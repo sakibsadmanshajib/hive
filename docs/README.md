@@ -9,6 +9,8 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Future implementation roadmap: `docs/plans/future-implementation-roadmap.md`
 - Existing approved design snapshot: `docs/plans/2026-02-23-bd-ai-gateway-design.md`
 - Existing implementation-plan snapshot: `docs/plans/2026-02-23-bd-ai-credit-gateway-implementation.md`
+- Chat UI overhaul design: `docs/plans/2026-02-23-chat-ui-overhaul-design.md`
+- Chat UI overhaul implementation plan: `docs/plans/2026-02-23-chat-ui-overhaul-implementation.md`
 
 ## Operations
 

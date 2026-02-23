@@ -2,6 +2,13 @@
 
 import { useState } from "react";
 
+import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { Input } from "../../components/ui/input";
+import { BillingShell } from "../../features/billing/components/billing-shell";
+import { TopUpPanel } from "../../features/billing/components/topup-panel";
+import { UsageCards } from "../../features/billing/components/usage-cards";
+
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
 
 type UserSnapshot = {
@@ -121,63 +128,43 @@ export default function BillingPage() {
     }
   }
 
-  const activeKeys = snapshot ? snapshot.api_keys.filter((key) => !key.revoked).length : 0;
-
   return (
-    <section style={{ maxWidth: 920 }}>
-      <h1>Billing and Usage</h1>
-      <p>Manage prepaid credits and keys for this demo account.</p>
-
-      <label style={{ display: "grid", gap: 6, marginBottom: 12 }}>
-        API key
-        <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="sk_live_..." />
-      </label>
-
-      <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-        <button type="button" onClick={fetchSnapshot} disabled={loading}>
-          Load account
-        </button>
-        <button type="button" onClick={createExtraKey} disabled={loading}>
-          Create API key
-        </button>
+    <BillingShell loading={loading} status={status}>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
+        <Card>
+          <CardHeader>
+            <CardTitle>Account controls</CardTitle>
+            <CardDescription>Use a valid API key to inspect account state and create secondary keys.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="grid gap-2" htmlFor="billing-api-key">
+              <span className="text-sm font-medium">Primary API key</span>
+              <Input
+                id="billing-api-key"
+                onChange={(event) => setApiKey(event.target.value)}
+                placeholder="sk_live_..."
+                value={apiKey}
+              />
+            </label>
+            <div className="flex flex-wrap gap-2">
+              <Button disabled={loading} onClick={() => void fetchSnapshot()} type="button">
+                Load account
+              </Button>
+              <Button disabled={loading} onClick={() => void createExtraKey()} type="button" variant="secondary">
+                Create API key
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+        <TopUpPanel
+          latestIntent={latestIntent}
+          loading={loading}
+          onTopUp={topUpDemo}
+          setTopUpAmount={setTopUpAmount}
+          topUpAmount={topUpAmount}
+        />
       </div>
-
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12, marginBottom: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Prepaid top-up (demo)</h2>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input type="number" min={1} value={topUpAmount} onChange={(event) => setTopUpAmount(Number(event.target.value) || 1)} />
-          <button type="button" onClick={topUpDemo} disabled={loading}>
-            Top up now
-          </button>
-        </div>
-        <p style={{ marginBottom: 0 }}>
-          Latest intent: <strong>{latestIntent || "N/A"}</strong>
-        </p>
-      </div>
-
-      <div style={{ border: "1px solid #e5e7eb", borderRadius: 10, padding: 12 }}>
-        <h2 style={{ marginTop: 0 }}>Snapshot</h2>
-        {snapshot ? (
-          <>
-            <p>
-              <strong>User:</strong> {snapshot.user.email} ({snapshot.user.user_id})
-            </p>
-            <p>
-              <strong>Credits:</strong> {snapshot.credits.availableCredits} available, {snapshot.credits.purchasedCredits} purchased, {snapshot.credits.promoCredits} promo
-            </p>
-            <p>
-              <strong>Usage events:</strong> {usageCount}
-            </p>
-            <p>
-              <strong>Active API keys:</strong> {activeKeys}
-            </p>
-          </>
-        ) : (
-          <p>Load account to view balances and usage.</p>
-        )}
-      </div>
-
-      <p style={{ marginTop: 12, color: "#0f766e" }}>{status}</p>
-    </section>
+      <UsageCards snapshot={snapshot} usageCount={usageCount} />
+    </BillingShell>
   );
 }
