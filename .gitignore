@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Node/TypeScript monorepo
+node_modules/
+dist/
+.pnpm-store/
+.turbo/
+coverage/
+*.tsbuildinfo

@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vitest";
+import { registerProvidersStatusRoute } from "../../src/routes/providers-status";
+
+type RegisteredHandler = (
+  request?: { headers?: Record<string, string> },
+  reply?: { code: (statusCode: number) => unknown },
+) => Promise<unknown>;
+
+class FakeApp {
+  handlers = new Map<string, RegisteredHandler>();
+
+  get(path: string, handler: RegisteredHandler) {
+    this.handlers.set(path, handler);
+  }
+}
+
+describe("providers status routes", () => {
+  it("returns sanitized public status without details", async () => {
+    const app = new FakeApp();
+    registerProvidersStatusRoute(app as never, {
+      env: { adminStatusToken: "admin-token" },
+      ai: {
+        providersStatus: async () => ({
+          providers: [
+            { name: "ollama", enabled: true, healthy: true, detail: "reachable" },
+            { name: "groq", enabled: false, healthy: false, detail: "missing key" },
+          ],
+        }),
+      },
+    } as never);
+
+    const handler = app.handlers.get("/v1/providers/status");
+    const payload = (await handler?.()) as { data: Array<Record<string, string | boolean>> };
+
+    expect(payload.data[0]).toEqual({ name: "ollama", enabled: true, healthy: true, state: "ready" });
+    expect(payload.data[1]).toEqual({ name: "groq", enabled: false, healthy: false, state: "disabled" });
+    expect("detail" in payload.data[0]).toBe(false);
+  });
+
+  it("requires admin token for internal provider status endpoint", async () => {
+    const app = new FakeApp();
+    registerProvidersStatusRoute(app as never, {
+      env: { adminStatusToken: "admin-token" },
+      ai: {
+        providersStatus: async () => ({
+          providers: [{ name: "mock", enabled: true, healthy: true, detail: "always available fallback" }],
+        }),
+      },
+    } as never);
+
+    const internal = app.handlers.get("/v1/providers/status/internal");
+    const unauthorized = (await internal?.(
+      { headers: {} },
+      { code: () => undefined },
+    )) as { error: string };
+    const authorized = (await internal?.(
+      { headers: { "x-admin-token": "admin-token" } },
+      { code: () => undefined },
+    )) as {
+      data: Array<Record<string, string | boolean>>;
+    };
+
+    expect(unauthorized.error).toBe("unauthorized");
+    expect(authorized.data[0].detail).toBe("always available fallback");
+  });
+});

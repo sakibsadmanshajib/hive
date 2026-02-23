@@ -1,0 +1,215 @@
+openapi: 3.1.0
+info:
+  title: BD AI Gateway API (TypeScript Scaffold)
+  version: 0.2.0
+  description: Fastify + Next.js MVP scaffold preserving Python implementation.
+servers:
+  - url: http://127.0.0.1:8080
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: API is healthy
+  /v1/models:
+    get:
+      summary: List available models
+      responses:
+        "200":
+          description: OpenAI-style model list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Model"
+  /v1/chat/completions:
+    post:
+      summary: OpenAI-compatible chat completion
+      parameters:
+        - in: header
+          name: x-api-key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                model:
+                  type: string
+                  default: auto
+                messages:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      role:
+                        type: string
+                      content:
+                        type: string
+      responses:
+        "200":
+          description: Chat completion response
+        "401":
+          description: Missing API key
+        "402":
+          description: Insufficient credits
+  /v1/responses:
+    post:
+      summary: OpenAI-compatible responses endpoint
+      parameters:
+        - in: header
+          name: x-api-key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                input:
+                  type: string
+      responses:
+        "200":
+          description: Response payload
+        "401":
+          description: Missing API key
+        "402":
+          description: Insufficient credits
+  /v1/images/generations:
+    post:
+      summary: OpenAI-compatible image generation endpoint
+      parameters:
+        - in: header
+          name: x-api-key
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                prompt:
+                  type: string
+      responses:
+        "200":
+          description: Generated image metadata
+        "401":
+          description: Missing API key
+        "402":
+          description: Insufficient credits
+  /v1/credits/balance:
+    get:
+      summary: Get user credit balance
+      parameters:
+        - in: header
+          name: x-api-key
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Credit balance
+        "401":
+          description: Missing API key
+  /v1/usage:
+    get:
+      summary: List usage events for key owner
+      parameters:
+        - in: header
+          name: x-api-key
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Usage list
+        "401":
+          description: Missing API key
+  /v1/payments/intents:
+    post:
+      summary: Create top-up payment intent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id:
+                  type: string
+                bdt_amount:
+                  type: number
+                provider:
+                  type: string
+                  enum: [bkash, sslcommerz]
+      responses:
+        "201":
+          description: Payment intent created
+  /v1/payments/webhook:
+    post:
+      summary: Handle verified payment callback
+      parameters:
+        - in: header
+          name: x-bkash-signature
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: x-bkash-timestamp
+          required: false
+          schema:
+            type: string
+        - in: header
+          name: x-sslcommerz-signature
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                provider:
+                  type: string
+                  enum: [bkash, sslcommerz]
+                intent_id:
+                  type: string
+                provider_txn_id:
+                  type: string
+                verified:
+                  type: boolean
+      responses:
+        "200":
+          description: Webhook accepted
+        "401":
+          description: Invalid signature
+components:
+  schemas:
+    Model:
+      type: object
+      properties:
+        id:
+          type: string
+        object:
+          type: string
+          example: model
