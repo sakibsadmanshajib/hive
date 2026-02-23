@@ -11,6 +11,8 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Existing implementation-plan snapshot: `docs/plans/2026-02-23-bd-ai-credit-gateway-implementation.md`
 - Chat UI overhaul design: `docs/plans/2026-02-23-chat-ui-overhaul-design.md`
 - Chat UI overhaul implementation plan: `docs/plans/2026-02-23-chat-ui-overhaul-implementation.md`
+- Google auth + RBAC + settings + 2FA design: `docs/plans/2026-02-23-google-auth-rbac-settings-2fa-design.md`
+- Google auth + RBAC + settings + 2FA implementation plan: `docs/plans/2026-02-23-google-auth-rbac-settings-2fa-implementation.md`
 
 ## Operations
 
