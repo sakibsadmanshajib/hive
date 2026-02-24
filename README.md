@@ -252,31 +252,31 @@ pnpm install
 API tests:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api test
+pnpm --filter @hive/api test
 ```
 
 API build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api build
+pnpm --filter @hive/api build
 ```
 
 Web build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web build
+pnpm --filter @hive/web build
 ```
 
 Run API locally:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api dev
+pnpm --filter @hive/api dev
 ```
 
 Run web locally:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web dev
+pnpm --filter @hive/web dev
 ```
 
 ## Tests Currently Present

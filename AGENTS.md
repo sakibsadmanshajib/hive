@@ -1,5 +1,5 @@
 ---
-name: bd-ai-gateway-agent
+name: hive-agent
 description: Implementation and operations agent for BD AI Gateway (TypeScript API + web + provider integrations)
 ---
 
@@ -18,19 +18,19 @@ pnpm install
 API tests:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api test
+pnpm --filter @hive/api test
 ```
 
 API build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api build
+pnpm --filter @hive/api build
 ```
 
 Web build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web build
+pnpm --filter @hive/web build
 ```
 
 Docker stack:
@@ -145,6 +145,7 @@ For ops/status changes:
 - Keep explicit boundaries in code and docs so future agents do not guess.
 - If AI-generated output is ambiguous, choose maintainability and clarity over cleverness.
 - If a secret appears in prompts/logs/chat, rotate it and remove it from persisted artifacts.
+- Parallelize independent tasks by default (parallel tool calls, parallel checks, parallel verification) and only serialize steps with real dependencies.
 
 ## Quick Troubleshooting
 

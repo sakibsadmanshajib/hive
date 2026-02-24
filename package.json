@@ -1,11 +1,11 @@
 {
-  "name": "bd-ai-gateway",
+  "name": "hive",
   "version": "0.1.0",
   "private": true,
   "packageManager": "pnpm@9.12.3",
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm --parallel --filter @bd-ai-gateway/api --filter @bd-ai-gateway/web dev",
+    "dev": "pnpm --parallel --filter @hive/api --filter @hive/web dev",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint"
   },

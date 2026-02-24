@@ -38,7 +38,7 @@ describe("auth session", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/auth-session.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/auth-session.test.ts`
 Expected: FAIL because module does not exist yet.
 
 **Step 3: Write minimal implementation**
@@ -72,7 +72,7 @@ export function clearAuthSession(): void {
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/auth-session.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/auth-session.test.ts`
 Expected: PASS
 
 **Step 5: Commit**
@@ -107,7 +107,7 @@ describe("AuthPage", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/auth-page.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/auth-page.test.tsx`
 Expected: FAIL because route does not exist.
 
 **Step 3: Write minimal implementation**
@@ -123,7 +123,7 @@ Implement `apps/web/src/app/auth/page.tsx`:
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/auth-page.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/auth-page.test.tsx`
 Expected: PASS
 
 **Step 5: Commit**
@@ -157,7 +157,7 @@ describe("Chat auth gate", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-auth-gate.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-auth-gate.test.tsx`
 Expected: FAIL because session setup card is still rendered.
 
 **Step 3: Write minimal implementation**
@@ -172,7 +172,7 @@ Expected: FAIL because session setup card is still rendered.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-auth-gate.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-auth-gate.test.tsx`
 Expected: PASS
 
 **Step 5: Commit**
@@ -205,7 +205,7 @@ describe("AppSidebar", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/auth-routing-nav.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/auth-routing-nav.test.tsx`
 Expected: FAIL because link is missing.
 
 **Step 3: Write minimal implementation**
@@ -215,7 +215,7 @@ Expected: FAIL because link is missing.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/auth-routing-nav.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/auth-routing-nav.test.tsx`
 Expected: PASS
 
 **Step 5: Commit**
@@ -238,12 +238,12 @@ Add links to new auth-first design + implementation docs in docs index.
 
 **Step 2: Run targeted checks**
 
-Run: `pnpm --filter @bd-ai-gateway/web test`
+Run: `pnpm --filter @hive/web test`
 Expected: PASS
 
 **Step 3: Run build**
 
-Run: `pnpm --filter @bd-ai-gateway/web build`
+Run: `pnpm --filter @hive/web build`
 Expected: PASS
 
 **Step 4: Runtime smoke checks**

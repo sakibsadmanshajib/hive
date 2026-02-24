@@ -1,4 +1,4 @@
-# BD AI Gateway Design
+# Hive Design
 
 ## Product Direction
 - API-first aggregator with OpenAI-compatible endpoints.

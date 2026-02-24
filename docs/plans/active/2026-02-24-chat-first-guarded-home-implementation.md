@@ -17,8 +17,8 @@ Deliver a ChatGPT-like chat-first IA with `/` as authenticated chat home and `/a
 
 ## Verification Commands
 
-- `pnpm --filter @bd-ai-gateway/web test`
-- `pnpm --filter @bd-ai-gateway/web build`
+- `pnpm --filter @hive/web test`
+- `pnpm --filter @hive/web build`
 
 ## Deferred Verification
 

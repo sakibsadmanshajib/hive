@@ -38,5 +38,5 @@ The web app now uses a chat-first flow with authentication gating on `/`.
 
 ## Verification
 
-- `pnpm --filter @bd-ai-gateway/web test`
-- `pnpm --filter @bd-ai-gateway/web build`
+- `pnpm --filter @hive/web test`
+- `pnpm --filter @hive/web build`

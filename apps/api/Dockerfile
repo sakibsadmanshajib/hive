@@ -10,11 +10,11 @@ RUN npm install -g pnpm@9.12.3 && pnpm install --frozen-lockfile || pnpm install
 
 FROM deps AS builder
 COPY . .
-RUN pnpm --filter @bd-ai-gateway/api build
+RUN pnpm --filter @hive/api build
 
 FROM deps AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=builder /app /app
 EXPOSE 8080
-CMD ["pnpm", "--filter", "@bd-ai-gateway/api", "start"]
+CMD ["pnpm", "--filter", "@hive/api", "start"]
