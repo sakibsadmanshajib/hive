@@ -124,6 +124,9 @@ For ops/status changes:
 ## Git and Change Hygiene
 
 - Keep commits atomic by concern (runtime, providers, docs, tests).
+- For tracked work, open exactly one PR per task; do not bundle multiple independent tasks into one PR.
+- Start each new task in a fresh git worktree instead of reusing the previous task's working directory.
+- Before beginning a new task, prune the previously used worktree if its PR is merged.
 - Use Conventional Commit style when possible, e.g. `feat(api): ...`, `fix(providers): ...`, `docs(readme): ...`.
 - Write commit messages with intent and rationale, not only diff summary.
 - Use descriptive branch names such as `feat/provider-status-internal` or `fix/redis-rate-limit`.
