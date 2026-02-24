@@ -358,7 +358,7 @@ git commit -m "test(routes): lock provider status security invariants during mig
 - Create: `apps/api/supabase/migrations/20260223_001_auth_user_tables.sql`
 - Create: `apps/api/supabase/migrations/20260223_002_api_keys.sql`
 - Create: `apps/api/supabase/migrations/20260223_003_billing_tables.sql`
-- Modify: `docs/runbooks/auth-rbac-settings-2fa.md`
+- Modify: `docs/runbooks/README.md`
 - Modify: `README.md`
 
 **Step 1: Write failing migration validation check**
@@ -390,7 +390,7 @@ Expected: PASS.
 **Step 5: Commit**
 
 ```bash
-git add apps/api/supabase/migrations docs/runbooks/auth-rbac-settings-2fa.md README.md
+git add apps/api/supabase/migrations docs/runbooks/README.md README.md
 git commit -m "docs(api): add supabase migration and operations guidance"
 ```
 
@@ -399,7 +399,7 @@ git commit -m "docs(api): add supabase migration and operations guidance"
 **Files:**
 - Modify (if needed): `apps/api/test/routes/*.test.ts`
 - Modify (if needed): `apps/api/test/domain/*.test.ts`
-- Modify: `docs/release/provider-fallback-matrix.md`
+- Modify: `docs/release/active/provider-fallback-matrix.md`
 
 **Step 1: Run targeted migration regression tests**
 
@@ -432,6 +432,6 @@ Expected: `401` without `x-admin-token`.
 **Step 6: Commit**
 
 ```bash
-git add apps/api/test docs/release/provider-fallback-matrix.md
+git add apps/api/test docs/release/active/provider-fallback-matrix.md
 git commit -m "test(api): verify supabase migration preserves contract and security invariants"
 ```

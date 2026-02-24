@@ -5,7 +5,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 ## Start Here
 
 - Architecture: `docs/architecture/system-architecture.md`
-- Product and design decisions: `docs/design/product-and-routing.md`
+- Product and design decisions: `docs/design/README.md`
 - Plans overview: `docs/plans/README.md`
 - Active roadmap: `docs/plans/active/future-implementation-roadmap.md`
 - Current architecture migration design: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
@@ -18,11 +18,8 @@ This folder is the canonical documentation hub for product, architecture, implem
 
 ## Operations
 
-- Payment reconciliation runbook: `docs/runbooks/payments-reconciliation.md`
-- Credit ledger audit runbook: `docs/runbooks/credit-ledger-audit.md`
-- Auth + RBAC + settings + 2FA runbook: `docs/runbooks/auth-rbac-settings-2fa.md`
-- Beta launch checklist: `docs/release/beta-launch-checklist.md`
-- Provider fallback matrix: `docs/release/provider-fallback-matrix.md`
+- Runbooks index: `docs/runbooks/README.md`
+- Release docs index: `docs/release/README.md`
 
 ## Engineering Standards
 
