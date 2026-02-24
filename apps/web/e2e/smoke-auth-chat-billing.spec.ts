@@ -1,6 +1,18 @@
 import { expect, test } from "@playwright/test";
 
-import { createSession, seedAuthSession } from "./fixtures/auth";
+import { cleanupSessionUser, createSession, seedAuthSession } from "./fixtures/auth";
+
+const createdSessionApiKeys: string[] = [];
+
+test.afterEach(async ({ request }) => {
+  while (createdSessionApiKeys.length > 0) {
+    const apiKey = createdSessionApiKeys.pop();
+    if (!apiKey) {
+      continue;
+    }
+    await cleanupSessionUser(request, apiKey);
+  }
+});
 
 test("unauthenticated root redirects to auth", async ({ page }) => {
   await page.goto("/");
@@ -13,6 +25,33 @@ test("register happy path reaches chat workspace", async ({ page }) => {
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const email = `e2e_web_smoke_ui_${unique}@example.com`;
   const registerForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Create account" }) });
+  const corsHeaders = {
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "POST, OPTIONS",
+    "access-control-allow-headers": "content-type",
+  };
+
+  await page.route("**/v1/users/register", async (route) => {
+    const method = route.request().method();
+    if (method === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: corsHeaders, body: "" });
+      return;
+    }
+
+    const payload = route.request().postDataJSON() as { email?: string; name?: string } | null;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      headers: corsHeaders,
+      body: JSON.stringify({
+        api_key: "sk_e2e_register_mock",
+        user: {
+          email: payload?.email ?? email,
+          name: payload?.name ?? "E2E UI User",
+        },
+      }),
+    });
+  });
 
   await page.goto("/auth");
   await registerForm.getByPlaceholder("Name").fill("E2E UI User");
@@ -27,6 +66,7 @@ test("register happy path reaches chat workspace", async ({ page }) => {
 
 test("chat success and failure messaging", async ({ page, request }) => {
   const session = await createSession(request);
+  createdSessionApiKeys.push(session.apiKey);
   await seedAuthSession(page, {
     apiKey: session.apiKey,
     email: session.email,
@@ -51,7 +91,15 @@ test("chat success and failure messaging", async ({ page, request }) => {
       contentType: "application/json",
       body: JSON.stringify({
         id: "chatcmpl_e2e",
-        choices: [{ message: { role: "assistant", content: "Mocked assistant reply" } }],
+        object: "chat.completion",
+        model: "mock-chat-model",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant", content: "Mocked assistant reply" },
+          },
+        ],
       }),
     });
   });
@@ -68,6 +116,7 @@ test("chat success and failure messaging", async ({ page, request }) => {
 
 test("billing access from profile menu and top-up failure messaging", async ({ page, request }) => {
   const session = await createSession(request);
+  createdSessionApiKeys.push(session.apiKey);
   await seedAuthSession(page, {
     apiKey: session.apiKey,
     email: session.email,

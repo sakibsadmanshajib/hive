@@ -51,3 +51,18 @@ export async function seedAuthSession(page: Page, seed: AuthSessionSeed) {
     { key: AUTH_STORAGE_KEY, session: seed },
   );
 }
+
+export async function cleanupSessionUser(request: APIRequestContext, apiKey: string): Promise<void> {
+  const response = await request.fetch(`${apiBase}/v1/users/me`, {
+    method: "DELETE",
+    headers: { "x-api-key": apiKey },
+  });
+
+  const status = response.status();
+  if (status === 200 || status === 204 || status === 404 || status === 405) {
+    return;
+  }
+
+  const body = await response.text();
+  throw new Error(`Unexpected cleanup response (${status}): ${body}`);
+}

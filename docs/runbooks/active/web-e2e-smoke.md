@@ -29,13 +29,16 @@ pnpm install
 pnpm --filter @hive/web exec playwright install chromium
 ```
 
-4. Export the API base URL used by fixtures that call the API directly:
+4. Export the API and web base URLs used by fixtures and browser navigation:
 
 ```bash
 export E2E_API_BASE_URL=http://127.0.0.1:8080
+export E2E_BASE_URL=http://127.0.0.1:3000
 ```
 
-You can also place `E2E_API_BASE_URL=http://127.0.0.1:8080` in your local shell profile or env file used during Playwright runs.
+`E2E_API_BASE_URL` is used by auth fixtures that call the API directly, and `E2E_BASE_URL` is used by Playwright `baseURL` for browser navigation.
+If you override the web port or host, set both variables to matching values for that environment.
+You can also place both exports in your local shell profile or env file used during Playwright runs.
 
 If Linux host libraries are missing locally:
 
