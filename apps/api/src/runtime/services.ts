@@ -18,6 +18,7 @@ import { createSupabaseAdminClient } from "./supabase-client";
 import { SupabaseAuthService } from "./supabase-auth-service";
 import { SupabaseApiKeyStore } from "./supabase-api-key-store";
 import { SupabaseUserStore } from "./supabase-user-store";
+import { SupabaseBillingStore } from "./supabase-billing-store";
 
 type ChatMessage = { role: string; content: string };
 
@@ -27,6 +28,22 @@ type ApiKeyStore = {
   list(userId: string): Promise<PersistentApiKey[]>;
   revoke(key: string, userId: string): Promise<boolean>;
   get(key: string): Promise<PersistentApiKey | undefined>;
+};
+
+type BillingStore = {
+  getBalance(userId: string): Promise<CreditBalance>;
+  consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean>;
+  topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance>;
+  createPaymentIntent(intent: PersistentPaymentIntent): Promise<void>;
+  getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined>;
+  recordPaymentEvent(
+    eventKey: string,
+    intentId: string,
+    provider: string,
+    providerTxnId: string,
+    verified: boolean,
+  ): Promise<boolean>;
+  markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void>;
 };
 
 class PostgresApiKeyStore implements ApiKeyStore {
@@ -57,8 +74,46 @@ class PostgresApiKeyStore implements ApiKeyStore {
   }
 }
 
-class PersistentCreditService {
+class PostgresBillingStore implements BillingStore {
   constructor(private readonly store: PostgresStore) {}
+
+  getBalance(userId: string): Promise<CreditBalance> {
+    return this.store.getBalance(userId);
+  }
+
+  consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean> {
+    return this.store.consumeCredits(userId, credits, referenceId);
+  }
+
+  topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
+    return this.store.topUp(userId, credits / 100, referenceId);
+  }
+
+  createPaymentIntent(intent: PersistentPaymentIntent): Promise<void> {
+    return this.store.createPaymentIntent(intent);
+  }
+
+  getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined> {
+    return this.store.getPaymentIntent(intentId);
+  }
+
+  recordPaymentEvent(
+    eventKey: string,
+    intentId: string,
+    provider: string,
+    providerTxnId: string,
+    verified: boolean,
+  ): Promise<boolean> {
+    return this.store.recordPaymentEvent(eventKey, intentId, provider, providerTxnId, verified);
+  }
+
+  markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void> {
+    return this.store.markPaymentCredited(intentId, mintedCredits, status);
+  }
+}
+
+class PersistentCreditService {
+  constructor(private readonly store: BillingStore) {}
 
   getBalance(userId: string): Promise<CreditBalance> {
     return this.store.getBalance(userId);
@@ -69,7 +124,8 @@ class PersistentCreditService {
   }
 
   topUp(userId: string, bdtAmount: number, referenceId: string): Promise<CreditBalance> {
-    return this.store.topUp(userId, bdtAmount, referenceId);
+    const mintedCredits = Math.trunc(Math.max(0, bdtAmount) * 100);
+    return this.store.topUpCredits(userId, mintedCredits, referenceId);
   }
 }
 
@@ -87,7 +143,7 @@ class PersistentUsageService {
 
 class PersistentPaymentService {
   constructor(
-    private readonly store: PostgresStore,
+    private readonly store: BillingStore,
     private readonly credits: PersistentCreditService,
   ) {}
 
@@ -554,13 +610,20 @@ export type RuntimeServices = {
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const store = new PostgresStore(env.postgresUrl);
-  const supabase = env.supabase.flags.authEnabled || env.supabase.flags.userRepoEnabled || env.supabase.flags.apiKeysEnabled
+  const supabase =
+    env.supabase.flags.authEnabled ||
+    env.supabase.flags.userRepoEnabled ||
+    env.supabase.flags.apiKeysEnabled ||
+    env.supabase.flags.billingStoreEnabled
     ? createSupabaseAdminClient(env)
     : undefined;
   const models = new ModelService();
-  const credits = new PersistentCreditService(store);
+  const billingStore: BillingStore = env.supabase.flags.billingStoreEnabled && supabase
+    ? new SupabaseBillingStore(supabase)
+    : new PostgresBillingStore(store);
+  const credits = new PersistentCreditService(billingStore);
   const usage = new PersistentUsageService(store);
-  const payments = new PersistentPaymentService(store, credits);
+  const payments = new PersistentPaymentService(billingStore, credits);
   const apiKeyStore: ApiKeyStore = env.supabase.flags.apiKeysEnabled && supabase
     ? new SupabaseApiKeyStore(supabase)
     : new PostgresApiKeyStore(store);

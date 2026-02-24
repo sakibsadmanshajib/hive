@@ -49,17 +49,19 @@ describe("providers status routes", () => {
     } as never);
 
     const internal = app.handlers.get("/v1/providers/status/internal");
+    const statusCodes: number[] = [];
     const unauthorized = (await internal?.(
       { headers: {} },
-      { code: () => undefined },
+      { code: (statusCode) => statusCodes.push(statusCode) },
     )) as { error: string };
     const authorized = (await internal?.(
       { headers: { "x-admin-token": "admin-token" } },
-      { code: () => undefined },
+      { code: (statusCode) => statusCodes.push(statusCode) },
     )) as {
       data: Array<Record<string, string | boolean>>;
     };
 
+    expect(statusCodes).toEqual([401]);
     expect(unauthorized.error).toBe("unauthorized");
     expect(authorized.data[0].detail).toBe("always available fallback");
   });

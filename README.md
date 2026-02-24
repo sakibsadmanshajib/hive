@@ -19,6 +19,7 @@ This document captures the current implementation state so you can continue in a
 
 - Stack: TypeScript monorepo (API + web) is the active implementation.
 - Runtime: production-style API wiring uses Postgres + Redis + provider clients.
+- Supabase Option A schema migrations are versioned under `apps/api/supabase/migrations`.
 - Providers: Ollama + Groq integrated behind a provider registry with fallback to mock.
 - Public provider health endpoint exists.
 - Internal provider diagnostics endpoint exists and is admin-token protected.
@@ -109,6 +110,7 @@ Chat response headers include:
 - Redis rate limit: `apps/api/src/runtime/redis-rate-limiter.ts`
 - Payment provider adapters: `apps/api/src/runtime/provider-adapters.ts`
 - Runtime service composition: `apps/api/src/runtime/services.ts`
+- Supabase migration docs: `apps/api/supabase/README.md`
 
 ### Provider Clients
 
@@ -147,6 +149,12 @@ Important variables:
 - `GOOGLE_REDIRECT_URI`
 - `AUTH_SESSION_TTL_MINUTES`
 - `ENFORCE_2FA_FOR_SENSITIVE_ACTIONS`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `SUPABASE_AUTH_ENABLED`
+- `SUPABASE_USER_REPO_ENABLED`
+- `SUPABASE_API_KEYS_ENABLED`
+- `SUPABASE_BILLING_STORE_ENABLED`
 - `LANGFUSE_ENABLED`
 - `LANGFUSE_BASE_URL`
 - `LANGFUSE_PUBLIC_KEY`
@@ -287,5 +295,5 @@ Done:
 
 Likely next engineering steps:
 - Replace placeholder/mock image pipeline with real image providers
-- Add migrations/versioned schema management (instead of bootstrap SQL in code)
+- Expand migration validation automation for Supabase schema checks
 - Add observability dashboards and alerts for provider failures
