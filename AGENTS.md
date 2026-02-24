@@ -33,6 +33,13 @@ Web build:
 pnpm --filter @hive/web build
 ```
 
+Web smoke E2E (Playwright):
+
+```bash
+pnpm --filter @hive/web exec playwright install chromium
+pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
+```
+
 Docker stack:
 
 ```bash
@@ -125,6 +132,8 @@ For ops/status changes:
 
 - Keep commits atomic by concern (runtime, providers, docs, tests).
 - For tracked work, open exactly one PR per task; do not bundle multiple independent tasks into one PR.
+- Worktrees are mandatory: because multiple AI agents/tools may touch the repo concurrently, start every new task in a fresh git worktree.
+- Never run two independent tasks in the same working tree.
 - Start each new task in a fresh git worktree instead of reusing the previous task's working directory.
 - Before beginning a new task, prune the previously used worktree if its PR is merged.
 - Use Conventional Commit style when possible, e.g. `feat(api): ...`, `fix(providers): ...`, `docs(readme): ...`.
@@ -132,6 +141,23 @@ For ops/status changes:
 - Use descriptive branch names such as `feat/provider-status-internal` or `fix/redis-rate-limit`.
 - Do not include unrelated formatting churn.
 - Prefer incremental, reviewable changes.
+
+### Worktree Quickstart
+
+Use this flow for every task branch:
+
+```bash
+git fetch origin main
+git worktree add ../hive-<task-slug> -b <type/task-name> origin/main
+git -C ../hive-<task-slug> status
+```
+
+After merge, clean up the old worktree:
+
+```bash
+git worktree remove ../hive-<task-slug>
+git worktree prune
+```
 
 ## Detailed Usage Behavior
 
@@ -166,6 +192,58 @@ Rules:
 - Do not assume existing long-running containers represent current branch code.
 - Do not debug E2E failures against stale containers; restart stack first.
 - If ports are occupied by another project stack, stop that stack before proceeding.
+
+Useful compose operations while debugging:
+
+```bash
+docker compose ps
+docker compose logs api web
+docker compose restart api web
+docker compose down -v
+```
+
+Use `docker compose down -v` when you need a fully clean state (for example, flaky local E2E caused by stale DB/Redis state).
+
+### Playwright Smoke E2E Expectations
+
+Primary smoke spec: `apps/web/e2e/smoke-auth-chat-billing.spec.ts`
+
+When touching auth/chat/billing/settings navigation or related API integration:
+
+1. Ensure Playwright browser is installed:
+   - `pnpm --filter @hive/web exec playwright install chromium`
+2. Start stack with Docker Compose and confirm readiness:
+   - `curl -s http://127.0.0.1:8080/health`
+   - `curl -sI http://127.0.0.1:3000/auth`
+3. Run smoke spec:
+   - `pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts`
+
+Environment used by E2E:
+- `E2E_BASE_URL` (default: `http://127.0.0.1:3000`)
+- `E2E_API_BASE_URL` (used by API fixtures)
+
+If Playwright fails due to missing Linux libs locally:
+- `pnpm --filter @hive/web exec playwright install-deps chromium`
+
+### CI Pipeline Expectations
+
+Primary CI workflow: `.github/workflows/ci.yml`
+- Runs on PR/push to `main`.
+- Ignores docs-only/markdown-only changes via `paths-ignore`.
+- Uses path filtering to run API and web checks only when relevant scopes changed.
+- API scope: lint, test, build.
+- Web scope: lint, test, build.
+
+Web smoke workflow: `.github/workflows/web-e2e-smoke.yml`
+- Runs on PRs touching `apps/web/**`, `apps/api/**`, `docker-compose.yml`, or the workflow file.
+- Installs Playwright Chromium, starts Docker stack, waits for readiness, then runs smoke spec.
+- Uploads Playwright artifacts on failure.
+
+Post-merge cleanup workflow: `.github/workflows/pr-cleanup.yml`
+- Runs when PR is merged.
+- Deletes merged source branches when safe and removes `status:in-progress` label.
+
+Before opening/updating a PR, run local checks that match your touched scopes so CI results are predictable.
 
 ### Receiving AI/Code Review Feedback
 
