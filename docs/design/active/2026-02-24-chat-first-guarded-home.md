@@ -6,7 +6,7 @@ The web app now uses a chat-first flow with authentication gating on `/`.
 
 ## Implemented IA
 
-- `/` is the primary chat workspace and requires authenticated session.
+- `/` is the primary chat workspace and requires an authenticated session.
 - Unauthenticated users on `/` are redirected to `/auth`.
 - `/chat` now redirects to `/`.
 - `/billing` is preserved as a dedicated route.

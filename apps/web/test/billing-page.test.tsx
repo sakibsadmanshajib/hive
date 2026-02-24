@@ -2,9 +2,12 @@
 
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pushMock = vi.fn();
+const fetchMock = vi.fn();
+
+vi.stubGlobal("fetch", fetchMock);
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -17,7 +20,27 @@ import BillingPage from "../src/app/billing/page";
 describe("billing page", () => {
   beforeEach(() => {
     pushMock.mockReset();
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: [] }),
+    });
+
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ user: { user_id: "u_1", email: "demo@example.com" }, credits: {}, api_keys: [] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ data: [] }),
+      });
+
     window.localStorage.setItem("bdai.auth.session", JSON.stringify({ apiKey: "sk_live_session", email: "demo@example.com" }));
+  });
+
+  afterEach(() => {
+    window.localStorage.removeItem("bdai.auth.session");
   });
 
   it("hydrates from stored session and still shows top-up controls", () => {

@@ -56,6 +56,12 @@ export default function BillingPage() {
         setStatus(meJson.error ?? "Failed to load account data");
         return;
       }
+      if (!usageRes.ok) {
+        setSnapshot(meJson);
+        setUsageCount(0);
+        setStatus(usageJson.error ?? "Failed to load usage data");
+        return;
+      }
 
       setSnapshot(meJson);
       setUsageCount(Array.isArray(usageJson?.data) ? usageJson.data.length : 0);

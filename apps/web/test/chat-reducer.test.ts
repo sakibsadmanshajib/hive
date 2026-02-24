@@ -43,6 +43,9 @@ describe("chatReducer", () => {
     expect(next.activeConversationId).toBe("conv_2");
     expect(next.conversations[0]?.id).toBe("conv_2");
     expect(next.conversations[0]?.title).toBe("Untitled");
+    const starterCreatedAt = next.conversations[0]?.messages[0]?.createdAt;
+    expect(typeof starterCreatedAt).toBe("string");
+    expect(starterCreatedAt && starterCreatedAt.length > 0).toBe(true);
   });
 
   it("appends user message and updates untitled conversation title", () => {

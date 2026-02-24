@@ -1,11 +1,5 @@
 import type { ChatAction, ChatConversation, ChatState } from "./chat-types";
 
-const initialConversation: ChatConversation = {
-  id: "conv_1",
-  title: "New Chat",
-  messages: [{ role: "assistant", content: "Welcome back. What's on the agenda today?", createdAt: new Date().toISOString() }],
-};
-
 function updateConversation(
   conversations: ChatConversation[],
   id: string,
@@ -15,6 +9,12 @@ function updateConversation(
 }
 
 export function createInitialChatState(): ChatState {
+  const initialConversation: ChatConversation = {
+    id: "conv_1",
+    title: "New Chat",
+    messages: [{ role: "assistant", content: "Welcome back. What's on the agenda today?", createdAt: new Date().toISOString() }],
+  };
+
   return {
     conversations: [initialConversation],
     activeConversationId: initialConversation.id,

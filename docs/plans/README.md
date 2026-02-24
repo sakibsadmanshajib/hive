@@ -9,7 +9,7 @@ Use these documents for current planning and execution:
 - `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
 - `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
 - `docs/plans/active/future-implementation-roadmap.md`
-- `docs/plans/2026-02-24-chat-first-guarded-home-implementation.md`
+- `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
 
 ## Archive (Obsolete)
 

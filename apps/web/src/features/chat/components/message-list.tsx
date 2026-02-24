@@ -15,21 +15,21 @@ type MessageListProps = {
   errorMessage: string | null;
 };
 
-export function MessageList({ messages, loading, errorMessage }: MessageListProps) {
-  function formatTimestamp(timestamp: string): string {
-    const date = new Date(timestamp);
-    return Number.isNaN(date.getTime())
-      ? "just now"
-      : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }
+function formatTimestamp(timestamp: string): string {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime())
+    ? "just now"
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
 
+export function MessageList({ messages, loading, errorMessage }: MessageListProps) {
   return (
     <ScrollArea className="h-[56vh] rounded-2xl border border-slate-800 bg-slate-950/85 p-3 shadow-sm sm:h-[62vh] sm:p-4">
       <div className="space-y-4">
         {messages.length === 0 ? <p className="text-sm text-slate-400">Start a new chat to see messages.</p> : null}
-        {messages.map((message, index) => (
+        {messages.map((message) => (
           <MessageBubble
-            key={`${message.role}-${index}`}
+            key={`${message.createdAt}-${message.role}-${message.content.slice(0, 24)}`}
             role={message.role}
             content={message.content}
             timestamp={formatTimestamp(message.createdAt)}

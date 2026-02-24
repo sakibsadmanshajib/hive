@@ -11,7 +11,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Current architecture migration design: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
 - Current architecture migration implementation plan: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
 - Current chat-first guarded-home design: `docs/design/active/2026-02-24-chat-first-guarded-home.md`
-- Current chat-first guarded-home implementation plan: `docs/plans/2026-02-24-chat-first-guarded-home-implementation.md`
+- Current chat-first guarded-home implementation plan: `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
 
 ## Planning Docs Status
 
