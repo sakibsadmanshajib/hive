@@ -6,7 +6,7 @@
 
 **Architecture:** Add two GitHub workflows: one monorepo quality workflow and one PR-close cleanup workflow. Use a repository script for cleanup logic so policy is versioned and testable. Enforce issue metadata hygiene via labels/milestone and document conventions in AGENTS guidance.
 
-**Tech Stack:** GitHub Actions, bash, gh CLI, pnpm, Node 24 (CI runtime uses Node 24)
+**Tech Stack:** GitHub Actions, bash, gh CLI, pnpm, Node 20 (CI runtime uses Node 20)
 
 ---
 

@@ -4,6 +4,7 @@
 
 - `docs/runbooks/active/payments-reconciliation.md`
 - `docs/runbooks/active/credit-ledger-audit.md`
+- `docs/runbooks/active/ci-and-pr-cleanup-operations.md` (CI quality workflow and merged-PR cleanup operations)
 - `apps/api/supabase/README.md` (Supabase migration order and cutover flow)
 
 ## Archive (Obsolete - Pre-Supabase)
