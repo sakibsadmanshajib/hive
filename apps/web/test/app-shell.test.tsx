@@ -35,5 +35,6 @@ describe("AppShell", () => {
 
     expect(screen.getByRole("link", { name: /chat/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /billing/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /auth/i })).toBeInTheDocument();
   });
 });

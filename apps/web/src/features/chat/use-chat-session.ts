@@ -1,21 +1,18 @@
-import { FormEvent, useMemo, useReducer, useState } from "react";
+import { useMemo, useReducer, useState } from "react";
 import { toast } from "sonner";
 
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
+import { readAuthSession } from "../auth/auth-session";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
 
 export function useChatSession() {
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [apiKey, setApiKey] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const [apiKey] = useState(() => readAuthSession()?.apiKey ?? "");
   const [model, setModel] = useState("fast-chat");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
-  const [authMessage, setAuthMessage] = useState("No API key yet.");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const activeConversation = useMemo(
@@ -41,65 +38,12 @@ export function useChatSession() {
     });
   }
 
-  async function registerUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-    setErrorMessage(null);
-    try {
-      const response = await fetch(`${apiBase}/v1/users/register`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password, name }),
-      });
-      const json = await response.json();
-      if (!response.ok) {
-        const nextMessage = json.error ?? "Registration failed";
-        setAuthMessage(nextMessage);
-        toast.error(nextMessage);
-        return;
-      }
-      setApiKey(json.api_key);
-      const nextMessage = `Registered ${json.user.email}`;
-      setAuthMessage(nextMessage);
-      toast.success(nextMessage);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loginUser(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-    setErrorMessage(null);
-    try {
-      const response = await fetch(`${apiBase}/v1/users/login`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const json = await response.json();
-      if (!response.ok) {
-        const nextMessage = json.error ?? "Login failed";
-        setAuthMessage(nextMessage);
-        toast.error(nextMessage);
-        return;
-      }
-      setApiKey(json.api_key);
-      const nextMessage = `Logged in as ${json.user.email}`;
-      setAuthMessage(nextMessage);
-      toast.success(nextMessage);
-    } finally {
-      setLoading(false);
-    }
-  }
-
   async function sendMessage() {
     if (!activeConversation || !prompt.trim()) {
       return;
     }
     if (!apiKey.trim()) {
       const nextError = "Set API key first.";
-      setAuthMessage(nextError);
       setErrorMessage(nextError);
       toast.error(nextError);
       return;
@@ -168,23 +112,12 @@ export function useChatSession() {
     activeConversationId: chatState.activeConversationId,
     addConversation,
     selectConversation,
-    apiKey,
-    setApiKey,
-    email,
-    setEmail,
-    password,
-    setPassword,
-    name,
-    setName,
     model,
     setModel,
     prompt,
     setPrompt,
     loading,
-    authMessage,
     errorMessage,
-    registerUser,
-    loginUser,
     sendMessage,
   };
 }

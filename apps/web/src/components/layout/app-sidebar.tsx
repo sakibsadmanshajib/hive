@@ -3,6 +3,7 @@ import Link from "next/link";
 import { cn } from "../../lib/utils";
 
 const navItems = [
+  { href: "/auth", label: "Auth" },
   { href: "/chat", label: "Chat" },
   { href: "/billing", label: "Billing" },
 ];
