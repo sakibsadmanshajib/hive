@@ -11,8 +11,7 @@ import { useChatSession } from "../features/chat/use-chat-session";
 
 export default function HomePage() {
   const router = useRouter();
-  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
-  const [sessionLoaded, setSessionLoaded] = useState(false);
+  const [authSession] = useState<AuthSession | null>(() => readAuthSession());
   const {
     conversations,
     activeConversation,
@@ -29,17 +28,12 @@ export default function HomePage() {
   } = useChatSession();
 
   useEffect(() => {
-    setAuthSession(readAuthSession());
-    setSessionLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (sessionLoaded && !authSession?.apiKey) {
+    if (!authSession?.apiKey) {
       router.push("/auth");
     }
-  }, [authSession?.apiKey, router, sessionLoaded]);
+  }, [authSession?.apiKey, router]);
 
-  if (!sessionLoaded || !authSession?.apiKey) {
+  if (!authSession?.apiKey) {
     return null;
   }
 
