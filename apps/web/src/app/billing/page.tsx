@@ -1,217 +1,27 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { Input } from "../../components/ui/input";
-import { BillingShell } from "../../features/billing/components/billing-shell";
-import { TopUpPanel } from "../../features/billing/components/topup-panel";
-import { UsageCards } from "../../features/billing/components/usage-cards";
-import { readAuthSession } from "../../features/auth/auth-session";
-import { UserSettingsPanel } from "../../features/settings/user-settings-panel";
-
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
-
-type UserSnapshot = {
-  user: { user_id: string; email: string; name?: string };
-  credits: { availableCredits: number; purchasedCredits: number; promoCredits: number };
-  api_keys: Array<{ key_id: string; revoked: boolean; scopes: string[]; createdAt: string }>;
-};
 
 export default function BillingPage() {
-  const router = useRouter();
-  const [sessionApiKey, setSessionApiKey] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [sessionLoaded, setSessionLoaded] = useState(false);
-  const [snapshot, setSnapshot] = useState<UserSnapshot | null>(null);
-  const [usageCount, setUsageCount] = useState(0);
-  const [topUpAmount, setTopUpAmount] = useState(50);
-  const [latestIntent, setLatestIntent] = useState("");
-  const [status, setStatus] = useState("Idle");
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    const key = readAuthSession()?.apiKey ?? "";
-    setSessionApiKey(key);
-    setApiKey(key);
-    setSessionLoaded(true);
-  }, []);
-
-  useEffect(() => {
-    if (sessionLoaded && !sessionApiKey) {
-      router.push("/auth");
-    }
-  }, [router, sessionApiKey, sessionLoaded]);
-
-  async function fetchSnapshot(overrideApiKey?: string) {
-    const key = overrideApiKey ?? apiKey;
-    if (!key) {
-      setStatus("Set API key first.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const [meRes, usageRes] = await Promise.all([
-        fetch(`${apiBase}/v1/users/me`, { headers: { "x-api-key": key } }),
-        fetch(`${apiBase}/v1/usage`, { headers: { "x-api-key": key } }),
-      ]);
-      const meJson = await meRes.json();
-      const usageJson = await usageRes.json();
-      if (!meRes.ok) {
-        setStatus(meJson.error ?? "Failed to load account data");
-        return;
-      }
-      if (!usageRes.ok) {
-        setSnapshot(meJson);
-        setUsageCount(0);
-        setStatus(usageJson.error ?? "Failed to load usage data");
-        return;
-      }
-
-      setSnapshot(meJson);
-      setUsageCount(Array.isArray(usageJson?.data) ? usageJson.data.length : 0);
-      setStatus("Loaded account snapshot");
-    } catch (error) {
-      const nextStatus = error instanceof Error ? error.message : "Could not load account snapshot";
-      setStatus(nextStatus);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function topUpDemo() {
-    if (!apiKey) {
-      setStatus("Set API key first.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const intentRes = await fetch(`${apiBase}/v1/payments/intents`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
-        body: JSON.stringify({ bdt_amount: topUpAmount, provider: "bkash" }),
-      });
-      const intentJson = await intentRes.json();
-      if (!intentRes.ok) {
-        setStatus(intentJson.error ?? "Could not create payment intent");
-        return;
-      }
-
-      const intentId = intentJson.intent_id;
-      setLatestIntent(intentId);
-
-      const confirmRes = await fetch(`${apiBase}/v1/payments/demo/confirm`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
-        body: JSON.stringify({ intent_id: intentId }),
-      });
-      const confirmJson = await confirmRes.json();
-      if (!confirmRes.ok) {
-        setStatus(confirmJson.error ?? "Demo confirm failed");
-        return;
-      }
-
-      setStatus(`Top-up successful (+${confirmJson.minted_credits} credits)`);
-      await fetchSnapshot();
-    } catch (error) {
-      const nextStatus = error instanceof Error ? error.message : "Could not complete demo top-up";
-      setStatus(nextStatus);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function createExtraKey() {
-    if (!apiKey) {
-      setStatus("Set API key first.");
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch(`${apiBase}/v1/users/api-keys`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
-        body: JSON.stringify({ scopes: ["chat", "image", "usage", "billing"] }),
-      });
-      const json = await response.json();
-      if (!response.ok) {
-        setStatus(json.error ?? "Could not create API key");
-        return;
-      }
-
-      setStatus("Generated additional API key");
-      await fetchSnapshot();
-    } catch (error) {
-      const nextStatus = error instanceof Error ? error.message : "Could not create API key";
-      setStatus(nextStatus);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!sessionLoaded || !sessionApiKey) {
-      return;
-    }
-    void fetchSnapshot(sessionApiKey);
-  }, [sessionApiKey, sessionLoaded]);
-
-  if (!sessionLoaded || !sessionApiKey) {
-    return null;
-  }
-
   return (
-    <BillingShell loading={loading} status={status}>
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.2fr_1fr]">
-        <Card>
-          <CardHeader>
-            <CardTitle>Account controls</CardTitle>
-            <CardDescription>Use a valid API key to inspect account state and create secondary keys.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <label className="grid gap-2" htmlFor="billing-api-key">
-              <span className="text-sm font-medium">Primary API key</span>
-              <Input
-                id="billing-api-key"
-                onChange={(event) => setApiKey(event.target.value)}
-                placeholder="sk_live_..."
-                value={apiKey}
-              />
-            </label>
-            <div className="flex flex-wrap gap-2">
-              <Button disabled={loading} onClick={() => void fetchSnapshot()} type="button">
-                Load account
-              </Button>
-              <Button disabled={loading} onClick={() => void createExtraKey()} type="button" variant="secondary">
-                Create API key
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-        <TopUpPanel
-          latestIntent={latestIntent}
-          loading={loading}
-          onTopUp={topUpDemo}
-          setTopUpAmount={setTopUpAmount}
-          topUpAmount={topUpAmount}
-        />
-      </div>
-      <UserSettingsPanel apiKey={apiKey} />
-      <UsageCards snapshot={snapshot} usageCount={usageCount} />
-    </BillingShell>
+    <section className="mx-auto w-full max-w-3xl">
+      <Card>
+        <CardHeader>
+          <CardTitle>Billing moved to Settings</CardTitle>
+          <CardDescription>
+            Billing and payment flows now live under Settings, while API keys and usage moved to Developer Panel.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-3">
+          <Button asChild>
+            <Link href="/settings">Open Settings</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/developer">Open Developer Panel</Link>
+          </Button>
+        </CardContent>
+      </Card>
+    </section>
   );
 }

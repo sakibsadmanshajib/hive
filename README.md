@@ -46,7 +46,7 @@ This document captures the current implementation state so you can continue in a
 ## Repo Structure
 
 - `apps/api` - Fastify API, domain logic, runtime integrations
-- `apps/web` - Next.js app (chat + billing pages)
+- `apps/web` - Next.js app (chat-first workspace + developer panel + settings)
 - `packages/openapi/openapi.yaml` - OpenAPI contract for TS stack
 - `app/` + `tests/` - legacy Python MVP and tests
 - `docs/` - runbooks, release checklists, planning docs
@@ -300,8 +300,14 @@ Done:
 - Provider routing + fallback + status visibility
 - Local-payment top-up and credit accounting paths
 - User registration/login with persistent API keys
-- ChatGPT-like multi-conversation demo UI and billing dashboard
+- Chat-first multi-conversation UI with dedicated developer and settings surfaces
 - Optional Langfuse tracing hooks in runtime
+
+Current web route map:
+- `/` -> chat workspace
+- `/developer` -> API keys and usage workflows
+- `/settings` -> profile and billing/payment controls
+- `/billing` -> compatibility route pointing to new destinations
 
 Likely next engineering steps:
 - Replace placeholder/mock image pipeline with real image providers

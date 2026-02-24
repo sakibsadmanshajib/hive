@@ -167,3 +167,13 @@ Whenever architecture, provider routing, billing behavior, or operational flow c
 
 Reference standards:
 - `docs/engineering/git-and-ai-practices.md`
+
+## Frontend IA Snapshot
+
+Current web information architecture is chat-first:
+
+- `/` is the default chat workspace (primary user entry after auth)
+- `/developer` contains API key and usage-centric developer workflows
+- `/settings` contains profile, billing/payment, and account settings workflows
+- `/billing` is a compatibility route that points to `/settings` and `/developer`
+- top-right header actions expose `Developer Panel` and `Settings` as peer-level destinations
