@@ -7,7 +7,7 @@ function createConversation(overrides: Partial<ChatConversation> = {}): ChatConv
   return {
     id: "conv_1",
     title: "New Chat",
-    messages: [{ role: "assistant", content: "Welcome" }],
+    messages: [{ role: "assistant", content: "Welcome", createdAt: "2000-01-01T00:00:00.000Z" }],
     ...overrides,
   };
 }
@@ -43,6 +43,9 @@ describe("chatReducer", () => {
     expect(next.activeConversationId).toBe("conv_2");
     expect(next.conversations[0]?.id).toBe("conv_2");
     expect(next.conversations[0]?.title).toBe("Untitled");
+    const starterCreatedAt = next.conversations[0]?.messages[0]?.createdAt;
+    expect(typeof starterCreatedAt).toBe("string");
+    expect(starterCreatedAt && starterCreatedAt.length > 0).toBe(true);
   });
 
   it("appends user message and updates untitled conversation title", () => {
@@ -54,12 +57,14 @@ describe("chatReducer", () => {
       type: "userMessageQueued",
       payload: {
         conversationId: "conv_1",
-        message: { role: "user", content: "Tell me a short story" },
+        message: { role: "user", content: "Tell me a short story", createdAt: "2000-01-01T00:01:00.000Z" },
       },
     });
 
     expect(next.conversations[0]?.title).toBe("Tell me a short story");
-    expect(next.conversations[0]?.messages).toEqual([{ role: "user", content: "Tell me a short story" }]);
+    expect(next.conversations[0]?.messages).toEqual([
+      { role: "user", content: "Tell me a short story", createdAt: "2000-01-01T00:01:00.000Z" },
+    ]);
   });
 
   it("appends assistant message without changing existing title", () => {
@@ -68,7 +73,7 @@ describe("chatReducer", () => {
         createConversation({
           id: "conv_1",
           title: "Support",
-          messages: [{ role: "user", content: "Hello" }],
+          messages: [{ role: "user", content: "Hello", createdAt: "2000-01-01T00:01:00.000Z" }],
         }),
       ],
     });
@@ -77,14 +82,14 @@ describe("chatReducer", () => {
       type: "assistantMessageReceived",
       payload: {
         conversationId: "conv_1",
-        message: { role: "assistant", content: "Hi there" },
+        message: { role: "assistant", content: "Hi there", createdAt: "2000-01-01T00:02:00.000Z" },
       },
     });
 
     expect(next.conversations[0]?.title).toBe("Support");
     expect(next.conversations[0]?.messages).toEqual([
-      { role: "user", content: "Hello" },
-      { role: "assistant", content: "Hi there" },
+      { role: "user", content: "Hello", createdAt: "2000-01-01T00:01:00.000Z" },
+      { role: "assistant", content: "Hi there", createdAt: "2000-01-01T00:02:00.000Z" },
     ]);
   });
 });

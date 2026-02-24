@@ -1,6 +1,6 @@
-# BD AI Gateway
+# Hive
 
-Bangladesh-focused AI API gateway with:
+Hive is a Bangladesh-focused AI API gateway with:
 - OpenAI-compatible API surface
 - prepaid AI credits
 - local payment intent + verified webhook flow
@@ -24,6 +24,16 @@ This document captures the current implementation state so you can continue in a
 - Public provider health endpoint exists.
 - Internal provider diagnostics endpoint exists and is admin-token protected.
 - Python MVP still exists in repo as a legacy reference implementation.
+
+## Current Web Flow
+
+- `/` is the primary chat workspace (auth-guarded).
+- Unauthenticated users are redirected from `/` to `/auth`.
+- `/auth` hosts login/signup.
+- `/chat` redirects to `/` (legacy compatibility).
+- Chat workspace includes:
+  - left conversation navigation
+  - top-right avatar menu with `Settings`, `Developer Panel`, `Billing`, and `Log out`
 
 ## Business Rules Implemented
 
@@ -242,31 +252,31 @@ pnpm install
 API tests:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api test
+pnpm --filter @hive/api test
 ```
 
 API build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api build
+pnpm --filter @hive/api build
 ```
 
 Web build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web build
+pnpm --filter @hive/web build
 ```
 
 Run API locally:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api dev
+pnpm --filter @hive/api dev
 ```
 
 Run web locally:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web dev
+pnpm --filter @hive/web dev
 ```
 
 ## Tests Currently Present

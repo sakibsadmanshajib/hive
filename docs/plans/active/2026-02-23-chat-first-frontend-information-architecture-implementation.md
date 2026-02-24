@@ -15,8 +15,8 @@ Status: Active
 
 ## Verification
 
-- `pnpm --filter @bd-ai-gateway/web test`
-- `pnpm --filter @bd-ai-gateway/web build`
+- `pnpm --filter @hive/web test`
+- `pnpm --filter @hive/web build`
 
 ## Follow-ups
 

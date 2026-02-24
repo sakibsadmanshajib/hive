@@ -27,10 +27,12 @@ describe("AppHeader", () => {
     expect(screen.queryByRole("link", { name: /^auth$/i })).not.toBeInTheDocument();
   });
 
-  it("maps root route to chat workspace", async () => {
+  it("keeps dedicated modules for root workspace and legacy chat redirect", async () => {
     const [homePageModule, chatPageModule] = await Promise.all([import("../src/app/page"), import("../src/app/chat/page")]);
 
-    expect(homePageModule.default).toBe(chatPageModule.default);
+    expect(homePageModule.default).toBeTypeOf("function");
+    expect(chatPageModule.default).toBeTypeOf("function");
+    expect(homePageModule.default).not.toBe(chatPageModule.default);
   });
 
   it("provides a developer route module", async () => {

@@ -30,7 +30,7 @@ it("creates and reads user settings rows", async () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/postgres-schema-auth.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/postgres-schema-auth.test.ts`
 Expected: FAIL because table/helper methods do not exist.
 
 **Step 3: Write minimal implementation**
@@ -43,7 +43,7 @@ Expected: FAIL because table/helper methods do not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/postgres-schema-auth.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/postgres-schema-auth.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -73,7 +73,7 @@ it("maps legacy api key scopes to equivalent permissions", async () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/authorization-matrix.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/authorization-matrix.test.ts`
 Expected: FAIL because authorization service does not exist.
 
 **Step 3: Write minimal implementation**
@@ -84,7 +84,7 @@ Expected: FAIL because authorization service does not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/authorization-matrix.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/authorization-matrix.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -114,7 +114,7 @@ it("denies feature when setting is disabled", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/user-settings-gates.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/user-settings-gates.test.ts`
 Expected: FAIL because gate service is missing.
 
 **Step 3: Write minimal implementation**
@@ -123,7 +123,7 @@ Expected: FAIL because gate service is missing.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/user-settings-gates.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/user-settings-gates.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -149,7 +149,7 @@ Create `apps/api/test/routes/auth-principal.test.ts` to assert:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/auth-principal.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/auth-principal.test.ts`
 Expected: FAIL because middleware only supports API key scope checks.
 
 **Step 3: Write minimal implementation**
@@ -158,7 +158,7 @@ Expected: FAIL because middleware only supports API key scope checks.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/auth-principal.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/auth-principal.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -186,7 +186,7 @@ Create `apps/api/test/routes/google-auth-routes.test.ts` for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/google-auth-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/google-auth-routes.test.ts`
 Expected: FAIL because routes/config do not exist.
 
 **Step 3: Write minimal implementation**
@@ -199,7 +199,7 @@ Expected: FAIL because routes/config do not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/google-auth-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/google-auth-routes.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -234,7 +234,7 @@ it("returns 403 when permission exists but setting disabled", async () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/rbac-settings-enforcement.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/rbac-settings-enforcement.test.ts`
 Expected: FAIL because routes do not evaluate settings gates.
 
 **Step 3: Write minimal implementation**
@@ -244,7 +244,7 @@ Expected: FAIL because routes do not evaluate settings gates.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/rbac-settings-enforcement.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/rbac-settings-enforcement.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -269,7 +269,7 @@ Create `apps/api/test/routes/users-settings-routes.test.ts` for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/users-settings-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/users-settings-routes.test.ts`
 Expected: FAIL because routes do not exist.
 
 **Step 3: Write minimal implementation**
@@ -278,7 +278,7 @@ Expected: FAIL because routes do not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/users-settings-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/users-settings-routes.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -305,7 +305,7 @@ Create `apps/api/test/routes/two-factor-routes.test.ts` for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/two-factor-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/two-factor-routes.test.ts`
 Expected: FAIL because endpoints/services do not exist.
 
 **Step 3: Write minimal implementation**
@@ -314,7 +314,7 @@ Expected: FAIL because endpoints/services do not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/two-factor-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/two-factor-routes.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -344,7 +344,7 @@ it("blocks api-key creation when 2fa is required but not recently verified", asy
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/two-factor-enforcement.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/two-factor-enforcement.test.ts`
 Expected: FAIL because enforcement hook is missing.
 
 **Step 3: Write minimal implementation**
@@ -353,7 +353,7 @@ Expected: FAIL because enforcement hook is missing.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/two-factor-enforcement.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/two-factor-enforcement.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -381,7 +381,7 @@ Add UI tests asserting:
 
 **Step 2: Run tests to verify they fail**
 
-Run: `pnpm --filter @bd-ai-gateway/web test test/google-login-ui.test.tsx test/user-settings-panel.test.tsx`
+Run: `pnpm --filter @hive/web test test/google-login-ui.test.tsx test/user-settings-panel.test.tsx`
 Expected: FAIL because components do not exist.
 
 **Step 3: Write minimal implementation**
@@ -390,7 +390,7 @@ Expected: FAIL because components do not exist.
 
 **Step 4: Run tests to verify they pass**
 
-Run: `pnpm --filter @bd-ai-gateway/web test test/google-login-ui.test.tsx test/user-settings-panel.test.tsx`
+Run: `pnpm --filter @hive/web test test/google-login-ui.test.tsx test/user-settings-panel.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -413,7 +413,7 @@ Add simple expectation in an existing test file for presence of new auth env var
 
 **Step 2: Run to verify fail**
 
-Run: `pnpm --filter @bd-ai-gateway/api test`
+Run: `pnpm --filter @hive/api test`
 Expected: FAIL before docs updates if test is added.
 
 **Step 3: Write minimal documentation updates**
@@ -423,10 +423,10 @@ Expected: FAIL before docs updates if test is added.
 **Step 4: Run full verification**
 
 Run:
-- `pnpm --filter @bd-ai-gateway/api test`
-- `pnpm --filter @bd-ai-gateway/api build`
-- `pnpm --filter @bd-ai-gateway/web test`
-- `pnpm --filter @bd-ai-gateway/web build`
+- `pnpm --filter @hive/api test`
+- `pnpm --filter @hive/api build`
+- `pnpm --filter @hive/web test`
+- `pnpm --filter @hive/web build`
 
 Expected:
 - All test suites pass.

@@ -22,7 +22,7 @@ export function useChatSession() {
     [chatState.activeConversationId, chatState.conversations],
   );
 
-  function addConversation() {
+function addConversation() {
     dispatch({
       type: "conversationAdded",
       payload: {
@@ -49,7 +49,11 @@ export function useChatSession() {
       return;
     }
 
-    const userMessage: ChatMessage = { role: "user", content: prompt.trim() };
+    const userMessage: ChatMessage = {
+      role: "user",
+      content: prompt.trim(),
+      createdAt: new Date().toISOString(),
+    };
     dispatch({
       type: "userMessageQueued",
       payload: {
@@ -83,11 +87,13 @@ export function useChatSession() {
         const nextError = json?.error ?? "Chat request failed";
         setErrorMessage(nextError);
         toast.error(nextError);
+        return;
       }
 
       const assistantMessage: ChatMessage = {
         role: "assistant",
         content: json?.choices?.[0]?.message?.content ?? json?.error ?? "No response",
+        createdAt: new Date().toISOString(),
       };
       dispatch({
         type: "assistantMessageReceived",
