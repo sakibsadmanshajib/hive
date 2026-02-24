@@ -267,6 +267,12 @@ Web build:
 pnpm --filter @hive/web build
 ```
 
+Web smoke e2e:
+
+```bash
+pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
+```
+
 Run API locally:
 
 ```bash
@@ -285,6 +291,8 @@ pnpm --filter @hive/web dev
 - Provider tests under `apps/api/test/providers/*`
 - Route-level test for provider status endpoints:
   - `apps/api/test/routes/providers-status-route.test.ts`
+- Web smoke e2e coverage:
+  - `apps/web/e2e/smoke-auth-chat-billing.spec.ts`
 
 ## Security and Operations Notes
 
