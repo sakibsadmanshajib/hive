@@ -96,6 +96,10 @@ export type AppEnv = {
     };
   };
   providers: {
+    circuitBreaker: {
+      failureThreshold: number;
+      resetTimeoutMs: number;
+    };
     ollama: {
       baseUrl: string;
       model: string;
@@ -165,6 +169,10 @@ export function getEnv(): AppEnv {
       },
     },
     providers: {
+      circuitBreaker: {
+        failureThreshold: parseNumber("PROVIDER_CB_THRESHOLD", 5),
+        resetTimeoutMs: parseNumber("PROVIDER_CB_RESET_MS", 30000),
+      },
       ollama: {
         baseUrl: required("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         model: required("OLLAMA_MODEL", "llama3.1:8b"),

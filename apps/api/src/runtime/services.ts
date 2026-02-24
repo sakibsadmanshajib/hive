@@ -677,6 +677,7 @@ export function createRuntimeServices(): RuntimeServices {
       groq: ["ollama", "mock"],
       mock: [],
     },
+    circuitBreaker: env.providers.circuitBreaker,
   });
 
   const ai = new RuntimeAiService(models, credits, usage, providerRegistry, langfuse);

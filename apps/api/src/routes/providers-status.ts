@@ -2,12 +2,18 @@ import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
 
 function sanitizeStatus(status: Awaited<ReturnType<RuntimeServices["ai"]["providersStatus"]>>) {
-  return status.providers.map((provider) => ({
-    name: provider.name,
-    enabled: provider.enabled,
-    healthy: provider.healthy,
-    state: provider.enabled ? (provider.healthy ? "ready" : "degraded") : "disabled",
-  }));
+  return status.providers.map((provider) => {
+    let state = provider.enabled ? (provider.healthy ? "ready" : "degraded") : "disabled";
+    if (provider.circuit.state === "OPEN") {
+      state = "circuit-open";
+    }
+    return {
+      name: provider.name,
+      enabled: provider.enabled,
+      healthy: provider.healthy,
+      state,
+    };
+  });
 }
 
 export function registerProvidersStatusRoute(app: FastifyInstance, services: RuntimeServices): void {

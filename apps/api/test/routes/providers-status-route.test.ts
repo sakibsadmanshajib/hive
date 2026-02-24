@@ -22,8 +22,20 @@ describe("providers status routes", () => {
       ai: {
         providersStatus: async () => ({
           providers: [
-            { name: "ollama", enabled: true, healthy: true, detail: "reachable" },
-            { name: "groq", enabled: false, healthy: false, detail: "missing key" },
+            {
+              name: "ollama",
+              enabled: true,
+              healthy: true,
+              detail: "reachable",
+              circuit: { state: "CLOSED", failures: 0 },
+            },
+            {
+              name: "groq",
+              enabled: false,
+              healthy: false,
+              detail: "missing key",
+              circuit: { state: "CLOSED", failures: 0 },
+            },
           ],
         }),
       },
@@ -43,7 +55,15 @@ describe("providers status routes", () => {
       env: { adminStatusToken: "admin-token" },
       ai: {
         providersStatus: async () => ({
-          providers: [{ name: "mock", enabled: true, healthy: true, detail: "always available fallback" }],
+          providers: [
+            {
+              name: "mock",
+              enabled: true,
+              healthy: true,
+              detail: "always available fallback",
+              circuit: { state: "CLOSED", failures: 0 },
+            },
+          ],
         }),
       },
     } as never);

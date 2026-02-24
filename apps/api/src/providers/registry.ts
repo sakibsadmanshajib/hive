@@ -1,3 +1,4 @@
+import { CircuitBreaker, type CircuitBreakerConfig, type CircuitState } from "./circuit-breaker";
 import type { ProviderChatMessage, ProviderClient, ProviderName } from "./types";
 
 type ProviderRegistryConfig = {
@@ -6,6 +7,7 @@ type ProviderRegistryConfig = {
   modelProviderMap: Record<string, ProviderName>;
   providerModelMap: Record<ProviderName, string>;
   fallbackOrder: Record<ProviderName, ProviderName[]>;
+  circuitBreaker?: CircuitBreakerConfig;
 };
 
 export type ProviderExecutionResult = {
@@ -20,14 +22,25 @@ export type ProviderStatusResult = {
     enabled: boolean;
     healthy: boolean;
     detail: string;
+    circuit: {
+      state: CircuitState;
+      failures: number;
+    };
   }>;
 };
 
 export class ProviderRegistry {
   private readonly clientsByName: Map<ProviderName, ProviderClient>;
+  private readonly circuitBreakers: Map<ProviderName, CircuitBreaker>;
 
   constructor(private readonly config: ProviderRegistryConfig) {
     this.clientsByName = new Map(config.clients.map((client) => [client.name, client]));
+    this.circuitBreakers = new Map(
+      config.clients.map((client) => [
+        client.name,
+        new CircuitBreaker(client.name, config.circuitBreaker ?? { failureThreshold: 3, resetTimeoutMs: 30000 }),
+      ]),
+    );
   }
 
   async chat(modelId: string, messages: ProviderChatMessage[]): Promise<ProviderExecutionResult> {
@@ -37,19 +50,28 @@ export class ProviderRegistry {
 
     for (const providerName of candidateProviders) {
       const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
       if (!client || !client.isEnabled()) {
+        continue;
+      }
+
+      if (breaker?.isOpen()) {
+        errors.push(`${providerName}: circuit open`);
         continue;
       }
 
       const providerModel = this.config.providerModelMap[providerName] ?? modelId;
       try {
         const response = await client.chat({ model: providerModel, messages });
+        breaker?.recordSuccess();
         return {
           content: response.content,
           providerUsed: providerName,
           providerModel: response.providerModel ?? providerModel,
         };
       } catch (error) {
+        breaker?.recordFailure();
         const reason = error instanceof Error ? error.message : String(error);
         errors.push(`${providerName}: ${reason}`);
       }
@@ -62,12 +84,15 @@ export class ProviderRegistry {
     const providers: ProviderStatusResult["providers"] = [];
     for (const providerName of ["ollama", "groq", "mock"] as const) {
       const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
       if (!client) {
         providers.push({
           name: providerName,
           enabled: false,
           healthy: false,
           detail: "not registered",
+          circuit: { state: "CLOSED", failures: 0 },
         });
         continue;
       }
@@ -77,6 +102,10 @@ export class ProviderRegistry {
         enabled: health.enabled,
         healthy: health.healthy,
         detail: health.detail,
+        circuit: {
+          state: breaker?.getState() ?? "CLOSED",
+          failures: breaker?.getFailures() ?? 0,
+        },
       });
     }
     return { providers };
