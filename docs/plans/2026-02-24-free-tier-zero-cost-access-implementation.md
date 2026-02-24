@@ -10,6 +10,8 @@
 
 ---
 
+## Tasks
+
 ### Task 1: Add failing tests for free API-key denial and free-only model gates
 
 **Files:**

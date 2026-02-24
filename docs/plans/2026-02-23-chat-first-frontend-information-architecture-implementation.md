@@ -12,6 +12,8 @@
 
 Use @superpowers/test-driven-development for implementation steps and @superpowers/verification-before-completion before any done claim.
 
+## Tasks
+
 ### Task 1: Add web test harness for route/shell behavior
 
 **Files:**

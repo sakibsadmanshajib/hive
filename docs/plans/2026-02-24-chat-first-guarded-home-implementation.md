@@ -10,6 +10,8 @@
 
 ---
 
+## Implementation Tasks
+
 ### Task 1: Guarded Root Routing
 
 **Files:**

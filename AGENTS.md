@@ -1,6 +1,6 @@
 ---
-name: bd-ai-gateway-agent
-description: Implementation and operations agent for BD AI Gateway (TypeScript API + web + provider integrations)
+name: hive-agent
+description: Implementation and operations agent for Hive (TypeScript API + web + provider integrations)
 ---
 
 # AGENTS.md
@@ -18,19 +18,19 @@ pnpm install
 API tests:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api test
+pnpm --filter @hive/api test
 ```
 
 API build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api build
+pnpm --filter @hive/api build
 ```
 
 Web build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web build
+pnpm --filter @hive/web build
 ```
 
 Docker stack:
@@ -158,6 +158,7 @@ For ops/status changes:
 - Keep explicit boundaries in code and docs so future agents do not guess.
 - If AI-generated output is ambiguous, choose maintainability and clarity over cleverness.
 - If a secret appears in prompts/logs/chat, rotate it and remove it from persisted artifacts.
+- Parallelize independent tasks by default (parallel tool calls, parallel checks, parallel verification) and only serialize steps with real dependencies.
 
 ## Quick Troubleshooting
 
@@ -228,3 +229,13 @@ Start-of-session checklist for agents:
 2. Run verification commands from "Commands First".
 3. If working on runtime behavior, run `docker compose up --build -d` and validate endpoints.
 4. Keep docs updated with behavior changes in the same change.
+
+## Frontend IA Snapshot
+
+Current web information architecture is chat-first:
+
+- `/` is the default chat workspace (primary user entry after auth)
+- `/developer` contains API key and usage-centric developer workflows
+- `/settings` contains profile, billing/payment, and account settings workflows
+- `/billing` is a compatibility route that points to `/settings` and `/developer`
+- top-right header actions expose `Developer Panel` and `Settings` as peer-level destinations

@@ -52,6 +52,7 @@ jobs:
               - 'pnpm-workspace.yaml'
               - 'tsconfig.base.json'
               - '.github/workflows/**'
+              - '.github/scripts/**'
 
       - name: Compute execution plan
         id: scope
@@ -90,7 +91,7 @@ jobs:
         if: steps.scope.outputs.run_api == 'true' || steps.scope.outputs.run_web == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 20
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
@@ -99,8 +100,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: apps/web/.next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/**') }}
+          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**', 'apps/web/public/**', 'apps/web/next.config.*', 'apps/web/tsconfig*.json', 'apps/web/package.json') }}
           restore-keys: |
+            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**', 'apps/web/public/**', 'apps/web/next.config.*', 'apps/web/tsconfig*.json', 'apps/web/package.json') }}-
             nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
 
       - name: Install dependencies
@@ -109,27 +111,27 @@ jobs:
 
       - name: Lint API
         if: steps.scope.outputs.run_api == 'true'
-        run: pnpm --filter @bd-ai-gateway/api lint
+        run: pnpm --filter @hive/api lint
 
       - name: Lint web
         if: steps.scope.outputs.run_web == 'true'
-        run: pnpm --filter @bd-ai-gateway/web lint
+        run: pnpm --filter @hive/web lint
 
       - name: Test API
         if: steps.scope.outputs.run_api == 'true'
-        run: pnpm --filter @bd-ai-gateway/api test
+        run: pnpm --filter @hive/api test
 
       - name: Test web
         if: steps.scope.outputs.run_web == 'true'
-        run: pnpm --filter @bd-ai-gateway/web test
+        run: pnpm --filter @hive/web test
 
       - name: Build API
         if: steps.scope.outputs.run_api == 'true'
-        run: pnpm --filter @bd-ai-gateway/api build
+        run: pnpm --filter @hive/api build
 
       - name: Build web
         if: steps.scope.outputs.run_web == 'true'
-        run: pnpm --filter @bd-ai-gateway/web build
+        run: pnpm --filter @hive/web build
 
       - name: No-op when no relevant source changed
         if: steps.scope.outputs.run_api != 'true' && steps.scope.outputs.run_web != 'true'

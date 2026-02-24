@@ -83,7 +83,7 @@ GitHub tracking issue: https://github.com/sakibsadmanshajib/hive/issues/14
 
 ### 11) Status and feedback copy is overly operational
 
-- Repeated statuses such as "Set API key first" and generic "Working..." style messaging focus on system state, not user guidance.
+- Repeated statuses such as "Set API key first" and generic "Working..."-style messaging focus on system state, not user guidance.
 - Combined with contradictory chat success/error signaling, this reduces user confidence.
 
 ## Product Direction Update (Owner-Specified)

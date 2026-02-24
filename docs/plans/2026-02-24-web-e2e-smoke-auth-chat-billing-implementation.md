@@ -4,13 +4,13 @@
 
 **Goal:** Add Playwright smoke e2e coverage for unauth/auth/chat/billing flows (including chat and billing failure states) with repeatable local and CI commands.
 
-**Architecture:** Add a Playwright test runner in `apps/web` and run smoke specs against the Docker full stack baseline. Keep tests deterministic by using API-assisted auth setup and stable selectors, while preserving current API contracts and user-facing behavior. Add one CI path dedicated to web smoke e2e so regular unit/build checks remain fast.
+**Architecture:** Add a Playwright test runner in `apps/web` and run smoke specs against the Docker full-stack baseline. Keep tests deterministic by using API-assisted auth setup and stable selectors, while preserving current API contracts and user-facing behavior. Add one CI path dedicated to web smoke e2e so regular unit/build checks remain fast.
 
 **Tech Stack:** Next.js 15, TypeScript, Playwright, pnpm workspaces, GitHub Actions, Docker Compose.
 
 ---
 
-### Task 1: Add Playwright runner and command wiring
+## Task 1: Add Playwright runner and command wiring
 
 **Files:**
 - Modify: `apps/web/package.json`

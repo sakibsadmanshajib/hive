@@ -43,7 +43,7 @@ Create an issue with:
 - milestone: matching release/stabilization milestone
 - sections: Context, Problem, Why this matters, Acceptance Criteria, Verification, Dependencies
 
-If project assignment is not possible due missing token scopes, note that in execution output and keep label/milestone compliance.
+If project assignment is not possible due to missing token scopes, note that in execution output and keep label/milestone compliance.
 
 ## Risks and Mitigations
 

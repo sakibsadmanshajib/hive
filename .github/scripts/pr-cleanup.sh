@@ -39,8 +39,8 @@ if [[ "$head_repo" != "$base_repo" ]]; then
   exit 0
 fi
 
-if gh api "repos/$base_repo/git/ref/heads/$head_ref" >/dev/null 2>&1; then
-  encoded_ref="${head_ref//\//%2F}"
+encoded_ref="$(jq -rn --arg ref "$head_ref" '$ref | @uri')"
+if gh api "repos/$base_repo/git/ref/heads/$encoded_ref" >/dev/null 2>&1; then
   gh api -X DELETE "repos/$base_repo/git/refs/heads/$encoded_ref" >/dev/null
   echo "Deleted merged branch: $head_ref"
 else
@@ -49,7 +49,7 @@ fi
 
 if [[ -n "$pr_number" ]]; then
   labels="$(gh pr view "$pr_number" --json labels --jq '.labels[].name' || true)"
-  if [[ "$labels" == *"status:in-progress"* ]]; then
+  if grep -Fxq "status:in-progress" <<< "$labels"; then
     gh pr edit "$pr_number" --remove-label "status:in-progress"
     echo "Removed status:in-progress label from PR #$pr_number"
   fi

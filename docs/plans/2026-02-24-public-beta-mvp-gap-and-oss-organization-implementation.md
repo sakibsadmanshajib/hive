@@ -10,6 +10,8 @@
 
 ---
 
+## Tasks
+
 ### Task 1: Baseline Repository and GH State Snapshot
 
 **Files:**
@@ -375,28 +377,18 @@ Expected: PASS.
 Run: `git status --short`
 Expected: clean tree if all commits were created, or only intentional uncommitted files.
 
-### Task 11: Optional Follow-Up (Maintainer UX)
+### Task 11: CI Workflow Verification (Already Added in This PR)
 
 **Files:**
-- Create: `.github/workflows/ci.yml` (if absent)
-- Test: workflow syntax only
+- Verify: `.github/workflows/ci.yml`
+- Test: workflow visibility only
 
-**Step 1: Add lightweight PR checks workflow**
-
-Run on pull requests:
-
-- API test
-- API build
-- Web build
-
-**Step 2: Validate workflow syntax**
+**Step 1: Confirm workflow is present**
 
 Run: `gh workflow list`
-Expected: workflow appears once pushed.
+Expected: `Monorepo Quality CI` appears.
 
-**Step 3: Commit**
+**Step 2: Verify workflow behavior after push**
 
-```bash
-git add .github/workflows/ci.yml
-git commit -m "ci: add baseline PR validation workflow"
-```
+Run: `gh run list --workflow ci.yml --limit 10`
+Expected: workflow runs appear for qualifying push/PR events.

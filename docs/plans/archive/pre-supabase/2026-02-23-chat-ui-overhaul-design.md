@@ -83,8 +83,8 @@
   - Conversation reducer/hook state transitions.
   - Mobile drawer open/close behavior.
 - Run and verify:
-  - `pnpm --filter @bd-ai-gateway/web test`
-  - `pnpm --filter @bd-ai-gateway/web build`
+  - `pnpm --filter @hive/web test`
+  - `pnpm --filter @hive/web build`
 
 ## Success Criteria
 - UI feels materially more polished and modern across phone, tablet, and desktop.

@@ -39,7 +39,7 @@ describe("styling config", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test`
+Run: `pnpm --filter @hive/web test`
 Expected: FAIL because `tailwind.config.ts` and `postcss.config.js` do not exist.
 
 **Step 3: Write minimal implementation**
@@ -50,7 +50,7 @@ Expected: FAIL because `tailwind.config.ts` and `postcss.config.js` do not exist
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test`
+Run: `pnpm --filter @hive/web test`
 Expected: PASS for `styling-config.test.ts`.
 
 **Step 5: Commit**
@@ -95,7 +95,7 @@ describe("cn", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/utils.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/utils.test.ts`
 Expected: FAIL with module-not-found for `src/lib/utils`.
 
 **Step 3: Write minimal implementation**
@@ -104,7 +104,7 @@ Expected: FAIL with module-not-found for `src/lib/utils`.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/utils.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/utils.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -144,7 +144,7 @@ describe("AppShell", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/app-shell.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/app-shell.test.tsx`
 Expected: FAIL because `AppShell` does not exist.
 
 **Step 3: Write minimal implementation**
@@ -156,7 +156,7 @@ Expected: FAIL because `AppShell` does not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/app-shell.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/app-shell.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -197,7 +197,7 @@ it("appends assistant response to active conversation", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-reducer.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-reducer.test.ts`
 Expected: FAIL because reducer module does not exist.
 
 **Step 3: Write minimal implementation**
@@ -206,7 +206,7 @@ Expected: FAIL because reducer module does not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-reducer.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-reducer.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -247,7 +247,7 @@ describe("chat page", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-mobile-layout.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-mobile-layout.test.tsx`
 Expected: FAIL until migrated components and semantics are in place.
 
 **Step 3: Write minimal implementation**
@@ -260,7 +260,7 @@ Expected: FAIL until migrated components and semantics are in place.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-mobile-layout.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-mobile-layout.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -297,7 +297,7 @@ describe("MarkdownMessage", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/markdown-message.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/markdown-message.test.tsx`
 Expected: FAIL because component does not exist.
 
 **Step 3: Write minimal implementation**
@@ -306,7 +306,7 @@ Expected: FAIL because component does not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/markdown-message.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/markdown-message.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -334,7 +334,7 @@ Create `apps/web/test/billing-page.test.tsx` with assertions for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/billing-page.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/billing-page.test.tsx`
 Expected: FAIL until billing components are migrated.
 
 **Step 3: Write minimal implementation**
@@ -343,7 +343,7 @@ Expected: FAIL until billing components are migrated.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/billing-page.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/billing-page.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -380,7 +380,7 @@ describe("ThemeProvider", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/theme-provider.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/theme-provider.test.tsx`
 Expected: FAIL because provider does not exist.
 
 **Step 3: Write minimal implementation**
@@ -389,7 +389,7 @@ Expected: FAIL because provider does not exist.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/theme-provider.test.tsx`
+Run: `pnpm --filter @hive/web test apps/web/test/theme-provider.test.tsx`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -417,7 +417,7 @@ Create `apps/web/test/chat-shortcuts.test.ts` for:
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-shortcuts.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-shortcuts.test.ts`
 Expected: FAIL until shortcut hook is implemented.
 
 **Step 3: Write minimal implementation**
@@ -427,7 +427,7 @@ Expected: FAIL until shortcut hook is implemented.
 
 **Step 4: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/web test apps/web/test/chat-shortcuts.test.ts`
+Run: `pnpm --filter @hive/web test apps/web/test/chat-shortcuts.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -455,7 +455,7 @@ it("documents upgraded web UI routes", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/web test`
+Run: `pnpm --filter @hive/web test`
 Expected: FAIL until documentation updates are included.
 
 **Step 3: Write minimal implementation**
@@ -465,10 +465,10 @@ Expected: FAIL until documentation updates are included.
 **Step 4: Run tests/build to verify all pass**
 
 Run:
-- `pnpm --filter @bd-ai-gateway/web test`
-- `pnpm --filter @bd-ai-gateway/web build`
-- `pnpm --filter @bd-ai-gateway/api test`
-- `pnpm --filter @bd-ai-gateway/api build`
+- `pnpm --filter @hive/web test`
+- `pnpm --filter @hive/web build`
+- `pnpm --filter @hive/api test`
+- `pnpm --filter @hive/api build`
 
 Expected:
 - PASS for web tests.

@@ -58,14 +58,14 @@ The codebase is developed by humans and AI agents. Clear Git and documentation s
 For API-impacting changes:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api test
-pnpm --filter @bd-ai-gateway/api build
+pnpm --filter @hive/api test
+pnpm --filter @hive/api build
 ```
 
 For web-impacting changes:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web build
+pnpm --filter @hive/web build
 ```
 
 For infra/runtime changes (when Docker is available):

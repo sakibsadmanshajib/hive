@@ -33,7 +33,7 @@ it("reads supabase config and feature flags", () => {
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/env.test.ts -t "reads supabase config and feature flags"`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/env.test.ts -t "reads supabase config and feature flags"`
 Expected: FAIL because `supabase` fields do not exist in `AppEnv`.
 
 **Step 3: Write minimal implementation**
@@ -63,7 +63,7 @@ export function createSupabaseAdminClient(env: AppEnv) {
 
 **Step 5: Run test to verify it passes**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/env.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/env.test.ts`
 Expected: PASS.
 
 **Step 6: Commit**
@@ -93,7 +93,7 @@ it("accepts bearer token validated through supabase when flag enabled", async ()
 
 **Step 2: Run test to verify it fails**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/auth-principal.test.ts -t "validated through supabase"`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/auth-principal.test.ts -t "validated through supabase"`
 Expected: FAIL because `supabaseAuth` path is not wired.
 
 **Step 3: Write minimal implementation**
@@ -117,7 +117,7 @@ const session = env.supabase.flags.authEnabled
 
 **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/auth-principal.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/auth-principal.test.ts`
 Expected: PASS.
 
 **Step 6: Commit**
@@ -154,7 +154,7 @@ it("patch /v1/users/settings writes through supabase repository", async () => {
 
 **Step 2: Run tests to verify failures**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/users-routes.test.ts apps/api/test/routes/users-settings-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/users-routes.test.ts apps/api/test/routes/users-settings-routes.test.ts`
 Expected: FAIL due to missing Supabase store wiring.
 
 **Step 3: Write minimal implementation**
@@ -178,7 +178,7 @@ const users = env.supabase.flags.userRepoEnabled
 
 **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/users-routes.test.ts apps/api/test/routes/users-settings-routes.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/users-routes.test.ts apps/api/test/routes/users-settings-routes.test.ts`
 Expected: PASS with unchanged payload shapes.
 
 **Step 6: Commit**
@@ -212,7 +212,7 @@ it("resolves api key by hash and respects revoked flag", async () => {
 
 **Step 2: Run tests to verify failures**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/api-key-service.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/api-key-service.test.ts`
 Expected: FAIL because Supabase API key store not present.
 
 **Step 3: Write minimal implementation**
@@ -243,7 +243,7 @@ if (env.supabase.flags.apiKeysEnabled) {
 
 **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/api-key-service.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/api-key-service.test.ts`
 Expected: PASS.
 
 **Step 6: Commit**
@@ -277,7 +277,7 @@ it("keeps webhook idempotency for duplicate provider_txn_id", async () => {
 
 **Step 2: Run tests to verify failures**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/credits-ledger.test.ts apps/api/test/domain/payment-service.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/credits-ledger.test.ts apps/api/test/domain/payment-service.test.ts`
 Expected: FAIL due to missing Supabase billing adapter.
 
 **Step 3: Write minimal implementation**
@@ -301,7 +301,7 @@ Do not move this formula into SQL or Supabase triggers.
 
 **Step 5: Run tests to verify pass**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/domain/credits-ledger.test.ts apps/api/test/domain/payment-service.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/domain/credits-ledger.test.ts apps/api/test/domain/payment-service.test.ts`
 Expected: PASS with unchanged formula behavior.
 
 **Step 6: Commit**
@@ -333,7 +333,7 @@ it("keeps internal status protected without admin token", async () => {
 
 **Step 2: Run tests to verify status protections**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/providers-status-route.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/providers-status-route.test.ts`
 Expected: FAIL only if migration touched behavior accidentally.
 
 **Step 3: Apply minimal implementation only if needed**
@@ -342,7 +342,7 @@ Keep existing sanitize/filter behavior and token gate exactly as current contrac
 
 **Step 4: Run tests to verify pass**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/providers-status-route.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/providers-status-route.test.ts`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -369,7 +369,7 @@ git commit -m "test(routes): lock provider status security invariants during mig
 
 **Step 2: Run migration validation to verify failure**
 
-Run: `pnpm --filter @bd-ai-gateway/api test -t "supabase schema exists"`
+Run: `pnpm --filter @hive/api test -t "supabase schema exists"`
 Expected: FAIL before migrations are present.
 
 **Step 3: Write minimal migration SQL**
@@ -384,7 +384,7 @@ Add equivalent explicit SQL for API keys and billing tables used by adapters.
 
 **Step 4: Run validation to verify pass**
 
-Run: `pnpm --filter @bd-ai-gateway/api test -t "supabase schema exists"`
+Run: `pnpm --filter @hive/api test -t "supabase schema exists"`
 Expected: PASS.
 
 **Step 5: Commit**
@@ -403,17 +403,17 @@ git commit -m "docs(api): add supabase migration and operations guidance"
 
 **Step 1: Run targeted migration regression tests**
 
-Run: `pnpm --filter @bd-ai-gateway/api test apps/api/test/routes/auth-principal.test.ts apps/api/test/routes/users-routes.test.ts apps/api/test/routes/users-settings-routes.test.ts apps/api/test/domain/api-key-service.test.ts apps/api/test/domain/credits-ledger.test.ts apps/api/test/domain/payment-service.test.ts apps/api/test/routes/providers-status-route.test.ts`
+Run: `pnpm --filter @hive/api test apps/api/test/routes/auth-principal.test.ts apps/api/test/routes/users-routes.test.ts apps/api/test/routes/users-settings-routes.test.ts apps/api/test/domain/api-key-service.test.ts apps/api/test/domain/credits-ledger.test.ts apps/api/test/domain/payment-service.test.ts apps/api/test/routes/providers-status-route.test.ts`
 Expected: PASS.
 
 **Step 2: Run full API suite**
 
-Run: `pnpm --filter @bd-ai-gateway/api test`
+Run: `pnpm --filter @hive/api test`
 Expected: PASS.
 
 **Step 3: Run API build**
 
-Run: `pnpm --filter @bd-ai-gateway/api build`
+Run: `pnpm --filter @hive/api build`
 Expected: PASS.
 
 **Step 4: Optional runtime smoke on Docker stack**

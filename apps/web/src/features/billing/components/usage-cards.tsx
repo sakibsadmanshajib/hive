@@ -1,6 +1,6 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 
-type UserSnapshot = {
+export type UserSnapshot = {
   user: { user_id: string; email: string; name?: string };
   credits: { availableCredits: number; purchasedCredits: number; promoCredits: number };
   api_keys: Array<{ key_id: string; revoked: boolean; scopes: string[]; createdAt: string }>;
