@@ -69,6 +69,16 @@ export type AppEnv = {
     storeId?: string;
     storePassword?: string;
   };
+  supabase: {
+    url: string;
+    serviceRoleKey: string;
+    flags: {
+      authEnabled: boolean;
+      userRepoEnabled: boolean;
+      apiKeysEnabled: boolean;
+      billingStoreEnabled: boolean;
+    };
+  };
   providers: {
     ollama: {
       baseUrl: string;
@@ -120,6 +130,16 @@ export function getEnv(): AppEnv {
       validatorEndpoint: process.env.SSLCOMMERZ_VALIDATOR_ENDPOINT,
       storeId: process.env.SSLCOMMERZ_STORE_ID,
       storePassword: process.env.SSLCOMMERZ_STORE_PASSWORD,
+    },
+    supabase: {
+      url: required("SUPABASE_URL", "http://127.0.0.1:54321"),
+      serviceRoleKey: required("SUPABASE_SERVICE_ROLE_KEY", "dev-service-role"),
+      flags: {
+        authEnabled: parseBoolean("SUPABASE_AUTH_ENABLED", false),
+        userRepoEnabled: parseBoolean("SUPABASE_USER_REPO_ENABLED", false),
+        apiKeysEnabled: parseBoolean("SUPABASE_API_KEYS_ENABLED", false),
+        billingStoreEnabled: parseBoolean("SUPABASE_BILLING_STORE_ENABLED", false),
+      },
     },
     providers: {
       ollama: {

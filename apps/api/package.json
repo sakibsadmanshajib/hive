@@ -10,6 +10,7 @@
     "lint": "eslint src --ext .ts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.57.4",
     "dotenv": "^16.4.7",
     "fastify": "^5.1.0",
     "ioredis": "^5.4.2",

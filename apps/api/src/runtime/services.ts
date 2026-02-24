@@ -8,17 +8,112 @@ import { MockProviderClient } from "../providers/mock-client";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
-import { PostgresStore, type PersistentPaymentIntent } from "./postgres-store";
+import { PostgresStore, type PersistentApiKey, type PersistentPaymentIntent } from "./postgres-store";
 import { RedisRateLimiter } from "./redis-rate-limiter";
 import { createApiKey, hashPassword, verifyPassword } from "./security";
 import { LangfuseClient } from "./langfuse";
 import { AuthorizationService } from "./authorization";
 import { UserSettingsService } from "./user-settings";
+import { createSupabaseAdminClient } from "./supabase-client";
+import { SupabaseAuthService } from "./supabase-auth-service";
+import { SupabaseApiKeyStore } from "./supabase-api-key-store";
+import { SupabaseUserStore } from "./supabase-user-store";
+import { SupabaseBillingStore } from "./supabase-billing-store";
 
 type ChatMessage = { role: string; content: string };
 
-class PersistentCreditService {
+type ApiKeyStore = {
+  create(input: { key: string; userId: string; scopes: string[] }): Promise<void>;
+  resolve(key: string): Promise<{ userId: string; scopes: string[] } | null>;
+  list(userId: string): Promise<PersistentApiKey[]>;
+  revoke(key: string, userId: string): Promise<boolean>;
+  get(key: string): Promise<PersistentApiKey | undefined>;
+};
+
+type BillingStore = {
+  getBalance(userId: string): Promise<CreditBalance>;
+  consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean>;
+  topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance>;
+  createPaymentIntent(intent: PersistentPaymentIntent): Promise<void>;
+  getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined>;
+  recordPaymentEvent(
+    eventKey: string,
+    intentId: string,
+    provider: string,
+    providerTxnId: string,
+    verified: boolean,
+  ): Promise<boolean>;
+  markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void>;
+};
+
+class PostgresApiKeyStore implements ApiKeyStore {
   constructor(private readonly store: PostgresStore) {}
+
+  create(input: { key: string; userId: string; scopes: string[] }): Promise<void> {
+    return this.store.createApiKey(input);
+  }
+
+  async resolve(key: string): Promise<{ userId: string; scopes: string[] } | null> {
+    const apiKey = await this.store.getApiKey(key);
+    if (!apiKey || apiKey.revoked) {
+      return null;
+    }
+    return { userId: apiKey.userId, scopes: apiKey.scopes };
+  }
+
+  list(userId: string): Promise<PersistentApiKey[]> {
+    return this.store.listApiKeys(userId);
+  }
+
+  revoke(key: string, userId: string): Promise<boolean> {
+    return this.store.revokeApiKey(key, userId);
+  }
+
+  get(key: string): Promise<PersistentApiKey | undefined> {
+    return this.store.getApiKey(key);
+  }
+}
+
+class PostgresBillingStore implements BillingStore {
+  constructor(private readonly store: PostgresStore) {}
+
+  getBalance(userId: string): Promise<CreditBalance> {
+    return this.store.getBalance(userId);
+  }
+
+  consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean> {
+    return this.store.consumeCredits(userId, credits, referenceId);
+  }
+
+  topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
+    return this.store.topUp(userId, credits / 100, referenceId);
+  }
+
+  createPaymentIntent(intent: PersistentPaymentIntent): Promise<void> {
+    return this.store.createPaymentIntent(intent);
+  }
+
+  getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined> {
+    return this.store.getPaymentIntent(intentId);
+  }
+
+  recordPaymentEvent(
+    eventKey: string,
+    intentId: string,
+    provider: string,
+    providerTxnId: string,
+    verified: boolean,
+  ): Promise<boolean> {
+    return this.store.recordPaymentEvent(eventKey, intentId, provider, providerTxnId, verified);
+  }
+
+  markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void> {
+    return this.store.markPaymentCredited(intentId, mintedCredits, status);
+  }
+}
+
+class PersistentCreditService {
+  constructor(private readonly store: BillingStore) {}
 
   getBalance(userId: string): Promise<CreditBalance> {
     return this.store.getBalance(userId);
@@ -29,7 +124,8 @@ class PersistentCreditService {
   }
 
   topUp(userId: string, bdtAmount: number, referenceId: string): Promise<CreditBalance> {
-    return this.store.topUp(userId, bdtAmount, referenceId);
+    const mintedCredits = Math.trunc(Math.max(0, bdtAmount) * 100);
+    return this.store.topUpCredits(userId, mintedCredits, referenceId);
   }
 }
 
@@ -47,7 +143,7 @@ class PersistentUsageService {
 
 class PersistentPaymentService {
   constructor(
-    private readonly store: PostgresStore,
+    private readonly store: BillingStore,
     private readonly credits: PersistentCreditService,
   ) {}
 
@@ -122,7 +218,11 @@ class PersistentPaymentService {
 }
 
 class PersistentUserService {
-  constructor(private readonly store: PostgresStore) {}
+  constructor(
+    private readonly store: PostgresStore,
+    private readonly apiKeys: ApiKeyStore,
+    private readonly supabaseUsers?: SupabaseUserStore,
+  ) {}
 
   async register(input: { email: string; password: string; name?: string }) {
     const existing = await this.store.findUserByEmail(input.email);
@@ -130,7 +230,7 @@ class PersistentUserService {
       return { error: "email already registered" as const };
     }
 
-    const userId = `user_${randomUUID().slice(0, 12)}`;
+    const userId = randomUUID();
     await this.store.createUser({
       userId,
       email: input.email,
@@ -138,7 +238,7 @@ class PersistentUserService {
       passwordHash: hashPassword(input.password),
     });
     const apiKey = createApiKey();
-    await this.store.createApiKey({ key: apiKey, userId, scopes: ["chat", "image", "usage", "billing"] });
+    await this.apiKeys.create({ key: apiKey, userId, scopes: ["chat", "image", "usage", "billing"] });
     return {
       userId,
       email: input.email,
@@ -153,7 +253,7 @@ class PersistentUserService {
       return { error: "invalid credentials" as const };
     }
     const apiKey = createApiKey();
-    await this.store.createApiKey({ key: apiKey, userId: user.userId, scopes: ["chat", "image", "usage", "billing"] });
+    await this.apiKeys.create({ key: apiKey, userId: user.userId, scopes: ["chat", "image", "usage", "billing"] });
     return {
       userId: user.userId,
       email: user.email,
@@ -162,24 +262,24 @@ class PersistentUserService {
     };
   }
 
-  validateApiKey(key: string, requiredScope: string): Promise<string | null> {
-    return this.store.validateApiKey(key, requiredScope);
+  async validateApiKey(key: string, requiredScope: string): Promise<string | null> {
+    const apiKey = await this.apiKeys.resolve(key);
+    if (!apiKey || !apiKey.scopes.includes(requiredScope)) {
+      return null;
+    }
+    return apiKey.userId;
   }
 
   async resolveApiKey(key: string): Promise<{ userId: string; scopes: string[] } | null> {
-    const apiKey = await this.store.getApiKey(key);
-    if (!apiKey || apiKey.revoked) {
-      return null;
-    }
-    return { userId: apiKey.userId, scopes: apiKey.scopes };
+    return this.apiKeys.resolve(key);
   }
 
   async me(userId: string) {
-    const user = await this.store.findUserById(userId);
+    const user = this.supabaseUsers ? await this.supabaseUsers.findById(userId) : await this.store.findUserById(userId);
     if (!user) {
       return undefined;
     }
-    const keys = await this.store.listApiKeys(userId);
+    const keys = await this.apiKeys.list(userId);
     return {
       userId: user.userId,
       email: user.email,
@@ -196,12 +296,12 @@ class PersistentUserService {
 
   async createApiKey(userId: string, scopes: string[]) {
     const key = createApiKey();
-    await this.store.createApiKey({ key, userId, scopes });
+    await this.apiKeys.create({ key, userId, scopes });
     return key;
   }
 
   revokeApiKey(userId: string, key: string): Promise<boolean> {
-    return this.store.revokeApiKey(key, userId);
+    return this.apiKeys.revoke(key, userId);
   }
 }
 
@@ -251,7 +351,7 @@ class RuntimeAuthService {
     };
 
     const existing = await this.store.findUserByEmail(googleIdentity.email);
-    const userId = existing?.userId ?? `user_${randomUUID().slice(0, 12)}`;
+    const userId = existing?.userId ?? randomUUID();
     if (!existing) {
       await this.store.createUser({
         userId,
@@ -497,6 +597,7 @@ export type RuntimeServices = {
   authz: AuthorizationService;
   userSettings: UserSettingsService;
   auth: RuntimeAuthService;
+  supabaseAuth?: SupabaseAuthService;
   twoFactor: TwoFactorService;
   ai: RuntimeAiService;
   rateLimiter: RedisRateLimiter;
@@ -509,14 +610,33 @@ export type RuntimeServices = {
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const store = new PostgresStore(env.postgresUrl);
+  const supabase =
+    env.supabase.flags.authEnabled ||
+    env.supabase.flags.userRepoEnabled ||
+    env.supabase.flags.apiKeysEnabled ||
+    env.supabase.flags.billingStoreEnabled
+    ? createSupabaseAdminClient(env)
+    : undefined;
   const models = new ModelService();
-  const credits = new PersistentCreditService(store);
+  const billingStore: BillingStore = env.supabase.flags.billingStoreEnabled && supabase
+    ? new SupabaseBillingStore(supabase)
+    : new PostgresBillingStore(store);
+  const credits = new PersistentCreditService(billingStore);
   const usage = new PersistentUsageService(store);
-  const payments = new PersistentPaymentService(store, credits);
-  const users = new PersistentUserService(store);
+  const payments = new PersistentPaymentService(billingStore, credits);
+  const apiKeyStore: ApiKeyStore = env.supabase.flags.apiKeysEnabled && supabase
+    ? new SupabaseApiKeyStore(supabase)
+    : new PostgresApiKeyStore(store);
+  const supabaseUserStore = env.supabase.flags.userRepoEnabled && supabase
+    ? new SupabaseUserStore(supabase)
+    : undefined;
+  const users = new PersistentUserService(store, apiKeyStore, supabaseUserStore);
   const authz = new AuthorizationService(store);
-  const userSettings = new UserSettingsService(store);
+  const userSettings = new UserSettingsService(supabaseUserStore ?? store);
   const auth = new RuntimeAuthService(store, users, userSettings, env);
+  const supabaseAuth = env.supabase.flags.authEnabled && supabase
+    ? new SupabaseAuthService(supabase)
+    : undefined;
   const twoFactor = new TwoFactorService(store);
   const langfuse = new LangfuseClient({
     enabled: env.langfuse.enabled,
@@ -562,6 +682,7 @@ export function createRuntimeServices(): RuntimeServices {
     authz,
     userSettings,
     auth,
+    supabaseAuth,
     twoFactor,
     ai,
     rateLimiter: new RedisRateLimiter(env.redisUrl, env.rateLimitPerMinute),
