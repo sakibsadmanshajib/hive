@@ -53,6 +53,25 @@ describe("auth principal resolution", () => {
     expect(userId).toBe("user_api");
   });
 
+  it("accepts bearer token validated through supabase when flag enabled", async () => {
+    const reply = fakeReply();
+    const userId = await requireApiUser(
+      { headers: { authorization: "Bearer sb_session_token" } } as never,
+      reply as never,
+      {
+        env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
+        auth: { getSessionPrincipal: async () => null },
+        supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user_supabase" }) },
+        users: { resolveApiKey: async () => null },
+        authz: { requirePermission: async () => true },
+        userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
+      } as never,
+      "usage",
+    );
+
+    expect(userId).toBe("user_supabase");
+  });
+
   it("returns 401 when credentials are missing", async () => {
     const reply = fakeReply();
     const userId = await requireApiUser(

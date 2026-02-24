@@ -14,6 +14,8 @@ import { createApiKey, hashPassword, verifyPassword } from "./security";
 import { LangfuseClient } from "./langfuse";
 import { AuthorizationService } from "./authorization";
 import { UserSettingsService } from "./user-settings";
+import { createSupabaseAdminClient } from "./supabase-client";
+import { SupabaseAuthService } from "./supabase-auth-service";
 
 type ChatMessage = { role: string; content: string };
 
@@ -497,6 +499,7 @@ export type RuntimeServices = {
   authz: AuthorizationService;
   userSettings: UserSettingsService;
   auth: RuntimeAuthService;
+  supabaseAuth?: SupabaseAuthService;
   twoFactor: TwoFactorService;
   ai: RuntimeAiService;
   rateLimiter: RedisRateLimiter;
@@ -517,6 +520,9 @@ export function createRuntimeServices(): RuntimeServices {
   const authz = new AuthorizationService(store);
   const userSettings = new UserSettingsService(store);
   const auth = new RuntimeAuthService(store, users, userSettings, env);
+  const supabaseAuth = env.supabase.flags.authEnabled
+    ? new SupabaseAuthService(createSupabaseAdminClient(env))
+    : undefined;
   const twoFactor = new TwoFactorService(store);
   const langfuse = new LangfuseClient({
     enabled: env.langfuse.enabled,
@@ -562,6 +568,7 @@ export function createRuntimeServices(): RuntimeServices {
     authz,
     userSettings,
     auth,
+    supabaseAuth,
     twoFactor,
     ai,
     rateLimiter: new RedisRateLimiter(env.redisUrl, env.rateLimitPerMinute),
