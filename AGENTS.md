@@ -124,11 +124,24 @@ For ops/status changes:
 ## Git and Change Hygiene
 
 - Keep commits atomic by concern (runtime, providers, docs, tests).
+- For tracked work, open exactly one PR per task; do not bundle multiple independent tasks into one PR.
 - Use Conventional Commit style when possible, e.g. `feat(api): ...`, `fix(providers): ...`, `docs(readme): ...`.
 - Write commit messages with intent and rationale, not only diff summary.
 - Use descriptive branch names such as `feat/provider-status-internal` or `fix/redis-rate-limit`.
 - Do not include unrelated formatting churn.
 - Prefer incremental, reviewable changes.
+
+## GitHub Issue Hygiene
+
+- When creating issues, apply existing taxonomy labels:
+  - exactly one `kind:*`
+  - exactly one `area:*`
+  - exactly one `priority:*`
+  - add `risk:*` only when applicable
+  - include one lifecycle label (`status:needs-triage`, `status:ready`, `status:in-progress`, or `status:blocked`)
+- Attach the most relevant existing milestone when one applies.
+- If a GitHub Project is configured and token scopes allow it, add the issue to that project as part of creation.
+- Issue body must include: Context, Problem, Why this matters, Acceptance Criteria, Verification, Dependencies.
 
 ## Documentation Discipline (AI + Human)
 
