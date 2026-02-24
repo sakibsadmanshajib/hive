@@ -154,22 +154,23 @@ For ops/status changes:
 
 Worktree location policy:
 
-- Create task worktrees as sibling directories next to the primary clone (parent directory of this repo).
-- In this environment, if primary clone is `/home/sakib/hive`, create worktrees at `/home/sakib/hive-<task-slug>` (equivalent to `../hive-<task-slug>` from repo root).
-- Do not nest worktrees inside the main repository directory.
+- Create task worktrees under a dedicated parent `.worktree/` directory.
+- In this environment, if primary clone is `/home/sakib/hive`, create worktrees at `/home/sakib/.worktree/hive-<task-slug>`.
+- Keep `.worktree` as a sibling path outside the repository root (not `hive/.worktree`).
 
 Use this flow for every task branch:
 
 ```bash
 git fetch origin main
-git worktree add ../hive-<task-slug> -b <type/task-name> origin/main
-git -C ../hive-<task-slug> status
+mkdir -p ../.worktree
+git worktree add ../.worktree/hive-<task-slug> -b <type/task-name> origin/main
+git -C ../.worktree/hive-<task-slug> status
 ```
 
 After merge, clean up the old worktree:
 
 ```bash
-git worktree remove ../hive-<task-slug>
+git worktree remove ../.worktree/hive-<task-slug>
 git worktree prune
 ```
 
