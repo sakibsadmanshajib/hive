@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
@@ -8,6 +9,7 @@ import { Input } from "../../components/ui/input";
 import { BillingShell } from "../../features/billing/components/billing-shell";
 import { TopUpPanel } from "../../features/billing/components/topup-panel";
 import { UsageCards } from "../../features/billing/components/usage-cards";
+import { readAuthSession } from "../../features/auth/auth-session";
 import { UserSettingsPanel } from "../../features/settings/user-settings-panel";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
@@ -19,7 +21,9 @@ type UserSnapshot = {
 };
 
 export default function BillingPage() {
-  const [apiKey, setApiKey] = useState("");
+  const router = useRouter();
+  const sessionApiKey = readAuthSession()?.apiKey ?? "";
+  const [apiKey, setApiKey] = useState(sessionApiKey);
   const [snapshot, setSnapshot] = useState<UserSnapshot | null>(null);
   const [usageCount, setUsageCount] = useState(0);
   const [topUpAmount, setTopUpAmount] = useState(50);
@@ -27,8 +31,15 @@ export default function BillingPage() {
   const [status, setStatus] = useState("Idle");
   const [loading, setLoading] = useState(false);
 
-  async function fetchSnapshot() {
-    if (!apiKey) {
+  useEffect(() => {
+    if (!sessionApiKey) {
+      router.push("/auth");
+    }
+  }, [router, sessionApiKey]);
+
+  async function fetchSnapshot(overrideApiKey?: string) {
+    const key = overrideApiKey ?? apiKey;
+    if (!key) {
       setStatus("Set API key first.");
       return;
     }
@@ -36,8 +47,8 @@ export default function BillingPage() {
     setLoading(true);
     try {
       const [meRes, usageRes] = await Promise.all([
-        fetch(`${apiBase}/v1/users/me`, { headers: { "x-api-key": apiKey } }),
-        fetch(`${apiBase}/v1/usage`, { headers: { "x-api-key": apiKey } }),
+        fetch(`${apiBase}/v1/users/me`, { headers: { "x-api-key": key } }),
+        fetch(`${apiBase}/v1/usage`, { headers: { "x-api-key": key } }),
       ]);
       const meJson = await meRes.json();
       const usageJson = await usageRes.json();
@@ -49,6 +60,9 @@ export default function BillingPage() {
       setSnapshot(meJson);
       setUsageCount(Array.isArray(usageJson?.data) ? usageJson.data.length : 0);
       setStatus("Loaded account snapshot");
+    } catch (error) {
+      const nextStatus = error instanceof Error ? error.message : "Could not load account snapshot";
+      setStatus(nextStatus);
     } finally {
       setLoading(false);
     }
@@ -95,6 +109,9 @@ export default function BillingPage() {
 
       setStatus(`Top-up successful (+${confirmJson.minted_credits} credits)`);
       await fetchSnapshot();
+    } catch (error) {
+      const nextStatus = error instanceof Error ? error.message : "Could not complete demo top-up";
+      setStatus(nextStatus);
     } finally {
       setLoading(false);
     }
@@ -124,9 +141,23 @@ export default function BillingPage() {
 
       setStatus("Generated additional API key");
       await fetchSnapshot();
+    } catch (error) {
+      const nextStatus = error instanceof Error ? error.message : "Could not create API key";
+      setStatus(nextStatus);
     } finally {
       setLoading(false);
     }
+  }
+
+  useEffect(() => {
+    if (!sessionApiKey) {
+      return;
+    }
+    void fetchSnapshot(sessionApiKey);
+  }, [sessionApiKey]);
+
+  if (!sessionApiKey) {
+    return null;
   }
 
   return (

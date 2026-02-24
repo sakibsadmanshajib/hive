@@ -24,7 +24,7 @@ describe("AppShell", () => {
     });
   });
 
-  it("renders chat and billing navigation links", () => {
+  it("renders compact shell chrome with app brand", () => {
     render(
       <ThemeProvider>
         <AppShell>
@@ -33,8 +33,7 @@ describe("AppShell", () => {
       </ThemeProvider>,
     );
 
-    expect(screen.getByRole("link", { name: /chat/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /billing/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /auth/i })).toBeInTheDocument();
+    expect(screen.getByText(/bd ai gateway/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /auth/i })).not.toBeInTheDocument();
   });
 });

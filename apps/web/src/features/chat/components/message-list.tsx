@@ -6,6 +6,7 @@ import { TypingIndicator } from "./typing-indicator";
 type MessageItem = {
   role: "user" | "assistant";
   content: string;
+  createdAt: string;
 };
 
 type MessageListProps = {
@@ -15,16 +16,23 @@ type MessageListProps = {
 };
 
 export function MessageList({ messages, loading, errorMessage }: MessageListProps) {
+  function formatTimestamp(timestamp: string): string {
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime())
+      ? "just now"
+      : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
   return (
-    <ScrollArea className="h-[50vh] rounded-2xl border bg-[linear-gradient(180deg,rgba(255,255,255,0.82)_0%,rgba(248,250,252,0.88)_100%)] p-3 shadow-sm sm:h-[58vh] sm:p-4">
+    <ScrollArea className="h-[56vh] rounded-2xl border border-slate-800 bg-slate-950/85 p-3 shadow-sm sm:h-[62vh] sm:p-4">
       <div className="space-y-4">
-        {messages.length === 0 ? <p className="text-sm text-muted-foreground">Start a new chat to see messages.</p> : null}
+        {messages.length === 0 ? <p className="text-sm text-slate-400">Start a new chat to see messages.</p> : null}
         {messages.map((message, index) => (
           <MessageBubble
             key={`${message.role}-${index}`}
             role={message.role}
             content={message.content}
-            timestamp={new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            timestamp={formatTimestamp(message.createdAt)}
           />
         ))}
         {loading ? (

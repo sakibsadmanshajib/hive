@@ -1,56 +1,66 @@
-import Link from "next/link";
+"use client";
 
-import { Badge } from "../components/ui/badge";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+
+import { AppToaster } from "../components/ui/sonner";
+import { readAuthSession } from "../features/auth/auth-session";
+import { ChatWorkspaceShell } from "../features/chat/components/chat-workspace-shell";
+import { MessageComposer } from "../features/chat/components/message-composer";
+import { MessageList } from "../features/chat/components/message-list";
+import { useChatSession } from "../features/chat/use-chat-session";
 
 export default function HomePage() {
-  return (
-    <section className="space-y-8">
-      <Card className="border-0 bg-gradient-to-br from-sky-50 via-amber-50 to-teal-100 shadow-md">
-        <CardHeader className="space-y-3">
-          <Badge className="w-fit" variant="secondary">
-            OpenAI-compatible gateway
-          </Badge>
-          <CardTitle className="text-3xl leading-tight md:text-4xl">Run chat and billing flows from one place</CardTitle>
-          <CardDescription className="max-w-2xl text-base text-slate-700">
-            This workspace pairs provider routing with prepaid credits so you can validate user auth, usage, and top-up behavior from a single UI.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
-          <Button asChild>
-            <Link href="/chat">Open chat workspace</Link>
-          </Button>
-          <Button asChild variant="outline">
-            <Link href="/billing">Open billing dashboard</Link>
-          </Button>
-        </CardContent>
-      </Card>
+  const router = useRouter();
+  const authSession = readAuthSession();
+  const {
+    conversations,
+    activeConversation,
+    activeConversationId,
+    addConversation,
+    selectConversation,
+    model,
+    setModel,
+    prompt,
+    setPrompt,
+    loading,
+    errorMessage,
+    sendMessage,
+  } = useChatSession();
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-xl">Chat workspace</CardTitle>
-            <CardDescription>Test model routing, message exchange, and account auth in one flow.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild variant="secondary">
-              <Link href="/chat">Go to Chat</Link>
-            </Button>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-xl">Billing and usage</CardTitle>
-            <CardDescription>Load account snapshots, top up demo credits, and inspect usage events.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button asChild variant="secondary">
-              <Link href="/billing">Go to Billing</Link>
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    </section>
+  useEffect(() => {
+    if (!authSession?.apiKey) {
+      router.push("/auth");
+    }
+  }, [authSession?.apiKey, router]);
+
+  if (!authSession?.apiKey) {
+    return null;
+  }
+
+  return (
+    <>
+      <ChatWorkspaceShell
+        conversations={conversations}
+        activeConversationId={activeConversationId}
+        onNewChat={addConversation}
+        onSelectConversation={selectConversation}
+      >
+        <div className="flex h-full min-h-[60vh] flex-col gap-4">
+          <MessageList messages={activeConversation?.messages ?? []} loading={loading} errorMessage={errorMessage} />
+          <div className="sticky bottom-2">
+            <MessageComposer
+              prompt={prompt}
+              model={model}
+              loading={loading}
+              onPromptChange={setPrompt}
+              onModelChange={setModel}
+              onSend={sendMessage}
+            />
+          </div>
+        </div>
+      </ChatWorkspaceShell>
+      <AppToaster position="top-right" />
+    </>
   );
 }

@@ -25,6 +25,16 @@ This document captures the current implementation state so you can continue in a
 - Internal provider diagnostics endpoint exists and is admin-token protected.
 - Python MVP still exists in repo as a legacy reference implementation.
 
+## Current Web Flow
+
+- `/` is the primary chat workspace (auth-guarded).
+- Unauthenticated users are redirected from `/` to `/auth`.
+- `/auth` hosts login/signup.
+- `/chat` redirects to `/` (legacy compatibility).
+- Chat workspace includes:
+  - left conversation navigation
+  - top-right avatar menu with `Settings`, `Developer Panel`, `Billing`, and `Log out`
+
 ## Business Rules Implemented
 
 - Base top-up conversion: `1 BDT = 100 AI Credits`
