@@ -15,6 +15,15 @@ const THEME_STORAGE_KEY = "bd-ai-theme";
 
 const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
+function readInitialTheme(): Theme {
+  if (typeof window === "undefined") {
+    return "system";
+  }
+
+  const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
+  return storedTheme === "light" || storedTheme === "dark" || storedTheme === "system" ? storedTheme : "system";
+}
+
 function resolveSystemTheme(): ResolvedTheme {
   if (typeof window === "undefined") {
     return "light";
@@ -32,15 +41,8 @@ function resolveTheme(theme: Theme): ResolvedTheme {
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<Theme>("system");
-  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>("light");
-
-  useEffect(() => {
-    const storedTheme = window.localStorage.getItem(THEME_STORAGE_KEY);
-    const nextTheme: Theme = storedTheme === "light" || storedTheme === "dark" || storedTheme === "system" ? storedTheme : "system";
-    setTheme(nextTheme);
-    setResolvedTheme(resolveTheme(nextTheme));
-  }, []);
+  const [theme, setTheme] = useState<Theme>(() => readInitialTheme());
+  const [resolvedTheme, setResolvedTheme] = useState<ResolvedTheme>(() => resolveTheme(readInitialTheme()));
 
   useEffect(() => {
     const root = document.documentElement;
