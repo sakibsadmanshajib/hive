@@ -8,6 +8,7 @@ import { Input } from "../../components/ui/input";
 import { BillingShell } from "../../features/billing/components/billing-shell";
 import { TopUpPanel } from "../../features/billing/components/topup-panel";
 import { UsageCards } from "../../features/billing/components/usage-cards";
+import { UserSettingsPanel } from "../../features/settings/user-settings-panel";
 
 const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
 
@@ -164,6 +165,7 @@ export default function BillingPage() {
           topUpAmount={topUpAmount}
         />
       </div>
+      <UserSettingsPanel apiKey={apiKey} />
       <UsageCards snapshot={snapshot} usageCount={usageCount} />
     </BillingShell>
   );

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
 import { registerChatCompletionsRoute } from "./chat-completions";
 import { registerCreditsBalanceRoute } from "./credits-balance";
+import { registerGoogleAuthRoutes } from "./google-auth";
 import { registerHealthRoute } from "./health";
 import { registerImagesGenerationsRoute } from "./images-generations";
 import { registerModelsRoute } from "./models";
@@ -10,6 +11,7 @@ import { registerPaymentDemoConfirmRoute } from "./payment-demo-confirm";
 import { registerPaymentWebhookRoute } from "./payment-webhook";
 import { registerProvidersStatusRoute } from "./providers-status";
 import { registerResponsesRoute } from "./responses";
+import { registerTwoFactorRoutes } from "./two-factor";
 import { registerUserRoutes } from "./users";
 import { registerUsageRoute } from "./usage";
 
@@ -22,6 +24,8 @@ export function registerRoutes(app: FastifyInstance, services: RuntimeServices):
   registerCreditsBalanceRoute(app, services);
   registerUsageRoute(app, services);
   registerProvidersStatusRoute(app, services);
+  registerGoogleAuthRoutes(app, services);
+  registerTwoFactorRoutes(app, services);
   registerUserRoutes(app, services);
   registerPaymentIntentsRoute(app, services);
   registerPaymentDemoConfirmRoute(app, services);

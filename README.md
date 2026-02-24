@@ -57,6 +57,19 @@ This document captures the current implementation state so you can continue in a
 - `GET /v1/users/me`
 - `POST /v1/users/api-keys`
 - `DELETE /v1/users/api-keys`
+- `GET /v1/users/settings`
+- `PATCH /v1/users/settings`
+
+### Auth and Security
+
+- `GET /v1/auth/google/start`
+- `GET /v1/auth/google/callback`
+- `POST /v1/auth/logout`
+- `GET /v1/auth/session`
+- `POST /v1/auth/2fa/enroll/start`
+- `POST /v1/auth/2fa/enroll/verify`
+- `POST /v1/auth/2fa/challenge/start`
+- `POST /v1/auth/2fa/challenge/verify`
 
 ### Billing and Usage
 
@@ -129,6 +142,11 @@ Important variables:
 - `GROQ_MODEL`
 - `ALLOW_DEMO_PAYMENT_CONFIRM`
 - `ALLOW_DEV_API_KEY_PREFIX`
+- `GOOGLE_CLIENT_ID`
+- `GOOGLE_CLIENT_SECRET`
+- `GOOGLE_REDIRECT_URI`
+- `AUTH_SESSION_TTL_MINUTES`
+- `ENFORCE_2FA_FOR_SENSITIVE_ACTIONS`
 - `LANGFUSE_ENABLED`
 - `LANGFUSE_BASE_URL`
 - `LANGFUSE_PUBLIC_KEY`

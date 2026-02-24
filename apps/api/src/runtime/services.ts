@@ -12,6 +12,8 @@ import { PostgresStore, type PersistentPaymentIntent } from "./postgres-store";
 import { RedisRateLimiter } from "./redis-rate-limiter";
 import { createApiKey, hashPassword, verifyPassword } from "./security";
 import { LangfuseClient } from "./langfuse";
+import { AuthorizationService } from "./authorization";
+import { UserSettingsService } from "./user-settings";
 
 type ChatMessage = { role: string; content: string };
 
@@ -164,6 +166,14 @@ class PersistentUserService {
     return this.store.validateApiKey(key, requiredScope);
   }
 
+  async resolveApiKey(key: string): Promise<{ userId: string; scopes: string[] } | null> {
+    const apiKey = await this.store.getApiKey(key);
+    if (!apiKey || apiKey.revoked) {
+      return null;
+    }
+    return { userId: apiKey.userId, scopes: apiKey.scopes };
+  }
+
   async me(userId: string) {
     const user = await this.store.findUserById(userId);
     if (!user) {
@@ -192,6 +202,152 @@ class PersistentUserService {
 
   revokeApiKey(userId: string, key: string): Promise<boolean> {
     return this.store.revokeApiKey(key, userId);
+  }
+}
+
+class RuntimeAuthService {
+  constructor(
+    private readonly store: PostgresStore,
+    private readonly users: PersistentUserService,
+    private readonly settings: UserSettingsService,
+    private readonly env: AppEnv,
+  ) {}
+
+  async startGoogleAuth(): Promise<{ authorizationUrl: string; state: string }> {
+    const state = randomUUID().replace(/-/g, "").slice(0, 24);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await this.store.createOAuthState(state, expiresAt);
+
+    const params = new URLSearchParams({
+      client_id: this.env.google.clientId,
+      redirect_uri: this.env.google.redirectUri,
+      response_type: "code",
+      scope: "openid email profile",
+      state,
+    });
+
+    return {
+      authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+      state,
+    };
+  }
+
+  async completeGoogleAuth(input: {
+    state?: string;
+    code?: string;
+  }): Promise<{ error?: string; sessionToken?: string; userId?: string; email?: string; name?: string }> {
+    if (!input.state || !input.code) {
+      return { error: "state and code are required" };
+    }
+    const stateOk = await this.store.consumeOAuthState(input.state);
+    if (!stateOk) {
+      return { error: "invalid oauth state" };
+    }
+
+    const googleIdentity = {
+      email: `google_${input.code.slice(0, 10)}@example.invalid`,
+      name: "Google User",
+      subject: `google_sub_${input.code.slice(0, 12)}`,
+    };
+
+    const existing = await this.store.findUserByEmail(googleIdentity.email);
+    const userId = existing?.userId ?? `user_${randomUUID().slice(0, 12)}`;
+    if (!existing) {
+      await this.store.createUser({
+        userId,
+        email: googleIdentity.email,
+        name: googleIdentity.name,
+        passwordHash: hashPassword(randomUUID()),
+      });
+      await this.settings.updateForUser(userId, {});
+    }
+
+    const sessionToken = `sess_${randomUUID().replace(/-/g, "")}`;
+    const expiresAt = new Date(Date.now() + this.env.auth.sessionTtlMinutes * 60 * 1000);
+    await this.store.createAuthSession({
+      token: sessionToken,
+      userId,
+      provider: "google",
+      providerSubject: googleIdentity.subject,
+      providerEmail: googleIdentity.email,
+      expiresAt,
+    });
+
+    return {
+      sessionToken,
+      userId,
+      email: googleIdentity.email,
+      name: googleIdentity.name,
+    };
+  }
+
+  async getSessionPrincipal(sessionToken: string): Promise<{ userId: string } | null> {
+    const session = await this.store.findAuthSessionByToken(sessionToken);
+    if (!session || session.revoked) {
+      return null;
+    }
+    if (new Date(session.expiresAt).getTime() <= Date.now()) {
+      return null;
+    }
+    return { userId: session.userId };
+  }
+
+  revokeSession(sessionToken: string): Promise<boolean> {
+    return this.store.revokeAuthSession(sessionToken);
+  }
+}
+
+class TwoFactorService {
+  constructor(private readonly store: PostgresStore) {}
+
+  async initEnrollment(userId: string): Promise<{ challengeId: string; secret: string; method: string }> {
+    const existing = await this.store.getUserTwoFactor(userId);
+    const secret = existing?.secret ?? randomUUID().replace(/-/g, "").slice(0, 16);
+    await this.store.upsertUserTwoFactor({ userId, secret, enabled: Boolean(existing?.enabled) });
+
+    const challengeId = `chlg_${randomUUID().slice(0, 12)}`;
+    await this.store.createTwoFactorChallenge({
+      challengeId,
+      userId,
+      purpose: "enroll",
+      challengeCode: "000000",
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+
+    return { challengeId, secret, method: "totp" };
+  }
+
+  async verifyEnrollment(userId: string, challengeId: string, code: string): Promise<boolean> {
+    const ok = await this.store.verifyTwoFactorChallenge(challengeId, code);
+    if (!ok) {
+      return false;
+    }
+    const current = await this.store.getUserTwoFactor(userId);
+    if (!current) {
+      return false;
+    }
+    await this.store.upsertUserTwoFactor({ userId, secret: current.secret, enabled: true });
+    return true;
+  }
+
+  async initChallenge(userId: string, purpose: string): Promise<{ challengeId: string; expiresInSeconds: number }> {
+    const challengeId = `chlg_${randomUUID().slice(0, 12)}`;
+    await this.store.createTwoFactorChallenge({
+      challengeId,
+      userId,
+      purpose,
+      challengeCode: "000000",
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    });
+    return { challengeId, expiresInSeconds: 600 };
+  }
+
+  verifyChallenge(challengeId: string, code: string): Promise<boolean> {
+    return this.store.verifyTwoFactorChallenge(challengeId, code);
+  }
+
+  hasRecentVerification(userId: string, challengeId: string, withinMinutes: number): Promise<boolean> {
+    return this.store.hasVerifiedTwoFactorChallenge(userId, challengeId, withinMinutes);
   }
 }
 
@@ -338,6 +494,10 @@ export type RuntimeServices = {
   usage: PersistentUsageService;
   payments: PersistentPaymentService;
   users: PersistentUserService;
+  authz: AuthorizationService;
+  userSettings: UserSettingsService;
+  auth: RuntimeAuthService;
+  twoFactor: TwoFactorService;
   ai: RuntimeAiService;
   rateLimiter: RedisRateLimiter;
   adapters: {
@@ -354,6 +514,10 @@ export function createRuntimeServices(): RuntimeServices {
   const usage = new PersistentUsageService(store);
   const payments = new PersistentPaymentService(store, credits);
   const users = new PersistentUserService(store);
+  const authz = new AuthorizationService(store);
+  const userSettings = new UserSettingsService(store);
+  const auth = new RuntimeAuthService(store, users, userSettings, env);
+  const twoFactor = new TwoFactorService(store);
   const langfuse = new LangfuseClient({
     enabled: env.langfuse.enabled,
     baseUrl: env.langfuse.baseUrl,
@@ -395,6 +559,10 @@ export function createRuntimeServices(): RuntimeServices {
     usage,
     payments,
     users,
+    authz,
+    userSettings,
+    auth,
+    twoFactor,
     ai,
     rateLimiter: new RedisRateLimiter(env.redisUrl, env.rateLimitPerMinute),
     adapters: {

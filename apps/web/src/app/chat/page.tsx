@@ -3,6 +3,7 @@
 import { AppToaster } from "../../components/ui/sonner";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
+import { GoogleLoginButton } from "../../features/auth/google-login-button";
 import { ChatShell } from "../../features/chat/components/chat-shell";
 import { MessageComposer } from "../../features/chat/components/message-composer";
 import { MessageList } from "../../features/chat/components/message-list";
@@ -66,6 +67,7 @@ export default function ChatPage() {
                 <button disabled={loading} type="submit" className="text-sm font-medium text-primary hover:underline">
                   Login
                 </button>
+                <GoogleLoginButton className="mt-3" />
               </form>
 
               <div className="sm:col-span-2">

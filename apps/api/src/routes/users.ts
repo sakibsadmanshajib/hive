@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
-import { requireApiUser } from "./auth";
+import { requireApiUser, requirePrincipal } from "./auth";
+import { USER_SETTING_KEYS, type UserSettingKey, type UserSettings } from "../runtime/user-settings";
 
 type RegisterBody = {
   email: string;
@@ -20,6 +21,8 @@ type CreateKeyBody = {
 type RevokeKeyBody = {
   key: string;
 };
+
+type UpdateSettingsBody = Partial<UserSettings>;
 
 export function registerUserRoutes(app: FastifyInstance, services: RuntimeServices): void {
   app.post<{ Body: RegisterBody }>("/v1/users/register", async (request, reply) => {
@@ -89,12 +92,33 @@ export function registerUserRoutes(app: FastifyInstance, services: RuntimeServic
   });
 
   app.post<{ Body: CreateKeyBody }>("/v1/users/api-keys", async (request, reply) => {
-    const userId = await requireApiUser(request, reply, services, "usage");
-    if (!userId) {
+    const principal = await requirePrincipal(request, reply, services, {
+      requiredScope: "usage",
+      requiredPermission: "users:manage_api_keys",
+      requiredSetting: "apiEnabled",
+    });
+    if (!principal) {
       return;
     }
+    if (services.env.auth.enforceTwoFactorSensitiveActions) {
+      const settings = await services.userSettings.getForUser(principal.userId);
+      if (settings.twoFactorEnabled) {
+        const challengeId = request.headers["x-2fa-challenge-id"];
+        if (typeof challengeId !== "string") {
+          return reply.code(403).send({ error: "two-factor verification required" });
+        }
+        const verified = await services.twoFactor.hasRecentVerification(
+          principal.userId,
+          challengeId,
+          services.env.auth.twoFactorVerificationWindowMinutes,
+        );
+        if (!verified) {
+          return reply.code(403).send({ error: "two-factor verification required" });
+        }
+      }
+    }
     const scopes = request.body?.scopes && request.body.scopes.length > 0 ? request.body.scopes : ["chat", "image", "usage", "billing"];
-    const key = await services.users.createApiKey(userId, scopes);
+    const key = await services.users.createApiKey(principal.userId, scopes);
     return reply.code(201).send({ key, scopes });
   });
 
@@ -109,5 +133,48 @@ export function registerUserRoutes(app: FastifyInstance, services: RuntimeServic
     }
     const revoked = await services.users.revokeApiKey(userId, key);
     return { revoked };
+  });
+
+  app.get("/v1/users/settings", async (request, reply) => {
+    const principal = await requirePrincipal(request, reply, services, {
+      requiredScope: "usage",
+      requiredPermission: "users:settings:read",
+      requiredSetting: "apiEnabled",
+    });
+    if (!principal) {
+      return;
+    }
+    const settings = await services.userSettings.getForUser(principal.userId);
+    return { user_id: principal.userId, settings };
+  });
+
+  app.patch<{ Body: UpdateSettingsBody }>("/v1/users/settings", async (request, reply) => {
+    const principal = await requirePrincipal(request, reply, services, {
+      requiredScope: "usage",
+      requiredPermission: "users:settings:write",
+      requiredSetting: "apiEnabled",
+    });
+    if (!principal) {
+      return;
+    }
+
+    const body = request.body ?? {};
+    const bodyKeys = Object.keys(body);
+    const allowed = new Set<string>(USER_SETTING_KEYS);
+    const invalidKeys = bodyKeys.filter((key) => !allowed.has(key));
+    if (invalidKeys.length > 0) {
+      return reply.code(400).send({ error: "invalid setting keys", invalid_keys: invalidKeys });
+    }
+
+    const patch = bodyKeys.reduce<Partial<UserSettings>>((acc, key) => {
+      const value = (body as Record<string, unknown>)[key];
+      if (typeof value === "boolean") {
+        acc[key as UserSettingKey] = value;
+      }
+      return acc;
+    }, {});
+
+    const settings = await services.userSettings.updateForUser(principal.userId, patch);
+    return { user_id: principal.userId, settings };
   });
 }

@@ -18,6 +18,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 
 - Payment reconciliation runbook: `docs/runbooks/payments-reconciliation.md`
 - Credit ledger audit runbook: `docs/runbooks/credit-ledger-audit.md`
+- Auth + RBAC + settings + 2FA runbook: `docs/runbooks/auth-rbac-settings-2fa.md`
 - Beta launch checklist: `docs/release/beta-launch-checklist.md`
 - Provider fallback matrix: `docs/release/provider-fallback-matrix.md`
 

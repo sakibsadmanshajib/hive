@@ -46,6 +46,16 @@ export type AppEnv = {
   adminStatusToken?: string;
   allowDemoPaymentConfirm: boolean;
   allowDevApiKeyPrefix: boolean;
+  google: {
+    clientId: string;
+    clientSecret: string;
+    redirectUri: string;
+  };
+  auth: {
+    sessionTtlMinutes: number;
+    enforceTwoFactorSensitiveActions: boolean;
+    twoFactorVerificationWindowMinutes: number;
+  };
   webhookSecrets: {
     bkash: string;
     sslcommerz: string;
@@ -88,6 +98,16 @@ export function getEnv(): AppEnv {
     adminStatusToken: process.env.ADMIN_STATUS_TOKEN,
     allowDemoPaymentConfirm: parseBoolean("ALLOW_DEMO_PAYMENT_CONFIRM", true),
     allowDevApiKeyPrefix: parseBoolean("ALLOW_DEV_API_KEY_PREFIX", false),
+    google: {
+      clientId: required("GOOGLE_CLIENT_ID", "google-client-id"),
+      clientSecret: required("GOOGLE_CLIENT_SECRET", "google-client-secret"),
+      redirectUri: required("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8080/v1/auth/google/callback"),
+    },
+    auth: {
+      sessionTtlMinutes: parseNumber("AUTH_SESSION_TTL_MINUTES", 60 * 24 * 7),
+      enforceTwoFactorSensitiveActions: parseBoolean("TWO_FACTOR_ENFORCE_SENSITIVE_ACTIONS", false),
+      twoFactorVerificationWindowMinutes: parseNumber("TWO_FACTOR_VERIFICATION_WINDOW_MINUTES", 10),
+    },
     webhookSecrets: {
       bkash: required("BKASH_WEBHOOK_SECRET", "bkash-secret"),
       sslcommerz: required("SSLCOMMERZ_WEBHOOK_SECRET", "sslcommerz-secret"),

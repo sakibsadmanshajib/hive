@@ -26,6 +26,10 @@ class FakeApp {
   delete(path: string, handler: Handler) {
     this.handlers.set(`DELETE ${path}`, handler);
   }
+
+  patch(path: string, handler: Handler) {
+    this.handlers.set(`PATCH ${path}`, handler);
+  }
 }
 
 describe("user routes", () => {

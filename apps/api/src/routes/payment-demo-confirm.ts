@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
-import { requireApiUser } from "./auth";
+import { requirePrincipal } from "./auth";
 
 type DemoConfirmBody = {
   intent_id: string;
@@ -13,8 +13,12 @@ export function registerPaymentDemoConfirmRoute(app: FastifyInstance, services: 
       reply.code(403);
       return { error: "demo payment confirm disabled" };
     }
-    const userId = await requireApiUser(request, reply, services, "billing");
-    if (!userId) {
+    const principal = await requirePrincipal(request, reply, services, {
+      requiredScope: "billing",
+      requiredPermission: "billing:write",
+      requiredSetting: "apiEnabled",
+    });
+    if (!principal) {
       return;
     }
     const intentId = request.body?.intent_id;
@@ -27,7 +31,7 @@ export function registerPaymentDemoConfirmRoute(app: FastifyInstance, services: 
       reply.code(404);
       return { error: "intent not found" };
     }
-    if (intent.userId !== userId) {
+    if (intent.userId !== principal.userId) {
       reply.code(403);
       return { error: "intent does not belong to current user" };
     }

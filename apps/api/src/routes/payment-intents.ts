@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
-import { requireApiUser } from "./auth";
+import { requirePrincipal } from "./auth";
 
 type PaymentIntentBody = {
   user_id?: string;
@@ -10,13 +10,35 @@ type PaymentIntentBody = {
 
 export function registerPaymentIntentsRoute(app: FastifyInstance, services: RuntimeServices): void {
   app.post<{ Body: PaymentIntentBody }>("/v1/payments/intents", async (request, reply) => {
-    const userId = await requireApiUser(request, reply, services, "billing");
-    if (!userId) {
+    const principal = await requirePrincipal(request, reply, services, {
+      requiredScope: "billing",
+      requiredPermission: "billing:write",
+      requiredSetting: "apiEnabled",
+    });
+    if (!principal) {
       return;
     }
 
+    if (services.env.auth.enforceTwoFactorSensitiveActions) {
+      const settings = await services.userSettings.getForUser(principal.userId);
+      if (settings.twoFactorEnabled) {
+        const challengeId = request.headers["x-2fa-challenge-id"];
+        if (typeof challengeId !== "string") {
+          return reply.code(403).send({ error: "two-factor verification required" });
+        }
+        const verified = await services.twoFactor.hasRecentVerification(
+          principal.userId,
+          challengeId,
+          services.env.auth.twoFactorVerificationWindowMinutes,
+        );
+        if (!verified) {
+          return reply.code(403).send({ error: "two-factor verification required" });
+        }
+      }
+    }
+
     const intent = await services.payments.createIntent({
-      userId,
+      userId: principal.userId,
       bdtAmount: Math.max(0, Number(request.body?.bdt_amount ?? 0)),
       provider: request.body?.provider ?? "bkash",
     });
