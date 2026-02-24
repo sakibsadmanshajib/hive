@@ -19,10 +19,10 @@ export function MessageComposer({ prompt, model, loading, onPromptChange, onMode
   const onKeyDown = useChatShortcuts({ canSend, onSend });
 
   return (
-    <div className="space-y-3 rounded-2xl border bg-card/95 p-3 shadow-sm backdrop-blur sm:p-4">
+    <div className="space-y-3 rounded-3xl border border-white/80 bg-card/95 p-3 shadow-[0_20px_45px_-38px_rgba(15,23,42,0.95)] backdrop-blur sm:p-4">
       <div className="grid gap-3 sm:grid-cols-[170px_1fr]">
         <Select value={model} onValueChange={onModelChange}>
-          <SelectTrigger aria-label="Model">
+          <SelectTrigger aria-label="Model" className="bg-background/90">
             <SelectValue placeholder="Model" />
           </SelectTrigger>
           <SelectContent>
@@ -36,11 +36,11 @@ export function MessageComposer({ prompt, model, loading, onPromptChange, onMode
           onChange={(event) => onPromptChange(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Ask something..."
-          className="min-h-[88px]"
+          className="min-h-[96px] bg-background/90"
         />
       </div>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs text-muted-foreground">Enter to send, Shift+Enter for newline</p>
+        <p className="text-xs font-medium text-muted-foreground">Enter to send, Shift+Enter for newline</p>
         <Button type="button" disabled={!canSend} onClick={onSend}>
           <SendHorizontal className="h-4 w-4" />
           {loading ? "Sending..." : "Send"}

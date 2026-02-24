@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import { MessageBubble } from "../src/features/chat/components/message-bubble";
 import { MessageComposer } from "../src/features/chat/components/message-composer";
+import { MessageList } from "../src/features/chat/components/message-list";
 
 describe("chat polish", () => {
   it("shows clear role labels in message bubbles", () => {
@@ -34,5 +35,17 @@ describe("chat polish", () => {
 
     expect(screen.getByText(/enter to send/i)).toBeInTheDocument();
     expect(screen.getByText(/shift\+enter for newline/i)).toBeInTheDocument();
+  });
+
+  it("renders persisted message timestamp from message metadata", () => {
+    render(
+      <MessageList
+        messages={[{ role: "assistant", content: "Hi", createdAt: "2000-01-01T10:00:00" }]}
+        loading={false}
+        errorMessage={null}
+      />,
+    );
+
+    expect(screen.getByText(/10\D*00/i)).toBeInTheDocument();
   });
 });

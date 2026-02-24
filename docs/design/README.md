@@ -3,6 +3,8 @@
 ## Active
 
 - `docs/design/active/product-and-routing.md`
+- `docs/design/active/2026-02-24-web-flow-critical-review.md`
+- `docs/design/active/2026-02-24-chat-first-guarded-home.md`
 
 ## Archive (Obsolete)
 

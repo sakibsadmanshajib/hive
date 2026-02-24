@@ -48,7 +48,7 @@ export default function AuthPage() {
       });
       setStatus(`Welcome ${json.user.email}`);
       toast.success("Authentication successful");
-      window.location.assign("/chat");
+      window.location.assign("/");
     } catch (error) {
       const nextStatus = error instanceof Error ? error.message : "Authentication failed";
       setStatus(nextStatus);
@@ -70,20 +70,20 @@ export default function AuthPage() {
 
   return (
     <section className="mx-auto grid w-full max-w-5xl gap-4 lg:grid-cols-[1.05fr_1fr]">
-      <Card className="border-0 bg-gradient-to-br from-sky-50 via-amber-50 to-teal-100 shadow-md">
+      <Card className="border-slate-800 bg-gradient-to-br from-slate-900 to-slate-800 shadow-md">
         <CardHeader>
-          <CardTitle className="text-3xl leading-tight md:text-4xl">Welcome back</CardTitle>
-          <CardDescription className="max-w-md text-sm text-slate-700">
+          <CardTitle className="text-3xl leading-tight text-slate-100 md:text-4xl">Welcome back</CardTitle>
+          <CardDescription className="max-w-md text-sm text-slate-400">
             Authenticate first, then continue directly into the chat workspace.
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-muted-foreground">{status}</p>
+          <p className="text-sm text-slate-400">{status}</p>
         </CardContent>
       </Card>
 
       <div className="grid gap-4">
-        <Card>
+        <Card className="border-slate-800 bg-slate-900 text-slate-100">
           <CardHeader>
             <CardTitle>Login</CardTitle>
           </CardHeader>
@@ -104,7 +104,7 @@ export default function AuthPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="border-slate-800 bg-slate-900 text-slate-100">
           <CardHeader>
             <CardTitle>Register</CardTitle>
           </CardHeader>

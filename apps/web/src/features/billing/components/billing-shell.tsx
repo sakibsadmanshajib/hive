@@ -11,7 +11,7 @@ type BillingShellProps = {
 export function BillingShell({ children, loading, status }: BillingShellProps) {
   return (
     <section className="mx-auto flex w-full max-w-5xl flex-col gap-5">
-      <Card className="border-none bg-gradient-to-r from-primary/15 via-background to-accent/10 shadow-none">
+      <Card className="border border-slate-200/75 bg-gradient-to-r from-primary/15 via-background to-accent/15 shadow-sm dark:border-slate-800/60">
         <CardHeader className="space-y-2">
           <CardTitle className="text-3xl">Billing and usage</CardTitle>
           <CardDescription>Manage prepaid credits, payment intents, and keys for this account.</CardDescription>

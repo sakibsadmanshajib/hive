@@ -17,15 +17,15 @@ export function MessageBubble({ role, content, timestamp }: MessageBubbleProps) 
         className={cn(
           "max-w-[88%] rounded-2xl px-4 py-3 text-sm shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md sm:max-w-[75%]",
           isUser
-            ? "rounded-br-md bg-gradient-to-br from-primary to-primary/85 text-primary-foreground"
-            : "rounded-bl-md border bg-card/95 text-card-foreground",
+            ? "rounded-br-md bg-gradient-to-br from-slate-700 to-slate-600 text-slate-100"
+            : "rounded-bl-md border border-slate-700 bg-slate-900 text-slate-100",
         )}
       >
-        <p className={cn("mb-2 text-[10px] font-semibold uppercase tracking-[0.14em]", isUser ? "text-primary-foreground/75" : "text-muted-foreground")}>
+        <p className={cn("mb-2 text-[10px] font-semibold uppercase tracking-[0.14em]", isUser ? "text-slate-300" : "text-slate-400")}>
           {speaker}
         </p>
         {isUser ? <p className="whitespace-pre-wrap leading-relaxed">{content}</p> : <MarkdownMessage content={content} />}
-        <p className={cn("mt-2 text-[10px] uppercase tracking-wide", isUser ? "text-primary-foreground/70" : "text-muted-foreground")}>{timestamp ?? "just now"}</p>
+        <p className={cn("mt-2 text-[10px] uppercase tracking-wide", isUser ? "text-slate-300" : "text-slate-400")}>{timestamp ?? "just now"}</p>
       </div>
     </article>
   );

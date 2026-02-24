@@ -1,6 +1,6 @@
-# BD AI Gateway
+# Hive
 
-Bangladesh-focused AI API gateway with:
+Hive is a Bangladesh-focused AI API gateway with:
 - OpenAI-compatible API surface
 - prepaid AI credits
 - local payment intent + verified webhook flow
@@ -25,6 +25,16 @@ This document captures the current implementation state so you can continue in a
 - Internal provider diagnostics endpoint exists and is admin-token protected.
 - Python MVP still exists in repo as a legacy reference implementation.
 
+## Current Web Flow
+
+- `/` is the primary chat workspace (auth-guarded).
+- Unauthenticated users are redirected from `/` to `/auth`.
+- `/auth` hosts login/signup.
+- `/chat` redirects to `/` (legacy compatibility).
+- Chat workspace includes:
+  - left conversation navigation
+  - top-right avatar menu with `Settings`, `Developer Panel`, `Billing`, and `Log out`
+
 ## Business Rules Implemented
 
 - Base top-up conversion: `1 BDT = 100 AI Credits`
@@ -36,7 +46,7 @@ This document captures the current implementation state so you can continue in a
 ## Repo Structure
 
 - `apps/api` - Fastify API, domain logic, runtime integrations
-- `apps/web` - Next.js app (chat + billing pages)
+- `apps/web` - Next.js app (chat-first workspace + developer panel + settings)
 - `packages/openapi/openapi.yaml` - OpenAPI contract for TS stack
 - `app/` + `tests/` - legacy Python MVP and tests
 - `docs/` - runbooks, release checklists, planning docs
@@ -242,31 +252,39 @@ pnpm install
 API tests:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api test
+pnpm --filter @hive/api test
 ```
 
 API build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api build
+pnpm --filter @hive/api build
 ```
 
 Web build:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web build
+pnpm --filter @hive/web build
+```
+
+Web smoke e2e:
+
+> Requires the local Docker stack and Playwright browser dependencies to be ready first. See `docs/runbooks/active/web-e2e-smoke.md` for pre-flight steps.
+
+```bash
+pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 ```
 
 Run API locally:
 
 ```bash
-pnpm --filter @bd-ai-gateway/api dev
+pnpm --filter @hive/api dev
 ```
 
 Run web locally:
 
 ```bash
-pnpm --filter @bd-ai-gateway/web dev
+pnpm --filter @hive/web dev
 ```
 
 ## Tests Currently Present
@@ -275,6 +293,8 @@ pnpm --filter @bd-ai-gateway/web dev
 - Provider tests under `apps/api/test/providers/*`
 - Route-level test for provider status endpoints:
   - `apps/api/test/routes/providers-status-route.test.ts`
+- Web smoke e2e coverage:
+  - `apps/web/e2e/smoke-auth-chat-billing.spec.ts`
 
 ## Security and Operations Notes
 
@@ -290,8 +310,14 @@ Done:
 - Provider routing + fallback + status visibility
 - Local-payment top-up and credit accounting paths
 - User registration/login with persistent API keys
-- ChatGPT-like multi-conversation demo UI and billing dashboard
+- Chat-first multi-conversation UI with dedicated developer and settings surfaces
 - Optional Langfuse tracing hooks in runtime
+
+Current web route map:
+- `/` -> chat workspace
+- `/developer` -> API keys and usage workflows
+- `/settings` -> profile and billing/payment controls
+- `/billing` -> compatibility route pointing to new destinations
 
 Likely next engineering steps:
 - Replace placeholder/mock image pipeline with real image providers

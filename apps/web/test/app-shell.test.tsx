@@ -24,7 +24,7 @@ describe("AppShell", () => {
     });
   });
 
-  it("renders chat and billing navigation links", () => {
+  it("renders chat navigation and peer top-right actions", () => {
     render(
       <ThemeProvider>
         <AppShell>
@@ -34,7 +34,8 @@ describe("AppShell", () => {
     );
 
     expect(screen.getByRole("link", { name: /chat/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /billing/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /auth/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /developer panel/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /settings/i })).toBeInTheDocument();
+    expect(document.querySelector("[data-app-shell='editorial']")).toBeInTheDocument();
   });
 });
