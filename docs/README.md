@@ -6,15 +6,15 @@ This folder is the canonical documentation hub for product, architecture, implem
 
 - Architecture: `docs/architecture/system-architecture.md`
 - Product and design decisions: `docs/design/product-and-routing.md`
-- Future implementation roadmap: `docs/plans/future-implementation-roadmap.md`
-- Existing approved design snapshot: `docs/plans/2026-02-23-bd-ai-gateway-design.md`
-- Existing implementation-plan snapshot: `docs/plans/2026-02-23-bd-ai-credit-gateway-implementation.md`
-- Chat UI overhaul design: `docs/plans/2026-02-23-chat-ui-overhaul-design.md`
-- Chat UI overhaul implementation plan: `docs/plans/2026-02-23-chat-ui-overhaul-implementation.md`
-- Auth-first chat entry design: `docs/plans/2026-02-24-auth-first-chat-entry-design.md`
-- Auth-first chat entry implementation plan: `docs/plans/2026-02-24-auth-first-chat-entry-implementation.md`
-- Google auth + RBAC + settings + 2FA design: `docs/plans/2026-02-23-google-auth-rbac-settings-2fa-design.md`
-- Google auth + RBAC + settings + 2FA implementation plan: `docs/plans/2026-02-23-google-auth-rbac-settings-2fa-implementation.md`
+- Plans overview: `docs/plans/README.md`
+- Active roadmap: `docs/plans/active/future-implementation-roadmap.md`
+- Current architecture migration design: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
+- Current architecture migration implementation plan: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
+
+## Planning Docs Status
+
+- `docs/plans/active/` contains current plans that should guide implementation.
+- `docs/plans/archive/pre-supabase/` contains pre-Supabase plans kept only for historical reference and should be treated as obsolete for current direction.
 
 ## Operations
 
