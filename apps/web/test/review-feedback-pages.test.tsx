@@ -64,4 +64,28 @@ describe("review feedback pages", () => {
       expect(screen.getByText(/top up failed/i)).toBeInTheDocument();
     });
   });
+
+  it("falls back to zero credits when top-up response omits minted credits", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ intent_id: "intent_1" }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({}) }),
+    );
+
+    render(<SettingsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /top up now/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/top-up successful \(\+0 credits\)/i)).toBeInTheDocument();
+    });
+  });
+
+  it("shows a user-facing read-only profile message", async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByText(/profile fields are read-only in this release\./i)).toBeInTheDocument();
+  });
 });

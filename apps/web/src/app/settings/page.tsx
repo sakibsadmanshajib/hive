@@ -83,7 +83,7 @@ export default function SettingsPage() {
         return;
       }
 
-      setStatus(`Top-up successful (+${confirmJson.minted_credits} credits)`);
+      setStatus(`Top-up successful (+${confirmJson.minted_credits ?? 0} credits)`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unexpected error during top-up");
     } finally {
@@ -110,7 +110,7 @@ export default function SettingsPage() {
             <p className="text-sm">
               <span className="font-medium">Email:</span> {profile.email}
             </p>
-            <p className="text-sm text-muted-foreground">Update profile editing APIs to make these fields writable from UI.</p>
+            <p className="text-sm text-muted-foreground">Profile fields are read-only in this release.</p>
           </CardContent>
         </Card>
         <Card>
