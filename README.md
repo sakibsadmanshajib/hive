@@ -1,6 +1,6 @@
-# BD AI Gateway
+# Hive
 
-Bangladesh-focused AI API gateway with:
+Hive is a Bangladesh-focused AI API gateway with:
 - OpenAI-compatible API surface
 - prepaid AI credits
 - local payment intent + verified webhook flow

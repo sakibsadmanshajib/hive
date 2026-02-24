@@ -1,6 +1,6 @@
 ---
 name: hive-agent
-description: Implementation and operations agent for BD AI Gateway (TypeScript API + web + provider integrations)
+description: Implementation and operations agent for Hive (TypeScript API + web + provider integrations)
 ---
 
 # AGENTS.md
