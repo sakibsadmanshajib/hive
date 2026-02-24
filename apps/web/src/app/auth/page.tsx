@@ -48,7 +48,7 @@ export default function AuthPage() {
       });
       setStatus(`Welcome ${json.user.email}`);
       toast.success("Authentication successful");
-      window.location.assign("/chat");
+      window.location.assign("/");
     } catch (error) {
       const nextStatus = error instanceof Error ? error.message : "Authentication failed";
       setStatus(nextStatus);

@@ -16,7 +16,7 @@ type MessageListProps = {
 
 export function MessageList({ messages, loading, errorMessage }: MessageListProps) {
   return (
-    <ScrollArea className="h-[50vh] rounded-2xl border bg-[linear-gradient(180deg,rgba(255,255,255,0.82)_0%,rgba(248,250,252,0.88)_100%)] p-3 shadow-sm sm:h-[58vh] sm:p-4">
+    <ScrollArea className="h-[50vh] rounded-3xl border border-white/80 bg-[linear-gradient(180deg,rgba(255,255,255,0.92)_0%,rgba(247,250,252,0.9)_54%,rgba(255,251,243,0.82)_100%)] p-3 shadow-[0_20px_45px_-38px_rgba(15,23,42,0.9)] backdrop-blur sm:h-[58vh] sm:p-5">
       <div className="space-y-4">
         {messages.length === 0 ? <p className="text-sm text-muted-foreground">Start a new chat to see messages.</p> : null}
         {messages.map((message, index) => (
