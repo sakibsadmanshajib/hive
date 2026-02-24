@@ -7,6 +7,14 @@ description: Implementation and operations agent for Hive (TypeScript API + web 
 
 This file defines how future coding agents should work in this repository.
 
+## Agent Policy Source of Truth
+
+`AGENTS.md` is the canonical instruction set for all coding agents in this repository.
+
+- Treat this file as a replacement for tool-specific agent docs like `CLAUDE.md`, `GEMINI.md`, `CURSOR.md`, or similar files.
+- If any other agent instruction file conflicts with this file, follow `AGENTS.md`.
+- Keep shared agent policy updates centralized here so all agents operate with the same rules.
+
 ## Commands First (Run These Often)
 
 Install dependencies:
@@ -143,6 +151,12 @@ For ops/status changes:
 - Prefer incremental, reviewable changes.
 
 ### Worktree Quickstart
+
+Worktree location policy:
+
+- Create task worktrees as sibling directories next to the primary clone (parent directory of this repo).
+- In this environment, if primary clone is `/home/sakib/hive`, create worktrees at `/home/sakib/hive-<task-slug>` (equivalent to `../hive-<task-slug>` from repo root).
+- Do not nest worktrees inside the main repository directory.
 
 Use this flow for every task branch:
 
@@ -315,6 +329,7 @@ Before `git push`, confirm all of the following:
 
 ## AI-Assisted Development Rules
 
+- Use the Obra Superpowers framework for all development tasks (planning, implementation, debugging, verification, and branch completion workflows).
 - Treat AI-generated code as draft: always review, test, and verify before completion.
 - Keep explicit boundaries in code and docs so future agents do not guess.
 - If AI-generated output is ambiguous, choose maintainability and clarity over cleverness.
