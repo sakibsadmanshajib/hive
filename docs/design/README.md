@@ -3,6 +3,7 @@
 ## Active
 
 - `docs/design/active/product-and-routing.md`
+- `docs/design/active/2026-02-24-web-flow-critical-review.md`
 
 ## Archive (Obsolete)
 

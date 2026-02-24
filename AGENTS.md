@@ -124,11 +124,24 @@ For ops/status changes:
 ## Git and Change Hygiene
 
 - Keep commits atomic by concern (runtime, providers, docs, tests).
+- For tracked work, open exactly one PR per task; do not bundle multiple independent tasks into one PR.
 - Use Conventional Commit style when possible, e.g. `feat(api): ...`, `fix(providers): ...`, `docs(readme): ...`.
 - Write commit messages with intent and rationale, not only diff summary.
 - Use descriptive branch names such as `feat/provider-status-internal` or `fix/redis-rate-limit`.
 - Do not include unrelated formatting churn.
 - Prefer incremental, reviewable changes.
+
+## GitHub Issue Hygiene
+
+- When creating issues, apply existing taxonomy labels:
+  - exactly one `kind:*`
+  - exactly one `area:*`
+  - exactly one `priority:*`
+  - add `risk:*` only when applicable
+  - include one lifecycle label (`status:needs-triage`, `status:ready`, `status:in-progress`, or `status:blocked`)
+- Attach the most relevant existing milestone when one applies.
+- If a GitHub Project is configured and token scopes allow it, add the issue to that project as part of creation.
+- Issue body must include: Context, Problem, Why this matters, Acceptance Criteria, Verification, Dependencies.
 
 ## Documentation Discipline (AI + Human)
 
@@ -167,3 +180,51 @@ Whenever architecture, provider routing, billing behavior, or operational flow c
 
 Reference standards:
 - `docs/engineering/git-and-ai-practices.md`
+
+## New Chat Bootstrap Context
+
+Use this snapshot when starting a fresh chat so no context is lost.
+
+Current product state:
+- Working MVP/demo is implemented and running in this repo.
+- OpenAI-compatible core API is live with prepaid credits and provider routing.
+- Chat UI and billing UI are functional for demo flows.
+
+Primary user and billing flows:
+1. Register user: `POST /v1/users/register`
+2. Login user: `POST /v1/users/login`
+3. Create payment intent: `POST /v1/payments/intents` (auth required)
+4. Demo credit confirmation: `POST /v1/payments/demo/confirm` (auth + ownership check)
+5. Run chat request: `POST /v1/chat/completions`
+6. Check usage and balance: `GET /v1/usage`, `GET /v1/credits/balance`
+
+Provider architecture:
+- Adapter pattern is required and already implemented.
+- Contract: `apps/api/src/providers/types.ts` (`ProviderClient`)
+- Adapters: `ollama-client.ts`, `groq-client.ts`, `mock-client.ts`
+- Orchestration/fallback: `apps/api/src/providers/registry.ts`
+
+Provider routing defaults:
+- `fast-chat` -> ollama -> groq -> mock
+- `smart-reasoning` -> groq -> ollama -> mock
+- `image-basic` -> mock
+
+Status endpoints:
+- Public: `GET /v1/providers/status` (sanitized)
+- Internal: `GET /v1/providers/status/internal` (requires `x-admin-token`)
+
+Security-critical expectations:
+- `ALLOW_DEV_API_KEY_PREFIX` defaults to `false`.
+- Public status must never include provider internals.
+- Internal status must remain token-protected.
+- Never commit real secrets or keys.
+
+Optional tracing:
+- Langfuse integration hooks exist in `apps/api/src/runtime/langfuse.ts`.
+- Controlled by env vars: `LANGFUSE_ENABLED`, `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`.
+
+Start-of-session checklist for agents:
+1. Read `README.md`, `AGENTS.md`, and `docs/README.md`.
+2. Run verification commands from "Commands First".
+3. If working on runtime behavior, run `docker compose up --build -d` and validate endpoints.
+4. Keep docs updated with behavior changes in the same change.
