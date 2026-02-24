@@ -652,8 +652,17 @@ export function createRuntimeServices(): RuntimeServices {
   };
   const providerRegistry = new ProviderRegistry({
     clients: [
-      new OllamaProviderClient({ baseUrl: env.providers.ollama.baseUrl }),
-      new GroqProviderClient({ baseUrl: env.providers.groq.baseUrl, apiKey: env.providers.groq.apiKey }),
+      new OllamaProviderClient({
+        baseUrl: env.providers.ollama.baseUrl,
+        timeoutMs: env.providers.ollama.timeoutMs,
+        maxRetries: env.providers.ollama.maxRetries,
+      }),
+      new GroqProviderClient({
+        baseUrl: env.providers.groq.baseUrl,
+        apiKey: env.providers.groq.apiKey,
+        timeoutMs: env.providers.groq.timeoutMs,
+        maxRetries: env.providers.groq.maxRetries,
+      }),
       new MockProviderClient(),
     ],
     defaultProvider: "mock",
