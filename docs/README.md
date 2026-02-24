@@ -10,6 +10,8 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Active roadmap: `docs/plans/active/future-implementation-roadmap.md`
 - Current architecture migration design: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
 - Current architecture migration implementation plan: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
+- Current chat-first frontend IA design: `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-design.md`
+- Current chat-first frontend IA implementation: `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-implementation.md`
 
 ## Planning Docs Status
 
