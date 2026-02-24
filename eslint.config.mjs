@@ -1,5 +1,6 @@
 import tsParser from "@typescript-eslint/parser";
 import tsPlugin from "@typescript-eslint/eslint-plugin";
+import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 
 export default [
   {
@@ -7,6 +8,7 @@ export default [
   },
   {
     files: ["**/*.ts", "**/*.tsx"],
+    ignores: ["apps/web/**/*"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {
@@ -28,4 +30,8 @@ export default [
       ],
     },
   },
+  ...nextCoreWebVitals.map((config) => ({
+    ...config,
+    basePath: "apps/web",
+  })),
 ];
