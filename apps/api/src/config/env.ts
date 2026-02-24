@@ -12,12 +12,20 @@ function required(name: string, fallback?: string): string {
 
 function parseNumber(name: string, fallback: number): number {
   const raw = process.env[name];
-  if (raw === undefined) {
+  if (raw === undefined || raw.trim() === "") {
     return fallback;
   }
   const value = Number(raw);
   if (Number.isNaN(value)) {
     throw new Error(`Invalid numeric environment variable ${name}: ${raw}`);
+  }
+  return value;
+}
+
+function parsePositiveInteger(name: string, fallback: number): number {
+  const value = parseNumber(name, fallback);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`Invalid positive integer environment variable ${name}: ${value}`);
   }
   return value;
 }
@@ -111,7 +119,7 @@ export type AppEnv = {
 };
 
 export function getEnv(): AppEnv {
-  const providerTimeoutMs = parseNonNegativeInteger("PROVIDER_TIMEOUT_MS", 4000);
+  const providerTimeoutMs = parsePositiveInteger("PROVIDER_TIMEOUT_MS", 4000);
   const providerMaxRetries = parseNonNegativeInteger("PROVIDER_MAX_RETRIES", 1);
 
   const env: AppEnv = {
@@ -160,14 +168,14 @@ export function getEnv(): AppEnv {
       ollama: {
         baseUrl: required("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         model: required("OLLAMA_MODEL", "llama3.1:8b"),
-        timeoutMs: parseNonNegativeInteger("OLLAMA_TIMEOUT_MS", providerTimeoutMs),
+        timeoutMs: parsePositiveInteger("OLLAMA_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OLLAMA_MAX_RETRIES", providerMaxRetries),
       },
       groq: {
         apiKey: process.env.GROQ_API_KEY,
         baseUrl: required("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
         model: required("GROQ_MODEL", "llama-3.1-8b-instant"),
-        timeoutMs: parseNonNegativeInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
+        timeoutMs: parsePositiveInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GROQ_MAX_RETRIES", providerMaxRetries),
       },
     },

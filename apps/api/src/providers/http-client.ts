@@ -22,9 +22,14 @@ function toProviderFetchError(provider: string, error: unknown): Error {
 }
 
 export async function fetchWithRetry(request: ProviderFetchRequest): Promise<Response> {
-  const totalAttempts = Math.max(0, request.maxRetries) + 1;
+  if (!Number.isInteger(request.maxRetries) || request.maxRetries < 0) {
+    throw new Error(`${request.provider} request has invalid retry configuration: ${request.maxRetries}`);
+  }
+  if (!Number.isFinite(request.timeoutMs) || request.timeoutMs <= 0) {
+    throw new Error(`${request.provider} request has invalid timeout configuration: ${request.timeoutMs}`);
+  }
 
-  for (let attempt = 0; attempt < totalAttempts; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), request.timeoutMs);
 
@@ -34,7 +39,8 @@ export async function fetchWithRetry(request: ProviderFetchRequest): Promise<Res
         signal: controller.signal,
       });
 
-      if (!response.ok && isRetryableStatus(response.status) && attempt < totalAttempts - 1) {
+      const canRetry = attempt < request.maxRetries;
+      if (!response.ok && isRetryableStatus(response.status) && canRetry) {
         continue;
       }
 
@@ -42,7 +48,7 @@ export async function fetchWithRetry(request: ProviderFetchRequest): Promise<Res
     } catch (error) {
       const timedOut = isAbortError(error);
       const retryableError = timedOut || error instanceof TypeError;
-      const canRetry = attempt < totalAttempts - 1;
+      const canRetry = attempt < request.maxRetries;
 
       if (retryableError && canRetry) {
         continue;
@@ -57,6 +63,4 @@ export async function fetchWithRetry(request: ProviderFetchRequest): Promise<Res
       clearTimeout(timeoutHandle);
     }
   }
-
-  throw new Error(`${request.provider} request failed after retries exhausted`);
 }

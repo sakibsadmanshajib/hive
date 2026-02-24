@@ -41,6 +41,25 @@ describe("provider http client", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("retries on rate limit status 429", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("rate limited", { status: 429 }))
+      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await fetchWithRetry({
+      provider: "groq",
+      url: "https://api.groq.com/openai/v1/chat/completions",
+      init: { method: "POST" },
+      timeoutMs: 50,
+      maxRetries: 1,
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("throws after timeout retries are exhausted", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"));
     vi.stubGlobal("fetch", fetchMock);

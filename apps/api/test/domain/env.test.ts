@@ -103,4 +103,25 @@ describe("getEnv provider timeout and retry controls", () => {
     expect(env.providers.groq.timeoutMs).toBe(7100);
     expect(env.providers.groq.maxRetries).toBe(3);
   });
+
+  it("treats empty timeout overrides as unset and falls back to shared timeout", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.PROVIDER_TIMEOUT_MS = "4500";
+    process.env.OLLAMA_TIMEOUT_MS = "";
+    process.env.GROQ_TIMEOUT_MS = "";
+
+    const env = getEnv();
+
+    expect(env.providers.ollama.timeoutMs).toBe(4500);
+    expect(env.providers.groq.timeoutMs).toBe(4500);
+  });
+
+  it("rejects non-positive provider timeout values", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.PROVIDER_TIMEOUT_MS = "0";
+
+    expect(() => getEnv()).toThrowError(/PROVIDER_TIMEOUT_MS/);
+  });
 });
