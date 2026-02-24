@@ -100,4 +100,85 @@ describe("user settings routes", () => {
     const sent = (response ?? payload) as { error: string };
     expect(sent.error).toContain("setting disabled");
   });
+
+  it("patch /v1/users/settings writes through supabase repository", async () => {
+    vi.resetModules();
+
+    const upsertSettings = vi.fn(async () => undefined);
+
+    vi.doMock("../../src/config/env", () => ({
+      getEnv: () => ({
+        nodeEnv: "test",
+        port: 8080,
+        postgresUrl: "postgres://test",
+        redisUrl: "redis://127.0.0.1:6379",
+        rateLimitPerMinute: 60,
+        adminStatusToken: "admin",
+        allowDemoPaymentConfirm: true,
+        allowDevApiKeyPrefix: false,
+        google: { clientId: "id", clientSecret: "secret", redirectUri: "http://127.0.0.1/callback" },
+        auth: {
+          sessionTtlMinutes: 60,
+          enforceTwoFactorSensitiveActions: false,
+          twoFactorVerificationWindowMinutes: 10,
+        },
+        webhookSecrets: { bkash: "bk", sslcommerz: "ssl" },
+        bkash: {},
+        sslcommerz: {},
+        supabase: {
+          url: "https://demo.supabase.co",
+          serviceRoleKey: "service-role-key",
+          flags: {
+            authEnabled: false,
+            userRepoEnabled: true,
+            apiKeysEnabled: false,
+            billingStoreEnabled: false,
+          },
+        },
+        providers: {
+          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
+          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
+        },
+        langfuse: {
+          enabled: false,
+          baseUrl: "https://cloud.langfuse.com",
+          publicKey: undefined,
+          secretKey: undefined,
+        },
+      }),
+    }));
+
+    vi.doMock("../../src/runtime/supabase-user-store", () => ({
+      SupabaseUserStore: class {
+        async findById() {
+          return undefined;
+        }
+        async findByEmail() {
+          return undefined;
+        }
+        upsertSettings = upsertSettings;
+        async getSettings() {
+          return { apiEnabled: true, generateImage: true, twoFactorEnabled: false };
+        }
+      },
+    }));
+
+    vi.doMock("../../src/runtime/postgres-store", () => ({
+      PostgresStore: class {
+        async upsertUserSetting() {
+          return undefined;
+        }
+        async getUserSettings() {
+          return {};
+        }
+      },
+    }));
+
+    const { createRuntimeServices } = await import("../../src/runtime/services");
+    const services = createRuntimeServices();
+
+    await services.userSettings.updateForUser("8f57d0e6-2ecb-4e8d-a774-5f4eeaf9a5ec", { generateImage: false });
+
+    expect(upsertSettings).toHaveBeenCalledWith("8f57d0e6-2ecb-4e8d-a774-5f4eeaf9a5ec", { generateImage: false });
+  });
 });
