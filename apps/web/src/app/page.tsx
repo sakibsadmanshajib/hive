@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { readAuthSession } from "../features/auth/auth-session";
+import { type AuthSession, readAuthSession } from "../features/auth/auth-session";
 import { ChatWorkspaceShell } from "../features/chat/components/chat-workspace-shell";
 import { MessageComposer } from "../features/chat/components/message-composer";
 import { MessageList } from "../features/chat/components/message-list";
@@ -11,7 +11,8 @@ import { useChatSession } from "../features/chat/use-chat-session";
 
 export default function HomePage() {
   const router = useRouter();
-  const authSession = readAuthSession();
+  const [authSession, setAuthSession] = useState<AuthSession | null>(null);
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const {
     conversations,
     activeConversation,
@@ -28,12 +29,17 @@ export default function HomePage() {
   } = useChatSession();
 
   useEffect(() => {
-    if (!authSession?.apiKey) {
+    setAuthSession(readAuthSession());
+    setSessionLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (sessionLoaded && !authSession?.apiKey) {
       router.push("/auth");
     }
-  }, [authSession?.apiKey, router]);
+  }, [authSession?.apiKey, router, sessionLoaded]);
 
-  if (!authSession?.apiKey) {
+  if (!sessionLoaded || !authSession?.apiKey) {
     return null;
   }
 

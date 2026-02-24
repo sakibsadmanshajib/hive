@@ -22,8 +22,9 @@ type UserSnapshot = {
 
 export default function BillingPage() {
   const router = useRouter();
-  const sessionApiKey = readAuthSession()?.apiKey ?? "";
-  const [apiKey, setApiKey] = useState(sessionApiKey);
+  const [sessionApiKey, setSessionApiKey] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [sessionLoaded, setSessionLoaded] = useState(false);
   const [snapshot, setSnapshot] = useState<UserSnapshot | null>(null);
   const [usageCount, setUsageCount] = useState(0);
   const [topUpAmount, setTopUpAmount] = useState(50);
@@ -32,10 +33,17 @@ export default function BillingPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!sessionApiKey) {
+    const key = readAuthSession()?.apiKey ?? "";
+    setSessionApiKey(key);
+    setApiKey(key);
+    setSessionLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (sessionLoaded && !sessionApiKey) {
       router.push("/auth");
     }
-  }, [router, sessionApiKey]);
+  }, [router, sessionApiKey, sessionLoaded]);
 
   async function fetchSnapshot(overrideApiKey?: string) {
     const key = overrideApiKey ?? apiKey;
@@ -156,13 +164,13 @@ export default function BillingPage() {
   }
 
   useEffect(() => {
-    if (!sessionApiKey) {
+    if (!sessionLoaded || !sessionApiKey) {
       return;
     }
     void fetchSnapshot(sessionApiKey);
-  }, [sessionApiKey]);
+  }, [sessionApiKey, sessionLoaded]);
 
-  if (!sessionApiKey) {
+  if (!sessionLoaded || !sessionApiKey) {
     return null;
   }
 

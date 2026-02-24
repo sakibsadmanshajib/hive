@@ -21,11 +21,11 @@ describe("chat workspace layout", () => {
     );
   });
 
-  it("renders left-rail trigger, composer, and profile menu trigger", () => {
+  it("renders left-rail trigger, composer, and profile menu trigger", async () => {
     render(<HomePage />);
 
-    expect(screen.getAllByRole("button", { name: /new chat/i }).length).toBeGreaterThan(0);
-    expect(screen.getByPlaceholderText(/ask something/i)).toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: /new chat/i })).length).toBeGreaterThan(0);
+    expect(await screen.findByPlaceholderText(/ask something/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /open profile menu/i })).toHaveAttribute("aria-haspopup", "menu");
   });
 });

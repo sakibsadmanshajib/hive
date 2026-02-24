@@ -33,12 +33,12 @@ describe("chat auth gate", () => {
     expect(screen.queryByRole("button", { name: /new chat/i })).not.toBeInTheDocument();
   });
 
-  it("renders chat workspace on root for authenticated users", () => {
+  it("renders chat workspace on root for authenticated users", async () => {
     window.localStorage.setItem("bdai.auth.session", JSON.stringify({ apiKey: "sk_test", email: "demo@example.com" }));
 
     render(<HomePage />);
 
-    expect(screen.getAllByRole("button", { name: /new chat/i }).length).toBeGreaterThan(0);
+    expect((await screen.findAllByRole("button", { name: /new chat/i })).length).toBeGreaterThan(0);
   });
 
   it("redirects legacy /chat route to root", async () => {
