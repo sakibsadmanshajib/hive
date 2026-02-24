@@ -11,13 +11,14 @@ test("unauthenticated root redirects to auth", async ({ page }) => {
 
 test("register happy path reaches chat workspace", async ({ page }) => {
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const email = `e2e_ui_${unique}@example.com`;
+  const email = `e2e_web_smoke_ui_${unique}@example.com`;
+  const registerForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Create account" }) });
 
   await page.goto("/auth");
-  await page.getByPlaceholder("Name").fill("E2E UI User");
-  await page.getByPlaceholder("Email").last().fill(email);
-  await page.getByPlaceholder("Password").last().fill("password123");
-  await page.getByRole("button", { name: "Create account" }).click();
+  await registerForm.getByPlaceholder("Name").fill("E2E UI User");
+  await registerForm.getByPlaceholder("Email").fill(email);
+  await registerForm.getByPlaceholder("Password").fill("password123");
+  await registerForm.getByRole("button", { name: "Create account" }).click();
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("button", { name: "Open profile menu" })).toBeVisible();
@@ -62,7 +63,7 @@ test("chat success and failure messaging", async ({ page, request }) => {
 
   await page.getByPlaceholder("Ask something...").fill("please fail now");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText("Chat backend unavailable")).toBeVisible();
+  await expect(page.getByRole("main").getByText("Chat backend unavailable").first()).toBeVisible();
 });
 
 test("billing access from profile menu and top-up failure messaging", async ({ page, request }) => {

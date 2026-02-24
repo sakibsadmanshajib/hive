@@ -29,6 +29,14 @@ pnpm install
 pnpm --filter @hive/web exec playwright install chromium
 ```
 
+4. Export the API base URL used by fixtures that call the API directly:
+
+```bash
+export E2E_API_BASE_URL=http://127.0.0.1:8080
+```
+
+You can also place `E2E_API_BASE_URL=http://127.0.0.1:8080` in your local shell profile or env file used during Playwright runs.
+
 If Linux host libraries are missing locally:
 
 ```bash
@@ -58,6 +66,6 @@ Workflow installs browser dependencies, starts Docker stack, waits for readiness
 
 ## Troubleshooting
 
-- If Playwright reports missing browser executable, rerun browser install command.
-- If API/web readiness times out, run `docker compose ps` and inspect logs via `docker compose logs api web`.
-- If local Linux host is missing shared libraries, use `playwright install-deps` or rely on CI runner provisioning.
+- Missing browser executable: rerun the Playwright browser install command.
+- API/web readiness timeout: run `docker compose ps` and inspect logs via `docker compose logs api web`.
+- Missing local Linux shared libraries: use `playwright install-deps` or rely on CI runner provisioning.

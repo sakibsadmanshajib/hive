@@ -269,6 +269,8 @@ pnpm --filter @hive/web build
 
 Web smoke e2e:
 
+> Requires the local Docker stack and Playwright browser dependencies to be ready first. See `docs/runbooks/active/web-e2e-smoke.md` for pre-flight steps.
+
 ```bash
 pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 ```

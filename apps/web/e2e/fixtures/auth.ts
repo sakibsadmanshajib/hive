@@ -1,6 +1,9 @@
 import type { APIRequestContext, Page } from "@playwright/test";
+import { AUTH_STORAGE_KEY } from "../../src/features/auth/auth-session";
 
 const apiBase = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:8080";
+// Stable prefix keeps test users identifiable for shared-environment cleanup jobs.
+const E2E_USER_EMAIL_PREFIX = "e2e_web_smoke";
 
 type AuthResponse = {
   api_key: string;
@@ -18,7 +21,7 @@ type AuthSessionSeed = {
 
 export async function createSession(request: APIRequestContext) {
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const email = `e2e_${unique}@example.com`;
+  const email = `${E2E_USER_EMAIL_PREFIX}_${unique}@example.com`;
   const password = "password123";
   const name = "E2E User";
 
@@ -41,7 +44,10 @@ export async function createSession(request: APIRequestContext) {
 }
 
 export async function seedAuthSession(page: Page, seed: AuthSessionSeed) {
-  await page.addInitScript((session) => {
-    window.localStorage.setItem("bdai.auth.session", JSON.stringify(session));
-  }, seed);
+  await page.addInitScript(
+    ({ key, session }: { key: string; session: AuthSessionSeed }) => {
+      window.localStorage.setItem(key, JSON.stringify(session));
+    },
+    { key: AUTH_STORAGE_KEY, session: seed },
+  );
 }
