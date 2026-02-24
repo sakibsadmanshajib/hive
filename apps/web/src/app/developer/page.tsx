@@ -7,57 +7,72 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { readAuthSession } from "../../features/auth/auth-session";
-import { UsageCards } from "../../features/billing/components/usage-cards";
+import { UsageCards, type UserSnapshot } from "../../features/billing/components/usage-cards";
 import { DeveloperShell } from "../../features/developer/components/developer-shell";
-
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
-
-type UserSnapshot = {
-  user: { user_id: string; email: string; name?: string };
-  credits: { availableCredits: number; purchasedCredits: number; promoCredits: number };
-  api_keys: Array<{ key_id: string; revoked: boolean; scopes: string[]; createdAt: string }>;
-};
+import { apiBase } from "../../lib/api-base";
 
 export default function DeveloperPage() {
   const router = useRouter();
-  const authSession = readAuthSession();
 
-  const [apiKey, setApiKey] = useState(authSession?.apiKey ?? "");
+  const [sessionReady, setSessionReady] = useState(false);
+  const [apiKey, setApiKey] = useState("");
   const [snapshot, setSnapshot] = useState<UserSnapshot | null>(null);
   const [usageCount, setUsageCount] = useState(0);
   const [status, setStatus] = useState("Load account metrics with your API key.");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    const authSession = readAuthSession();
     if (!authSession?.apiKey) {
       router.push("/auth");
+      setSessionReady(true);
+      return;
     }
-  }, [authSession?.apiKey, router]);
 
-  async function fetchSnapshot() {
+    setApiKey(authSession.apiKey);
+    setSessionReady(true);
+  }, [router]);
+
+  async function fetchSnapshot(options: { manageLoading?: boolean } = {}) {
+    const { manageLoading = true } = options;
+
     if (!apiKey) {
       setStatus("Set API key first.");
       return;
     }
 
-    setLoading(true);
+    if (manageLoading) {
+      setLoading(true);
+    }
+
     try {
       const [meRes, usageRes] = await Promise.all([
         fetch(`${apiBase}/v1/users/me`, { headers: { "x-api-key": apiKey } }),
         fetch(`${apiBase}/v1/usage`, { headers: { "x-api-key": apiKey } }),
       ]);
-      const meJson = await meRes.json();
-      const usageJson = await usageRes.json();
+      const meJson = (await meRes.json().catch(() => ({}))) as UserSnapshot & { error?: string };
+      const usageJson = (await usageRes.json().catch(() => ({}))) as { data?: unknown[]; error?: string };
+
       if (!meRes.ok) {
         setStatus(meJson.error ?? "Failed to load account data");
         return;
       }
 
       setSnapshot(meJson);
-      setUsageCount(Array.isArray(usageJson?.data) ? usageJson.data.length : 0);
+      if (!usageRes.ok) {
+        setUsageCount(0);
+        setStatus(`Loaded account data, but failed to load usage: ${usageJson.error ?? "Unknown usage error"}`);
+        return;
+      }
+
+      setUsageCount(Array.isArray(usageJson.data) ? usageJson.data.length : 0);
       setStatus("Loaded developer account snapshot");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to load account data");
     } finally {
-      setLoading(false);
+      if (manageLoading) {
+        setLoading(false);
+      }
     }
   }
 
@@ -84,13 +99,15 @@ export default function DeveloperPage() {
       }
 
       setStatus("Generated additional API key");
-      await fetchSnapshot();
+      await fetchSnapshot({ manageLoading: false });
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not create API key");
     } finally {
       setLoading(false);
     }
   }
 
-  if (!authSession?.apiKey) {
+  if (!sessionReady || !apiKey) {
     return null;
   }
 
@@ -108,6 +125,7 @@ export default function DeveloperPage() {
               id="developer-api-key"
               onChange={(event) => setApiKey(event.target.value)}
               placeholder="sk_live_..."
+              type="password"
               value={apiKey}
             />
           </label>
