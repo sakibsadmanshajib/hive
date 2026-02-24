@@ -125,11 +125,94 @@ For ops/status changes:
 
 - Keep commits atomic by concern (runtime, providers, docs, tests).
 - For tracked work, open exactly one PR per task; do not bundle multiple independent tasks into one PR.
+- Start each new task in a fresh git worktree instead of reusing the previous task's working directory.
+- Before beginning a new task, prune the previously used worktree if its PR is merged.
 - Use Conventional Commit style when possible, e.g. `feat(api): ...`, `fix(providers): ...`, `docs(readme): ...`.
 - Write commit messages with intent and rationale, not only diff summary.
 - Use descriptive branch names such as `feat/provider-status-internal` or `fix/redis-rate-limit`.
 - Do not include unrelated formatting churn.
 - Prefer incremental, reviewable changes.
+
+## Detailed Usage Behavior
+
+### Docker Compose Lifecycle
+
+Use this exact lifecycle to avoid stale containers and port conflicts during local verification:
+
+1. Stop any existing stack before starting task verification:
+
+```bash
+docker compose down
+```
+
+2. Start a fresh stack only when the task needs API/web integration behavior:
+
+```bash
+docker compose up --build -d
+docker compose ps
+```
+
+3. Verify readiness before running E2E:
+- API: `curl -s http://127.0.0.1:8080/health`
+- Web: `curl -sI http://127.0.0.1:3000/auth`
+
+4. Tear down stack when verification is complete or blocked:
+
+```bash
+docker compose down
+```
+
+Rules:
+- Do not assume existing long-running containers represent current branch code.
+- Do not debug E2E failures against stale containers; restart stack first.
+- If ports are occupied by another project stack, stop that stack before proceeding.
+
+### Receiving AI/Code Review Feedback
+
+When PR comments arrive:
+
+1. Extract exact comment text and line locations.
+2. Verify each comment against current code before changing anything.
+3. Apply only technically correct suggestions for this codebase.
+4. For suggestions requiring nonexistent endpoints or contracts, choose safe alternatives (for example deterministic test data prefixes) and document rationale in the PR update.
+5. Re-run relevant tests/build after fixes.
+
+Rules:
+- Do not blindly apply all automated review suggestions.
+- Do not ignore failing CI root causes while fixing only style nits.
+
+### Merge Conflict Handling
+
+Before push:
+
+1. Sync latest `main`:
+
+```bash
+git fetch origin main
+```
+
+2. Integrate `main` into the task branch (`rebase` preferred unless merge commit is intentionally needed):
+
+```bash
+git rebase origin/main
+```
+
+3. Resolve conflicts file-by-file, preserving current task intent and docs consistency.
+4. Re-run verification commands after conflict resolution.
+5. Push only after clean status and successful verification evidence.
+
+Rules:
+- Never resolve conflicts by dropping behavior-critical tests/docs.
+- Never force-push rewritten history without confirming branch ownership and PR impact.
+
+### Push Readiness Checklist
+
+Before `git push`, confirm all of the following:
+
+- `git status` is clean except intended task files.
+- Required tests/build commands for touched areas have run successfully.
+- Docs and runbooks reflect any behavior or operational changes.
+- Public/internal status endpoint boundaries remain intact.
 
 ## GitHub Issue Hygiene
 

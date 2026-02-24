@@ -4,7 +4,7 @@ export type AuthSession = {
   name?: string;
 };
 
-const AUTH_STORAGE_KEY = "bdai.auth.session";
+export const AUTH_STORAGE_KEY = "bdai.auth.session";
 
 export function readAuthSession(): AuthSession | null {
   if (typeof window === "undefined") {

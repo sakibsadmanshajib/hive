@@ -12,5 +12,7 @@ dist/
 coverage/
 *.tsbuildinfo
 .next/
+playwright-report/
+test-results/
 .env
 .worktrees/
