@@ -54,9 +54,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile --prefer-offline
 
-      - name: Checkpoint cache snapshot
-        run: echo "Playwright cache hit: ${{ steps['cache-playwright'].outputs['cache-hit'] }}"
-
       - name: Install Playwright browser dependencies
         run: pnpm --filter @hive/web exec playwright install --with-deps chromium
 

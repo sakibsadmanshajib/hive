@@ -301,7 +301,7 @@ Web smoke workflow: `.github/workflows/web-e2e-smoke.yml`
 - Runs for PR changes under `apps/web/**`, `apps/api/**`, `docker-compose.yml`, and workflow file.
 - Uses Node `24` (same as primary CI) so pnpm cache keys can be reused across workflows.
 - Restores cached Playwright browsers from `~/.cache/ms-playwright` before install.
-- Uses `pnpm install --prefer-offline` and logs a cache-hit checkpoint in workflow output.
+- Uses `pnpm install --prefer-offline` to maximize dependency cache reuse.
 - Uses workflow-level concurrency cancellation to stop stale in-progress smoke runs on the same branch/PR.
 - Installs Playwright Chromium, starts Docker stack, waits for readiness, runs smoke spec.
 - Uploads Playwright artifacts on failure.
