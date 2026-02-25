@@ -337,6 +337,7 @@ Never force-push rewritten history unless explicitly required and safe.
 
 - If behavior changes, update docs in the same change.
 - Update `README.md` for user-facing changes.
+- Update `CHANGELOG.md` for all notable changes (Added, Changed, Deprecated, Removed, Fixed, Security).
 - Update `docs/` runbooks/architecture/plans for operational or architectural changes.
 - Prefer concrete examples (commands, payloads, env vars) over abstract prose.
 - Keep docs synchronized with implementation.

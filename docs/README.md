@@ -6,6 +6,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 
 - Architecture: `docs/architecture/system-architecture.md`
 - Product and design decisions: `docs/design/README.md`
+- Changelog: `../CHANGELOG.md`
 - Plans overview: `docs/plans/README.md`
 - Active roadmap: `docs/plans/active/future-implementation-roadmap.md`
 - Current architecture migration design: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
