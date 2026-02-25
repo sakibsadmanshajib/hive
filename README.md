@@ -149,9 +149,15 @@ Important variables:
 - `SSLCOMMERZ_WEBHOOK_SECRET`
 - `OLLAMA_BASE_URL`
 - `OLLAMA_MODEL`
+- `PROVIDER_TIMEOUT_MS` (default `4000`)
+- `PROVIDER_MAX_RETRIES` (default `1`)
+- `OLLAMA_TIMEOUT_MS` (optional override)
+- `OLLAMA_MAX_RETRIES` (optional override)
 - `GROQ_API_KEY`
 - `GROQ_BASE_URL`
 - `GROQ_MODEL`
+- `GROQ_TIMEOUT_MS` (optional override)
+- `GROQ_MAX_RETRIES` (optional override)
 - `ALLOW_DEMO_PAYMENT_CONFIRM`
 - `ALLOW_DEV_API_KEY_PREFIX`
 - `GOOGLE_CLIENT_ID`
@@ -171,6 +177,7 @@ Important variables:
 - `LANGFUSE_SECRET_KEY`
 
 Provider optional verification settings are also available in `.env.example`.
+Provider retries apply to timeout/network failures and HTTP `429/5xx`.
 
 ## Docker Setup
 

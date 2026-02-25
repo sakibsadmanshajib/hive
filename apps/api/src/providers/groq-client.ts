@@ -1,8 +1,11 @@
 import type { ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderHealthStatus } from "./types";
+import { fetchWithRetry } from "./http-client";
 
 type GroqConfig = {
   baseUrl: string;
   apiKey?: string;
+  timeoutMs: number;
+  maxRetries: number;
 };
 
 type GroqChatResponse = {
@@ -27,16 +30,22 @@ export class GroqProviderClient implements ProviderClient {
       throw new Error("groq api key missing");
     }
 
-    const response = await fetch(`${this.config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.apiKey}`,
-        "content-type": "application/json",
+    const response = await fetchWithRetry({
+      provider: "groq",
+      url: `${this.config.baseUrl}/chat/completions`,
+      timeoutMs: this.config.timeoutMs,
+      maxRetries: this.config.maxRetries,
+      init: {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: request.model,
+          messages: request.messages,
+        }),
       },
-      body: JSON.stringify({
-        model: request.model,
-        messages: request.messages,
-      }),
     });
 
     if (!response.ok) {
@@ -62,10 +71,16 @@ export class GroqProviderClient implements ProviderClient {
     }
 
     try {
-      const response = await fetch(`${this.config.baseUrl}/models`, {
-        method: "GET",
-        headers: {
-          authorization: `Bearer ${this.config.apiKey}`,
+      const response = await fetchWithRetry({
+        provider: "groq",
+        url: `${this.config.baseUrl}/models`,
+        timeoutMs: this.config.timeoutMs,
+        maxRetries: this.config.maxRetries,
+        init: {
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${this.config.apiKey}`,
+          },
         },
       });
       if (!response.ok) {

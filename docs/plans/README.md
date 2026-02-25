@@ -26,6 +26,8 @@ Use these documents for current planning and execution:
 - `docs/plans/2026-02-24-free-tier-zero-cost-access-design.md`
 - `docs/plans/2026-02-24-free-tier-zero-cost-access-implementation.md`
 - `docs/plans/2026-02-24-public-beta-mvp-gap-and-oss-organization-implementation.md`
+- `docs/plans/2026-02-24-provider-timeout-retry-controls-design.md`
+- `docs/plans/2026-02-24-provider-timeout-retry-controls-implementation.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-implementation.md`
 

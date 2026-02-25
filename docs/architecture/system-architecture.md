@@ -61,6 +61,17 @@ Routing orchestration lives in:
 - `apps/api/src/providers/registry.ts`
 - `apps/api/src/runtime/services.ts`
 
+## Provider Circuit Breaker
+
+The Provider Registry implements a circuit breaker pattern to protect against cascading failures and reduce latency when a provider is repeatedly failing.
+
+- **Thresholds**: Configurable via `PROVIDER_CB_THRESHOLD` (failure count) and `PROVIDER_CB_RESET_MS` (timeout).
+- **States**: 
+  - `CLOSED`: Normal operation, calls the provider.
+  - `OPEN`: Provider is skipped for all requests until the reset timeout expires.
+  - `HALF_OPEN`: Allows a single test request to check if the provider has recovered.
+- **Observability**: Circuit state is exposed in `/v1/providers/status` (as `circuit-open` state) and in detail via `/v1/providers/status/internal`.
+
 ## Provider Status Endpoints
 
 - Public status endpoint: `GET /v1/providers/status`

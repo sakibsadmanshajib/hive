@@ -1,3 +1,4 @@
+import { CircuitBreaker, type CircuitBreakerConfig, type CircuitState } from "./circuit-breaker";
 import type { ProviderChatMessage, ProviderClient, ProviderName } from "./types";
 
 type ProviderRegistryConfig = {
@@ -6,6 +7,7 @@ type ProviderRegistryConfig = {
   modelProviderMap: Record<string, ProviderName>;
   providerModelMap: Record<ProviderName, string>;
   fallbackOrder: Record<ProviderName, ProviderName[]>;
+  circuitBreaker?: CircuitBreakerConfig;
 };
 
 export type ProviderExecutionResult = {
@@ -20,16 +22,40 @@ export type ProviderStatusResult = {
     enabled: boolean;
     healthy: boolean;
     detail: string;
+    circuit: {
+      state: CircuitState;
+      failures: number;
+      lastError?: string;
+    };
   }>;
 };
 
+/**
+ * ProviderRegistry manages multiple AI provider clients, handling model routing,
+ * failover logic, and circuit breaking for resilience.
+ */
 export class ProviderRegistry {
   private readonly clientsByName: Map<ProviderName, ProviderClient>;
+  private readonly circuitBreakers: Map<ProviderName, CircuitBreaker>;
 
   constructor(private readonly config: ProviderRegistryConfig) {
     this.clientsByName = new Map(config.clients.map((client) => [client.name, client]));
+    this.circuitBreakers = new Map(
+      config.clients.map((client) => [
+        client.name,
+        new CircuitBreaker(client.name, config.circuitBreaker ?? { failureThreshold: 5, resetTimeoutMs: 30000 }),
+      ]),
+    );
   }
 
+  /**
+   * Executes a chat completion request using the primary provider for the model,
+   * falling back to secondary providers if failures occur.
+   *
+   * @param modelId - The internal model ID to route.
+   * @param messages - The chat messages to process.
+   * @throws Error if no provider succeeds or if all candidates are blocked by circuit breakers.
+   */
   async chat(modelId: string, messages: ProviderChatMessage[]): Promise<ProviderExecutionResult> {
     const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
     const candidateProviders = this.buildCandidates(primaryProvider);
@@ -37,13 +63,28 @@ export class ProviderRegistry {
 
     for (const providerName of candidateProviders) {
       const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
       if (!client || !client.isEnabled()) {
         continue;
+      }
+
+      if (breaker) {
+        breaker.evaluateState();
+        if (breaker.isOpen()) {
+          errors.push(`${providerName}: circuit open`);
+          continue;
+        }
+        if (breaker.isHalfOpen() && !breaker.tryAcquireProbe()) {
+          errors.push(`${providerName}: half-open probe in-flight`);
+          continue;
+        }
       }
 
       const providerModel = this.config.providerModelMap[providerName] ?? modelId;
       try {
         const response = await client.chat({ model: providerModel, messages });
+        breaker?.recordSuccess();
         return {
           content: response.content,
           providerUsed: providerName,
@@ -51,6 +92,7 @@ export class ProviderRegistry {
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        breaker?.recordFailure(reason);
         errors.push(`${providerName}: ${reason}`);
       }
     }
@@ -58,16 +100,22 @@ export class ProviderRegistry {
     throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
   }
 
+  /**
+   * Returns the current status of all registered providers, including health and circuit state.
+   */
   async status(): Promise<ProviderStatusResult> {
     const providers: ProviderStatusResult["providers"] = [];
     for (const providerName of ["ollama", "groq", "mock"] as const) {
       const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
       if (!client) {
         providers.push({
           name: providerName,
           enabled: false,
           healthy: false,
           detail: "not registered",
+          circuit: { state: "CLOSED", failures: 0 },
         });
         continue;
       }
@@ -77,6 +125,11 @@ export class ProviderRegistry {
         enabled: health.enabled,
         healthy: health.healthy,
         detail: health.detail,
+        circuit: {
+          state: breaker?.getState() ?? "CLOSED",
+          failures: breaker?.getFailures() ?? 0,
+          lastError: breaker?.getLastError(),
+        },
       });
     }
     return { providers };

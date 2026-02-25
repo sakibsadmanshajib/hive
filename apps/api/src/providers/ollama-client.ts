@@ -1,7 +1,10 @@
 import type { ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderHealthStatus } from "./types";
+import { fetchWithRetry } from "./http-client";
 
 type OllamaConfig = {
   baseUrl: string;
+  timeoutMs: number;
+  maxRetries: number;
 };
 
 type OllamaChatResponse = {
@@ -20,14 +23,20 @@ export class OllamaProviderClient implements ProviderClient {
   }
 
   async chat(request: ProviderChatRequest): Promise<ProviderChatResponse> {
-    const response = await fetch(`${this.config.baseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: request.model,
-        messages: request.messages,
-        stream: false,
-      }),
+    const response = await fetchWithRetry({
+      provider: "ollama",
+      url: `${this.config.baseUrl}/api/chat`,
+      timeoutMs: this.config.timeoutMs,
+      maxRetries: this.config.maxRetries,
+      init: {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: request.model,
+          messages: request.messages,
+          stream: false,
+        }),
+      },
     });
 
     if (!response.ok) {
@@ -53,7 +62,13 @@ export class OllamaProviderClient implements ProviderClient {
     }
 
     try {
-      const response = await fetch(`${this.config.baseUrl}/api/tags`, { method: "GET" });
+      const response = await fetchWithRetry({
+        provider: "ollama",
+        url: `${this.config.baseUrl}/api/tags`,
+        timeoutMs: this.config.timeoutMs,
+        maxRetries: this.config.maxRetries,
+        init: { method: "GET" },
+      });
       if (!response.ok) {
         return { enabled: true, healthy: false, detail: `tags check failed: ${response.status}` };
       }
