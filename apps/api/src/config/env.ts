@@ -106,23 +106,15 @@ export type AppEnv = {
       timeoutMs: number;
       maxRetries: number;
     };
-          groq: {
-            apiKey?: string;
-            baseUrl: string;
-            model: string;
-            timeoutMs: number;
-            maxRetries: number;
-          };
-          openrouter: {
-            apiKey?: string;
-            baseUrl: string;
-            model: string;
-            timeoutMs: number;
-            maxRetries: number;
-          };
-        };
-        langfuse: {
-    
+    groq: {
+      apiKey?: string;
+      baseUrl: string;
+      model: string;
+      timeoutMs: number;
+      maxRetries: number;
+    };
+  };
+  langfuse: {
     enabled: boolean;
     baseUrl: string;
     publicKey?: string;
@@ -193,13 +185,6 @@ export function getEnv(): AppEnv {
         model: required("GROQ_MODEL", "llama-3.1-8b-instant"),
         timeoutMs: parsePositiveInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GROQ_MAX_RETRIES", providerMaxRetries),
-      },
-      openrouter: {
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseUrl: required("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        model: required("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct"),
-        timeoutMs: parsePositiveInteger("OPENROUTER_TIMEOUT_MS", providerTimeoutMs),
-        maxRetries: parseNonNegativeInteger("OPENROUTER_MAX_RETRIES", providerMaxRetries),
       },
     },
     langfuse: {

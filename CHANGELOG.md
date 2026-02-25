@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Cost-optimized CI quality gates that only run relevant checks based on changed scopes (API vs. Web).
     - Automated PR cleanup workflow.
 
+### Removed
+- **OpenRouter & CostCalculator:** Removed inadvertently added/restored implementations to maintain project scope and avoid token-based billing complexity.
+
 ### Changed
 - **Web Architecture:** Moved to a "Guarded Chat Home" structure.
     - `/` is now the authenticated chat interface.

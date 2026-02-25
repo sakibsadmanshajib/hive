@@ -1,4 +1,4 @@
-export type ProviderName = "mock" | "ollama" | "groq" | "openrouter";
+export type ProviderName = "mock" | "ollama" | "groq";
 
 export type ProviderChatMessage = {
   role: "system" | "user" | "assistant";
