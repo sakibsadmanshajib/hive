@@ -38,7 +38,7 @@ export class ProviderRegistry {
     this.circuitBreakers = new Map(
       config.clients.map((client) => [
         client.name,
-        new CircuitBreaker(client.name, config.circuitBreaker ?? { failureThreshold: 3, resetTimeoutMs: 30000 }),
+        new CircuitBreaker(client.name, config.circuitBreaker ?? { failureThreshold: 5, resetTimeoutMs: 30000 }),
       ]),
     );
   }
@@ -56,9 +56,16 @@ export class ProviderRegistry {
         continue;
       }
 
-      if (breaker?.isOpen()) {
-        errors.push(`${providerName}: circuit open`);
-        continue;
+      if (breaker) {
+        breaker.evaluateState();
+        if (breaker.isOpen()) {
+          errors.push(`${providerName}: circuit open`);
+          continue;
+        }
+        if (breaker.isHalfOpen() && !breaker.tryAcquireProbe()) {
+          errors.push(`${providerName}: half-open probe in-flight`);
+          continue;
+        }
       }
 
       const providerModel = this.config.providerModelMap[providerName] ?? modelId;

@@ -36,6 +36,13 @@ describe("providers status routes", () => {
               detail: "missing key",
               circuit: { state: "CLOSED", failures: 0 },
             },
+            {
+              name: "mock",
+              enabled: true,
+              healthy: false,
+              detail: "timeout",
+              circuit: { state: "OPEN", failures: 5 },
+            },
           ],
         }),
       },
@@ -46,6 +53,7 @@ describe("providers status routes", () => {
 
     expect(payload.data[0]).toEqual({ name: "ollama", enabled: true, healthy: true, state: "ready" });
     expect(payload.data[1]).toEqual({ name: "groq", enabled: false, healthy: false, state: "disabled" });
+    expect(payload.data[2]).toEqual({ name: "mock", enabled: true, healthy: false, state: "circuit-open" });
     expect("detail" in payload.data[0]).toBe(false);
   });
 
