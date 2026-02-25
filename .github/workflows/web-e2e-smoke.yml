@@ -23,8 +23,6 @@ jobs:
     name: Auth Chat Billing smoke
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    env:
-      PLAYWRIGHT_BROWSERS_PATH: ~/.cache/ms-playwright
 
     steps:
       - name: Checkout repository
