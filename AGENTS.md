@@ -90,7 +90,7 @@ Plan for the task exactly as provided by the user. If task input is missing, ask
 
 ### Persist (mandatory)
 
-Write the plan to `artifacts/superpowers/plan.md`. Create the folder if needed. Confirm by listing `artifacts/superpowers/`.
+Write the plan to `artifacts/superpowers/plan.md` (Note: the `artifacts` folder is local-only and ignored by git). Create the folder if needed. Confirm by listing `artifacts/superpowers/`.
 
 Preferred writer command when available:
 

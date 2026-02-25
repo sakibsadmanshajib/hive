@@ -113,41 +113,6 @@ export type AppEnv = {
             timeoutMs: number;
             maxRetries: number;
           };
-          openrouter: {
-            apiKey?: string;
-            baseUrl: string;
-            model: string;
-            timeoutMs: number;
-            maxRetries: number;
-          };
-        };
-        langfuse: {
-    
-    enabled: boolean;
-    baseUrl: string;
-    publicKey?: string;
-    secretKey?: string;
-  };
-};
-
-export function getEnv(): AppEnv {
-  const providerTimeoutMs = parsePositiveInteger("PROVIDER_TIMEOUT_MS", 4000);
-  const providerMaxRetries = parseNonNegativeInteger("PROVIDER_MAX_RETRIES", 1);
-
-  const env: AppEnv = {
-    nodeEnv: process.env.NODE_ENV ?? "development",
-    port: parseNumber("PORT", 8080),
-    postgresUrl: required("POSTGRES_URL", "postgres://postgres:postgres@127.0.0.1:5432/bd_ai_gateway"),
-    redisUrl: required("REDIS_URL", "redis://127.0.0.1:6379"),
-    rateLimitPerMinute: parseNumber("RATE_LIMIT_PER_MINUTE", 60),
-    adminStatusToken: process.env.ADMIN_STATUS_TOKEN,
-    allowDemoPaymentConfirm: parseBoolean("ALLOW_DEMO_PAYMENT_CONFIRM", true),
-    allowDevApiKeyPrefix: parseBoolean("ALLOW_DEV_API_KEY_PREFIX", false),
-    google: {
-      clientId: required("GOOGLE_CLIENT_ID", "google-client-id"),
-      clientSecret: required("GOOGLE_CLIENT_SECRET", "google-client-secret"),
-      redirectUri: required("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8080/v1/auth/google/callback"),
-    },
     auth: {
       sessionTtlMinutes: parseNumber("AUTH_SESSION_TTL_MINUTES", 60 * 24 * 7),
       enforceTwoFactorSensitiveActions: parseBoolean("TWO_FACTOR_ENFORCE_SENSITIVE_ACTIONS", false),
@@ -193,13 +158,6 @@ export function getEnv(): AppEnv {
         model: required("GROQ_MODEL", "llama-3.1-8b-instant"),
         timeoutMs: parsePositiveInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GROQ_MAX_RETRIES", providerMaxRetries),
-      },
-      openrouter: {
-        apiKey: process.env.OPENROUTER_API_KEY,
-        baseUrl: required("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        model: required("OPENROUTER_MODEL", "meta-llama/llama-3.1-8b-instruct"),
-        timeoutMs: parsePositiveInteger("OPENROUTER_TIMEOUT_MS", providerTimeoutMs),
-        maxRetries: parseNonNegativeInteger("OPENROUTER_MAX_RETRIES", providerMaxRetries),
       },
     },
     langfuse: {

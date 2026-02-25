@@ -1,38 +1,23 @@
 ## Goal
-Create a CHANGELOG.md file to track notable changes and update project documentation to reference it, ensuring compliance with AGENTS.md workflow.
-
-## Assumptions
-- The analysis of git history and existing docs is accurate.
-- I have write access to the repository.
-- The 'CHANGELOG.md' content should reflect the 'Unreleased' and '0.1.0' states.
+Remove all traces of OpenRouter and CostCalculator implementation that were inadvertently added/restored.
 
 ## Plan
-1.  **Create CHANGELOG.md**
-    -   **File:** 'CHANGELOG.md'
-    -   **Change:** Create file with 'Unreleased' and '0.1.0' sections.
-    -   **Verify:** 'cat CHANGELOG.md' checks for content.
+1.  **Remove Files**
+    - `apps/api/src/providers/openrouter-client.ts`
+    - `apps/api/src/providers/cost-calculator.ts`
+    - `apps/api/test/providers/openrouter-client.test.ts`
+    - `apps/api/test/providers/cost-calculator.test.ts`
 
-2.  **Update AGENTS.md**
-    -   **File:** 'AGENTS.md'
-    -   **Change:** Add 'Update CHANGELOG.md for all notable changes' to 'Documentation Discipline' section.
-    -   **Verify:** 'grep CHANGELOG.md AGENTS.md' confirms addition.
+2.  **Revert Changes to core files**
+    - `apps/api/src/providers/types.ts`: Remove "openrouter" from ProviderName.
+    - `apps/api/src/config/env.ts`: Remove openrouter config.
+    - `apps/api/src/runtime/services.ts`: Remove openrouter imports and registration.
 
-3.  **Update README.md**
-    -   **File:** 'README.md'
-    -   **Change:** Add link to 'CHANGELOG.md' in 'Start Here' section.
-    -   **Verify:** 'grep CHANGELOG.md README.md' confirms addition.
+3.  **Clean up tests**
+    - Remove openrouter mock config from affected tests.
 
-4.  **Update docs/README.md**
-    -   **File:** 'docs/README.md'
-    -   **Change:** Add link to '../../CHANGELOG.md' in 'Start Here' section.
-    -   **Verify:** 'grep CHANGELOG.md docs/README.md' confirms addition.
+4.  **Update .gitignore**
+    - Add `artifacts/` to `.gitignore`.
 
-## Risks & mitigations
--   **Risk:** Incorrect file paths or broken links.
-    -   **Mitigation:** Verify file existence and relative paths.
--   **Risk:** Overwriting existing uncommitted changes (unlikely in fresh worktree).
-    -   **Mitigation:** 'git status' check before starting.
-
-## Rollback plan
--   'rm CHANGELOG.md'
--   'git checkout AGENTS.md README.md docs/README.md'
+5.  **Update AGENTS.md**
+    - Clarify artifacts are local-only.
