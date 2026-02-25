@@ -214,10 +214,10 @@ git fetch origin main
 mkdir -p ../.worktrees
 git worktree add ../.worktrees/hive-<task-slug> -b <type/task-name> origin/main
 git -C ../.worktrees/hive-<task-slug> status
-pnpm install --frozen-lockfile
+pnpm --dir ../.worktrees/hive-<task-slug> install --frozen-lockfile
 ```
 
-Mandatory: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` before other project commands.
+Mandatory: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands.
 
 After merge:
 
