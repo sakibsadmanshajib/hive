@@ -13,6 +13,12 @@ export type ProviderChatRequest = {
 export type ProviderChatResponse = {
   content: string;
   providerModel?: string;
+  // New: Token usage tracking
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
 };
 
 export type ProviderHealthStatus = {
