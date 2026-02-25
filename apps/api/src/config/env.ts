@@ -106,13 +106,40 @@ export type AppEnv = {
       timeoutMs: number;
       maxRetries: number;
     };
-          groq: {
-            apiKey?: string;
-            baseUrl: string;
-            model: string;
-            timeoutMs: number;
-            maxRetries: number;
-          };
+    groq: {
+      apiKey?: string;
+      baseUrl: string;
+      model: string;
+      timeoutMs: number;
+      maxRetries: number;
+    };
+  };
+  langfuse: {
+    enabled: boolean;
+    baseUrl: string;
+    publicKey?: string;
+    secretKey?: string;
+  };
+};
+
+export function getEnv(): AppEnv {
+  const providerTimeoutMs = parsePositiveInteger("PROVIDER_TIMEOUT_MS", 4000);
+  const providerMaxRetries = parseNonNegativeInteger("PROVIDER_MAX_RETRIES", 1);
+
+  const env: AppEnv = {
+    nodeEnv: process.env.NODE_ENV ?? "development",
+    port: parseNumber("PORT", 8080),
+    postgresUrl: required("POSTGRES_URL", "postgres://postgres:postgres@127.0.0.1:5432/bd_ai_gateway"),
+    redisUrl: required("REDIS_URL", "redis://127.0.0.1:6379"),
+    rateLimitPerMinute: parseNumber("RATE_LIMIT_PER_MINUTE", 60),
+    adminStatusToken: process.env.ADMIN_STATUS_TOKEN,
+    allowDemoPaymentConfirm: parseBoolean("ALLOW_DEMO_PAYMENT_CONFIRM", true),
+    allowDevApiKeyPrefix: parseBoolean("ALLOW_DEV_API_KEY_PREFIX", false),
+    google: {
+      clientId: required("GOOGLE_CLIENT_ID", "google-client-id"),
+      clientSecret: required("GOOGLE_CLIENT_SECRET", "google-client-secret"),
+      redirectUri: required("GOOGLE_REDIRECT_URI", "http://127.0.0.1:8080/v1/auth/google/callback"),
+    },
     auth: {
       sessionTtlMinutes: parseNumber("AUTH_SESSION_TTL_MINUTES", 60 * 24 * 7),
       enforceTwoFactorSensitiveActions: parseBoolean("TWO_FACTOR_ENFORCE_SENSITIVE_ACTIONS", false),
