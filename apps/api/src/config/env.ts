@@ -170,8 +170,8 @@ export function getEnv(): AppEnv {
     },
     providers: {
       circuitBreaker: {
-        failureThreshold: Math.max(1, Math.trunc(parseNumber("PROVIDER_CB_THRESHOLD", 5))),
-        resetTimeoutMs: Math.max(1000, Math.trunc(parseNumber("PROVIDER_CB_RESET_MS", 30000))),
+        failureThreshold: parsePositiveInteger("PROVIDER_CB_THRESHOLD", 5),
+        resetTimeoutMs: parsePositiveInteger("PROVIDER_CB_RESET_MS", 30000),
       },
       ollama: {
         baseUrl: required("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),

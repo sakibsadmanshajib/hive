@@ -25,6 +25,7 @@ export type ProviderStatusResult = {
     circuit: {
       state: CircuitState;
       failures: number;
+      lastError?: string;
     };
   }>;
 };
@@ -90,8 +91,8 @@ export class ProviderRegistry {
           providerModel: response.providerModel ?? providerModel,
         };
       } catch (error) {
-        breaker?.recordFailure();
         const reason = error instanceof Error ? error.message : String(error);
+        breaker?.recordFailure(reason);
         errors.push(`${providerName}: ${reason}`);
       }
     }
@@ -127,6 +128,7 @@ export class ProviderRegistry {
         circuit: {
           state: breaker?.getState() ?? "CLOSED",
           failures: breaker?.getFailures() ?? 0,
+          lastError: breaker?.getLastError(),
         },
       });
     }

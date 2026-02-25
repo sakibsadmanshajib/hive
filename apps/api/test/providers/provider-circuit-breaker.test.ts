@@ -104,16 +104,17 @@ describe("provider circuit breaker", () => {
       resolveProbe = resolve;
     });
     
-          const client: ProviderClient = {
-            name: "ollama",
-            isEnabled: () => true,
-            chat: vi.fn()
-              .mockRejectedValueOnce(new Error("initial failure"))
-              .mockReturnValueOnce(probePromise as any) // Use return value directly
-              .mockResolvedValueOnce({ content: "probe success" }), // Post-recovery call
-            status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
-          };
-        const registry = new ProviderRegistry({
+    const client: ProviderClient = {
+      name: "ollama",
+      isEnabled: () => true,
+      chat: vi.fn()
+        .mockRejectedValueOnce(new Error("initial failure"))
+        .mockReturnValueOnce(probePromise as any) // Use return value directly
+        .mockResolvedValueOnce({ content: "probe success" }), // Post-recovery call
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+    };
+
+    const registry = new ProviderRegistry({
       clients: [client],
       defaultProvider: "ollama",
       modelProviderMap: {},

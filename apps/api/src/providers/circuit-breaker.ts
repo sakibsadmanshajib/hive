@@ -29,6 +29,7 @@ export interface CircuitBreakerConfig {
 export class CircuitBreaker {
   private failures = 0;
   private lastFailureTime?: number;
+  private lastError?: string;
   private state: CircuitState = "CLOSED";
   private probeInFlight = false;
 
@@ -48,7 +49,7 @@ export class CircuitBreaker {
    */
   evaluateState(): void {
     if (this.state === "OPEN") {
-      if (this.lastFailureTime && Date.now() - this.lastFailureTime > this.config.resetTimeoutMs) {
+      if (this.lastFailureTime && Date.now() - this.lastFailureTime >= this.config.resetTimeoutMs) {
         this.state = "HALF_OPEN";
         this.probeInFlight = false;
       }
@@ -88,16 +89,21 @@ export class CircuitBreaker {
   recordSuccess(): void {
     this.failures = 0;
     this.lastFailureTime = undefined;
+    this.lastError = undefined;
     this.state = "CLOSED";
     this.probeInFlight = false;
   }
 
   /**
    * Records a failed operation, incrementing the failure count and potentially tripping the circuit.
+   * @param error - The error message associated with the failure.
    */
-  recordFailure(): void {
-    this.failures++;
+  recordFailure(error?: string): void {
+    if (this.state !== "HALF_OPEN" || this.failures < this.config.failureThreshold) {
+      this.failures++;
+    }
     this.lastFailureTime = Date.now();
+    this.lastError = error;
     this.probeInFlight = false;
     if (this.failures >= this.config.failureThreshold) {
       this.state = "OPEN";
@@ -116,5 +122,12 @@ export class CircuitBreaker {
    */
   getFailures(): number {
     return this.failures;
+  }
+
+  /**
+   * Returns the last error message that caused a failure.
+   */
+  getLastError(): string | undefined {
+    return this.lastError;
   }
 }

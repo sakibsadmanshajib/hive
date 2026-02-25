@@ -31,16 +31,18 @@ Providers in OPEN state will show `state: "circuit-open"`.
 
 ### Internal API
 `GET /v1/providers/status/internal` (Requires `x-admin-token`)
-Includes the exact failure count and state (`CLOSED`, `OPEN`, `HALF_OPEN`).
+Includes the exact failure count, state (`CLOSED`, `OPEN`, `HALF_OPEN`), and the last error encountered.
 
 ```json
 {
   "name": "ollama",
   "enabled": true,
   "healthy": false,
+  "detail": "connection refused",
   "circuit": {
     "state": "OPEN",
-    "failures": 5
+    "failures": 5,
+    "lastError": "ollama: connection refused"
   }
 }
 ```
@@ -48,9 +50,10 @@ Includes the exact failure count and state (`CLOSED`, `OPEN`, `HALF_OPEN`).
 ## Troubleshooting
 
 ### Why is the circuit open?
-1. Check the `detail` field in the internal status endpoint for the last error message.
-2. Verify downstream connectivity (e.g., `curl localhost:11434` for Ollama).
-3. Check provider logs (e.g., `docker compose logs ollama`).
+1. Check the `circuit.lastError` field in the internal status endpoint for the reason the circuit tripped.
+2. Check the `detail` field for the output of the most recent health probe (which may differ from the error that tripped the circuit).
+3. Verify downstream connectivity (e.g., `curl localhost:11434` for Ollama).
+4. Check provider logs (e.g., `docker compose logs ollama`).
 
 ### How to reset a circuit?
 Currently, circuits are in-memory per API instance. Restarting the API service will reset all circuits to `CLOSED`.
