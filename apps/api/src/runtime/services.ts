@@ -4,6 +4,7 @@ import { ModelService } from "../domain/model-service";
 import { getEnv, type AppEnv } from "../config/env";
 import { BkashAdapter, SslcommerzAdapter } from "./provider-adapters";
 import { GroqProviderClient } from "../providers/groq-client";
+import { OpenRouterProviderClient } from "../providers/openrouter-client";
 import { MockProviderClient } from "../providers/mock-client";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
@@ -649,6 +650,7 @@ export function createRuntimeServices(): RuntimeServices {
     mock: "mock-chat",
     ollama: env.providers.ollama.model,
     groq: env.providers.groq.model,
+    openrouter: env.providers.openrouter.model,
   };
   const providerRegistry = new ProviderRegistry({
     clients: [
@@ -663,6 +665,12 @@ export function createRuntimeServices(): RuntimeServices {
         timeoutMs: env.providers.groq.timeoutMs,
         maxRetries: env.providers.groq.maxRetries,
       }),
+      new OpenRouterProviderClient({
+        baseUrl: env.providers.openrouter.baseUrl,
+        apiKey: env.providers.openrouter.apiKey,
+        timeoutMs: env.providers.openrouter.timeoutMs,
+        maxRetries: env.providers.openrouter.maxRetries,
+      }),
       new MockProviderClient(),
     ],
     defaultProvider: "mock",
@@ -673,8 +681,9 @@ export function createRuntimeServices(): RuntimeServices {
     },
     providerModelMap,
     fallbackOrder: {
-      ollama: ["groq", "mock"],
-      groq: ["ollama", "mock"],
+      ollama: ["groq", "openrouter", "mock"],
+      groq: ["openrouter", "ollama", "mock"],
+      openrouter: ["groq", "ollama", "mock"],
       mock: [],
     },
     circuitBreaker: env.providers.circuitBreaker,
