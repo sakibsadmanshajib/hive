@@ -29,6 +29,10 @@ export type ProviderStatusResult = {
   }>;
 };
 
+/**
+ * ProviderRegistry manages multiple AI provider clients, handling model routing,
+ * failover logic, and circuit breaking for resilience.
+ */
 export class ProviderRegistry {
   private readonly clientsByName: Map<ProviderName, ProviderClient>;
   private readonly circuitBreakers: Map<ProviderName, CircuitBreaker>;
@@ -43,6 +47,14 @@ export class ProviderRegistry {
     );
   }
 
+  /**
+   * Executes a chat completion request using the primary provider for the model,
+   * falling back to secondary providers if failures occur.
+   *
+   * @param modelId - The internal model ID to route.
+   * @param messages - The chat messages to process.
+   * @throws Error if no provider succeeds or if all candidates are blocked by circuit breakers.
+   */
   async chat(modelId: string, messages: ProviderChatMessage[]): Promise<ProviderExecutionResult> {
     const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
     const candidateProviders = this.buildCandidates(primaryProvider);
@@ -87,6 +99,9 @@ export class ProviderRegistry {
     throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
   }
 
+  /**
+   * Returns the current status of all registered providers, including health and circuit state.
+   */
   async status(): Promise<ProviderStatusResult> {
     const providers: ProviderStatusResult["providers"] = [];
     for (const providerName of ["ollama", "groq", "mock"] as const) {
