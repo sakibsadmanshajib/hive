@@ -92,8 +92,10 @@ describe("user routes", () => {
           },
         },
         providers: {
-          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
-          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
+          circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 30000 },
+          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b", timeoutMs: 4000, maxRetries: 1 },
+          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", timeoutMs: 4000, maxRetries: 1 },
+          openrouter: { baseUrl: "https://openrouter.ai/api/v1", model: "meta-llama/llama-3.1-8b-instruct", timeoutMs: 4000, maxRetries: 1 },
         },
         langfuse: {
           enabled: false,

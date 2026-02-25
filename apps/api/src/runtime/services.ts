@@ -608,8 +608,8 @@ export type RuntimeServices = {
   };
 };
 
-export function createRuntimeServices(): RuntimeServices {
-  const env = getEnv();
+export function createRuntimeServices(providedEnv?: AppEnv): RuntimeServices {
+  const env = providedEnv ?? getEnv();
   const store = new PostgresStore(env.postgresUrl);
   const supabase =
     env.supabase.flags.authEnabled ||

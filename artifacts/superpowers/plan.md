@@ -1,38 +1,25 @@
 ## Goal
-Create a CHANGELOG.md file to track notable changes and update project documentation to reference it, ensuring compliance with AGENTS.md workflow.
+Fix OpenRouter-related test failures by allowing createRuntimeServices to accept an optional environment object and providing a safe default in tests.
 
 ## Assumptions
-- The analysis of git history and existing docs is accurate.
-- I have write access to the repository.
-- The 'CHANGELOG.md' content should reflect the 'Unreleased' and '0.1.0' states.
+- The test failures are due to createRuntimeServices calling getEnv() which throws when required OpenRouter env vars are missing.
+- Modifying createRuntimeServices to accept an optional env is a safe and common pattern for testing.
 
 ## Plan
-1.  **Create CHANGELOG.md**
-    -   **File:** 'CHANGELOG.md'
-    -   **Change:** Create file with 'Unreleased' and '0.1.0' sections.
-    -   **Verify:** 'cat CHANGELOG.md' checks for content.
+1.  **Update createRuntimeServices**
+    -   **File:** apps/api/src/runtime/services.ts
+    -   **Change:** Modify createRuntimeServices to accept an optional `env?: AppEnv` argument. If provided, use it; otherwise, call getEnv().
+    -   **Verify:** pnpm --filter @hive/api build
 
-2.  **Update AGENTS.md**
-    -   **File:** 'AGENTS.md'
-    -   **Change:** Add 'Update CHANGELOG.md for all notable changes' to 'Documentation Discipline' section.
-    -   **Verify:** 'grep CHANGELOG.md AGENTS.md' confirms addition.
-
-3.  **Update README.md**
-    -   **File:** 'README.md'
-    -   **Change:** Add link to 'CHANGELOG.md' in 'Start Here' section.
-    -   **Verify:** 'grep CHANGELOG.md README.md' confirms addition.
-
-4.  **Update docs/README.md**
-    -   **File:** 'docs/README.md'
-    -   **Change:** Add link to '../../CHANGELOG.md' in 'Start Here' section.
-    -   **Verify:** 'grep CHANGELOG.md docs/README.md' confirms addition.
+2.  **Fix failing tests by providing mock env**
+    -   **Files:** 
+        - apps/api/test/domain/credits-ledger.test.ts
+        - apps/api/test/domain/payment-service.test.ts
+        - apps/api/test/routes/users-routes.test.ts
+        - apps/api/test/routes/users-settings-routes.test.ts
+    -   **Change:** Update createRuntimeServices() calls to include a mock environment object that satisfies the AppEnv type, especially the new providers.openrouter configuration.
+    -   **Verify:** pnpm --filter @hive/api test
 
 ## Risks & mitigations
--   **Risk:** Incorrect file paths or broken links.
-    -   **Mitigation:** Verify file existence and relative paths.
--   **Risk:** Overwriting existing uncommitted changes (unlikely in fresh worktree).
-    -   **Mitigation:** 'git status' check before starting.
-
-## Rollback plan
--   'rm CHANGELOG.md'
--   'git checkout AGENTS.md README.md docs/README.md'
+-   **Risk:** Missing other required env vars in mock objects.
+    -   **Mitigation:** Use getEnv() as a base if possible, or ensure mock objects are comprehensive enough for the test case.
