@@ -13,6 +13,7 @@ This document captures the current implementation state so you can continue in a
 
 - Full docs index: `docs/README.md`
 - Agent operating guide: `AGENTS.md`
+- Changelog: `CHANGELOG.md`
 - Engineering standards (Git + AI): `docs/engineering/git-and-ai-practices.md`
 
 ## Current Status
