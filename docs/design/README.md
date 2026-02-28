@@ -5,6 +5,8 @@
 - `docs/design/active/product-and-routing.md`
 - `docs/design/active/2026-02-24-web-flow-critical-review.md`
 - `docs/design/active/2026-02-24-chat-first-guarded-home.md`
+- `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
+- `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
 
 ## Archive (Obsolete)
 

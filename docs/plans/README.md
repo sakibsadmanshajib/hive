@@ -30,6 +30,7 @@ Use these documents for current planning and execution:
 - `docs/plans/2026-02-24-provider-timeout-retry-controls-implementation.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-implementation.md`
+- `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
 
 ## Archive (Obsolete)
 
