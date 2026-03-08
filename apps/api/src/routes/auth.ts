@@ -37,10 +37,10 @@ async function resolvePrincipal(
   const bearerToken = readBearerToken(request);
   if (bearerToken) {
     const supabaseAuthEnabled = services.env.supabase?.flags.authEnabled ?? false;
-    const session = supabaseAuthEnabled
-      ? (await services.supabaseAuth?.getSessionPrincipal(bearerToken))
-        ?? (await services.auth.getSessionPrincipal(bearerToken))
-      : await services.auth.getSessionPrincipal(bearerToken);
+    const { data: { user }, error } = await services.supabaseAuth.getSessionPrincipal(bearerToken).then(p => ({ data: { user: p ? { id: p.userId } : null }, error: null }));
+    const session = services.env.supabase.flags.authEnabled
+      ? user ? { userId: user.id } : null
+      : null;
     if (session) {
       return {
         userId: session.userId,

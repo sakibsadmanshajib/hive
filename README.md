@@ -77,7 +77,6 @@ This document captures the current implementation state so you can continue in a
 - `GET /v1/auth/google/start`
 - `GET /v1/auth/google/callback`
 - `POST /v1/auth/logout`
-- `GET /v1/auth/session`
 - `POST /v1/2fa/enroll/init`
 - `POST /v1/2fa/enroll/verify`
 - `POST /v1/2fa/challenge/init`

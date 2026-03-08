@@ -1,4 +1,4 @@
-import type { PostgresStore } from "./postgres-store";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type PermissionKey =
   | "chat:write"
@@ -24,7 +24,7 @@ const scopeBridge: Record<string, PermissionKey[]> = {
 };
 
 export class AuthorizationService {
-  constructor(private readonly store: PostgresStore) {}
+  constructor(private readonly supabase: SupabaseClient) { }
 
   async hasPermission(principal: AuthorizationPrincipal, permission: PermissionKey): Promise<boolean> {
     const staticPermissions = new Set(principal.permissions ?? []);
@@ -39,7 +39,16 @@ export class AuthorizationService {
       }
     }
 
-    const dbPermissions = await this.store.listPermissionsForUser(principal.userId);
+    const { data } = await this.supabase
+      .from("user_roles")
+      .select("role_permissions(permission_key)")
+      .eq("user_id", principal.userId);
+
+    const dbPermissions = (data ?? []).flatMap((row: any) =>
+      Array.isArray(row.role_permissions)
+        ? row.role_permissions.map((rp: any) => rp.permission_key)
+        : [],
+    );
     return dbPermissions.includes(permission);
   }
 

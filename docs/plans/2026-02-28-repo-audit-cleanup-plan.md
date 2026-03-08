@@ -1,3 +1,6 @@
+## Status
+**Pending Execution** - This plan and associated design docs were merged in PR #36 to address Issue #35, but implementation was deferred. All steps below are currently pending.
+
 ## Goal
 Execute a full repository audit and cleanup that verifies implementation claims against code/tests/GitHub, removes redundant/stale assets, updates contracts/docs, and includes an explicit migration/removal track for the legacy Python MVP in this pre-production environment.
 

@@ -19,23 +19,7 @@ export function registerPaymentIntentsRoute(app: FastifyInstance, services: Runt
       return;
     }
 
-    if (services.env.auth.enforceTwoFactorSensitiveActions) {
-      const settings = await services.userSettings.getForUser(principal.userId);
-      if (settings.twoFactorEnabled) {
-        const challengeId = request.headers["x-2fa-challenge-id"];
-        if (typeof challengeId !== "string") {
-          return reply.code(403).send({ error: "two-factor verification required" });
-        }
-        const verified = await services.twoFactor.hasRecentVerification(
-          principal.userId,
-          challengeId,
-          services.env.auth.twoFactorVerificationWindowMinutes,
-        );
-        if (!verified) {
-          return reply.code(403).send({ error: "two-factor verification required" });
-        }
-      }
-    }
+
 
     const intent = await services.payments.createIntent({
       userId: principal.userId,

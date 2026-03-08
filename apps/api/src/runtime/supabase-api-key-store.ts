@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { PersistentApiKey } from "./postgres-store";
+import type { PersistentApiKey } from "../domain/types";
 import { hashApiKeyForLookup } from "./security";
 
 type ApiKeyResolution = { userId: string; scopes: string[] };
@@ -13,7 +13,7 @@ function extractApiKeyPrefix(rawKey: string): string {
 }
 
 export class SupabaseApiKeyStore {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: SupabaseClient) { }
 
   async create(input: { key: string; userId: string; scopes: string[] }): Promise<void> {
     const { error } = await this.supabase.from("api_keys").insert({

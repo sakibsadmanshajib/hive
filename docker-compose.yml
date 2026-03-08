@@ -1,15 +1,4 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: bd_ai_gateway
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
   redis:
     image: redis:7-alpine
     ports:
@@ -29,7 +18,7 @@ services:
     env_file:
       - .env.example
     environment:
-      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/bd_ai_gateway
+      POSTGRES_URL: postgres://postgres:postgres@host.docker.internal:54322/postgres
       REDIS_URL: redis://redis:6379
       PORT: 8080
       ADMIN_STATUS_TOKEN: ${ADMIN_STATUS_TOKEN:-}
@@ -40,12 +29,19 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
-      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-false}
-      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-https://cloud.langfuse.com}
-      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
-      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_ENABLED: ${LANGFUSE_ENABLED:-true}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-http://langfuse:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-123}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-123}
+      SUPABASE_URL: http://host.docker.internal:54321
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-dev-service-role}
+      SUPABASE_AUTH_ENABLED: ${SUPABASE_AUTH_ENABLED:-true}
+      SUPABASE_USER_REPO_ENABLED: ${SUPABASE_USER_REPO_ENABLED:-true}
+      SUPABASE_API_KEYS_ENABLED: ${SUPABASE_API_KEYS_ENABLED:-true}
+      SUPABASE_BILLING_STORE_ENABLED: ${SUPABASE_BILLING_STORE_ENABLED:-true}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      - postgres
       - redis
       - ollama
     ports:
@@ -62,6 +58,45 @@ services:
     ports:
       - "3000:3000"
 
+  langfuse:
+    image: langfuse/langfuse:2
+    depends_on:
+      langfuse-db:
+        condition: service_healthy
+    ports:
+      - "3030:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgresql://langfuse:langfuse@langfuse-db:5432/langfuse
+      - NEXTAUTH_SECRET=my_super_secret_langfuse_key
+      - SALT=my_super_secret_salt
+      - NEXTAUTH_URL=http://localhost:3030
+      - TELEMETRY_ENABLED=false
+      - LANGFUSE_INIT_ORG_ID=org_123
+      - LANGFUSE_INIT_ORG_NAME=Hive
+      - LANGFUSE_INIT_PROJECT_ID=prj_123
+      - LANGFUSE_INIT_PROJECT_NAME=HiveAPI
+      - LANGFUSE_INIT_PROJECT_PUBLIC_KEY=pk-lf-123
+      - LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-123
+      - LANGFUSE_INIT_USER_EMAIL=admin@hive.local
+      - LANGFUSE_INIT_USER_PASSWORD=admin123
+
+  langfuse-db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=langfuse
+      - POSTGRES_PASSWORD=langfuse
+      - POSTGRES_DB=langfuse
+    ports:
+      - "5434:5432"
+    volumes:
+      - langfuse_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U langfuse"]
+      interval: 2s
+      timeout: 2s
+      retries: 5
+
 volumes:
-  pgdata:
   ollama_data:
+  langfuse_db_data:

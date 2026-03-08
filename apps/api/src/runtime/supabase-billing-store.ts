@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CreditBalance } from "../domain/types";
-import type { PersistentPaymentIntent } from "./postgres-store";
+import type { PersistentPaymentIntent } from "../domain/types";
 
 type CreditAccountRow = {
   user_id: string;
@@ -19,7 +19,7 @@ type PaymentIntentRow = {
 };
 
 export class SupabaseBillingStore {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: SupabaseClient) { }
 
   async getBalance(userId: string): Promise<CreditBalance> {
     await this.ensureCreditAccount(userId);

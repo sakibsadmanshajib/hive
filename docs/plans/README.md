@@ -18,9 +18,7 @@ Use these documents for current planning and execution:
 
 ### In-Progress Plan Drafts (`docs/plans/`)
 
-- `docs/plans/2026-02-23-chat-first-frontend-information-architecture-implementation.md`
 - `docs/plans/2026-02-24-chat-first-guarded-home-design.md`
-- `docs/plans/2026-02-24-chat-first-guarded-home-implementation.md`
 - `docs/plans/2026-02-24-ci-quality-and-pr-cleanup-design.md`
 - `docs/plans/2026-02-24-ci-quality-and-pr-cleanup-implementation.md`
 - `docs/plans/2026-02-24-free-tier-zero-cost-access-design.md`
