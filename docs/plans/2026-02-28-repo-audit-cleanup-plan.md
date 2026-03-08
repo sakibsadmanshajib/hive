@@ -1,3 +1,5 @@
+# Repo Audit and Cleanup Plan
+
 ## Status
 **Pending Execution** - This plan and associated design docs were merged in PR #36 to address Issue #35, but implementation was deferred. All steps below are currently pending.
 

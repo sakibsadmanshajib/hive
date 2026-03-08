@@ -34,7 +34,7 @@ create table if not exists public.usage_events (
 create table if not exists public.payment_intents (
   intent_id text primary key,
   user_id uuid not null references public.user_profiles(user_id) on delete cascade,
-  provider text not null,
+  provider text not null check (provider in ('bkash', 'sslcommerz')),
   bdt_amount numeric(12,2) not null check (bdt_amount >= 0),
   status text not null check (status in ('initiated', 'credited', 'failed')),
   minted_credits integer not null default 0,
@@ -46,7 +46,7 @@ create table if not exists public.payment_events (
   id bigserial primary key,
   event_key text unique not null,
   intent_id text not null references public.payment_intents(intent_id) on delete cascade,
-  provider text not null,
+  provider text not null check (provider in ('bkash', 'sslcommerz')),
   provider_txn_id text not null,
   verified boolean not null,
   created_at timestamptz not null default now()

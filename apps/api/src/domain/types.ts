@@ -44,5 +44,5 @@ export type PaymentIntent = {
   userId: string;
   provider: "bkash" | "sslcommerz";
   bdtAmount: number;
-  status: "initiated" | "succeeded" | "failed";
+  status: "initiated" | "credited" | "failed";
 };

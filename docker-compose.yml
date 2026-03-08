@@ -44,6 +44,7 @@ services:
     depends_on:
       - redis
       - ollama
+      - langfuse
     ports:
       - "8080:8080"
 

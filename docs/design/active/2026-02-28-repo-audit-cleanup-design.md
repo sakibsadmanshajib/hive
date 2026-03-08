@@ -86,7 +86,7 @@ Cons:
 Use Approach C (staged aggressive cleanup).
 
 Rationale:
-- You explicitly allow disruptive changes and no data-retention constraints.
+- The maintainer has explicitly allowed disruptive changes with no data-retention constraints.
 - The largest risk is not runtime breakage today; it is uncontrolled cleanup that mixes too many concerns at once.
 - Staging gives strong momentum while preserving traceability and fast rollback if needed.
 

@@ -31,7 +31,7 @@ This matrix reconciles documentation (README.md, OpenAPI) with actual implemente
 | `/v1/payments/webhook` | POST | Yes | Yes | Yes | Good |
 | `/v1/payments/demo/confirm` | POST | Yes | Yes | No | Demo route, expected to be missing from OpenAPI |
 | `/v1/providers/status` | GET | Yes | Yes | No | Missing from OpenAPI |
-| `/v1/providers/status/internal` | GET | Yes | Yes | No | Internal route, potentially expected to not be in public OpenAPI |
+| `/v1/providers/status/internal` | GET | Yes | Yes | No | Internal route, expected not to be in public OpenAPI |
 | `/health` | GET | Yes | No | No | Internal health check |
 
 ## Summary

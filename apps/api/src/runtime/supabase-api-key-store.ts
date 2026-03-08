@@ -77,7 +77,7 @@ export class SupabaseApiKeyStore {
       return false;
     }
 
-    const { error } = await this.supabase.from("api_keys").update({ revoked: true }).eq("key_hash", keyHash).eq("user_id", userId);
+    const { error } = await this.supabase.from("api_keys").update({ revoked: true, revoked_at: new Date().toISOString() }).eq("key_hash", keyHash).eq("user_id", userId);
     if (error) {
       throw new Error(`failed to revoke api key metadata: ${error.message}`);
     }

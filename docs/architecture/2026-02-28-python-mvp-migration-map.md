@@ -7,7 +7,7 @@ This map records where legacy Python MVP responsibilities moved in the TypeScrip
 
 | Legacy Python path | Responsibility | TypeScript replacement |
 |---|---|---|
-| `app/server.py` | HTTP app bootstrap and wiring | `apps/api/src/server.ts`, `apps/api/src/app.ts` |
+| `app/server.py` | HTTP app bootstrap and wiring | `apps/api/src/server.ts` |
 | `app/api.py` | REST endpoints | `apps/api/src/routes/*` |
 | `app/auth.py` | auth/session handling | `apps/api/src/routes/google-auth.ts`, `apps/api/src/routes/users.ts`, `apps/api/src/routes/two-factor.ts` |
 | `app/ledger.py` | credits ledger domain logic | `apps/api/src/domain/credits-ledger.ts` |

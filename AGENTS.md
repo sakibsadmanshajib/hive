@@ -13,6 +13,43 @@ This file is the canonical operating policy for coding agents in this repository
 - If any other agent-instruction file conflicts with this file, follow `AGENTS.md`.
 - Keep shared policy updates centralized here so all agents follow the same rules.
 
+## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
+
+**Before doing ANY work**, verify that Superpowers skills are installed locally:
+
+```bash
+ls .agents/skills/superpowers/using-superpowers/SKILL.md
+```
+
+- **If the file exists**: proceed normally.
+- **If the file does NOT exist or the path is broken**: **STOP ALL WORK IMMEDIATELY.** Do not read code, do not plan, do not edit files.
+
+When superpowers is missing, reply with **exactly** this message and nothing else:
+
+> ⛔ **Superpowers skills not found.**
+>
+> This repository requires [Obra Superpowers](https://github.com/obra/superpowers) to be installed before any agent work can proceed.
+>
+> **Setup (one-time):**
+> ```bash
+> git clone https://github.com/obra/superpowers.git ~/.agents/superpowers
+> mkdir -p .agents/skills
+> ln -s ~/.agents/superpowers/skills .agents/skills/superpowers
+> ```
+>
+> After setup, re-run your request.
+
+**No exceptions.** Do not attempt to self-install, skip, or work around this gate.
+
+## Agent Skills Reference
+
+Custom skills are located in `.agents/skills/`. Read the `SKILL.md` in each skill folder for full instructions before using.
+
+| Skill | Path | Purpose |
+|-------|------|---------|
+| Superpowers | `.agents/skills/superpowers/` | Obra Superpowers planning/execution framework |
+| GitHub API | `.agents/skills/gh-api/SKILL.md` | `gh api` patterns for PR reviews, comments, and issue management |
+
 ## Commands First (Run These Often)
 
 Install dependencies:

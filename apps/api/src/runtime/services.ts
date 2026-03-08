@@ -68,13 +68,13 @@ class PersistentUsageService {
 
   async add(entry: Omit<UsageEvent, "id" | "createdAt">): Promise<UsageEvent> {
     const id = `usage_${randomUUID()}`;
-    const { error } = await this.supabase.from("usage_events").insert({
+    const { data, error } = await this.supabase.from("usage_events").insert({
       id,
       user_id: entry.userId,
       endpoint: entry.endpoint,
       model: entry.model,
       credits: entry.credits,
-    });
+    }).select("created_at").single();
     if (error) {
       throw new Error(`failed to record usage: ${error.message}`);
     }
@@ -84,7 +84,7 @@ class PersistentUsageService {
       endpoint: entry.endpoint,
       model: entry.model,
       credits: entry.credits,
-      createdAt: new Date().toISOString(),
+      createdAt: new Date(data.created_at as string | Date).toISOString(),
     };
   }
 
