@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Repository Audit Artifacts:** Added repo-audit design, decision-process, and execution-plan documents to track cleanup work and implementation parity.
 - **Provider Circuit Breaker:** Implemented a circuit breaker pattern for AI providers (Ollama, Groq) to handle repeated failures gracefully.
     - Configurable thresholds (`PROVIDER_CB_THRESHOLD`) and reset timeouts (`PROVIDER_CB_RESET_MS`).
     - Exposed circuit state in `/v1/providers/status` (public) and detailed diagnostics in `/v1/providers/status/internal` (admin-only).
@@ -22,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - **OpenRouter & CostCalculator:** Removed inadvertently added/restored implementations to maintain project scope and avoid token-based billing complexity.
+- **Legacy Python MVP:** Removed deprecated root `app/` and `tests/` Python implementation paths after documenting TypeScript migration mapping.
+- **Duplicate OpenAPI Contract:** Removed `openapi/openapi.yaml`; `packages/openapi/openapi.yaml` is now the sole in-repo OpenAPI source.
 
 ### Changed
 - **Web Architecture:** Moved to a "Guarded Chat Home" structure.
@@ -46,4 +49,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Infrastructure:** Docker Compose stack including Postgres, Redis, and Ollama.
 
 ### Deprecated
-- **Python MVP:** The legacy Python implementation in `app/` and `tests/` is retained as a reference but is no longer the active development path.
+- **Python MVP:** Legacy Python implementation was deprecated at 0.1.0 and has since been removed in Unreleased cleanup.

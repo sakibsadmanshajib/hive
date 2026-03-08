@@ -24,7 +24,7 @@ This document captures the current implementation state so you can continue in a
 - Providers: Ollama + Groq integrated behind a provider registry with fallback to mock.
 - Public provider health endpoint exists.
 - Internal provider diagnostics endpoint exists and is admin-token protected.
-- Python MVP still exists in repo as a legacy reference implementation.
+- Legacy Python MVP has been removed from active repo surfaces; TypeScript is the only runtime path.
 
 ## Current Web Flow
 
@@ -49,7 +49,7 @@ This document captures the current implementation state so you can continue in a
 - `apps/api` - Fastify API, domain logic, runtime integrations
 - `apps/web` - Next.js app (chat-first workspace + developer panel + settings)
 - `packages/openapi/openapi.yaml` - OpenAPI contract for TS stack
-- `app/` + `tests/` - legacy Python MVP and tests
+- `docs/architecture/2026-02-28-python-mvp-migration-map.md` - Python MVP to TypeScript migration map
 - `docs/` - runbooks, release checklists, planning docs
 
 ## Implemented API Endpoints
@@ -78,10 +78,10 @@ This document captures the current implementation state so you can continue in a
 - `GET /v1/auth/google/callback`
 - `POST /v1/auth/logout`
 - `GET /v1/auth/session`
-- `POST /v1/auth/2fa/enroll/start`
-- `POST /v1/auth/2fa/enroll/verify`
-- `POST /v1/auth/2fa/challenge/start`
-- `POST /v1/auth/2fa/challenge/verify`
+- `POST /v1/2fa/enroll/init`
+- `POST /v1/2fa/enroll/verify`
+- `POST /v1/2fa/challenge/init`
+- `POST /v1/2fa/challenge/verify`
 
 ### Billing and Usage
 
