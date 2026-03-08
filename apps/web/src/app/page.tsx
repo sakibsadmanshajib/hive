@@ -28,12 +28,12 @@ export default function HomePage() {
   } = useChatSession();
 
   useEffect(() => {
-    if (!authSession?.apiKey) {
+    if (!authSession?.accessToken) {
       router.push("/auth");
     }
-  }, [authSession?.apiKey, router]);
+  }, [authSession?.accessToken, router]);
 
-  if (!authSession?.apiKey) {
+  if (!authSession?.accessToken) {
     return null;
   }
 

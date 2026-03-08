@@ -23,8 +23,8 @@ describe("auth principal resolution", () => {
       { headers: { authorization: "Bearer sess_123" } } as never,
       reply as never,
       {
-        env: { allowDevApiKeyPrefix: false },
-        auth: { getSessionPrincipal: async () => ({ userId: "user_session" }) },
+        env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
+        supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user_session" }) },
         users: { resolveApiKey: async () => null },
         authz: { requirePermission: async () => true },
         userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
@@ -41,8 +41,8 @@ describe("auth principal resolution", () => {
       { headers: { "x-api-key": "sk_live_123" } } as never,
       reply as never,
       {
-        env: { allowDevApiKeyPrefix: false },
-        auth: { getSessionPrincipal: async () => null },
+        env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
+        supabaseAuth: { getSessionPrincipal: async () => null },
         users: { resolveApiKey: async () => ({ userId: "user_api", scopes: ["usage"] }) },
         authz: { requirePermission: async () => true },
         userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
@@ -60,7 +60,6 @@ describe("auth principal resolution", () => {
       reply as never,
       {
         env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
-        auth: { getSessionPrincipal: async () => null },
         supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user_supabase" }) },
         users: { resolveApiKey: async () => null },
         authz: { requirePermission: async () => true },
@@ -78,8 +77,8 @@ describe("auth principal resolution", () => {
       { headers: {} } as never,
       reply as never,
       {
-        env: { allowDevApiKeyPrefix: false },
-        auth: { getSessionPrincipal: async () => null },
+        env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: false } } },
+        supabaseAuth: { getSessionPrincipal: async () => null },
         users: { resolveApiKey: async () => null },
         authz: { requirePermission: async () => true },
         userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },

@@ -8,14 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Input } from "../../components/ui/input";
 import { GoogleLoginButton } from "../../features/auth/google-login-button";
 import { writeAuthSession } from "../../features/auth/auth-session";
-
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
-
-type AuthResponse = {
-  api_key: string;
-  user: { email: string; name?: string };
-  error?: string;
-};
+import { createSupabaseBrowserClient } from "../../lib/supabase-client";
 
 export default function AuthPage() {
   const [name, setName] = useState("");
@@ -24,29 +17,68 @@ export default function AuthPage() {
   const [status, setStatus] = useState("Sign in to continue.");
   const [loading, setLoading] = useState(false);
 
-  async function runAuth(endpoint: "register" | "login", payload: Record<string, string>) {
+  const supabase = createSupabaseBrowserClient();
+
+  async function register(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setLoading(true);
     try {
-      const response = await fetch(`${apiBase}/v1/users/${endpoint}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: { data: { name } },
       });
-      const json = (await response.json()) as AuthResponse;
 
-      if (!response.ok) {
-        const nextStatus = json.error ?? "Authentication failed";
-        setStatus(nextStatus);
-        toast.error(nextStatus);
+      if (error) {
+        setStatus(error.message);
+        toast.error(error.message);
+        return;
+      }
+
+      if (!data.session) {
+        setStatus("Check your email to confirm your account.");
+        toast.info("Check your email to confirm your account.");
         return;
       }
 
       writeAuthSession({
-        apiKey: json.api_key,
-        email: json.user.email,
-        name: json.user.name,
+        accessToken: data.session.access_token,
+        email: data.user?.email ?? email,
+        name: data.user?.user_metadata?.name ?? name,
       });
-      setStatus(`Welcome ${json.user.email}`);
+      setStatus(`Welcome ${data.user?.email ?? email}`);
+      toast.success("Account created successfully");
+      window.location.assign("/");
+    } catch (error) {
+      const nextStatus = error instanceof Error ? error.message : "Registration failed";
+      setStatus(nextStatus);
+      toast.error(nextStatus);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function login(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+
+      if (error) {
+        setStatus(error.message);
+        toast.error(error.message);
+        return;
+      }
+
+      writeAuthSession({
+        accessToken: data.session.access_token,
+        email: data.user.email ?? email,
+        name: data.user.user_metadata?.name,
+      });
+      setStatus(`Welcome ${data.user.email}`);
       toast.success("Authentication successful");
       window.location.assign("/");
     } catch (error) {
@@ -56,16 +88,6 @@ export default function AuthPage() {
     } finally {
       setLoading(false);
     }
-  }
-
-  function register(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void runAuth("register", { name, email, password });
-  }
-
-  function login(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void runAuth("login", { email, password });
   }
 
   return (

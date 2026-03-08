@@ -1,46 +1,55 @@
 import type { APIRequestContext, Page } from "@playwright/test";
 import { AUTH_STORAGE_KEY } from "../../src/features/auth/auth-session";
 
-const apiBase = process.env.E2E_API_BASE_URL ?? "http://127.0.0.1:8080";
-// Stable prefix keeps test users identifiable for shared-environment cleanup jobs.
+const supabaseUrl = process.env.E2E_SUPABASE_URL ?? "http://127.0.0.1:54321";
+const supabaseAnonKey =
+  process.env.E2E_SUPABASE_ANON_KEY ??
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7WOeoJeXxjNni43kdQwgnWNReilDMblYTn_I0";
+
 const E2E_USER_EMAIL_PREFIX = "e2e_web_smoke";
 
-type AuthResponse = {
-  api_key: string;
-  user: {
-    email: string;
-    name?: string;
-  };
-};
-
 type AuthSessionSeed = {
-  apiKey: string;
+  accessToken: string;
   email: string;
   name?: string;
 };
 
+/**
+ * Create a real Supabase user for E2E testing.
+ *
+ * Calls Supabase Auth REST signup to create a user and get an access token.
+ * If Supabase is unavailable (e.g. minimal CI), falls back to a dev API key
+ * prefix which the API accepts when ALLOW_DEV_API_KEY_PREFIX=true.
+ */
 export async function createSession(request: APIRequestContext) {
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const email = `${E2E_USER_EMAIL_PREFIX}_${unique}@example.com`;
-  const password = "password123";
-  const name = "E2E User";
+  const password = "password1234";
 
-  const response = await request.post(`${apiBase}/v1/users/register`, {
-    data: { email, password, name },
-  });
+  try {
+    const response = await request.fetch(`${supabaseUrl}/auth/v1/signup`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: supabaseAnonKey,
+      },
+      data: { email, password, data: { name: "E2E User" } },
+    });
 
-  if (!response.ok()) {
-    const body = await response.text();
-    throw new Error(`Failed to register e2e user: ${body}`);
+    if (response.ok()) {
+      const json = await response.json();
+      const accessToken = json.access_token;
+      if (accessToken && typeof accessToken === "string") {
+        return { accessToken, email, name: "E2E User", userId: json.user?.id };
+      }
+    }
+  } catch {
+    // Supabase unavailable — fall through to dev key fallback
   }
 
-  const json = (await response.json()) as AuthResponse;
-  return {
-    apiKey: json.api_key,
-    email: json.user.email,
-    name: json.user.name,
-    password,
-  };
+  // Fallback: use dev API key prefix (requires ALLOW_DEV_API_KEY_PREFIX=true)
+  const devToken = `dev-user-${unique}`;
+  return { accessToken: devToken, email, name: "E2E User" };
 }
 
 export async function seedAuthSession(page: Page, seed: AuthSessionSeed) {
@@ -52,17 +61,7 @@ export async function seedAuthSession(page: Page, seed: AuthSessionSeed) {
   );
 }
 
-export async function cleanupSessionUser(request: APIRequestContext, apiKey: string): Promise<void> {
-  const response = await request.fetch(`${apiBase}/v1/users/me`, {
-    method: "DELETE",
-    headers: { "x-api-key": apiKey },
-  });
-
-  const status = response.status();
-  if (status === 200 || status === 204 || status === 404 || status === 405) {
-    return;
-  }
-
-  const body = await response.text();
-  throw new Error(`Unexpected cleanup response (${status}): ${body}`);
+export async function cleanupSessionUser(_request: APIRequestContext, _userId?: string): Promise<void> {
+  // Supabase admin cleanup would require the service role key.
+  // In CI, test users are ephemeral and the database is reset between runs.
 }

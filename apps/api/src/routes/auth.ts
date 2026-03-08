@@ -35,15 +35,11 @@ async function resolvePrincipal(
   requiredScope?: "chat" | "image" | "usage" | "billing",
 ): Promise<AuthPrincipal | null> {
   const bearerToken = readBearerToken(request);
-  if (bearerToken) {
-    const supabaseAuthEnabled = services.env.supabase?.flags.authEnabled ?? false;
-    const { data: { user }, error } = await services.supabaseAuth.getSessionPrincipal(bearerToken).then(p => ({ data: { user: p ? { id: p.userId } : null }, error: null }));
-    const session = services.env.supabase.flags.authEnabled
-      ? user ? { userId: user.id } : null
-      : null;
-    if (session) {
+  if (bearerToken && services.env.supabase.flags.authEnabled) {
+    const principal = await services.supabaseAuth.getSessionPrincipal(bearerToken);
+    if (principal) {
       return {
-        userId: session.userId,
+        userId: principal.userId,
         authType: "session",
         scopes: requiredScope ? [requiredScope] : ["chat", "image", "usage", "billing"],
       };

@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
 import { clearAuthSession, readAuthSession } from "../../auth/auth-session";
+import { createSupabaseBrowserClient } from "../../../lib/supabase-client";
 
 export function ProfileMenu() {
   const router = useRouter();
@@ -31,7 +32,9 @@ export function ProfileMenu() {
     router.push(path);
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    const supabase = createSupabaseBrowserClient();
+    await supabase.auth.signOut();
     clearAuthSession();
     router.push("/auth");
   }
@@ -59,7 +62,7 @@ export function ProfileMenu() {
           Billing
         </DropdownMenuItem>
         <DropdownMenuSeparator className="bg-slate-700" />
-        <DropdownMenuItem className="text-rose-300 focus:bg-slate-800 focus:text-rose-200" onSelect={handleLogout}>
+        <DropdownMenuItem className="text-rose-300 focus:bg-slate-800 focus:text-rose-200" onSelect={() => void handleLogout()}>
           Log out
         </DropdownMenuItem>
       </DropdownMenuContent>

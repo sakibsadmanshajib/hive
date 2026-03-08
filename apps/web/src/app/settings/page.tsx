@@ -8,7 +8,7 @@ import { readAuthSession } from "../../features/auth/auth-session";
 import { TopUpPanel } from "../../features/billing/components/topup-panel";
 import { SettingsShell } from "../../features/settings/components/settings-shell";
 import { UserSettingsPanel } from "../../features/settings/user-settings-panel";
-import { apiBase } from "../../lib/api-base";
+import { apiBase, apiHeaders } from "../../lib/api";
 
 type ProfileSession = {
   email: string;
@@ -20,7 +20,7 @@ export default function SettingsPage() {
 
   const [sessionReady, setSessionReady] = useState(false);
   const [profile, setProfile] = useState<ProfileSession | null>(null);
-  const [apiKey, setApiKey] = useState("");
+  const [accessToken, setAccessToken] = useState("");
   const [topUpAmount, setTopUpAmount] = useState(50);
   const [latestIntent, setLatestIntent] = useState("");
   const [status, setStatus] = useState("Manage account and billing settings.");
@@ -28,19 +28,19 @@ export default function SettingsPage() {
 
   useEffect(() => {
     const authSession = readAuthSession();
-    if (!authSession?.apiKey) {
+    if (!authSession?.accessToken) {
       router.push("/auth");
       setSessionReady(true);
       return;
     }
 
     setProfile({ email: authSession.email, name: authSession.name });
-    setApiKey(authSession.apiKey);
+    setAccessToken(authSession.accessToken);
     setSessionReady(true);
   }, [router]);
 
   async function topUpDemo() {
-    if (!apiKey) {
+    if (!accessToken) {
       setStatus("Set API key first.");
       return;
     }
@@ -49,10 +49,7 @@ export default function SettingsPage() {
     try {
       const intentRes = await fetch(`${apiBase}/v1/payments/intents`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
+        headers: apiHeaders(accessToken),
         body: JSON.stringify({ bdt_amount: topUpAmount, provider: "bkash" }),
       });
       const intentJson = (await intentRes.json().catch(() => ({}))) as { error?: string; intent_id?: string };
@@ -71,10 +68,7 @@ export default function SettingsPage() {
 
       const confirmRes = await fetch(`${apiBase}/v1/payments/demo/confirm`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
+        headers: apiHeaders(accessToken),
         body: JSON.stringify({ intent_id: intentId }),
       });
       const confirmJson = (await confirmRes.json().catch(() => ({}))) as { error?: string; minted_credits?: number };
@@ -91,7 +85,7 @@ export default function SettingsPage() {
     }
   }
 
-  if (!sessionReady || !apiKey || !profile) {
+  if (!sessionReady || !accessToken || !profile) {
     return null;
   }
 
@@ -131,7 +125,7 @@ export default function SettingsPage() {
         setTopUpAmount={setTopUpAmount}
         topUpAmount={topUpAmount}
       />
-      <UserSettingsPanel apiKey={apiKey} />
+      <UserSettingsPanel accessToken={accessToken} />
     </SettingsShell>
   );
 }

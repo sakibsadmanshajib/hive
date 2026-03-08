@@ -4,12 +4,11 @@ import { toast } from "sonner";
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
 import { readAuthSession } from "../auth/auth-session";
-
-const apiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
+import { apiBase, apiHeaders } from "../../lib/api";
 
 export function useChatSession() {
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [apiKey] = useState(() => readAuthSession()?.apiKey ?? "");
+  const [accessToken] = useState(() => readAuthSession()?.accessToken ?? "");
   const [model, setModel] = useState("fast-chat");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,7 +21,7 @@ export function useChatSession() {
     [chatState.activeConversationId, chatState.conversations],
   );
 
-function addConversation() {
+  function addConversation() {
     dispatch({
       type: "conversationAdded",
       payload: {
@@ -42,8 +41,8 @@ function addConversation() {
     if (!activeConversation || !prompt.trim()) {
       return;
     }
-    if (!apiKey.trim()) {
-      const nextError = "Set API key first.";
+    if (!accessToken.trim()) {
+      const nextError = "Not authenticated.";
       setErrorMessage(nextError);
       toast.error(nextError);
       return;
@@ -73,10 +72,7 @@ function addConversation() {
 
       const response = await fetch(`${apiBase}/v1/chat/completions`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
+        headers: apiHeaders(accessToken),
         body: JSON.stringify({
           model,
           messages: payloadMessages,
