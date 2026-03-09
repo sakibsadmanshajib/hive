@@ -10,7 +10,7 @@ import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
 import type { PersistentApiKey, PersistentPaymentIntent } from "../domain/types";
 import { RedisRateLimiter } from "./redis-rate-limiter";
-import { createApiKey, hashPassword, verifyPassword } from "./security";
+import { createApiKey } from "./security";
 import { LangfuseClient } from "./langfuse";
 import { AuthorizationService } from "./authorization";
 import { UserSettingsService } from "./user-settings";
