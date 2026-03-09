@@ -33,7 +33,7 @@ describe("UserSettingsPanel", () => {
 
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<UserSettingsPanel apiKey="sk_test_123" />);
+    render(<UserSettingsPanel accessToken="sk_test_123" />);
 
     expect(await screen.findByRole("switch", { name: /api enabled/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("switch", { name: /two-factor enabled/i }));
@@ -61,7 +61,7 @@ describe("UserSettingsPanel", () => {
       }),
     );
 
-    render(<UserSettingsPanel apiKey="sk_test_123" />);
+    render(<UserSettingsPanel accessToken="sk_test_123" />);
 
     expect(await screen.findByText(/settings endpoint is not available yet/i)).toBeInTheDocument();
   });

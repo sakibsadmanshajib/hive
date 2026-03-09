@@ -12,6 +12,6 @@ describe("AuthPage", () => {
 
     expect(screen.getByRole("heading", { name: /welcome back/i })).toBeInTheDocument();
     expect(screen.getByText("Register")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /continue with google/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /continue with google/i })).toBeInTheDocument();
   });
 });

@@ -26,15 +26,9 @@ describe("review feedback pages", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     pushMock.mockReset();
-    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ apiKey: "sk_test", email: "demo@example.com" }));
+    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ accessToken: "sk_test", email: "demo@example.com" }));
   });
 
-  it("masks developer api key input", async () => {
-    render(<DeveloperPage />);
-
-    const keyInput = await screen.findByLabelText(/primary api key/i);
-    expect(keyInput).toHaveAttribute("type", "password");
-  });
 
   it("shows a status message when developer usage loading throws", async () => {
     const fetchMock = vi

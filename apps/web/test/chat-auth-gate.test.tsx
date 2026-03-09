@@ -34,7 +34,7 @@ describe("chat auth gate", () => {
   });
 
   it("renders chat workspace on root for authenticated users", async () => {
-    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ apiKey: "sk_test", email: "demo@example.com" }));
+    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ accessToken: "sk_test", email: "demo@example.com" }));
 
     render(<HomePage />);
 
