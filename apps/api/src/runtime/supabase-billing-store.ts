@@ -40,39 +40,15 @@ export class SupabaseBillingStore {
   }
 
   async consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean> {
-    await this.ensureCreditAccount(userId);
-    const balance = await this.getBalance(userId);
-    if (balance.availableCredits < credits) {
-      return false;
+    const { data, error } = await this.supabase.rpc("consume_credits", {
+      p_user_id: userId,
+      p_credits: credits,
+      p_reference_id: referenceId,
+    });
+    if (error) {
+      throw new Error(`failed to consume credits via rpc: ${error.message}`);
     }
-
-    const purchasedDebit = Math.min(balance.purchasedCredits, credits);
-    const { error: updateError } = await this.supabase
-      .from("credit_accounts")
-      .update({
-        available_credits: balance.availableCredits - credits,
-        purchased_credits: balance.purchasedCredits - purchasedDebit,
-      })
-      .eq("user_id", userId);
-    if (updateError) {
-      throw new Error(`failed to consume credits: ${updateError.message}`);
-    }
-
-    const { error: ledgerError } = await this.supabase.from("credit_ledger").upsert(
-      {
-        user_id: userId,
-        entry_type: "debit",
-        credits,
-        reference_type: "usage",
-        reference_id: referenceId,
-      },
-      { onConflict: "reference_type,reference_id", ignoreDuplicates: true },
-    );
-    if (ledgerError) {
-      throw new Error(`failed to write debit ledger entry: ${ledgerError.message}`);
-    }
-
-    return true;
+    return Boolean(data);
   }
 
   async topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
@@ -183,6 +159,32 @@ export class SupabaseBillingStore {
     if (error) {
       throw new Error(`failed to mark payment intent status: ${error.message}`);
     }
+  }
+
+  async claimPaymentIntent(intentId: string, provider: string, providerTxnId: string): Promise<{ success: boolean; intent?: PersistentPaymentIntent }> {
+    const { data, error } = await this.supabase.rpc("claim_payment_intent", {
+      p_intent_id: intentId,
+      p_provider: provider,
+      p_provider_txn_id: providerTxnId,
+    });
+    if (error) {
+      throw new Error(`failed to claim payment intent via rpc: ${error.message}`);
+    }
+    const result = data as { success: boolean; intent?: PaymentIntentRow; error?: string };
+    if (!result.success || !result.intent) {
+      return { success: false };
+    }
+    return {
+      success: true,
+      intent: {
+        intentId: result.intent.intent_id,
+        userId: result.intent.user_id,
+        provider: result.intent.provider,
+        bdtAmount: Number(result.intent.bdt_amount),
+        status: result.intent.status,
+        mintedCredits: Number(result.intent.minted_credits),
+      },
+    };
   }
 
   private async ensureCreditAccount(userId: string): Promise<void> {

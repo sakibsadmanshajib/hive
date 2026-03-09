@@ -65,23 +65,19 @@ export class SupabaseApiKeyStore {
 
   async revoke(key: string, userId: string): Promise<boolean> {
     const keyHash = hashApiKeyForLookup(key);
-    const { data: record, error: lookupError } = await this.supabase
+    const { data, error } = await this.supabase
       .from("api_keys")
-      .select("user_id, revoked")
+      .update({ revoked: true, revoked_at: new Date().toISOString() })
       .eq("key_hash", keyHash)
-      .maybeSingle();
-    if (lookupError) {
-      throw new Error(`failed to query api key metadata for revoke: ${lookupError.message}`);
-    }
-    if (!record || record.revoked || String(record.user_id) !== userId) {
-      return false;
-    }
+      .eq("user_id", userId)
+      .eq("revoked", false)
+      .select();
 
-    const { error } = await this.supabase.from("api_keys").update({ revoked: true, revoked_at: new Date().toISOString() }).eq("key_hash", keyHash).eq("user_id", userId);
     if (error) {
       throw new Error(`failed to revoke api key metadata: ${error.message}`);
     }
-    return true;
+
+    return Array.isArray(data) && data.length > 0;
   }
 
   async get(key: string): Promise<PersistentApiKey | undefined> {

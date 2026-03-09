@@ -44,6 +44,7 @@ type BillingStore = {
     verified: boolean,
   ): Promise<boolean>;
   markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void>;
+  claimPaymentIntent(intentId: string, provider: string, providerTxnId: string): Promise<{ success: boolean; intent?: PersistentPaymentIntent }>;
 };
 
 class PersistentCreditService {
@@ -138,41 +139,19 @@ class PersistentPaymentService {
     provider_txn_id: string;
     verified: boolean;
   }) {
-    const eventKey = `${payload.provider}:${payload.provider_txn_id}`;
-    const inserted = await this.store.recordPaymentEvent(
-      eventKey,
+    if (!payload.verified) {
+      await this.store.markPaymentCredited(payload.intent_id, 0, "failed");
+      return this.store.getPaymentIntent(payload.intent_id);
+    }
+
+    // Call the PostgreSQL RPC for atomic idempotency, intent verification, and crediting
+    const result = await this.store.claimPaymentIntent(
       payload.intent_id,
       payload.provider,
-      payload.provider_txn_id,
-      payload.verified,
+      payload.provider_txn_id
     );
-    if (!inserted) {
-      return this.store.getPaymentIntent(payload.intent_id);
-    }
 
-    const intent = await this.store.getPaymentIntent(payload.intent_id);
-    if (!intent) {
-      return undefined;
-    }
-
-    if (intent.provider !== payload.provider) {
-      await this.store.markPaymentCredited(intent.intentId, 0, "failed");
-      return this.store.getPaymentIntent(payload.intent_id);
-    }
-
-    if (!payload.verified) {
-      await this.store.markPaymentCredited(intent.intentId, 0, "failed");
-      return this.store.getPaymentIntent(payload.intent_id);
-    }
-
-    if (intent.status === "credited") {
-      return intent;
-    }
-
-    const mintedCredits = Math.trunc(intent.bdtAmount * 100);
-    await this.credits.topUp(intent.userId, intent.bdtAmount, `payment_${intent.intentId}`);
-    await this.store.markPaymentCredited(intent.intentId, mintedCredits, "credited");
-    return this.store.getPaymentIntent(payload.intent_id);
+    return result?.intent;
   }
 
   async confirmDemoIntent(input: { intentId: string; providerTxnId?: string }) {
