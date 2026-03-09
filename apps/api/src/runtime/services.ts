@@ -64,7 +64,7 @@ class PersistentCreditService {
   }
 }
 
-class PersistentUsageService {
+export class PersistentUsageService {
   constructor(private readonly supabase: ReturnType<typeof createSupabaseAdminClient>) { }
 
   async add(entry: Omit<UsageEvent, "id" | "createdAt">): Promise<UsageEvent> {
@@ -164,7 +164,7 @@ class PersistentPaymentService {
   }
 }
 
-class PersistentUserService {
+export class PersistentUserService {
   constructor(
     private readonly apiKeys: SupabaseApiKeyStore,
     private readonly supabaseUsers: SupabaseUserStore,
