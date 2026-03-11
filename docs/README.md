@@ -25,6 +25,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 ## Planning Docs Status
 
 - `docs/plans/active/` contains current plans that should guide implementation.
+- New session plans and tracked implementation plans belong in `docs/plans/`.
 - `docs/plans/archive/pre-supabase/` contains pre-Supabase plans kept only for historical reference and should be treated as obsolete for current direction.
 - Active design artifacts may live under `docs/design/active/` when they capture UX or product decisions that are not implementation plans.
 

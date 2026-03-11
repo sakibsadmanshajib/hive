@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `/` is now the authenticated chat interface.
     - Unauthenticated users are strictly redirected to `/auth`.
 - **Documentation:** Major restructuring of `AGENTS.md` to include the "Superpowers" workflow and stricter operational mandates.
+- **Browser Runtime Configuration:** Web runtime now requires explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY` instead of implicit localhost or placeholder fallbacks.
+- **Web Smoke Auth Fixtures:** Playwright smoke auth now prefers real Supabase signup using `E2E_SUPABASE_ANON_KEY` and only uses synthetic token fallback when `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` is explicitly enabled.
+- **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
+
+### Fixed
+- **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
+- **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
 
 ## [0.1.0] - 2026-02-24
 

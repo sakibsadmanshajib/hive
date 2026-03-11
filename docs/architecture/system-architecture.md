@@ -33,11 +33,13 @@ graph TD
 ### 2. Web App (`apps/web`)
 - Next.js App Router UI
 - Chat-first workspace with developer panel and settings surfaces
+- Browser clients require explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; the web app no longer falls back to localhost or placeholder credentials at runtime
 
 ### 3. Supabase (Auth + Persistence)
 - **Auth**: User registration, login, OAuth, MFA — all handled by Supabase Auth
 - **User Profiles**: `user_profiles` table via `SupabaseUserStore`
 - **API Keys**: Hashed key metadata in `api_keys` table via `SupabaseApiKeyStore`
+- **API Key Metadata Shape**: Persisted records expose only a non-secret `key_prefix` plus scopes/revocation metadata; plaintext API keys are never returned after creation
 - **Billing**: Credit accounts, ledger, payment intents/events via `SupabaseBillingStore`
 - **RBAC**: `user_roles` + `role_permissions` tables queried by `AuthorizationService`
 - **Settings**: `user_settings` table for feature gates
@@ -95,6 +97,7 @@ Circuit breaker protects against cascading provider failures:
 - All Supabase tables use Row Level Security (RLS)
 - API keys are stored as SHA-256 hashes; raw keys are never persisted
 - Bearer tokens are validated server-side via Supabase Auth
+- Browser runtime configuration fails closed when required public env vars are missing
 
 ## Operational Dependencies
 

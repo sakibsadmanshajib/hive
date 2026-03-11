@@ -13,6 +13,12 @@ This file is the canonical operating policy for coding agents in this repository
 - If any other agent-instruction file conflicts with this file, follow `AGENTS.md`.
 - Keep shared policy updates centralized here so all agents follow the same rules.
 
+## Maintainer Override
+
+- Explicit maintainer instructions in the current session override `AGENTS.md` defaults globally.
+- If the maintainer explicitly asks to persist an override or workflow preference, update `AGENTS.md` so the preference applies in future sessions as well.
+- This override rule does not permit committing secrets, tokens, or credentials, leaking protected internal data, or otherwise bypassing hard safety constraints around sensitive information.
+
 ## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
 
 **Before doing ANY work**, verify that Superpowers skills are installed locally:
@@ -39,7 +45,7 @@ When superpowers is missing, reply with **exactly** this message and nothing els
 >
 > After setup, re-run your request.
 
-**No exceptions.** Do not attempt to self-install, skip, or work around this gate.
+Unless the maintainer explicitly directs otherwise, do not attempt to self-install, skip, or work around this gate.
 
 ## Agent Skills Reference
 
@@ -97,9 +103,9 @@ curl -s http://127.0.0.1:8080/v1/providers/status
 curl -s http://127.0.0.1:8080/v1/providers/status/internal -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
 ```
 
-## Superpowers Workflow Gate (Mandatory)
+## Superpowers Workflow Gate (Default)
 
-Use the Obra Superpowers framework for all development tasks: planning, implementation, debugging, verification, and completion.
+Use the Obra Superpowers framework for all development tasks by default unless the maintainer explicitly directs a different workflow.
 
 Before any code edits, perform a plan gate:
 
@@ -125,19 +131,19 @@ Plan for the task exactly as provided by the user. If task input is missing, ask
 ## Rollback plan
 ```
 
-### Persist (mandatory)
+### Persist (default)
 
-Write the plan to `artifacts/superpowers/plan.md` (Note: the `artifacts` folder is local-only and ignored by git). Create the folder if needed. Confirm by listing `artifacts/superpowers/`.
+Write the plan to `docs/plans/YYYY-MM-DD-<task-name>.md`. Reuse an existing tracked plan when continuing that same task; otherwise create a new dated plan file under `docs/plans/`.
 
 Preferred writer command when available:
 
 ```bash
-python .agent/skills/superpowers-workflow/scripts/write_artifact.py --path artifacts/superpowers/plan.md
+python .agent/skills/superpowers-workflow/scripts/write_artifact.py --path docs/plans/YYYY-MM-DD-<task-name>.md
 ```
 
 Pass the full markdown plan as stdin to the command.
 
-If the command is unavailable, write `artifacts/superpowers/plan.md` directly and explicitly state that the helper command was unavailable.
+If the command is unavailable, write the plan file in `docs/plans/` directly and explicitly state that the helper command was unavailable.
 
 ### Approval gate
 
@@ -230,9 +236,9 @@ For ops/status changes:
 - `/v1/providers/status` must not include internal `detail`.
 - `/v1/providers/status/internal` must return `401` without valid admin token.
 
-## Git Workflow and Worktrees (Mandatory)
+## Git Workflow and Worktrees (Default)
 
-- Worktrees are required because multiple AI agents/tools may operate concurrently.
+- Use worktrees by default because multiple AI agents/tools may operate concurrently.
 - Never run two independent tasks in the same working tree.
 - Keep commits atomic by concern (runtime, providers, docs, tests).
 - Open one PR per tracked task.
@@ -254,7 +260,7 @@ git -C ../.worktrees/hive-<task-slug> status
 pnpm --dir ../.worktrees/hive-<task-slug> install --frozen-lockfile
 ```
 
-Mandatory: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands.
+Default: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands.
 
 After merge:
 

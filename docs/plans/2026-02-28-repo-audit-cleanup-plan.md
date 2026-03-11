@@ -1,7 +1,7 @@
 # Repo Audit and Cleanup Plan
 
 ## Status
-**Pending Execution** - This plan and associated design docs were merged in PR #36 to address Issue #35, but implementation was deferred. All steps below are currently pending.
+**In Progress / Partially Executed** - PR #36 started as a planning-and-audit track, but the current branch now includes implementation follow-ups across API runtime, web auth/session behavior, environment hardening, smoke E2E support, and documentation cleanup. Remaining items should be treated as a tracked cleanup backlog, not as an untouched deferred plan.
 
 ## Goal
 Execute a full repository audit and cleanup that verifies implementation claims against code/tests/GitHub, removes redundant/stale assets, updates contracts/docs, and includes an explicit migration/removal track for the legacy Python MVP in this pre-production environment.

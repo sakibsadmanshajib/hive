@@ -2,6 +2,12 @@
 
 This folder is organized by plan status to reduce ambiguity.
 
+## Canonical Placement
+
+- Create new tracked plans in `docs/plans/YYYY-MM-DD-<task-name>.md`.
+- Continue an existing task in its current plan file instead of creating an untracked side artifact.
+- Move only long-lived current-track plans into `docs/plans/active/` when they become the canonical implementation guide for that stream.
+
 ## Active
 
 Use these documents for current planning and execution:

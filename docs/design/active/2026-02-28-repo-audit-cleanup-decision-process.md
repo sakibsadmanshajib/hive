@@ -44,17 +44,15 @@ Included:
 - GitHub issue/PR triage alignment,
 - legacy Python MVP migration map and removal plan.
 
-Explicitly deferred from this tracking PR:
-- implementation of the cleanup itself,
-- functional contract changes beyond documentation/plan artifacts.
+Initially deferred from this tracking PR:
+- broad functional contract changes beyond the verified cleanup scope.
 
 ## Canonical Doc Placement for This Track
 
 - Design artifact: `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
 - Decision process log: `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
 - Execution plan artifact (tracked copy): `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
-- Local-only plan gate artifact (ignored): `artifacts/superpowers/plan.md`
 
 ## Next Trigger
 
-Execution starts when maintainer resumes with the approved plan and opens the implementation session against the tracked plan doc.
+Continue execution against the tracked plan doc and keep status/current-scope notes in `docs/` as the cleanup branch evolves.
