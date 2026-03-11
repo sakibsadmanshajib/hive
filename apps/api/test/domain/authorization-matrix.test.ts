@@ -4,7 +4,7 @@ import { AuthorizationService } from "../../src/runtime/authorization";
 describe("AuthorizationService", () => {
   it("maps legacy api key scopes to equivalent permissions", async () => {
     const authorization = new AuthorizationService({
-      listPermissionsForUser: async () => [],
+      from: () => ({ select: () => ({ eq: async () => ({ data: [] }) }) }),
     } as never);
 
     const allowed = await authorization.hasPermission({ userId: "user_1", scopes: ["chat"] }, "chat:write");
@@ -14,7 +14,7 @@ describe("AuthorizationService", () => {
 
   it("allows permissions provided by role assignments", async () => {
     const authorization = new AuthorizationService({
-      listPermissionsForUser: async () => ["billing:write"],
+      from: () => ({ select: () => ({ eq: async () => ({ data: [{ role_permissions: [{ permission_key: "billing:write" }] }] }) }) }),
     } as never);
 
     const allowed = await authorization.hasPermission({ userId: "user_1", scopes: [] }, "billing:write");

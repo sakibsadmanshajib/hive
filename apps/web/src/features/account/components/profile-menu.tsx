@@ -12,11 +12,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
-import { clearAuthSession, readAuthSession } from "../../auth/auth-session";
+import { clearAuthSession, useAuthSession } from "../../auth/auth-session";
+import { createSupabaseBrowserClient, useSupabaseAuthSessionSync } from "../../../lib/supabase-client";
 
 export function ProfileMenu() {
   const router = useRouter();
-  const session = readAuthSession();
+  useSupabaseAuthSessionSync();
+  const session = useAuthSession();
 
   const initials = useMemo(() => {
     const source = session?.name?.trim() || session?.email || "User";
@@ -31,9 +33,16 @@ export function ProfileMenu() {
     router.push(path);
   }
 
-  function handleLogout() {
-    clearAuthSession();
-    router.push("/auth");
+  async function handleLogout() {
+    const supabase = createSupabaseBrowserClient();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Local cleanup should still complete if remote sign-out fails.
+    } finally {
+      clearAuthSession();
+      router.push("/auth");
+    }
   }
 
   return (
@@ -59,7 +68,7 @@ export function ProfileMenu() {
           Billing
         </DropdownMenuItem>
         <DropdownMenuSeparator className="bg-slate-700" />
-        <DropdownMenuItem className="text-rose-300 focus:bg-slate-800 focus:text-rose-200" onSelect={handleLogout}>
+        <DropdownMenuItem className="text-rose-300 focus:bg-slate-800 focus:text-rose-200" onSelect={() => void handleLogout()}>
           Log out
         </DropdownMenuItem>
       </DropdownMenuContent>

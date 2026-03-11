@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { PersistentApiKey } from "./postgres-store";
+import type { PersistentApiKey } from "../domain/types";
 import { hashApiKeyForLookup } from "./security";
 
 type ApiKeyResolution = { userId: string; scopes: string[] };
@@ -13,7 +13,7 @@ function extractApiKeyPrefix(rawKey: string): string {
 }
 
 export class SupabaseApiKeyStore {
-  constructor(private readonly supabase: SupabaseClient) {}
+  constructor(private readonly supabase: SupabaseClient) { }
 
   async create(input: { key: string; userId: string; scopes: string[] }): Promise<void> {
     const { error } = await this.supabase.from("api_keys").insert({
@@ -55,7 +55,7 @@ export class SupabaseApiKeyStore {
       throw new Error(`failed to list api key metadata: ${error.message}`);
     }
     return (data ?? []).map((row) => ({
-      key: String(row.key_prefix),
+      keyPrefix: String(row.key_prefix),
       userId: String(row.user_id),
       scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
       revoked: Boolean(row.revoked),
@@ -65,23 +65,19 @@ export class SupabaseApiKeyStore {
 
   async revoke(key: string, userId: string): Promise<boolean> {
     const keyHash = hashApiKeyForLookup(key);
-    const { data: record, error: lookupError } = await this.supabase
+    const { data, error } = await this.supabase
       .from("api_keys")
-      .select("user_id, revoked")
+      .update({ revoked: true, revoked_at: new Date().toISOString() })
       .eq("key_hash", keyHash)
-      .maybeSingle();
-    if (lookupError) {
-      throw new Error(`failed to query api key metadata for revoke: ${lookupError.message}`);
-    }
-    if (!record || record.revoked || String(record.user_id) !== userId) {
-      return false;
-    }
+      .eq("user_id", userId)
+      .eq("revoked", false)
+      .select();
 
-    const { error } = await this.supabase.from("api_keys").update({ revoked: true }).eq("key_hash", keyHash).eq("user_id", userId);
     if (error) {
       throw new Error(`failed to revoke api key metadata: ${error.message}`);
     }
-    return true;
+
+    return Array.isArray(data) && data.length > 0;
   }
 
   async get(key: string): Promise<PersistentApiKey | undefined> {
@@ -98,7 +94,7 @@ export class SupabaseApiKeyStore {
       return undefined;
     }
     return {
-      key: String(data.key_prefix),
+      keyPrefix: String(data.key_prefix),
       userId: String(data.user_id),
       scopes: Array.isArray(data.scopes) ? (data.scopes as string[]) : [],
       revoked: Boolean(data.revoked),

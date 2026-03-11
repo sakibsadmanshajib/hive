@@ -37,6 +37,7 @@ The codebase is developed by humans and AI agents. Clear Git and documentation s
 - If behavior changes, update docs in the same change:
   - `README.md` for quickstart/public behavior
   - `docs/` for architecture, runbooks, and implementation details
+- Keep implementation plans in `docs/plans/`, not in local-only scratch directories, when the plan should persist across sessions.
 - Prefer explicit examples (commands, payloads, env vars) over abstract prose.
 - Keep endpoint and env-var docs synchronized with implementation.
 

@@ -8,9 +8,9 @@ import { MockProviderClient } from "../providers/mock-client";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
-import { PostgresStore, type PersistentApiKey, type PersistentPaymentIntent } from "./postgres-store";
+import type { PersistentApiKey, PersistentPaymentIntent } from "../domain/types";
 import { RedisRateLimiter } from "./redis-rate-limiter";
-import { createApiKey, hashPassword, verifyPassword } from "./security";
+import { createApiKey } from "./security";
 import { LangfuseClient } from "./langfuse";
 import { AuthorizationService } from "./authorization";
 import { UserSettingsService } from "./user-settings";
@@ -44,76 +44,15 @@ type BillingStore = {
     verified: boolean,
   ): Promise<boolean>;
   markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void>;
-};
-
-class PostgresApiKeyStore implements ApiKeyStore {
-  constructor(private readonly store: PostgresStore) {}
-
-  create(input: { key: string; userId: string; scopes: string[] }): Promise<void> {
-    return this.store.createApiKey(input);
-  }
-
-  async resolve(key: string): Promise<{ userId: string; scopes: string[] } | null> {
-    const apiKey = await this.store.getApiKey(key);
-    if (!apiKey || apiKey.revoked) {
-      return null;
-    }
-    return { userId: apiKey.userId, scopes: apiKey.scopes };
-  }
-
-  list(userId: string): Promise<PersistentApiKey[]> {
-    return this.store.listApiKeys(userId);
-  }
-
-  revoke(key: string, userId: string): Promise<boolean> {
-    return this.store.revokeApiKey(key, userId);
-  }
-
-  get(key: string): Promise<PersistentApiKey | undefined> {
-    return this.store.getApiKey(key);
-  }
-}
-
-class PostgresBillingStore implements BillingStore {
-  constructor(private readonly store: PostgresStore) {}
-
-  getBalance(userId: string): Promise<CreditBalance> {
-    return this.store.getBalance(userId);
-  }
-
-  consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean> {
-    return this.store.consumeCredits(userId, credits, referenceId);
-  }
-
-  topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
-    return this.store.topUp(userId, credits / 100, referenceId);
-  }
-
-  createPaymentIntent(intent: PersistentPaymentIntent): Promise<void> {
-    return this.store.createPaymentIntent(intent);
-  }
-
-  getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined> {
-    return this.store.getPaymentIntent(intentId);
-  }
-
-  recordPaymentEvent(
-    eventKey: string,
+  claimPaymentIntent(
     intentId: string,
     provider: string,
     providerTxnId: string,
-    verified: boolean,
-  ): Promise<boolean> {
-    return this.store.recordPaymentEvent(eventKey, intentId, provider, providerTxnId, verified);
-  }
-
-  markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void> {
-    return this.store.markPaymentCredited(intentId, mintedCredits, status);
-  }
-}
+  ): Promise<{ success: boolean; intent?: PersistentPaymentIntent; error?: string }>;
+};
 
 class PersistentCreditService {
-  constructor(private readonly store: BillingStore) {}
+  constructor(private readonly store: BillingStore) { }
 
   getBalance(userId: string): Promise<CreditBalance> {
     return this.store.getBalance(userId);
@@ -129,15 +68,49 @@ class PersistentCreditService {
   }
 }
 
-class PersistentUsageService {
-  constructor(private readonly store: PostgresStore) {}
+export class PersistentUsageService {
+  constructor(private readonly supabase: ReturnType<typeof createSupabaseAdminClient>) { }
 
-  add(entry: Omit<UsageEvent, "id" | "createdAt">): Promise<UsageEvent> {
-    return this.store.addUsage(entry.userId, entry.endpoint, entry.model, entry.credits);
+  async add(entry: Omit<UsageEvent, "id" | "createdAt">): Promise<UsageEvent> {
+    const id = `usage_${randomUUID()}`;
+    const { data, error } = await this.supabase.from("usage_events").insert({
+      id,
+      user_id: entry.userId,
+      endpoint: entry.endpoint,
+      model: entry.model,
+      credits: entry.credits,
+    }).select("created_at").single();
+    if (error) {
+      throw new Error(`failed to record usage: ${error.message}`);
+    }
+    return {
+      id,
+      userId: entry.userId,
+      endpoint: entry.endpoint,
+      model: entry.model,
+      credits: entry.credits,
+      createdAt: new Date(data.created_at as string | Date).toISOString(),
+    };
   }
 
-  list(userId: string): Promise<UsageEvent[]> {
-    return this.store.listUsage(userId);
+  async list(userId: string): Promise<UsageEvent[]> {
+    const { data, error } = await this.supabase
+      .from("usage_events")
+      .select("id, user_id, endpoint, model, credits, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(500);
+    if (error) {
+      throw new Error(`failed to read usage events: ${error.message}`);
+    }
+    return (data ?? []).map((row) => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      endpoint: String(row.endpoint),
+      model: String(row.model),
+      credits: Number(row.credits),
+      createdAt: new Date(row.created_at as string | Date).toISOString(),
+    }));
   }
 }
 
@@ -145,7 +118,7 @@ class PersistentPaymentService {
   constructor(
     private readonly store: BillingStore,
     private readonly credits: PersistentCreditService,
-  ) {}
+  ) { }
 
   async createIntent(input: { userId: string; provider: "bkash" | "sslcommerz"; bdtAmount: number }) {
     const intent: PersistentPaymentIntent = {
@@ -170,41 +143,21 @@ class PersistentPaymentService {
     provider_txn_id: string;
     verified: boolean;
   }) {
-    const eventKey = `${payload.provider}:${payload.provider_txn_id}`;
-    const inserted = await this.store.recordPaymentEvent(
-      eventKey,
-      payload.intent_id,
-      payload.provider,
-      payload.provider_txn_id,
-      payload.verified,
-    );
-    if (!inserted) {
-      return this.store.getPaymentIntent(payload.intent_id);
-    }
-
-    const intent = await this.store.getPaymentIntent(payload.intent_id);
-    if (!intent) {
-      return undefined;
-    }
-
-    if (intent.provider !== payload.provider) {
-      await this.store.markPaymentCredited(intent.intentId, 0, "failed");
-      return this.store.getPaymentIntent(payload.intent_id);
-    }
-
     if (!payload.verified) {
-      await this.store.markPaymentCredited(intent.intentId, 0, "failed");
+      await this.store.markPaymentCredited(payload.intent_id, 0, "failed");
       return this.store.getPaymentIntent(payload.intent_id);
     }
 
-    if (intent.status === "credited") {
-      return intent;
+    // Call the PostgreSQL RPC for atomic idempotency, intent verification, and crediting
+    const result = await this.store.claimPaymentIntent(payload.intent_id, payload.provider, payload.provider_txn_id);
+    if (!result.success || !result.intent) {
+      throw new Error(
+        `payment intent claim failed: ${result.error ?? "unknown error"} ` +
+        `(intent_id=${payload.intent_id}, provider=${payload.provider}, provider_txn_id=${payload.provider_txn_id})`,
+      );
     }
 
-    const mintedCredits = Math.trunc(intent.bdtAmount * 100);
-    await this.credits.topUp(intent.userId, intent.bdtAmount, `payment_${intent.intentId}`);
-    await this.store.markPaymentCredited(intent.intentId, mintedCredits, "credited");
-    return this.store.getPaymentIntent(payload.intent_id);
+    return result.intent;
   }
 
   async confirmDemoIntent(input: { intentId: string; providerTxnId?: string }) {
@@ -217,48 +170,29 @@ class PersistentPaymentService {
   }
 }
 
-class PersistentUserService {
+export class PersistentUserService {
   constructor(
-    private readonly store: PostgresStore,
     private readonly apiKeys: ApiKeyStore,
-    private readonly supabaseUsers?: SupabaseUserStore,
-  ) {}
+    private readonly supabaseUsers: SupabaseUserStore,
+  ) { }
 
-  async register(input: { email: string; password: string; name?: string }) {
-    const existing = await this.store.findUserByEmail(input.email);
-    if (existing) {
-      return { error: "email already registered" as const };
+  async me(userId: string) {
+    const user = await this.supabaseUsers.findById(userId);
+    if (!user) {
+      return undefined;
     }
-
-    const userId = randomUUID();
-    await this.store.createUser({
-      userId,
-      email: input.email,
-      name: input.name,
-      passwordHash: hashPassword(input.password),
-    });
-    const apiKey = createApiKey();
-    await this.apiKeys.create({ key: apiKey, userId, scopes: ["chat", "image", "usage", "billing"] });
-    return {
-      userId,
-      email: input.email,
-      name: input.name,
-      apiKey,
-    };
-  }
-
-  async login(input: { email: string; password: string }) {
-    const user = await this.store.findUserByEmail(input.email);
-    if (!user || !verifyPassword(input.password, user.passwordHash)) {
-      return { error: "invalid credentials" as const };
-    }
-    const apiKey = createApiKey();
-    await this.apiKeys.create({ key: apiKey, userId: user.userId, scopes: ["chat", "image", "usage", "billing"] });
+    const keys = await this.apiKeys.list(userId);
     return {
       userId: user.userId,
       email: user.email,
       name: user.name,
-      apiKey,
+      createdAt: user.createdAt,
+      apiKeys: keys.map((key) => ({
+        key_id: key.keyPrefix,
+        revoked: key.revoked,
+        scopes: key.scopes,
+        createdAt: key.createdAt,
+      })),
     };
   }
 
@@ -274,25 +208,7 @@ class PersistentUserService {
     return this.apiKeys.resolve(key);
   }
 
-  async me(userId: string) {
-    const user = this.supabaseUsers ? await this.supabaseUsers.findById(userId) : await this.store.findUserById(userId);
-    if (!user) {
-      return undefined;
-    }
-    const keys = await this.apiKeys.list(userId);
-    return {
-      userId: user.userId,
-      email: user.email,
-      name: user.name,
-      createdAt: user.createdAt,
-      apiKeys: keys.map((key) => ({
-        key_id: key.key.slice(-8),
-        revoked: key.revoked,
-        scopes: key.scopes,
-        createdAt: key.createdAt,
-      })),
-    };
-  }
+
 
   async createApiKey(userId: string, scopes: string[]) {
     const key = createApiKey();
@@ -305,151 +221,7 @@ class PersistentUserService {
   }
 }
 
-class RuntimeAuthService {
-  constructor(
-    private readonly store: PostgresStore,
-    private readonly users: PersistentUserService,
-    private readonly settings: UserSettingsService,
-    private readonly env: AppEnv,
-  ) {}
 
-  async startGoogleAuth(): Promise<{ authorizationUrl: string; state: string }> {
-    const state = randomUUID().replace(/-/g, "").slice(0, 24);
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    await this.store.createOAuthState(state, expiresAt);
-
-    const params = new URLSearchParams({
-      client_id: this.env.google.clientId,
-      redirect_uri: this.env.google.redirectUri,
-      response_type: "code",
-      scope: "openid email profile",
-      state,
-    });
-
-    return {
-      authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
-      state,
-    };
-  }
-
-  async completeGoogleAuth(input: {
-    state?: string;
-    code?: string;
-  }): Promise<{ error?: string; sessionToken?: string; userId?: string; email?: string; name?: string }> {
-    if (!input.state || !input.code) {
-      return { error: "state and code are required" };
-    }
-    const stateOk = await this.store.consumeOAuthState(input.state);
-    if (!stateOk) {
-      return { error: "invalid oauth state" };
-    }
-
-    const googleIdentity = {
-      email: `google_${input.code.slice(0, 10)}@example.invalid`,
-      name: "Google User",
-      subject: `google_sub_${input.code.slice(0, 12)}`,
-    };
-
-    const existing = await this.store.findUserByEmail(googleIdentity.email);
-    const userId = existing?.userId ?? randomUUID();
-    if (!existing) {
-      await this.store.createUser({
-        userId,
-        email: googleIdentity.email,
-        name: googleIdentity.name,
-        passwordHash: hashPassword(randomUUID()),
-      });
-      await this.settings.updateForUser(userId, {});
-    }
-
-    const sessionToken = `sess_${randomUUID().replace(/-/g, "")}`;
-    const expiresAt = new Date(Date.now() + this.env.auth.sessionTtlMinutes * 60 * 1000);
-    await this.store.createAuthSession({
-      token: sessionToken,
-      userId,
-      provider: "google",
-      providerSubject: googleIdentity.subject,
-      providerEmail: googleIdentity.email,
-      expiresAt,
-    });
-
-    return {
-      sessionToken,
-      userId,
-      email: googleIdentity.email,
-      name: googleIdentity.name,
-    };
-  }
-
-  async getSessionPrincipal(sessionToken: string): Promise<{ userId: string } | null> {
-    const session = await this.store.findAuthSessionByToken(sessionToken);
-    if (!session || session.revoked) {
-      return null;
-    }
-    if (new Date(session.expiresAt).getTime() <= Date.now()) {
-      return null;
-    }
-    return { userId: session.userId };
-  }
-
-  revokeSession(sessionToken: string): Promise<boolean> {
-    return this.store.revokeAuthSession(sessionToken);
-  }
-}
-
-class TwoFactorService {
-  constructor(private readonly store: PostgresStore) {}
-
-  async initEnrollment(userId: string): Promise<{ challengeId: string; secret: string; method: string }> {
-    const existing = await this.store.getUserTwoFactor(userId);
-    const secret = existing?.secret ?? randomUUID().replace(/-/g, "").slice(0, 16);
-    await this.store.upsertUserTwoFactor({ userId, secret, enabled: Boolean(existing?.enabled) });
-
-    const challengeId = `chlg_${randomUUID().slice(0, 12)}`;
-    await this.store.createTwoFactorChallenge({
-      challengeId,
-      userId,
-      purpose: "enroll",
-      challengeCode: "000000",
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    });
-
-    return { challengeId, secret, method: "totp" };
-  }
-
-  async verifyEnrollment(userId: string, challengeId: string, code: string): Promise<boolean> {
-    const ok = await this.store.verifyTwoFactorChallenge(challengeId, code);
-    if (!ok) {
-      return false;
-    }
-    const current = await this.store.getUserTwoFactor(userId);
-    if (!current) {
-      return false;
-    }
-    await this.store.upsertUserTwoFactor({ userId, secret: current.secret, enabled: true });
-    return true;
-  }
-
-  async initChallenge(userId: string, purpose: string): Promise<{ challengeId: string; expiresInSeconds: number }> {
-    const challengeId = `chlg_${randomUUID().slice(0, 12)}`;
-    await this.store.createTwoFactorChallenge({
-      challengeId,
-      userId,
-      purpose,
-      challengeCode: "000000",
-      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-    });
-    return { challengeId, expiresInSeconds: 600 };
-  }
-
-  verifyChallenge(challengeId: string, code: string): Promise<boolean> {
-    return this.store.verifyTwoFactorChallenge(challengeId, code);
-  }
-
-  hasRecentVerification(userId: string, challengeId: string, withinMinutes: number): Promise<boolean> {
-    return this.store.hasVerifiedTwoFactorChallenge(userId, challengeId, withinMinutes);
-  }
-}
 
 class RuntimeAiService {
   constructor(
@@ -458,7 +230,7 @@ class RuntimeAiService {
     private readonly usage: PersistentUsageService,
     private readonly providerRegistry: ProviderRegistry,
     private readonly langfuse: LangfuseClient,
-  ) {}
+  ) { }
 
   async chatCompletions(userId: string, modelId: string | undefined, messages: ChatMessage[]) {
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
@@ -596,9 +368,7 @@ export type RuntimeServices = {
   users: PersistentUserService;
   authz: AuthorizationService;
   userSettings: UserSettingsService;
-  auth: RuntimeAuthService;
-  supabaseAuth?: SupabaseAuthService;
-  twoFactor: TwoFactorService;
+  supabaseAuth: SupabaseAuthService;
   ai: RuntimeAiService;
   rateLimiter: RedisRateLimiter;
   adapters: {
@@ -609,35 +379,18 @@ export type RuntimeServices = {
 
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
-  const store = new PostgresStore(env.postgresUrl);
-  const supabase =
-    env.supabase.flags.authEnabled ||
-    env.supabase.flags.userRepoEnabled ||
-    env.supabase.flags.apiKeysEnabled ||
-    env.supabase.flags.billingStoreEnabled
-    ? createSupabaseAdminClient(env)
-    : undefined;
+  const supabase = createSupabaseAdminClient(env);
   const models = new ModelService();
-  const billingStore: BillingStore = env.supabase.flags.billingStoreEnabled && supabase
-    ? new SupabaseBillingStore(supabase)
-    : new PostgresBillingStore(store);
+  const billingStore: BillingStore = new SupabaseBillingStore(supabase);
   const credits = new PersistentCreditService(billingStore);
-  const usage = new PersistentUsageService(store);
+  const usage = new PersistentUsageService(supabase);
   const payments = new PersistentPaymentService(billingStore, credits);
-  const apiKeyStore: ApiKeyStore = env.supabase.flags.apiKeysEnabled && supabase
-    ? new SupabaseApiKeyStore(supabase)
-    : new PostgresApiKeyStore(store);
-  const supabaseUserStore = env.supabase.flags.userRepoEnabled && supabase
-    ? new SupabaseUserStore(supabase)
-    : undefined;
-  const users = new PersistentUserService(store, apiKeyStore, supabaseUserStore);
-  const authz = new AuthorizationService(store);
-  const userSettings = new UserSettingsService(supabaseUserStore ?? store);
-  const auth = new RuntimeAuthService(store, users, userSettings, env);
-  const supabaseAuth = env.supabase.flags.authEnabled && supabase
-    ? new SupabaseAuthService(supabase)
-    : undefined;
-  const twoFactor = new TwoFactorService(store);
+  const apiKeyStore: ApiKeyStore = new SupabaseApiKeyStore(supabase);
+  const supabaseUserStore = new SupabaseUserStore(supabase);
+  const users = new PersistentUserService(apiKeyStore, supabaseUserStore);
+  const authz = new AuthorizationService(supabase);
+  const userSettings = new UserSettingsService(supabaseUserStore);
+  const supabaseAuth = new SupabaseAuthService(supabase);
   const langfuse = new LangfuseClient({
     enabled: env.langfuse.enabled,
     baseUrl: env.langfuse.baseUrl,
@@ -691,9 +444,7 @@ export function createRuntimeServices(): RuntimeServices {
     users,
     authz,
     userSettings,
-    auth,
     supabaseAuth,
-    twoFactor,
     ai,
     rateLimiter: new RedisRateLimiter(env.redisUrl, env.rateLimitPerMinute),
     adapters: {

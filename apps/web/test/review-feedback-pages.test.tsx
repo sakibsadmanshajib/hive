@@ -3,12 +3,17 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeAuthSession } from "../src/features/auth/auth-session";
 
 const pushMock = vi.fn();
 const routerMock = { push: pushMock };
 
 vi.mock("next/navigation", () => ({
   useRouter: () => routerMock,
+}));
+
+vi.mock("../src/lib/supabase-client", () => ({
+  useSupabaseAuthSessionSync: () => undefined,
 }));
 
 vi.mock("../src/features/settings/user-settings-panel", () => ({
@@ -26,15 +31,9 @@ describe("review feedback pages", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     pushMock.mockReset();
-    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ apiKey: "sk_test", email: "demo@example.com" }));
+    writeAuthSession({ accessToken: "sk_test", email: "demo@example.com" });
   });
 
-  it("masks developer api key input", async () => {
-    render(<DeveloperPage />);
-
-    const keyInput = await screen.findByLabelText(/primary api key/i);
-    expect(keyInput).toHaveAttribute("type", "password");
-  });
 
   it("shows a status message when developer usage loading throws", async () => {
     const fetchMock = vi

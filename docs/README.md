@@ -5,6 +5,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 ## Start Here
 
 - Architecture: `docs/architecture/system-architecture.md`
+- Python MVP migration map: `docs/architecture/2026-02-28-python-mvp-migration-map.md`
 - Product and design decisions: `docs/design/README.md`
 - Changelog: `../CHANGELOG.md`
 - Plans overview: `docs/plans/README.md`
@@ -16,10 +17,16 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Current web flow audit: `docs/design/active/2026-02-24-web-flow-critical-review.md`
 - Current chat-first guarded-home design: `docs/design/active/2026-02-24-chat-first-guarded-home.md`
 - Current chat-first guarded-home implementation plan: `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
+- Current repo audit design: `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
+- Current repo audit decision process: `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
+- Current repo audit execution plan: `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
+- Current PR #36 unresolved-comments implementation plan: `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
+- Repo audit outputs: `docs/audits/2026-02-28-redundancy-inventory.md`, `docs/audits/2026-02-28-final-audit-report.md`
 
 ## Planning Docs Status
 
 - `docs/plans/active/` contains current plans that should guide implementation.
+- New session plans and tracked implementation plans belong in `docs/plans/`.
 - `docs/plans/archive/pre-supabase/` contains pre-Supabase plans kept only for historical reference and should be treated as obsolete for current direction.
 - Active design artifacts may live under `docs/design/active/` when they capture UX or product decisions that are not implementation plans.
 

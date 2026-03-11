@@ -4,8 +4,8 @@ import { UserSettingsService } from "../../src/runtime/user-settings";
 describe("UserSettingsService", () => {
   it("denies feature when setting is disabled", () => {
     const settings = new UserSettingsService({
-      getUserSettings: async () => ({}),
-      upsertUserSetting: async () => undefined,
+      getSettings: async () => ({}),
+      upsertSettings: async () => undefined,
     } as never);
 
     const canUse = settings.canUse("generateImage", { generateImage: false });
@@ -15,8 +15,8 @@ describe("UserSettingsService", () => {
 
   it("returns defaults for unset keys", async () => {
     const settings = new UserSettingsService({
-      getUserSettings: async () => ({}),
-      upsertUserSetting: async () => undefined,
+      getSettings: async () => ({}),
+      upsertSettings: async () => undefined,
     } as never);
 
     const resolved = await settings.getForUser("user_1");

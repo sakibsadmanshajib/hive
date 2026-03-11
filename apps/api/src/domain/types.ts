@@ -22,10 +22,27 @@ export type CreditBalance = {
   promoCredits: number;
 };
 
+export type PersistentPaymentIntent = {
+  intentId: string;
+  userId: string;
+  provider: "bkash" | "sslcommerz";
+  bdtAmount: number;
+  status: "initiated" | "credited" | "failed";
+  mintedCredits: number;
+};
+
+export type PersistentApiKey = {
+  keyPrefix: string;
+  userId: string;
+  scopes: string[];
+  revoked: boolean;
+  createdAt: string;
+};
+
 export type PaymentIntent = {
   intentId: string;
   userId: string;
   provider: "bkash" | "sslcommerz";
   bdtAmount: number;
-  status: "initiated" | "succeeded" | "failed";
+  status: "initiated" | "credited" | "failed";
 };

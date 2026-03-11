@@ -2,6 +2,12 @@
 
 This folder is organized by plan status to reduce ambiguity.
 
+## Canonical Placement
+
+- Create new tracked plans in `docs/plans/YYYY-MM-DD-<task-name>.md`.
+- Continue an existing task in its current plan file instead of creating an untracked side artifact.
+- Move only long-lived current-track plans into `docs/plans/active/` when they become the canonical implementation guide for that stream.
+
 ## Active
 
 Use these documents for current planning and execution:
@@ -18,9 +24,7 @@ Use these documents for current planning and execution:
 
 ### In-Progress Plan Drafts (`docs/plans/`)
 
-- `docs/plans/2026-02-23-chat-first-frontend-information-architecture-implementation.md`
 - `docs/plans/2026-02-24-chat-first-guarded-home-design.md`
-- `docs/plans/2026-02-24-chat-first-guarded-home-implementation.md`
 - `docs/plans/2026-02-24-ci-quality-and-pr-cleanup-design.md`
 - `docs/plans/2026-02-24-ci-quality-and-pr-cleanup-implementation.md`
 - `docs/plans/2026-02-24-free-tier-zero-cost-access-design.md`
@@ -30,6 +34,8 @@ Use these documents for current planning and execution:
 - `docs/plans/2026-02-24-provider-timeout-retry-controls-implementation.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-implementation.md`
+- `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
+- `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
 
 ## Archive (Obsolete)
 

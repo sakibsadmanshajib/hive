@@ -56,6 +56,10 @@ jobs:
         run: pnpm --filter @hive/web exec playwright install --with-deps chromium
 
       - name: Start docker stack
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8080
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: test-supabase-anon-key
         run: docker compose up --build -d
 
       - name: Wait for API and web readiness
@@ -74,6 +78,7 @@ jobs:
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
           E2E_API_BASE_URL: http://127.0.0.1:8080
+          E2E_ALLOW_DEV_TOKEN_FALLBACK: "true"
         run: pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 
       - name: Upload Playwright artifacts

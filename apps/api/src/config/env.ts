@@ -129,7 +129,7 @@ export function getEnv(): AppEnv {
   const env: AppEnv = {
     nodeEnv: process.env.NODE_ENV ?? "development",
     port: parseNumber("PORT", 8080),
-    postgresUrl: required("POSTGRES_URL", "postgres://postgres:postgres@127.0.0.1:5432/bd_ai_gateway"),
+    postgresUrl: required("POSTGRES_URL", "postgres://postgres:postgres@127.0.0.1:5432/postgres"),
     redisUrl: required("REDIS_URL", "redis://127.0.0.1:6379"),
     rateLimitPerMinute: parseNumber("RATE_LIMIT_PER_MINUTE", 60),
     adminStatusToken: process.env.ADMIN_STATUS_TOKEN,

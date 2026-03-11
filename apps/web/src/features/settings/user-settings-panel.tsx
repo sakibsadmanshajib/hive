@@ -4,8 +4,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-
-const defaultApiBase = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8080";
+import { apiHeaders, getApiBase } from "../../lib/api";
 
 type SettingKey = "apiEnabled" | "generateImage" | "chatEnabled" | "billingEnabled" | "twoFactorEnabled";
 
@@ -28,7 +27,7 @@ const settingMetadata: Array<{ key: SettingKey; label: string; description: stri
 ];
 
 type UserSettingsPanelProps = {
-  apiKey: string;
+  accessToken: string;
   apiBase?: string;
 };
 
@@ -51,7 +50,7 @@ function endpointMessage(status: number, fallback: string): string {
   return fallback;
 }
 
-export function UserSettingsPanel({ apiKey, apiBase = defaultApiBase }: UserSettingsPanelProps) {
+export function UserSettingsPanel({ accessToken, apiBase }: UserSettingsPanelProps) {
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
   const [status, setStatus] = useState("Provide an API key to load feature settings.");
   const [loading, setLoading] = useState(false);
@@ -59,7 +58,7 @@ export function UserSettingsPanel({ apiKey, apiBase = defaultApiBase }: UserSett
 
   useEffect(() => {
     async function loadSettings() {
-      if (!apiKey) {
+      if (!accessToken) {
         setStatus("Provide an API key to load feature settings.");
         return;
       }
@@ -67,9 +66,10 @@ export function UserSettingsPanel({ apiKey, apiBase = defaultApiBase }: UserSett
       setLoading(true);
       setStatus("Loading settings...");
       try {
-        const response = await fetch(`${apiBase}/v1/users/settings`, {
+        const resolvedApiBase = apiBase ?? getApiBase();
+        const response = await fetch(`${resolvedApiBase}/v1/users/settings`, {
           method: "GET",
-          headers: { "x-api-key": apiKey },
+          headers: apiHeaders(accessToken),
         });
         const json = await response.json().catch(() => ({}));
 
@@ -89,10 +89,10 @@ export function UserSettingsPanel({ apiKey, apiBase = defaultApiBase }: UserSett
     }
 
     void loadSettings();
-  }, [apiBase, apiKey]);
+  }, [apiBase, accessToken]);
 
   async function toggleSetting(key: SettingKey) {
-    if (!apiKey || loading || updatingKey) {
+    if (!accessToken || loading || updatingKey) {
       return;
     }
 
@@ -104,12 +104,10 @@ export function UserSettingsPanel({ apiKey, apiBase = defaultApiBase }: UserSett
     setStatus(`Updating ${key}...`);
 
     try {
-      const response = await fetch(`${apiBase}/v1/users/settings`, {
+      const resolvedApiBase = apiBase ?? getApiBase();
+      const response = await fetch(`${resolvedApiBase}/v1/users/settings`, {
         method: "PATCH",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": apiKey,
-        },
+        headers: apiHeaders(accessToken),
         body: JSON.stringify({ [key]: nextValue }),
       });
       const json = await response.json().catch(() => ({}));

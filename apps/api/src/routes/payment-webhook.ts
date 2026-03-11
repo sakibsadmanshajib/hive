@@ -8,6 +8,17 @@ type PaymentWebhookBody = {
   verified: boolean;
 };
 
+function mapPaymentClaimError(error: unknown): { status: number; payload: { error: string } } {
+  const message = error instanceof Error ? error.message : "payment webhook failed";
+  if (message.includes("intent not found")) {
+    return { status: 404, payload: { error: "intent not found" } };
+  }
+  if (message.includes("duplicate") || message.includes("provider mismatch")) {
+    return { status: 409, payload: { error: message } };
+  }
+  return { status: 500, payload: { error: "payment webhook failed" } };
+}
+
 export function registerPaymentWebhookRoute(app: FastifyInstance, services: RuntimeServices): void {
   app.post<{ Body: PaymentWebhookBody }>("/v1/payments/webhook", async (request, reply) => {
     const fallbackBody = JSON.stringify(request.body ?? {});
@@ -41,12 +52,18 @@ export function registerPaymentWebhookRoute(app: FastifyInstance, services: Runt
       }
     }
 
-    const intent = await services.payments.applyWebhook({
-      provider,
-      intent_id: request.body.intent_id,
-      provider_txn_id: request.body.provider_txn_id,
-      verified: true,
-    });
+    let intent;
+    try {
+      intent = await services.payments.applyWebhook({
+        provider,
+        intent_id: request.body.intent_id,
+        provider_txn_id: request.body.provider_txn_id,
+        verified: true,
+      });
+    } catch (error) {
+      const mapped = mapPaymentClaimError(error);
+      return reply.code(mapped.status).send(mapped.payload);
+    }
     if (!intent) {
       return reply.code(404).send({ error: "intent not found" });
     }

@@ -1,8 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
 
 # Node/TypeScript monorepo
 node_modules/
@@ -19,3 +14,7 @@ test-results/
 
 # AI Agent Artifacts
 artifacts/
+
+# Superpowers skills (local files – each dev runs their own install)
+.agents/skills/*
+!.agents/skills/gh-api/

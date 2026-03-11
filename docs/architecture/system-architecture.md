@@ -2,97 +2,138 @@
 
 ## Purpose
 
-BD AI Gateway provides an API-first aggregation layer over multiple LLM providers with Bangladesh-focused billing and payment workflows.
+Hive is a Bangladesh-focused AI API gateway that provides an OpenAI-compatible aggregation layer over multiple LLM providers with local payment workflows.
 
 ## High-Level Components
 
-1. API Service (`apps/api`)
-   - Fastify HTTP server
-   - OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/responses`, `/v1/images/generations`)
-   - Billing and payment endpoints
-   - Provider status endpoints
+```mermaid
+graph TD
+    Client[Client / Web App]
+    API[Fastify API :8080]
+    Supabase[Supabase :54321]
+    Redis[Redis :6379]
+    Ollama[Ollama :11434]
+    Groq[Groq Cloud API]
+    Langfuse[Langfuse :3030]
 
-2. Web App (`apps/web`)
-   - Next.js App Router UI
-   - Chat and billing surfaces for quick operator/user testing
+    Client --> API
+    API --> Supabase
+    API --> Redis
+    API --> Ollama
+    API --> Groq
+    API --> Langfuse
+```
 
-3. Data and Infra
-   - PostgreSQL: source of truth for balances, ledger, usage, payment intents/events
-   - Redis: rate limiting and short-window traffic control
-   - Ollama: local model inference runtime
+### 1. API Service (`apps/api`)
+- Fastify HTTP server
+- OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/responses`, `/v1/images/generations`)
+- Billing and payment endpoints
+- Provider status endpoints (public + admin-protected)
 
-4. External Provider Integrations
-   - Groq API for hosted inference
-   - bKash/SSLCOMMERZ webhooks and optional provider-side verification
+### 2. Web App (`apps/web`)
+- Next.js App Router UI
+- Chat-first workspace with developer panel and settings surfaces
+- Browser clients require explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; the web app no longer falls back to localhost or placeholder credentials at runtime
+- The browser maintains a small mirrored auth-session store for app routing and API headers, but Supabase remains the source of truth. The mirror is synchronized from `getSession()` and `onAuthStateChange()` without clearing seeded local sessions until a real Supabase session has been observed.
+- Protected routes must wait for client auth-session hydration before redirecting to `/auth`; prerendered `null` auth state is not sufficient evidence that the browser is unauthenticated.
+
+### 3. Supabase (Auth + Persistence)
+- **Auth**: User registration, login, OAuth, MFA — all handled by Supabase Auth
+- **User Profiles**: `user_profiles` table via `SupabaseUserStore`
+- **API Keys**: Hashed key metadata in `api_keys` table via `SupabaseApiKeyStore`
+- **API Key Metadata Shape**: Persisted records expose only a non-secret `key_prefix` plus scopes/revocation metadata; plaintext API keys are never returned after creation
+- **Billing**: Credit accounts, ledger, payment intents/events via `SupabaseBillingStore`
+- **RBAC**: `user_roles` + `role_permissions` tables queried by `AuthorizationService`
+- **Settings**: `user_settings` table for feature gates
+
+### 4. Redis
+- Rate limiting and short-window traffic control
+
+### 5. Ollama
+- Local model inference runtime
+
+### 6. Langfuse (Self-hosted)
+- LLM observability, tracing, and analytics
+- Runs as a Docker container with its own dedicated Postgres (`langfuse-db`)
+
+### 7. External Integrations
+- Groq API for hosted inference
+- bKash/SSLCOMMERZ payment webhooks
 
 ## Request Lifecycle (Chat)
 
-1. Auth and scope check (`x-api-key`)
+1. Bearer token validated against Supabase Auth (`SupabaseAuthService`)
 2. Redis rate-limit check
 3. Model selection (`fast-chat`, `smart-reasoning`, etc.)
-4. Credit debit attempt in Postgres
-5. Provider registry execution with fallback chain
+4. Credit debit attempt via `SupabaseBillingStore`
+5. Provider registry execution with fallback chain and circuit breaker
 6. Usage event persisted
-7. Response returned with routing headers:
-   - `x-model-routed`
-   - `x-provider-used`
-   - `x-provider-model`
-   - `x-actual-credits`
+7. Trace sent to Langfuse (if enabled)
+8. Response returned with routing headers
 
 ## Billing and Ledger Architecture
 
 - Credits are tracked as application entitlements (not wallet cash balance)
-- Conversion and refund policy:
-  - top-up: `1 BDT = 100 AI Credits`
-  - refund: `100 AI Credits = 0.9 BDT`
-  - refundable only if unused purchased credits and within configured window
+- Conversion: `1 BDT = 100 AI Credits` (top-up), `100 AI Credits = 0.9 BDT` (refund)
+- Refundable only if unused purchased credits and within configured window
 - Payment events are idempotent via provider transaction event keys
-- Usage debits are tied to request IDs and endpoint/model metadata
+- All billing data stored in Supabase: `credit_accounts`, `credit_ledger`, `payment_intents`, `payment_events`
 
 ## Provider Routing Architecture
 
-Current provider mapping:
+| Model | Primary | Fallback 1 | Fallback 2 |
+|-------|---------|------------|------------|
+| `fast-chat` | Ollama | Groq | Mock |
+| `smart-reasoning` | Groq | Ollama | Mock |
+| `image-basic` | Mock | — | — |
 
-- `fast-chat` -> `ollama` -> `groq` -> `mock`
-- `smart-reasoning` -> `groq` -> `ollama` -> `mock`
-- `image-basic` -> `mock` (placeholder implementation)
-
-Routing orchestration lives in:
-- `apps/api/src/providers/registry.ts`
-- `apps/api/src/runtime/services.ts`
-
-## Provider Circuit Breaker
-
-The Provider Registry implements a circuit breaker pattern to protect against cascading failures and reduce latency when a provider is repeatedly failing.
-
-- **Thresholds**: Configurable via `PROVIDER_CB_THRESHOLD` (failure count) and `PROVIDER_CB_RESET_MS` (timeout).
-- **States**: 
-  - `CLOSED`: Normal operation, calls the provider.
-  - `OPEN`: Provider is skipped for all requests until the reset timeout expires.
-  - `HALF_OPEN`: Allows a single test request to check if the provider has recovered.
-- **Observability**: Circuit state is exposed in `/v1/providers/status` (as `circuit-open` state) and in detail via `/v1/providers/status/internal`.
-
-## Provider Status Endpoints
-
-- Public status endpoint: `GET /v1/providers/status`
-  - sanitized availability only
-- Internal status endpoint: `GET /v1/providers/status/internal`
-  - includes detailed provider diagnostics
-  - protected with `x-admin-token`
+Circuit breaker protects against cascading provider failures:
+- **CLOSED** → normal operation
+- **OPEN** → provider skipped until reset timeout
+- **HALF_OPEN** → single test request to check recovery
 
 ## Security Boundaries
 
-- Public endpoint never returns internal provider error details
-- Internal provider diagnostics require `ADMIN_STATUS_TOKEN`
-- Production should avoid default secrets (`BKASH_WEBHOOK_SECRET`, `SSLCOMMERZ_WEBHOOK_SECRET`)
-- Never commit real API keys; rotate immediately on accidental exposure
+- Public provider status never returns internal error details
+- Internal diagnostics require `ADMIN_STATUS_TOKEN` header
+- All Supabase tables use Row Level Security (RLS)
+- API keys are stored as SHA-256 hashes; raw keys are never persisted
+- Bearer tokens are validated server-side via Supabase Auth
+- Browser runtime configuration fails closed when required public env vars are missing
 
 ## Operational Dependencies
 
-The API requires reachable:
-- Postgres (`POSTGRES_URL`)
-- Redis (`REDIS_URL`)
+The API requires:
+- Supabase (Auth + Postgres) — for all persistence and authentication
+- Redis — for rate limiting
 
-Provider health and behavior depends on:
+Provider health depends on:
 - Ollama availability and pulled model
 - Groq API key validity and network reachability
+
+## Docker Topology
+
+```
+┌─────────────────────────────────────────────────────┐
+│  docker compose                                      │
+│  ┌──────┐ ┌──────┐ ┌─────┐ ┌─────┐                 │
+│  │ api  │ │ web  │ │redis│ │oll- │                  │
+│  │ :8080│ │ :3000│ │:6379│ │ama  │                  │
+│  └──┬───┘ └──────┘ └─────┘ │:1143│                  │
+│     │                       │ 4   │                  │
+│  ┌──┴────────┐ ┌──────────┐└─────┘                  │
+│  │ langfuse  │ │langfuse- │                          │
+│  │ :3030     │ │db :5434  │                          │
+│  └───────────┘ └──────────┘                          │
+└─────────────────────────────────────────────────────┘
+          │
+          ▼ host.docker.internal
+┌─────────────────┐
+│ Supabase CLI     │
+│ :54321 (API)     │
+│ :54322 (Postgres)│
+│ :54323 (Studio)  │
+└─────────────────┘
+```
+
+Supabase is managed by the Supabase CLI on the host and the API container reaches it via `host.docker.internal`.

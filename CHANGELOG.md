@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Repository Audit Artifacts:** Added repo-audit design, decision-process, and execution-plan documents to track cleanup work and implementation parity.
 - **Provider Circuit Breaker:** Implemented a circuit breaker pattern for AI providers (Ollama, Groq) to handle repeated failures gracefully.
     - Configurable thresholds (`PROVIDER_CB_THRESHOLD`) and reset timeouts (`PROVIDER_CB_RESET_MS`).
     - Exposed circuit state in `/v1/providers/status` (public) and detailed diagnostics in `/v1/providers/status/internal` (admin-only).
@@ -22,12 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 - **OpenRouter & CostCalculator:** Removed inadvertently added/restored implementations to maintain project scope and avoid token-based billing complexity.
+- **Legacy Python MVP:** Removed deprecated root `app/` and `tests/` Python implementation paths after documenting TypeScript migration mapping.
+- **Duplicate OpenAPI Contract:** Removed `openapi/openapi.yaml`; `packages/openapi/openapi.yaml` is now the sole in-repo OpenAPI source.
 
 ### Changed
 - **Web Architecture:** Moved to a "Guarded Chat Home" structure.
     - `/` is now the authenticated chat interface.
     - Unauthenticated users are strictly redirected to `/auth`.
 - **Documentation:** Major restructuring of `AGENTS.md` to include the "Superpowers" workflow and stricter operational mandates.
+- **Browser Runtime Configuration:** Web runtime now requires explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY` instead of implicit localhost or placeholder fallbacks.
+- **Web Smoke Auth Fixtures:** Playwright smoke auth now prefers real Supabase signup using `E2E_SUPABASE_ANON_KEY` and only uses synthetic token fallback when `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` is explicitly enabled.
+- **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
+
+### Fixed
+- **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
+- **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
+- **Web Auth Session Sync:** Fixed stale browser auth-session behavior by synchronizing the mirrored local auth store with Supabase session refresh events, while preserving seeded smoke/dev sessions until a real Supabase session has been observed.
+- **Protected Route Hydration:** Fixed `/`, `/developer`, and `/settings` auth guards so they wait for client auth-session hydration before redirecting to `/auth`, preventing false redirects during production startup.
 
 ## [0.1.0] - 2026-02-24
 
@@ -46,4 +58,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Infrastructure:** Docker Compose stack including Postgres, Redis, and Ollama.
 
 ### Deprecated
-- **Python MVP:** The legacy Python implementation in `app/` and `tests/` is retained as a reference but is no longer the active development path.
+- **Python MVP:** Legacy Python implementation was deprecated at 0.1.0 and has since been removed in Unreleased cleanup.

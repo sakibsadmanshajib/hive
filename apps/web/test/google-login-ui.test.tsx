@@ -10,8 +10,7 @@ describe("google login ui", () => {
   it("renders google login button on auth page", () => {
     render(<AuthPage />);
 
-    const loginLink = screen.getByRole("link", { name: /continue with google/i });
-    expect(loginLink).toBeInTheDocument();
-    expect(loginLink).toHaveAttribute("href", "http://127.0.0.1:8080/v1/auth/google/start");
+    const loginBtn = screen.getByRole("button", { name: /continue with google/i });
+    expect(loginBtn).toBeInTheDocument();
   });
 });

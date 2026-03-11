@@ -13,6 +13,50 @@ This file is the canonical operating policy for coding agents in this repository
 - If any other agent-instruction file conflicts with this file, follow `AGENTS.md`.
 - Keep shared policy updates centralized here so all agents follow the same rules.
 
+## Maintainer Override
+
+- Explicit maintainer instructions in the current session override `AGENTS.md` defaults globally.
+- If the maintainer explicitly asks to persist an override or workflow preference, update `AGENTS.md` so the preference applies in future sessions as well.
+- If execution or verification uncovers a durable repo-specific lesson that is likely to matter again, update `AGENTS.md` before completion so the lesson persists for future sessions.
+- This override rule does not permit committing secrets, tokens, or credentials, leaking protected internal data, or otherwise bypassing hard safety constraints around sensitive information.
+
+## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
+
+**Before doing ANY work**, verify that Superpowers skills are installed locally:
+
+```bash
+ls .agents/skills/using-superpowers/SKILL.md
+```
+
+- **If the file exists**: proceed normally. You MUST load skills directly from `.agents/skills/` when needed.
+- **If the file does NOT exist or the path is broken**: **STOP ALL WORK IMMEDIATELY.** Do not read code, do not plan, do not edit files.
+
+When superpowers is missing, reply with **exactly** this message and nothing else:
+
+> ⛔ **Superpowers skills not found.**
+>
+> This repository requires [Obra Superpowers](https://github.com/obra/superpowers) to be installed before any agent work can proceed.
+>
+> **Setup (one-time):**
+> ```bash
+> git clone https://github.com/obra/superpowers.git ~/.agents/superpowers
+> mkdir -p .agents/skills
+> cp -r ~/.agents/superpowers/skills/* .agents/skills/
+> ```
+>
+> After setup, re-run your request.
+
+Unless the maintainer explicitly directs otherwise, do not attempt to self-install, skip, or work around this gate.
+
+## Agent Skills Reference
+
+Custom skills are located in the following paths. Read the `SKILL.md` in each skill folder for full instructions before using.
+
+| Skill | Path | Purpose |
+|-------|------|---------|
+| Superpowers | `.agents/skills/using-superpowers/` (and others) | Obra Superpowers planning/execution framework |
+| GitHub API | `.agents/skills/gh-api/SKILL.md` | `gh api` patterns for PR reviews, comments, and issue management |
+
 ## Commands First (Run These Often)
 
 Install dependencies:
@@ -39,6 +83,18 @@ Web build:
 pnpm --filter @hive/web build
 ```
 
+If web changes touch browser auth/bootstrap, `NEXT_PUBLIC_*` env usage, or smoke flows, also verify the production bundle with the required public envs set:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
+pnpm --filter @hive/web build
+```
+
+Unit tests are not sufficient evidence for those changes; they can miss prerender-time and browser-bundle env failures.
+When auth/session behavior changes, also verify that protected routes do not redirect during initial client hydration before local auth state is loaded.
+
 Web smoke E2E (Playwright):
 
 ```bash
@@ -60,9 +116,9 @@ curl -s http://127.0.0.1:8080/v1/providers/status
 curl -s http://127.0.0.1:8080/v1/providers/status/internal -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
 ```
 
-## Superpowers Workflow Gate (Mandatory)
+## Superpowers Workflow Gate (Default)
 
-Use the Obra Superpowers framework for all development tasks: planning, implementation, debugging, verification, and completion.
+Use the Obra Superpowers framework for all development tasks by default unless the maintainer explicitly directs a different workflow.
 
 Before any code edits, perform a plan gate:
 
@@ -88,19 +144,19 @@ Plan for the task exactly as provided by the user. If task input is missing, ask
 ## Rollback plan
 ```
 
-### Persist (mandatory)
+### Persist (default)
 
-Write the plan to `artifacts/superpowers/plan.md` (Note: the `artifacts` folder is local-only and ignored by git). Create the folder if needed. Confirm by listing `artifacts/superpowers/`.
+Write the plan to `docs/plans/YYYY-MM-DD-<task-name>.md`. Reuse an existing tracked plan when continuing that same task; otherwise create a new dated plan file under `docs/plans/`.
 
 Preferred writer command when available:
 
 ```bash
-python .agent/skills/superpowers-workflow/scripts/write_artifact.py --path artifacts/superpowers/plan.md
+python .agent/skills/superpowers-workflow/scripts/write_artifact.py --path docs/plans/YYYY-MM-DD-<task-name>.md
 ```
 
 Pass the full markdown plan as stdin to the command.
 
-If the command is unavailable, write `artifacts/superpowers/plan.md` directly and explicitly state that the helper command was unavailable.
+If the command is unavailable, write the plan file in `docs/plans/` directly and explicitly state that the helper command was unavailable.
 
 ### Approval gate
 
@@ -193,9 +249,9 @@ For ops/status changes:
 - `/v1/providers/status` must not include internal `detail`.
 - `/v1/providers/status/internal` must return `401` without valid admin token.
 
-## Git Workflow and Worktrees (Mandatory)
+## Git Workflow and Worktrees (Default)
 
-- Worktrees are required because multiple AI agents/tools may operate concurrently.
+- Use worktrees by default because multiple AI agents/tools may operate concurrently.
 - Never run two independent tasks in the same working tree.
 - Keep commits atomic by concern (runtime, providers, docs, tests).
 - Open one PR per tracked task.
@@ -217,7 +273,7 @@ git -C ../.worktrees/hive-<task-slug> status
 pnpm --dir ../.worktrees/hive-<task-slug> install --frozen-lockfile
 ```
 
-Mandatory: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands.
+Default: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands.
 
 After merge:
 
@@ -281,6 +337,13 @@ E2E environment variables:
 
 - `E2E_BASE_URL` (default `http://127.0.0.1:3000`)
 - `E2E_API_BASE_URL` (used by API fixtures)
+
+Auth/session lessons that must persist:
+
+- Do not clear the custom browser auth session just because `supabase.auth.getSession()` returns `null` on startup; that can erase seeded smoke/dev sessions before Supabase has established any browser session.
+- Only let Supabase-driven sign-out clear the mirrored custom auth session after the browser runtime has observed a real Supabase session.
+- For protected web routes, wait until client auth-session hydration is ready before redirecting to `/auth`, or valid local sessions can be bounced to the login page during initial render.
+- When verifying auth/chat/billing smoke flows, prefer a rebuilt production app (`pnpm --filter @hive/web build` + `next start`) over assuming `next dev` behavior matches production hydration and routing.
 
 If Linux browser dependencies are missing locally:
 

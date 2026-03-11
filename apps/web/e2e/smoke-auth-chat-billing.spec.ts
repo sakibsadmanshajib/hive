@@ -1,18 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { cleanupSessionUser, createSession, seedAuthSession } from "./fixtures/auth";
-
-const createdSessionApiKeys: string[] = [];
-
-test.afterEach(async ({ request }) => {
-  while (createdSessionApiKeys.length > 0) {
-    const apiKey = createdSessionApiKeys.pop();
-    if (!apiKey) {
-      continue;
-    }
-    await cleanupSessionUser(request, apiKey);
-  }
-});
+import { createSession, seedAuthSession } from "./fixtures/auth";
 
 test("unauthenticated root redirects to auth", async ({ page }) => {
   await page.goto("/");
@@ -25,29 +13,30 @@ test("register happy path reaches chat workspace", async ({ page }) => {
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const email = `e2e_web_smoke_ui_${unique}@example.com`;
   const registerForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Create account" }) });
-  const corsHeaders = {
-    "access-control-allow-origin": "*",
-    "access-control-allow-methods": "POST, OPTIONS",
-    "access-control-allow-headers": "content-type",
-  };
 
-  await page.route("**/v1/users/register", async (route) => {
+  // Mock Supabase Auth signup endpoint at the browser network level.
+  // The auth page calls supabase.auth.signUp which posts to /auth/v1/signup.
+  await page.route("**/auth/v1/signup", async (route) => {
     const method = route.request().method();
     if (method === "OPTIONS") {
-      await route.fulfill({ status: 204, headers: corsHeaders, body: "" });
+      await route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*" }, body: "" });
       return;
     }
 
-    const payload = route.request().postDataJSON() as { email?: string; name?: string } | null;
+    const payload = route.request().postDataJSON() as { email?: string; options?: { data?: { name?: string } } } | null;
     await route.fulfill({
       status: 200,
       contentType: "application/json",
-      headers: corsHeaders,
+      headers: { "access-control-allow-origin": "*" },
       body: JSON.stringify({
-        api_key: "sk_e2e_register_mock",
+        access_token: "e2e_mock_access_token",
+        token_type: "bearer",
+        expires_in: 3600,
+        refresh_token: "e2e_mock_refresh_token",
         user: {
+          id: "e2e_mock_user_id",
           email: payload?.email ?? email,
-          name: payload?.name ?? "E2E UI User",
+          user_metadata: { name: payload?.options?.data?.name ?? "E2E UI User" },
         },
       }),
     });
@@ -66,9 +55,8 @@ test("register happy path reaches chat workspace", async ({ page }) => {
 
 test("chat success and failure messaging", async ({ page, request }) => {
   const session = await createSession(request);
-  createdSessionApiKeys.push(session.apiKey);
   await seedAuthSession(page, {
-    apiKey: session.apiKey,
+    accessToken: session.accessToken,
     email: session.email,
     name: session.name,
   });
@@ -116,9 +104,8 @@ test("chat success and failure messaging", async ({ page, request }) => {
 
 test("billing access from profile menu and top-up failure messaging", async ({ page, request }) => {
   const session = await createSession(request);
-  createdSessionApiKeys.push(session.apiKey);
   await seedAuthSession(page, {
-    apiKey: session.apiKey,
+    accessToken: session.accessToken,
     email: session.email,
     name: session.name,
   });

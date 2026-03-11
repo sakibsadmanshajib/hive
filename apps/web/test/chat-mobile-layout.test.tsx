@@ -17,7 +17,7 @@ describe("chat workspace layout", () => {
   beforeEach(() => {
     window.localStorage.setItem(
       "bdai.auth.session",
-      JSON.stringify({ apiKey: "sk_test", email: "demo@example.com" }),
+      JSON.stringify({ accessToken: "sk_test", email: "demo@example.com" }),
     );
   });
 

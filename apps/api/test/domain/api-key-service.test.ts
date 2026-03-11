@@ -33,9 +33,11 @@ class FakeApiKeysTable {
     return Promise.resolve({ error: null });
   }
 
-  select() {
-    this.mode = "select";
-    this.query = {};
+  select(columns?: string) {
+    if (this.mode !== "update") {
+      this.mode = "select";
+      this.query = {};
+    }
     return this;
   }
 

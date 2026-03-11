@@ -31,4 +31,26 @@ describe("payment webhook route", () => {
 
     expect(result.error).toBe("unsupported provider");
   });
+
+  it("returns 409 for duplicate webhook claims instead of throwing", async () => {
+    const app = new FakeApp();
+    registerPaymentWebhookRoute(app as never, {
+      adapters: {
+        bkash: { verifyWebhook: vi.fn().mockResolvedValue(true) },
+        sslcommerz: { verifyWebhook: vi.fn() },
+      },
+      payments: {
+        applyWebhook: vi.fn().mockRejectedValue(new Error("payment intent claim failed: duplicate callback (intent_id=i, provider=bkash, provider_txn_id=t)")),
+      },
+    } as never);
+
+    const handler = app.handlers.get("/v1/payments/webhook");
+    const reply = { code: () => ({ send: (payload: unknown) => payload }) };
+    const result = (await handler?.(
+      { body: { provider: "bkash", intent_id: "i", provider_txn_id: "t", verified: true }, headers: {} },
+      reply,
+    )) as { error: string };
+
+    expect(result.error).toMatch(/duplicate callback/i);
+  });
 });
