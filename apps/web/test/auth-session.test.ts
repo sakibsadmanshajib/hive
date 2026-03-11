@@ -3,7 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { clearAuthSession, readAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
+import { AUTH_STORAGE_KEY, clearAuthSession, readAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
 
 describe("auth session", () => {
   beforeEach(() => {
@@ -11,20 +11,25 @@ describe("auth session", () => {
   });
 
   it("persists and reads session payload", () => {
-    writeAuthSession({ apiKey: "sk_test", email: "demo@example.com", name: "Demo" });
+    writeAuthSession({ accessToken: "sk_test", email: "demo@example.com", name: "Demo" });
+
+    expect(window.localStorage.getItem(AUTH_STORAGE_KEY)).toEqual(
+      JSON.stringify({ accessToken: "sk_test", email: "demo@example.com", name: "Demo" }),
+    );
 
     expect(readAuthSession()).toEqual({
-      apiKey: "sk_test",
+      accessToken: "sk_test",
       email: "demo@example.com",
       name: "Demo",
     });
   });
 
   it("clears persisted session", () => {
-    writeAuthSession({ apiKey: "sk_test", email: "demo@example.com" });
+    writeAuthSession({ accessToken: "sk_test", email: "demo@example.com" });
 
     clearAuthSession();
 
     expect(readAuthSession()).toBeNull();
+    expect(window.localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
   });
 });

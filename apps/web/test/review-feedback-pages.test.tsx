@@ -3,6 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AUTH_STORAGE_KEY } from "../src/features/auth/auth-session";
 
 const pushMock = vi.fn();
 const routerMock = { push: pushMock };
@@ -26,7 +27,7 @@ describe("review feedback pages", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     pushMock.mockReset();
-    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ accessToken: "sk_test", email: "demo@example.com" }));
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({ accessToken: "sk_test", email: "demo@example.com" }));
   });
 
 

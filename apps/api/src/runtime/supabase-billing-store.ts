@@ -161,7 +161,11 @@ export class SupabaseBillingStore {
     }
   }
 
-  async claimPaymentIntent(intentId: string, provider: string, providerTxnId: string): Promise<{ success: boolean; intent?: PersistentPaymentIntent }> {
+  async claimPaymentIntent(
+    intentId: string,
+    provider: string,
+    providerTxnId: string,
+  ): Promise<{ success: boolean; intent?: PersistentPaymentIntent; error?: string }> {
     const { data, error } = await this.supabase.rpc("claim_payment_intent", {
       p_intent_id: intentId,
       p_provider: provider,
@@ -172,7 +176,7 @@ export class SupabaseBillingStore {
     }
     const result = data as { success: boolean; intent?: PaymentIntentRow; error?: string };
     if (!result.success || !result.intent) {
-      return { success: false };
+      return { success: false, error: result.error ?? "claim rejected" };
     }
     return {
       success: true,

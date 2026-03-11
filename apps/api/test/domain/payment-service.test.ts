@@ -29,7 +29,7 @@ describe("PaymentService", () => {
     vi.resetModules();
 
     const claimPaymentIntent = vi
-      .fn<(...args: unknown[]) => Promise<{ success: boolean; intent?: any }>>()
+      .fn<(...args: unknown[]) => Promise<{ success: boolean; intent?: any; error?: string }>>()
       .mockResolvedValueOnce({
         success: true,
         intent: {
@@ -41,7 +41,7 @@ describe("PaymentService", () => {
           mintedCredits: 1000,
         },
       })
-      .mockResolvedValueOnce({ success: false });
+      .mockResolvedValueOnce({ success: false, error: "duplicate callback" });
 
     vi.doMock("../../src/config/env", () => ({
       getEnv: () => ({
@@ -123,15 +123,15 @@ describe("PaymentService", () => {
       provider_txn_id: "txn-123",
       verified: true,
     });
-    const res2 = await services.payments.applyWebhook({
-      provider: "bkash",
-      intent_id: "intent-1",
-      provider_txn_id: "txn-123",
-      verified: true,
-    });
-
-    expect(claimPaymentIntent).toHaveBeenCalledTimes(2);
     expect(res1?.status).toBe("credited");
-    expect(res2).toBeUndefined();
+    await expect(
+      services.payments.applyWebhook({
+        provider: "bkash",
+        intent_id: "intent-1",
+        provider_txn_id: "txn-123",
+        verified: true,
+      }),
+    ).rejects.toThrow(/duplicate callback/);
+    expect(claimPaymentIntent).toHaveBeenCalledTimes(2);
   });
 });

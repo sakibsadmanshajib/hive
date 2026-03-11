@@ -44,7 +44,11 @@ type BillingStore = {
     verified: boolean,
   ): Promise<boolean>;
   markPaymentCredited(intentId: string, mintedCredits: number, status: "credited" | "failed"): Promise<void>;
-  claimPaymentIntent(intentId: string, provider: string, providerTxnId: string): Promise<{ success: boolean; intent?: PersistentPaymentIntent }>;
+  claimPaymentIntent(
+    intentId: string,
+    provider: string,
+    providerTxnId: string,
+  ): Promise<{ success: boolean; intent?: PersistentPaymentIntent; error?: string }>;
 };
 
 class PersistentCreditService {
@@ -145,13 +149,15 @@ class PersistentPaymentService {
     }
 
     // Call the PostgreSQL RPC for atomic idempotency, intent verification, and crediting
-    const result = await this.store.claimPaymentIntent(
-      payload.intent_id,
-      payload.provider,
-      payload.provider_txn_id
-    );
+    const result = await this.store.claimPaymentIntent(payload.intent_id, payload.provider, payload.provider_txn_id);
+    if (!result.success || !result.intent) {
+      throw new Error(
+        `payment intent claim failed: ${result.error ?? "unknown error"} ` +
+        `(intent_id=${payload.intent_id}, provider=${payload.provider}, provider_txn_id=${payload.provider_txn_id})`,
+      );
+    }
 
-    return result?.intent;
+    return result.intent;
   }
 
   async confirmDemoIntent(input: { intentId: string; providerTxnId?: string }) {
@@ -166,7 +172,7 @@ class PersistentPaymentService {
 
 export class PersistentUserService {
   constructor(
-    private readonly apiKeys: SupabaseApiKeyStore,
+    private readonly apiKeys: ApiKeyStore,
     private readonly supabaseUsers: SupabaseUserStore,
   ) { }
 
@@ -381,7 +387,7 @@ export function createRuntimeServices(): RuntimeServices {
   const payments = new PersistentPaymentService(billingStore, credits);
   const apiKeyStore: ApiKeyStore = new SupabaseApiKeyStore(supabase);
   const supabaseUserStore = new SupabaseUserStore(supabase);
-  const users = new PersistentUserService(apiKeyStore as SupabaseApiKeyStore, supabaseUserStore);
+  const users = new PersistentUserService(apiKeyStore, supabaseUserStore);
   const authz = new AuthorizationService(supabase);
   const userSettings = new UserSettingsService(supabaseUserStore);
   const supabaseAuth = new SupabaseAuthService(supabase);
