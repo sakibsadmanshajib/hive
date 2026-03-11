@@ -51,4 +51,52 @@ describe("provider registry", () => {
     expect(ollama.chat).toHaveBeenCalledTimes(1);
     expect(groq.chat).not.toHaveBeenCalled();
   });
+
+  it("records provider-level request, error, and latency metrics across fallback attempts", async () => {
+    const ollama: ProviderClient = {
+      name: "ollama",
+      isEnabled: () => true,
+      chat: vi.fn(async () => {
+        throw new Error("timeout");
+      }),
+      status: vi.fn(async () => ({ enabled: true, healthy: false, detail: "timeout" })),
+    };
+    const groq: ProviderClient = {
+      name: "groq",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "groq ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+    };
+    const mock: ProviderClient = {
+      name: "mock",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+    };
+
+    const registry = createRegistry([ollama, groq, mock]);
+
+    await registry.chat("fast-chat", [{ role: "user", content: "hello" }]);
+
+    const metrics = await registry.metrics();
+    const ollamaMetrics = metrics.providers.find((provider) => provider.name === "ollama");
+    const groqMetrics = metrics.providers.find((provider) => provider.name === "groq");
+
+    expect(ollamaMetrics).toMatchObject({
+      name: "ollama",
+      requests: 1,
+      errors: 1,
+      enabled: true,
+      healthy: false,
+    });
+    expect(groqMetrics).toMatchObject({
+      name: "groq",
+      requests: 1,
+      errors: 0,
+      enabled: true,
+      healthy: true,
+    });
+    expect(ollamaMetrics?.latencyMs.avg).toBeGreaterThanOrEqual(0);
+    expect(groqMetrics?.latencyMs.avg).toBeGreaterThanOrEqual(0);
+  });
 });

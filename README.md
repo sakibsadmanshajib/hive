@@ -73,6 +73,9 @@ Hive is a Bangladesh-focused AI API gateway with:
 
 - `GET /v1/providers/status` — public, sanitized availability
 - `GET /v1/providers/status/internal` — admin-only with `x-admin-token`
+- `GET /v1/providers/metrics` — public, provider-level request/error/latency summary
+- `GET /v1/providers/metrics/internal` — admin-only JSON with provider diagnostics
+- `GET /v1/providers/metrics/internal/prometheus` — admin-only Prometheus text scrape
 
 ### Auth
 
@@ -170,6 +173,7 @@ docker compose exec ollama ollama pull llama3.1:8b
 # 5. Verify everything is running
 docker compose ps
 curl -s http://127.0.0.1:8080/v1/providers/status
+curl -s http://127.0.0.1:8080/v1/providers/metrics
 ```
 
 ### Langfuse Dashboard
@@ -203,14 +207,16 @@ pnpm --filter @hive/web dev         # Run web locally
 
 - **Domain tests**: Supabase stores, authorization, user settings, credits, payments, rate limiting, routing
 - **Provider tests**: HTTP client, fallback, circuit breaker, registry, status
-- **Route tests**: Auth principal resolution, payment webhooks, provider status, RBAC enforcement
+- **Route tests**: Auth principal resolution, payment webhooks, provider status, provider metrics, RBAC enforcement
 - **E2E smoke**: Auth → chat → billing flow via Playwright
 
 ## Security Notes
 
 - Do not expose `/v1/providers/status/internal` without `ADMIN_STATUS_TOKEN`
+- Do not expose `/v1/providers/metrics/internal` or `/v1/providers/metrics/internal/prometheus` without `ADMIN_STATUS_TOKEN`
 - Do not commit real API keys; rotate immediately on accidental exposure
 - Public provider status intentionally omits internal error details
+- Public provider metrics intentionally omit provider diagnostic detail and raw circuit-breaker failure internals
 - All Supabase tables use Row Level Security (RLS)
 
 ## Database Migrations

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { registerImagesGenerationsRoute } from "../../src/routes/images-generations";
+import { registerProvidersMetricsRoute } from "../../src/routes/providers-metrics";
 import { registerProvidersStatusRoute } from "../../src/routes/providers-status";
 
 type Handler = (request?: { headers?: Record<string, string>; body?: unknown }, reply?: { code: (status: number) => unknown; send: (payload: unknown) => unknown; header: (key: string, value: string) => unknown }) => Promise<unknown>;
@@ -68,5 +69,49 @@ describe("rbac + settings enforcement", () => {
     )) as { error: string };
 
     expect(unauthorized.error).toBe("unauthorized");
+  });
+
+  it("keeps provider metrics internal endpoints token-protected", async () => {
+    const app = new FakeApp();
+    registerProvidersMetricsRoute(app as never, {
+      env: { adminStatusToken: "admin-token" },
+      ai: {
+        providersMetrics: async () => ({
+          scrapedAt: "2026-03-11T00:00:00.000Z",
+          providers: [
+            {
+              name: "mock",
+              enabled: true,
+              healthy: true,
+              detail: "ok",
+              circuit: { state: "CLOSED", failures: 0 },
+              requests: 1,
+              errors: 0,
+              errorRate: 0,
+              latencyMs: { avg: 10, p95: 10 },
+            },
+          ],
+        }),
+        providersMetricsPrometheus: async () => ({
+          contentType: "text/plain; version=0.0.4; charset=utf-8",
+          body: "hive_provider_requests_total{provider=\"mock\"} 1",
+        }),
+      },
+    } as never);
+
+    const internal = app.handlers.get("GET /v1/providers/metrics/internal");
+    const prometheus = app.handlers.get("GET /v1/providers/metrics/internal/prometheus");
+
+    const unauthorizedJson = (await internal?.(
+      { headers: {} },
+      { code: () => ({ send: (payload: unknown) => payload }), send: (payload: unknown) => payload, header: () => undefined },
+    )) as { error: string };
+    const unauthorizedPrometheus = (await prometheus?.(
+      { headers: {} },
+      { code: () => ({ send: (payload: unknown) => payload }), send: (payload: unknown) => payload, header: () => undefined },
+    )) as { error: string };
+
+    expect(unauthorizedJson.error).toBe("unauthorized");
+    expect(unauthorizedPrometheus.error).toBe("unauthorized");
   });
 });

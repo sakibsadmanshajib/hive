@@ -19,6 +19,7 @@ This file is the canonical operating policy for coding agents in this repository
 - If the maintainer explicitly asks to persist an override or workflow preference, update `AGENTS.md` so the preference applies in future sessions as well.
 - If execution or verification uncovers a durable repo-specific lesson that is likely to matter again, update `AGENTS.md` before completion so the lesson persists for future sessions.
 - This override rule does not permit committing secrets, tokens, or credentials, leaking protected internal data, or otherwise bypassing hard safety constraints around sensitive information.
+- Current persisted maintainer preference: worktrees are optional in this repository and should not be treated as mandatory for normal task execution.
 
 ## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
 
@@ -248,11 +249,14 @@ For ops/status changes:
 
 - `/v1/providers/status` must not include internal `detail`.
 - `/v1/providers/status/internal` must return `401` without valid admin token.
+- `/v1/providers/metrics` must remain public-safe and omit provider diagnostic detail plus raw circuit-breaker failure internals.
+- `/v1/providers/metrics/internal` and `/v1/providers/metrics/internal/prometheus` must return `401` without a valid admin token.
+- Provider metrics are currently in-memory per API instance; if behavior or docs touch them, explicitly preserve or document restart-reset semantics.
 
 ## Git Workflow and Worktrees (Default)
 
-- Use worktrees by default because multiple AI agents/tools may operate concurrently.
-- Never run two independent tasks in the same working tree.
+- Worktrees are optional in this repository. Use them when isolation is useful, but they are not required for normal task execution.
+- Never run two independent tasks in the same working tree at the same time.
 - Keep commits atomic by concern (runtime, providers, docs, tests).
 - Open one PR per tracked task.
 - Use Conventional Commit style when practical.
@@ -273,7 +277,7 @@ git -C ../.worktrees/hive-<task-slug> status
 pnpm --dir ../.worktrees/hive-<task-slug> install --frozen-lockfile
 ```
 
-Default: after creating or switching into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands.
+Default: if you create or switch into a task worktree for the first time, run `pnpm install --frozen-lockfile` in that worktree before other project commands. If you stay in the primary working tree, use the existing install unless dependency changes require a refresh.
 
 After merge:
 

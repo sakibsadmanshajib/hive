@@ -1,5 +1,6 @@
 import { CircuitBreaker, type CircuitBreakerConfig, type CircuitState } from "./circuit-breaker";
-import type { ProviderChatMessage, ProviderClient, ProviderName } from "./types";
+import { ProviderMetrics } from "./provider-metrics";
+import type { ProviderChatMessage, ProviderClient, ProviderMetricsResult, ProviderName } from "./types";
 
 type ProviderRegistryConfig = {
   clients: ProviderClient[];
@@ -30,6 +31,8 @@ export type ProviderStatusResult = {
   }>;
 };
 
+const ALL_PROVIDERS = ["ollama", "groq", "mock"] as const;
+
 /**
  * ProviderRegistry manages multiple AI provider clients, handling model routing,
  * failover logic, and circuit breaking for resilience.
@@ -37,6 +40,7 @@ export type ProviderStatusResult = {
 export class ProviderRegistry {
   private readonly clientsByName: Map<ProviderName, ProviderClient>;
   private readonly circuitBreakers: Map<ProviderName, CircuitBreaker>;
+  private readonly metricsCollector = new ProviderMetrics(ALL_PROVIDERS);
 
   constructor(private readonly config: ProviderRegistryConfig) {
     this.clientsByName = new Map(config.clients.map((client) => [client.name, client]));
@@ -82,8 +86,10 @@ export class ProviderRegistry {
       }
 
       const providerModel = this.config.providerModelMap[providerName] ?? modelId;
+      const startedAt = Date.now();
       try {
         const response = await client.chat({ model: providerModel, messages });
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
         breaker?.recordSuccess();
         return {
           content: response.content,
@@ -92,6 +98,7 @@ export class ProviderRegistry {
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, true);
         breaker?.recordFailure(reason);
         errors.push(`${providerName}: ${reason}`);
       }
@@ -105,7 +112,7 @@ export class ProviderRegistry {
    */
   async status(): Promise<ProviderStatusResult> {
     const providers: ProviderStatusResult["providers"] = [];
-    for (const providerName of ["ollama", "groq", "mock"] as const) {
+    for (const providerName of ALL_PROVIDERS) {
       const client = this.clientsByName.get(providerName);
       const breaker = this.circuitBreakers.get(providerName);
 
@@ -133,6 +140,16 @@ export class ProviderRegistry {
       });
     }
     return { providers };
+  }
+
+  async metrics(): Promise<ProviderMetricsResult> {
+    const status = await this.status();
+    return this.metricsCollector.summarize(status.providers);
+  }
+
+  async metricsPrometheus(): Promise<{ contentType: string; body: string }> {
+    const status = await this.status();
+    return this.metricsCollector.renderPrometheus(status.providers);
   }
 
   private buildCandidates(primary: ProviderName): ProviderName[] {

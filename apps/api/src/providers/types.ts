@@ -27,6 +27,34 @@ export type ProviderHealthStatus = {
   detail: string;
 };
 
+export type ProviderLatencySummary = {
+  avg: number;
+  p95: number;
+};
+
+export type ProviderCircuitSnapshot = {
+  state: "CLOSED" | "OPEN" | "HALF_OPEN";
+  failures: number;
+  lastError?: string;
+};
+
+export type ProviderMetricsSummary = {
+  name: ProviderName;
+  enabled: boolean;
+  healthy: boolean;
+  detail: string;
+  circuit: ProviderCircuitSnapshot;
+  requests: number;
+  errors: number;
+  errorRate: number;
+  latencyMs: ProviderLatencySummary;
+};
+
+export type ProviderMetricsResult = {
+  scrapedAt: string;
+  providers: ProviderMetricsSummary[];
+};
+
 export interface ProviderClient {
   readonly name: ProviderName;
   isEnabled(): boolean;
