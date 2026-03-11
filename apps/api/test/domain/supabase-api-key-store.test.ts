@@ -33,10 +33,19 @@ describe("SupabaseApiKeyStore", () => {
         await store.create({ key: "sk_live_abcdefghijklmnop", userId: "user_1", scopes: ["chat"] });
 
         expect(insertMock).toHaveBeenCalledTimes(1);
-        const [record] = insertMock.mock.calls[0] as [{ user_id: string; scopes: string[]; revoked: boolean }];
+        const [record] = insertMock.mock.calls[0] as [{
+            user_id: string;
+            key_hash: string;
+            key_prefix: string;
+            scopes: string[];
+            revoked: boolean;
+        }];
         expect(record.user_id).toBe("user_1");
+        expect(record.key_hash).toBeTypeOf("string");
+        expect(record.key_prefix).toBe("sk_live_");
         expect(record.scopes).toEqual(["chat"]);
         expect(record.revoked).toBe(false);
+        expect(record).not.toHaveProperty("key");
     });
 
     it("list returns api keys for a user", async () => {

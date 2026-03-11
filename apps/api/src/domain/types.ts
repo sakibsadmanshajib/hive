@@ -32,7 +32,7 @@ export type PersistentPaymentIntent = {
 };
 
 export type PersistentApiKey = {
-  key: string;
+  keyPrefix: string;
   userId: string;
   scopes: string[];
   revoked: boolean;

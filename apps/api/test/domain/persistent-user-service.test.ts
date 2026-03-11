@@ -15,7 +15,7 @@ describe("PersistentUserService", () => {
 
         const mockApiKeyStore = {
             list: vi.fn().mockResolvedValue([
-                { key: "sk_live_12345678", revoked: false, scopes: ["chat"], createdAt: "2026-01-01T00:00:00.000Z" },
+                { keyPrefix: "sk_live_", revoked: false, scopes: ["chat"], createdAt: "2026-01-01T00:00:00.000Z" },
             ]),
         } as any;
 
@@ -25,7 +25,7 @@ describe("PersistentUserService", () => {
         expect(me).toBeDefined();
         expect(me?.email).toBe("test@example.com");
         expect(me?.apiKeys).toHaveLength(1);
-        expect(me?.apiKeys[0].key_id).toBe("12345678"); // last 8 chars
+        expect(me?.apiKeys[0].key_id).toBe("sk_live_");
     });
 
     it("validates valid api key and required scope", async () => {

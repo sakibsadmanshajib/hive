@@ -57,7 +57,6 @@ jobs:
 
       - name: Start docker stack
         env:
-          ALLOW_DEV_API_KEY_PREFIX: "true"
         run: docker compose up --build -d
 
       - name: Wait for API and web readiness
@@ -76,6 +75,7 @@ jobs:
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
           E2E_API_BASE_URL: http://127.0.0.1:8080
+          E2E_ALLOW_DEV_TOKEN_FALLBACK: "true"
         run: pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 
       - name: Upload Playwright artifacts

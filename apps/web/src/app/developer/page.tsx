@@ -17,7 +17,7 @@ export default function DeveloperPage() {
   const [accessToken, setAccessToken] = useState("");
   const [snapshot, setSnapshot] = useState<UserSnapshot | null>(null);
   const [usageCount, setUsageCount] = useState(0);
-  const [status, setStatus] = useState("Load account metrics with your API key.");
+  const [status, setStatus] = useState("Load account metrics for your signed-in account.");
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -36,7 +36,7 @@ export default function DeveloperPage() {
     const { manageLoading = true } = options;
 
     if (!accessToken) {
-      setStatus("Set API key first.");
+      setStatus("Not authenticated.");
       return;
     }
 

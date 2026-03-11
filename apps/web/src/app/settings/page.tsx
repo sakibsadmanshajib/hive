@@ -41,7 +41,7 @@ export default function SettingsPage() {
 
   async function topUpDemo() {
     if (!accessToken) {
-      setStatus("Set API key first.");
+      setStatus("Please sign in to continue.");
       return;
     }
 

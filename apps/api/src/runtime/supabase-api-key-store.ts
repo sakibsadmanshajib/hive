@@ -55,7 +55,7 @@ export class SupabaseApiKeyStore {
       throw new Error(`failed to list api key metadata: ${error.message}`);
     }
     return (data ?? []).map((row) => ({
-      key: String(row.key_prefix),
+      keyPrefix: String(row.key_prefix),
       userId: String(row.user_id),
       scopes: Array.isArray(row.scopes) ? (row.scopes as string[]) : [],
       revoked: Boolean(row.revoked),
@@ -94,7 +94,7 @@ export class SupabaseApiKeyStore {
       return undefined;
     }
     return {
-      key: String(data.key_prefix),
+      keyPrefix: String(data.key_prefix),
       userId: String(data.user_id),
       scopes: Array.isArray(data.scopes) ? (data.scopes as string[]) : [],
       revoked: Boolean(data.revoked),

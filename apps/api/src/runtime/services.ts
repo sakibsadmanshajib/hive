@@ -188,7 +188,7 @@ export class PersistentUserService {
       name: user.name,
       createdAt: user.createdAt,
       apiKeys: keys.map((key) => ({
-        key_id: key.key.slice(-8),
+        key_id: key.keyPrefix,
         revoked: key.revoked,
         scopes: key.scopes,
         createdAt: key.createdAt,

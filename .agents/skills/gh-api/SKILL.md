@@ -80,7 +80,7 @@ gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments \
 2. **`--jq` filtering** — Essential for extracting structured data from large review payloads.
 3. **Truncating body text** — Use `.body[0:N]` in jq to prevent terminal overflow from long review comments.
 4. **`gh pr view --json`** — Cleaner than raw API for PR metadata.
-5. **Pagination** — `gh api` handles pagination automatically by default (up to 30 items per page). For large result sets, add `--paginate`.
+5. **Pagination** — `gh api` returns a single page by default. GitHub REST endpoints commonly default to 30 items per page, so add `--paginate` when you need the full result set.
 
 ## Common Pitfalls
 

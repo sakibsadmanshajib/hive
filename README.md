@@ -121,6 +121,8 @@ Use `.env.example` as the template. Key variables:
 - `SUPABASE_URL` — Supabase API endpoint (default: `http://127.0.0.1:54321`)
 - `SUPABASE_SERVICE_ROLE_KEY` — Service role key for admin operations
 - `SUPABASE_AUTH_ENABLED`, `SUPABASE_USER_REPO_ENABLED`, `SUPABASE_API_KEYS_ENABLED`, `SUPABASE_BILLING_STORE_ENABLED` — Feature flags (all `true` for production)
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` — Required browser-side Supabase auth configuration for the web app
+- `NEXT_PUBLIC_API_BASE_URL` — Required browser-side Hive API base URL for authenticated web requests
 
 ### Langfuse
 - `LANGFUSE_ENABLED` — Enable LLM tracing (`true`)

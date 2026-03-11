@@ -34,9 +34,14 @@ export function ProfileMenu() {
 
   async function handleLogout() {
     const supabase = createSupabaseBrowserClient();
-    await supabase.auth.signOut();
-    clearAuthSession();
-    router.push("/auth");
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // Local cleanup should still complete if remote sign-out fails.
+    } finally {
+      clearAuthSession();
+      router.push("/auth");
+    }
   }
 
   return (
