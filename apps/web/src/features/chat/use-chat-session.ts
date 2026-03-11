@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
 import { readAuthSession } from "../auth/auth-session";
-import { apiBase, apiHeaders } from "../../lib/api";
+import { apiHeaders, getApiBase } from "../../lib/api";
 
 export function useChatSession() {
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
@@ -65,6 +65,7 @@ export function useChatSession() {
     setErrorMessage(null);
 
     try {
+      const apiBase = getApiBase();
       const payloadMessages = [...activeConversation.messages, userMessage].map((message) => ({
         role: message.role,
         content: message.content,

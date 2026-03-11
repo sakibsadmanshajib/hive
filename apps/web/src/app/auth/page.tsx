@@ -17,12 +17,11 @@ export default function AuthPage() {
   const [status, setStatus] = useState("Sign in to continue.");
   const [loading, setLoading] = useState(false);
 
-  const supabase = createSupabaseBrowserClient();
-
   async function register(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoading(true);
     try {
+      const supabase = createSupabaseBrowserClient();
       const { data, error } = await supabase.auth.signUp({
         email,
         password,
@@ -62,6 +61,7 @@ export default function AuthPage() {
     event.preventDefault();
     setLoading(true);
     try {
+      const supabase = createSupabaseBrowserClient();
       const { data, error } = await supabase.auth.signInWithPassword({
         email,
         password,

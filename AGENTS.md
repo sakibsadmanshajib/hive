@@ -17,6 +17,7 @@ This file is the canonical operating policy for coding agents in this repository
 
 - Explicit maintainer instructions in the current session override `AGENTS.md` defaults globally.
 - If the maintainer explicitly asks to persist an override or workflow preference, update `AGENTS.md` so the preference applies in future sessions as well.
+- If execution or verification uncovers a durable repo-specific lesson that is likely to matter again, update `AGENTS.md` before completion so the lesson persists for future sessions.
 - This override rule does not permit committing secrets, tokens, or credentials, leaking protected internal data, or otherwise bypassing hard safety constraints around sensitive information.
 
 ## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
@@ -81,6 +82,17 @@ Web build:
 ```bash
 pnpm --filter @hive/web build
 ```
+
+If web changes touch browser auth/bootstrap, `NEXT_PUBLIC_*` env usage, or smoke flows, also verify the production bundle with the required public envs set:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
+pnpm --filter @hive/web build
+```
+
+Unit tests are not sufficient evidence for those changes; they can miss prerender-time and browser-bundle env failures.
 
 Web smoke E2E (Playwright):
 

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { apiBase as defaultApiBase, apiHeaders } from "../../lib/api";
+import { apiHeaders, getApiBase } from "../../lib/api";
 
 type SettingKey = "apiEnabled" | "generateImage" | "chatEnabled" | "billingEnabled" | "twoFactorEnabled";
 
@@ -50,7 +50,7 @@ function endpointMessage(status: number, fallback: string): string {
   return fallback;
 }
 
-export function UserSettingsPanel({ accessToken, apiBase = defaultApiBase }: UserSettingsPanelProps) {
+export function UserSettingsPanel({ accessToken, apiBase }: UserSettingsPanelProps) {
   const [settings, setSettings] = useState<UserSettings>(defaultSettings);
   const [status, setStatus] = useState("Provide an API key to load feature settings.");
   const [loading, setLoading] = useState(false);
@@ -66,7 +66,8 @@ export function UserSettingsPanel({ accessToken, apiBase = defaultApiBase }: Use
       setLoading(true);
       setStatus("Loading settings...");
       try {
-        const response = await fetch(`${apiBase}/v1/users/settings`, {
+        const resolvedApiBase = apiBase ?? getApiBase();
+        const response = await fetch(`${resolvedApiBase}/v1/users/settings`, {
           method: "GET",
           headers: apiHeaders(accessToken),
         });
@@ -103,7 +104,8 @@ export function UserSettingsPanel({ accessToken, apiBase = defaultApiBase }: Use
     setStatus(`Updating ${key}...`);
 
     try {
-      const response = await fetch(`${apiBase}/v1/users/settings`, {
+      const resolvedApiBase = apiBase ?? getApiBase();
+      const response = await fetch(`${resolvedApiBase}/v1/users/settings`, {
         method: "PATCH",
         headers: apiHeaders(accessToken),
         body: JSON.stringify({ [key]: nextValue }),

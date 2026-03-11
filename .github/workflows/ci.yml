@@ -131,6 +131,10 @@ jobs:
 
       - name: Build web
         if: steps.scope.outputs.run_web == 'true'
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8080
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: test-supabase-anon-key
         run: pnpm --filter @hive/web build
 
       - name: No-op when no relevant source changed

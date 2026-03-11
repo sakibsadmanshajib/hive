@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { readAuthSession } from "../../features/auth/auth-session";
 import { UsageCards, type UserSnapshot } from "../../features/billing/components/usage-cards";
 import { DeveloperShell } from "../../features/developer/components/developer-shell";
-import { apiBase, apiHeaders } from "../../lib/api";
+import { apiHeaders, getApiBase } from "../../lib/api";
 
 export default function DeveloperPage() {
   const router = useRouter();
@@ -45,6 +45,7 @@ export default function DeveloperPage() {
     }
 
     try {
+      const apiBase = getApiBase();
       const [meRes, usageRes] = await Promise.all([
         fetch(`${apiBase}/v1/users/me`, { headers: apiHeaders(accessToken) }),
         fetch(`${apiBase}/v1/usage`, { headers: apiHeaders(accessToken) }),
@@ -83,6 +84,7 @@ export default function DeveloperPage() {
 
     setLoading(true);
     try {
+      const apiBase = getApiBase();
       const response = await fetch(`${apiBase}/v1/users/api-keys`, {
         method: "POST",
         headers: apiHeaders(accessToken),

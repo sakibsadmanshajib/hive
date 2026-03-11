@@ -8,7 +8,7 @@ import { readAuthSession } from "../../features/auth/auth-session";
 import { TopUpPanel } from "../../features/billing/components/topup-panel";
 import { SettingsShell } from "../../features/settings/components/settings-shell";
 import { UserSettingsPanel } from "../../features/settings/user-settings-panel";
-import { apiBase, apiHeaders } from "../../lib/api";
+import { apiHeaders, getApiBase } from "../../lib/api";
 
 type ProfileSession = {
   email: string;
@@ -47,6 +47,7 @@ export default function SettingsPage() {
 
     setLoading(true);
     try {
+      const apiBase = getApiBase();
       const intentRes = await fetch(`${apiBase}/v1/payments/intents`, {
         method: "POST",
         headers: apiHeaders(accessToken),
