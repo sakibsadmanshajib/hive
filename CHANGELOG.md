@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
 - **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
+- **Web Auth Session Sync:** Fixed stale browser auth-session behavior by synchronizing the mirrored local auth store with Supabase session refresh events, while preserving seeded smoke/dev sessions until a real Supabase session has been observed.
+- **Protected Route Hydration:** Fixed `/`, `/developer`, and `/settings` auth guards so they wait for client auth-session hydration before redirecting to `/auth`, preventing false redirects during production startup.
 
 ## [0.1.0] - 2026-02-24
 

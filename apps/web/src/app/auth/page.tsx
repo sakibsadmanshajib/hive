@@ -8,9 +8,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Input } from "../../components/ui/input";
 import { GoogleLoginButton } from "../../features/auth/google-login-button";
 import { writeAuthSession } from "../../features/auth/auth-session";
-import { createSupabaseBrowserClient } from "../../lib/supabase-client";
+import { createSupabaseBrowserClient, useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
 export default function AuthPage() {
+  useSupabaseAuthSessionSync();
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

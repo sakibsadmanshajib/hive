@@ -5,13 +5,16 @@ import { useRouter } from "next/navigation";
 
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { readAuthSession } from "../../features/auth/auth-session";
+import { useAuthSessionState } from "../../features/auth/auth-session";
 import { UsageCards, type UserSnapshot } from "../../features/billing/components/usage-cards";
 import { DeveloperShell } from "../../features/developer/components/developer-shell";
 import { apiHeaders, getApiBase } from "../../lib/api";
+import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
 export default function DeveloperPage() {
   const router = useRouter();
+  useSupabaseAuthSessionSync();
+  const { ready: authSessionReady, session: authSession } = useAuthSessionState();
 
   const [sessionReady, setSessionReady] = useState(false);
   const [accessToken, setAccessToken] = useState("");
@@ -21,7 +24,10 @@ export default function DeveloperPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const authSession = readAuthSession();
+    if (!authSessionReady) {
+      return;
+    }
+
     if (!authSession?.accessToken) {
       router.push("/auth");
       setSessionReady(true);
@@ -30,7 +36,7 @@ export default function DeveloperPage() {
 
     setAccessToken(authSession.accessToken);
     setSessionReady(true);
-  }, [router]);
+  }, [authSession, authSessionReady, router]);
 
   async function fetchSnapshot(options: { manageLoading?: boolean } = {}) {
     const { manageLoading = true } = options;

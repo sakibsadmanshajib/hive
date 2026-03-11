@@ -3,16 +3,19 @@ import { toast } from "sonner";
 
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
-import { readAuthSession } from "../auth/auth-session";
+import { useAuthSession } from "../auth/auth-session";
 import { apiHeaders, getApiBase } from "../../lib/api";
+import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
 export function useChatSession() {
+  useSupabaseAuthSessionSync();
+  const authSession = useAuthSession();
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [accessToken] = useState(() => readAuthSession()?.accessToken ?? "");
   const [model, setModel] = useState("fast-chat");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const accessToken = authSession?.accessToken ?? "";
 
   const activeConversation = useMemo(
     () =>

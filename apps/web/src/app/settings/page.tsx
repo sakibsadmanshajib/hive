@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
-import { readAuthSession } from "../../features/auth/auth-session";
+import { useAuthSessionState } from "../../features/auth/auth-session";
 import { TopUpPanel } from "../../features/billing/components/topup-panel";
 import { SettingsShell } from "../../features/settings/components/settings-shell";
 import { UserSettingsPanel } from "../../features/settings/user-settings-panel";
 import { apiHeaders, getApiBase } from "../../lib/api";
+import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
 type ProfileSession = {
   email: string;
@@ -17,6 +18,8 @@ type ProfileSession = {
 
 export default function SettingsPage() {
   const router = useRouter();
+  useSupabaseAuthSessionSync();
+  const { ready: authSessionReady, session: authSession } = useAuthSessionState();
 
   const [sessionReady, setSessionReady] = useState(false);
   const [profile, setProfile] = useState<ProfileSession | null>(null);
@@ -27,7 +30,10 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const authSession = readAuthSession();
+    if (!authSessionReady) {
+      return;
+    }
+
     if (!authSession?.accessToken) {
       router.push("/auth");
       setSessionReady(true);
@@ -37,7 +43,7 @@ export default function SettingsPage() {
     setProfile({ email: authSession.email, name: authSession.name });
     setAccessToken(authSession.accessToken);
     setSessionReady(true);
-  }, [router]);
+  }, [authSession, authSessionReady, router]);
 
   async function topUpDemo() {
     if (!accessToken) {

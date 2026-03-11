@@ -93,6 +93,7 @@ pnpm --filter @hive/web build
 ```
 
 Unit tests are not sufficient evidence for those changes; they can miss prerender-time and browser-bundle env failures.
+When auth/session behavior changes, also verify that protected routes do not redirect during initial client hydration before local auth state is loaded.
 
 Web smoke E2E (Playwright):
 
@@ -336,6 +337,13 @@ E2E environment variables:
 
 - `E2E_BASE_URL` (default `http://127.0.0.1:3000`)
 - `E2E_API_BASE_URL` (used by API fixtures)
+
+Auth/session lessons that must persist:
+
+- Do not clear the custom browser auth session just because `supabase.auth.getSession()` returns `null` on startup; that can erase seeded smoke/dev sessions before Supabase has established any browser session.
+- Only let Supabase-driven sign-out clear the mirrored custom auth session after the browser runtime has observed a real Supabase session.
+- For protected web routes, wait until client auth-session hydration is ready before redirecting to `/auth`, or valid local sessions can be bounced to the login page during initial render.
+- When verifying auth/chat/billing smoke flows, prefer a rebuilt production app (`pnpm --filter @hive/web build` + `next start`) over assuming `next dev` behavior matches production hydration and routing.
 
 If Linux browser dependencies are missing locally:
 

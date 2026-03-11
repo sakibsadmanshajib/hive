@@ -35,6 +35,7 @@ Use these documents for current planning and execution:
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md`
 - `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-implementation.md`
 - `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
+- `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
 
 ## Archive (Obsolete)
 

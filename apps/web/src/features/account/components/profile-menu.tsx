@@ -12,12 +12,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
-import { clearAuthSession, readAuthSession } from "../../auth/auth-session";
-import { createSupabaseBrowserClient } from "../../../lib/supabase-client";
+import { clearAuthSession, useAuthSession } from "../../auth/auth-session";
+import { createSupabaseBrowserClient, useSupabaseAuthSessionSync } from "../../../lib/supabase-client";
 
 export function ProfileMenu() {
   const router = useRouter();
-  const session = readAuthSession();
+  useSupabaseAuthSessionSync();
+  const session = useAuthSession();
 
   const initials = useMemo(() => {
     const source = session?.name?.trim() || session?.email || "User";

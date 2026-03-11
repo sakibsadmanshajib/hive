@@ -3,6 +3,11 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { writeAuthSession } from "../src/features/auth/auth-session";
+
+vi.mock("../src/lib/supabase-client", () => ({
+  useSupabaseAuthSessionSync: () => undefined,
+}));
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
@@ -34,7 +39,7 @@ describe("chat auth gate", () => {
   });
 
   it("renders chat workspace on root for authenticated users", async () => {
-    window.localStorage.setItem("bdai.auth.session", JSON.stringify({ accessToken: "sk_test", email: "demo@example.com" }));
+    writeAuthSession({ accessToken: "sk_test", email: "demo@example.com" });
 
     render(<HomePage />);
 

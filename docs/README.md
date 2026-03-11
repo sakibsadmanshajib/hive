@@ -20,6 +20,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Current repo audit design: `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
 - Current repo audit decision process: `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
 - Current repo audit execution plan: `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
+- Current PR #36 unresolved-comments implementation plan: `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
 - Repo audit outputs: `docs/audits/2026-02-28-redundancy-inventory.md`, `docs/audits/2026-02-28-final-audit-report.md`
 
 ## Planning Docs Status

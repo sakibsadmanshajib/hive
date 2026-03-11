@@ -34,6 +34,8 @@ graph TD
 - Next.js App Router UI
 - Chat-first workspace with developer panel and settings surfaces
 - Browser clients require explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; the web app no longer falls back to localhost or placeholder credentials at runtime
+- The browser maintains a small mirrored auth-session store for app routing and API headers, but Supabase remains the source of truth. The mirror is synchronized from `getSession()` and `onAuthStateChange()` without clearing seeded local sessions until a real Supabase session has been observed.
+- Protected routes must wait for client auth-session hydration before redirecting to `/auth`; prerendered `null` auth state is not sufficient evidence that the browser is unauthenticated.
 
 ### 3. Supabase (Auth + Persistence)
 - **Auth**: User registration, login, OAuth, MFA — all handled by Supabase Auth

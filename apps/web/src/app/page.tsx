@@ -1,17 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-import { type AuthSession, readAuthSession } from "../features/auth/auth-session";
+import { useAuthSessionState } from "../features/auth/auth-session";
 import { ChatWorkspaceShell } from "../features/chat/components/chat-workspace-shell";
 import { MessageComposer } from "../features/chat/components/message-composer";
 import { MessageList } from "../features/chat/components/message-list";
 import { useChatSession } from "../features/chat/use-chat-session";
+import { useSupabaseAuthSessionSync } from "../lib/supabase-client";
 
 export default function HomePage() {
   const router = useRouter();
-  const [authSession] = useState<AuthSession | null>(() => readAuthSession());
+  useSupabaseAuthSessionSync();
+  const { ready: authSessionReady, session: authSession } = useAuthSessionState();
   const {
     conversations,
     activeConversation,
@@ -28,12 +30,12 @@ export default function HomePage() {
   } = useChatSession();
 
   useEffect(() => {
-    if (!authSession?.accessToken) {
+    if (authSessionReady && !authSession?.accessToken) {
       router.push("/auth");
     }
-  }, [authSession?.accessToken, router]);
+  }, [authSession?.accessToken, authSessionReady, router]);
 
-  if (!authSession?.accessToken) {
+  if (!authSessionReady || !authSession?.accessToken) {
     return null;
   }
 

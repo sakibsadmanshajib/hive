@@ -5,7 +5,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { AUTH_STORAGE_KEY } from "../src/features/auth/auth-session";
+import { readAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
 
 const pushMock = vi.fn();
 const signOutMock = vi.fn();
@@ -22,6 +22,7 @@ vi.mock("../src/lib/supabase-client", () => ({
       signOut: signOutMock,
     },
   }),
+  useSupabaseAuthSessionSync: () => undefined,
 }));
 
 vi.mock("../src/components/ui/dropdown-menu", () => ({
@@ -56,10 +57,7 @@ describe("ProfileMenu", () => {
     pushMock.mockReset();
     signOutMock.mockReset();
     window.localStorage.clear();
-    window.localStorage.setItem(
-      AUTH_STORAGE_KEY,
-      JSON.stringify({ accessToken: "sk_test", email: "demo@example.com", name: "Demo User" }),
-    );
+    writeAuthSession({ accessToken: "sk_test", email: "demo@example.com", name: "Demo User" });
   });
 
   it("clears the local session and redirects even if sign out fails", async () => {
@@ -71,7 +69,7 @@ describe("ProfileMenu", () => {
     fireEvent.click(await screen.findByRole("button", { name: /log out/i }));
 
     await waitFor(() => {
-      expect(window.localStorage.getItem(AUTH_STORAGE_KEY)).toBeNull();
+      expect(readAuthSession()).toBeNull();
       expect(pushMock).toHaveBeenCalledWith("/auth");
     });
   });
