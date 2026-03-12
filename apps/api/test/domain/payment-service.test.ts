@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { CreditLedger } from "../../src/domain/credits-ledger";
 import type { PaymentReconciliationSnapshot } from "../../src/domain/types";
 import { PaymentService } from "../../src/domain/payment-service";
 
 describe("PaymentService", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("does not duplicate credits for duplicate provider callback", () => {
     const ledger = new CreditLedger();
     const service = new PaymentService(ledger);
@@ -38,6 +42,7 @@ describe("PaymentService", () => {
 
   it("keeps webhook idempotency for duplicate provider_txn_id", async () => {
     vi.resetModules();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const claimPaymentIntent = vi
       .fn<(...args: unknown[]) => Promise<{ success: boolean; intent?: any; error?: string }>>()
@@ -89,8 +94,9 @@ describe("PaymentService", () => {
           lookbackHours: 24,
         },
         providers: {
-          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
-          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
+          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b", timeoutMs: 50, maxRetries: 0 },
+          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", timeoutMs: 50, maxRetries: 0 },
+          circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 100 },
         },
         langfuse: {
           enabled: false,
@@ -107,6 +113,20 @@ describe("PaymentService", () => {
 
     vi.doMock("../../src/runtime/supabase-client", () => ({
       createSupabaseAdminClient: () => ({ from: () => ({}) }),
+    }));
+
+    vi.doMock("../../src/providers/registry", () => ({
+      ProviderRegistry: class {
+        captureStartupReadiness = vi.fn(async () => ({
+          ollama: { ready: true, detail: "startup model ready" },
+          groq: { ready: true, detail: "startup model ready" },
+          mock: { ready: true, detail: "startup model ready" },
+        }));
+        status = vi.fn(async () => ({ providers: [] }));
+        chat = vi.fn();
+        metrics = vi.fn(async () => ({ scrapedAt: new Date().toISOString(), providers: [] }));
+        metricsPrometheus = vi.fn(async () => ({ contentType: "text/plain", body: "" }));
+      },
     }));
 
     vi.doMock("../../src/runtime/supabase-billing-store", () => ({
@@ -152,5 +172,6 @@ describe("PaymentService", () => {
       }),
     ).rejects.toThrow(/duplicate callback/);
     expect(claimPaymentIntent).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
   });
 });

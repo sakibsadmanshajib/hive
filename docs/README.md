@@ -38,6 +38,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 ## Operations
 
 - Runbooks index: `docs/runbooks/README.md`
+- Provider circuit-breaker and startup readiness runbook: `docs/runbooks/active/provider-circuit-breaker.md`
 - Payments reconciliation runbook: `docs/runbooks/active/payments-reconciliation.md`
 - API key lifecycle runbook: `docs/runbooks/active/api-key-lifecycle.md`
 - GitHub triage runbook: `docs/runbooks/active/github-triage.md`

@@ -1,4 +1,10 @@
-import type { ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderHealthStatus } from "./types";
+import type {
+  ProviderChatRequest,
+  ProviderChatResponse,
+  ProviderClient,
+  ProviderHealthStatus,
+  ProviderReadinessStatus,
+} from "./types";
 import { fetchWithRetry } from "./http-client";
 
 type OllamaConfig = {
@@ -11,6 +17,13 @@ type OllamaChatResponse = {
   message?: {
     content?: string;
   };
+};
+
+type OllamaTagsResponse = {
+  models?: Array<{
+    name?: string;
+    model?: string;
+  }>;
 };
 
 export class OllamaProviderClient implements ProviderClient {
@@ -76,6 +89,40 @@ export class OllamaProviderClient implements ProviderClient {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return { enabled: true, healthy: false, detail: `unreachable: ${reason}` };
+    }
+  }
+
+  async checkModelReadiness(model: string): Promise<ProviderReadinessStatus> {
+    if (!this.isEnabled()) {
+      return { ready: false, detail: "disabled by config" };
+    }
+
+    try {
+      const response = await fetchWithRetry({
+        provider: "ollama",
+        url: `${this.config.baseUrl}/api/tags`,
+        timeoutMs: this.config.timeoutMs,
+        maxRetries: this.config.maxRetries,
+        init: { method: "GET" },
+      });
+
+      if (!response.ok) {
+        return { ready: false, detail: `startup tags check failed: ${response.status}` };
+      }
+
+      const payload = (await response.json()) as OllamaTagsResponse;
+      const installedModels = new Set(
+        (payload.models ?? []).flatMap((entry) => [entry.name, entry.model]).filter((value): value is string => Boolean(value)),
+      );
+
+      if (installedModels.has(model)) {
+        return { ready: true, detail: "startup model ready" };
+      }
+
+      return { ready: false, detail: `startup model missing: ${model}` };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { ready: false, detail: `startup unreachable: ${reason}` };
     }
   }
 }

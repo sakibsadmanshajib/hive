@@ -27,6 +27,11 @@ export type ProviderHealthStatus = {
   detail: string;
 };
 
+export type ProviderReadinessStatus = {
+  ready: boolean;
+  detail: string;
+};
+
 export type ProviderLatencySummary = {
   avg: number;
   p95: number;
@@ -60,4 +65,5 @@ export interface ProviderClient {
   isEnabled(): boolean;
   chat(request: ProviderChatRequest): Promise<ProviderChatResponse>;
   status(): Promise<ProviderHealthStatus>;
+  checkModelReadiness(model: string): Promise<ProviderReadinessStatus>;
 }

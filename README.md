@@ -103,6 +103,8 @@ GitHub contributor intake and triage are repo-managed:
 - `GET /v1/providers/metrics/internal` — admin-only JSON with provider diagnostics
 - `GET /v1/providers/metrics/internal/prometheus` — admin-only Prometheus text scrape
 
+The API also performs a zero-token startup readiness sweep for configured provider models. Missing or unreachable provider models are logged for operators and exposed only through internal status detail; public status remains sanitized.
+
 ### Auth
 
 Authentication is fully handled by **Supabase Auth**. There are no custom auth endpoints in the Hive API. Users authenticate via Supabase's client SDKs (email/password, OAuth, MFA), and the API validates bearer tokens against Supabase using `SupabaseAuthService.getSessionPrincipal()`.
@@ -220,6 +222,7 @@ docker compose exec ollama ollama pull llama3.1:8b
 # 5. Verify everything is running
 docker compose ps
 curl -s http://127.0.0.1:8080/v1/providers/status
+curl -s http://127.0.0.1:8080/v1/providers/status/internal -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
 curl -s http://127.0.0.1:8080/v1/providers/metrics
 ```
 
@@ -263,6 +266,7 @@ pnpm --filter @hive/web dev         # Run web locally
 - Do not expose `/v1/providers/metrics/internal` or `/v1/providers/metrics/internal/prometheus` without `ADMIN_STATUS_TOKEN`
 - Do not commit real API keys; rotate immediately on accidental exposure
 - Public provider status intentionally omits internal error details
+- Public provider status intentionally omits startup model readiness detail
 - Public provider metrics intentionally omit provider diagnostic detail and raw circuit-breaker failure internals
 - All Supabase tables use Row Level Security (RLS)
 

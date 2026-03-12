@@ -1,4 +1,10 @@
-import type { ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderHealthStatus } from "./types";
+import type {
+  ProviderChatRequest,
+  ProviderChatResponse,
+  ProviderClient,
+  ProviderHealthStatus,
+  ProviderReadinessStatus,
+} from "./types";
 import { fetchWithRetry } from "./http-client";
 
 type GroqConfig = {
@@ -13,6 +19,12 @@ type GroqChatResponse = {
     message?: {
       content?: string;
     };
+  }>;
+};
+
+type GroqModelsResponse = {
+  data?: Array<{
+    id?: string;
   }>;
 };
 
@@ -90,6 +102,45 @@ export class GroqProviderClient implements ProviderClient {
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       return { enabled: true, healthy: false, detail: `unreachable: ${reason}` };
+    }
+  }
+
+  async checkModelReadiness(model: string): Promise<ProviderReadinessStatus> {
+    if (!this.isEnabled()) {
+      return { ready: false, detail: "disabled by config" };
+    }
+
+    try {
+      const response = await fetchWithRetry({
+        provider: "groq",
+        url: `${this.config.baseUrl}/models`,
+        timeoutMs: this.config.timeoutMs,
+        maxRetries: this.config.maxRetries,
+        init: {
+          method: "GET",
+          headers: {
+            authorization: `Bearer ${this.config.apiKey}`,
+          },
+        },
+      });
+
+      if (!response.ok) {
+        return { ready: false, detail: `startup models check failed: ${response.status}` };
+      }
+
+      const payload = (await response.json()) as GroqModelsResponse;
+      const availableModels = new Set(
+        (payload.data ?? []).map((entry) => entry.id).filter((value): value is string => Boolean(value)),
+      );
+
+      if (availableModels.has(model)) {
+        return { ready: true, detail: "startup model ready" };
+      }
+
+      return { ready: false, detail: `startup model missing: ${model}` };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { ready: false, detail: `startup unreachable: ${reason}` };
     }
   }
 }

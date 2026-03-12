@@ -1,6 +1,12 @@
 import { CircuitBreaker, type CircuitBreakerConfig, type CircuitState } from "./circuit-breaker";
 import { ProviderMetrics } from "./provider-metrics";
-import type { ProviderChatMessage, ProviderClient, ProviderMetricsResult, ProviderName } from "./types";
+import type {
+  ProviderChatMessage,
+  ProviderClient,
+  ProviderMetricsResult,
+  ProviderName,
+  ProviderReadinessStatus,
+} from "./types";
 
 type ProviderRegistryConfig = {
   clients: ProviderClient[];
@@ -42,6 +48,7 @@ export class ProviderRegistry {
   private readonly clientsByName: Map<ProviderName, ProviderClient>;
   private readonly circuitBreakers: Map<ProviderName, CircuitBreaker>;
   private readonly metricsCollector = new ProviderMetrics(ALL_PROVIDERS);
+  private readonly startupReadiness = new Map<ProviderName, ProviderReadinessStatus>();
   private cachedMetricsStatus?: ProviderStatusResult;
   private cachedMetricsStatusAt = 0;
 
@@ -130,11 +137,12 @@ export class ProviderRegistry {
         continue;
       }
       const health = await client.status();
+      const readiness = this.startupReadiness.get(providerName);
       providers.push({
         name: providerName,
         enabled: health.enabled,
         healthy: health.healthy,
-        detail: health.detail,
+        detail: readiness ? `${health.detail}; ${readiness.detail}` : health.detail,
         circuit: {
           state: breaker?.getState() ?? "CLOSED",
           failures: breaker?.getFailures() ?? 0,
@@ -153,6 +161,36 @@ export class ProviderRegistry {
   async metricsPrometheus(): Promise<{ contentType: string; body: string }> {
     const status = await this.getCachedMetricsStatus();
     return this.metricsCollector.renderPrometheus(status.providers);
+  }
+
+  async captureStartupReadiness(): Promise<Record<ProviderName, ProviderReadinessStatus>> {
+    const results = {} as Record<ProviderName, ProviderReadinessStatus>;
+
+    for (const providerName of ALL_PROVIDERS) {
+      const client = this.clientsByName.get(providerName);
+      if (!client) {
+        const missing = { ready: false, detail: "not registered" };
+        this.startupReadiness.set(providerName, missing);
+        results[providerName] = missing;
+        continue;
+      }
+
+      let readiness: ProviderReadinessStatus;
+      try {
+        const providerModel = this.config.providerModelMap[providerName];
+        readiness = await client.checkModelReadiness(providerModel);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        readiness = { ready: false, detail: `startup readiness failed: ${reason}` };
+      }
+      this.startupReadiness.set(providerName, readiness);
+      results[providerName] = readiness;
+    }
+
+    this.cachedMetricsStatus = undefined;
+    this.cachedMetricsStatusAt = 0;
+
+    return results;
   }
 
   private buildCandidates(primary: ProviderName): ProviderName[] {

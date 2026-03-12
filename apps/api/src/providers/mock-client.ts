@@ -1,4 +1,10 @@
-import type { ProviderChatRequest, ProviderChatResponse, ProviderClient, ProviderHealthStatus } from "./types";
+import type {
+  ProviderChatRequest,
+  ProviderChatResponse,
+  ProviderClient,
+  ProviderHealthStatus,
+  ProviderReadinessStatus,
+} from "./types";
 
 export class MockProviderClient implements ProviderClient {
   readonly name = "mock" as const;
@@ -20,6 +26,13 @@ export class MockProviderClient implements ProviderClient {
       enabled: true,
       healthy: true,
       detail: "always available fallback",
+    };
+  }
+
+  async checkModelReadiness(_model: string): Promise<ProviderReadinessStatus> {
+    return {
+      ready: true,
+      detail: "startup model ready",
     };
   }
 }
