@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Repository Audit Artifacts:** Added repo-audit design, decision-process, and execution-plan documents to track cleanup work and implementation parity.
+- **OSS Governance Policy Set:** Added root contributor and governance documents: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `GOVERNANCE.md`, and `.github/CODEOWNERS`.
 - **Provider Circuit Breaker:** Implemented a circuit breaker pattern for AI providers (Ollama, Groq) to handle repeated failures gracefully.
     - Configurable thresholds (`PROVIDER_CB_THRESHOLD`) and reset timeouts (`PROVIDER_CB_RESET_MS`).
     - Exposed circuit state in `/v1/providers/status` (public) and detailed diagnostics in `/v1/providers/status/internal` (admin-only).

@@ -1,0 +1,23 @@
+# Default owner for repository changes
+* @sakibsadmanshajib
+
+# Application areas
+/apps/api/ @sakibsadmanshajib
+/apps/web/ @sakibsadmanshajib
+/packages/openapi/ @sakibsadmanshajib
+/supabase/ @sakibsadmanshajib
+
+# Project docs and repo policy
+/docs/ @sakibsadmanshajib
+/AGENTS.md @sakibsadmanshajib
+/README.md @sakibsadmanshajib
+/CHANGELOG.md @sakibsadmanshajib
+/CONTRIBUTING.md @sakibsadmanshajib
+/CODE_OF_CONDUCT.md @sakibsadmanshajib
+/SECURITY.md @sakibsadmanshajib
+/SUPPORT.md @sakibsadmanshajib
+/GOVERNANCE.md @sakibsadmanshajib
+
+# Automation and workflows
+/.github/ @sakibsadmanshajib
+/docker-compose.yml @sakibsadmanshajib

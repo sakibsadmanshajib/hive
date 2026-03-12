@@ -16,5 +16,6 @@
 - [ ] Reconciliation daily task assigned
 
 ## Policy
+- [x] OSS governance and contributor policy set published
 - [ ] Credits policy published
 - [ ] Refund policy published (30 days, 100 credits = 0.9 BDT)

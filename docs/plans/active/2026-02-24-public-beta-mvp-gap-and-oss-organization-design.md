@@ -1,7 +1,7 @@
 # Public Beta MVP Gap Analysis and OSS Organization Design
 
 Date: 2026-02-24
-Status: Active
+Status: Active - OSS governance docs delivered via issue #5 / PR #39; broader backlog hygiene remains active
 Scope: Gap analysis, architecture decision narrative, GitHub issue/label setup, and OSS contributor-facing repo organization (docs/meta only)
 
 ## Context
@@ -110,7 +110,8 @@ Keep existing docs information architecture intact:
 
 Only add and link contributor-facing assets:
 
-- root: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`
+- root: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `GOVERNANCE.md`
+- `.github/`: `CODEOWNERS`
 - `.github/`: issue templates, PR template, labels bootstrap helper, optional CI workflow updates
 - docs cross-links: update `README.md` and `docs/README.md` without category churn
 
@@ -139,3 +140,15 @@ Only add and link contributor-facing assets:
 - GitHub labels/milestones/issues are consistent and actionable.
 - New contributors can onboard via root community docs and linked run commands.
 - Existing documentation categories remain intact.
+
+## Progress Update
+
+- Delivered on 2026-03-12 via issue `#5` / PR `#39`:
+  - `CONTRIBUTING.md`
+  - `CODE_OF_CONDUCT.md`
+  - `SECURITY.md`
+  - `SUPPORT.md`
+  - `GOVERNANCE.md`
+  - `.github/CODEOWNERS`
+  - `README.md`, `docs/README.md`, and `CHANGELOG.md` cross-links
+- Remaining work in this design track is backlog and repository-governance hygiene outside the root policy-doc set.
