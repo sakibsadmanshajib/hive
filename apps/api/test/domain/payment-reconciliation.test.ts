@@ -218,4 +218,35 @@ describe("reconcilePaymentDrift", () => {
 
     expect(result.summary.totalFindings).toBe(0);
   });
+
+  it("does not flag correctly credited decimal amounts because of floating-point underflow", () => {
+    const snapshot: PaymentReconciliationSnapshot = {
+      intents: [
+        {
+          intentId: "intent_7",
+          userId: "user_7",
+          provider: "bkash",
+          bdtAmount: 19.99,
+          status: "credited",
+          mintedCredits: 1999,
+          paymentLedgerCredits: 1999,
+          createdAt: "2026-03-11T12:00:00.000Z",
+        },
+      ],
+      events: [
+        {
+          eventKey: "bkash:txn_7",
+          intentId: "intent_7",
+          provider: "bkash",
+          providerTxnId: "txn_7",
+          verified: true,
+          createdAt: "2026-03-11T12:05:00.000Z",
+        },
+      ],
+    };
+
+    const result = reconcilePaymentDrift(snapshot);
+
+    expect(result.summary.totalFindings).toBe(0);
+  });
 });

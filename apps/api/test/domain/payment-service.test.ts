@@ -25,6 +25,16 @@ describe("PaymentService", () => {
     expect(ledger.balance("user-2").total).toBe(0);
   });
 
+  it("mints correct credits for 2-decimal BDT amounts", () => {
+    const ledger = new CreditLedger();
+    const service = new PaymentService(ledger);
+
+    service.createIntent("intent-decimal", "user-3", 19.99);
+    service.handleVerifiedEvent("bkash", "bkash-decimal", "intent-decimal", true);
+
+    expect(ledger.balance("user-3").total).toBe(1999);
+  });
+
   it("keeps webhook idempotency for duplicate provider_txn_id", async () => {
     vi.resetModules();
 

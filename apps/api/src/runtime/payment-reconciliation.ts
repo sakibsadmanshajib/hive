@@ -3,6 +3,7 @@ import type {
   PaymentReconciliationResult,
   PaymentReconciliationSnapshot,
 } from "../domain/types";
+import { bdtToCredits } from "../domain/credits-conversion";
 
 type ReconciliationSnapshotStore = {
   listRecentSnapshot(since: Date): Promise<PaymentReconciliationSnapshot>;
@@ -60,7 +61,7 @@ export function reconcilePaymentDrift(snapshot: PaymentReconciliationSnapshot): 
       result.summary.creditedIntentWithoutVerifiedEvent += 1;
     }
 
-    const expectedMintedCredits = Math.trunc(intent.bdtAmount * 100);
+    const expectedMintedCredits = bdtToCredits(intent.bdtAmount);
     if (intent.paymentLedgerCredits === 0) {
       findings.push({
         kind: "missing_payment_ledger_entry",

@@ -9,6 +9,7 @@ import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
 import type { PersistentApiKey, PersistentPaymentIntent } from "../domain/types";
+import { bdtToCredits } from "../domain/credits-conversion";
 import { RedisRateLimiter } from "./redis-rate-limiter";
 import { createApiKey } from "./security";
 import { LangfuseClient } from "./langfuse";
@@ -66,7 +67,7 @@ class PersistentCreditService {
   }
 
   topUp(userId: string, bdtAmount: number, referenceId: string): Promise<CreditBalance> {
-    const mintedCredits = Math.trunc(Math.max(0, bdtAmount) * 100);
+    const mintedCredits = bdtToCredits(bdtAmount);
     return this.store.topUpCredits(userId, mintedCredits, referenceId);
   }
 }
