@@ -95,6 +95,11 @@ export type AppEnv = {
       billingStoreEnabled: boolean;
     };
   };
+  paymentReconciliation: {
+    enabled: boolean;
+    intervalMs: number;
+    lookbackHours: number;
+  };
   providers: {
     circuitBreaker: {
       failureThreshold: number;
@@ -167,6 +172,11 @@ export function getEnv(): AppEnv {
         apiKeysEnabled: parseBoolean("SUPABASE_API_KEYS_ENABLED", false),
         billingStoreEnabled: parseBoolean("SUPABASE_BILLING_STORE_ENABLED", false),
       },
+    },
+    paymentReconciliation: {
+      enabled: parseBoolean("PAYMENT_RECONCILIATION_ENABLED", false),
+      intervalMs: parsePositiveInteger("PAYMENT_RECONCILIATION_INTERVAL_MS", 60 * 60 * 1000),
+      lookbackHours: parsePositiveInteger("PAYMENT_RECONCILIATION_LOOKBACK_HOURS", 24),
     },
     providers: {
       circuitBreaker: {

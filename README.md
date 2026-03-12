@@ -62,6 +62,7 @@ GitHub contributor intake and triage are repo-managed:
 ## Business Rules
 
 - Base top-up conversion: `1 BDT = 100 AI Credits`
+- Credit conversion implementation must stay decimal-safe for 2-decimal payment amounts such as `19.99 BDT -> 1999 credits`
 - Refund conversion: `100 AI Credits = 0.9 BDT`
 - Refund eligibility: unused purchased credits within 30 days
 - Promo credits: non-refundable
@@ -116,6 +117,7 @@ Authentication is fully handled by **Supabase Auth**. There are no custom auth e
 | User store | `src/runtime/supabase-user-store.ts` | User profiles and settings via Supabase |
 | API key store | `src/runtime/supabase-api-key-store.ts` | Hashed API key persistence via Supabase |
 | Billing store | `src/runtime/supabase-billing-store.ts` | Credits, ledger, and payment events via Supabase |
+| Payment reconciliation | `src/runtime/payment-reconciliation.ts`, `src/runtime/payment-reconciliation-scheduler.ts` | Recent billing drift detection and opt-in scheduler |
 | Authorization | `src/runtime/authorization.ts` | RBAC via Supabase `user_roles`/`role_permissions` tables |
 | User settings | `src/runtime/user-settings.ts` | Feature gates (apiEnabled, generateImage, etc.) |
 | Rate limiter | `src/runtime/redis-rate-limiter.ts` | Redis-based rate limiting |
@@ -163,6 +165,19 @@ Use `.env.example` as the template. Key variables:
 
 ### Payments
 - `BKASH_WEBHOOK_SECRET`, `SSLCOMMERZ_WEBHOOK_SECRET`
+- `PAYMENT_RECONCILIATION_ENABLED` (default `false`)
+- `PAYMENT_RECONCILIATION_INTERVAL_MS` (default `3600000`)
+- `PAYMENT_RECONCILIATION_LOOKBACK_HOURS` (default `24`)
+
+Automated billing hardening:
+
+- When enabled, the API runs a reconciliation scheduler that scans recent payment intents, verified payment events, and payment ledger entries.
+- The scheduler runs an initial reconciliation immediately on start, then continues on the configured interval.
+- Reconciliation treats `payment_intents.status` and `minted_credits` as insufficient by themselves; payment ledger evidence is also required.
+- Lookback scans expand to all rows linked to affected `intent_id` values so boundary-adjacent events do not create false drift alerts.
+- In multi-instance deployments, enable reconciliation on only one API instance until cross-instance coordination exists.
+- Drift alerts are log-based and emitted only for actionable mismatches or scheduler failures.
+- Operator workflow lives in `docs/runbooks/active/payments-reconciliation.md`.
 
 ## Docker Setup
 

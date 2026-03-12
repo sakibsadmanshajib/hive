@@ -45,6 +45,30 @@ gh api repos/{owner}/{repo}/issues/<PR_NUMBER>/comments \
 - PRs are issues, so issue comments API works for PR conversation comments
 - Truncate `.body` with `[0:N]` to avoid overwhelming output
 
+### Reply To Inline Review Comments
+
+Use the PR-scoped review-comment reply endpoint:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies \
+  -X POST \
+  -f body='Fixed in `<COMMIT_SHA>`.
+
+Brief explanation of the change.'
+```
+
+- This creates a reply in the existing inline review thread.
+- Use this for comments from `/pulls/<PR_NUMBER>/comments`, not for top-level PR comments.
+
+Known bad pattern:
+
+```bash
+gh api repos/{owner}/{repo}/pulls/comments/<COMMENT_ID>/replies -X POST ...
+```
+
+- This returns `404 Not Found` in this repository.
+- Keep the PR number in the path: `/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies`.
+
 ### Get PR Metadata
 
 ```bash
@@ -89,6 +113,7 @@ gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments \
    - `/pulls/{pr}/comments` = inline code review comments
    - `/issues/{pr}/comments` = general PR conversation comments
    - `/pulls/{pr}/reviews` = top-level review summaries
+   - `/pulls/{pr}/comments/{comment_id}/replies` = reply inside an inline review thread
 3. **Bot comments are verbose** — CodeRabbit and GitGuardian comments contain large HTML/markdown bodies. Always truncate or filter.
 4. **Rate limits** — Authenticated `gh` has 5000 req/hr. Unlikely to hit in practice, but avoid loops.
 5. **`diff_hunk` field** — Contains the diff context around each comment. Useful for understanding what code the comment references, but very verbose.

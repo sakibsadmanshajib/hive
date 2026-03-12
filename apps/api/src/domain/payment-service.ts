@@ -1,4 +1,5 @@
 import { CreditLedger } from "./credits-ledger";
+import { bdtToCredits } from "./credits-conversion";
 
 interface CreditTopUpService {
   topUp(userId: string, bdtAmount: number): unknown;
@@ -88,7 +89,7 @@ export class PaymentService {
       return;
     }
 
-    const credits = Math.trunc(intent.bdtAmount * 100);
+    const credits = bdtToCredits(intent.bdtAmount);
     if (this.ledger) {
       this.ledger.mintPurchased(intent.userId, credits, intent.intentId);
       this.store?.markIntentCredited(intent.intentId, credits);

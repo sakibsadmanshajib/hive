@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CreditLedger } from "../../src/domain/credits-ledger";
+import type { PaymentReconciliationSnapshot } from "../../src/domain/types";
 import { PaymentService } from "../../src/domain/payment-service";
 
 describe("PaymentService", () => {
@@ -23,6 +24,16 @@ describe("PaymentService", () => {
     service.handleVerifiedEvent("sslcommerz", "ssl-abc", "intent-2", false);
 
     expect(ledger.balance("user-2").total).toBe(0);
+  });
+
+  it("mints correct credits for 2-decimal BDT amounts", () => {
+    const ledger = new CreditLedger();
+    const service = new PaymentService(ledger);
+
+    service.createIntent("intent-decimal", "user-3", 19.99);
+    service.handleVerifiedEvent("bkash", "bkash-decimal", "intent-decimal", true);
+
+    expect(ledger.balance("user-3").total).toBe(1999);
   });
 
   it("keeps webhook idempotency for duplicate provider_txn_id", async () => {
@@ -72,6 +83,11 @@ describe("PaymentService", () => {
             billingStoreEnabled: true,
           },
         },
+        paymentReconciliation: {
+          enabled: false,
+          intervalMs: 60000,
+          lookbackHours: 24,
+        },
         providers: {
           ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
           groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
@@ -108,6 +124,9 @@ describe("PaymentService", () => {
           return { intentId, status: "credited" };
         }
         async markPaymentCredited() { }
+        async listRecentSnapshot(_since: Date): Promise<PaymentReconciliationSnapshot> {
+          return { intents: [], events: [] };
+        }
 
         claimPaymentIntent = claimPaymentIntent;
       },

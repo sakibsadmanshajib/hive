@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CreditBalance } from "../domain/types";
 import type { PersistentPaymentIntent } from "../domain/types";
+import type { PaymentReconciliationSnapshot } from "../domain/types";
 
 type CreditAccountRow = {
   user_id: string;
@@ -16,6 +17,24 @@ type PaymentIntentRow = {
   bdt_amount: number;
   status: "initiated" | "credited" | "failed";
   minted_credits: number;
+};
+
+type PaymentIntentSnapshotRow = PaymentIntentRow & {
+  created_at: string;
+};
+
+type PaymentLedgerRow = {
+  reference_id: string;
+  credits: number;
+};
+
+type PaymentEventRow = {
+  event_key: string;
+  intent_id: string;
+  provider: "bkash" | "sslcommerz";
+  provider_txn_id: string;
+  verified: boolean;
+  created_at: string;
 };
 
 export class SupabaseBillingStore {
@@ -188,6 +207,108 @@ export class SupabaseBillingStore {
         status: result.intent.status,
         mintedCredits: Number(result.intent.minted_credits),
       },
+    };
+  }
+
+  async listRecentSnapshot(since: Date): Promise<PaymentReconciliationSnapshot> {
+    const sinceIso = since.toISOString();
+    const { data: recentIntents, error: recentIntentsError } = await this.supabase
+      .from("payment_intents")
+      .select("intent_id")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false });
+    if (recentIntentsError) {
+      throw new Error(`failed to read recent payment intents: ${recentIntentsError.message}`);
+    }
+
+    const { data: recentEvents, error: recentEventsError } = await this.supabase
+      .from("payment_events")
+      .select("intent_id")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false });
+    if (recentEventsError) {
+      throw new Error(`failed to read recent payment events: ${recentEventsError.message}`);
+    }
+
+    const { data: recentLedger, error: recentLedgerError } = await this.supabase
+      .from("credit_ledger")
+      .select("reference_id")
+      .eq("reference_type", "payment")
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false });
+    if (recentLedgerError) {
+      throw new Error(`failed to read recent payment ledger entries: ${recentLedgerError.message}`);
+    }
+
+    const affectedIntentIds = [
+      ...new Set(
+        [
+          ...(recentIntents ?? []).map((row) => String((row as { intent_id: string }).intent_id)),
+          ...(recentEvents ?? []).map((row) => String((row as { intent_id: string }).intent_id)),
+          ...(recentLedger ?? []).map((row) => String((row as { reference_id: string }).reference_id)),
+        ].filter((value) => value.length > 0),
+      ),
+    ];
+
+    if (affectedIntentIds.length === 0) {
+      return { intents: [], events: [] };
+    }
+
+    const { data: intents, error: intentsError } = await this.supabase
+      .from("payment_intents")
+      .select("intent_id, user_id, provider, bdt_amount, status, minted_credits, created_at")
+      .in("intent_id", affectedIntentIds)
+      .order("created_at", { ascending: false });
+    if (intentsError) {
+      throw new Error(`failed to read reconciliation payment intents: ${intentsError.message}`);
+    }
+
+    const { data: events, error: eventsError } = await this.supabase
+      .from("payment_events")
+      .select("event_key, intent_id, provider, provider_txn_id, verified, created_at")
+      .in("intent_id", affectedIntentIds)
+      .order("created_at", { ascending: false });
+    if (eventsError) {
+      throw new Error(`failed to read reconciliation payment events: ${eventsError.message}`);
+    }
+
+    const { data: ledgerEntries, error: ledgerEntriesError } = await this.supabase
+      .from("credit_ledger")
+      .select("reference_id, credits")
+      .eq("reference_type", "payment")
+      .in("reference_id", affectedIntentIds);
+    if (ledgerEntriesError) {
+      throw new Error(`failed to read reconciliation payment ledger entries: ${ledgerEntriesError.message}`);
+    }
+
+    const ledgerCreditsByIntentId = new Map<string, number>();
+    for (const row of ledgerEntries ?? []) {
+      const entry = row as PaymentLedgerRow;
+      ledgerCreditsByIntentId.set(
+        String(entry.reference_id),
+        (ledgerCreditsByIntentId.get(String(entry.reference_id)) ?? 0) + Number(entry.credits),
+      );
+    }
+
+    return {
+      intents: (intents ?? []).map((intent) => ({
+        intentId: String((intent as PaymentIntentSnapshotRow).intent_id),
+        userId: String((intent as PaymentIntentSnapshotRow).user_id),
+        provider: (intent as PaymentIntentSnapshotRow).provider,
+        bdtAmount: Number((intent as PaymentIntentSnapshotRow).bdt_amount),
+        status: (intent as PaymentIntentSnapshotRow).status,
+        mintedCredits: Number((intent as PaymentIntentSnapshotRow).minted_credits),
+        paymentLedgerCredits: ledgerCreditsByIntentId.get(String((intent as PaymentIntentSnapshotRow).intent_id)) ?? 0,
+        createdAt: new Date((intent as PaymentIntentSnapshotRow).created_at).toISOString(),
+      })),
+      events: (events ?? []).map((event) => ({
+        eventKey: String((event as PaymentEventRow).event_key),
+        intentId: String((event as PaymentEventRow).intent_id),
+        provider: (event as PaymentEventRow).provider,
+        providerTxnId: String((event as PaymentEventRow).provider_txn_id),
+        verified: Boolean((event as PaymentEventRow).verified),
+        createdAt: new Date((event as PaymentEventRow).created_at).toISOString(),
+      })),
     };
   }
 
