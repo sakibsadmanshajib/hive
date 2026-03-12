@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Provider Circuit Breaker:** Implemented a circuit breaker pattern for AI providers (Ollama, Groq) to handle repeated failures gracefully.
     - Configurable thresholds (`PROVIDER_CB_THRESHOLD`) and reset timeouts (`PROVIDER_CB_RESET_MS`).
     - Exposed circuit state in `/v1/providers/status` (public) and detailed diagnostics in `/v1/providers/status/internal` (admin-only).
+- **Provider Metrics Endpoints:** Added provider-level metrics for request volume, errors, latency, and health snapshots.
+    - Public-safe JSON at `/v1/providers/metrics`.
+    - Admin-only JSON at `/v1/providers/metrics/internal`.
+    - Admin-only Prometheus exposition at `/v1/providers/metrics/internal/prometheus`.
+    - Metrics are in-memory per API instance and reset on restart.
 - **Provider Reliability Controls:** Added explicit timeout and retry logic for provider HTTP requests.
     - Environment variables for global and per-provider timeouts (`PROVIDER_TIMEOUT_MS`, `OLLAMA_TIMEOUT_MS`, etc.).
     - Smart retries for transient errors (network, 429, 5xx).
@@ -31,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - `/` is now the authenticated chat interface.
     - Unauthenticated users are strictly redirected to `/auth`.
 - **Documentation:** Major restructuring of `AGENTS.md` to include the "Superpowers" workflow and stricter operational mandates.
+- **Git Workflow Policy:** Worktrees are now optional in this repository; they remain available for isolation but are no longer required by default.
 - **Browser Runtime Configuration:** Web runtime now requires explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY` instead of implicit localhost or placeholder fallbacks.
 - **Web Smoke Auth Fixtures:** Playwright smoke auth now prefers real Supabase signup using `E2E_SUPABASE_ANON_KEY` and only uses synthetic token fallback when `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` is explicitly enabled.
 - **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
@@ -38,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
 - **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
+- **Provider Metrics Documentation:** Aligned README, runbook, and architecture docs with the new public/internal provider metrics boundary and in-memory reset behavior.
 - **Web Auth Session Sync:** Fixed stale browser auth-session behavior by synchronizing the mirrored local auth store with Supabase session refresh events, while preserving seeded smoke/dev sessions until a real Supabase session has been observed.
 - **Protected Route Hydration:** Fixed `/`, `/developer`, and `/settings` auth guards so they wait for client auth-session hydration before redirecting to `/auth`, preventing false redirects during production startup.
 

@@ -351,6 +351,14 @@ class RuntimeAiService {
     return this.providerRegistry.status();
   }
 
+  providersMetrics() {
+    return this.providerRegistry.metrics();
+  }
+
+  providersMetricsPrometheus() {
+    return this.providerRegistry.metricsPrometheus();
+  }
+
   private normalizeRole(role: string): "system" | "user" | "assistant" {
     if (role === "system" || role === "assistant") {
       return role;

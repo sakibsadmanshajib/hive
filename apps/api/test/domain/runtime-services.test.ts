@@ -87,5 +87,7 @@ describe("RuntimeServices", () => {
         expect(services.models).toBeDefined();
         expect(services.adapters.bkash).toBeDefined();
         expect(services.adapters.sslcommerz).toBeDefined();
+        expect(typeof services.ai.providersMetrics).toBe("function");
+        expect(typeof services.ai.providersMetricsPrometheus).toBe("function");
     });
 });

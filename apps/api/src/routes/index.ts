@@ -8,6 +8,7 @@ import { registerModelsRoute } from "./models";
 import { registerPaymentIntentsRoute } from "./payment-intents";
 import { registerPaymentDemoConfirmRoute } from "./payment-demo-confirm";
 import { registerPaymentWebhookRoute } from "./payment-webhook";
+import { registerProvidersMetricsRoute } from "./providers-metrics";
 import { registerProvidersStatusRoute } from "./providers-status";
 import { registerResponsesRoute } from "./responses";
 import { registerUsageRoute } from "./usage";
@@ -21,6 +22,7 @@ export function registerRoutes(app: FastifyInstance, services: RuntimeServices):
   registerCreditsBalanceRoute(app, services);
   registerUsageRoute(app, services);
   registerProvidersStatusRoute(app, services);
+  registerProvidersMetricsRoute(app, services);
   registerPaymentIntentsRoute(app, services);
   registerPaymentDemoConfirmRoute(app, services);
   registerPaymentWebhookRoute(app, services);

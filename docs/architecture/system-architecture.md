@@ -29,6 +29,7 @@ graph TD
 - OpenAI-compatible endpoints (`/v1/chat/completions`, `/v1/responses`, `/v1/images/generations`)
 - Billing and payment endpoints
 - Provider status endpoints (public + admin-protected)
+- Provider metrics endpoints (public-safe JSON, admin JSON, admin Prometheus text)
 
 ### 2. Web App (`apps/web`)
 - Next.js App Router UI
@@ -95,6 +96,7 @@ Circuit breaker protects against cascading provider failures:
 ## Security Boundaries
 
 - Public provider status never returns internal error details
+- Public provider metrics never return provider diagnostic detail or raw circuit-breaker internals
 - Internal diagnostics require `ADMIN_STATUS_TOKEN` header
 - All Supabase tables use Row Level Security (RLS)
 - API keys are stored as SHA-256 hashes; raw keys are never persisted
@@ -110,6 +112,11 @@ The API requires:
 Provider health depends on:
 - Ollama availability and pulled model
 - Groq API key validity and network reachability
+
+Provider metrics are:
+- collected in-process inside the API provider registry
+- exposed through pull-based endpoints only
+- reset on API restart because they are in-memory per API instance
 
 ## Docker Topology
 
