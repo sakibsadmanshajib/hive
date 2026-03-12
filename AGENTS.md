@@ -398,6 +398,10 @@ Before push:
 4. Re-run verification commands
 5. Push only with clean status and verification evidence
 
+Repo lesson:
+
+- In this environment, remote git actions that rely on repository SSH credentials (especially `git push`, and similar remote-mutating git commands) are user-owned. Agents should stop and ask the user to run those commands unless the maintainer explicitly directs otherwise.
+
 Never force-push rewritten history unless explicitly required and safe.
 
 ## Documentation Discipline

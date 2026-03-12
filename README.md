@@ -33,6 +33,13 @@ Contributor and repository policy documents live at the repository root:
 
 Use these documents together with `AGENTS.md` and `docs/README.md` when proposing changes, reporting issues, or reviewing repository policy.
 
+GitHub contributor intake and triage are repo-managed:
+
+- Issue forms live under `.github/ISSUE_TEMPLATE/`
+- The PR checklist lives in `.github/pull_request_template.md`
+- Label and milestone metadata are managed by `tools/github/sync-github-meta.sh`
+- Maintainer operating guidance lives in `docs/runbooks/active/github-triage.md`
+
 ## Current Status
 
 - Stack: TypeScript monorepo (API + web) is the only active runtime.

@@ -1,0 +1,98 @@
+name: Bug report
+description: Report a reproducible defect in the API, web app, billing flow, or repository operations
+title: "[Bug] "
+labels:
+  - bug
+  - kind:bug
+  - status:needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for reproducible defects. For security issues, follow `SECURITY.md` instead of filing a public issue.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Briefly describe the bug.
+      placeholder: API billing endpoint rejects valid top-up requests
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Pick the closest area so triage starts in the right place.
+      options:
+        - API
+        - Web
+        - Auth
+        - Billing
+        - Providers
+        - Docs
+        - Ops
+        - OSS / repository process
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - Blocks release or production use
+        - Major workflow broken
+        - Minor defect
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and context
+      description: Include branch, local/runtime setup, browser, provider, or any relevant environment details.
+      placeholder: |
+        Branch: main
+        Runtime: docker compose + local Supabase
+        Browser: Chrome 135
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest set of steps that reproduces the issue.
+      placeholder: |
+        1. Start the stack with docker compose up --build -d
+        2. Open /auth
+        3. Sign in with seeded smoke user
+        4. Navigate to Billing
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs, screenshots, or response samples
+      description: Paste only non-sensitive evidence. Do not include secrets or admin tokens.
+      render: shell
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification performed
+      description: Record the commands or checks already run.
+      placeholder: |
+        pnpm --filter @hive/api test
+        pnpm --filter @hive/api build
+        curl -s http://127.0.0.1:8080/health
+    validations:
+      required: true
