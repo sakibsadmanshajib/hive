@@ -13,8 +13,25 @@ Hive is a Bangladesh-focused AI API gateway with:
 - Full docs index: `docs/README.md`
 - Agent operating guide: `AGENTS.md`
 - Changelog: `CHANGELOG.md`
+- Contributing guide: `CONTRIBUTING.md`
+- Code of Conduct: `CODE_OF_CONDUCT.md`
+- Security policy: `SECURITY.md`
+- Support guide: `SUPPORT.md`
+- Governance: `GOVERNANCE.md`
 - Engineering standards: `docs/engineering/git-and-ai-practices.md`
 - System architecture: `docs/architecture/system-architecture.md`
+
+## Contributing and Governance
+
+Contributor and repository policy documents live at the repository root:
+
+- `CONTRIBUTING.md`
+- `CODE_OF_CONDUCT.md`
+- `SECURITY.md`
+- `SUPPORT.md`
+- `GOVERNANCE.md`
+
+Use these documents together with `AGENTS.md` and `docs/README.md` when proposing changes, reporting issues, or reviewing repository policy.
 
 ## Current Status
 

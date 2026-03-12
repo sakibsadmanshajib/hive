@@ -6,6 +6,11 @@ This folder is the canonical documentation hub for product, architecture, implem
 
 - Architecture: `docs/architecture/system-architecture.md`
 - Python MVP migration map: `docs/architecture/2026-02-28-python-mvp-migration-map.md`
+- Contributing: `../CONTRIBUTING.md`
+- Code of Conduct: `../CODE_OF_CONDUCT.md`
+- Security policy: `../SECURITY.md`
+- Support: `../SUPPORT.md`
+- Governance: `../GOVERNANCE.md`
 - Product and design decisions: `docs/design/README.md`
 - Changelog: `../CHANGELOG.md`
 - Plans overview: `docs/plans/README.md`
