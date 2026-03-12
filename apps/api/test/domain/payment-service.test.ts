@@ -72,6 +72,11 @@ describe("PaymentService", () => {
             billingStoreEnabled: true,
           },
         },
+        paymentReconciliation: {
+          enabled: false,
+          intervalMs: 60000,
+          lookbackHours: 24,
+        },
         providers: {
           ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
           groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
@@ -108,6 +113,9 @@ describe("PaymentService", () => {
           return { intentId, status: "credited" };
         }
         async markPaymentCredited() { }
+        async listRecentSnapshot() {
+          return { intents: [], events: [] };
+        }
 
         claimPaymentIntent = claimPaymentIntent;
       },

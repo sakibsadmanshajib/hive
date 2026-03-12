@@ -8,6 +8,9 @@ const trackedKeys = [
   "SUPABASE_USER_REPO_ENABLED",
   "SUPABASE_API_KEYS_ENABLED",
   "SUPABASE_BILLING_STORE_ENABLED",
+  "PAYMENT_RECONCILIATION_ENABLED",
+  "PAYMENT_RECONCILIATION_INTERVAL_MS",
+  "PAYMENT_RECONCILIATION_LOOKBACK_HOURS",
   "PROVIDER_TIMEOUT_MS",
   "PROVIDER_MAX_RETRIES",
   "OLLAMA_TIMEOUT_MS",
@@ -64,6 +67,25 @@ describe("getEnv supabase config", () => {
     expect(env.supabase.flags.userRepoEnabled).toBe(false);
     expect(env.supabase.flags.apiKeysEnabled).toBe(false);
     expect(env.supabase.flags.billingStoreEnabled).toBe(false);
+    expect(env.paymentReconciliation.enabled).toBe(false);
+    expect(env.paymentReconciliation.intervalMs).toBe(60 * 60 * 1000);
+    expect(env.paymentReconciliation.lookbackHours).toBe(24);
+  });
+});
+
+describe("getEnv payment reconciliation config", () => {
+  it("reads payment reconciliation scheduler settings", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.PAYMENT_RECONCILIATION_ENABLED = "true";
+    process.env.PAYMENT_RECONCILIATION_INTERVAL_MS = "120000";
+    process.env.PAYMENT_RECONCILIATION_LOOKBACK_HOURS = "48";
+
+    const env = getEnv();
+
+    expect(env.paymentReconciliation.enabled).toBe(true);
+    expect(env.paymentReconciliation.intervalMs).toBe(120000);
+    expect(env.paymentReconciliation.lookbackHours).toBe(48);
   });
 });
 

@@ -19,6 +19,8 @@ import { SupabaseAuthService } from "./supabase-auth-service";
 import { SupabaseApiKeyStore } from "./supabase-api-key-store";
 import { SupabaseUserStore } from "./supabase-user-store";
 import { SupabaseBillingStore } from "./supabase-billing-store";
+import { PaymentReconciliationService } from "./payment-reconciliation";
+import { PaymentReconciliationScheduler } from "./payment-reconciliation-scheduler";
 
 type ChatMessage = { role: string; content: string };
 
@@ -49,6 +51,7 @@ type BillingStore = {
     provider: string,
     providerTxnId: string,
   ): Promise<{ success: boolean; intent?: PersistentPaymentIntent; error?: string }>;
+  listRecentSnapshot(since: Date): Promise<import("../domain/types").PaymentReconciliationSnapshot>;
 };
 
 class PersistentCreditService {
@@ -373,6 +376,8 @@ export type RuntimeServices = {
   credits: PersistentCreditService;
   usage: PersistentUsageService;
   payments: PersistentPaymentService;
+  reconciliation: PaymentReconciliationService;
+  reconciliationScheduler?: PaymentReconciliationScheduler;
   users: PersistentUserService;
   authz: AuthorizationService;
   userSettings: UserSettingsService;
@@ -393,6 +398,21 @@ export function createRuntimeServices(): RuntimeServices {
   const credits = new PersistentCreditService(billingStore);
   const usage = new PersistentUsageService(supabase);
   const payments = new PersistentPaymentService(billingStore, credits);
+  const reconciliation = new PaymentReconciliationService(billingStore);
+  const reconciliationScheduler = env.paymentReconciliation.enabled
+    ? new PaymentReconciliationScheduler(
+      reconciliation,
+      {
+        warn: (payload, message) => console.warn(message ?? "payment reconciliation warning", payload),
+        error: (payload, message) => console.error(message ?? "payment reconciliation error", payload),
+      },
+      {
+        intervalMs: env.paymentReconciliation.intervalMs,
+        lookbackHours: env.paymentReconciliation.lookbackHours,
+      },
+    )
+    : undefined;
+  reconciliationScheduler?.start();
   const apiKeyStore: ApiKeyStore = new SupabaseApiKeyStore(supabase);
   const supabaseUserStore = new SupabaseUserStore(supabase);
   const users = new PersistentUserService(apiKeyStore, supabaseUserStore);
@@ -449,6 +469,8 @@ export function createRuntimeServices(): RuntimeServices {
     credits,
     usage,
     payments,
+    reconciliation,
+    reconciliationScheduler,
     users,
     authz,
     userSettings,
