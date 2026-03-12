@@ -57,6 +57,9 @@ Custom skills are located in the following paths. Read the `SKILL.md` in each sk
 |-------|------|---------|
 | Superpowers | `.agents/skills/using-superpowers/` (and others) | Obra Superpowers planning/execution framework |
 | GitHub API | `.agents/skills/gh-api/SKILL.md` | `gh api` patterns for PR reviews, comments, and issue management |
+| GitHub Review Reading | `.agents/skills/gh-reading-reviews/SKILL.md` | Read PR review comments, review summaries, and PR conversation comments |
+| GitHub Review Replies | `.agents/skills/gh-responding-to-reviews/SKILL.md` | Reply inside inline review threads with the correct endpoint |
+| GitHub PR Editing | `.agents/skills/gh-editing-prs/SKILL.md` | Inspect and edit PR metadata, including REST fallbacks for `gh pr edit` failures |
 
 ## Commands First (Run These Often)
 
