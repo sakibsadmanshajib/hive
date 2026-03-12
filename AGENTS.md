@@ -57,6 +57,9 @@ Custom skills are located in the following paths. Read the `SKILL.md` in each sk
 |-------|------|---------|
 | Superpowers | `.agents/skills/using-superpowers/` (and others) | Obra Superpowers planning/execution framework |
 | GitHub API | `.agents/skills/gh-api/SKILL.md` | `gh api` patterns for PR reviews, comments, and issue management |
+| GitHub Review Reading | `.agents/skills/gh-reading-reviews/SKILL.md` | Read PR review comments, review summaries, and PR conversation comments |
+| GitHub Review Replies | `.agents/skills/gh-responding-to-reviews/SKILL.md` | Reply inside inline review threads with the correct endpoint |
+| GitHub PR Editing | `.agents/skills/gh-editing-prs/SKILL.md` | Inspect and edit PR metadata, including REST fallbacks for `gh pr edit` failures |
 
 ## Commands First (Run These Often)
 
@@ -348,6 +351,12 @@ Auth/session lessons that must persist:
 - Only let Supabase-driven sign-out clear the mirrored custom auth session after the browser runtime has observed a real Supabase session.
 - For protected web routes, wait until client auth-session hydration is ready before redirecting to `/auth`, or valid local sessions can be bounced to the login page during initial render.
 - When verifying auth/chat/billing smoke flows, prefer a rebuilt production app (`pnpm --filter @hive/web build` + `next start`) over assuming `next dev` behavior matches production hydration and routing.
+
+API key lifecycle lessons that must persist:
+
+- Keep the `/v1/users/me` developer snapshot backward-compatible with the web developer panel's credit summary unless the web contract is updated in the same change; dropping `credits` from that payload breaks the existing dashboard.
+- Validate API key expiration input at the route boundary as a real future ISO timestamp before persisting it; invalid date strings can otherwise cause later list/resolve paths to throw when they normalize timestamps.
+- Do not dedupe `expired_observed` audit events only in process memory; expiry audit deduplication must survive API restarts and multi-instance reads by checking persisted event state.
 
 If Linux browser dependencies are missing locally:
 

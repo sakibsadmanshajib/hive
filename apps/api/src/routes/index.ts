@@ -11,6 +11,7 @@ import { registerPaymentWebhookRoute } from "./payment-webhook";
 import { registerProvidersMetricsRoute } from "./providers-metrics";
 import { registerProvidersStatusRoute } from "./providers-status";
 import { registerResponsesRoute } from "./responses";
+import { registerUserRoutes } from "./users";
 import { registerUsageRoute } from "./usage";
 
 export function registerRoutes(app: FastifyInstance, services: RuntimeServices): void {
@@ -21,6 +22,7 @@ export function registerRoutes(app: FastifyInstance, services: RuntimeServices):
   registerImagesGenerationsRoute(app, services);
   registerCreditsBalanceRoute(app, services);
   registerUsageRoute(app, services);
+  registerUserRoutes(app, services);
   registerProvidersStatusRoute(app, services);
   registerProvidersMetricsRoute(app, services);
   registerPaymentIntentsRoute(app, services);

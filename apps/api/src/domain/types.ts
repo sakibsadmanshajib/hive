@@ -90,11 +90,25 @@ export type PaymentReconciliationResult = {
 };
 
 export type PersistentApiKey = {
+  id: string;
   keyPrefix: string;
+  nickname: string;
   userId: string;
   scopes: string[];
+  status: "active" | "revoked" | "expired";
   revoked: boolean;
   createdAt: string;
+  expiresAt?: string;
+  revokedAt?: string;
+};
+
+export type PersistentApiKeyEvent = {
+  id: string;
+  apiKeyId: string;
+  userId: string;
+  eventType: "created" | "revoked" | "expired_observed";
+  eventAt: string;
+  metadata: Record<string, unknown>;
 };
 
 export type PaymentIntent = {

@@ -18,3 +18,6 @@ artifacts/
 # Superpowers skills (local files – each dev runs their own install)
 .agents/skills/*
 !.agents/skills/gh-api/
+!.agents/skills/gh-reading-reviews/
+!.agents/skills/gh-responding-to-reviews/
+!.agents/skills/gh-editing-prs/

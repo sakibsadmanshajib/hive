@@ -58,6 +58,7 @@ GitHub contributor intake and triage are repo-managed:
 - Chat workspace includes:
   - left conversation navigation
   - top-right avatar menu with `Settings`, `Developer Panel`, `Billing`, and `Log out`
+- Developer Panel supports managed API key creation with nickname and optional expiry, current key status visibility, and lifecycle activity.
 
 ## Business Rules
 
@@ -106,6 +107,13 @@ GitHub contributor intake and triage are repo-managed:
 
 Authentication is fully handled by **Supabase Auth**. There are no custom auth endpoints in the Hive API. Users authenticate via Supabase's client SDKs (email/password, OAuth, MFA), and the API validates bearer tokens against Supabase using `SupabaseAuthService.getSessionPrincipal()`.
 
+Session-authenticated developer key management endpoints:
+
+- `GET /v1/users/me`
+- `GET /v1/users/api-keys`
+- `POST /v1/users/api-keys`
+- `POST /v1/users/api-keys/{id}/revoke`
+
 ## Runtime Components
 
 ### API Runtime
@@ -115,7 +123,7 @@ Authentication is fully handled by **Supabase Auth**. There are no custom auth e
 | Env config | `src/config/env.ts` | Validates all env vars including Supabase and Langfuse |
 | Auth service | `src/runtime/supabase-auth-service.ts` | Validates bearer tokens via Supabase Auth |
 | User store | `src/runtime/supabase-user-store.ts` | User profiles and settings via Supabase |
-| API key store | `src/runtime/supabase-api-key-store.ts` | Hashed API key persistence via Supabase |
+| API key store | `src/runtime/supabase-api-key-store.ts` | Hashed API key persistence plus lifecycle audit events via Supabase |
 | Billing store | `src/runtime/supabase-billing-store.ts` | Credits, ledger, and payment events via Supabase |
 | Payment reconciliation | `src/runtime/payment-reconciliation.ts`, `src/runtime/payment-reconciliation-scheduler.ts` | Recent billing drift detection and opt-in scheduler |
 | Authorization | `src/runtime/authorization.ts` | RBAC via Supabase `user_roles`/`role_permissions` tables |
@@ -264,3 +272,4 @@ Supabase migrations are located in `supabase/migrations/`:
 - `20260223000001_auth_user_tables.sql` — User profiles, roles, permissions, settings
 - `20260223000002_api_keys.sql` — Hashed API key metadata
 - `20260223000003_billing_tables.sql` — Credit accounts, ledger, payment intents/events
+- `20260312_004_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events

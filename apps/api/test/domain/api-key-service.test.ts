@@ -5,12 +5,23 @@ import { hashApiKeyForLookup } from "../../src/runtime/security";
 import { SupabaseApiKeyStore } from "../../src/runtime/supabase-api-key-store";
 
 type ApiKeyRow = {
+  id?: string;
+  nickname?: string;
+  expires_at?: string | null;
+  revoked_at?: string | null;
   user_id: string;
   key_hash: string;
   key_prefix: string;
   scopes: string[];
   revoked: boolean;
   created_at: string;
+};
+
+type ApiKeyEventRow = {
+  api_key_id: string;
+  user_id: string;
+  event_type: string;
+  metadata?: Record<string, unknown>;
 };
 
 class FakeApiKeysTable {
@@ -23,11 +34,15 @@ class FakeApiKeysTable {
   insert(payload: Record<string, unknown>) {
     this.lastInsert = payload;
     this.rows.push({
+      id: payload.id ? String(payload.id) : undefined,
+      nickname: payload.nickname ? String(payload.nickname) : undefined,
+      expires_at: payload.expires_at ? String(payload.expires_at) : null,
       user_id: String(payload.user_id),
       key_hash: String(payload.key_hash),
       key_prefix: String(payload.key_prefix),
       scopes: Array.isArray(payload.scopes) ? (payload.scopes as string[]) : [],
       revoked: Boolean(payload.revoked),
+      revoked_at: payload.revoked_at ? String(payload.revoked_at) : null,
       created_at: new Date().toISOString(),
     });
     return Promise.resolve({ error: null });
@@ -73,12 +88,26 @@ class FakeApiKeysTable {
 
 class FakeSupabaseClient {
   readonly apiKeys = new FakeApiKeysTable();
+  readonly apiKeyEvents: ApiKeyEventRow[] = [];
 
   from(table: string) {
-    if (table !== "api_keys") {
-      throw new Error(`unexpected table ${table}`);
+    if (table === "api_keys") {
+      return this.apiKeys;
     }
-    return this.apiKeys;
+    if (table === "api_key_events") {
+      return {
+        insert: (payload: Record<string, unknown>) => {
+          this.apiKeyEvents.push({
+            api_key_id: String(payload.api_key_id),
+            user_id: String(payload.user_id),
+            event_type: String(payload.event_type),
+            metadata: typeof payload.metadata === "object" ? payload.metadata as Record<string, unknown> : {},
+          });
+          return Promise.resolve({ error: null });
+        },
+      };
+    }
+    throw new Error(`unexpected table ${table}`);
   }
 }
 
@@ -118,7 +147,12 @@ describe("SupabaseApiKeyStore", () => {
     const store = new SupabaseApiKeyStore(supabase as never);
     const rawKey = "sk_live_abcdef1234567890";
 
-    await store.create({ key: rawKey, userId: "3a343f16-a94c-4a8f-9f39-4ae8f6bd90e5", scopes: ["chat"] });
+    await store.create({
+      key: rawKey,
+      userId: "3a343f16-a94c-4a8f-9f39-4ae8f6bd90e5",
+      scopes: ["chat"],
+      nickname: "primary",
+    });
 
     expect(supabase.apiKeys.lastInsert).toMatchObject({
       user_id: "3a343f16-a94c-4a8f-9f39-4ae8f6bd90e5",
@@ -128,6 +162,12 @@ describe("SupabaseApiKeyStore", () => {
       revoked: false,
     });
     expect(supabase.apiKeys.lastInsert).not.toHaveProperty("key");
+    expect(supabase.apiKeyEvents).toEqual([
+      expect.objectContaining({
+        user_id: "3a343f16-a94c-4a8f-9f39-4ae8f6bd90e5",
+        event_type: "created",
+      }),
+    ]);
   });
 
   it("resolves api key by hash and respects revoked flag", async () => {
@@ -135,7 +175,12 @@ describe("SupabaseApiKeyStore", () => {
     const store = new SupabaseApiKeyStore(supabase as never);
     const rawKey = "sk_live_hash_lookup";
 
-    await store.create({ key: rawKey, userId: "8c7d3298-b7b0-4ba0-a8f8-f9be8a6430cb", scopes: ["usage", "billing"] });
+    await store.create({
+      key: rawKey,
+      userId: "8c7d3298-b7b0-4ba0-a8f8-f9be8a6430cb",
+      scopes: ["usage", "billing"],
+      nickname: "billing",
+    });
 
     await expect(store.resolve(rawKey)).resolves.toEqual({
       userId: "8c7d3298-b7b0-4ba0-a8f8-f9be8a6430cb",
