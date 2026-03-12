@@ -26,6 +26,7 @@ export class PaymentReconciliationScheduler {
       return;
     }
 
+    void this.runOnce();
     this.timer = setInterval(() => {
       void this.runOnce();
     }, this.config.intervalMs);

@@ -15,7 +15,7 @@ body:
     attributes:
       label: Summary
       description: Short statement of the proposed feature or improvement.
-      placeholder: Add repository-managed GitHub issue forms for contributor intake
+      placeholder: Briefly describe the feature or improvement
     validations:
       required: true
   - type: dropdown
@@ -53,9 +53,9 @@ body:
       label: Acceptance criteria
       description: Write concrete, testable outcomes.
       placeholder: |
-        - [ ] New issue forms exist for bugs and feature requests
-        - [ ] PR template includes required verification checklist
-        - [ ] Maintainer runbook documents label and milestone usage
+        - [ ] Behavior change is implemented
+        - [ ] Tests or explicit checks cover the change
+        - [ ] Required docs are updated
     validations:
       required: true
   - type: textarea
@@ -70,7 +70,7 @@ body:
     attributes:
       label: Docs and policy impact
       description: Which docs, runbooks, or changelog entries need updating?
-      placeholder: README.md, docs/README.md, CONTRIBUTING.md, CHANGELOG.md
+      placeholder: README.md, docs/runbooks/active/<runbook>.md, CHANGELOG.md
     validations:
       required: true
   - type: textarea
@@ -79,8 +79,9 @@ body:
       label: Verification expectations
       description: Specify the tests, builds, or explicit checks needed before completion.
       placeholder: |
+        pnpm --filter @hive/api test
         pnpm --filter @hive/api build
         pnpm --filter @hive/web build
-        gh api repos/{owner}/{repo}/labels --paginate
+        # or explicit manual checks for docs/ops-only work
     validations:
       required: true

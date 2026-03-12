@@ -87,6 +87,30 @@ describe("getEnv payment reconciliation config", () => {
     expect(env.paymentReconciliation.intervalMs).toBe(120000);
     expect(env.paymentReconciliation.lookbackHours).toBe(48);
   });
+
+  it("rejects invalid payment reconciliation booleans", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.PAYMENT_RECONCILIATION_ENABLED = "notabool";
+
+    expect(() => getEnv()).toThrowError(/PAYMENT_RECONCILIATION_ENABLED/);
+  });
+
+  it("rejects invalid payment reconciliation interval values", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.PAYMENT_RECONCILIATION_INTERVAL_MS = "0";
+
+    expect(() => getEnv()).toThrowError(/PAYMENT_RECONCILIATION_INTERVAL_MS/);
+  });
+
+  it("rejects invalid payment reconciliation lookback values", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.PAYMENT_RECONCILIATION_LOOKBACK_HOURS = "12.5";
+
+    expect(() => getEnv()).toThrowError(/PAYMENT_RECONCILIATION_LOOKBACK_HOURS/);
+  });
 });
 
 describe("getEnv provider timeout and retry controls", () => {

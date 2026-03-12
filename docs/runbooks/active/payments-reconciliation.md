@@ -18,6 +18,7 @@ Behavior:
 - The scheduler scans recent payment intents, payment events, and payment credit-ledger entries.
 - The scheduler expands the scan to all rows linked to affected `intent_id` values so lookback-boundary matches do not create false drift alerts.
 - The job skips overlap inside one API process if a prior run is still in flight.
+- In multi-replica deployments each API process runs its own scheduler and may emit duplicate drift alerts, so enable reconciliation on only one instance until cross-instance coordination exists.
 - The scheduler logs only when drift is found or when the reconciliation job fails. Clean intervals are intentionally silent.
 
 ## Daily Procedure

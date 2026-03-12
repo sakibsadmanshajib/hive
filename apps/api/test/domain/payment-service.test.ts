@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { CreditLedger } from "../../src/domain/credits-ledger";
+import type { PaymentReconciliationSnapshot } from "../../src/domain/types";
 import { PaymentService } from "../../src/domain/payment-service";
 
 describe("PaymentService", () => {
@@ -123,7 +124,7 @@ describe("PaymentService", () => {
           return { intentId, status: "credited" };
         }
         async markPaymentCredited() { }
-        async listRecentSnapshot() {
+        async listRecentSnapshot(_since: Date): Promise<PaymentReconciliationSnapshot> {
           return { intents: [], events: [] };
         }
 

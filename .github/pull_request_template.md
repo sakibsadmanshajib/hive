@@ -28,9 +28,11 @@ Results:
 - [ ] Public/internal provider boundaries remain intact.
 - [ ] No secrets, tokens, or credentials were added to the repo.
 - [ ] Billing, ledger, auth, or provider-routing changes were verified carefully where applicable.
-- [ ] This change does not require special rollout or rollback steps, or I documented them below.
+- [ ] I documented the rollout and rollback plan below.
 
 ## Evidence and Reviewer Notes
 
+- Rollout plan:
+- Rollback plan:
 - Screenshots, logs, API samples, or dry-run output:
 - Follow-up risks or known gaps:

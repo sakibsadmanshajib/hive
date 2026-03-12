@@ -57,6 +57,7 @@ First implementation should detect these classes:
 1. Verified payment event exists, but the payment intent is not marked `credited`.
 2. Payment intent is `credited`, but there is no verified payment event for that intent.
 3. Payment intent is `credited`, but `minted_credits` does not equal `bdt_amount * 100`.
+4. Payment intent is `credited` or has a verified payment event, but there is no corresponding payment-ledger evidence for that intent (`missing_payment_ledger_entry`).
 
 These rules map directly to the existing manual runbook and current billing conversion logic.
 

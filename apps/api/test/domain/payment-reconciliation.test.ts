@@ -12,11 +12,11 @@ describe("reconcilePaymentDrift", () => {
           userId: "user_1",
           provider: "bkash",
           bdtAmount: 25,
-        status: "initiated",
-        mintedCredits: 0,
-        paymentLedgerCredits: 0,
-        createdAt: "2026-03-11T10:00:00.000Z",
-      },
+          status: "initiated",
+          mintedCredits: 0,
+          paymentLedgerCredits: 0,
+          createdAt: "2026-03-11T10:00:00.000Z",
+        },
       ],
       events: [
         {
@@ -107,6 +107,47 @@ describe("reconcilePaymentDrift", () => {
         intentId: "intent_3",
         expectedMintedCredits: 1500,
         actualMintedCredits: 1200,
+      }),
+    ]);
+  });
+
+  it("flags credited intents whose ledger credits do not match the payment amount", () => {
+    const snapshot: PaymentReconciliationSnapshot = {
+      intents: [
+        {
+          intentId: "intent_ledger_mismatch",
+          userId: "user_ledger",
+          provider: "bkash",
+          bdtAmount: 15,
+          status: "credited",
+          mintedCredits: 1500,
+          paymentLedgerCredits: 1400,
+          createdAt: "2026-03-11T12:00:00.000Z",
+        },
+      ],
+      events: [
+        {
+          eventKey: "bkash:txn_ledger_mismatch",
+          intentId: "intent_ledger_mismatch",
+          provider: "bkash",
+          providerTxnId: "txn_ledger_mismatch",
+          verified: true,
+          createdAt: "2026-03-11T12:05:00.000Z",
+        },
+      ],
+    };
+
+    const result = reconcilePaymentDrift(snapshot);
+
+    expect(result.summary.totalFindings).toBe(1);
+    expect(result.summary.creditedAmountMismatch).toBe(1);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "credited_amount_mismatch",
+        intentId: "intent_ledger_mismatch",
+        expectedMintedCredits: 1500,
+        actualMintedCredits: 1500,
+        actualLedgerCredits: 1400,
       }),
     ]);
   });

@@ -30,11 +30,12 @@ describe("PaymentReconciliationScheduler", () => {
     );
 
     scheduler.start();
+    await Promise.resolve();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(reconcileRecentPayments).toHaveBeenCalledTimes(1);
+    expect(reconcileRecentPayments).toHaveBeenCalledTimes(2);
     expect(reconcileRecentPayments).toHaveBeenCalledWith(6);
-    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
   });
 
   it("skips overlapping runs while a prior reconciliation is still in flight", async () => {
@@ -52,6 +53,7 @@ describe("PaymentReconciliationScheduler", () => {
     );
 
     scheduler.start();
+    await Promise.resolve();
     await vi.advanceTimersByTimeAsync(60_000);
     await vi.advanceTimersByTimeAsync(60_000);
 
@@ -71,7 +73,7 @@ describe("PaymentReconciliationScheduler", () => {
     );
 
     scheduler.start();
-    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.resolve();
 
     expect(logger.error).toHaveBeenCalledTimes(1);
     expect(logger.warn).not.toHaveBeenCalled();
@@ -96,6 +98,7 @@ describe("PaymentReconciliationScheduler", () => {
     );
 
     scheduler.start();
+    await Promise.resolve();
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(logger.warn).not.toHaveBeenCalled();
