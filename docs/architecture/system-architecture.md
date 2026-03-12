@@ -41,8 +41,9 @@ graph TD
 ### 3. Supabase (Auth + Persistence)
 - **Auth**: User registration, login, OAuth, MFA — all handled by Supabase Auth
 - **User Profiles**: `user_profiles` table via `SupabaseUserStore`
-- **API Keys**: Hashed key metadata in `api_keys` table via `SupabaseApiKeyStore`
-- **API Key Metadata Shape**: Persisted records expose only a non-secret `key_prefix` plus scopes/revocation metadata; plaintext API keys are never returned after creation
+- **API Keys**: Hashed key metadata in `api_keys` plus immutable lifecycle history in `api_key_events`, managed via `SupabaseApiKeyStore`
+- **API Key Metadata Shape**: Persisted records expose a stable key id, non-secret `key_prefix`, nickname, scopes, expiration, and revocation metadata; plaintext API keys are never returned after creation
+- **API Key Lifecycle**: Creation, revocation, and first observed expiry are recorded as immutable audit events for developer visibility and operator investigations
 - **Billing**: Credit accounts, ledger, payment intents/events via `SupabaseBillingStore`
 - **RBAC**: `user_roles` + `role_permissions` tables queried by `AuthorizationService`
 - **Settings**: `user_settings` table for feature gates

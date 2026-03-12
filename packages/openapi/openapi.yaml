@@ -143,6 +143,155 @@ paths:
           description: Usage list
         "401":
           description: Missing API key
+  /v1/users/me:
+    get:
+      summary: Get authenticated user developer snapshot
+      parameters:
+        - in: header
+          name: authorization
+          required: true
+          schema:
+            type: string
+            example: Bearer <supabase-access-token>
+      responses:
+        "200":
+          description: User snapshot including credits and API key metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    $ref: "#/components/schemas/UserProfile"
+                  credits:
+                    $ref: "#/components/schemas/CreditBalance"
+                  api_keys:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ManagedApiKey"
+                  api_key_events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiKeyEvent"
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden
+  /v1/users/api-keys:
+    get:
+      summary: List authenticated user API keys and lifecycle events
+      parameters:
+        - in: header
+          name: authorization
+          required: true
+          schema:
+            type: string
+            example: Bearer <supabase-access-token>
+      responses:
+        "200":
+          description: Managed API keys
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ManagedApiKey"
+                  events:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ApiKeyEvent"
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden
+    post:
+      summary: Create a managed API key for the authenticated user
+      parameters:
+        - in: header
+          name: authorization
+          required: true
+          schema:
+            type: string
+            example: Bearer <supabase-access-token>
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nickname, scopes]
+              properties:
+                nickname:
+                  type: string
+                scopes:
+                  type: array
+                  items:
+                    type: string
+                    enum: [chat, image, usage, billing]
+                expiresAt:
+                  type: string
+                  format: date-time
+      responses:
+        "200":
+          description: Raw key returned once with persisted metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  key:
+                    type: string
+                  nickname:
+                    type: string
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+        "400":
+          description: Invalid create request
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden
+  /v1/users/api-keys/{id}/revoke:
+    post:
+      summary: Revoke a managed API key by stable id
+      parameters:
+        - in: header
+          name: authorization
+          required: true
+          schema:
+            type: string
+            example: Bearer <supabase-access-token>
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Key revoked
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revoked:
+                    type: boolean
+                  id:
+                    type: string
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden
+        "404":
+          description: API key not found
   /v1/payments/intents:
     post:
       summary: Create top-up payment intent
@@ -213,3 +362,71 @@ components:
         object:
           type: string
           example: model
+    UserProfile:
+      type: object
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    CreditBalance:
+      type: object
+      properties:
+        userId:
+          type: string
+        availableCredits:
+          type: number
+        purchasedCredits:
+          type: number
+        promoCredits:
+          type: number
+    ManagedApiKey:
+      type: object
+      properties:
+        id:
+          type: string
+        key_id:
+          type: string
+        nickname:
+          type: string
+        status:
+          type: string
+          enum: [active, revoked, expired]
+        revoked:
+          type: boolean
+        scopes:
+          type: array
+          items:
+            type: string
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        revokedAt:
+          type: string
+          format: date-time
+    ApiKeyEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        apiKeyId:
+          type: string
+        userId:
+          type: string
+        eventType:
+          type: string
+          enum: [created, revoked, expired_observed]
+        eventAt:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          additionalProperties: true

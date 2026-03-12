@@ -3,7 +3,25 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 export type UserSnapshot = {
   user: { user_id: string; email: string; name?: string };
   credits: { availableCredits: number; purchasedCredits: number; promoCredits: number };
-  api_keys: Array<{ key_id: string; revoked: boolean; scopes: string[]; createdAt: string }>;
+  api_keys: Array<{
+    id: string;
+    key_id: string;
+    nickname: string;
+    status: "active" | "revoked" | "expired";
+    revoked: boolean;
+    scopes: string[];
+    createdAt: string;
+    expiresAt?: string;
+    revokedAt?: string;
+  }>;
+  api_key_events?: Array<{
+    id: string;
+    apiKeyId: string;
+    userId: string;
+    eventType: "created" | "revoked" | "expired_observed";
+    eventAt: string;
+    metadata: Record<string, unknown>;
+  }>;
 };
 
 type UsageCardsProps = {
@@ -12,7 +30,7 @@ type UsageCardsProps = {
 };
 
 export function UsageCards({ snapshot, usageCount }: UsageCardsProps) {
-  const activeKeys = snapshot ? snapshot.api_keys.filter((key) => !key.revoked).length : 0;
+  const activeKeys = snapshot ? snapshot.api_keys.filter((key) => key.status === "active").length : 0;
 
   if (!snapshot) {
     return (

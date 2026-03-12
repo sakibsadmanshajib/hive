@@ -3,6 +3,7 @@
 ## Active
 
 - `docs/runbooks/active/github-triage.md`
+- `docs/runbooks/active/api-key-lifecycle.md`
 - `docs/runbooks/active/payments-reconciliation.md`
 - `docs/runbooks/active/credit-ledger-audit.md`
 - `docs/runbooks/active/ci-and-pr-cleanup-operations.md` (CI quality workflow and merged-PR cleanup operations)

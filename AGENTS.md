@@ -349,6 +349,12 @@ Auth/session lessons that must persist:
 - For protected web routes, wait until client auth-session hydration is ready before redirecting to `/auth`, or valid local sessions can be bounced to the login page during initial render.
 - When verifying auth/chat/billing smoke flows, prefer a rebuilt production app (`pnpm --filter @hive/web build` + `next start`) over assuming `next dev` behavior matches production hydration and routing.
 
+API key lifecycle lessons that must persist:
+
+- Keep the `/v1/users/me` developer snapshot backward-compatible with the web developer panel's credit summary unless the web contract is updated in the same change; dropping `credits` from that payload breaks the existing dashboard.
+- Validate API key expiration input at the route boundary as a real future ISO timestamp before persisting it; invalid date strings can otherwise cause later list/resolve paths to throw when they normalize timestamps.
+- Do not dedupe `expired_observed` audit events only in process memory; expiry audit deduplication must survive API restarts and multi-instance reads by checking persisted event state.
+
 If Linux browser dependencies are missing locally:
 
 - `pnpm --filter @hive/web exec playwright install-deps chromium`

@@ -8,7 +8,7 @@ import { MockProviderClient } from "../providers/mock-client";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName } from "../providers/types";
-import type { PersistentApiKey, PersistentPaymentIntent } from "../domain/types";
+import type { PersistentApiKey, PersistentApiKeyEvent, PersistentPaymentIntent } from "../domain/types";
 import { bdtToCredits } from "../domain/credits-conversion";
 import { RedisRateLimiter } from "./redis-rate-limiter";
 import { createApiKey } from "./security";
@@ -26,11 +26,19 @@ import { PaymentReconciliationScheduler } from "./payment-reconciliation-schedul
 type ChatMessage = { role: string; content: string };
 
 type ApiKeyStore = {
-  create(input: { key: string; userId: string; scopes: string[] }): Promise<void>;
+  create(input: {
+    key: string;
+    userId: string;
+    scopes: string[];
+    nickname: string;
+    expiresAt?: string;
+  }): Promise<void>;
   resolve(key: string): Promise<{ userId: string; scopes: string[] } | null>;
   list(userId: string): Promise<PersistentApiKey[]>;
   revoke(key: string, userId: string): Promise<boolean>;
+  revokeById(id: string, userId: string): Promise<boolean>;
   get(key: string): Promise<PersistentApiKey | undefined>;
+  listEvents(userId: string): Promise<PersistentApiKeyEvent[]>;
 };
 
 type BillingStore = {
@@ -186,17 +194,24 @@ export class PersistentUserService {
       return undefined;
     }
     const keys = await this.apiKeys.list(userId);
+    const events = await this.apiKeys.listEvents(userId);
     return {
       userId: user.userId,
       email: user.email,
       name: user.name,
       createdAt: user.createdAt,
       apiKeys: keys.map((key) => ({
+        id: key.id,
         key_id: key.keyPrefix,
+        nickname: key.nickname,
+        status: key.status,
         revoked: key.revoked,
         scopes: key.scopes,
         createdAt: key.createdAt,
+        expiresAt: key.expiresAt,
+        revokedAt: key.revokedAt,
       })),
+      apiKeyEvents: events,
     };
   }
 
@@ -211,17 +226,29 @@ export class PersistentUserService {
   async resolveApiKey(key: string): Promise<{ userId: string; scopes: string[] } | null> {
     return this.apiKeys.resolve(key);
   }
-
-
-
-  async createApiKey(userId: string, scopes: string[]) {
+  async createApiKey(userId: string, input: {
+    nickname: string;
+    scopes: string[];
+    expiresAt?: string;
+  }) {
     const key = createApiKey();
-    await this.apiKeys.create({ key, userId, scopes });
-    return key;
+    await this.apiKeys.create({
+      key,
+      userId,
+      nickname: input.nickname,
+      scopes: input.scopes,
+      expiresAt: input.expiresAt,
+    });
+    return {
+      key,
+      nickname: input.nickname,
+      scopes: input.scopes,
+      expiresAt: input.expiresAt,
+    };
   }
 
-  revokeApiKey(userId: string, key: string): Promise<boolean> {
-    return this.apiKeys.revoke(key, userId);
+  revokeApiKey(userId: string, id: string): Promise<boolean> {
+    return this.apiKeys.revokeById(id, userId);
   }
 }
 

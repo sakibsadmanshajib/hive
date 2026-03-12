@@ -39,6 +39,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 
 - Runbooks index: `docs/runbooks/README.md`
 - Payments reconciliation runbook: `docs/runbooks/active/payments-reconciliation.md`
+- API key lifecycle runbook: `docs/runbooks/active/api-key-lifecycle.md`
 - GitHub triage runbook: `docs/runbooks/active/github-triage.md`
 - Web e2e smoke runbook: `docs/runbooks/active/web-e2e-smoke.md`
 - CI quality workflow: `.github/workflows/ci.yml` (troubleshooting: `docs/runbooks/active/ci-and-pr-cleanup-operations.md`)

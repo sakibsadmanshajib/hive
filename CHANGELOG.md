@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **API Key Lifecycle Management:** Added stable API key ids, nicknames, optional expiration, revoke-by-id management, and immutable lifecycle audit events for create/revoke/expiry visibility.
+    - Session-authenticated management routes: `/v1/users/me`, `/v1/users/api-keys`, and `/v1/users/api-keys/{id}/revoke`.
+    - Developer Panel now shows managed API keys, one-time raw key reveal on creation, and recent lifecycle activity.
 - **Repository Audit Artifacts:** Added repo-audit design, decision-process, and execution-plan documents to track cleanup work and implementation parity.
 - **OSS Governance Policy Set:** Added root contributor and governance documents: `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `GOVERNANCE.md`, and `.github/CODEOWNERS`.
 - **GitHub Contribution Intake and Metadata Sync:** Added GitHub Issue Forms, a structured PR template, declarative label/milestone metadata under `tools/github/`, and a maintainer triage runbook for repository issue operations.
