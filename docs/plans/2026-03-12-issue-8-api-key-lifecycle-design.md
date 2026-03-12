@@ -194,11 +194,36 @@ Cons:
 
 ## Verification Strategy
 
-- migration and store tests for new columns and audit events
-- auth tests for expired-key rejection
-- service/route tests for create, list, and revoke flows
-- web tests for developer-page rendering of metadata and status
-- required repo verification for touched API and web scopes
+- Migration and store checks:
+  `sed -n '1,260p' apps/api/supabase/migrations/20260312_004_api_key_lifecycle.sql`
+  `pnpm --filter @hive/api exec vitest run test/domain/supabase-api-key-store.test.ts`
+- Auth and expiry checks:
+  `pnpm --filter @hive/api exec vitest run test/routes/auth-principal.test.ts`
+  `pnpm --filter @hive/api exec vitest run test/domain/supabase-api-key-store.test.ts`
+- Service and route flows:
+  `pnpm --filter @hive/api exec vitest run test/domain/persistent-user-service.test.ts`
+  `pnpm --filter @hive/api exec vitest run test/routes/user-api-keys-route.test.ts`
+- Web contract and UI:
+  `rg -n "/v1/users/me|/v1/users/api-keys|nickname|expiresAt|revokedAt|status" packages/openapi/openapi.yaml`
+  `pnpm --filter @hive/web build`
+- Full touched-scope verification:
+  `pnpm --filter @hive/api test`
+  `pnpm --filter @hive/api build`
+  `pnpm --filter @hive/web build`
+
+Example manual API exercise after deployment:
+
+```bash
+API_URL=http://127.0.0.1:8080
+ACCESS_TOKEN="<supabase-access-token>"
+
+curl -s "$API_URL/v1/users/me" -H "authorization: Bearer $ACCESS_TOKEN"
+curl -s "$API_URL/v1/users/api-keys" -H "authorization: Bearer $ACCESS_TOKEN"
+curl -s -X POST "$API_URL/v1/users/api-keys" \
+  -H "authorization: Bearer $ACCESS_TOKEN" \
+  -H "content-type: application/json" \
+  -d '{"nickname":"deploy","scopes":["chat","usage"],"expiresAt":"2026-12-01T00:00:00.000Z"}'
+```
 
 ## Risks and Mitigations
 

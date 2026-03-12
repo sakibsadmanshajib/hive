@@ -13,12 +13,18 @@ import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
 const DEFAULT_SCOPES = ["chat", "image", "usage", "billing"] as const;
 
-function toExpiry(days: string): string | undefined {
-  const parsed = Number(days);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    return undefined;
+function toExpiry(days: string): { expiresAt?: string; error?: string } {
+  const trimmed = days.trim();
+  if (trimmed === "") {
+    return {};
   }
-  return new Date(Date.now() + parsed * 24 * 60 * 60 * 1000).toISOString();
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return { error: "Validity must be a positive whole number of days." };
+  }
+  return {
+    expiresAt: new Date(Date.now() + parsed * 24 * 60 * 60 * 1000).toISOString(),
+  };
 }
 
 export default function DeveloperPage() {
@@ -104,7 +110,11 @@ export default function DeveloperPage() {
     setLoading(true);
     try {
       const apiBase = getApiBase();
-      const expiresAt = toExpiry(expiryDays);
+      const { expiresAt, error } = toExpiry(expiryDays);
+      if (error) {
+        setStatus(error);
+        return;
+      }
       const response = await fetch(`${apiBase}/v1/users/api-keys`, {
         method: "POST",
         headers: apiHeaders(accessToken),

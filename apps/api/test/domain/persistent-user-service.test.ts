@@ -92,7 +92,7 @@ describe("PersistentUserService", () => {
         const mockUserStore = {} as any;
 
         const service = new PersistentUserService(mockApiKeyStore, mockUserStore);
-        const result = await (service as any).createApiKey("user-x", {
+        const result = await service.createApiKey("user-x", {
             nickname: "deploy",
             scopes: ["chat", "usage"],
             expiresAt: "2026-05-01T00:00:00.000Z",
@@ -119,7 +119,7 @@ describe("PersistentUserService", () => {
         const mockUserStore = {} as any;
 
         const service = new PersistentUserService(mockApiKeyStore, mockUserStore);
-        const result = await (service as any).revokeApiKey("user-x", "key-1");
+        const result = await service.revokeApiKey("user-x", "key-1");
 
         expect(result).toBe(true);
         expect(mockApiKeyStore.revokeById).toHaveBeenCalledWith("key-1", "user-x");

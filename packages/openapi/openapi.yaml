@@ -235,7 +235,7 @@ paths:
                   type: string
                   format: date-time
       responses:
-        "200":
+        "201":
           description: Raw key returned once with persisted metadata
           content:
             application/json:
@@ -390,8 +390,10 @@ components:
       properties:
         id:
           type: string
+          description: Stable UUID used for backend management operations such as revocation.
         key_id:
           type: string
+          description: Visible key prefix returned for display and identification in the developer UI.
         nickname:
           type: string
         status:

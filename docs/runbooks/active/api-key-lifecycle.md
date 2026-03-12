@@ -55,6 +55,8 @@ Creation rules:
 pnpm --filter @hive/api exec vitest run test/domain/supabase-api-key-store.test.ts
 pnpm --filter @hive/api exec vitest run test/domain/persistent-user-service.test.ts
 pnpm --filter @hive/api exec vitest run test/routes/user-api-keys-route.test.ts
+pnpm --filter @hive/api test
+pnpm --filter @hive/api build
 pnpm --filter @hive/web build
 ```
 

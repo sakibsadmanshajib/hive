@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
 import { requirePrincipal } from "./auth";
 
+const ALLOWED_SCOPES = new Set(["chat", "image", "usage", "billing"]);
+
 function readCreateApiKeyBody(body: unknown): { nickname: string; scopes: string[]; expiresAt?: string } | null {
   if (!body || typeof body !== "object") {
     return null;
@@ -10,7 +12,10 @@ function readCreateApiKeyBody(body: unknown): { nickname: string; scopes: string
   if (typeof record.nickname !== "string" || !record.nickname.trim()) {
     return null;
   }
-  if (!Array.isArray(record.scopes) || !record.scopes.every((scope) => typeof scope === "string")) {
+  if (
+    !Array.isArray(record.scopes)
+    || !record.scopes.every((scope) => typeof scope === "string" && ALLOWED_SCOPES.has(scope))
+  ) {
     return null;
   }
   if (record.expiresAt !== undefined && typeof record.expiresAt !== "string") {
@@ -94,7 +99,8 @@ export function registerUserRoutes(app: FastifyInstance, services: RuntimeServic
       return;
     }
 
-    return services.users.createApiKey(principal.userId, input);
+    const created = await services.users.createApiKey(principal.userId, input);
+    return reply.code(201).send(created);
   });
 
   app.post("/v1/users/api-keys/:id/revoke", async (request, reply) => {

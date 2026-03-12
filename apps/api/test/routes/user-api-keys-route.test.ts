@@ -27,6 +27,7 @@ describe("user api-key management route registration", () => {
 
   it("creates and revokes api keys through the authenticated user routes", async () => {
     const app = new FakeApp();
+    const futureExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     registerRoutes(app as never, {
       env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
       supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user-1" }) },
@@ -74,7 +75,7 @@ describe("user api-key management route registration", () => {
     const created = await create?.(
       {
         headers: { authorization: "Bearer token" },
-        body: { nickname: "deploy", scopes: ["chat"], expiresAt: "2026-05-01T00:00:00.000Z" },
+        body: { nickname: "deploy", scopes: ["chat"], expiresAt: futureExpiry },
       },
       reply,
     ) as Record<string, unknown>;
@@ -86,7 +87,7 @@ describe("user api-key management route registration", () => {
       reply,
     ) as Record<string, unknown>;
 
-    expect(statusCode).toBe(200);
+    expect(statusCode).toBe(201);
     expect(mePayload).toMatchObject({
       credits: {
         availableCredits: 250,
@@ -98,7 +99,7 @@ describe("user api-key management route registration", () => {
       key: "sk_live_created",
       nickname: "deploy",
       scopes: ["chat"],
-      expiresAt: "2026-05-01T00:00:00.000Z",
+      expiresAt: futureExpiry,
     });
 
     const revoked = await revoke?.(
