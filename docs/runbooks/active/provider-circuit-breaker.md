@@ -31,6 +31,7 @@ Providers in OPEN state will show `state: "circuit-open"`.
 
 `GET /v1/providers/metrics`
 Returns public-safe provider-level counters and latency summaries:
+- `name`
 - `requests`
 - `errors`
 - `errorRate`
