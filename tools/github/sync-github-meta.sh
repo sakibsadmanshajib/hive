@@ -45,6 +45,28 @@ def gh_api(path: str, method: str = "GET", fields: dict[str, str] | None = None)
     return subprocess.check_output(cmd, text=True)
 
 
+def gh_api_paginated(path: str) -> list[dict]:
+    output = subprocess.check_output(["gh", "api", path, "--paginate"], text=True)
+    pages = []
+    decoder = json.JSONDecoder()
+    content = output.strip()
+    index = 0
+
+    while index < len(content):
+        while index < len(content) and content[index].isspace():
+            index += 1
+        if index >= len(content):
+            break
+        page, next_index = decoder.raw_decode(content, index)
+        if isinstance(page, list):
+            pages.extend(page)
+        else:
+            pages.append(page)
+        index = next_index
+
+    return pages
+
+
 print(f"Syncing labels from {labels_path}")
 for label in labels:
     name = label["name"]
@@ -67,7 +89,9 @@ for label in labels:
         )
         continue
 
-    if current.get("color") == color and (current.get("description") or "") == description:
+    current_color = (current.get("color") or "").lstrip("#").lower()
+    target_color = color.lstrip("#").lower()
+    if current_color == target_color and (current.get("description") or "") == description:
         print(f"Label up to date: {name}")
         continue
 
@@ -83,7 +107,7 @@ for label in labels:
     )
 
 print(f"Syncing milestones from {milestones_path}")
-current_milestones = json.loads(gh_api("repos/{owner}/{repo}/milestones?state=all&per_page=100"))
+current_milestones = gh_api_paginated("repos/{owner}/{repo}/milestones?state=all&per_page=100")
 
 for milestone in milestones:
     title = milestone["title"]

@@ -95,6 +95,7 @@ After metadata changes:
 
 ```bash
 tools/github/sync-github-meta.sh
+# `gh api` resolves {owner}/{repo} from the repo remote. Example explicit form: repos/sakibsadmanshajib/hive/labels
 gh api repos/{owner}/{repo}/labels --paginate --jq '.[] | {name,color,description}'
 gh api repos/{owner}/{repo}/milestones --jq '.[] | {title,description,state}'
 ```
