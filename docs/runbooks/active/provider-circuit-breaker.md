@@ -25,6 +25,17 @@ These are set in `.env`:
 
 ## Monitoring Status
 
+## Startup Model Readiness
+
+On API startup, Hive performs a one-time zero-token readiness check for each configured provider model.
+
+- Ollama readiness checks reuse `/api/tags`.
+- Groq readiness checks reuse `/models`.
+- No chat completion probe is sent, so startup verification does not consume hosted-provider tokens.
+- Startup readiness failures do not block API boot. The API stays up and continues relying on normal provider fallback behavior.
+
+If an enabled provider is reachable but its configured model is missing, the API logs a startup warning and the internal provider status detail is enriched with the startup readiness result.
+
 ### Public API
 `GET /v1/providers/status`
 Providers in OPEN state will show `state: "circuit-open"`.
@@ -47,7 +58,7 @@ curl -s http://127.0.0.1:8080/v1/providers/metrics
 
 ### Internal API
 `GET /v1/providers/status/internal` (Requires `x-admin-token`)
-Includes the exact failure count, state (`CLOSED`, `OPEN`, `HALF_OPEN`), and the last error encountered.
+Includes the exact failure count, state (`CLOSED`, `OPEN`, `HALF_OPEN`), the last error encountered, and any persisted startup readiness detail such as `startup model ready` or `startup model missing`.
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/providers/status/internal \
@@ -91,6 +102,12 @@ curl -s http://127.0.0.1:8080/v1/providers/metrics/internal/prometheus \
 2. Check the `detail` field for the output of the most recent health probe (which may differ from the error that tripped the circuit).
 3. Verify downstream connectivity (e.g., `curl localhost:11434` for Ollama).
 4. Check provider logs (e.g., `docker compose logs ollama`).
+
+### Why is the provider reachable but still degraded at startup?
+1. Check `GET /v1/providers/status/internal` for appended startup readiness detail such as `startup model missing`.
+2. For Ollama, confirm the configured model is installed: `docker compose exec ollama ollama list`.
+3. For Groq, confirm the configured model id still appears in the account-visible `/models` catalog for the API key in use.
+4. Fix the configured `OLLAMA_MODEL` or `GROQ_MODEL` value and restart the API to rerun the startup readiness sweep.
 
 ### Why did the metrics reset?
 Provider metrics are currently in-memory per API process. Restarting the API resets:

@@ -43,6 +43,7 @@ describe("CreditLedger", () => {
 
   it("applies 1 BDT = 100 credits using supabase store path", async () => {
     vi.resetModules();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const topUpCredits = vi.fn(async () => ({
       userId: "user-1",
@@ -86,8 +87,9 @@ describe("CreditLedger", () => {
           lookbackHours: 24,
         },
         providers: {
-          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
-          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
+          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b", timeoutMs: 50, maxRetries: 0 },
+          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", timeoutMs: 50, maxRetries: 0 },
+          circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 100 },
         },
         langfuse: {
           enabled: false,
@@ -154,6 +156,7 @@ describe("CreditLedger", () => {
 
   it("rounds decimal BDT amounts to the correct credit value in the supabase store path", async () => {
     vi.resetModules();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const topUpCredits = vi.fn(async () => ({
       userId: "user-1",
@@ -197,8 +200,9 @@ describe("CreditLedger", () => {
           lookbackHours: 24,
         },
         providers: {
-          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
-          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
+          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b", timeoutMs: 50, maxRetries: 0 },
+          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", timeoutMs: 50, maxRetries: 0 },
+          circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 100 },
         },
         langfuse: {
           enabled: false,

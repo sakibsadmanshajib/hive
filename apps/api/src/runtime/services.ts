@@ -7,7 +7,7 @@ import { GroqProviderClient } from "../providers/groq-client";
 import { MockProviderClient } from "../providers/mock-client";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
-import type { ProviderName } from "../providers/types";
+import type { ProviderName, ProviderReadinessStatus } from "../providers/types";
 import type { PersistentApiKey, PersistentApiKeyEvent, PersistentPaymentIntent } from "../domain/types";
 import { bdtToCredits } from "../domain/credits-conversion";
 import { RedisRateLimiter } from "./redis-rate-limiter";
@@ -418,6 +418,32 @@ export type RuntimeServices = {
   };
 };
 
+function shouldWarnForStartupReadiness(result: ProviderReadinessStatus): boolean {
+  return !result.ready && result.detail !== "disabled by config" && result.detail !== "not registered";
+}
+
+function startProviderReadinessCapture(providerRegistry: ProviderRegistry): void {
+  void providerRegistry
+    .captureStartupReadiness()
+    .then((results) => {
+      for (const [provider, result] of Object.entries(results) as Array<[ProviderName, ProviderReadinessStatus]>) {
+        if (shouldWarnForStartupReadiness(result)) {
+          console.warn(
+            {
+              provider,
+              detail: result.detail,
+            },
+            "provider startup readiness warning",
+          );
+        }
+      }
+    })
+    .catch((error) => {
+      const reason = error instanceof Error ? error.message : String(error);
+      console.error({ error: reason }, "provider startup readiness failed");
+    });
+}
+
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const supabase = createSupabaseAdminClient(env);
@@ -488,6 +514,7 @@ export function createRuntimeServices(): RuntimeServices {
     },
     circuitBreaker: env.providers.circuitBreaker,
   });
+  startProviderReadinessCapture(providerRegistry);
 
   const ai = new RuntimeAiService(models, credits, usage, providerRegistry, langfuse);
 

@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Provider Reliability Controls:** Added explicit timeout and retry logic for provider HTTP requests.
     - Environment variables for global and per-provider timeouts (`PROVIDER_TIMEOUT_MS`, `OLLAMA_TIMEOUT_MS`, etc.).
     - Smart retries for transient errors (network, 429, 5xx).
+- **Startup Provider Model Readiness Checks:** Added zero-token startup verification for configured Ollama and Groq models.
+    - Reuses provider metadata endpoints instead of chat probes, so readiness checks do not consume request tokens.
+    - Persists startup readiness detail into the internal provider status surface while keeping the public status endpoint sanitized.
+    - Logs warnings for enabled-but-unready providers without blocking API startup.
 - **Web E2E Smoke Tests:** Added Playwright end-to-end tests for the critical Auth -> Chat -> Billing flow.
 - **CI/CD Optimizations:**
     - "Smart" smoke workflow that reuses Playwright binaries and pnpm cache.

@@ -38,6 +38,7 @@ describe("PaymentService", () => {
 
   it("keeps webhook idempotency for duplicate provider_txn_id", async () => {
     vi.resetModules();
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     const claimPaymentIntent = vi
       .fn<(...args: unknown[]) => Promise<{ success: boolean; intent?: any; error?: string }>>()
@@ -89,8 +90,9 @@ describe("PaymentService", () => {
           lookbackHours: 24,
         },
         providers: {
-          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b" },
-          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant" },
+          ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b", timeoutMs: 50, maxRetries: 0 },
+          groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", timeoutMs: 50, maxRetries: 0 },
+          circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 100 },
         },
         langfuse: {
           enabled: false,

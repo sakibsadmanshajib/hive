@@ -248,6 +248,10 @@ For provider/routing changes, verify headers remain correct:
 - `x-provider-model`
 - `x-actual-credits`
 
+Provider readiness lesson that must persist:
+
+- Startup provider model readiness checks must use zero-token metadata endpoints such as Ollama `/api/tags` and Groq `/models`; do not spend chat tokens just to verify configured model availability.
+
 For ops/status changes:
 
 - `/v1/providers/status` must not include internal `detail`.
