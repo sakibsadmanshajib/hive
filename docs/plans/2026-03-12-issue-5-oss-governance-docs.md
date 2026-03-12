@@ -8,6 +8,10 @@
 
 **Tech Stack:** Markdown, GitHub `CODEOWNERS`, pnpm workspace commands
 
+**Status:** Implemented on branch `docs/issue-5-oss-governance-docs`, opened as PR `#39` on 2026-03-12
+
+**Verification Completed:** `pnpm test`, `pnpm --filter @hive/web build`, file-presence and link-discoverability checks
+
 ---
 
 ## Goal

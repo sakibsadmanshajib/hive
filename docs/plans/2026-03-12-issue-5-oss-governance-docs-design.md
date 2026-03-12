@@ -1,8 +1,14 @@
 # Issue #5 OSS Governance Docs Design
 
 Date: 2026-03-12
-Status: Approved in-session
+Status: Implemented in PR #39
 Issue: `#5` - Publish OSS governance docs and contribution policy set
+
+## Progress
+
+- Design approved in-session on 2026-03-12
+- Implemented on branch `docs/issue-5-oss-governance-docs`
+- PR opened: `#39`
 
 ## Goal
 
