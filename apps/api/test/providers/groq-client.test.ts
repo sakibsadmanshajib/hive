@@ -4,6 +4,7 @@ import { GroqProviderClient } from "../../src/providers/groq-client";
 describe("groq provider client readiness", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("reports ready when the configured model is listed", async () => {

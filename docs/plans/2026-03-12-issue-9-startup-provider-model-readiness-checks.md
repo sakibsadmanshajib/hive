@@ -25,7 +25,7 @@ Implement issue `#9` by adding zero-token startup provider model readiness check
 
 **Change:** Add failing tests for persisted startup readiness snapshots, internal detail enrichment, and unchanged public-status sanitization before changing runtime code.
 
-**Verify:** `pnpm --filter @hive/api exec vitest run apps/api/test/providers/provider-registry.test.ts apps/api/test/providers/provider-status.test.ts apps/api/test/routes/providers-status-route.test.ts`
+**Verify:** `pnpm --filter @hive/api exec vitest run test/providers/provider-registry.test.ts test/providers/provider-status.test.ts test/routes/providers-status-route.test.ts`
 
 ### Step 3
 
@@ -33,7 +33,7 @@ Implement issue `#9` by adding zero-token startup provider model readiness check
 
 **Change:** Add failing adapter-level tests that prove Ollama and Groq can validate configured model availability from metadata endpoints alone and classify missing-model versus unreachable cases.
 
-**Verify:** `pnpm --filter @hive/api exec vitest run apps/api/test/providers/ollama-client.test.ts apps/api/test/providers/groq-client.test.ts`
+**Verify:** `pnpm --filter @hive/api exec vitest run test/providers/ollama-client.test.ts test/providers/groq-client.test.ts`
 
 ### Step 4
 
@@ -41,7 +41,7 @@ Implement issue `#9` by adding zero-token startup provider model readiness check
 
 **Change:** Implement the zero-token readiness method on each provider client, including metadata parsing and clear readiness-detail messages for disabled, unreachable, ready, and missing-model outcomes.
 
-**Verify:** `pnpm --filter @hive/api exec vitest run apps/api/test/providers/ollama-client.test.ts apps/api/test/providers/groq-client.test.ts`
+**Verify:** `pnpm --filter @hive/api exec vitest run test/providers/ollama-client.test.ts test/providers/groq-client.test.ts`
 
 ### Step 5
 
@@ -49,15 +49,15 @@ Implement issue `#9` by adding zero-token startup provider model readiness check
 
 **Change:** Extend the provider registry to store startup readiness snapshots separately from circuit and request metrics, expose enriched internal status detail, and keep public sanitization behavior unchanged.
 
-**Verify:** `pnpm --filter @hive/api exec vitest run apps/api/test/providers/provider-registry.test.ts apps/api/test/providers/provider-status.test.ts apps/api/test/routes/providers-status-route.test.ts`
+**Verify:** `pnpm --filter @hive/api exec vitest run test/providers/provider-registry.test.ts test/providers/provider-status.test.ts test/routes/providers-status-route.test.ts`
 
 ### Step 6
 
-**Files:** `apps/api/src/runtime/services.ts`, `apps/api/test/runtime/services.test.ts`
+**Files:** `apps/api/src/runtime/services.ts`, `apps/api/test/domain/runtime-services.test.ts`
 
 **Change:** Run the readiness sweep during runtime service construction, log warnings for enabled-but-unready providers, and confirm startup stays available instead of throwing.
 
-**Verify:** `pnpm --filter @hive/api exec vitest run apps/api/test/runtime/services.test.ts`
+**Verify:** `pnpm --filter @hive/api exec vitest run test/domain/runtime-services.test.ts`
 
 ### Step 7
 
@@ -69,7 +69,7 @@ Implement issue `#9` by adding zero-token startup provider model readiness check
 
 ### Step 8
 
-**Files:** `apps/api/src/providers/types.ts`, `apps/api/src/providers/ollama-client.ts`, `apps/api/src/providers/groq-client.ts`, `apps/api/src/providers/mock-client.ts`, `apps/api/src/providers/registry.ts`, `apps/api/src/runtime/services.ts`, `apps/api/test/providers/provider-registry.test.ts`, `apps/api/test/providers/provider-status.test.ts`, `apps/api/test/routes/providers-status-route.test.ts`, `apps/api/test/providers/ollama-client.test.ts`, `apps/api/test/providers/groq-client.test.ts`, `apps/api/test/runtime/services.test.ts`, `docs/runbooks/active/provider-circuit-breaker.md`, `README.md`, `docs/README.md`, `CHANGELOG.md`
+**Files:** `apps/api/src/providers/types.ts`, `apps/api/src/providers/ollama-client.ts`, `apps/api/src/providers/groq-client.ts`, `apps/api/src/providers/mock-client.ts`, `apps/api/src/providers/registry.ts`, `apps/api/src/runtime/services.ts`, `apps/api/test/providers/provider-registry.test.ts`, `apps/api/test/providers/provider-status.test.ts`, `apps/api/test/routes/providers-status-route.test.ts`, `apps/api/test/providers/ollama-client.test.ts`, `apps/api/test/providers/groq-client.test.ts`, `apps/api/test/domain/runtime-services.test.ts`, `docs/runbooks/active/provider-circuit-breaker.md`, `README.md`, `docs/README.md`, `CHANGELOG.md`
 
 **Change:** Run final verification for the touched API and docs scope, capture the exact commands used as evidence, and paste the final command/results block into the PR checklist description or a follow-up PR comment so reviewers can verify the execution evidence in one consistent location.
 
