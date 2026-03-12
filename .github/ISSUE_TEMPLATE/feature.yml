@@ -1,0 +1,86 @@
+name: Feature request
+description: Propose a product, platform, or repository improvement with clear scope and acceptance criteria
+title: "[Feature] "
+labels:
+  - enhancement
+  - kind:feature
+  - status:needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for scoped feature work. For support questions, use `SUPPORT.md`. For policy or governance concerns, include the operator/contributor impact below.
+  - type: input
+    id: summary
+    attributes:
+      label: Summary
+      description: Short statement of the proposed feature or improvement.
+      placeholder: Add repository-managed GitHub issue forms for contributor intake
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Primary area
+      options:
+        - API
+        - Web
+        - Auth
+        - Billing
+        - Providers
+        - Docs
+        - Ops
+        - OSS / repository process
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem exists today, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the expected end state or user/operator benefit.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Write concrete, testable outcomes.
+      placeholder: |
+        - [ ] New issue forms exist for bugs and feature requests
+        - [ ] PR template includes required verification checklist
+        - [ ] Maintainer runbook documents label and milestone usage
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: User or operator impact
+      description: Note who benefits, who needs to change behavior, and any rollout concerns.
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Docs and policy impact
+      description: Which docs, runbooks, or changelog entries need updating?
+      placeholder: README.md, docs/README.md, CONTRIBUTING.md, CHANGELOG.md
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification expectations
+      description: Specify the tests, builds, or explicit checks needed before completion.
+      placeholder: |
+        pnpm --filter @hive/api build
+        pnpm --filter @hive/web build
+        gh api repos/{owner}/{repo}/labels --paginate
+    validations:
+      required: true

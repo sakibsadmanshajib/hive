@@ -60,6 +60,7 @@ pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 ## Pull Request Expectations
 
 - Explain the user-facing or operator-facing change clearly.
+- Use the repository pull request template and complete the verification/docs/risk checklist.
 - Add or update tests for behavior changes.
 - Update docs in the same change when behavior, policy, or operations change.
 - Update `CHANGELOG.md` for notable changes.
@@ -102,3 +103,4 @@ For docs-only or policy-only changes, provide explicit verification checks such 
 - Use `SUPPORT.md` for support routing.
 - Use `CODE_OF_CONDUCT.md` for community behavior expectations.
 - Use `GOVERNANCE.md` for project decision-making and maintainer-role guidance.
+- Use `docs/runbooks/active/github-triage.md` for issue forms, label taxonomy, milestone routing, and GitHub metadata sync operations.

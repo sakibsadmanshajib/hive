@@ -1,0 +1,172 @@
+[
+  {
+    "name": "area:api",
+    "color": "0052CC",
+    "description": "API service"
+  },
+  {
+    "name": "area:auth",
+    "color": "D4C5F9",
+    "description": "Authentication and authorization"
+  },
+  {
+    "name": "area:billing",
+    "color": "FBCA04",
+    "description": "Billing and ledger"
+  },
+  {
+    "name": "area:docs",
+    "color": "006B75",
+    "description": "Documentation system"
+  },
+  {
+    "name": "area:ops",
+    "color": "C2E0C6",
+    "description": "Operations and reliability"
+  },
+  {
+    "name": "area:oss",
+    "color": "A2EEEF",
+    "description": "Open-source process and governance"
+  },
+  {
+    "name": "area:providers",
+    "color": "0366D6",
+    "description": "Provider adapters/registry"
+  },
+  {
+    "name": "area:web",
+    "color": "5319E7",
+    "description": "Web application"
+  },
+  {
+    "name": "bug",
+    "color": "d73a4a",
+    "description": "Something isn't working"
+  },
+  {
+    "name": "documentation",
+    "color": "0075ca",
+    "description": "Improvements or additions to documentation"
+  },
+  {
+    "name": "duplicate",
+    "color": "cfd3d7",
+    "description": "This issue or pull request already exists"
+  },
+  {
+    "name": "enhancement",
+    "color": "a2eeef",
+    "description": "New feature or request"
+  },
+  {
+    "name": "good first issue",
+    "color": "7057ff",
+    "description": "Good for newcomers"
+  },
+  {
+    "name": "help wanted",
+    "color": "008672",
+    "description": "Extra attention is needed"
+  },
+  {
+    "name": "invalid",
+    "color": "e4e669",
+    "description": "This doesn't seem right"
+  },
+  {
+    "name": "kind:bug",
+    "color": "D73A4A",
+    "description": "Bug fix"
+  },
+  {
+    "name": "kind:chore",
+    "color": "6A737D",
+    "description": "Maintenance chores"
+  },
+  {
+    "name": "kind:docs",
+    "color": "0E8A16",
+    "description": "Documentation changes"
+  },
+  {
+    "name": "kind:feature",
+    "color": "1D76DB",
+    "description": "New feature work"
+  },
+  {
+    "name": "kind:hardening",
+    "color": "B60205",
+    "description": "Reliability/security hardening"
+  },
+  {
+    "name": "priority:P0",
+    "color": "B60205",
+    "description": "Release blocker"
+  },
+  {
+    "name": "priority:P1",
+    "color": "D93F0B",
+    "description": "High priority stabilization"
+  },
+  {
+    "name": "priority:P2",
+    "color": "FBCA04",
+    "description": "Medium priority"
+  },
+  {
+    "name": "priority:P3",
+    "color": "0E8A16",
+    "description": "Low priority"
+  },
+  {
+    "name": "question",
+    "color": "d876e3",
+    "description": "Further information is requested"
+  },
+  {
+    "name": "risk:availability",
+    "color": "E99695",
+    "description": "Reliability/uptime risk"
+  },
+  {
+    "name": "risk:compliance",
+    "color": "5319E7",
+    "description": "Compliance or policy risk"
+  },
+  {
+    "name": "risk:financial",
+    "color": "D93F0B",
+    "description": "Billing/financial risk"
+  },
+  {
+    "name": "risk:security",
+    "color": "B60205",
+    "description": "Security risk"
+  },
+  {
+    "name": "status:blocked",
+    "color": "000000",
+    "description": "Blocked by dependency"
+  },
+  {
+    "name": "status:in-progress",
+    "color": "FBCA04",
+    "description": "Currently in progress"
+  },
+  {
+    "name": "status:needs-triage",
+    "color": "F9D0C4",
+    "description": "Needs maintainer triage"
+  },
+  {
+    "name": "status:ready",
+    "color": "0E8A16",
+    "description": "Ready to work"
+  },
+  {
+    "name": "wontfix",
+    "color": "ffffff",
+    "description": "This will not be worked on"
+  }
+]
