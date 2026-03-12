@@ -32,6 +32,7 @@ export type ProviderStatusResult = {
 };
 
 const ALL_PROVIDERS = ["ollama", "groq", "mock"] as const;
+const METRICS_STATUS_CACHE_TTL_MS = 5000;
 
 /**
  * ProviderRegistry manages multiple AI provider clients, handling model routing,
@@ -41,6 +42,8 @@ export class ProviderRegistry {
   private readonly clientsByName: Map<ProviderName, ProviderClient>;
   private readonly circuitBreakers: Map<ProviderName, CircuitBreaker>;
   private readonly metricsCollector = new ProviderMetrics(ALL_PROVIDERS);
+  private cachedMetricsStatus?: ProviderStatusResult;
+  private cachedMetricsStatusAt = 0;
 
   constructor(private readonly config: ProviderRegistryConfig) {
     this.clientsByName = new Map(config.clients.map((client) => [client.name, client]));
@@ -143,17 +146,29 @@ export class ProviderRegistry {
   }
 
   async metrics(): Promise<ProviderMetricsResult> {
-    const status = await this.status();
+    const status = await this.getCachedMetricsStatus();
     return this.metricsCollector.summarize(status.providers);
   }
 
   async metricsPrometheus(): Promise<{ contentType: string; body: string }> {
-    const status = await this.status();
+    const status = await this.getCachedMetricsStatus();
     return this.metricsCollector.renderPrometheus(status.providers);
   }
 
   private buildCandidates(primary: ProviderName): ProviderName[] {
     const ordered = [primary, ...(this.config.fallbackOrder[primary] ?? [])];
     return [...new Set(ordered)];
+  }
+
+  private async getCachedMetricsStatus(): Promise<ProviderStatusResult> {
+    const now = Date.now();
+    if (this.cachedMetricsStatus && now - this.cachedMetricsStatusAt < METRICS_STATUS_CACHE_TTL_MS) {
+      return this.cachedMetricsStatus;
+    }
+
+    const status = await this.status();
+    this.cachedMetricsStatus = status;
+    this.cachedMetricsStatusAt = now;
+    return status;
   }
 }

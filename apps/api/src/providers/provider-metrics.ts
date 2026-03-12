@@ -57,6 +57,9 @@ export class ProviderMetrics {
 
   constructor(providerNames: readonly ProviderName[]) {
     for (const providerName of providerNames) {
+      this.requestCounter.labels(providerName);
+      this.errorCounter.labels(providerName);
+      this.latencyHistogram.zero({ provider: providerName });
       this.requestCounts.set(providerName, 0);
       this.errorCounts.set(providerName, 0);
       this.latencySamples.set(providerName, []);

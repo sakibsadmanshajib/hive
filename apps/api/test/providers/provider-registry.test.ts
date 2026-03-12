@@ -99,4 +99,37 @@ describe("provider registry", () => {
     expect(ollamaMetrics?.latencyMs.avg).toBeGreaterThanOrEqual(0);
     expect(groqMetrics?.latencyMs.avg).toBeGreaterThanOrEqual(0);
   });
+
+  it("reuses a short-lived provider status snapshot across metrics scrapes", async () => {
+    const ollamaStatus = vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" }));
+    const groqStatus = vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" }));
+    const mockStatus = vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" }));
+    const ollama: ProviderClient = {
+      name: "ollama",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ollama ok" })),
+      status: ollamaStatus,
+    };
+    const groq: ProviderClient = {
+      name: "groq",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "groq ok" })),
+      status: groqStatus,
+    };
+    const mock: ProviderClient = {
+      name: "mock",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      status: mockStatus,
+    };
+
+    const registry = createRegistry([ollama, groq, mock]);
+
+    await registry.metrics();
+    await registry.metricsPrometheus();
+
+    expect(ollamaStatus).toHaveBeenCalledTimes(1);
+    expect(groqStatus).toHaveBeenCalledTimes(1);
+    expect(mockStatus).toHaveBeenCalledTimes(1);
+  });
 });

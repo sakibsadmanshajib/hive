@@ -98,6 +98,10 @@ describe("providers metrics routes", () => {
       { headers: {} },
       { code: (statusCode) => statusCodes.push(statusCode), header: () => undefined },
     )) as { error: string };
+    const unauthorizedPrometheus = (await prometheus?.(
+      { headers: {} },
+      { code: (statusCode) => statusCodes.push(statusCode), header: () => undefined },
+    )) as { error: string };
     const authorized = (await internal?.(
       { headers: { "x-admin-token": "admin-token" } },
       { code: (statusCode) => statusCodes.push(statusCode), header: () => undefined },
@@ -113,8 +117,9 @@ describe("providers metrics routes", () => {
       },
     )) as string;
 
-    expect(statusCodes).toEqual([401]);
+    expect(statusCodes).toEqual([401, 401]);
     expect(unauthorized.error).toBe("unauthorized");
+    expect(unauthorizedPrometheus.error).toBe("unauthorized");
     expect(authorized.data[0].detail).toBe("timeout");
     expect(authorized.data[0].circuit).toEqual({ state: "OPEN", failures: 5, lastError: "timeout" });
     expect(headers["content-type"]).toContain("text/plain");

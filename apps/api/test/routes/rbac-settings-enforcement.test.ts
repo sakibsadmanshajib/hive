@@ -73,45 +73,65 @@ describe("rbac + settings enforcement", () => {
 
   it("keeps provider metrics internal endpoints token-protected", async () => {
     const app = new FakeApp();
+    const providersMetrics = vi.fn(async () => ({
+      scrapedAt: "2026-03-11T00:00:00.000Z",
+      providers: [
+        {
+          name: "mock",
+          enabled: true,
+          healthy: true,
+          detail: "ok",
+          circuit: { state: "CLOSED", failures: 0 },
+          requests: 1,
+          errors: 0,
+          errorRate: 0,
+          latencyMs: { avg: 10, p95: 10 },
+        },
+      ],
+    }));
+    const providersMetricsPrometheus = vi.fn(async () => ({
+      contentType: "text/plain; version=0.0.4; charset=utf-8",
+      body: "hive_provider_requests_total{provider=\"mock\"} 1",
+    }));
     registerProvidersMetricsRoute(app as never, {
       env: { adminStatusToken: "admin-token" },
       ai: {
-        providersMetrics: async () => ({
-          scrapedAt: "2026-03-11T00:00:00.000Z",
-          providers: [
-            {
-              name: "mock",
-              enabled: true,
-              healthy: true,
-              detail: "ok",
-              circuit: { state: "CLOSED", failures: 0 },
-              requests: 1,
-              errors: 0,
-              errorRate: 0,
-              latencyMs: { avg: 10, p95: 10 },
-            },
-          ],
-        }),
-        providersMetricsPrometheus: async () => ({
-          contentType: "text/plain; version=0.0.4; charset=utf-8",
-          body: "hive_provider_requests_total{provider=\"mock\"} 1",
-        }),
+        providersMetrics,
+        providersMetricsPrometheus,
       },
     } as never);
 
     const internal = app.handlers.get("GET /v1/providers/metrics/internal");
     const prometheus = app.handlers.get("GET /v1/providers/metrics/internal/prometheus");
+    const statusCodes: number[] = [];
 
     const unauthorizedJson = (await internal?.(
       { headers: {} },
-      { code: () => ({ send: (payload: unknown) => payload }), send: (payload: unknown) => payload, header: () => undefined },
+      {
+        code: (statusCode: number) => {
+          statusCodes.push(statusCode);
+          return { send: (payload: unknown) => payload };
+        },
+        send: (payload: unknown) => payload,
+        header: () => undefined,
+      },
     )) as { error: string };
     const unauthorizedPrometheus = (await prometheus?.(
       { headers: {} },
-      { code: () => ({ send: (payload: unknown) => payload }), send: (payload: unknown) => payload, header: () => undefined },
+      {
+        code: (statusCode: number) => {
+          statusCodes.push(statusCode);
+          return { send: (payload: unknown) => payload };
+        },
+        send: (payload: unknown) => payload,
+        header: () => undefined,
+      },
     )) as { error: string };
 
+    expect(statusCodes).toEqual([401, 401]);
     expect(unauthorizedJson.error).toBe("unauthorized");
     expect(unauthorizedPrometheus.error).toBe("unauthorized");
+    expect(providersMetrics).not.toHaveBeenCalled();
+    expect(providersMetricsPrometheus).not.toHaveBeenCalled();
   });
 });

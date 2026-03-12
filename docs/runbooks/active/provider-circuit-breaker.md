@@ -40,15 +40,34 @@ Returns public-safe provider-level counters and latency summaries:
 - `healthy`
 - `circuitState`
 
+```bash
+curl -s http://127.0.0.1:8080/v1/providers/metrics
+```
+
 ### Internal API
 `GET /v1/providers/status/internal` (Requires `x-admin-token`)
 Includes the exact failure count, state (`CLOSED`, `OPEN`, `HALF_OPEN`), and the last error encountered.
 
+```bash
+curl -s http://127.0.0.1:8080/v1/providers/status/internal \
+  -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
+```
+
 `GET /v1/providers/metrics/internal` (Requires `x-admin-token`)
 Includes the provider health-check `detail`, exact circuit failure count, and last circuit error together with the provider-level counters and latency summaries.
 
+```bash
+curl -s http://127.0.0.1:8080/v1/providers/metrics/internal \
+  -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
+```
+
 `GET /v1/providers/metrics/internal/prometheus` (Requires `x-admin-token`)
 Returns Prometheus exposition text from the in-process metrics registry for operator scraping or ad hoc inspection.
+
+```bash
+curl -s http://127.0.0.1:8080/v1/providers/metrics/internal/prometheus \
+  -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
+```
 
 ```json
 {
