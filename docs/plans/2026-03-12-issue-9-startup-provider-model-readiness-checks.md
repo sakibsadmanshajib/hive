@@ -71,7 +71,7 @@ Implement issue `#9` by adding zero-token startup provider model readiness check
 
 **Files:** `apps/api/src/providers/types.ts`, `apps/api/src/providers/ollama-client.ts`, `apps/api/src/providers/groq-client.ts`, `apps/api/src/providers/mock-client.ts`, `apps/api/src/providers/registry.ts`, `apps/api/src/runtime/services.ts`, `apps/api/test/providers/provider-registry.test.ts`, `apps/api/test/providers/provider-status.test.ts`, `apps/api/test/routes/providers-status-route.test.ts`, `apps/api/test/providers/ollama-client.test.ts`, `apps/api/test/providers/groq-client.test.ts`, `apps/api/test/runtime/services.test.ts`, `docs/runbooks/active/provider-circuit-breaker.md`, `README.md`, `docs/README.md`, `CHANGELOG.md`
 
-**Change:** Run final verification for the touched API and docs scope and capture the exact commands used as evidence.
+**Change:** Run final verification for the touched API and docs scope, capture the exact commands used as evidence, and paste the final command/results block into the PR checklist description or a follow-up PR comment so reviewers can verify the execution evidence in one consistent location.
 
 **Verify:** `pnpm --filter @hive/api test && pnpm --filter @hive/api build`
 

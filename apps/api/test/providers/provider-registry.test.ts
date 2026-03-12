@@ -100,6 +100,53 @@ describe("provider registry", () => {
     expect(groq.chat).not.toHaveBeenCalled();
   });
 
+  it("continues startup readiness capture after one provider readiness check throws", async () => {
+    const ollama: ProviderClient = {
+      name: "ollama",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ollama ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
+      checkModelReadiness: vi.fn(async () => {
+        throw new Error("catalog exploded");
+      }),
+    };
+    const groq: ProviderClient = {
+      name: "groq",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "groq ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
+      checkModelReadiness: vi.fn(async () => ({
+        ready: true,
+        detail: "startup model ready",
+      })),
+    };
+    const mock: ProviderClient = {
+      name: "mock",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "always available fallback" })),
+      checkModelReadiness: vi.fn(async () => ({
+        ready: true,
+        detail: "startup model ready",
+      })),
+    };
+
+    const registry = createRegistry([ollama, groq, mock]);
+
+    const readiness = await registry.captureStartupReadiness();
+
+    expect(readiness.ollama).toEqual({
+      ready: false,
+      detail: "startup readiness failed: catalog exploded",
+    });
+    expect(readiness.groq).toEqual({
+      ready: true,
+      detail: "startup model ready",
+    });
+    expect(groq.checkModelReadiness).toHaveBeenCalledTimes(1);
+    expect(mock.checkModelReadiness).toHaveBeenCalledTimes(1);
+  });
+
   it("records provider-level request, error, and latency metrics across fallback attempts", async () => {
     const ollama: ProviderClient = {
       name: "ollama",

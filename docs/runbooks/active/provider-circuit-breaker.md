@@ -25,7 +25,7 @@ These are set in `.env`:
 
 ## Monitoring Status
 
-## Startup Model Readiness
+### Startup Model Readiness
 
 On API startup, Hive performs a one-time zero-token readiness check for each configured provider model.
 

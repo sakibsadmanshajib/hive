@@ -62,6 +62,41 @@ describe("groq provider client readiness", () => {
     });
   });
 
+  it("reports startup models check failure for non-ok responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("upstream error", { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new GroqProviderClient({
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: "test-key",
+      timeoutMs: 50,
+      maxRetries: 0,
+    });
+
+    await expect(client.checkModelReadiness("llama-3.1-8b-instant")).resolves.toEqual({
+      ready: false,
+      detail: "startup models check failed: 500",
+    });
+  });
+
+  it("reports disabled by config when the provider is not enabled", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = new GroqProviderClient({
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: undefined,
+      timeoutMs: 50,
+      maxRetries: 0,
+    });
+
+    await expect(client.checkModelReadiness("llama-3.1-8b-instant")).resolves.toEqual({
+      ready: false,
+      detail: "disabled by config",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reports unreachable when the model catalog request fails", async () => {
     const fetchMock = vi.fn().mockRejectedValue(new TypeError("network down"));
     vi.stubGlobal("fetch", fetchMock);

@@ -175,8 +175,14 @@ export class ProviderRegistry {
         continue;
       }
 
-      const providerModel = this.config.providerModelMap[providerName];
-      const readiness = await client.checkModelReadiness(providerModel);
+      let readiness: ProviderReadinessStatus;
+      try {
+        const providerModel = this.config.providerModelMap[providerName];
+        readiness = await client.checkModelReadiness(providerModel);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        readiness = { ready: false, detail: `startup readiness failed: ${reason}` };
+      }
       this.startupReadiness.set(providerName, readiness);
       results[providerName] = readiness;
     }

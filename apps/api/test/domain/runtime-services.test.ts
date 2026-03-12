@@ -78,6 +78,20 @@ describe("RuntimeServices", () => {
             SupabaseUserStore: class { },
         }));
 
+        vi.doMock("../../src/providers/registry", () => ({
+            ProviderRegistry: class {
+                captureStartupReadiness = vi.fn(async () => ({
+                    ollama: { ready: true, detail: "startup model ready" },
+                    groq: { ready: true, detail: "startup model ready" },
+                    mock: { ready: true, detail: "startup model ready" },
+                }));
+                status = vi.fn(async () => ({ providers: [] }));
+                chat = vi.fn();
+                metrics = vi.fn(async () => ({ scrapedAt: new Date().toISOString(), providers: [] }));
+                metricsPrometheus = vi.fn(async () => ({ contentType: "text/plain", body: "" }));
+            },
+        }));
+
         // Import the module under test dynamically after declaring mocks
         const { createRuntimeServices } = await import("../../src/runtime/services");
 
@@ -176,6 +190,20 @@ describe("RuntimeServices", () => {
         vi.doMock("../../src/runtime/payment-reconciliation-scheduler", () => ({
             PaymentReconciliationScheduler: class {
                 start = start;
+            },
+        }));
+
+        vi.doMock("../../src/providers/registry", () => ({
+            ProviderRegistry: class {
+                captureStartupReadiness = vi.fn(async () => ({
+                    ollama: { ready: true, detail: "startup model ready" },
+                    groq: { ready: true, detail: "startup model ready" },
+                    mock: { ready: true, detail: "startup model ready" },
+                }));
+                status = vi.fn(async () => ({ providers: [] }));
+                chat = vi.fn();
+                metrics = vi.fn(async () => ({ scrapedAt: new Date().toISOString(), providers: [] }));
+                metricsPrometheus = vi.fn(async () => ({ contentType: "text/plain", body: "" }));
             },
         }));
 
