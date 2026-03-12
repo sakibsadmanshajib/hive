@@ -16,6 +16,7 @@ Environment variables:
 Behavior:
 
 - The scheduler scans recent payment intents, payment events, and payment credit-ledger entries.
+- The scheduler runs once immediately on startup, then continues on the configured interval.
 - The scheduler expands the scan to all rows linked to affected `intent_id` values so lookback-boundary matches do not create false drift alerts.
 - The job skips overlap inside one API process if a prior run is still in flight.
 - In multi-replica deployments each API process runs its own scheduler and may emit duplicate drift alerts, so enable reconciliation on only one instance until cross-instance coordination exists.
@@ -37,4 +38,5 @@ Behavior:
 - Never issue credits from browser redirect status.
 - Process webhook events idempotently.
 - Require server-side verification before credit minting.
+- Keep payment credit conversion decimal-safe for 2-decimal BDT amounts; avoid truncating floating-point math in reconciliation or minting paths.
 - Treat `payment_intents.status = credited` as insufficient evidence by itself; confirm matching verified event and payment ledger evidence.

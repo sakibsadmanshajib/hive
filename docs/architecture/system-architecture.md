@@ -76,9 +76,11 @@ graph TD
 
 - Credits are tracked as application entitlements (not wallet cash balance)
 - Conversion: `1 BDT = 100 AI Credits` (top-up), `100 AI Credits = 0.9 BDT` (refund)
+- Payment credit conversion must use decimal-safe arithmetic so valid 2-decimal payment amounts are not under-credited or falsely flagged during reconciliation
 - Refundable only if unused purchased credits and within configured window
 - Payment events are idempotent via provider transaction event keys
 - All billing data stored in Supabase: `credit_accounts`, `credit_ledger`, `payment_intents`, `payment_events`
+- Payment reconciliation checks recent `payment_intents`, `payment_events`, and `credit_ledger` payment entries together; credited intent state alone is not sufficient evidence that billing is consistent
 
 ## Provider Routing Architecture
 
@@ -117,6 +119,11 @@ Provider metrics are:
 - collected in-process inside the API provider registry
 - exposed through pull-based endpoints only
 - reset on API restart because they are in-memory per API instance
+
+Payment reconciliation scheduling is:
+- opt-in via environment configuration
+- started immediately on API startup, then repeated on a fixed interval
+- process-local per API instance, so multi-replica deployments should enable it on only one instance until coordination exists
 
 ## Docker Topology
 

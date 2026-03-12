@@ -62,6 +62,7 @@ GitHub contributor intake and triage are repo-managed:
 ## Business Rules
 
 - Base top-up conversion: `1 BDT = 100 AI Credits`
+- Credit conversion implementation must stay decimal-safe for 2-decimal payment amounts such as `19.99 BDT -> 1999 credits`
 - Refund conversion: `100 AI Credits = 0.9 BDT`
 - Refund eligibility: unused purchased credits within 30 days
 - Promo credits: non-refundable
@@ -171,6 +172,10 @@ Use `.env.example` as the template. Key variables:
 Automated billing hardening:
 
 - When enabled, the API runs a reconciliation scheduler that scans recent payment intents, verified payment events, and payment ledger entries.
+- The scheduler runs an initial reconciliation immediately on start, then continues on the configured interval.
+- Reconciliation treats `payment_intents.status` and `minted_credits` as insufficient by themselves; payment ledger evidence is also required.
+- Lookback scans expand to all rows linked to affected `intent_id` values so boundary-adjacent events do not create false drift alerts.
+- In multi-instance deployments, enable reconciliation on only one API instance until cross-instance coordination exists.
 - Drift alerts are log-based and emitted only for actionable mismatches or scheduler failures.
 - Operator workflow lives in `docs/runbooks/active/payments-reconciliation.md`.
 

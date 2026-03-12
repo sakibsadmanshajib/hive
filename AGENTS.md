@@ -402,6 +402,14 @@ Repo lesson:
 
 - In this environment, remote git actions that rely on repository SSH credentials (especially `git push`, and similar remote-mutating git commands) are user-owned. Agents should stop and ask the user to run those commands unless the maintainer explicitly directs otherwise.
 
+Billing/reconciliation lessons that must persist:
+
+- Do not derive payment credits with floating-point truncation such as `Math.trunc(bdtAmount * 100)`; use a shared decimal-safe conversion helper and keep regression coverage for common 2-decimal amounts such as `19.99 BDT -> 1999 credits`.
+- Payment reconciliation must verify payment-ledger evidence in addition to `payment_intents.status` and `minted_credits`; a credited intent without the corresponding `credit_ledger` payment entry is still drift.
+- Reconciliation lookback queries must expand to all rows linked to affected `intent_id` values; filtering intents, events, and ledger entries independently by timestamp creates false drift alerts at the lookback boundary.
+- The payment reconciliation scheduler is process-local today. Enable it on only one API instance in multi-replica deployments until cross-instance coordination exists.
+- Start the payment reconciliation job immediately when the scheduler starts; do not wait a full interval before the first scan after deployment or restart.
+
 Never force-push rewritten history unless explicitly required and safe.
 
 ## Documentation Discipline

@@ -6,6 +6,7 @@ Prove every credit mint, debit, and refund is traceable.
 ## Audit Invariants
 - Purchased credit mint must map to a verified payment intent.
 - Purchased credit mint must also map to a `credit_ledger` entry with `reference_type = payment` and `reference_id = intent_id`.
+- Purchased credit mint conversion must preserve 2-decimal payment amounts exactly at the `1 BDT = 100 credits` rate.
 - Every debit must map to a request id.
 - Refunded credits must be unused purchased credits inside 30-day window.
 - Promo credits are never cash-refundable.
