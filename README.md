@@ -179,7 +179,7 @@ GitHub contributor intake and triage are repo-managed:
 - Chat workspace includes:
   - left conversation navigation
   - top-right avatar menu with `Settings`, `Developer Panel`, `Billing`, and `Log out`
-- Developer Panel supports managed API key creation with nickname and optional expiry, current key status visibility, and lifecycle activity.
+- Developer Panel supports managed API key creation with nickname and optional expiry, current key status visibility, lifecycle activity, and a windowed usage analytics summary.
 
 ## Business Rules
 
@@ -211,7 +211,7 @@ GitHub contributor intake and triage are repo-managed:
 ### Billing and Usage
 
 - `GET /v1/credits/balance`
-- `GET /v1/usage`
+- `GET /v1/usage` — raw usage events plus summary analytics by day, model, and endpoint
 - `POST /v1/payments/intents`
 - `POST /v1/payments/demo/confirm` (demo-only top-up)
 - `POST /v1/payments/webhook`
@@ -223,6 +223,7 @@ GitHub contributor intake and triage are repo-managed:
 - `GET /v1/providers/metrics` — public, provider-level request/error/latency summary
 - `GET /v1/providers/metrics/internal` — admin-only JSON with provider diagnostics
 - `GET /v1/providers/metrics/internal/prometheus` — admin-only Prometheus text scrape
+- `GET /v1/support/users/{userId}` — admin-only single-user troubleshooting snapshot with credits, usage, and API key state
 
 The API also performs a zero-token startup readiness sweep for configured provider models. Missing or unreachable provider models are logged for operators and exposed only through internal status detail; public status remains sanitized.
 
@@ -236,6 +237,10 @@ Session-authenticated developer key management endpoints:
 - `GET /v1/users/api-keys`
 - `POST /v1/users/api-keys`
 - `POST /v1/users/api-keys/{id}/revoke`
+
+Operator-only support endpoint:
+
+- `GET /v1/support/users/{userId}` with `x-admin-token`
 
 ## Runtime Components
 

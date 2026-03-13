@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { ProviderMetricsSummary } from "../providers/types";
 import type { RuntimeServices } from "../runtime/services";
+import { hasValidAdminToken } from "./admin-auth";
 
 function sanitizeMetrics(provider: ProviderMetricsSummary) {
   return {
@@ -15,11 +16,6 @@ function sanitizeMetrics(provider: ProviderMetricsSummary) {
   };
 }
 
-function isAuthorized(requestHeaders: Record<string, unknown> | undefined, expectedToken: string | undefined) {
-  const providedToken = requestHeaders?.["x-admin-token"];
-  return expectedToken && typeof providedToken === "string" && providedToken === expectedToken;
-}
-
 export function registerProvidersMetricsRoute(app: FastifyInstance, services: RuntimeServices): void {
   app.get("/v1/providers/metrics", async () => {
     const metrics = await services.ai.providersMetrics();
@@ -31,7 +27,7 @@ export function registerProvidersMetricsRoute(app: FastifyInstance, services: Ru
   });
 
   app.get("/v1/providers/metrics/internal", async (request, reply) => {
-    if (!isAuthorized(request.headers, services.env.adminStatusToken)) {
+    if (!hasValidAdminToken(request.headers, services.env.adminStatusToken)) {
       reply.code(401);
       return { error: "unauthorized" };
     }
@@ -45,7 +41,7 @@ export function registerProvidersMetricsRoute(app: FastifyInstance, services: Ru
   });
 
   app.get("/v1/providers/metrics/internal/prometheus", async (request, reply) => {
-    if (!isAuthorized(request.headers, services.env.adminStatusToken)) {
+    if (!hasValidAdminToken(request.headers, services.env.adminStatusToken)) {
       reply.code(401);
       return { error: "unauthorized" };
     }

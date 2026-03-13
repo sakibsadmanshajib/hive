@@ -22,6 +22,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [object, data]
                 properties:
                   object:
                     type: string
@@ -125,7 +126,7 @@ paths:
           description: Missing API key
   /v1/usage:
     get:
-      summary: List usage events for key owner
+      summary: List usage events and summary analytics for key owner
       parameters:
         - in: header
           name: x-api-key
@@ -134,9 +135,90 @@ paths:
             type: string
       responses:
         "200":
-          description: Usage list
+          description: Usage list with summary analytics
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  summary:
+                    $ref: "#/components/schemas/UsageSummary"
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UsageEvent"
         "401":
           description: Missing API key
+  /v1/support/users/{userId}:
+    get:
+      summary: Get an admin-only troubleshooting snapshot for one user
+      parameters:
+        - in: header
+          name: x-admin-token
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: userId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Support snapshot for the requested user
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object:
+                    type: string
+                    example: support.user
+                  data:
+                    type: object
+                    required: [user, credits, usage, apiKeys, apiKeyEvents]
+                    properties:
+                      user:
+                        type: object
+                        required: [userId, email, createdAt]
+                        properties:
+                          userId:
+                            type: string
+                          email:
+                            type: string
+                          name:
+                            type: string
+                          createdAt:
+                            type: string
+                            format: date-time
+                      credits:
+                        $ref: "#/components/schemas/CreditBalance"
+                      usage:
+                        type: object
+                        required: [summary, data]
+                        properties:
+                          summary:
+                            $ref: "#/components/schemas/UsageSummary"
+                          data:
+                            type: array
+                            items:
+                              $ref: "#/components/schemas/UsageEvent"
+                      apiKeys:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ManagedApiKey"
+                      apiKeyEvents:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/ApiKeyEvent"
+        "401":
+          description: Missing or invalid admin token
+        "404":
+          description: User not found
   /v1/users/me:
     get:
       summary: Get authenticated user developer snapshot
@@ -388,6 +470,65 @@ components:
           type: number
         promoCredits:
           type: number
+    UsageEvent:
+      type: object
+      required: [id, userId, endpoint, model, credits, createdAt]
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        endpoint:
+          type: string
+        model:
+          type: string
+        credits:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+    UsageSummaryBucket:
+      type: object
+      required: [key, requests, credits]
+      properties:
+        key:
+          type: string
+        requests:
+          type: number
+        credits:
+          type: number
+    UsageDailyTrendPoint:
+      type: object
+      required: [date, requests, credits]
+      properties:
+        date:
+          type: string
+        requests:
+          type: number
+        credits:
+          type: number
+    UsageSummary:
+      type: object
+      required: [windowDays, totalRequests, totalCredits, daily, byModel, byEndpoint]
+      properties:
+        windowDays:
+          type: number
+        totalRequests:
+          type: number
+        totalCredits:
+          type: number
+        daily:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageDailyTrendPoint"
+        byModel:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageSummaryBucket"
+        byEndpoint:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageSummaryBucket"
     ManagedApiKey:
       type: object
       properties:

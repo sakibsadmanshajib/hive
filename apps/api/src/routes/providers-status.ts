@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
+import { hasValidAdminToken } from "./admin-auth";
 
 /**
  * Sanitizes internal provider status for public consumption, hiding internal details
@@ -38,9 +39,7 @@ export function registerProvidersStatusRoute(app: FastifyInstance, services: Run
   });
 
   app.get("/v1/providers/status/internal", async (request, reply) => {
-    const expectedToken = services.env.adminStatusToken;
-    const providedToken = request.headers["x-admin-token"];
-    if (!expectedToken || typeof providedToken !== "string" || providedToken !== expectedToken) {
+    if (!hasValidAdminToken(request.headers, services.env.adminStatusToken)) {
       reply.code(401);
       return { error: "unauthorized" };
     }
