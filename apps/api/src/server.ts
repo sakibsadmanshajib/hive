@@ -30,7 +30,7 @@ export function createApp() {
         return;
       }
 
-      callback(new Error(`origin not allowed: ${origin}`), false);
+      callback(null, false);
     },
     methods: ["GET", "POST", "PATCH", "OPTIONS"],
     allowedHeaders: ["authorization", "content-type", "x-api-key", "x-admin-token"],

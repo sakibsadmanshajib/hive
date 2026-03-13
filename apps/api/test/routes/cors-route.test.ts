@@ -21,4 +21,18 @@ describe("api cors", () => {
     expect(response.statusCode).toBe(204);
     expect(response.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:3000");
   });
+
+  it("rejects disallowed origins without surfacing a server error", async () => {
+    const response = await app.inject({
+      method: "OPTIONS",
+      url: "/v1/models",
+      headers: {
+        origin: "http://malicious-site.com",
+        "access-control-request-method": "GET",
+      },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.headers["access-control-allow-origin"]).toBeUndefined();
+  });
 });
