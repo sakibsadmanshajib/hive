@@ -35,10 +35,18 @@ Both will appear in `docker ps`, but they are managed by different tools.
 
 ```bash
 pnpm install
+pnpm bootstrap:local
 pnpm stack:dev
 ```
 
-`pnpm stack:dev` is the canonical local development entry point. It:
+`pnpm bootstrap:local` is the explicit first-time setup command. It:
+
+1. starts or verifies the local Supabase CLI stack
+2. resets the local Supabase database
+3. applies repo migrations to the local database
+4. starts the local `ollama` service and pulls the default `OLLAMA_MODEL`
+
+`pnpm stack:dev` is the canonical daily-development entry point. It:
 
 1. starts or verifies the Supabase local stack
 2. reads the live local Supabase keys from `npx supabase status -o env`
@@ -59,6 +67,8 @@ Use these commands to stop or reset the local stack:
 pnpm stack:down
 pnpm stack:reset
 ```
+
+Use `pnpm bootstrap:local` again when you need to rebuild the local Supabase schema from migrations or repopulate the default local Ollama model.
 
 ### What Starts
 
@@ -87,7 +97,8 @@ That means:
 
 - `docker compose up` alone is not enough for local auth
 - `npx supabase start` alone is not enough for the Hive app stack
-- `pnpm stack:dev` is the standardized command because it handles both lifecycles together
+- `pnpm bootstrap:local` owns first-time local schema/bootstrap
+- `pnpm stack:dev` is the standardized daily-development command because it handles both lifecycles together
 
 ### Why `api` And `web` Are Separate Containers
 

@@ -21,6 +21,15 @@ Thanks for contributing to Hive.
 
 Use the canonical quickstart in `README.md`.
 
+For first-time local setup, run:
+
+```bash
+pnpm install
+pnpm bootstrap:local
+```
+
+`pnpm bootstrap:local` starts the Supabase CLI stack, rebuilds the local Supabase schema from repo migrations, and pulls the default local Ollama model so the standard provider path is ready on first run.
+
 For normal local development, the default command is:
 
 ```bash

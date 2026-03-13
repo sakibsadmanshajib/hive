@@ -172,6 +172,11 @@ Payment reconciliation scheduling is:
 
 Supabase is managed by the Supabase CLI rather than Hive's Compose file, but it still runs as Docker containers under the hood. The API container reaches that stack via `host.docker.internal`.
 
+The standardized local workflow is split deliberately:
+
+- `pnpm bootstrap:local` for first-time schema/bootstrap, migration application, and default local Ollama model provisioning
+- `pnpm stack:dev` for daily full-stack development with hot reload
+
 ## Why API And Web Are Separate Containers
 
 Hive keeps `api` and `web` as separate containers because they are separate applications with different runtime concerns:
@@ -186,4 +191,4 @@ This separation is useful even in local development because it:
 - makes it obvious which values are safe for browser exposure (`NEXT_PUBLIC_*`) versus server-only secrets
 - lets the web production bundle be validated independently from the API runtime
 
-The standardized daily-development workflow is `pnpm stack:dev`, which combines the Supabase CLI lifecycle with a Docker Compose dev override so `api` and `web` keep hot reload while still running as part of the full stack.
+The standardized daily-development workflow is `pnpm stack:dev`, which combines the Supabase CLI lifecycle with a Docker Compose dev override so `api` and `web` keep hot reload while still running as part of the full stack. First-time local setup should run `pnpm bootstrap:local` before that daily workflow.
