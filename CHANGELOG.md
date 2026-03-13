@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Maintainer Issue Lifecycle Runbook:** Added a dedicated runbook for issue intake, triage state transitions, planning expectations, PR linkage, verification evidence, and closeout workflow.
 - **API Key Lifecycle Management:** Added stable API key ids, nicknames, optional expiration, revoke-by-id management, and immutable lifecycle audit events for create/revoke/expiry visibility.
     - Session-authenticated management routes: `/v1/users/me`, `/v1/users/api-keys`, and `/v1/users/api-keys/{id}/revoke`.
     - Developer Panel now shows managed API keys, one-time raw key reveal on creation, and recent lifecycle activity.

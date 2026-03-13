@@ -2,6 +2,7 @@
 
 ## Active
 
+- `docs/runbooks/active/issue-lifecycle.md` (maintainer issue state transitions, planning expectations, PR linkage, and closeout workflow)
 - `docs/runbooks/active/github-triage.md`
 - `docs/runbooks/active/api-key-lifecycle.md`
 - `docs/runbooks/active/payments-reconciliation.md`
