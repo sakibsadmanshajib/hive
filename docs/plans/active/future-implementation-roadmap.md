@@ -50,7 +50,7 @@ Goals:
 - close the most obvious gaps between current platform claims and user-visible capability
 
 Tasks:
-1. Replace the mock image pipeline with a real image provider integration.
+1. Expand image support beyond the initial OpenAI-backed provider integration.
 2. Add file ingestion with parser abstraction and safe limits.
 3. Expand usage analytics:
    - daily trend

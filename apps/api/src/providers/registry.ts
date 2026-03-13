@@ -3,6 +3,7 @@ import { ProviderMetrics } from "./provider-metrics";
 import type {
   ProviderChatMessage,
   ProviderClient,
+  ProviderImageRequest,
   ProviderMetricsResult,
   ProviderName,
   ProviderReadinessStatus,
@@ -23,6 +24,16 @@ export type ProviderExecutionResult = {
   providerModel: string;
 };
 
+export type ProviderImageExecutionResult = {
+  created: number;
+  data: Array<{
+    url?: string;
+    b64Json?: string;
+  }>;
+  providerUsed: ProviderName;
+  providerModel: string;
+};
+
 export type ProviderStatusResult = {
   providers: Array<{
     name: ProviderName;
@@ -37,7 +48,7 @@ export type ProviderStatusResult = {
   }>;
 };
 
-const ALL_PROVIDERS = ["ollama", "groq", "mock"] as const;
+const ALL_PROVIDERS = ["ollama", "groq", "openai", "mock"] as const;
 const METRICS_STATUS_CACHE_TTL_MS = 5000;
 
 /**
@@ -103,6 +114,59 @@ export class ProviderRegistry {
         breaker?.recordSuccess();
         return {
           content: response.content,
+          providerUsed: providerName,
+          providerModel: response.providerModel ?? providerModel,
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, true);
+        breaker?.recordFailure(reason);
+        errors.push(`${providerName}: ${reason}`);
+      }
+    }
+
+    throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
+  }
+
+  async imageGeneration(modelId: string, request: Omit<ProviderImageRequest, "model">): Promise<ProviderImageExecutionResult> {
+    const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
+    const candidateProviders = this.buildCandidates(primaryProvider);
+    const errors: string[] = [];
+
+    for (const providerName of candidateProviders) {
+      const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
+      if (!client || !client.isEnabled()) {
+        continue;
+      }
+
+      if (!client.generateImage) {
+        errors.push(`${providerName}: unsupported image capability`);
+        continue;
+      }
+
+      if (breaker) {
+        breaker.evaluateState();
+        if (breaker.isOpen()) {
+          errors.push(`${providerName}: circuit open`);
+          continue;
+        }
+        if (breaker.isHalfOpen() && !breaker.tryAcquireProbe()) {
+          errors.push(`${providerName}: half-open probe in-flight`);
+          continue;
+        }
+      }
+
+      const providerModel = this.config.providerModelMap[providerName] ?? modelId;
+      const startedAt = Date.now();
+      try {
+        const response = await client.generateImage({ ...request, model: providerModel });
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
+        breaker?.recordSuccess();
+        return {
+          created: response.created,
+          data: response.data,
           providerUsed: providerName,
           providerModel: response.providerModel ?? providerModel,
         };

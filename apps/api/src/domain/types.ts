@@ -3,7 +3,7 @@ export type GatewayModel = {
   object: "model";
   capability: "chat" | "image";
   creditsPerRequest: number;
-  provider?: "mock" | "ollama" | "groq";
+  provider?: "mock" | "ollama" | "groq" | "openai";
 };
 
 export type UsageEvent = {

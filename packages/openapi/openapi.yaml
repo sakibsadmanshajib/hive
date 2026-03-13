@@ -93,28 +93,28 @@ paths:
   /v1/images/generations:
     post:
       summary: OpenAI-compatible image generation endpoint
-      parameters:
-        - in: header
-          name: x-api-key
-          required: true
-          schema:
-            type: string
+      security:
+        - bearerAuth: []
+        - apiKeyHeader: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                prompt:
-                  type: string
+              $ref: "#/components/schemas/ImageGenerationRequest"
       responses:
         "200":
           description: Generated image metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ImageGenerationResponse"
         "401":
-          description: Missing API key
+          description: Missing or invalid credentials
         "402":
           description: Insufficient credits
+        "502":
+          description: Provider unavailable
   /v1/credits/balance:
     get:
       summary: Get user credit balance
@@ -353,6 +353,15 @@ paths:
         "401":
           description: Invalid signature
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API key or session token
+    apiKeyHeader:
+      type: apiKey
+      in: header
+      name: x-api-key
   schemas:
     Model:
       type: object
@@ -432,3 +441,40 @@ components:
         metadata:
           type: object
           additionalProperties: true
+    ImageGenerationRequest:
+      type: object
+      required: [prompt]
+      properties:
+        model:
+          type: string
+          default: image-basic
+        prompt:
+          type: string
+        n:
+          type: integer
+          minimum: 1
+          default: 1
+        size:
+          type: string
+          examples: ["1024x1024"]
+        response_format:
+          type: string
+          enum: [url, b64_json]
+          default: url
+        user:
+          type: string
+    ImageGenerationResponse:
+      type: object
+      required: [created, data]
+      properties:
+        created:
+          type: integer
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              url:
+                type: string
+              b64_json:
+                type: string

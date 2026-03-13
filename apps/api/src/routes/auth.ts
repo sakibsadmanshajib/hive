@@ -46,7 +46,7 @@ async function resolvePrincipal(
     }
   }
 
-  const apiKey = request.headers["x-api-key"];
+  const apiKey = typeof request.headers["x-api-key"] === "string" ? request.headers["x-api-key"] : bearerToken;
   if (!apiKey || typeof apiKey !== "string") {
     return null;
   }

@@ -9,11 +9,12 @@ function createRegistry(clients: ProviderClient[]) {
     modelProviderMap: {
       "fast-chat": "ollama",
       "smart-reasoning": "groq",
+      "image-basic": "mock",
     },
     providerModelMap: {
       ollama: "llama3.1:8b",
       groq: "llama-3.1-8b-instant",
-      mock: "mock-chat",
+      mock: "mock-image",
     },
     fallbackOrder: {
       ollama: ["groq", "mock"],
@@ -74,6 +75,9 @@ describe("provider registry", () => {
       name: "ollama",
       isEnabled: () => true,
       chat: vi.fn(async () => ({ content: "ollama ok" })),
+      generateImage: vi.fn(async () => {
+        throw new Error("ollama timed out");
+      }),
       status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
       checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
     };
@@ -232,5 +236,129 @@ describe("provider registry", () => {
     expect(ollamaStatus).toHaveBeenCalledTimes(1);
     expect(groqStatus).toHaveBeenCalledTimes(1);
     expect(mockStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails cleanly when no provider supports image generation for the selected model", async () => {
+    const ollama: ProviderClient = {
+      name: "ollama",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ollama ok" })),
+      generateImage: vi.fn(async () => {
+        throw new Error("ollama timed out");
+      }),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const groq: ProviderClient = {
+      name: "groq",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "groq ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const mock: ProviderClient = {
+      name: "mock",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = createRegistry([ollama, groq, mock]);
+
+    await expect(
+      registry.imageGeneration("image-basic", {
+        prompt: "city skyline",
+        n: 1,
+        responseFormat: "url",
+        size: "1024x1024",
+      }),
+    ).rejects.toThrow(/no provider succeeded|unsupported image capability/);
+  });
+
+  it("routes image generation through the configured provider fallback chain", async () => {
+    const ollama: ProviderClient = {
+      name: "ollama",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ollama ok" })),
+      generateImage: vi.fn(async () => {
+        throw new Error("ollama timed out");
+      }),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const groq: ProviderClient = {
+      name: "groq",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "groq ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const mock: ProviderClient = {
+      name: "mock",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      generateImage: vi.fn(async () => ({
+        created: 1_710_000_000,
+        data: [{ url: "https://cdn.example.com/image.png" }],
+        providerModel: "mock-image",
+      })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [ollama, groq, mock],
+      defaultProvider: "mock",
+      modelProviderMap: {
+        "fast-chat": "ollama",
+        "smart-reasoning": "groq",
+        "image-basic": "ollama",
+      },
+      providerModelMap: {
+        ollama: "image-primary",
+        groq: "llama-3.1-8b-instant",
+        mock: "mock-image",
+      },
+      fallbackOrder: {
+        ollama: ["mock"],
+        groq: ["mock"],
+        mock: [],
+      },
+    });
+
+    const result = await registry.imageGeneration("image-basic", {
+      prompt: "city skyline",
+      n: 1,
+      responseFormat: "url",
+      size: "1024x1024",
+    });
+
+    expect(result).toEqual({
+      created: 1_710_000_000,
+      data: [{ url: "https://cdn.example.com/image.png" }],
+      providerUsed: "mock",
+      providerModel: "mock-image",
+    });
+    expect(ollama.generateImage).toHaveBeenCalledTimes(1);
+    expect(mock.generateImage).toHaveBeenCalledTimes(1);
+
+    const metrics = await registry.metrics();
+    const ollamaMetrics = metrics.providers.find((provider) => provider.name === "ollama");
+    const mockMetrics = metrics.providers.find((provider) => provider.name === "mock");
+    expect(ollamaMetrics).toMatchObject({
+      name: "ollama",
+      requests: 1,
+      errors: 1,
+      enabled: true,
+      healthy: true,
+    });
+    expect(mockMetrics).toMatchObject({
+      name: "mock",
+      requests: 1,
+      errors: 0,
+      enabled: true,
+      healthy: true,
+    });
   });
 });

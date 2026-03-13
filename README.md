@@ -159,7 +159,7 @@ GitHub contributor intake and triage are repo-managed:
 - Auth: Supabase Auth handles all user registration, login, OAuth, and MFA.
 - Persistence: Supabase Postgres via `@supabase/supabase-js` for user profiles, API keys, billing/credits, and settings.
 - Observability: Self-hosted Langfuse v2 for LLM tracing and analytics.
-- Providers: Ollama + Groq behind a provider registry with circuit breaker and fallback to mock.
+- Providers: Ollama + Groq for chat, OpenAI-backed image generation, all behind a provider registry with circuit breaker and mock fallback where configured.
 - Legacy Python MVP and in-house `PostgresStore` have been fully removed.
 
 ## Product Direction
@@ -168,7 +168,7 @@ GitHub contributor intake and triage are repo-managed:
 - Secondary audience: operators and end users using Hive's web workspace.
 - Positioning: inference-platform core first, with local payment rails and prepaid credits as a market-entry advantage rather than the whole product story.
 - Current strengths: routing, billing controls, provider safety boundaries, and OSS contributor hygiene.
-- Current expansion gaps: broader provider catalog, richer analytics, image/file capabilities, and stronger admin/deployment tooling.
+- Current expansion gaps: broader provider catalog, richer analytics, file capabilities, and stronger admin/deployment tooling.
 
 ## Current Web Flow
 
@@ -228,7 +228,7 @@ The API also performs a zero-token startup readiness sweep for configured provid
 
 ### Auth
 
-Authentication is fully handled by **Supabase Auth**. There are no custom auth endpoints in the Hive API. Users authenticate via Supabase's client SDKs (email/password, OAuth, MFA), and the API validates bearer tokens against Supabase using `SupabaseAuthService.getSessionPrincipal()`.
+Authentication is handled by **Supabase Auth** for session-based web flows and by Hive API keys for developer-facing inference routes. Inference endpoints accept either `x-api-key` or `Authorization: Bearer <api-key>`, while the web's session-authenticated management routes validate Supabase bearer tokens through `SupabaseAuthService.getSessionPrincipal()`.
 
 Session-authenticated developer key management endpoints:
 
@@ -258,6 +258,7 @@ Session-authenticated developer key management endpoints:
 
 - `src/providers/ollama-client.ts` — Ollama adapter
 - `src/providers/groq-client.ts` — Groq adapter
+- `src/providers/openai-client.ts` — OpenAI-compatible hosted image adapter
 - `src/providers/mock-client.ts` — Mock fallback adapter
 - `src/providers/registry.ts` — Orchestration with circuit breaker and fallback
 
@@ -265,9 +266,9 @@ Session-authenticated developer key management endpoints:
 
 - `fast-chat` → primary `ollama`, fallback `groq`, then `mock`
 - `smart-reasoning` → primary `groq`, fallback `ollama`, then `mock`
-- `image-basic` → `mock` (placeholder)
+- `image-basic` → primary `openai`, fallback `mock`
 
-Chat response headers: `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits`.
+Chat and image response headers: `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits`.
 
 ## Environment Variables
 
@@ -288,6 +289,11 @@ Use `.env.example` as the template. Key variables:
 - `LANGFUSE_ENABLED` — Enable LLM tracing (`true`)
 - `LANGFUSE_BASE_URL` — Langfuse endpoint (default: `http://langfuse:3000` in Docker)
 - `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` — Project credentials
+
+### Providers
+- `OLLAMA_*` — local chat provider base URL, model, timeout, retries
+- `GROQ_*` — hosted chat provider API key, base URL, model, timeout, retries
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_IMAGE_MODEL`, `OPENAI_TIMEOUT_MS`, `OPENAI_MAX_RETRIES` — hosted image provider configuration
 
 ### Providers
 - `OLLAMA_BASE_URL`, `OLLAMA_MODEL`

@@ -108,7 +108,7 @@ Still missing for a fuller platform posture:
 |-------|---------|------------|------------|
 | `fast-chat` | Ollama | Groq | Mock |
 | `smart-reasoning` | Groq | Ollama | Mock |
-| `image-basic` | Mock | — | — |
+| `image-basic` | OpenAI | Mock | — |
 
 Circuit breaker protects against cascading provider failures:
 - **CLOSED** → normal operation

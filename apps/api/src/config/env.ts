@@ -118,6 +118,13 @@ export type AppEnv = {
       timeoutMs: number;
       maxRetries: number;
     };
+    openai: {
+      apiKey?: string;
+      baseUrl: string;
+      model: string;
+      timeoutMs: number;
+      maxRetries: number;
+    };
   };
   langfuse: {
     enabled: boolean;
@@ -195,6 +202,13 @@ export function getEnv(): AppEnv {
         model: required("GROQ_MODEL", "llama-3.1-8b-instant"),
         timeoutMs: parsePositiveInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GROQ_MAX_RETRIES", providerMaxRetries),
+      },
+      openai: {
+        apiKey: process.env.OPENAI_API_KEY,
+        baseUrl: required("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        model: required("OPENAI_IMAGE_MODEL", "gpt-image-1"),
+        timeoutMs: parsePositiveInteger("OPENAI_TIMEOUT_MS", providerTimeoutMs),
+        maxRetries: parseNonNegativeInteger("OPENAI_MAX_RETRIES", providerMaxRetries),
       },
     },
     langfuse: {

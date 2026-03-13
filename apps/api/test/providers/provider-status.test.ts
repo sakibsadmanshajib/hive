@@ -35,9 +35,14 @@ describe("provider status", () => {
     });
 
     const status = await registry.status();
-    expect(status.providers).toHaveLength(3);
+    expect(status.providers).toHaveLength(4);
     expect(status.providers.find((provider) => provider.name === "ollama")?.healthy).toBe(true);
     expect(status.providers.find((provider) => provider.name === "groq")?.enabled).toBe(false);
+    expect(status.providers.find((provider) => provider.name === "openai")).toMatchObject({
+      enabled: false,
+      healthy: false,
+      detail: "not registered",
+    });
   });
 
   it("enriches internal detail with startup readiness state", async () => {

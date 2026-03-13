@@ -3,7 +3,12 @@ import type { RuntimeServices } from "../runtime/services";
 import { requirePrincipal } from "./auth";
 
 type ImageBody = {
+  model?: string;
   prompt?: string;
+  n?: number;
+  size?: string;
+  response_format?: "url" | "b64_json";
+  user?: string;
 };
 
 export function registerImagesGenerationsRoute(app: FastifyInstance, services: RuntimeServices): void {
@@ -21,12 +26,27 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
       return reply.code(429).send({ error: "rate limit exceeded" });
     }
 
-    const result = await services.ai.imageGeneration(principal.userId, request.body?.prompt ?? "");
+    const result = await services.ai.imageGeneration(principal.userId, {
+      model: request.body?.model,
+      prompt: request.body?.prompt ?? "",
+      n: request.body?.n,
+      size: request.body?.size,
+      responseFormat: request.body?.response_format,
+      user: request.body?.user,
+    });
     if ("error" in result) {
+      if (result.headers) {
+        for (const [key, value] of Object.entries(result.headers)) {
+          reply.header(key, value);
+        }
+      }
       return reply.code(result.statusCode).send({ error: result.error });
     }
 
-    reply.header("x-actual-credits", result.headers["x-actual-credits"]).code(result.statusCode);
+    for (const [key, value] of Object.entries(result.headers)) {
+      reply.header(key, value);
+    }
+    reply.code(result.statusCode);
     return result.body;
   });
 }

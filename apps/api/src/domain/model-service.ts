@@ -3,7 +3,7 @@ import type { GatewayModel } from "./types";
 const MODELS: GatewayModel[] = [
   { id: "fast-chat", object: "model", capability: "chat", creditsPerRequest: 8, provider: "ollama" },
   { id: "smart-reasoning", object: "model", capability: "chat", creditsPerRequest: 16, provider: "groq" },
-  { id: "image-basic", object: "model", capability: "image", creditsPerRequest: 120, provider: "mock" },
+  { id: "image-basic", object: "model", capability: "image", creditsPerRequest: 120, provider: "openai" },
 ];
 
 export class ModelService {
