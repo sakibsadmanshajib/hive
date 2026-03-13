@@ -26,6 +26,14 @@ The codebase is developed by humans and AI agents. Clear Git and documentation s
   - `docs/architecture-update`
 - Avoid vague names like `updates` or `temp-branch`.
 
+### Pull Request Titles
+
+- Prefer scoped pull request titles where practical:
+  - `docs(audit): deepen platform review and standardize local auth bootstrap`
+  - `fix(api): harden payment webhook idempotency`
+  - `feat(web): add developer usage breakdown cards`
+- Avoid vague umbrella titles that read like session summaries instead of change intent.
+
 ### Change Scope
 
 - Do not mix unrelated concerns in one commit/PR.

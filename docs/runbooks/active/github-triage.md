@@ -29,6 +29,7 @@ Version-controlled files are the source of truth. Avoid editing managed label na
 Reviewers should expect every PR to include:
 
 - issue linkage or explicit scope statement
+- a scoped PR title, preferably Conventional-Commit-style where practical
 - exact verification commands and outcomes
 - docs/changelog status
 - risk review for sensitive areas

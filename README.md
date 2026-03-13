@@ -1,12 +1,13 @@
 # Hive
 
-Hive is a Bangladesh-focused AI API gateway with:
-- OpenAI-compatible API surface
-- prepaid AI credits with local payment integration
+Hive is an AI inference platform with:
+- OpenAI-compatible API endpoints for chat, responses, and model access
 - provider routing across Ollama, Groq, and mock fallback
-- Supabase for auth, user data, API keys, and billing persistence
+- prepaid credits, billing persistence, and reconciliation controls
+- Supabase-backed auth, user data, API keys, and settings
 - self-hosted Langfuse for LLM observability
-- Dockerized API + web + Redis + Ollama + Langfuse
+- a lightweight web workspace plus developer panel
+- Bangladesh-native payment workflows as one strategic monetization wedge
 
 ## Start Here
 
@@ -20,6 +21,117 @@ Hive is a Bangladesh-focused AI API gateway with:
 - Governance: `GOVERNANCE.md`
 - Engineering standards: `docs/engineering/git-and-ai-practices.md`
 - System architecture: `docs/architecture/system-architecture.md`
+
+## Getting Started
+
+Hive local development runs two Docker-managed systems:
+
+- the **Hive app stack**, started by this repo's Docker Compose files
+- the **Supabase local stack**, started by the Supabase CLI
+
+Both will appear in `docker ps`, but they are managed by different tools.
+
+### First-Time Setup
+
+```bash
+pnpm install
+pnpm bootstrap:local
+pnpm stack:dev
+```
+
+`pnpm bootstrap:local` is the explicit first-time setup command. It:
+
+1. starts or verifies the local Supabase CLI stack
+2. resets the local Supabase database
+3. applies repo migrations to the local database
+4. starts the local `ollama` service and pulls the default `OLLAMA_MODEL`
+
+`pnpm stack:dev` is the canonical daily-development entry point. It:
+
+1. starts or verifies the Supabase local stack
+2. reads the live local Supabase keys from `npx supabase status -o env`
+3. injects the required auth env vars for Hive
+4. starts the full Hive stack with hot reload for `api` and `web`
+
+### Daily Development
+
+Use the same command for normal development:
+
+```bash
+pnpm stack:dev
+```
+
+Use these commands to stop or reset the local stack:
+
+```bash
+pnpm stack:down
+pnpm stack:reset
+```
+
+Use `pnpm bootstrap:local` again when you need to rebuild the local Supabase schema from migrations or repopulate the default local Ollama model.
+
+### What Starts
+
+`pnpm stack:dev` starts:
+
+- Hive Compose services:
+  - `api`
+  - `web`
+  - `redis`
+  - `ollama`
+  - `langfuse`
+  - `langfuse-db`
+- Supabase CLI services:
+  - `auth`
+  - `db`
+  - `kong`
+  - `rest`
+  - `studio`
+  - and related local Supabase services
+
+### Why Supabase Uses The CLI
+
+Supabase is not defined in Hive's `docker-compose.yml`. Instead, Hive uses the Supabase CLI as the source of truth for the local Supabase stack.
+
+That means:
+
+- `docker compose up` alone is not enough for local auth
+- `npx supabase start` alone is not enough for the Hive app stack
+- `pnpm bootstrap:local` owns first-time local schema/bootstrap
+- `pnpm stack:dev` is the standardized daily-development command because it handles both lifecycles together
+
+### Why `api` And `web` Are Separate Containers
+
+Hive keeps `api` and `web` separate even in local development because they are separate deployable applications with different runtime concerns.
+
+This preserves:
+
+- the real browser-to-API HTTP boundary
+- correct separation of browser-safe `NEXT_PUBLIC_*` values from server-only secrets
+- production-like wiring with hot reload still enabled in development
+
+### Verification
+
+Once the stack is up, these are the primary checks:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8080/v1/providers/status
+curl -s http://127.0.0.1:54321/auth/v1/health
+curl -sI http://127.0.0.1:3000/auth
+```
+
+### Optional Production-Like Compose Mode
+
+If you explicitly want the built production-style stack instead of hot reload, use:
+
+```bash
+npx supabase start
+docker compose up --build -d
+```
+
+In that mode, you are responsible for ensuring the real local Supabase values are provided to the Hive containers.
 
 ## Contributing and Governance
 
@@ -49,6 +161,14 @@ GitHub contributor intake and triage are repo-managed:
 - Observability: Self-hosted Langfuse v2 for LLM tracing and analytics.
 - Providers: Ollama + Groq behind a provider registry with circuit breaker and fallback to mock.
 - Legacy Python MVP and in-house `PostgresStore` have been fully removed.
+
+## Product Direction
+
+- Primary audience: developers and small teams integrating inference into applications.
+- Secondary audience: operators and end users using Hive's web workspace.
+- Positioning: inference-platform core first, with local payment rails and prepaid credits as a market-entry advantage rather than the whole product story.
+- Current strengths: routing, billing controls, provider safety boundaries, and OSS contributor hygiene.
+- Current expansion gaps: broader provider catalog, richer analytics, image/file capabilities, and stronger admin/deployment tooling.
 
 ## Current Web Flow
 
@@ -192,6 +312,25 @@ Automated billing hardening:
 
 ## Docker Setup
 
+Docker is used here to give Hive a reproducible local runtime for the parts that behave like deployed services:
+
+- `api` runs the Fastify backend in a containerized environment close to production wiring
+- `web` runs the built Next.js app as a separate HTTP service
+- `redis` provides rate limiting
+- `ollama` provides local inference
+- `langfuse` and `langfuse-db` provide observability
+
+The API and web are separate containers on purpose:
+
+- they are separate deployable applications in the monorepo
+- the web depends on the API over HTTP just like a real client would
+- this catches environment, networking, and build/runtime mismatches that do not appear when everything is run as one in-process dev setup
+- it keeps the boundary between browser code and server code explicit
+
+Supabase is intentionally **not** defined in the Hive Compose file. In the current local architecture, Supabase is started separately by the Supabase CLI, which itself runs Supabase services as Docker containers. The API container reaches that stack over `host.docker.internal`.
+
+The standardized path is `pnpm stack:dev`, which reads the live local Supabase keys and injects them for the Hive stack automatically.
+
 The compose stack includes:
 
 | Service | Port | Description |
@@ -203,29 +342,7 @@ The compose stack includes:
 | `langfuse` | 3030 | LLM observability dashboard |
 | `langfuse-db` | 5434 | Langfuse's dedicated Postgres |
 
-> **Note:** Supabase runs separately via the Supabase CLI (`npx supabase start`). The API container communicates with it over `host.docker.internal:54321`.
-
-### Getting Started
-
-```bash
-# 1. Start Supabase locally
-npx supabase start
-
-# 2. Apply database migrations
-npx supabase db reset
-
-# 3. Start the Docker stack
-docker compose up --build -d
-
-# 4. Pull Ollama model
-docker compose exec ollama ollama pull llama3.1:8b
-
-# 5. Verify everything is running
-docker compose ps
-curl -s http://127.0.0.1:8080/v1/providers/status
-curl -s http://127.0.0.1:8080/v1/providers/status/internal -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
-curl -s http://127.0.0.1:8080/v1/providers/metrics
-```
+> **Note:** Supabase runs as Docker containers too, but it is managed by the Supabase CLI instead of Hive's Compose file.
 
 ### Langfuse Dashboard
 
@@ -247,11 +364,12 @@ curl -i -X POST http://127.0.0.1:8080/v1/chat/completions \
 
 ```bash
 pnpm install                        # Install dependencies
+pnpm stack:dev                     # Start full local stack with hot reload
+pnpm stack:down                    # Stop the Hive dev stack
+pnpm stack:reset                   # Stop Hive stack, remove Compose volumes, stop Supabase
 pnpm --filter @hive/api test        # Run API tests (23 suites, 64 tests)
 pnpm --filter @hive/api build       # TypeScript build check
 pnpm --filter @hive/web build       # Web build
-pnpm --filter @hive/api dev         # Run API locally
-pnpm --filter @hive/web dev         # Run web locally
 ```
 
 ## Test Coverage

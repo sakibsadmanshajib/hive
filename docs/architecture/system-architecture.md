@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Hive is a Bangladesh-focused AI API gateway that provides an OpenAI-compatible aggregation layer over multiple LLM providers with local payment workflows.
+Hive is an AI inference platform that provides an OpenAI-compatible aggregation layer over multiple LLM providers, prepaid billing controls, and operator-safe observability. Bangladesh-native payment workflows remain one market wedge, not the full product definition.
 
 ## High-Level Components
 
@@ -35,6 +35,7 @@ graph TD
 - Next.js App Router UI
 - Chat-first workspace with developer panel and settings surfaces
 - Browser clients require explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; the web app no longer falls back to localhost or placeholder credentials at runtime
+- In local Docker-based development, those browser envs and the API's `SUPABASE_SERVICE_ROLE_KEY` must come from the live Supabase CLI stack (`npx supabase status -o env`), not placeholder defaults
 - The browser maintains a small mirrored auth-session store for app routing and API headers, but Supabase remains the source of truth. The mirror is synchronized from `getSession()` and `onAuthStateChange()` without clearing seeded local sessions until a real Supabase session has been observed.
 - Protected routes must wait for client auth-session hydration before redirecting to `/auth`; prerendered `null` auth state is not sufficient evidence that the browser is unauthenticated.
 
@@ -61,6 +62,24 @@ graph TD
 ### 7. External Integrations
 - Groq API for hosted inference
 - bKash/SSLCOMMERZ payment webhooks
+
+## Product Posture
+
+Hive currently sits between a narrow gateway and a full multi-tenant inference platform.
+
+Already platform-like:
+- compatible inference API surface
+- provider routing and fallback
+- public/internal provider health boundaries
+- billing ledger and reconciliation
+- managed API-key lifecycle
+- lightweight web and developer surfaces
+
+Still missing for a fuller platform posture:
+- broader provider/catalog coverage
+- richer analytics and operator tooling
+- organization/team controls
+- stronger deployment and SLO guidance
 
 ## Request Lifecycle (Chat)
 
@@ -151,4 +170,25 @@ Payment reconciliation scheduling is:
 └─────────────────┘
 ```
 
-Supabase is managed by the Supabase CLI on the host and the API container reaches it via `host.docker.internal`.
+Supabase is managed by the Supabase CLI rather than Hive's Compose file, but it still runs as Docker containers under the hood. The API container reaches that stack via `host.docker.internal`.
+
+The standardized local workflow is split deliberately:
+
+- `pnpm bootstrap:local` for first-time schema/bootstrap, migration application, and default local Ollama model provisioning
+- `pnpm stack:dev` for daily full-stack development with hot reload
+
+## Why API And Web Are Separate Containers
+
+Hive keeps `api` and `web` as separate containers because they are separate applications with different runtime concerns:
+
+- `api` is the backend service that owns auth validation, provider routing, billing, and persistence access
+- `web` is the browser-facing Next.js application that consumes the API over HTTP
+
+This separation is useful even in local development because it:
+
+- preserves the real browser-to-API boundary
+- catches env and network wiring problems early
+- makes it obvious which values are safe for browser exposure (`NEXT_PUBLIC_*`) versus server-only secrets
+- lets the web production bundle be validated independently from the API runtime
+
+The standardized daily-development workflow is `pnpm stack:dev`, which combines the Supabase CLI lifecycle with a Docker Compose dev override so `api` and `web` keep hot reload while still running as part of the full stack. First-time local setup should run `pnpm bootstrap:local` before that daily workflow.

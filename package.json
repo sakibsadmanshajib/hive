@@ -6,6 +6,10 @@
   "scripts": {
     "build": "pnpm -r build",
     "dev": "pnpm --parallel --filter @hive/api --filter @hive/web dev",
+    "bootstrap:local": "bash tools/dev/bootstrap-local.sh",
+    "stack:dev": "bash tools/dev/stack-dev.sh",
+    "stack:down": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down && npx supabase stop",
+    "stack:reset": "docker compose -f docker-compose.yml -f docker-compose.dev.yml down -v && npx supabase stop --no-backup",
     "test": "pnpm -r test",
     "lint": "pnpm -r lint"
   },

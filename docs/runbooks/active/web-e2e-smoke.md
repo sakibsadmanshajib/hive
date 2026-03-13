@@ -59,18 +59,46 @@ pnpm --filter @hive/web exec playwright install-deps chromium
 
 ## Local Run
 
+Use `pnpm stack:dev` for normal daily development. It is not the preferred target for this smoke runbook, because this runbook is meant to validate production-bundle and hydration behavior rather than `next dev`.
+
+For local smoke validation on a fresh environment, run the one-time bootstrap first:
+
+```bash
+pnpm bootstrap:local
+```
+
+Do not rerun `pnpm bootstrap:local` as a routine smoke step unless you explicitly want to reset your local Supabase data and repull the default Ollama model.
+
+Then use the non-destructive production-style build/serve flow below.
+
 Build the production web bundle with the required public envs:
 
 ```bash
+ANON_KEY=<your-local-supabase-anon-key>
+
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
 pnpm --filter @hive/web build
 ```
 
-Start stack:
+Load the live local Supabase values used by the production-style stack:
 
 ```bash
+set -a
+# shellcheck disable=SC1090
+source <(npx supabase status -o env)
+set +a
+```
+
+Start the production-style stack:
+
+```bash
+npx supabase start
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
+NEXT_PUBLIC_SUPABASE_URL=$API_URL \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
+SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY \
 docker compose up --build -d
 docker compose ps
 ```
@@ -78,9 +106,11 @@ docker compose ps
 If you are validating a local fix outside Docker, run the rebuilt production app instead of `next dev`:
 
 ```bash
+ANON_KEY=<your-local-supabase-anon-key>
+
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
 pnpm --filter @hive/web exec next start -p 3000
 ```
 
@@ -104,5 +134,6 @@ The CI workflow currently enables `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` so smoke r
 - Missing browser executable: rerun the Playwright browser install command.
 - Missing `E2E_SUPABASE_ANON_KEY`: export the local Supabase anon key or opt into `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` for smoke-only runs.
 - API/web readiness timeout: run `docker compose ps` and inspect logs via `docker compose logs api web`.
+- Smoke run accidentally executed against `pnpm stack:dev`: stop the dev stack with `pnpm stack:down` and rerun the production-style commands above.
 - Missing local Linux shared libraries: use `playwright install-deps` or rely on CI runner provisioning.
 - Smoke redirects authenticated fixtures back to `/auth`: verify the browser auth-session mirror waits for client hydration and does not clear seeded sessions before a real Supabase session has been observed.
