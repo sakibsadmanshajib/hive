@@ -1,10 +1,11 @@
 # Documentation Index
 
-This folder is the canonical documentation hub for product, architecture, implementation plans, and operations.
+This folder is the canonical documentation hub for Hive's product direction, architecture, implementation plans, and operations.
 
 ## Start Here
 
 - Architecture: `docs/architecture/system-architecture.md`
+- Product direction: `docs/design/active/product-and-routing.md`
 - Python MVP migration map: `docs/architecture/2026-02-28-python-mvp-migration-map.md`
 - Contributing: `../CONTRIBUTING.md`
 - Code of Conduct: `../CODE_OF_CONDUCT.md`
@@ -27,6 +28,7 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Current repo audit execution plan: `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
 - Current PR #36 unresolved-comments implementation plan: `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
 - Repo audit outputs: `docs/audits/2026-02-28-redundancy-inventory.md`, `docs/audits/2026-02-28-final-audit-report.md`
+- Current platform audit: `docs/audits/2026-03-13-platform-audit.md`
 
 ## Planning Docs Status
 
@@ -57,3 +59,4 @@ This folder is the canonical documentation hub for product, architecture, implem
 - Add new architecture/design docs in separate files instead of appending huge sections to one file.
 - Keep decision logs explicit: what changed, why, and migration impact.
 - For major new feature tracks, add a separate roadmap doc under `docs/plans/`.
+- Treat historical audits and archived plans as context, not as the current product truth when newer active docs disagree.

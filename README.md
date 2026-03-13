@@ -1,12 +1,13 @@
 # Hive
 
-Hive is a Bangladesh-focused AI API gateway with:
-- OpenAI-compatible API surface
-- prepaid AI credits with local payment integration
+Hive is an AI inference platform with:
+- OpenAI-compatible API endpoints for chat, responses, and model access
 - provider routing across Ollama, Groq, and mock fallback
-- Supabase for auth, user data, API keys, and billing persistence
+- prepaid credits, billing persistence, and reconciliation controls
+- Supabase-backed auth, user data, API keys, and settings
 - self-hosted Langfuse for LLM observability
-- Dockerized API + web + Redis + Ollama + Langfuse
+- a lightweight web workspace plus developer panel
+- Bangladesh-native payment workflows as one strategic monetization wedge
 
 ## Start Here
 
@@ -49,6 +50,14 @@ GitHub contributor intake and triage are repo-managed:
 - Observability: Self-hosted Langfuse v2 for LLM tracing and analytics.
 - Providers: Ollama + Groq behind a provider registry with circuit breaker and fallback to mock.
 - Legacy Python MVP and in-house `PostgresStore` have been fully removed.
+
+## Product Direction
+
+- Primary audience: developers and small teams integrating inference into applications.
+- Secondary audience: operators and end users using Hive's web workspace.
+- Positioning: inference-platform core first, with local payment rails and prepaid credits as a market-entry advantage rather than the whole product story.
+- Current strengths: routing, billing controls, provider safety boundaries, and OSS contributor hygiene.
+- Current expansion gaps: broader provider catalog, richer analytics, image/file capabilities, and stronger admin/deployment tooling.
 
 ## Current Web Flow
 
@@ -192,6 +201,24 @@ Automated billing hardening:
 
 ## Docker Setup
 
+Docker is used here to give Hive a reproducible local runtime for the parts that behave like deployed services:
+
+- `api` runs the Fastify backend in a containerized environment close to production wiring
+- `web` runs the built Next.js app as a separate HTTP service
+- `redis` provides rate limiting
+- `ollama` provides local inference
+- `langfuse` and `langfuse-db` provide observability
+
+The API and web are separate containers on purpose:
+
+- they are separate deployable applications in the monorepo
+- the web depends on the API over HTTP just like a real client would
+- this catches environment, networking, and build/runtime mismatches that do not appear when everything is run as one in-process dev setup
+- it keeps the boundary between browser code and server code explicit
+
+Supabase is intentionally **not** in this compose file. In the current local architecture, Supabase runs via the Supabase CLI on the host, and the API container reaches it over `host.docker.internal`.
+The Supabase CLI generates real local `ANON_KEY` and `SERVICE_ROLE_KEY` values. Copy those into your local `.env` before starting `api` and `web`, or browser auth and API session validation will fail even though the containers boot.
+
 The compose stack includes:
 
 | Service | Port | Description |
@@ -203,7 +230,24 @@ The compose stack includes:
 | `langfuse` | 3030 | LLM observability dashboard |
 | `langfuse-db` | 5434 | Langfuse's dedicated Postgres |
 
-> **Note:** Supabase runs separately via the Supabase CLI (`npx supabase start`). The API container communicates with it over `host.docker.internal:54321`.
+> **Note:** Supabase runs separately via the Supabase CLI (`npx supabase start`). The API container communicates with it over `host.docker.internal:54321`, and both `api` and `web` need the real local Supabase keys from `npx supabase status -o env`.
+
+### When To Use Docker vs `pnpm dev`
+
+Use Docker Compose when you want:
+
+- a stack that behaves more like deployment
+- API/web/network boundary verification
+- local Ollama and Langfuse in one repeatable setup
+- smoke testing and end-to-end validation
+
+Use `pnpm --filter @hive/api dev` and `pnpm --filter @hive/web dev` when you want:
+
+- faster inner-loop development
+- direct code reload during frontend or API work
+- focused local debugging without the full stack
+
+Do not run both on the same ports at the same time. If `docker compose ps` shows `api` on `:8080` and `web` on `:3000`, local dev servers will either fail to bind or move to a different port.
 
 ### Getting Started
 
@@ -214,13 +258,21 @@ npx supabase start
 # 2. Apply database migrations
 npx supabase db reset
 
-# 3. Start the Docker stack
+# 3. Copy the generated local Supabase keys into .env
+npx supabase status -o env | rg '^(API_URL|ANON_KEY|SERVICE_ROLE_KEY)='
+# Set:
+#   SUPABASE_URL=$API_URL
+#   NEXT_PUBLIC_SUPABASE_URL=$API_URL
+#   SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
+#   NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY
+
+# 4. Start the Docker stack
 docker compose up --build -d
 
-# 4. Pull Ollama model
+# 5. Pull Ollama model
 docker compose exec ollama ollama pull llama3.1:8b
 
-# 5. Verify everything is running
+# 6. Verify everything is running
 docker compose ps
 curl -s http://127.0.0.1:8080/v1/providers/status
 curl -s http://127.0.0.1:8080/v1/providers/status/internal -H "x-admin-token: <ADMIN_STATUS_TOKEN>"

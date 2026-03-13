@@ -6,7 +6,9 @@ The product is intentionally API-first with a lightweight web app:
 
 - Primary audience: developers and teams integrating AI into apps
 - Secondary audience: direct end users using chat UI
-- Market focus: Bangladesh (local payment rails, prepaid model, transparent usage)
+- Positioning: broader AI inference platform first
+- Market wedge: Bangladesh-native payment rails, prepaid credits, and transparent local monetization
+- Platform emphasis: compatibility, routing, billing controls, and operator visibility
 
 ## User Experience Principles
 
@@ -51,6 +53,9 @@ Billing/ops endpoints:
 - `/v1/payments/webhook`
 - `/v1/providers/status`
 - `/v1/providers/status/internal`
+- `/v1/providers/metrics`
+- `/v1/providers/metrics/internal`
+- `/v1/providers/metrics/internal/prometheus`
 
 ## Provider Strategy (Current)
 
@@ -82,6 +87,7 @@ This split keeps observability high without leaking operational details.
 ## Known Gaps
 
 1. Image route still mock-backed
-2. No dynamic runtime provider config updates yet
-3. DB schema bootstrap is code-driven; formal migrations should be added
+2. No durable provider/model catalog or intelligence layer yet
+3. No dynamic runtime provider config updates yet
 4. Provider-specific quota/cost controls can be extended further
+5. Analytics and admin tooling are still limited for a broader platform story

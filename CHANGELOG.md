@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Platform Audit Refresh:** Added `docs/audits/2026-03-13-platform-audit.md` to capture the current implementation baseline, backlog drift, and next-step platform priorities.
 - **Maintainer Issue Lifecycle Runbook:** Added a dedicated runbook for issue intake, triage state transitions, planning expectations, PR linkage, verification evidence, and closeout workflow.
 - **API Key Lifecycle Management:** Added stable API key ids, nicknames, optional expiration, revoke-by-id management, and immutable lifecycle audit events for create/revoke/expiry visibility.
     - Session-authenticated management routes: `/v1/users/me`, `/v1/users/api-keys`, and `/v1/users/api-keys/{id}/revoke`.
@@ -46,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Duplicate OpenAPI Contract:** Removed `openapi/openapi.yaml`; `packages/openapi/openapi.yaml` is now the sole in-repo OpenAPI source.
 
 ### Changed
+- **Product Positioning Docs:** Reframed top-level product and architecture docs around Hive as a broader AI inference platform, with Bangladesh-native payments positioned as one strategic wedge rather than the entire product definition.
+- **Future Roadmap:** Rewrote the active roadmap so already-shipped hardening work is treated as delivered baseline and remaining work is organized around provider breadth, analytics, commercial controls, and operator maturity.
+- **Docker Documentation:** Clarified why Docker Compose is used locally, why `api` and `web` are separate containers, and how that differs from running `pnpm dev` directly.
+- **Local Auth Bootstrap Docs:** Clarified that local Supabase generates real `ANON_KEY` and `SERVICE_ROLE_KEY` values, and those keys must be copied into `.env` before starting Docker `api` and `web`.
 - **Web Architecture:** Moved to a "Guarded Chat Home" structure.
     - `/` is now the authenticated chat interface.
     - Unauthenticated users are strictly redirected to `/auth`.
@@ -56,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
 
 ### Fixed
+- **API Browser CORS:** Added explicit Fastify CORS support for current local web origins so browser requests to the API no longer fail preflight by default.
 - **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
 - **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
 - **Provider Metrics Documentation:** Aligned README, runbook, and architecture docs with the new public/internal provider metrics boundary and in-memory reset behavior.

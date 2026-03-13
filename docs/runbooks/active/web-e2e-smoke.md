@@ -62,10 +62,18 @@ pnpm --filter @hive/web exec playwright install-deps chromium
 Build the production web bundle with the required public envs:
 
 ```bash
+ANON_KEY=<your-local-supabase-anon-key>
+
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
 pnpm --filter @hive/web build
+```
+
+Get the real local Supabase anon key from:
+
+```bash
+npx supabase status -o env | rg '^(ANON_KEY|API_URL|SERVICE_ROLE_KEY)='
 ```
 
 Start stack:
@@ -78,9 +86,11 @@ docker compose ps
 If you are validating a local fix outside Docker, run the rebuilt production app instead of `next dev`:
 
 ```bash
+ANON_KEY=<your-local-supabase-anon-key>
+
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
 NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
 pnpm --filter @hive/web exec next start -p 3000
 ```
 

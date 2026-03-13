@@ -1,72 +1,98 @@
 # Future Implementation Roadmap
 
-This roadmap is the next-stage implementation guide after the current stable provider-testing baseline.
+This roadmap reflects Hive after the provider-hardening and OSS-governance wave that shipped through late February and early March 2026.
 
-## Phase 1 - Provider Hardening (Immediate)
+## Already Delivered Baseline
 
-Goals:
-- make Ollama/Groq behavior production predictable
-- improve observability and failure diagnosis
+The following platform primitives are already in place and should no longer be treated as future roadmap work:
 
-Tasks:
-0. Keep the existing provider adapter pattern as the canonical inference integration style (`ProviderClient` + concrete adapters + registry orchestration).
-1. Add provider latency/error counters and expose aggregated metrics endpoint.
-2. Add startup checks to verify configured provider models exist.
-3. Add per-provider timeout/retry controls via env vars.
-4. Add circuit-breaker behavior for repeated provider failures.
-5. Add integration tests for real provider adapters using mock HTTP server contracts.
+- provider routing with fallback
+- provider timeout and retry controls
+- provider circuit breaker
+- public/internal provider status split
+- public/internal provider metrics split
+- startup provider model readiness checks
+- payment reconciliation scheduler
+- API key lifecycle management
+- web auth -> chat -> billing smoke coverage
+- GitHub issue templates, metadata sync, and maintainer lifecycle docs
 
-## Phase 2 - Data and Billing Maturity
-
-Goals:
-- strengthen financial correctness and auditability
-
-Tasks:
-1. Introduce migration tooling (Prisma/Drizzle/Kysely migrations) replacing ad hoc table bootstrap.
-2. Add explicit ledger transaction table for reservation/capture/refund events.
-3. Add campaign engine persistence and admin management endpoints.
-4. Add refundable-balance endpoint with policy decomposition (purchased/promo/consumed/expired).
-5. Add reconciliation scheduler and drift alerting.
-
-## Phase 3 - Auth and Tenant Controls
+## Phase 1 - Platform Positioning And Backlog Quality
 
 Goals:
-- move from dev-key model to operator-grade access control
+- clarify Hive as an inference platform rather than a narrow local gateway
+- ensure docs, roadmap, and GitHub backlog describe the real product
 
 Tasks:
-1. Persist API keys with hash-at-rest and metadata.
-2. Add key scopes, key rotation, key revocation audit trail.
-3. Add organization/team entities and per-org budgets.
-4. Add admin role model and policy enforcement middleware.
-5. Add authenticated admin dashboard endpoints.
+1. Align top-level docs and architecture docs to the broader inference-platform narrative.
+2. Retire or re-triage stale strategic issues and oversized implementation placeholders.
+3. Create missing issues for genuine platform gaps with clean acceptance criteria.
+4. Keep roadmap, runbooks, and changelog synchronized with backlog changes.
 
-## Phase 4 - Product Surface Expansion
+## Phase 2 - Provider Breadth And Provider Intelligence
 
 Goals:
-- improve usability and market readiness
+- make Hive meaningfully stronger as a multi-provider inference platform
+- improve provider discovery and routing decisions
 
 Tasks:
-1. Replace mock image pipeline with actual image provider integration.
-2. Add file ingestion pipeline with parser abstraction.
-3. Add better usage analytics (daily trend, model split, provider split).
-4. Add top-up/refund request UI with status timeline.
-5. Add internal support tooling endpoints.
+1. Decide the OpenRouter strategy cleanly:
+   - metadata intelligence first
+   - runtime provider later only if billing and governance stay controlled
+2. Add a provider/model catalog layer with normalized metadata and provenance.
+3. Expand provider breadth beyond the current Ollama/Groq baseline.
+4. Add explicit provider cost-governance and routing-policy inputs.
+5. Improve `/v1/models` to expose richer model capability and pricing context where appropriate.
 
-## Phase 5 - Release and Operations Readiness
+## Phase 3 - Product Surface Expansion
 
 Goals:
-- make deployment and incident response operationally reliable
+- close the most obvious gaps between current platform claims and user-visible capability
 
 Tasks:
-1. Add CI pipeline for lint, typecheck, test, build, and container build.
-2. Add staging/prod environment templates.
-3. Add SLOs and alerting (availability, latency, provider failure rate, payment drift).
-4. Add backup and restore process for Postgres.
-5. Add incident runbook playbooks for payment and provider outages.
+1. Replace the mock image pipeline with a real image provider integration.
+2. Add file ingestion with parser abstraction and safe limits.
+3. Expand usage analytics:
+   - daily trend
+   - model split
+   - provider split
+   - credit-spend visibility
+4. Add support/admin tooling surfaces for debugging users, keys, and billing flows.
+5. Improve developer-facing controls around keys, quotas, and environment clarity.
+
+## Phase 4 - Billing, Access Tiers, And Commercial Controls
+
+Goals:
+- improve monetization flexibility without weakening billing correctness
+
+Tasks:
+1. Reframe and implement the free-tier / zero-cost access-control track.
+2. Add refundable-balance decomposition and clearer credit accounting surfaces.
+3. Add campaign/promo management with explicit lifecycle rules.
+4. Add stronger abuse controls and tier-aware limits.
+5. Add cost and margin visibility for provider-backed traffic.
+
+## Phase 5 - Team And Operator Maturity
+
+Goals:
+- move from single-user/operator assumptions toward platform operations
+
+Tasks:
+1. Add organization/team entities and per-org budgets.
+2. Add stronger admin role models and support permissions.
+3. Add operator-facing deployment templates for staging and production.
+4. Add SLOs and incident runbooks for provider, billing, and auth failures.
+5. Add backup and restore guidance for Supabase/Postgres-dependent operations.
 
 ## Recommended Execution Order
 
-1. Phase 1 and 2 in parallel tracks (separate owners)
-2. Phase 3 after baseline observability stabilizes
-3. Phase 4 after billing and auth are durable
-4. Phase 5 continuously, but final hardening before public launch
+1. Phase 1 immediately, because narrative and backlog quality now limit execution more than missing fundamentals do.
+2. Phase 2 next, because provider breadth and provider intelligence most directly strengthen Hive's inference-platform identity.
+3. Phase 3 and Phase 4 in parallel only after provider strategy is clearer.
+4. Phase 5 continuously, with deeper operator maturity before any broader launch.
+
+## Planning Notes
+
+- Bangladesh-native payments should remain a strategic wedge and monetization advantage, not the sole framing for product direction.
+- Avoid reopening broad provider integrations until metadata, billing, and acceptance criteria are disciplined enough to prevent scope sprawl.
+- Prefer small, evidence-backed GitHub issues over umbrella issues that mix strategy, implementation detail, and speculative market claims.
