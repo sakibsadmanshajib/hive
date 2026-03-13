@@ -4,7 +4,7 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 
 ## Start Here
 
-- Local quickstart and daily development: `../README.md`
+- Local bootstrap and daily development: `../README.md`
 - Architecture: `docs/architecture/system-architecture.md`
 - Product direction: `docs/design/active/product-and-routing.md`
 - Python MVP migration map: `docs/architecture/2026-02-28-python-mvp-migration-map.md`
@@ -17,6 +17,8 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 - Changelog: `../CHANGELOG.md`
 - Plans overview: `docs/plans/README.md`
 - Active roadmap: `docs/plans/active/future-implementation-roadmap.md`
+- Current in-flight bootstrap/docs workflow plan: `docs/plans/2026-03-12-bootstrap-and-smoke-doc-fixes.md`
+- Current exhaustive audit plan: `docs/plans/2026-03-13-exhaustive-repo-audit.md`
 - Current architecture migration design: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
 - Current architecture migration implementation plan: `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
 - Current chat-first frontend IA design: `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-design.md`
@@ -26,21 +28,20 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 - Current chat-first guarded-home implementation plan: `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
 - Current repo audit design: `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
 - Current repo audit decision process: `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
-- Current repo audit execution plan: `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
-- Current PR #36 unresolved-comments implementation plan: `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
 - Repo audit outputs: `docs/audits/2026-02-28-redundancy-inventory.md`, `docs/audits/2026-02-28-final-audit-report.md`
 - Current platform audit: `docs/audits/2026-03-13-platform-audit.md`
 
 ## Planning Docs Status
 
-- `docs/plans/active/` contains current plans that should guide implementation.
-- New session plans and tracked implementation plans belong in `docs/plans/`.
+- `docs/plans/` root is for in-flight tracked plans only.
+- `docs/plans/active/` contains long-lived current plans that should guide implementation.
+- `docs/plans/completed/` contains completed dated execution artifacts retained for history.
 - `docs/plans/archive/pre-supabase/` contains pre-Supabase plans kept only for historical reference and should be treated as obsolete for current direction.
 - Active design artifacts may live under `docs/design/active/` when they capture UX or product decisions that are not implementation plans.
 
 ## Operations
 
-- Canonical local stack startup: `../README.md`
+- Canonical local bootstrap and stack startup: `../README.md`
 - Runbooks index: `docs/runbooks/README.md`
 - Maintainer issue lifecycle runbook: `docs/runbooks/active/issue-lifecycle.md`
 - Provider circuit-breaker and startup readiness runbook: `docs/runbooks/active/provider-circuit-breaker.md`

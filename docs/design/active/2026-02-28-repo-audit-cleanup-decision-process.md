@@ -51,7 +51,7 @@ Initially deferred from this tracking PR:
 
 - Design artifact: `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
 - Decision process log: `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
-- Execution plan artifact (tracked copy): `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
+- Execution plan artifact (tracked copy): `docs/plans/completed/2026-02-28-repo-audit-cleanup-plan.md`
 
 ## Next Trigger
 

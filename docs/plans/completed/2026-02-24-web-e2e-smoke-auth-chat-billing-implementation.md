@@ -287,7 +287,7 @@ git commit -m "docs(web): document smoke e2e command and operational checks"
 ### Task 6: Final verification and PR readiness
 
 **Files:**
-- Modify: `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md` (only if implementation deviated)
+- Modify: `docs/plans/completed/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md` (only if implementation deviated)
 
 **Step 1: Run full web verification bundle**
 
@@ -320,6 +320,6 @@ If implementation differs from design decisions, add a small "Implementation Not
 **Step 5: Commit**
 
 ```bash
-git add docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md
+git add docs/plans/completed/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md
 git commit -m "docs(plans): align smoke e2e design notes with implementation"
 ```

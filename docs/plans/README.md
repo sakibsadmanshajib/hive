@@ -1,18 +1,24 @@
 # Plans Index
 
-This folder is organized by plan status to reduce ambiguity.
+This folder is organized by plan status to reduce ambiguity and keep active work discoverable.
 
 ## Canonical Placement
 
 - Create new tracked plans in `docs/plans/YYYY-MM-DD-<task-name>.md`.
 - Continue an existing task in its current plan file instead of creating an untracked side artifact.
-- Move only long-lived current-track plans into `docs/plans/active/` when they become the canonical implementation guide for that stream.
+- Move long-lived current-track plans into `docs/plans/active/` when they become the canonical implementation guide for that stream.
+- Move completed dated plans out of the root into `docs/plans/completed/` once they are no longer the current execution surface.
 
-## Active
+## In Flight
+
+The root `docs/plans/` folder should stay small and contain only currently active session plans.
+
+- `docs/plans/2026-03-12-bootstrap-and-smoke-doc-fixes.md`
+- `docs/plans/2026-03-13-exhaustive-repo-audit.md`
+
+## Active Track Docs
 
 Use these documents for current planning and execution:
-
-### Active Track Docs (`docs/plans/active/`)
 
 - `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
 - `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
@@ -22,20 +28,14 @@ Use these documents for current planning and execution:
 - `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
 - `docs/plans/active/2026-02-24-public-beta-mvp-gap-and-oss-organization-design.md`
 
-### In-Progress Plan Drafts (`docs/plans/`)
+## Completed
 
-- `docs/plans/2026-02-24-chat-first-guarded-home-design.md`
-- `docs/plans/2026-02-24-ci-quality-and-pr-cleanup-design.md`
-- `docs/plans/2026-02-24-ci-quality-and-pr-cleanup-implementation.md`
-- `docs/plans/2026-02-24-free-tier-zero-cost-access-design.md`
-- `docs/plans/2026-02-24-free-tier-zero-cost-access-implementation.md`
-- `docs/plans/2026-02-24-public-beta-mvp-gap-and-oss-organization-implementation.md`
-- `docs/plans/2026-02-24-provider-timeout-retry-controls-design.md`
-- `docs/plans/2026-02-24-provider-timeout-retry-controls-implementation.md`
-- `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-design.md`
-- `docs/plans/2026-02-24-web-e2e-smoke-auth-chat-billing-implementation.md`
-- `docs/plans/2026-02-28-repo-audit-cleanup-plan.md`
-- `docs/plans/2026-03-11-pr36-remaining-unresolved-comments.md`
+Completed dated plans live under `docs/plans/completed/`.
+
+Examples:
+
+- `docs/plans/completed/2026-02-24-ci-quality-and-pr-cleanup-implementation.md`
+- `docs/plans/completed/2026-03-13-unified-local-stack.md`
 
 ## Archive (Obsolete)
 

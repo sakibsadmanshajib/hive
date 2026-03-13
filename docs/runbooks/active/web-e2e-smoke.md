@@ -59,13 +59,17 @@ pnpm --filter @hive/web exec playwright install-deps chromium
 
 ## Local Run
 
-Preferred local stack startup:
+Use `pnpm stack:dev` for normal daily development. It is not the preferred target for this smoke runbook, because this runbook is meant to validate production-bundle and hydration behavior rather than `next dev`.
+
+For local smoke validation on a fresh environment, run the one-time bootstrap first:
 
 ```bash
-pnpm stack:dev
+pnpm bootstrap:local
 ```
 
-That command is the canonical daily-development path and already handles Supabase CLI startup plus the Hive dev stack. For smoke validation, use the production-style build/serve flow below when you need to validate hydration and bundle behavior rather than dev-mode behavior.
+Do not rerun `pnpm bootstrap:local` as a routine smoke step unless you explicitly want to reset your local Supabase data and repull the default Ollama model.
+
+Then use the non-destructive production-style build/serve flow below.
 
 Build the production web bundle with the required public envs:
 
@@ -84,9 +88,13 @@ Get the real local Supabase anon key from:
 npx supabase status -o env | rg '^(ANON_KEY|API_URL|SERVICE_ROLE_KEY)='
 ```
 
-Start stack:
+Start the production-style stack:
 
 ```bash
+npx supabase start
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
 docker compose up --build -d
 docker compose ps
 ```
@@ -122,5 +130,6 @@ The CI workflow currently enables `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` so smoke r
 - Missing browser executable: rerun the Playwright browser install command.
 - Missing `E2E_SUPABASE_ANON_KEY`: export the local Supabase anon key or opt into `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` for smoke-only runs.
 - API/web readiness timeout: run `docker compose ps` and inspect logs via `docker compose logs api web`.
+- Smoke run accidentally executed against `pnpm stack:dev`: stop the dev stack with `pnpm stack:down` and rerun the production-style commands above.
 - Missing local Linux shared libraries: use `playwright install-deps` or rely on CI runner provisioning.
 - Smoke redirects authenticated fixtures back to `/auth`: verify the browser auth-session mirror waits for client hydration and does not clear seeded sessions before a real Supabase session has been observed.
