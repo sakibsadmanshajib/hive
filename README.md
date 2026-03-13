@@ -22,6 +22,106 @@ Hive is an AI inference platform with:
 - Engineering standards: `docs/engineering/git-and-ai-practices.md`
 - System architecture: `docs/architecture/system-architecture.md`
 
+## Getting Started
+
+Hive local development runs two Docker-managed systems:
+
+- the **Hive app stack**, started by this repo's Docker Compose files
+- the **Supabase local stack**, started by the Supabase CLI
+
+Both will appear in `docker ps`, but they are managed by different tools.
+
+### First-Time Setup
+
+```bash
+pnpm install
+pnpm stack:dev
+```
+
+`pnpm stack:dev` is the canonical local development entry point. It:
+
+1. starts or verifies the Supabase local stack
+2. reads the live local Supabase keys from `npx supabase status -o env`
+3. injects the required auth env vars for Hive
+4. starts the full Hive stack with hot reload for `api` and `web`
+
+### Daily Development
+
+Use the same command for normal development:
+
+```bash
+pnpm stack:dev
+```
+
+Use these commands to stop or reset the local stack:
+
+```bash
+pnpm stack:down
+pnpm stack:reset
+```
+
+### What Starts
+
+`pnpm stack:dev` starts:
+
+- Hive Compose services:
+  - `api`
+  - `web`
+  - `redis`
+  - `ollama`
+  - `langfuse`
+  - `langfuse-db`
+- Supabase CLI services:
+  - `auth`
+  - `db`
+  - `kong`
+  - `rest`
+  - `studio`
+  - and related local Supabase services
+
+### Why Supabase Uses The CLI
+
+Supabase is not defined in Hive's `docker-compose.yml`. Instead, Hive uses the Supabase CLI as the source of truth for the local Supabase stack.
+
+That means:
+
+- `docker compose up` alone is not enough for local auth
+- `npx supabase start` alone is not enough for the Hive app stack
+- `pnpm stack:dev` is the standardized command because it handles both lifecycles together
+
+### Why `api` And `web` Are Separate Containers
+
+Hive keeps `api` and `web` separate even in local development because they are separate deployable applications with different runtime concerns.
+
+This preserves:
+
+- the real browser-to-API HTTP boundary
+- correct separation of browser-safe `NEXT_PUBLIC_*` values from server-only secrets
+- production-like wiring with hot reload still enabled in development
+
+### Verification
+
+Once the stack is up, these are the primary checks:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml ps
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8080/v1/providers/status
+curl -s http://127.0.0.1:54321/auth/v1/health
+curl -sI http://127.0.0.1:3000/auth
+```
+
+### Optional Production-Like Compose Mode
+
+If you explicitly want the built production-style stack instead of hot reload, use:
+
+```bash
+npx supabase start
+docker compose up --build -d
+```
+
+In that mode, you are responsible for ensuring the real local Supabase values are provided to the Hive containers.
+
 ## Contributing and Governance
 
 Contributor and repository policy documents live at the repository root:
@@ -216,8 +316,9 @@ The API and web are separate containers on purpose:
 - this catches environment, networking, and build/runtime mismatches that do not appear when everything is run as one in-process dev setup
 - it keeps the boundary between browser code and server code explicit
 
-Supabase is intentionally **not** in this compose file. In the current local architecture, Supabase runs via the Supabase CLI on the host, and the API container reaches it over `host.docker.internal`.
-The Supabase CLI generates real local `ANON_KEY` and `SERVICE_ROLE_KEY` values. Copy those into your local `.env` before starting `api` and `web`, or browser auth and API session validation will fail even though the containers boot.
+Supabase is intentionally **not** defined in the Hive Compose file. In the current local architecture, Supabase is started separately by the Supabase CLI, which itself runs Supabase services as Docker containers. The API container reaches that stack over `host.docker.internal`.
+
+The standardized path is `pnpm stack:dev`, which reads the live local Supabase keys and injects them for the Hive stack automatically.
 
 The compose stack includes:
 
@@ -230,54 +331,7 @@ The compose stack includes:
 | `langfuse` | 3030 | LLM observability dashboard |
 | `langfuse-db` | 5434 | Langfuse's dedicated Postgres |
 
-> **Note:** Supabase runs separately via the Supabase CLI (`npx supabase start`). The API container communicates with it over `host.docker.internal:54321`, and both `api` and `web` need the real local Supabase keys from `npx supabase status -o env`.
-
-### When To Use Docker vs `pnpm dev`
-
-Use Docker Compose when you want:
-
-- a stack that behaves more like deployment
-- API/web/network boundary verification
-- local Ollama and Langfuse in one repeatable setup
-- smoke testing and end-to-end validation
-
-Use `pnpm --filter @hive/api dev` and `pnpm --filter @hive/web dev` when you want:
-
-- faster inner-loop development
-- direct code reload during frontend or API work
-- focused local debugging without the full stack
-
-Do not run both on the same ports at the same time. If `docker compose ps` shows `api` on `:8080` and `web` on `:3000`, local dev servers will either fail to bind or move to a different port.
-
-### Getting Started
-
-```bash
-# 1. Start Supabase locally
-npx supabase start
-
-# 2. Apply database migrations
-npx supabase db reset
-
-# 3. Copy the generated local Supabase keys into .env
-npx supabase status -o env | rg '^(API_URL|ANON_KEY|SERVICE_ROLE_KEY)='
-# Set:
-#   SUPABASE_URL=$API_URL
-#   NEXT_PUBLIC_SUPABASE_URL=$API_URL
-#   SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY
-#   NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY
-
-# 4. Start the Docker stack
-docker compose up --build -d
-
-# 5. Pull Ollama model
-docker compose exec ollama ollama pull llama3.1:8b
-
-# 6. Verify everything is running
-docker compose ps
-curl -s http://127.0.0.1:8080/v1/providers/status
-curl -s http://127.0.0.1:8080/v1/providers/status/internal -H "x-admin-token: <ADMIN_STATUS_TOKEN>"
-curl -s http://127.0.0.1:8080/v1/providers/metrics
-```
+> **Note:** Supabase runs as Docker containers too, but it is managed by the Supabase CLI instead of Hive's Compose file.
 
 ### Langfuse Dashboard
 
@@ -299,11 +353,12 @@ curl -i -X POST http://127.0.0.1:8080/v1/chat/completions \
 
 ```bash
 pnpm install                        # Install dependencies
+pnpm stack:dev                     # Start full local stack with hot reload
+pnpm stack:down                    # Stop the Hive dev stack
+pnpm stack:reset                   # Stop Hive stack, remove Compose volumes, stop Supabase
 pnpm --filter @hive/api test        # Run API tests (23 suites, 64 tests)
 pnpm --filter @hive/api build       # TypeScript build check
 pnpm --filter @hive/web build       # Web build
-pnpm --filter @hive/api dev         # Run API locally
-pnpm --filter @hive/web dev         # Run web locally
 ```
 
 ## Test Coverage

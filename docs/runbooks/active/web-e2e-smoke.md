@@ -59,6 +59,14 @@ pnpm --filter @hive/web exec playwright install-deps chromium
 
 ## Local Run
 
+Preferred local stack startup:
+
+```bash
+pnpm stack:dev
+```
+
+That command is the canonical daily-development path and already handles Supabase CLI startup plus the Hive dev stack. For smoke validation, use the production-style build/serve flow below when you need to validate hydration and bundle behavior rather than dev-mode behavior.
+
 Build the production web bundle with the required public envs:
 
 ```bash

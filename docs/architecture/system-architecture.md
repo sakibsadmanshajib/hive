@@ -170,7 +170,7 @@ Payment reconciliation scheduling is:
 └─────────────────┘
 ```
 
-Supabase is managed by the Supabase CLI on the host and the API container reaches it via `host.docker.internal`.
+Supabase is managed by the Supabase CLI rather than Hive's Compose file, but it still runs as Docker containers under the hood. The API container reaches that stack via `host.docker.internal`.
 
 ## Why API And Web Are Separate Containers
 
@@ -186,4 +186,4 @@ This separation is useful even in local development because it:
 - makes it obvious which values are safe for browser exposure (`NEXT_PUBLIC_*`) versus server-only secrets
 - lets the web production bundle be validated independently from the API runtime
 
-In practice, Docker Compose is the closer-to-deployment option, while `pnpm --filter ... dev` is the faster inner-loop option. Running both at once on the same ports will cause bind conflicts.
+The standardized daily-development workflow is `pnpm stack:dev`, which combines the Supabase CLI lifecycle with a Docker Compose dev override so `api` and `web` keep hot reload while still running as part of the full stack.

@@ -51,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Future Roadmap:** Rewrote the active roadmap so already-shipped hardening work is treated as delivered baseline and remaining work is organized around provider breadth, analytics, commercial controls, and operator maturity.
 - **Docker Documentation:** Clarified why Docker Compose is used locally, why `api` and `web` are separate containers, and how that differs from running `pnpm dev` directly.
 - **Local Auth Bootstrap Docs:** Clarified that local Supabase generates real `ANON_KEY` and `SERVICE_ROLE_KEY` values, and those keys must be copied into `.env` before starting Docker `api` and `web`.
+- **Local Development Workflow:** Standardized contributor onboarding around `pnpm stack:dev` as the canonical full-stack hot-reload entry point, and clarified that Supabase runs as Docker containers under the Supabase CLI rather than inside Hive's Compose file.
+- **PR Hygiene Docs:** Tightened guidance so pull request titles are expected to be scoped and Conventional-Commit-style where practical.
 - **Web Architecture:** Moved to a "Guarded Chat Home" structure.
     - `/` is now the authenticated chat interface.
     - Unauthenticated users are strictly redirected to `/auth`.

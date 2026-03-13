@@ -19,7 +19,24 @@ Thanks for contributing to Hive.
 
 ## Local Setup
 
-Install dependencies:
+Use the canonical quickstart in `README.md`.
+
+For normal local development, the default command is:
+
+```bash
+pnpm stack:dev
+```
+
+That command starts the full real local stack with hot reload for the Hive app services while also ensuring the Supabase CLI stack is available and its live local keys are injected into the Hive runtime.
+
+Useful lifecycle commands:
+
+```bash
+pnpm stack:down
+pnpm stack:reset
+```
+
+Install dependencies separately when needed:
 
 ```bash
 pnpm install
@@ -61,6 +78,7 @@ pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 
 - Explain the user-facing or operator-facing change clearly.
 - Use the repository pull request template and complete the verification/docs/risk checklist.
+- Prefer scoped pull request titles in Conventional-Commit style where practical, for example `docs(readme): standardize local development workflow`.
 - Add or update tests for behavior changes.
 - Update docs in the same change when behavior, policy, or operations change.
 - Update `CHANGELOG.md` for notable changes.

@@ -4,6 +4,7 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 
 ## Start Here
 
+- Local quickstart and daily development: `../README.md`
 - Architecture: `docs/architecture/system-architecture.md`
 - Product direction: `docs/design/active/product-and-routing.md`
 - Python MVP migration map: `docs/architecture/2026-02-28-python-mvp-migration-map.md`
@@ -39,6 +40,7 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 
 ## Operations
 
+- Canonical local stack startup: `../README.md`
 - Runbooks index: `docs/runbooks/README.md`
 - Maintainer issue lifecycle runbook: `docs/runbooks/active/issue-lifecycle.md`
 - Provider circuit-breaker and startup readiness runbook: `docs/runbooks/active/provider-circuit-breaker.md`
