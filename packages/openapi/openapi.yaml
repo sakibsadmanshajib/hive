@@ -22,6 +22,7 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [object, summary, data]
                 properties:
                   object:
                     type: string
@@ -172,15 +173,18 @@ paths:
             application/json:
               schema:
                 type: object
+                required: [object, data]
                 properties:
                   object:
                     type: string
                     example: support.user
                   data:
                     type: object
+                    required: [user, credits, usage, apiKeys, apiKeyEvents]
                     properties:
                       user:
                         type: object
+                        required: [userId, email, createdAt]
                         properties:
                           userId:
                             type: string
@@ -195,6 +199,7 @@ paths:
                         $ref: "#/components/schemas/CreditBalance"
                       usage:
                         type: object
+                        required: [summary, data]
                         properties:
                           summary:
                             $ref: "#/components/schemas/UsageSummary"
@@ -467,6 +472,7 @@ components:
           type: number
     UsageEvent:
       type: object
+      required: [id, userId, endpoint, model, credits, createdAt]
       properties:
         id:
           type: string
@@ -483,6 +489,7 @@ components:
           format: date-time
     UsageSummaryBucket:
       type: object
+      required: [key, requests, credits]
       properties:
         key:
           type: string
@@ -492,6 +499,7 @@ components:
           type: number
     UsageDailyTrendPoint:
       type: object
+      required: [date, requests, credits]
       properties:
         date:
           type: string
@@ -501,6 +509,7 @@ components:
           type: number
     UsageSummary:
       type: object
+      required: [windowDays, totalRequests, totalCredits, daily, byModel, byEndpoint]
       properties:
         windowDays:
           type: number

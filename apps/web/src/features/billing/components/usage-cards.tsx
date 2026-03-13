@@ -99,7 +99,7 @@ export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsPro
       <Card>
         <CardHeader>
           <CardDescription>Usage requests</CardDescription>
-          <CardTitle>{usageSummary?.totalRequests ?? usageCount}</CardTitle>
+          <CardTitle>{usageSummary ? usageSummary.totalRequests : "—"}</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-xs text-muted-foreground">
@@ -110,10 +110,12 @@ export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsPro
       <Card>
         <CardHeader>
           <CardDescription>Credits spent</CardDescription>
-          <CardTitle>{usageSummary?.totalCredits ?? 0}</CardTitle>
+          <CardTitle>{usageSummary ? usageSummary.totalCredits : "—"}</CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-xs text-muted-foreground">{usageCount} raw events loaded</p>
+          <p className="text-xs text-muted-foreground">
+            {usageSummary ? `${usageCount} raw events loaded` : "Usage summary unavailable"}
+          </p>
         </CardContent>
       </Card>
       <Card>

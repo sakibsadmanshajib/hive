@@ -97,6 +97,13 @@ class PersistentCreditService {
 export class PersistentUsageService {
   constructor(private readonly supabase: ReturnType<typeof createSupabaseAdminClient>) { }
 
+  private buildWindowStart(windowDays: number): string {
+    const start = new Date();
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCDate(start.getUTCDate() - (windowDays - 1));
+    return start.toISOString();
+  }
+
   private buildSummary(events: UsageEvent[], windowDays: number): UsageSummary {
     const daily = new Map<string, UsageDailyTrendPoint>();
     const byModel = new Map<string, UsageSummaryBucket>();
@@ -193,11 +200,34 @@ export class PersistentUsageService {
     }));
   }
 
+  async listRecent(userId: string, windowDays: number): Promise<UsageEvent[]> {
+    const { data, error } = await this.supabase
+      .from("usage_events")
+      .select("id, user_id, endpoint, model, credits, created_at")
+      .eq("user_id", userId)
+      .gte("created_at", this.buildWindowStart(windowDays))
+      .order("created_at", { ascending: false });
+    if (error) {
+      throw new Error(`failed to read recent usage events: ${error.message}`);
+    }
+    return (data ?? []).map((row) => ({
+      id: String(row.id),
+      userId: String(row.user_id),
+      endpoint: String(row.endpoint),
+      model: String(row.model),
+      credits: Number(row.credits),
+      createdAt: new Date(row.created_at as string | Date).toISOString(),
+    }));
+  }
+
   async listWithSummary(userId: string, windowDays = 7): Promise<{ data: UsageEvent[]; summary: UsageSummary }> {
-    const data = await this.list(userId);
+    const [data, summaryRows] = await Promise.all([
+      this.list(userId),
+      this.listRecent(userId, windowDays),
+    ]);
     return {
       data,
-      summary: this.buildSummary(data, windowDays),
+      summary: this.buildSummary(summaryRows, windowDays),
     };
   }
 }

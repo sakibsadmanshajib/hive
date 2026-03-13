@@ -31,7 +31,7 @@ Important boundary:
 
 ## Admin Support Snapshot
 
-`GET /v1/support/users/:userId`
+`GET /v1/support/users/{userId}`
 
 Authentication:
 

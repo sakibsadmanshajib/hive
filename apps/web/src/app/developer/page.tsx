@@ -84,6 +84,9 @@ export default function DeveloperPage() {
       };
 
       if (!meRes.ok) {
+        setSnapshot(null);
+        setUsageCount(0);
+        setUsageSummary(null);
         setStatus(meJson.error ?? "Failed to load account data");
         return;
       }
@@ -100,6 +103,9 @@ export default function DeveloperPage() {
       setUsageSummary(usageJson.summary ?? null);
       setStatus("Loaded developer account snapshot and usage analytics");
     } catch (error) {
+      setSnapshot(null);
+      setUsageCount(0);
+      setUsageSummary(null);
       setStatus(error instanceof Error ? error.message : "Failed to load account data");
     } finally {
       if (manageLoading) {

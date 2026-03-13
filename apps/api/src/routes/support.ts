@@ -1,14 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
-
-function isAuthorized(requestHeaders: Record<string, unknown> | undefined, expectedToken: string | undefined) {
-  const providedToken = requestHeaders?.["x-admin-token"];
-  return expectedToken && typeof providedToken === "string" && providedToken === expectedToken;
-}
+import { hasValidAdminToken } from "./admin-auth";
 
 export function registerSupportRoute(app: FastifyInstance, services: RuntimeServices): void {
   app.get("/v1/support/users/:userId", async (request, reply) => {
-    if (!isAuthorized(request.headers, services.env.adminStatusToken)) {
+    if (!hasValidAdminToken(request.headers, services.env.adminStatusToken)) {
       reply.code(401);
       return { error: "unauthorized" };
     }

@@ -82,11 +82,81 @@ describe("support route", () => {
     const payload = await handler?.(
       { headers: { "x-admin-token": "admin-token" }, params: { userId: "user-1" } },
       { code: () => undefined },
-    ) as { object: string; data: { user: { userId: string }; usage: { summary: { totalCredits: number } } } };
+    ) as {
+      object: string;
+      data: {
+        user: { userId: string; email: string; name: string; createdAt: string };
+        credits: { availableCredits: number; purchasedCredits: number; promoCredits: number };
+        usage: {
+          summary: {
+            windowDays: number;
+            totalRequests: number;
+            totalCredits: number;
+            daily: Array<{ date: string; requests: number; credits: number }>;
+            byModel: Array<{ key: string; requests: number; credits: number }>;
+            byEndpoint: Array<{ key: string; requests: number; credits: number }>;
+          };
+          data: Array<{ id: string; userId: string; endpoint: string; model: string; credits: number; createdAt: string }>;
+        };
+        apiKeys: Array<{ id: string; key_id: string; nickname: string; status: string; revoked: boolean; scopes: string[]; createdAt: string }>;
+        apiKeyEvents: Array<{ id: string; apiKeyId: string; userId: string; eventType: string; eventAt: string; metadata: Record<string, unknown> }>;
+      };
+    };
 
     expect(payload.object).toBe("support.user");
-    expect(payload.data.user.userId).toBe("user-1");
-    expect(payload.data.usage.summary.totalCredits).toBe(25);
+    expect(payload.data.user).toEqual({
+      userId: "user-1",
+      email: "user@example.com",
+      name: "Test User",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    expect(payload.data.credits).toEqual({
+      userId: "user-1",
+      availableCredits: 120,
+      purchasedCredits: 100,
+      promoCredits: 20,
+    });
+    expect(payload.data.apiKeys).toEqual([
+      {
+        id: "key-1",
+        key_id: "sk_live_abcd",
+        nickname: "default",
+        status: "active",
+        revoked: false,
+        scopes: ["chat"],
+        createdAt: "2026-03-01T00:00:00.000Z",
+      },
+    ]);
+    expect(payload.data.apiKeyEvents).toEqual([
+      {
+        id: "evt-1",
+        apiKeyId: "key-1",
+        userId: "user-1",
+        eventType: "created",
+        eventAt: "2026-03-01T00:00:00.000Z",
+        metadata: {},
+      },
+    ]);
+    expect(payload.data.usage).toEqual({
+      summary: {
+        windowDays: 7,
+        totalRequests: 2,
+        totalCredits: 25,
+        daily: [],
+        byModel: [{ key: "fast-chat", requests: 2, credits: 25 }],
+        byEndpoint: [{ key: "/v1/chat/completions", requests: 2, credits: 25 }],
+      },
+      data: [
+        {
+          id: "usage_1",
+          userId: "user-1",
+          endpoint: "/v1/chat/completions",
+          model: "fast-chat",
+          credits: 25,
+          createdAt: "2026-03-13T10:00:00.000Z",
+        },
+      ],
+    });
   });
 
   it("returns 404 when the requested support user does not exist", async () => {

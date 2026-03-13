@@ -92,7 +92,41 @@ describe("PersistentUsageService", () => {
         vi.useFakeTimers();
         vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
 
-        const mockEq = vi.fn().mockReturnValue({
+        const mockRecentEq = vi.fn().mockReturnValue({
+            gte: vi.fn().mockReturnValue({
+                order: vi.fn().mockResolvedValue({
+                    data: [
+                        {
+                            id: "usage_3",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "smart-reasoning",
+                            credits: 30,
+                            created_at: "2026-03-13T11:00:00.000Z",
+                        },
+                        {
+                            id: "usage_2",
+                            user_id: "user-1",
+                            endpoint: "/v1/responses",
+                            model: "smart-reasoning",
+                            credits: 20,
+                            created_at: "2026-03-12T09:00:00.000Z",
+                        },
+                        {
+                            id: "usage_1",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "fast-chat",
+                            credits: 10,
+                            created_at: "2026-03-10T08:00:00.000Z",
+                        },
+                    ],
+                    error: null,
+                }),
+            }),
+        });
+
+        const mockListEq = vi.fn().mockReturnValue({
             order: vi.fn().mockReturnValue({
                 limit: vi.fn().mockResolvedValue({
                     data: [
@@ -133,14 +167,13 @@ describe("PersistentUsageService", () => {
                 }),
             }),
         });
+        const mockSelect = vi
+            .fn()
+            .mockReturnValueOnce({ eq: mockListEq })
+            .mockReturnValueOnce({ eq: mockRecentEq });
 
         const supabase = {
-            from: vi.fn().mockImplementation((table: string) => {
-                if (table === "usage_events") {
-                    return { select: vi.fn().mockReturnValue({ eq: mockEq }) };
-                }
-                return {};
-            }),
+            from: vi.fn().mockImplementation((table: string) => (table === "usage_events" ? { select: mockSelect } : {})),
         } as any;
 
         const service = new PersistentUsageService(supabase);
@@ -170,6 +203,8 @@ describe("PersistentUsageService", () => {
                 { key: "/v1/responses", requests: 1, credits: 20 },
             ],
         });
+        expect(mockListEq).toHaveBeenCalledWith("user_id", "user-1");
+        expect(mockRecentEq).toHaveBeenCalledWith("user_id", "user-1");
 
         vi.useRealTimers();
     });
