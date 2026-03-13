@@ -53,6 +53,7 @@ type ApiKeyStore = {
 type BillingStore = {
   getBalance(userId: string): Promise<CreditBalance>;
   consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean>;
+  refundCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance>;
   topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance>;
   createPaymentIntent(intent: PersistentPaymentIntent): Promise<void>;
   getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined>;
@@ -79,8 +80,12 @@ class PersistentCreditService {
     return this.store.getBalance(userId);
   }
 
-  consume(userId: string, credits: number): Promise<boolean> {
-    return this.store.consumeCredits(userId, credits, `req_${randomUUID()}`);
+  consume(userId: string, credits: number, referenceId = `req_${randomUUID()}`): Promise<boolean> {
+    return this.store.consumeCredits(userId, credits, referenceId);
+  }
+
+  refund(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
+    return this.store.refundCredits(userId, credits, referenceId);
   }
 
   topUp(userId: string, bdtAmount: number, referenceId: string): Promise<CreditBalance> {
@@ -373,6 +378,13 @@ class RuntimeAiService {
     if (!model || model.capability !== "image") {
       return { error: "unknown model", statusCode: 400 as const };
     }
+    const creditsCost = model.creditsPerRequest;
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
+    if (!consumed) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+
     let providerResult;
     try {
       providerResult = await this.providerRegistry.imageGeneration(model.id, {
@@ -383,25 +395,12 @@ class RuntimeAiService {
         user: request.user,
       });
     } catch {
+      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       return {
         error: "provider unavailable",
         statusCode: 502 as const,
         headers: {
           "x-model-routed": model.id,
-        },
-      };
-    }
-
-    const creditsCost = model.creditsPerRequest;
-    const consumed = await this.credits.consume(userId, creditsCost);
-    if (!consumed) {
-      return {
-        error: "insufficient credits",
-        statusCode: 402 as const,
-        headers: {
-          "x-model-routed": model.id,
-          "x-provider-used": providerResult.providerUsed,
-          "x-provider-model": providerResult.providerModel,
         },
       };
     }
