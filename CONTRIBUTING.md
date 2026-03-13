@@ -104,3 +104,4 @@ For docs-only or policy-only changes, provide explicit verification checks such 
 - Use `CODE_OF_CONDUCT.md` for community behavior expectations.
 - Use `GOVERNANCE.md` for project decision-making and maintainer-role guidance.
 - Use `docs/runbooks/active/github-triage.md` for issue forms, label taxonomy, milestone routing, and GitHub metadata sync operations.
+- Use `docs/runbooks/active/issue-lifecycle.md` for maintainer issue state transitions, planning expectations, PR linkage, and closeout workflow.

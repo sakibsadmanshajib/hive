@@ -34,6 +34,12 @@ Reviewers should expect every PR to include:
 - risk review for sensitive areas
 - supporting evidence when useful
 
+## Issue Lifecycle Summary
+
+See the canonical Issue Lifecycle runbook at `docs/runbooks/active/issue-lifecycle.md` for the full state machine and transition criteria.
+
+Use this runbook for metadata rules. Use `docs/runbooks/active/issue-lifecycle.md` for the operational workflow, transition criteria, planning expectations, PR linkage, and closeout guidance.
+
 ## Label Taxonomy
 
 Use labels deliberately. The default triage set is:

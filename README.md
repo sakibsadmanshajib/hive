@@ -39,6 +39,7 @@ GitHub contributor intake and triage are repo-managed:
 - The PR checklist lives in `.github/pull_request_template.md`
 - Label and milestone metadata are managed by `tools/github/sync-github-meta.sh`
 - Maintainer operating guidance lives in `docs/runbooks/active/github-triage.md`
+- Maintainer issue state transitions, planning, and closeout workflow live in `docs/runbooks/active/issue-lifecycle.md`
 
 ## Current Status
 
