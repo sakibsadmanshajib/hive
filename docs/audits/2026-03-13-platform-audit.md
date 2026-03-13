@@ -194,6 +194,11 @@ The repo increasingly behaves like an inference platform, but the docs and backl
   - `/billing` is effectively an empty page with one explanatory card, which makes the route feel abandoned
   - `/developer` and `/settings` have real structure but read as admin-style forms dropped into the same shell rather than a coherent product workspace
   - `/settings` visibly confirms the missing backend contract with the message that the user settings endpoint is not available yet
+- The mobile screenshots add a second layer of concern:
+  - responsive behavior mostly works, but the top navigation is overcrowded on small screens
+  - `/auth` still shows authenticated workspace actions on mobile, which is even more confusing when horizontal space is tight
+  - the mobile chat shell prioritizes empty transcript space over composition and app orientation, so the product value is not obvious at first glance
+  - settings remains usable on mobile, but it looks like a long internal control form rather than a polished customer-facing account surface
 
 ### Auth/bootstrap assessment
 
