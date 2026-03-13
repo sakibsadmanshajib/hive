@@ -26,6 +26,8 @@ describe("chat polish", () => {
       <MessageComposer
         prompt=""
         model="fast-chat"
+        modelOptions={["fast-chat", "smart-reasoning"]}
+        guestMode={false}
         loading={false}
         onPromptChange={() => {}}
         onModelChange={() => {}}

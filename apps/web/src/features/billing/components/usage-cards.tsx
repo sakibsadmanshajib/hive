@@ -19,6 +19,16 @@ export type UsageSummary = {
     requests: number;
     credits: number;
   }>;
+  byChannel: Array<{
+    key: string;
+    requests: number;
+    credits: number;
+  }>;
+  byApiKey: Array<{
+    key: string;
+    requests: number;
+    credits: number;
+  }>;
 };
 
 export type UserSnapshot = {
@@ -62,6 +72,8 @@ export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsPro
   const activeKeys = snapshot ? snapshot.api_keys.filter((key) => key.status === "active").length : 0;
   const topModel = usageSummary?.byModel[0];
   const topEndpoint = usageSummary?.byEndpoint[0];
+  const topChannel = usageSummary?.byChannel[0];
+  const topApiKey = usageSummary?.byApiKey[0];
 
   if (!snapshot) {
     return (
@@ -127,9 +139,9 @@ export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsPro
       <Card className="sm:col-span-2 xl:col-span-3">
         <CardHeader>
           <CardTitle>Usage breakdown</CardTitle>
-          <CardDescription>Top model, top endpoint, and daily trend for the current analytics window.</CardDescription>
+          <CardDescription>Top model, endpoint, channel, API key, and daily trend for the current analytics window.</CardDescription>
         </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-3">
+        <CardContent className="grid gap-4 lg:grid-cols-5">
           <div className="space-y-1">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Top model</p>
             <p className="text-sm font-medium">{formatSplitLabel(topModel)}</p>
@@ -137,6 +149,14 @@ export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsPro
           <div className="space-y-1">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Top endpoint</p>
             <p className="text-sm font-medium">{formatSplitLabel(topEndpoint)}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Top channel</p>
+            <p className="text-sm font-medium">{formatSplitLabel(topChannel)}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Top API key</p>
+            <p className="text-sm font-medium">{formatSplitLabel(topApiKey)}</p>
           </div>
           <div className="space-y-1">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">Daily credits</p>

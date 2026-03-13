@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { writeAuthSession } from "../src/features/auth/auth-session";
 
@@ -29,13 +29,11 @@ describe("chat auth gate", () => {
     replaceMock.mockReset();
   });
 
-  it("redirects unauthenticated users to auth page", async () => {
+  it("renders chat workspace on root for unauthenticated users", async () => {
     render(<HomePage />);
 
-    await waitFor(() => {
-      expect(pushMock).toHaveBeenCalledWith("/auth");
-    });
-    expect(screen.queryByRole("button", { name: /new chat/i })).not.toBeInTheDocument();
+    expect((await screen.findAllByRole("button", { name: /new chat/i })).length).toBeGreaterThan(0);
+    expect(pushMock).not.toHaveBeenCalled();
   });
 
   it("renders chat workspace on root for authenticated users", async () => {
@@ -44,6 +42,48 @@ describe("chat auth gate", () => {
     render(<HomePage />);
 
     expect((await screen.findAllByRole("button", { name: /new chat/i })).length).toBeGreaterThan(0);
+  });
+
+  it("tags authenticated chat requests as web traffic for reporting", async () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
+    writeAuthSession({ accessToken: "sk_test", email: "demo@example.com" });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          data: [
+            { id: "fast-chat", capability: "chat", costType: "fixed" },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "Authenticated reply" } }],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    const prompts = await screen.findAllByPlaceholderText(/ask something/i);
+    fireEvent.change(prompts.at(-1)!, {
+      target: { value: "hello from auth" },
+    });
+    const sendButtons = screen.getAllByRole("button", { name: /send/i });
+    fireEvent.click(sendButtons.at(-1)!);
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => {
+        if (url !== "http://127.0.0.1:8080/v1/chat/completions") {
+          return false;
+        }
+        const headers = init && typeof init === "object" && "headers" in init
+          ? init.headers as Record<string, string>
+          : undefined;
+        return headers?.Authorization === "Bearer sk_test" && headers["content-type"] === "application/json";
+      })).toBe(true);
+    });
   });
 
   it("redirects legacy /chat route to root", async () => {

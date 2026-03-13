@@ -33,10 +33,11 @@ graph TD
 
 ### 2. Web App (`apps/web`)
 - Next.js App Router UI
-- Chat-first workspace with developer panel and settings surfaces
+- Chat-first workspace with guest-first home, developer panel, and settings surfaces
 - Browser clients require explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; the web app no longer falls back to localhost or placeholder credentials at runtime
 - In local Docker-based development, those browser envs and the API's `SUPABASE_SERVICE_ROLE_KEY` must come from the live Supabase CLI stack (`npx supabase status -o env`), not placeholder defaults
 - The browser maintains a small mirrored auth-session store for app routing and API headers, but Supabase remains the source of truth. The mirror is synchronized from `getSession()` and `onAuthStateChange()` without clearing seeded local sessions until a real Supabase session has been observed.
+- The home route `/` is guest-accessible by default. Guest chat bootstraps a signed `httpOnly` guest cookie plus a mirrored browser-visible guest session object, is limited to models with `costType: "free"`, rejects non-same-origin browser traffic, and forwards the client IP plus validated `guestId` to the API for guest rate limiting and attribution.
 - Protected routes must wait for client auth-session hydration before redirecting to `/auth`; prerendered `null` auth state is not sufficient evidence that the browser is unauthenticated.
 
 ### 3. Supabase (Auth + Persistence)
@@ -48,6 +49,7 @@ graph TD
 - **Billing**: Credit accounts, ledger, payment intents/events via `SupabaseBillingStore`
 - **RBAC**: `user_roles` + `role_permissions` tables queried by `AuthorizationService`
 - **Settings**: `user_settings` table for feature gates
+- **Guest Attribution**: `guest_sessions`, `guest_usage_events`, and `guest_user_links` via `SupabaseGuestAttributionStore`
 
 ### 4. Redis
 - Rate limiting and short-window traffic control
@@ -81,16 +83,49 @@ Still missing for a fuller platform posture:
 - organization/team controls
 - stronger deployment and SLO guidance
 
+## Product Pipelines And Analytics
+
+Hive currently has two commercial/product pipelines that should not be conflated in reporting:
+
+- `api`: the OpenAI-compatible API business
+- `web`: the chat product business
+
+Reporting and attribution should reflect that split even when runtime infrastructure is temporarily shared. API-product traffic should stay tagged `api` and include a stable API-key identifier when available. Web chat traffic, including guest chat and authenticated web chat, should stay tagged `web`.
+While authenticated web chat still shares the public inference runtime path, its reporting classification should come from trusted browser-origin signals rather than a caller-controlled product hint header.
+
+The current implementation separates analytics/reporting first. Authenticated web chat still executes through shared inference endpoints today; a deeper runtime split away from the public OpenAI-compatible API path remains a follow-up tracked in GitHub issue `#57`.
+
 ## Request Lifecycle (Chat)
 
-1. Bearer token validated against Supabase Auth (`SupabaseAuthService`)
+Authenticated chat:
+
+1. Bearer token validated against Supabase Auth (`SupabaseAuthService`) or API key resolution
 2. Redis rate-limit check
 3. Model selection (`fast-chat`, `smart-reasoning`, etc.)
 4. Credit debit attempt via `SupabaseBillingStore`
 5. Provider registry execution with fallback chain and circuit breaker
-6. Usage event persisted
+6. Usage event persisted with `channel = "api"` for API-product traffic and `channel = "web"` for session-authenticated web chat traffic
 7. Trace sent to Langfuse (if enabled)
 8. Response returned with routing headers
+
+Guest web chat:
+
+1. Browser stays on `/` without auth and bootstraps a guest session through `/api/guest-session`
+2. The Next.js route issues a signed guest cookie, mirrors a browser-visible guest session object, and persists/refreshes the guest session through the internal API
+3. Browser submits guest chat to `/api/chat/guest`
+4. The Next.js guest route rejects non-same-origin requests and forwards the internal request with a server-only token, validated `guestId`, and caller IP
+5. Redis rate-limit check uses a guest key derived from the forwarded client IP
+6. Requested model is validated against guest policy (`costType === "free"`)
+7. Provider registry executes only the guest-safe model and records usage under `guest_usage_events`
+8. No credit debit occurs
+9. Response returns without spilling into paid models
+
+Guest-to-user conversion linkage:
+
+1. Browser later authenticates through Supabase Auth
+2. The web auth/session sync posts to `/api/guest-session/link` when a guest session is present
+3. The web route validates the signed guest cookie and forwards the link request to the API with the internal token plus authenticated bearer token
+4. The API resolves the authenticated user and persists the durable `guestId -> userId` link in `guest_user_links`
 
 ## Billing and Ledger Architecture
 
@@ -106,6 +141,7 @@ Still missing for a fuller platform posture:
 
 | Model | Primary | Fallback 1 | Fallback 2 |
 |-------|---------|------------|------------|
+| `guest-free` | Mock | — | — |
 | `fast-chat` | Ollama | Groq | Mock |
 | `smart-reasoning` | Groq | Ollama | Mock |
 | `image-basic` | OpenAI | Mock | — |
@@ -124,6 +160,7 @@ Circuit breaker protects against cascading provider failures:
 - API keys are stored as SHA-256 hashes; raw keys are never persisted
 - Bearer tokens are validated server-side via Supabase Auth
 - Browser runtime configuration fails closed when required public env vars are missing
+- Guest attribution stays behind a web-server boundary: the browser talks to Next.js routes, while the API accepts guest attribution writes only through internal token-protected routes
 
 ## Operational Dependencies
 
@@ -183,7 +220,7 @@ The standardized local workflow is split deliberately:
 Hive keeps `api` and `web` as separate containers because they are separate applications with different runtime concerns:
 
 - `api` is the backend service that owns auth validation, provider routing, billing, and persistence access
-- `web` is the browser-facing Next.js application that consumes the API over HTTP
+- `web` is the browser-facing Next.js application that consumes the API over HTTP and owns the browser-trusted guest-session boundary
 
 This separation is useful even in local development because it:
 

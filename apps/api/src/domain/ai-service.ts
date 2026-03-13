@@ -18,13 +18,13 @@ export class AiService {
       return { error: "unknown model", statusCode: 400 as const };
     }
 
-    const credits = model.creditsPerRequest;
+    const credits = this.models.creditsForRequest(model);
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
     const text = messages.map((msg) => msg.content).join(" ").trim();
-    this.usage.add({ userId, endpoint: "/v1/chat/completions", model: model.id, credits });
+    this.usage.add({ userId, endpoint: "/v1/chat/completions", model: model.id, credits, channel: "api" });
 
     return {
       statusCode: 200 as const,
@@ -53,11 +53,11 @@ export class AiService {
 
   responses(userId: string, input: string) {
     const model = this.models.pickDefault("chat");
-    const credits = Math.max(4, Math.floor(model.creditsPerRequest * 0.75));
+    const credits = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
-    this.usage.add({ userId, endpoint: "/v1/responses", model: model.id, credits });
+    this.usage.add({ userId, endpoint: "/v1/responses", model: model.id, credits, channel: "api" });
 
     return {
       statusCode: 200 as const,
@@ -72,11 +72,11 @@ export class AiService {
 
   imageGeneration(userId: string, prompt: string) {
     const model = this.models.pickDefault("image");
-    const credits = model.creditsPerRequest;
+    const credits = this.models.creditsForRequest(model);
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
-    this.usage.add({ userId, endpoint: "/v1/images/generations", model: model.id, credits });
+    this.usage.add({ userId, endpoint: "/v1/images/generations", model: model.id, credits, channel: "api" });
 
     return {
       statusCode: 200 as const,

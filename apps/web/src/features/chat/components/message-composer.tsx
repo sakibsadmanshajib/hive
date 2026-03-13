@@ -8,13 +8,24 @@ import { useChatShortcuts } from "../hooks/use-chat-shortcuts";
 type MessageComposerProps = {
   prompt: string;
   model: string;
+  modelOptions: string[];
+  guestMode: boolean;
   loading: boolean;
   onPromptChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onSend: () => void;
 };
 
-export function MessageComposer({ prompt, model, loading, onPromptChange, onModelChange, onSend }: MessageComposerProps) {
+export function MessageComposer({
+  prompt,
+  model,
+  modelOptions,
+  guestMode,
+  loading,
+  onPromptChange,
+  onModelChange,
+  onSend,
+}: MessageComposerProps) {
   const canSend = prompt.trim().length > 0 && !loading;
   const onKeyDown = useChatShortcuts({ canSend, onSend });
 
@@ -26,8 +37,11 @@ export function MessageComposer({ prompt, model, loading, onPromptChange, onMode
             <SelectValue placeholder="Model" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="fast-chat">fast-chat</SelectItem>
-            <SelectItem value="smart-reasoning">smart-reasoning</SelectItem>
+            {modelOptions.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Textarea
@@ -40,7 +54,9 @@ export function MessageComposer({ prompt, model, loading, onPromptChange, onMode
         />
       </div>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium text-muted-foreground">Enter to send, Shift+Enter for newline</p>
+        <p className="text-xs font-medium text-muted-foreground">
+          {guestMode ? "Guest mode only supports free models." : "Enter to send, Shift+Enter for newline"}
+        </p>
         <Button type="button" disabled={!canSend} onClick={onSend}>
           <SendHorizontal className="h-4 w-4" />
           {loading ? "Sending..." : "Send"}

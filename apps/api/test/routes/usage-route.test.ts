@@ -36,6 +36,8 @@ describe("usage route", () => {
             ],
             byModel: [{ key: "fast-chat", requests: 2, credits: 25 }],
             byEndpoint: [{ key: "/v1/chat/completions", requests: 2, credits: 25 }],
+            byChannel: [{ key: "web", requests: 2, credits: 25 }],
+            byApiKey: [{ key: "key-123", requests: 1, credits: 10 }],
           },
           data: [
             {
@@ -44,6 +46,8 @@ describe("usage route", () => {
               endpoint: "/v1/chat/completions",
               model: "fast-chat",
               credits: 15,
+              channel: "web",
+              apiKeyId: "key-123",
               createdAt: "2026-03-13T10:00:00.000Z",
             },
           ],
@@ -59,10 +63,18 @@ describe("usage route", () => {
         code: () => ({ send: (body: unknown) => body }),
         send: (body: unknown) => body,
       },
-    ) as { object: string; summary: { totalCredits: number }; data: Array<{ id: string }> };
+    ) as {
+      object: string;
+      summary: { totalCredits: number; byChannel: Array<{ key: string }>; byApiKey: Array<{ key: string }> };
+      data: Array<{ id: string; channel: string; apiKeyId?: string }>;
+    };
 
     expect(payload.object).toBe("list");
     expect(payload.summary.totalCredits).toBe(25);
+    expect(payload.summary.byChannel[0]?.key).toBe("web");
+    expect(payload.summary.byApiKey[0]?.key).toBe("key-123");
     expect(payload.data[0]?.id).toBe("usage_1");
+    expect(payload.data[0]?.channel).toBe("web");
+    expect(payload.data[0]?.apiKeyId).toBe("key-123");
   });
 });

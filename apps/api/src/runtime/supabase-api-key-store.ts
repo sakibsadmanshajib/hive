@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { PersistentApiKey, PersistentApiKeyEvent } from "../domain/types";
 import { hashApiKeyForLookup } from "./security";
 
-type ApiKeyResolution = { userId: string; scopes: string[] };
+type ApiKeyResolution = { apiKeyId: string; userId: string; scopes: string[] };
 type CreateApiKeyInput = {
   key: string;
   userId: string;
@@ -80,6 +80,7 @@ export class SupabaseApiKeyStore {
       return null;
     }
     return {
+      apiKeyId: String(data.id),
       userId: String(data.user_id),
       scopes: Array.isArray(data.scopes) ? (data.scopes as string[]) : [],
     };

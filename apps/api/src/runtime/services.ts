@@ -1,5 +1,13 @@
 import { randomUUID } from "node:crypto";
-import type { CreditBalance, UsageEvent, UsageSummary, UsageSummaryBucket, UsageDailyTrendPoint } from "../domain/types";
+import type {
+  CreditBalance,
+  TrafficAnalyticsSnapshot,
+  UsageChannel,
+  UsageDailyTrendPoint,
+  UsageEvent,
+  UsageSummary,
+  UsageSummaryBucket,
+} from "../domain/types";
 import { ModelService } from "../domain/model-service";
 import { getEnv, type AppEnv } from "../config/env";
 import { BkashAdapter, SslcommerzAdapter } from "./provider-adapters";
@@ -23,6 +31,7 @@ import { SupabaseUserStore } from "./supabase-user-store";
 import { SupabaseBillingStore } from "./supabase-billing-store";
 import { PaymentReconciliationService } from "./payment-reconciliation";
 import { PaymentReconciliationScheduler } from "./payment-reconciliation-scheduler";
+import { SupabaseGuestAttributionStore } from "./supabase-guest-attribution-store";
 
 type ChatMessage = { role: string; content: string };
 type ImageGenerationRequest = {
@@ -42,7 +51,7 @@ type ApiKeyStore = {
     nickname: string;
     expiresAt?: string;
   }): Promise<void>;
-  resolve(key: string): Promise<{ userId: string; scopes: string[] } | null>;
+  resolve(key: string): Promise<{ apiKeyId: string; userId: string; scopes: string[] } | null>;
   list(userId: string): Promise<PersistentApiKey[]>;
   revoke(key: string, userId: string): Promise<boolean>;
   revokeById(id: string, userId: string): Promise<boolean>;
@@ -73,6 +82,26 @@ type BillingStore = {
   listRecentSnapshot(since: Date): Promise<import("../domain/types").PaymentReconciliationSnapshot>;
 };
 
+type GuestAttributionStore = {
+  upsertSession(input: {
+    guestId: string;
+    expiresAt: string;
+    lastSeenIp?: string;
+  }): Promise<void>;
+  addUsage(input: {
+    guestId: string;
+    endpoint: string;
+    model: string;
+    credits: number;
+    ipAddress?: string;
+  }): Promise<unknown>;
+  linkGuestToUser(input: {
+    guestId: string;
+    userId: string;
+    linkSource: string;
+  }): Promise<void>;
+};
+
 class PersistentCreditService {
   constructor(private readonly store: BillingStore) { }
 
@@ -97,6 +126,29 @@ class PersistentCreditService {
 export class PersistentUsageService {
   constructor(private readonly supabase: ReturnType<typeof createSupabaseAdminClient>) { }
 
+  private async listLinkedGuestIds(guestIds: string[]): Promise<Set<string>> {
+    const linkedGuestIds = new Set<string>();
+    const chunkSize = 200;
+
+    for (let index = 0; index < guestIds.length; index += chunkSize) {
+      const chunk = guestIds.slice(index, index + chunkSize);
+      const { data, error } = await this.supabase
+        .from("guest_user_links")
+        .select("guest_id")
+        .in("guest_id", chunk);
+
+      if (error) {
+        throw new Error(`failed to read guest link analytics: ${error.message}`);
+      }
+
+      for (const row of data ?? []) {
+        linkedGuestIds.add(String(row.guest_id));
+      }
+    }
+
+    return linkedGuestIds;
+  }
+
   private buildWindowStart(windowDays: number): string {
     const start = new Date();
     start.setUTCHours(0, 0, 0, 0);
@@ -108,6 +160,8 @@ export class PersistentUsageService {
     const daily = new Map<string, UsageDailyTrendPoint>();
     const byModel = new Map<string, UsageSummaryBucket>();
     const byEndpoint = new Map<string, UsageSummaryBucket>();
+    const byChannel = new Map<string, UsageSummaryBucket>();
+    const byApiKey = new Map<string, UsageSummaryBucket>();
     const now = new Date();
     now.setUTCHours(0, 0, 0, 0);
 
@@ -139,6 +193,18 @@ export class PersistentUsageService {
       endpointBucket.requests += 1;
       endpointBucket.credits += event.credits;
       byEndpoint.set(event.endpoint, endpointBucket);
+
+      const channelBucket = byChannel.get(event.channel) ?? { key: event.channel, requests: 0, credits: 0 };
+      channelBucket.requests += 1;
+      channelBucket.credits += event.credits;
+      byChannel.set(event.channel, channelBucket);
+
+      if (event.apiKeyId) {
+        const apiKeyBucket = byApiKey.get(event.apiKeyId) ?? { key: event.apiKeyId, requests: 0, credits: 0 };
+        apiKeyBucket.requests += 1;
+        apiKeyBucket.credits += event.credits;
+        byApiKey.set(event.apiKeyId, apiKeyBucket);
+      }
     }
 
     const sortBuckets = (entries: UsageSummaryBucket[]) => entries.sort((left, right) => {
@@ -155,10 +221,26 @@ export class PersistentUsageService {
       daily: [...daily.values()],
       byModel: sortBuckets([...byModel.values()]),
       byEndpoint: sortBuckets([...byEndpoint.values()]),
+      byChannel: sortBuckets([...byChannel.values()]),
+      byApiKey: sortBuckets([...byApiKey.values()]),
     };
   }
 
-  async add(entry: Omit<UsageEvent, "id" | "createdAt">): Promise<UsageEvent> {
+  async add(entry: Omit<UsageEvent, "id" | "createdAt" | "channel"> & { channel?: UsageChannel }): Promise<UsageEvent> {
+    const channel = entry.channel ?? "api";
+    if (entry.userId === "guest") {
+      return {
+        id: `usage_guest_${randomUUID()}`,
+        userId: entry.userId,
+        endpoint: entry.endpoint,
+        model: entry.model,
+        credits: entry.credits,
+        channel,
+        apiKeyId: entry.apiKeyId,
+        createdAt: new Date().toISOString(),
+      };
+    }
+
     const id = `usage_${randomUUID()}`;
     const { data, error } = await this.supabase.from("usage_events").insert({
       id,
@@ -166,6 +248,8 @@ export class PersistentUsageService {
       endpoint: entry.endpoint,
       model: entry.model,
       credits: entry.credits,
+      channel,
+      api_key_id: entry.apiKeyId ?? null,
     }).select("created_at").single();
     if (error) {
       throw new Error(`failed to record usage: ${error.message}`);
@@ -176,48 +260,49 @@ export class PersistentUsageService {
       endpoint: entry.endpoint,
       model: entry.model,
       credits: entry.credits,
+      channel,
+      apiKeyId: entry.apiKeyId,
       createdAt: new Date(data.created_at as string | Date).toISOString(),
+    };
+  }
+
+  private mapUsageRow(row: Record<string, unknown>): UsageEvent {
+    return {
+      id: String(row.id),
+      userId: String(row.user_id),
+      endpoint: String(row.endpoint),
+      model: String(row.model),
+      credits: Number(row.credits),
+      channel: String(row.channel ?? "api") as UsageChannel,
+      apiKeyId: row.api_key_id ? String(row.api_key_id) : undefined,
+      createdAt: new Date(row.created_at as string | Date).toISOString(),
     };
   }
 
   async list(userId: string): Promise<UsageEvent[]> {
     const { data, error } = await this.supabase
       .from("usage_events")
-      .select("id, user_id, endpoint, model, credits, created_at")
+      .select("id, user_id, endpoint, model, credits, channel, api_key_id, created_at")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
       .limit(500);
     if (error) {
       throw new Error(`failed to read usage events: ${error.message}`);
     }
-    return (data ?? []).map((row) => ({
-      id: String(row.id),
-      userId: String(row.user_id),
-      endpoint: String(row.endpoint),
-      model: String(row.model),
-      credits: Number(row.credits),
-      createdAt: new Date(row.created_at as string | Date).toISOString(),
-    }));
+    return (data ?? []).map((row) => this.mapUsageRow(row));
   }
 
   async listRecent(userId: string, windowDays: number): Promise<UsageEvent[]> {
     const { data, error } = await this.supabase
       .from("usage_events")
-      .select("id, user_id, endpoint, model, credits, created_at")
+      .select("id, user_id, endpoint, model, credits, channel, api_key_id, created_at")
       .eq("user_id", userId)
       .gte("created_at", this.buildWindowStart(windowDays))
       .order("created_at", { ascending: false });
     if (error) {
       throw new Error(`failed to read recent usage events: ${error.message}`);
     }
-    return (data ?? []).map((row) => ({
-      id: String(row.id),
-      userId: String(row.user_id),
-      endpoint: String(row.endpoint),
-      model: String(row.model),
-      credits: Number(row.credits),
-      createdAt: new Date(row.created_at as string | Date).toISOString(),
-    }));
+    return (data ?? []).map((row) => this.mapUsageRow(row));
   }
 
   async listWithSummary(userId: string, windowDays = 7): Promise<{ data: UsageEvent[]; summary: UsageSummary }> {
@@ -228,6 +313,92 @@ export class PersistentUsageService {
     return {
       data,
       summary: this.buildSummary(summaryRows, windowDays),
+    };
+  }
+
+  async trafficAnalytics(windowDays = 7): Promise<TrafficAnalyticsSnapshot> {
+    const windowStart = this.buildWindowStart(windowDays);
+    const [{ data: usageRows, error: usageError }, { data: guestUsageRows, error: guestUsageError }, {
+      data: guestSessions,
+      error: guestSessionsError,
+    }] = await Promise.all([
+      this.supabase
+        .from("usage_events")
+        .select("credits, channel, api_key_id, created_at")
+        .gte("created_at", windowStart),
+      this.supabase
+        .from("guest_usage_events")
+        .select("credits, created_at")
+        .gte("created_at", windowStart),
+      this.supabase
+        .from("guest_sessions")
+        .select("guest_id")
+        .gte("created_at", windowStart),
+    ]);
+
+    if (usageError) {
+      throw new Error(`failed to read traffic analytics usage events: ${usageError.message}`);
+    }
+    if (guestUsageError) {
+      throw new Error(`failed to read guest traffic analytics: ${guestUsageError.message}`);
+    }
+    if (guestSessionsError) {
+      throw new Error(`failed to read guest sessions analytics: ${guestSessionsError.message}`);
+    }
+
+    const api = { requests: 0, credits: 0 };
+    const web = { requests: 0, credits: 0 };
+    let authenticatedWebRequests = 0;
+    const byApiKey = new Map<string, UsageSummaryBucket>();
+
+    for (const row of usageRows ?? []) {
+      const channel = String(row.channel ?? "api") as UsageChannel;
+      const credits = Number(row.credits ?? 0);
+      const target = channel === "web" ? web : api;
+      target.requests += 1;
+      target.credits += credits;
+      if (channel === "web") {
+        authenticatedWebRequests += 1;
+      }
+
+      const apiKeyId = row.api_key_id ? String(row.api_key_id) : "";
+      if (channel === "api" && apiKeyId) {
+        const bucket = byApiKey.get(apiKeyId) ?? { key: apiKeyId, requests: 0, credits: 0 };
+        bucket.requests += 1;
+        bucket.credits += credits;
+        byApiKey.set(apiKeyId, bucket);
+      }
+    }
+
+    let guestRequests = 0;
+    for (const row of guestUsageRows ?? []) {
+      guestRequests += 1;
+      web.requests += 1;
+      web.credits += Number(row.credits ?? 0);
+    }
+
+    const guestSessionIds = [...new Set((guestSessions ?? []).map((row) => String(row.guest_id)))];
+    const guestSessionCount = guestSessionIds.length;
+    const linkedGuests = guestSessionCount > 0
+      ? (await this.listLinkedGuestIds(guestSessionIds)).size
+      : 0;
+
+    return {
+      windowDays,
+      channels: { api, web },
+      byApiKey: [...byApiKey.values()].sort((left, right) => {
+        if (right.credits !== left.credits) {
+          return right.credits - left.credits;
+        }
+        return left.key.localeCompare(right.key);
+      }),
+      webBreakdown: {
+        guestRequests,
+        authenticatedRequests: authenticatedWebRequests,
+        guestSessions: guestSessionCount,
+        linkedGuests,
+        conversionRate: guestSessionCount > 0 ? linkedGuests / guestSessionCount : 0,
+      },
     };
   }
 }
@@ -292,6 +463,7 @@ export class PersistentUserService {
   constructor(
     private readonly apiKeys: ApiKeyStore,
     private readonly supabaseUsers: SupabaseUserStore,
+    private readonly guests: GuestAttributionStore,
   ) { }
 
   async me(userId: string) {
@@ -329,7 +501,7 @@ export class PersistentUserService {
     return apiKey.userId;
   }
 
-  async resolveApiKey(key: string): Promise<{ userId: string; scopes: string[] } | null> {
+  async resolveApiKey(key: string): Promise<{ userId: string; scopes: string[]; apiKeyId?: string } | null> {
     return this.apiKeys.resolve(key);
   }
   async createApiKey(userId: string, input: {
@@ -356,6 +528,10 @@ export class PersistentUserService {
   revokeApiKey(userId: string, id: string): Promise<boolean> {
     return this.apiKeys.revokeById(id, userId);
   }
+
+  linkGuest(guestId: string, userId: string, linkSource = "auth_session"): Promise<void> {
+    return this.guests.linkGuestToUser({ guestId, userId, linkSource });
+  }
 }
 
 
@@ -365,23 +541,42 @@ class RuntimeAiService {
     private readonly models: ModelService,
     private readonly credits: PersistentCreditService,
     private readonly usage: PersistentUsageService,
+    private readonly guests: GuestAttributionStore,
     private readonly providerRegistry: ProviderRegistry,
     private readonly langfuse: LangfuseClient,
   ) { }
 
-  async chatCompletions(userId: string, modelId: string | undefined, messages: ChatMessage[]) {
+  private buildUsageContext(context?: { channel?: UsageChannel; apiKeyId?: string }) {
+    return {
+      channel: context?.channel ?? "api",
+      apiKeyId: context?.apiKeyId,
+    };
+  }
+
+  async chatCompletions(
+    userId: string,
+    modelId: string | undefined,
+    messages: ChatMessage[],
+    usageContext?: { channel?: UsageChannel; apiKeyId?: string },
+  ) {
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
     }
-    const creditsCost = model.creditsPerRequest;
+    const creditsCost = this.models.creditsForRequest(model);
     const consumed = await this.credits.consume(userId, creditsCost);
     if (!consumed) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
     const text = messages.map((msg) => msg.content).join(" ").trim();
-    await this.usage.add({ userId, endpoint: "/v1/chat/completions", model: model.id, credits: creditsCost });
+    await this.usage.add({
+      userId,
+      endpoint: "/v1/chat/completions",
+      model: model.id,
+      credits: creditsCost,
+      ...this.buildUsageContext(usageContext),
+    });
 
     let providerResult;
     try {
@@ -435,14 +630,20 @@ class RuntimeAiService {
     };
   }
 
-  async responses(userId: string, input: string) {
+  async responses(userId: string, input: string, usageContext?: { channel?: UsageChannel; apiKeyId?: string }) {
     const model = this.models.pickDefault("chat");
-    const creditsCost = Math.max(4, Math.floor(model.creditsPerRequest * 0.75));
+    const creditsCost = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     const consumed = await this.credits.consume(userId, creditsCost);
     if (!consumed) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
-    await this.usage.add({ userId, endpoint: "/v1/responses", model: model.id, credits: creditsCost });
+    await this.usage.add({
+      userId,
+      endpoint: "/v1/responses",
+      model: model.id,
+      credits: creditsCost,
+      ...this.buildUsageContext(usageContext),
+    });
 
     let providerResult;
     try {
@@ -465,12 +666,16 @@ class RuntimeAiService {
     };
   }
 
-  async imageGeneration(userId: string, request: ImageGenerationRequest) {
+  async imageGeneration(
+    userId: string,
+    request: ImageGenerationRequest,
+    usageContext?: { channel?: UsageChannel; apiKeyId?: string },
+  ) {
     const model = request.model && request.model !== "auto" ? this.models.findById(request.model) : this.models.pickDefault("image");
     if (!model || model.capability !== "image") {
       return { error: "unknown model", statusCode: 400 as const };
     }
-    const creditsCost = model.creditsPerRequest;
+    const creditsCost = this.models.creditsForRequest(model);
     const chargeReferenceId = `req_${randomUUID()}`;
     const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
     if (!consumed) {
@@ -497,7 +702,13 @@ class RuntimeAiService {
       };
     }
 
-    await this.usage.add({ userId, endpoint: "/v1/images/generations", model: model.id, credits: creditsCost });
+    await this.usage.add({
+      userId,
+      endpoint: "/v1/images/generations",
+      model: model.id,
+      credits: creditsCost,
+      ...this.buildUsageContext(usageContext),
+    });
     return {
       statusCode: 200 as const,
       headers: {
@@ -512,6 +723,73 @@ class RuntimeAiService {
           ...(entry.url ? { url: entry.url } : {}),
           ...(entry.b64Json ? { b64_json: entry.b64Json } : {}),
         })),
+      },
+    };
+  }
+
+  async guestChatCompletions(
+    guestId: string,
+    modelId: string | undefined,
+    messages: ChatMessage[],
+    guestIp?: string,
+  ) {
+    const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickGuestDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: "unknown model", statusCode: 400 as const };
+    }
+    if (model.costType !== "free") {
+      return { error: "forbidden", statusCode: 403 as const };
+    }
+
+    const text = messages.map((msg) => msg.content).join(" ").trim();
+
+    let providerResult;
+    try {
+      providerResult = await this.providerRegistry.chat(
+        model.id,
+        messages.map((message) => ({
+          role: this.normalizeRole(message.role),
+          content: message.content,
+        })),
+      );
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : "provider unavailable",
+        statusCode: 502 as const,
+      };
+    }
+
+    await this.guests.addUsage({
+      guestId,
+      endpoint: "/v1/web/chat/guest",
+      model: model.id,
+      credits: 0,
+      ipAddress: guestIp,
+    });
+
+    return {
+      statusCode: 200 as const,
+      body: {
+        id: `chatcmpl_${randomUUID().slice(0, 12)}`,
+        object: "chat.completion",
+        created: Math.floor(Date.now() / 1000),
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: {
+              role: "assistant",
+              content: providerResult.content || `MVP response: ${text || "Your request was processed."}`,
+            },
+          },
+        ],
+      },
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": providerResult.providerUsed,
+        "x-provider-model": providerResult.providerModel,
+        "x-actual-credits": "0",
       },
     };
   }
@@ -545,6 +823,7 @@ export type RuntimeServices = {
   reconciliation: PaymentReconciliationService;
   reconciliationScheduler?: PaymentReconciliationScheduler;
   users: PersistentUserService;
+  guests: GuestAttributionStore;
   authz: AuthorizationService;
   userSettings: UserSettingsService;
   supabaseAuth: SupabaseAuthService;
@@ -589,6 +868,7 @@ export function createRuntimeServices(): RuntimeServices {
   const billingStore: BillingStore = new SupabaseBillingStore(supabase);
   const credits = new PersistentCreditService(billingStore);
   const usage = new PersistentUsageService(supabase);
+  const guests = new SupabaseGuestAttributionStore(supabase);
   const payments = new PersistentPaymentService(billingStore, credits);
   const reconciliation = new PaymentReconciliationService(billingStore);
   const reconciliationScheduler = env.paymentReconciliation.enabled
@@ -607,7 +887,7 @@ export function createRuntimeServices(): RuntimeServices {
   reconciliationScheduler?.start();
   const apiKeyStore: ApiKeyStore = new SupabaseApiKeyStore(supabase);
   const supabaseUserStore = new SupabaseUserStore(supabase);
-  const users = new PersistentUserService(apiKeyStore, supabaseUserStore);
+  const users = new PersistentUserService(apiKeyStore, supabaseUserStore, guests);
   const authz = new AuthorizationService(supabase);
   const userSettings = new UserSettingsService(supabaseUserStore);
   const supabaseAuth = new SupabaseAuthService(supabase);
@@ -669,7 +949,7 @@ export function createRuntimeServices(): RuntimeServices {
   });
   startProviderReadinessCapture(providerRegistry);
 
-  const ai = new RuntimeAiService(models, credits, usage, providerRegistry, langfuse);
+  const ai = new RuntimeAiService(models, credits, usage, guests, providerRegistry, langfuse);
 
   return {
     env,
@@ -680,6 +960,7 @@ export function createRuntimeServices(): RuntimeServices {
     reconciliation,
     reconciliationScheduler,
     users,
+    guests,
     authz,
     userSettings,
     supabaseAuth,

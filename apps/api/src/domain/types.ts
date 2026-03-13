@@ -1,8 +1,20 @@
+export type ModelCostType = "free" | "fixed" | "variable";
+export type UsageChannel = "api" | "web";
+
+export type GatewayModelPricing = {
+  creditsPerRequest?: number;
+  inputTokensPer1m?: number;
+  outputTokensPer1m?: number;
+  cacheReadTokensPer1m?: number;
+  cacheWriteTokensPer1m?: number;
+};
+
 export type GatewayModel = {
   id: string;
   object: "model";
   capability: "chat" | "image";
-  creditsPerRequest: number;
+  costType: ModelCostType;
+  pricing: GatewayModelPricing;
   provider?: "mock" | "ollama" | "groq" | "openai";
 };
 
@@ -12,6 +24,8 @@ export type UsageEvent = {
   endpoint: string;
   model: string;
   credits: number;
+  channel: UsageChannel;
+  apiKeyId?: string;
   createdAt: string;
 };
 
@@ -34,6 +48,24 @@ export type UsageSummary = {
   daily: UsageDailyTrendPoint[];
   byModel: UsageSummaryBucket[];
   byEndpoint: UsageSummaryBucket[];
+  byChannel: UsageSummaryBucket[];
+  byApiKey: UsageSummaryBucket[];
+};
+
+export type TrafficAnalyticsSnapshot = {
+  windowDays: number;
+  channels: {
+    api: { requests: number; credits: number };
+    web: { requests: number; credits: number };
+  };
+  byApiKey: UsageSummaryBucket[];
+  webBreakdown: {
+    guestRequests: number;
+    authenticatedRequests: number;
+    guestSessions: number;
+    linkedGuests: number;
+    conversionRate: number;
+  };
 };
 
 export type CreditBalance = {

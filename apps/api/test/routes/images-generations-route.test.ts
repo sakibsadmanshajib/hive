@@ -86,6 +86,9 @@ describe("images generations route", () => {
       size: "1024x1024",
       responseFormat: "url",
       user: "user-123",
+    }, {
+      channel: "api",
+      apiKeyId: undefined,
     });
     expect(statusCode).toBe(200);
     expect(headers.get("x-model-routed")).toBe("image-basic");

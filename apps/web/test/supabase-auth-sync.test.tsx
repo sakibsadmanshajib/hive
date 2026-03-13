@@ -155,4 +155,54 @@ describe("Supabase auth session sync", () => {
 
     expect(readAuthSession()).toBeNull();
   });
+
+  it("links the current guest session after observing an authenticated Supabase session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ linked: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.localStorage.setItem(
+      "bdai.guest.session",
+      JSON.stringify({
+        guestId: "guest_123",
+        issuedAt: "2026-03-13T00:00:00.000Z",
+        expiresAt: "2026-03-20T00:00:00.000Z",
+      }),
+    );
+
+    getSessionMock.mockResolvedValue({
+      data: {
+        session: {
+          access_token: "initial_token",
+          user: {
+            email: "demo@example.com",
+            user_metadata: { name: "Demo" },
+          },
+        },
+      },
+    });
+    onAuthStateChangeMock.mockImplementation(() => ({
+      data: {
+        subscription: {
+          unsubscribe: vi.fn(),
+        },
+      },
+    }));
+
+    const { ensureSupabaseAuthSessionSync } = await import("../src/lib/supabase-client");
+
+    ensureSupabaseAuthSessionSync();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/guest-session\/link$/),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer initial_token",
+        }),
+      }),
+    );
+  });
 });

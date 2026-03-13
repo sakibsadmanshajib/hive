@@ -1,13 +1,14 @@
-# Chat-First Guarded Home (Implemented)
+# Chat-First Guarded Home (Superseded)
 
 ## Outcome
 
-The web app now uses a chat-first flow with authentication gating on `/`.
+This design was implemented initially, but the home-route policy has since been superseded by guest-first chat on `/`.
 
 ## Implemented IA
 
-- `/` is the primary chat workspace and requires an authenticated session.
-- Unauthenticated users on `/` are redirected to `/auth`.
+- Historical state:
+  - `/` was the primary chat workspace and required an authenticated session.
+  - Unauthenticated users on `/` were redirected to `/auth`.
 - `/chat` now redirects to `/`.
 - `/billing` is preserved as a dedicated route.
 - New authenticated utility routes:
@@ -40,3 +41,7 @@ The web app now uses a chat-first flow with authentication gating on `/`.
 
 - `pnpm --filter @hive/web test`
 - `pnpm --filter @hive/web build`
+
+## Superseded By
+
+- `docs/plans/2026-03-13-issue-19-guest-home-free-models-design.md`

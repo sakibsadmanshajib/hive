@@ -39,8 +39,31 @@ describe("PersistentUsageService", () => {
                 endpoint: "/v1/chat/completions",
                 model: "test-model",
                 credits: 10,
+                channel: "api",
+                api_key_id: null,
             })
         );
+    });
+
+    it("skips persistence for anonymous guest usage events", async () => {
+        const supabase = {
+            from: vi.fn(),
+        } as any;
+
+        const service = new PersistentUsageService(supabase);
+        const result = await service.add({
+            userId: "guest",
+            endpoint: "/v1/web/chat/guest",
+            model: "guest-free",
+            credits: 0,
+        });
+
+        expect(result.id).toMatch(/^usage_guest_/);
+        expect(result.userId).toBe("guest");
+        expect(result.endpoint).toBe("/v1/web/chat/guest");
+        expect(result.model).toBe("guest-free");
+        expect(result.credits).toBe(0);
+        expect(supabase.from).not.toHaveBeenCalled();
     });
 
     it("lists usage events correctly mocked", async () => {
@@ -83,6 +106,8 @@ describe("PersistentUsageService", () => {
             endpoint: "/v1/chat",
             model: "model-a",
             credits: 15,
+            channel: "api",
+            apiKeyId: undefined,
             createdAt: "2026-03-09T10:00:00.000Z",
         });
         expect(mockEq).toHaveBeenCalledWith("user_id", "user-1");
@@ -100,27 +125,33 @@ describe("PersistentUsageService", () => {
                             {
                                 id: "usage_3",
                                 user_id: "user-1",
-                                endpoint: "/v1/chat/completions",
-                                model: "smart-reasoning",
-                                credits: 30,
-                                created_at: "2026-03-13T11:00:00.000Z",
-                            },
-                            {
-                                id: "usage_2",
-                                user_id: "user-1",
-                                endpoint: "/v1/responses",
-                                model: "smart-reasoning",
-                                credits: 20,
-                                created_at: "2026-03-12T09:00:00.000Z",
-                            },
-                            {
-                                id: "usage_1",
-                                user_id: "user-1",
-                                endpoint: "/v1/chat/completions",
-                                model: "fast-chat",
-                                credits: 10,
-                                created_at: "2026-03-10T08:00:00.000Z",
-                            },
+                            endpoint: "/v1/chat/completions",
+                            model: "smart-reasoning",
+                            credits: 30,
+                            channel: "web",
+                            api_key_id: null,
+                            created_at: "2026-03-13T11:00:00.000Z",
+                        },
+                        {
+                            id: "usage_2",
+                            user_id: "user-1",
+                            endpoint: "/v1/responses",
+                            model: "smart-reasoning",
+                            credits: 20,
+                            channel: "api",
+                            api_key_id: "key-123",
+                            created_at: "2026-03-12T09:00:00.000Z",
+                        },
+                        {
+                            id: "usage_1",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "fast-chat",
+                            credits: 10,
+                            channel: "api",
+                            api_key_id: "key-123",
+                            created_at: "2026-03-10T08:00:00.000Z",
+                        },
                         ],
                         error: null,
                     }),
@@ -134,35 +165,43 @@ describe("PersistentUsageService", () => {
                             {
                                 id: "usage_3",
                                 user_id: "user-1",
-                                endpoint: "/v1/chat/completions",
-                                model: "smart-reasoning",
-                                credits: 30,
-                                created_at: "2026-03-13T11:00:00.000Z",
-                            },
-                            {
-                                id: "usage_2",
-                                user_id: "user-1",
-                                endpoint: "/v1/responses",
-                                model: "smart-reasoning",
-                                credits: 20,
-                                created_at: "2026-03-12T09:00:00.000Z",
-                            },
-                            {
-                                id: "usage_1",
-                                user_id: "user-1",
-                                endpoint: "/v1/chat/completions",
-                                model: "fast-chat",
-                                credits: 10,
-                                created_at: "2026-03-10T08:00:00.000Z",
-                            },
-                            {
-                                id: "usage_0",
-                                user_id: "user-1",
-                                endpoint: "/v1/chat/completions",
-                                model: "legacy-model",
-                                credits: 99,
-                                created_at: "2026-03-01T08:00:00.000Z",
-                            },
+                            endpoint: "/v1/chat/completions",
+                            model: "smart-reasoning",
+                            credits: 30,
+                            channel: "web",
+                            api_key_id: null,
+                            created_at: "2026-03-13T11:00:00.000Z",
+                        },
+                        {
+                            id: "usage_2",
+                            user_id: "user-1",
+                            endpoint: "/v1/responses",
+                            model: "smart-reasoning",
+                            credits: 20,
+                            channel: "api",
+                            api_key_id: "key-123",
+                            created_at: "2026-03-12T09:00:00.000Z",
+                        },
+                        {
+                            id: "usage_1",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "fast-chat",
+                            credits: 10,
+                            channel: "api",
+                            api_key_id: "key-123",
+                            created_at: "2026-03-10T08:00:00.000Z",
+                        },
+                        {
+                            id: "usage_0",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "legacy-model",
+                            credits: 99,
+                            channel: "api",
+                            api_key_id: "key-999",
+                            created_at: "2026-03-01T08:00:00.000Z",
+                        },
                         ],
                         error: null,
                     }),
@@ -203,11 +242,100 @@ describe("PersistentUsageService", () => {
                     { key: "/v1/chat/completions", requests: 2, credits: 40 },
                     { key: "/v1/responses", requests: 1, credits: 20 },
                 ],
+                byChannel: [
+                    { key: "api", requests: 2, credits: 30 },
+                    { key: "web", requests: 1, credits: 30 },
+                ],
+                byApiKey: [
+                    { key: "key-123", requests: 2, credits: 30 },
+                ],
             });
             expect(mockListEq).toHaveBeenCalledWith("user_id", "user-1");
             expect(mockRecentEq).toHaveBeenCalledWith("user_id", "user-1");
         } finally {
             vi.useRealTimers();
         }
+    });
+
+    it("computes conversion rate from the guest sessions created within the window", async () => {
+        const usageRows = {
+            data: [
+                { credits: 15, channel: "api", api_key_id: "key-1", created_at: "2026-03-13T09:00:00.000Z" },
+                { credits: 0, channel: "web", api_key_id: null, created_at: "2026-03-13T10:00:00.000Z" },
+            ],
+            error: null,
+        };
+        const guestUsageRows = {
+            data: [
+                { credits: 0, created_at: "2026-03-13T11:00:00.000Z" },
+                { credits: 0, created_at: "2026-03-13T12:00:00.000Z" },
+            ],
+            error: null,
+        };
+        const guestSessions = {
+            data: [
+                { guest_id: "guest-a" },
+                { guest_id: "guest-b" },
+            ],
+            error: null,
+        };
+        const guestLinks = {
+            data: [
+                { guest_id: "guest-a" },
+            ],
+            error: null,
+        };
+
+        const mockUsageGte = vi.fn().mockResolvedValue(usageRows);
+        const mockGuestUsageGte = vi.fn().mockResolvedValue(guestUsageRows);
+        const mockGuestSessionsGte = vi.fn().mockResolvedValue(guestSessions);
+        const mockGuestLinksIn = vi.fn().mockResolvedValue(guestLinks);
+
+        const supabase = {
+            from: vi.fn().mockImplementation((table: string) => {
+                if (table === "usage_events") {
+                    return {
+                        select: vi.fn().mockReturnValue({
+                            gte: mockUsageGte,
+                        }),
+                    };
+                }
+                if (table === "guest_usage_events") {
+                    return {
+                        select: vi.fn().mockReturnValue({
+                            gte: mockGuestUsageGte,
+                        }),
+                    };
+                }
+                if (table === "guest_sessions") {
+                    return {
+                        select: vi.fn().mockReturnValue({
+                            gte: mockGuestSessionsGte,
+                        }),
+                    };
+                }
+                if (table === "guest_user_links") {
+                    return {
+                        select: vi.fn().mockReturnValue({
+                            in: mockGuestLinksIn,
+                        }),
+                    };
+                }
+                return {};
+            }),
+        } as any;
+
+        const service = new PersistentUsageService(supabase);
+        const result = await service.trafficAnalytics(7);
+
+        expect(result.channels.api).toEqual({ requests: 1, credits: 15 });
+        expect(result.channels.web).toEqual({ requests: 3, credits: 0 });
+        expect(result.byApiKey).toEqual([{ key: "key-1", requests: 1, credits: 15 }]);
+        expect(result.webBreakdown.guestRequests).toBe(2);
+        expect(result.webBreakdown.authenticatedRequests).toBe(1);
+        expect(result.webBreakdown.guestSessions).toBe(2);
+        expect(result.webBreakdown.linkedGuests).toBe(1);
+        expect(result.webBreakdown.conversionRate).toBe(0.5);
+        expect(mockGuestLinksIn).toHaveBeenCalledWith("guest_id", ["guest-a", "guest-b"]);
     });
 });

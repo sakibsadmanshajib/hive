@@ -1,21 +1,51 @@
-import { useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useState } from "react";
 import { toast } from "sonner";
 
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
 import { useAuthSession } from "../auth/auth-session";
-import { apiHeaders, getApiBase } from "../../lib/api";
+import {
+  isGuestSessionExpired,
+  readGuestSession,
+  writeGuestSession,
+  type GuestSession,
+} from "../auth/guest-session";
+import { apiHeaders, getApiBase, getAppUrl } from "../../lib/api";
 import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
 export function useChatSession() {
   useSupabaseAuthSessionSync();
   const authSession = useAuthSession();
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [model, setModel] = useState("fast-chat");
+  const [modelOptions, setModelOptions] = useState(["guest-free"]);
+  const [model, setModel] = useState("guest-free");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const accessToken = authSession?.accessToken ?? "";
+  const guestMode = accessToken.trim().length === 0;
+
+  async function ensureGuestSession(): Promise<GuestSession | null> {
+    const currentSession = readGuestSession();
+    if (!isGuestSessionExpired(currentSession)) {
+      return currentSession;
+    }
+
+    try {
+      const response = await fetch(getAppUrl("/api/guest-session"), {
+        method: "POST",
+      });
+      if (!response.ok) {
+        return null;
+      }
+
+      const session = await response.json() as GuestSession;
+      writeGuestSession(session);
+      return session;
+    } catch {
+      return null;
+    }
+  }
 
   const activeConversation = useMemo(
     () =>
@@ -23,6 +53,49 @@ export function useChatSession() {
       chatState.conversations[0],
     [chatState.activeConversationId, chatState.conversations],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadModels() {
+      try {
+        const response = await fetch(`${getApiBase()}/v1/models`);
+        if (!response.ok) {
+          return;
+        }
+
+        const json = await response.json() as {
+          data?: Array<{ id?: string; capability?: string; costType?: string }>;
+        };
+        const chatModels = (json.data ?? [])
+          .filter((entry) => entry.capability === "chat")
+          .filter((entry) => !guestMode || entry.costType === "free")
+          .map((entry) => entry.id)
+          .filter((entry): entry is string => Boolean(entry));
+
+        if (!cancelled && chatModels.length > 0) {
+          setModelOptions(chatModels);
+          setModel((currentModel) => (chatModels.includes(currentModel) ? currentModel : chatModels[0]));
+        }
+      } catch {
+        // Keep built-in model defaults if the catalog request fails.
+      }
+    }
+
+    void loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [guestMode]);
+
+  useEffect(() => {
+    if (!guestMode) {
+      return;
+    }
+
+    void ensureGuestSession();
+  }, [guestMode]);
 
   function addConversation() {
     dispatch({
@@ -42,12 +115,6 @@ export function useChatSession() {
 
   async function sendMessage() {
     if (!activeConversation || !prompt.trim()) {
-      return;
-    }
-    if (!accessToken.trim()) {
-      const nextError = "Not authenticated.";
-      setErrorMessage(nextError);
-      toast.error(nextError);
       return;
     }
 
@@ -73,15 +140,26 @@ export function useChatSession() {
         role: message.role,
         content: message.content,
       }));
+      if (guestMode) {
+        const guestSession = await ensureGuestSession();
+        if (!guestSession) {
+          setErrorMessage("Guest chat unavailable");
+          toast.error("Guest chat unavailable");
+          return;
+        }
+      }
 
-      const response = await fetch(`${apiBase}/v1/chat/completions`, {
+      const response = await fetch(
+        guestMode ? getAppUrl("/api/chat/guest") : `${apiBase}/v1/chat/completions`,
+        {
         method: "POST",
-        headers: apiHeaders(accessToken),
+        headers: guestMode ? { "content-type": "application/json" } : apiHeaders(accessToken),
         body: JSON.stringify({
           model,
           messages: payloadMessages,
         }),
-      });
+        },
+      );
       const json = await response.json();
       if (!response.ok) {
         const nextError = json?.error ?? "Chat request failed";
@@ -125,5 +203,7 @@ export function useChatSession() {
     loading,
     errorMessage,
     sendMessage,
+    modelOptions,
+    guestMode,
   };
 }

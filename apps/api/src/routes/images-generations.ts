@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
-import { requirePrincipal } from "./auth";
+import { inferUsageChannel, requirePrincipal } from "./auth";
 
 type ImageBody = {
   model?: string;
@@ -38,6 +38,9 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
       size: request.body?.size,
       responseFormat: request.body?.response_format,
       user: request.body?.user,
+    }, {
+      channel: inferUsageChannel(request, principal),
+      apiKeyId: principal.apiKeyId,
     });
     if ("error" in result) {
       if (result.headers) {

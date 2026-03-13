@@ -172,8 +172,10 @@ GitHub contributor intake and triage are repo-managed:
 
 ## Current Web Flow
 
-- `/` is the primary chat workspace (auth-guarded).
-- Unauthenticated users are redirected from `/` to `/auth`.
+- `/` is the primary chat workspace for both guests and authenticated users.
+- Guests stay on `/` in guest mode and are limited to `costType: "free"` chat models.
+- The web app bootstraps a signed `httpOnly` guest cookie through `/api/guest-session` and mirrors a browser-visible guest session object for UI state and analytics.
+- Guest chat flows through `/api/chat/guest`; the browser never calls the API guest runtime directly.
 - `/auth` hosts login/signup (backed by Supabase Auth).
 - `/chat` redirects to `/` (legacy compatibility).
 - Chat workspace includes:
@@ -211,7 +213,8 @@ GitHub contributor intake and triage are repo-managed:
 ### Billing and Usage
 
 - `GET /v1/credits/balance`
-- `GET /v1/usage` — raw usage events plus summary analytics by day, model, and endpoint
+- `GET /v1/usage` — raw usage events plus summary analytics by day, model, endpoint, channel (`api` vs `web`), and API key where applicable
+- `GET /v1/analytics/internal` — admin-only traffic snapshot across API and web channels, including per-key API usage and guest conversion metrics
 - `POST /v1/payments/intents`
 - `POST /v1/payments/demo/confirm` (demo-only top-up)
 - `POST /v1/payments/webhook`
@@ -229,7 +232,26 @@ The API also performs a zero-token startup readiness sweep for configured provid
 
 ### Auth
 
-Authentication is handled by **Supabase Auth** for session-based web flows and by Hive API keys for developer-facing inference routes. Inference endpoints accept either `x-api-key` or `Authorization: Bearer <api-key>`, while the web's session-authenticated management routes validate Supabase bearer tokens through `SupabaseAuthService.getSessionPrincipal()`.
+Authentication is handled by **Supabase Auth** for session-based web flows and by Hive API keys for developer-facing inference routes. The web home `/` supports guest chat through Next.js server routes in `apps/web`, which mint a signed guest cookie, mirror a browser-visible guest session object, and forward guest chat plus guest-to-user linking to internal API endpoints using a server-only token. Those web routes accept only same-origin browser traffic and forward the client IP so guest rate limiting still applies per visitor. The direct public inference endpoint `/v1/chat/completions` remains authenticated. Inference endpoints accept either `x-api-key` or `Authorization: Bearer <api-key>`, while the web's session-authenticated management routes validate Supabase bearer tokens through `SupabaseAuthService.getSessionPrincipal()`.
+
+OpenAI-compatible behavior is the API product contract, not the web chat product contract. Reporting now distinguishes the two businesses explicitly:
+
+- `api` traffic covers the OpenAI-compatible API surface and records the stable API key id when a key-backed call is used
+- `web` traffic covers the chat product, including guest chat and session-authenticated web chat inferred from trusted browser-origin signals while the runtime is still shared
+
+This PR separates analytics/reporting first. Authenticated web chat still shares the public inference runtime path today; the deeper runtime split is tracked separately in GitHub issue `#57`.
+
+Model metadata now includes a policy-oriented `costType` (`free`, `fixed`, `variable`). Guest web chat can use only `free` chat models, while authenticated users can access credit-charging models.
+
+Guest web chat and attribution proxying require a server-only `WEB_INTERNAL_GUEST_TOKEN` to be configured in both the web and API runtimes. Without it, guest chat is unavailable.
+
+Guest attribution is persisted in dedicated Supabase tables:
+
+- `guest_sessions`
+- `guest_usage_events`
+- `guest_user_links`
+
+The web auth/session sync links a validated `guestId` to the first authenticated user session through the internal guest-link route, which makes later signup and payment conversion analysis queryable through `guestId -> userId`.
 
 Session-authenticated developer key management endpoints:
 
@@ -253,6 +275,7 @@ Operator-only support endpoint:
 | User store | `src/runtime/supabase-user-store.ts` | User profiles and settings via Supabase |
 | API key store | `src/runtime/supabase-api-key-store.ts` | Hashed API key persistence plus lifecycle audit events via Supabase |
 | Billing store | `src/runtime/supabase-billing-store.ts` | Credits, ledger, and payment events via Supabase |
+| Guest attribution store | `src/runtime/supabase-guest-attribution-store.ts` | Guest sessions, guest usage events, and guest-to-user conversion links via Supabase |
 | Payment reconciliation | `src/runtime/payment-reconciliation.ts`, `src/runtime/payment-reconciliation-scheduler.ts` | Recent billing drift detection and opt-in scheduler |
 | Authorization | `src/runtime/authorization.ts` | RBAC via Supabase `user_roles`/`role_permissions` tables |
 | User settings | `src/runtime/user-settings.ts` | Feature gates (apiEnabled, generateImage, etc.) |

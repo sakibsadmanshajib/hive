@@ -1,5 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { UsageChannel } from "../domain/types";
 import type { RuntimeServices } from "../runtime/services";
+import { isAllowedBrowserOrigin } from "../runtime/cors-origins";
 import { mapScopeToPrimaryPermission, type PermissionKey } from "../runtime/authorization";
 import type { UserSettingKey } from "../runtime/user-settings";
 
@@ -9,6 +11,7 @@ export type AuthPrincipal = {
   userId: string;
   authType: "apiKey" | "session";
   scopes: string[];
+  apiKeyId?: string;
 };
 
 type AuthRequirements = {
@@ -16,6 +19,34 @@ type AuthRequirements = {
   requiredPermission?: PermissionKey;
   requiredSetting?: UserSettingKey;
 };
+
+function readSingleHeaderValue(header: string | string[] | undefined): string | undefined {
+  if (typeof header === "string") {
+    return header;
+  }
+  if (Array.isArray(header)) {
+    return header[0];
+  }
+  return undefined;
+}
+
+function hasTrustedBrowserOrigin(request: FastifyRequest): boolean {
+  const origin = readSingleHeaderValue(request.headers.origin);
+  if (origin && isAllowedBrowserOrigin(origin)) {
+    return true;
+  }
+
+  const referer = readSingleHeaderValue(request.headers.referer);
+  if (!referer) {
+    return false;
+  }
+
+  try {
+    return isAllowedBrowserOrigin(new URL(referer).origin);
+  } catch {
+    return false;
+  }
+}
 
 function readBearerToken(request: FastifyRequest): string | null {
   const authHeader = request.headers.authorization;
@@ -68,6 +99,7 @@ async function resolvePrincipal(
     userId: resolved.userId,
     authType: "apiKey",
     scopes: resolved.scopes,
+    apiKeyId: resolved.apiKeyId,
   };
 }
 
@@ -118,4 +150,24 @@ export async function requireApiUser(
     return undefined;
   }
   return principal.userId;
+}
+
+export async function requireApiPrincipal(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  services: RuntimeServices,
+  requiredScope: "chat" | "image" | "usage" | "billing",
+): Promise<AuthPrincipal | undefined> {
+  return requirePrincipal(request, reply, services, {
+    requiredScope,
+    requiredSetting: "apiEnabled",
+  });
+}
+
+export function inferUsageChannel(request: FastifyRequest, principal: AuthPrincipal): UsageChannel {
+  if (principal.authType !== "session") {
+    return "api";
+  }
+
+  return hasTrustedBrowserOrigin(request) ? "web" : "api";
 }

@@ -354,7 +354,12 @@ Auth/session lessons that must persist:
 - Do not clear the custom browser auth session just because `supabase.auth.getSession()` returns `null` on startup; that can erase seeded smoke/dev sessions before Supabase has established any browser session.
 - Only let Supabase-driven sign-out clear the mirrored custom auth session after the browser runtime has observed a real Supabase session.
 - For protected web routes, wait until client auth-session hydration is ready before redirecting to `/auth`, or valid local sessions can be bounced to the login page during initial render.
+- Guest-session bootstrap and guest-to-user link side effects must fail closed on browser/network errors and preserve retryability; do not let background guest-session fetches create unhandled runtime rejections.
 - When verifying auth/chat/billing smoke flows, prefer a rebuilt production app (`pnpm --filter @hive/web build` + `next start`) over assuming `next dev` behavior matches production hydration and routing.
+- Guest web chat must stay behind the web app boundary: browser traffic should hit a Next.js route, the API guest endpoint must require a server-only token, and the web route should reject non-same-origin requests before forwarding.
+- When guest chat is proxied through the web app, preserve guest rate limiting by forwarding the caller IP to the internal API route instead of keying all guests to the web server address.
+- OpenAI-compatible contract requirements apply to the API product surface. The web chat product is a separate analytics/reporting pipeline and must be tagged `web`, while API-product traffic must be tagged `api` and should include a stable API key id when available.
+- If authenticated web chat still shares runtime endpoints with the public API temporarily, document that as an explicit gap instead of folding web traffic into API-business analytics.
 
 API key lifecycle lessons that must persist:
 
