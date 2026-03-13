@@ -70,6 +70,21 @@ export class SupabaseBillingStore {
     return Boolean(data);
   }
 
+  async refundCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
+    const { data, error } = await this.supabase.rpc("refund_credits", {
+      p_user_id: userId,
+      p_credits: credits,
+      p_reference_id: referenceId,
+    });
+    if (error) {
+      throw new Error(`failed to refund credits via rpc: ${error.message}`);
+    }
+    if (!data) {
+      throw new Error("refund credits rpc rejected the refund request");
+    }
+    return this.getBalance(userId);
+  }
+
   async topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
     await this.ensureCreditAccount(userId);
     const balance = await this.getBalance(userId);

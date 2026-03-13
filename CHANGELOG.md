@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Real Image Provider Path:** Added an OpenAI-backed adapter for `/v1/images/generations` with provider-registry routing, startup readiness checks, and OpenAI-shaped request/response handling.
+- **Inference API Key Bearer Compatibility:** Inference routes now accept `Authorization: Bearer <api-key>` in addition to `x-api-key`, improving drop-in compatibility with OpenAI-style clients and SDKs.
 - **Platform Audit Refresh:** Added `docs/audits/2026-03-13-platform-audit.md` to capture the current implementation baseline, backlog drift, and next-step platform priorities.
 - **Maintainer Issue Lifecycle Runbook:** Added a dedicated runbook for issue intake, triage state transitions, planning expectations, PR linkage, verification evidence, and closeout workflow.
 - **API Key Lifecycle Management:** Added stable API key ids, nicknames, optional expiration, revoke-by-id management, and immutable lifecycle audit events for create/revoke/expiry visibility.
@@ -47,6 +49,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Duplicate OpenAPI Contract:** Removed `openapi/openapi.yaml`; `packages/openapi/openapi.yaml` is now the sole in-repo OpenAPI source.
 
 ### Changed
+- **Image Routing:** `image-basic` now routes to the hosted OpenAI image adapter with `mock` fallback instead of returning a placeholder-only mock image URL.
+- **OpenAPI Image Contract:** Expanded `/v1/images/generations` in `packages/openapi/openapi.yaml` to document model, size, count, response format, and bearer/api-key auth compatibility.
 - **Product Positioning Docs:** Reframed top-level product and architecture docs around Hive as a broader AI inference platform, with Bangladesh-native payments positioned as one strategic wedge rather than the entire product definition.
 - **Future Roadmap:** Rewrote the active roadmap so already-shipped hardening work is treated as delivered baseline and remaining work is organized around provider breadth, analytics, commercial controls, and operator maturity.
 - **Docker Documentation:** Clarified why Docker Compose is used locally, why `api` and `web` are separate containers, and how that differs from running `pnpm dev` directly.

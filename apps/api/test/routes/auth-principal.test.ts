@@ -53,6 +53,24 @@ describe("auth principal resolution", () => {
     expect(userId).toBe("user_api");
   });
 
+  it("falls back to treating bearer tokens as API keys when no session principal resolves", async () => {
+    const reply = fakeReply();
+    const userId = await requireApiUser(
+      { headers: { authorization: "Bearer sk_live_123" } } as never,
+      reply as never,
+      {
+        env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
+        supabaseAuth: { getSessionPrincipal: async () => null },
+        users: { resolveApiKey: async () => ({ userId: "user_api", scopes: ["usage"] }) },
+        authz: { requirePermission: async () => true },
+        userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
+      } as never,
+      "usage",
+    );
+
+    expect(userId).toBe("user_api");
+  });
+
   it("accepts bearer token validated through supabase when flag enabled", async () => {
     const reply = fakeReply();
     const userId = await requireApiUser(

@@ -5,6 +5,7 @@ import { getEnv, type AppEnv } from "../config/env";
 import { BkashAdapter, SslcommerzAdapter } from "./provider-adapters";
 import { GroqProviderClient } from "../providers/groq-client";
 import { MockProviderClient } from "../providers/mock-client";
+import { OpenAIProviderClient } from "../providers/openai-client";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName, ProviderReadinessStatus } from "../providers/types";
@@ -24,6 +25,14 @@ import { PaymentReconciliationService } from "./payment-reconciliation";
 import { PaymentReconciliationScheduler } from "./payment-reconciliation-scheduler";
 
 type ChatMessage = { role: string; content: string };
+type ImageGenerationRequest = {
+  model?: string;
+  prompt: string;
+  n?: number;
+  size?: string;
+  responseFormat?: "url" | "b64_json";
+  user?: string;
+};
 
 type ApiKeyStore = {
   create(input: {
@@ -44,6 +53,7 @@ type ApiKeyStore = {
 type BillingStore = {
   getBalance(userId: string): Promise<CreditBalance>;
   consumeCredits(userId: string, credits: number, referenceId: string): Promise<boolean>;
+  refundCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance>;
   topUpCredits(userId: string, credits: number, referenceId: string): Promise<CreditBalance>;
   createPaymentIntent(intent: PersistentPaymentIntent): Promise<void>;
   getPaymentIntent(intentId: string): Promise<PersistentPaymentIntent | undefined>;
@@ -70,8 +80,12 @@ class PersistentCreditService {
     return this.store.getBalance(userId);
   }
 
-  consume(userId: string, credits: number): Promise<boolean> {
-    return this.store.consumeCredits(userId, credits, `req_${randomUUID()}`);
+  consume(userId: string, credits: number, referenceId = `req_${randomUUID()}`): Promise<boolean> {
+    return this.store.consumeCredits(userId, credits, referenceId);
+  }
+
+  refund(userId: string, credits: number, referenceId: string): Promise<CreditBalance> {
+    return this.store.refundCredits(userId, credits, referenceId);
   }
 
   topUp(userId: string, bdtAmount: number, referenceId: string): Promise<CreditBalance> {
@@ -359,21 +373,53 @@ class RuntimeAiService {
     };
   }
 
-  async imageGeneration(userId: string, prompt: string) {
-    const model = this.models.pickDefault("image");
+  async imageGeneration(userId: string, request: ImageGenerationRequest) {
+    const model = request.model && request.model !== "auto" ? this.models.findById(request.model) : this.models.pickDefault("image");
+    if (!model || model.capability !== "image") {
+      return { error: "unknown model", statusCode: 400 as const };
+    }
     const creditsCost = model.creditsPerRequest;
-    const consumed = await this.credits.consume(userId, creditsCost);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
     if (!consumed) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
+
+    let providerResult;
+    try {
+      providerResult = await this.providerRegistry.imageGeneration(model.id, {
+        prompt: request.prompt,
+        n: request.n ?? 1,
+        size: request.size,
+        responseFormat: request.responseFormat ?? "url",
+        user: request.user,
+      });
+    } catch {
+      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      return {
+        error: "provider unavailable",
+        statusCode: 502 as const,
+        headers: {
+          "x-model-routed": model.id,
+        },
+      };
+    }
+
     await this.usage.add({ userId, endpoint: "/v1/images/generations", model: model.id, credits: creditsCost });
     return {
       statusCode: 200 as const,
-      headers: { "x-actual-credits": String(creditsCost) },
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": providerResult.providerUsed,
+        "x-provider-model": providerResult.providerModel,
+        "x-actual-credits": String(creditsCost),
+      },
       body: {
-        created: Math.floor(Date.now() / 1000),
-        object: "list",
-        data: [{ url: `https://example.invalid/generated/${encodeURIComponent(prompt || "image")}.png` }],
+        created: providerResult.created,
+        data: providerResult.data.map((entry) => ({
+          ...(entry.url ? { url: entry.url } : {}),
+          ...(entry.b64Json ? { b64_json: entry.b64Json } : {}),
+        })),
       },
     };
   }
@@ -479,11 +525,19 @@ export function createRuntimeServices(): RuntimeServices {
     publicKey: env.langfuse.publicKey,
     secretKey: env.langfuse.secretKey,
   });
+  const openaiConfig = env.providers.openai ?? {
+    baseUrl: "https://api.openai.com/v1",
+    apiKey: undefined,
+    model: "gpt-image-1",
+    timeoutMs: 4000,
+    maxRetries: 1,
+  };
 
   const providerModelMap: Record<ProviderName, string> = {
     mock: "mock-chat",
     ollama: env.providers.ollama.model,
     groq: env.providers.groq.model,
+    openai: openaiConfig.model,
   };
   const providerRegistry = new ProviderRegistry({
     clients: [
@@ -498,18 +552,25 @@ export function createRuntimeServices(): RuntimeServices {
         timeoutMs: env.providers.groq.timeoutMs,
         maxRetries: env.providers.groq.maxRetries,
       }),
+      new OpenAIProviderClient({
+        baseUrl: openaiConfig.baseUrl,
+        apiKey: openaiConfig.apiKey,
+        timeoutMs: openaiConfig.timeoutMs,
+        maxRetries: openaiConfig.maxRetries,
+      }),
       new MockProviderClient(),
     ],
     defaultProvider: "mock",
     modelProviderMap: {
       "fast-chat": "ollama",
       "smart-reasoning": "groq",
-      "image-basic": "mock",
+      "image-basic": "openai",
     },
     providerModelMap,
     fallbackOrder: {
       ollama: ["groq", "mock"],
       groq: ["ollama", "mock"],
+      openai: ["mock"],
       mock: [],
     },
     circuitBreaker: env.providers.circuitBreaker,

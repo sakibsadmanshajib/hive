@@ -108,7 +108,7 @@ Still missing for a fuller platform posture:
 |-------|---------|------------|------------|
 | `fast-chat` | Ollama | Groq | Mock |
 | `smart-reasoning` | Groq | Ollama | Mock |
-| `image-basic` | Mock | — | — |
+| `image-basic` | OpenAI | Mock | — |
 
 Circuit breaker protects against cascading provider failures:
 - **CLOSED** → normal operation
@@ -134,6 +134,7 @@ The API requires:
 Provider health depends on:
 - Ollama availability and pulled model
 - Groq API key validity and network reachability
+- OpenAI API key validity and network reachability
 
 Provider metrics are:
 - collected in-process inside the API provider registry
