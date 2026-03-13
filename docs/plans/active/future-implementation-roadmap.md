@@ -50,7 +50,7 @@ Goals:
 - close the most obvious gaps between current platform claims and user-visible capability
 
 Tasks:
-1. Expand image support beyond the initial OpenAI-backed provider integration.
+1. Add a second non-mock image provider behind `/v1/images/generations`, keep the response contract OpenAI-compatible, and verify fallback behavior between providers for image requests.
 2. Add file ingestion with parser abstraction and safe limits.
 3. Expand usage analytics:
    - daily trend

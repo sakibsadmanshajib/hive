@@ -26,9 +26,14 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
       return reply.code(429).send({ error: "rate limit exceeded" });
     }
 
+    const prompt = request.body?.prompt?.trim();
+    if (!prompt) {
+      return reply.code(400).send({ error: "prompt is required" });
+    }
+
     const result = await services.ai.imageGeneration(principal.userId, {
       model: request.body?.model,
-      prompt: request.body?.prompt ?? "",
+      prompt,
       n: request.body?.n,
       size: request.body?.size,
       responseFormat: request.body?.response_format,

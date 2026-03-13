@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Lock down the current image contract with failing tests
+## Task 1: Lock down the current image contract with failing tests
 
 **Files:**
 - Modify: `apps/api/test/routes`
@@ -69,7 +69,7 @@ git add apps/api/test
 git commit -m "test(api): define image generation contract"
 ```
 
-### Task 2: Extend provider types for image capability
+## Task 2: Extend provider types for image capability
 
 **Files:**
 - Modify: `apps/api/src/providers/types.ts`
@@ -143,7 +143,7 @@ git add apps/api/src/providers/types.ts apps/api/test/providers
 git commit -m "refactor(api): add provider image capability types"
 ```
 
-### Task 3: Add image execution to the provider registry
+## Task 3: Add image execution to the provider registry
 
 **Files:**
 - Modify: `apps/api/src/providers/registry.ts`
@@ -213,7 +213,7 @@ git add apps/api/src/providers/registry.ts apps/api/test/providers
 git commit -m "feat(api): add registry image routing"
 ```
 
-### Task 4: Implement the first real image adapter
+## Task 4: Implement the first real image adapter
 
 **Files:**
 - Create or Modify: `apps/api/src/providers/<provider>-client.ts`
@@ -262,7 +262,7 @@ git add apps/api/src/providers apps/api/test/providers apps/api/src/config apps/
 git commit -m "feat(api): add hosted image provider adapter"
 ```
 
-### Task 5: Wire the provider into runtime configuration and model mapping
+## Task 5: Wire the provider into runtime configuration and model mapping
 
 **Files:**
 - Modify: `apps/api/src/runtime/services.ts`
@@ -314,7 +314,7 @@ git add apps/api/src/runtime/services.ts apps/api/src/domain/model-service.ts ap
 git commit -m "feat(api): wire image model to real provider"
 ```
 
-### Task 6: Replace the placeholder runtime image flow
+## Task 6: Replace the placeholder runtime image flow
 
 **Files:**
 - Modify: `apps/api/src/runtime/services.ts`
@@ -361,7 +361,7 @@ git add apps/api/src/runtime/services.ts apps/api/test
 git commit -m "feat(api): replace mock image runtime flow"
 ```
 
-### Task 7: Upgrade the image route request and response contract
+## Task 7: Upgrade the image route request and response contract
 
 **Files:**
 - Modify: `apps/api/src/routes/images-generations.ts`
@@ -407,7 +407,7 @@ git add apps/api/src/routes/images-generations.ts packages/openapi/openapi.yaml 
 git commit -m "feat(api): make image endpoint OpenAI compatible"
 ```
 
-### Task 8: Verify observability boundaries for image-capable providers
+## Task 8: Verify observability boundaries for image-capable providers
 
 **Files:**
 - Modify: `apps/api/test/routes`
@@ -446,7 +446,7 @@ git add apps/api/test/routes apps/api/src/routes/providers-status.ts apps/api/sr
 git commit -m "test(api): preserve provider observability boundaries"
 ```
 
-### Task 9: Update user-facing and operator documentation
+## Task 9: Update user-facing and operator documentation
 
 **Files:**
 - Modify: `README.md`
@@ -476,7 +476,7 @@ git add README.md CHANGELOG.md docs packages/openapi/openapi.yaml
 git commit -m "docs: update image provider support"
 ```
 
-### Task 10: Run full verification for touched scopes
+## Task 10: Run full verification for touched scopes
 
 **Files:**
 - Reference only

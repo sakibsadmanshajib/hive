@@ -98,18 +98,7 @@ export class OpenAIProviderClient implements ProviderClient {
     }
 
     try {
-      const response = await fetchWithRetry({
-        provider: "openai",
-        url: `${this.config.baseUrl}/models`,
-        timeoutMs: this.config.timeoutMs,
-        maxRetries: this.config.maxRetries,
-        init: {
-          method: "GET",
-          headers: {
-            authorization: `Bearer ${this.config.apiKey}`,
-          },
-        },
-      });
+      const response = await this.fetchModels();
 
       if (!response.ok) {
         return { enabled: true, healthy: false, detail: `models check failed: ${response.status}` };
@@ -127,18 +116,7 @@ export class OpenAIProviderClient implements ProviderClient {
     }
 
     try {
-      const response = await fetchWithRetry({
-        provider: "openai",
-        url: `${this.config.baseUrl}/models`,
-        timeoutMs: this.config.timeoutMs,
-        maxRetries: this.config.maxRetries,
-        init: {
-          method: "GET",
-          headers: {
-            authorization: `Bearer ${this.config.apiKey}`,
-          },
-        },
-      });
+      const response = await this.fetchModels();
 
       if (!response.ok) {
         return { ready: false, detail: `startup models check failed: ${response.status}` };
@@ -158,5 +136,20 @@ export class OpenAIProviderClient implements ProviderClient {
       const reason = error instanceof Error ? error.message : String(error);
       return { ready: false, detail: `startup unreachable: ${reason}` };
     }
+  }
+
+  private fetchModels(): Promise<Response> {
+    return fetchWithRetry({
+      provider: "openai",
+      url: `${this.config.baseUrl}/models`,
+      timeoutMs: this.config.timeoutMs,
+      maxRetries: this.config.maxRetries,
+      init: {
+        method: "GET",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+        },
+      },
+    });
   }
 }

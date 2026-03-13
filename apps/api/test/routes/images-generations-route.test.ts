@@ -23,6 +23,7 @@ describe("images generations route", () => {
     const imageGeneration = vi.fn(async () => ({
       statusCode: 200,
       headers: {
+        "x-model-routed": "image-basic",
         "x-actual-credits": "120",
         "x-provider-used": "openai",
         "x-provider-model": "gpt-image-1",
@@ -87,6 +88,7 @@ describe("images generations route", () => {
       user: "user-123",
     });
     expect(statusCode).toBe(200);
+    expect(headers.get("x-model-routed")).toBe("image-basic");
     expect(headers.get("x-actual-credits")).toBe("120");
     expect(headers.get("x-provider-used")).toBe("openai");
     expect(headers.get("x-provider-model")).toBe("gpt-image-1");
@@ -114,6 +116,7 @@ describe("images generations route", () => {
           statusCode: 502,
           error: "provider unavailable",
           headers: {
+            "x-model-routed": "image-basic",
             "x-provider-used": "openai",
             "x-provider-model": "gpt-image-1",
           },
@@ -150,9 +153,50 @@ describe("images generations route", () => {
     )) as { error: string };
 
     expect(statusCode).toBe(502);
+    expect(headers.get("x-model-routed")).toBe("image-basic");
     expect(response).toEqual({ error: "provider unavailable" });
     expect(headers.get("x-provider-used")).toBe("openai");
     expect(headers.get("x-provider-model")).toBe("gpt-image-1");
     expect(JSON.stringify(response)).not.toContain("internal");
+  });
+
+  it("rejects empty prompts before calling the runtime service", async () => {
+    const imageGeneration = vi.fn();
+    const app = new FakeApp();
+
+    registerImagesGenerationsRoute(app as never, {
+      env: { allowDevApiKeyPrefix: false },
+      auth: { getSessionPrincipal: async () => null },
+      users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
+      authz: { requirePermission: async () => true },
+      userSettings: {
+        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
+        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
+      },
+      rateLimiter: { allow: async () => true },
+      ai: { imageGeneration },
+    } as never);
+
+    const handler = app.handlers.get("POST /v1/images/generations");
+    let statusCode = 200;
+    const reply = {
+      code: (code: number) => {
+        statusCode = code;
+        return {
+          send: (body: unknown) => body,
+        };
+      },
+      send: (body: unknown) => body,
+      header: () => reply,
+    };
+
+    const response = (await handler?.(
+      { headers: { "x-api-key": "sk_1" }, body: { prompt: "   " } },
+      reply,
+    )) as { error: string };
+
+    expect(statusCode).toBe(400);
+    expect(response).toEqual({ error: "prompt is required" });
+    expect(imageGeneration).not.toHaveBeenCalled();
   });
 });

@@ -294,10 +294,6 @@ Use `.env.example` as the template. Key variables:
 - `OLLAMA_*` — local chat provider base URL, model, timeout, retries
 - `GROQ_*` — hosted chat provider API key, base URL, model, timeout, retries
 - `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_IMAGE_MODEL`, `OPENAI_TIMEOUT_MS`, `OPENAI_MAX_RETRIES` — hosted image provider configuration
-
-### Providers
-- `OLLAMA_BASE_URL`, `OLLAMA_MODEL`
-- `GROQ_API_KEY`, `GROQ_BASE_URL`, `GROQ_MODEL`
 - `PROVIDER_TIMEOUT_MS` (default `4000`), `PROVIDER_MAX_RETRIES` (default `1`)
 
 ### Payments

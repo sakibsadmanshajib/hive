@@ -382,7 +382,7 @@ class RuntimeAiService {
         responseFormat: request.responseFormat ?? "url",
         user: request.user,
       });
-    } catch (_error) {
+    } catch {
       return {
         error: "provider unavailable",
         statusCode: 502 as const,

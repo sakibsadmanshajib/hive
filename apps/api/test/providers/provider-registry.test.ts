@@ -75,9 +75,6 @@ describe("provider registry", () => {
       name: "ollama",
       isEnabled: () => true,
       chat: vi.fn(async () => ({ content: "ollama ok" })),
-      generateImage: vi.fn(async () => {
-        throw new Error("ollama timed out");
-      }),
       status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
       checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
     };
