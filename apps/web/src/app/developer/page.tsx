@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { useAuthSessionState } from "../../features/auth/auth-session";
-import { UsageCards, type UserSnapshot } from "../../features/billing/components/usage-cards";
+import { UsageCards, type UsageSummary, type UserSnapshot } from "../../features/billing/components/usage-cards";
 import { DeveloperShell } from "../../features/developer/components/developer-shell";
 import { apiHeaders, getApiBase } from "../../lib/api";
 import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
@@ -36,6 +36,7 @@ export default function DeveloperPage() {
   const [accessToken, setAccessToken] = useState("");
   const [snapshot, setSnapshot] = useState<UserSnapshot | null>(null);
   const [usageCount, setUsageCount] = useState(0);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
   const [status, setStatus] = useState("Load account metrics for your signed-in account.");
   const [loading, setLoading] = useState(false);
   const [nickname, setNickname] = useState("default key");
@@ -76,7 +77,11 @@ export default function DeveloperPage() {
         fetch(`${apiBase}/v1/usage`, { headers: apiHeaders(accessToken) }),
       ]);
       const meJson = (await meRes.json().catch(() => ({}))) as UserSnapshot & { error?: string };
-      const usageJson = (await usageRes.json().catch(() => ({}))) as { data?: unknown[]; error?: string };
+      const usageJson = (await usageRes.json().catch(() => ({}))) as {
+        data?: unknown[];
+        summary?: UsageSummary;
+        error?: string;
+      };
 
       if (!meRes.ok) {
         setStatus(meJson.error ?? "Failed to load account data");
@@ -86,12 +91,14 @@ export default function DeveloperPage() {
       setSnapshot(meJson);
       if (!usageRes.ok) {
         setUsageCount(0);
+        setUsageSummary(null);
         setStatus(`Loaded account data, but failed to load usage: ${usageJson.error ?? "Unknown usage error"}`);
         return;
       }
 
       setUsageCount(Array.isArray(usageJson.data) ? usageJson.data.length : 0);
-      setStatus("Loaded developer account snapshot");
+      setUsageSummary(usageJson.summary ?? null);
+      setStatus("Loaded developer account snapshot and usage analytics");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to load account data");
     } finally {
@@ -219,7 +226,7 @@ export default function DeveloperPage() {
           ) : null}
         </CardContent>
       </Card>
-      <UsageCards snapshot={snapshot} usageCount={usageCount} />
+      <UsageCards snapshot={snapshot} usageCount={usageCount} usageSummary={usageSummary} />
       <Card>
         <CardHeader>
           <CardTitle>Managed API keys</CardTitle>

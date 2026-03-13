@@ -15,6 +15,27 @@ export type UsageEvent = {
   createdAt: string;
 };
 
+export type UsageSummaryBucket = {
+  key: string;
+  requests: number;
+  credits: number;
+};
+
+export type UsageDailyTrendPoint = {
+  date: string;
+  requests: number;
+  credits: number;
+};
+
+export type UsageSummary = {
+  windowDays: number;
+  totalRequests: number;
+  totalCredits: number;
+  daily: UsageDailyTrendPoint[];
+  byModel: UsageSummaryBucket[];
+  byEndpoint: UsageSummaryBucket[];
+};
+
 export type CreditBalance = {
   userId: string;
   availableCredits: number;

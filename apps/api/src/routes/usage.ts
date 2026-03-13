@@ -9,9 +9,10 @@ export function registerUsageRoute(app: FastifyInstance, services: RuntimeServic
       return;
     }
 
-    const data = await services.usage.list(userId);
+    const { data, summary } = await services.usage.listWithSummary(userId);
     return {
       object: "list",
+      summary,
       data,
     };
   });

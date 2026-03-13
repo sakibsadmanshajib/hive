@@ -1,5 +1,26 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 
+export type UsageSummary = {
+  windowDays: number;
+  totalRequests: number;
+  totalCredits: number;
+  daily: Array<{
+    date: string;
+    requests: number;
+    credits: number;
+  }>;
+  byModel: Array<{
+    key: string;
+    requests: number;
+    credits: number;
+  }>;
+  byEndpoint: Array<{
+    key: string;
+    requests: number;
+    credits: number;
+  }>;
+};
+
 export type UserSnapshot = {
   user: { user_id: string; email: string; name?: string };
   credits: { availableCredits: number; purchasedCredits: number; promoCredits: number };
@@ -26,11 +47,21 @@ export type UserSnapshot = {
 
 type UsageCardsProps = {
   snapshot: UserSnapshot | null;
+  usageSummary: UsageSummary | null;
   usageCount: number;
 };
 
-export function UsageCards({ snapshot, usageCount }: UsageCardsProps) {
+function formatSplitLabel(entry: { key: string; requests: number; credits: number } | undefined) {
+  if (!entry) {
+    return "No data yet";
+  }
+  return `${entry.key} · ${entry.requests} req · ${entry.credits} cr`;
+}
+
+export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsProps) {
   const activeKeys = snapshot ? snapshot.api_keys.filter((key) => key.status === "active").length : 0;
+  const topModel = usageSummary?.byModel[0];
+  const topEndpoint = usageSummary?.byEndpoint[0];
 
   if (!snapshot) {
     return (
@@ -44,7 +75,7 @@ export function UsageCards({ snapshot, usageCount }: UsageCardsProps) {
   }
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <Card>
         <CardHeader>
           <CardDescription>User</CardDescription>
@@ -67,15 +98,60 @@ export function UsageCards({ snapshot, usageCount }: UsageCardsProps) {
       </Card>
       <Card>
         <CardHeader>
-          <CardDescription>Usage events</CardDescription>
-          <CardTitle>{usageCount}</CardTitle>
+          <CardDescription>Usage requests</CardDescription>
+          <CardTitle>{usageSummary?.totalRequests ?? usageCount}</CardTitle>
         </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground">
+            {usageSummary ? `${usageSummary.windowDays}-day window` : "Load usage to view summary"}
+          </p>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardDescription>Credits spent</CardDescription>
+          <CardTitle>{usageSummary?.totalCredits ?? 0}</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-xs text-muted-foreground">{usageCount} raw events loaded</p>
+        </CardContent>
       </Card>
       <Card>
         <CardHeader>
           <CardDescription>Active API keys</CardDescription>
           <CardTitle>{activeKeys}</CardTitle>
         </CardHeader>
+      </Card>
+      <Card className="sm:col-span-2 xl:col-span-3">
+        <CardHeader>
+          <CardTitle>Usage breakdown</CardTitle>
+          <CardDescription>Top model, top endpoint, and daily trend for the current analytics window.</CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 lg:grid-cols-3">
+          <div className="space-y-1">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Top model</p>
+            <p className="text-sm font-medium">{formatSplitLabel(topModel)}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Top endpoint</p>
+            <p className="text-sm font-medium">{formatSplitLabel(topEndpoint)}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">Daily credits</p>
+            <div className="space-y-1">
+              {usageSummary?.daily.length ? (
+                usageSummary.daily.map((point) => (
+                  <div key={point.date} className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span>{point.date}</span>
+                    <span>{point.credits} cr / {point.requests} req</span>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">Load usage to inspect the current trend.</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
       </Card>
     </div>
   );

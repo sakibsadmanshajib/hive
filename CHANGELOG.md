@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Usage Analytics and Support Snapshot:** Enriched `/v1/usage` with windowed request/credit analytics and added admin-only `GET /v1/support/users/{userId}` for single-user troubleshooting.
+    - Usage summaries now include daily trend, model split, and endpoint split.
+    - Developer Panel now shows the usage analytics summary instead of only a raw event count.
+    - Support snapshot remains protected by `x-admin-token` and preserves the existing public/internal diagnostics boundary.
 - **Real Image Provider Path:** Added an OpenAI-backed adapter for `/v1/images/generations` with provider-registry routing, startup readiness checks, and OpenAI-shaped request/response handling.
 - **Inference API Key Bearer Compatibility:** Inference routes now accept `Authorization: Bearer <api-key>` in addition to `x-api-key`, improving drop-in compatibility with OpenAI-style clients and SDKs.
 - **Platform Audit Refresh:** Added `docs/audits/2026-03-13-platform-audit.md` to capture the current implementation baseline, backlog drift, and next-step platform priorities.

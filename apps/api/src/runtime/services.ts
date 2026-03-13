@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { CreditBalance, UsageEvent } from "../domain/types";
+import type { CreditBalance, UsageEvent, UsageSummary, UsageSummaryBucket, UsageDailyTrendPoint } from "../domain/types";
 import { ModelService } from "../domain/model-service";
 import { getEnv, type AppEnv } from "../config/env";
 import { BkashAdapter, SslcommerzAdapter } from "./provider-adapters";
@@ -97,6 +97,60 @@ class PersistentCreditService {
 export class PersistentUsageService {
   constructor(private readonly supabase: ReturnType<typeof createSupabaseAdminClient>) { }
 
+  private buildSummary(events: UsageEvent[], windowDays: number): UsageSummary {
+    const daily = new Map<string, UsageDailyTrendPoint>();
+    const byModel = new Map<string, UsageSummaryBucket>();
+    const byEndpoint = new Map<string, UsageSummaryBucket>();
+    const now = new Date();
+    now.setUTCHours(0, 0, 0, 0);
+
+    for (let index = windowDays - 1; index >= 0; index -= 1) {
+      const date = new Date(now);
+      date.setUTCDate(date.getUTCDate() - index);
+      const key = date.toISOString().slice(0, 10);
+      daily.set(key, { date: key, requests: 0, credits: 0 });
+    }
+
+    const filteredEvents = events.filter((event) => daily.has(event.createdAt.slice(0, 10)));
+    const totalRequests = filteredEvents.length;
+    const totalCredits = filteredEvents.reduce((sum, event) => sum + event.credits, 0);
+
+    for (const event of filteredEvents) {
+      const dateKey = event.createdAt.slice(0, 10);
+      const day = daily.get(dateKey);
+      if (day) {
+        day.requests += 1;
+        day.credits += event.credits;
+      }
+
+      const modelBucket = byModel.get(event.model) ?? { key: event.model, requests: 0, credits: 0 };
+      modelBucket.requests += 1;
+      modelBucket.credits += event.credits;
+      byModel.set(event.model, modelBucket);
+
+      const endpointBucket = byEndpoint.get(event.endpoint) ?? { key: event.endpoint, requests: 0, credits: 0 };
+      endpointBucket.requests += 1;
+      endpointBucket.credits += event.credits;
+      byEndpoint.set(event.endpoint, endpointBucket);
+    }
+
+    const sortBuckets = (entries: UsageSummaryBucket[]) => entries.sort((left, right) => {
+      if (right.credits !== left.credits) {
+        return right.credits - left.credits;
+      }
+      return left.key.localeCompare(right.key);
+    });
+
+    return {
+      windowDays,
+      totalRequests,
+      totalCredits,
+      daily: [...daily.values()],
+      byModel: sortBuckets([...byModel.values()]),
+      byEndpoint: sortBuckets([...byEndpoint.values()]),
+    };
+  }
+
   async add(entry: Omit<UsageEvent, "id" | "createdAt">): Promise<UsageEvent> {
     const id = `usage_${randomUUID()}`;
     const { data, error } = await this.supabase.from("usage_events").insert({
@@ -137,6 +191,14 @@ export class PersistentUsageService {
       credits: Number(row.credits),
       createdAt: new Date(row.created_at as string | Date).toISOString(),
     }));
+  }
+
+  async listWithSummary(userId: string, windowDays = 7): Promise<{ data: UsageEvent[]; summary: UsageSummary }> {
+    const data = await this.list(userId);
+    return {
+      data,
+      summary: this.buildSummary(data, windowDays),
+    };
   }
 }
 

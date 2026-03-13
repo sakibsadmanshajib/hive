@@ -87,4 +87,90 @@ describe("PersistentUsageService", () => {
         });
         expect(mockEq).toHaveBeenCalledWith("user_id", "user-1");
     });
+
+    it("builds a usage summary alongside the raw event list", async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
+
+        const mockEq = vi.fn().mockReturnValue({
+            order: vi.fn().mockReturnValue({
+                limit: vi.fn().mockResolvedValue({
+                    data: [
+                        {
+                            id: "usage_3",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "smart-reasoning",
+                            credits: 30,
+                            created_at: "2026-03-13T11:00:00.000Z",
+                        },
+                        {
+                            id: "usage_2",
+                            user_id: "user-1",
+                            endpoint: "/v1/responses",
+                            model: "smart-reasoning",
+                            credits: 20,
+                            created_at: "2026-03-12T09:00:00.000Z",
+                        },
+                        {
+                            id: "usage_1",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "fast-chat",
+                            credits: 10,
+                            created_at: "2026-03-10T08:00:00.000Z",
+                        },
+                        {
+                            id: "usage_0",
+                            user_id: "user-1",
+                            endpoint: "/v1/chat/completions",
+                            model: "legacy-model",
+                            credits: 99,
+                            created_at: "2026-03-01T08:00:00.000Z",
+                        },
+                    ],
+                    error: null,
+                }),
+            }),
+        });
+
+        const supabase = {
+            from: vi.fn().mockImplementation((table: string) => {
+                if (table === "usage_events") {
+                    return { select: vi.fn().mockReturnValue({ eq: mockEq }) };
+                }
+                return {};
+            }),
+        } as any;
+
+        const service = new PersistentUsageService(supabase);
+        const result = await service.listWithSummary("user-1");
+
+        expect(result.data).toHaveLength(4);
+        expect(result.data.some((event) => event.id === "usage_0")).toBe(true);
+        expect(result.summary).toEqual({
+            windowDays: 7,
+            totalRequests: 3,
+            totalCredits: 60,
+            daily: [
+                { date: "2026-03-07", requests: 0, credits: 0 },
+                { date: "2026-03-08", requests: 0, credits: 0 },
+                { date: "2026-03-09", requests: 0, credits: 0 },
+                { date: "2026-03-10", requests: 1, credits: 10 },
+                { date: "2026-03-11", requests: 0, credits: 0 },
+                { date: "2026-03-12", requests: 1, credits: 20 },
+                { date: "2026-03-13", requests: 1, credits: 30 },
+            ],
+            byModel: [
+                { key: "smart-reasoning", requests: 2, credits: 50 },
+                { key: "fast-chat", requests: 1, credits: 10 },
+            ],
+            byEndpoint: [
+                { key: "/v1/chat/completions", requests: 2, credits: 40 },
+                { key: "/v1/responses", requests: 1, credits: 20 },
+            ],
+        });
+
+        vi.useRealTimers();
+    });
 });

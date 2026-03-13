@@ -23,6 +23,7 @@ describe("user api-key management route registration", () => {
     expect(app.handlers.has("GET /v1/users/api-keys")).toBe(true);
     expect(app.handlers.has("POST /v1/users/api-keys")).toBe(true);
     expect(app.handlers.has("POST /v1/users/api-keys/:id/revoke")).toBe(true);
+    expect(app.handlers.has("GET /v1/support/users/:userId")).toBe(true);
   });
 
   it("creates and revokes api keys through the authenticated user routes", async () => {
