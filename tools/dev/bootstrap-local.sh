@@ -9,7 +9,7 @@ echo "==> Starting or verifying local Supabase stack"
 npx supabase start
 
 echo "==> Resetting local Supabase database and applying migrations"
-npx supabase db reset
+npx supabase db reset --yes
 
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
 

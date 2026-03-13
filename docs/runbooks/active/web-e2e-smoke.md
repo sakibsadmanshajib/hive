@@ -82,10 +82,13 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
 pnpm --filter @hive/web build
 ```
 
-Get the real local Supabase anon key from:
+Load the live local Supabase values used by the production-style stack:
 
 ```bash
-npx supabase status -o env | rg '^(ANON_KEY|API_URL|SERVICE_ROLE_KEY)='
+set -a
+# shellcheck disable=SC1090
+source <(npx supabase status -o env)
+set +a
 ```
 
 Start the production-style stack:
@@ -93,8 +96,9 @@ Start the production-style stack:
 ```bash
 npx supabase start
 NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
+NEXT_PUBLIC_SUPABASE_URL=$API_URL \
 NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
+SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY \
 docker compose up --build -d
 docker compose ps
 ```

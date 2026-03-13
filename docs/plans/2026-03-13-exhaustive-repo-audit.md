@@ -6,6 +6,11 @@ Perform a best-effort exhaustive audit of Hive across code, docs, runtime/securi
 - Existing audit artifacts and issues `#45` through `#51` are the current baseline, but this pass may refine them or add new issues if the evidence supports it.
 - “Exhaustive” here means repo-wide and evidence-driven, not a formal external pentest or production load test.
 
+## Approval Gate
+- Status: APPROVED
+- Approval source: maintainer replied `APPROVED. $executing-plans` in this session on 2026-03-12.
+- Do not execute the Plan section unless that explicit approval is recorded in the session or this file.
+
 ## Plan
 1. Files: `apps/api/src/**`, `apps/api/test/**`, `apps/api/supabase/**`, `supabase/migrations/**`
    Change: Audit backend correctness and security posture end-to-end, including auth/session validation, user provisioning, settings, API keys, billing, reconciliation, rate limiting, provider routing, observability boundaries, and runtime failure modes.
