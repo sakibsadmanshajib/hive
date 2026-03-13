@@ -61,9 +61,7 @@ Entry criteria:
 
 Maintainer actions:
 
-- Apply one `area:*` label.
-- Apply one `kind:*` label when intent is clear.
-- Apply one `priority:*` label once importance is assessed.
+- Apply one `area:*` label, one `kind:*` label when intent is clear, and one `priority:*` label once importance is assessed.
 - Assign the correct milestone based on current planning horizon.
 - Clarify acceptance criteria or blockers if the issue body is incomplete.
 
@@ -204,6 +202,7 @@ Exit criteria:
 ## Planning and Documentation Expectations
 
 - Use a persisted design or implementation plan under `docs/plans/` when the work spans multiple steps, has operational risk, or benefits from an approval gate.
+- Example: a rolling DB schema migration that spans multiple deploys, carries operational risk, and needs stakeholder approval should get a persisted plan such as `docs/plans/rolling-db-migration.md` with the objective, step-by-step rollout tasks, risks, rollback steps, approvers, and exact verification commands.
 - Keep documentation updates in the same change when behavior, maintainer workflow, or operational guidance changes.
 - Record verification commands explicitly in the PR or implementation notes.
 
@@ -211,7 +210,11 @@ Exit criteria:
 
 - Prefer one PR per tracked issue when practical.
 - Reference the issue directly in the PR body.
+- Example PR body lines:
+  `Fixes #123`
+  `Summary: document the maintainer issue lifecycle runbook and link it from the triage docs`
 - Keep issue status aligned with actual PR state.
+- Example follow-through: move the issue to the appropriate status label for review or merge state, and re-run the touched verification commands after review feedback changes the branch.
 - Re-run relevant verification after review feedback changes the implementation.
 
 ## Edge Cases
@@ -252,6 +255,16 @@ Before closing an issue as completed, confirm:
 - acceptance criteria are satisfied
 - linked PR verification matches the touched scope
 - required docs and changelog updates are present when behavior or workflow changed
+
+Runnable checks:
+
+- Verify issue metadata:
+  `gh issue view <issue-number> --json labels,milestone,state,url`
+- Verify linked PR:
+  `gh pr view <pr-number> --json state,mergeStateStatus,closingIssuesReferences,url`
+- Run required builds:
+  `pnpm --filter @hive/api build`
+  `pnpm --filter @hive/web build`
 
 ## Maintenance Notes
 

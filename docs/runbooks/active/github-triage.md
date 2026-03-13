@@ -36,16 +36,7 @@ Reviewers should expect every PR to include:
 
 ## Issue Lifecycle Summary
 
-The maintainer issue flow for this repository is:
-
-1. Intake
-2. `status:needs-triage`
-3. `status:ready`
-4. `status:in-progress`
-5. `status:blocked` when work cannot continue
-6. In review through an open pull request
-7. Merged
-8. Closed
+See the canonical Issue Lifecycle runbook at `docs/runbooks/active/issue-lifecycle.md` for the full state machine and transition criteria.
 
 Use this runbook for metadata rules. Use `docs/runbooks/active/issue-lifecycle.md` for the operational workflow, transition criteria, planning expectations, PR linkage, and closeout guidance.
 

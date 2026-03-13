@@ -109,6 +109,14 @@ This issue is documentation-first, so verification should be explicit rather tha
 - run required repository builds per doc policy
 - confirm the lifecycle guidance matches existing GitHub labels, milestones, templates, and workflow files
 
+Before implementation begins, this design should record an explicit approval gate from a maintainer.
+
+Approval record template:
+
+- `Status: DRAFT -> APPROVED by @maintainer on YYYY-MM-DD`
+
+Implementation should not begin until that `APPROVED` mark is recorded on the issue, PR, or plan artifact.
+
 ## Operational Impact
 
 - Maintainers get a clear operating model for issue progression.
