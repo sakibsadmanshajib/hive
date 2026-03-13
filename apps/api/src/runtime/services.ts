@@ -373,12 +373,6 @@ class RuntimeAiService {
     if (!model || model.capability !== "image") {
       return { error: "unknown model", statusCode: 400 as const };
     }
-    const creditsCost = model.creditsPerRequest;
-    const consumed = await this.credits.consume(userId, creditsCost);
-    if (!consumed) {
-      return { error: "insufficient credits", statusCode: 402 as const };
-    }
-
     let providerResult;
     try {
       providerResult = await this.providerRegistry.imageGeneration(model.id, {
@@ -394,6 +388,20 @@ class RuntimeAiService {
         statusCode: 502 as const,
         headers: {
           "x-model-routed": model.id,
+        },
+      };
+    }
+
+    const creditsCost = model.creditsPerRequest;
+    const consumed = await this.credits.consume(userId, creditsCost);
+    if (!consumed) {
+      return {
+        error: "insufficient credits",
+        statusCode: 402 as const,
+        headers: {
+          "x-model-routed": model.id,
+          "x-provider-used": providerResult.providerUsed,
+          "x-provider-model": providerResult.providerModel,
         },
       };
     }

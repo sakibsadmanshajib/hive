@@ -3,6 +3,8 @@ import type {
   ProviderChatResponse,
   ProviderClient,
   ProviderHealthStatus,
+  ProviderImageRequest,
+  ProviderImageResponse,
   ProviderReadinessStatus,
 } from "./types";
 
@@ -17,6 +19,14 @@ export class MockProviderClient implements ProviderClient {
     const prompt = request.messages.filter((message) => message.role === "user").map((message) => message.content).join(" ");
     return {
       content: `MVP response: ${prompt || "Your request was processed."}`,
+      providerModel: request.model,
+    };
+  }
+
+  async generateImage(request: ProviderImageRequest): Promise<ProviderImageResponse> {
+    return {
+      created: Math.floor(Date.now() / 1000),
+      data: [{ url: `https://example.invalid/generated/${encodeURIComponent(request.prompt || "image")}.png` }],
       providerModel: request.model,
     };
   }
