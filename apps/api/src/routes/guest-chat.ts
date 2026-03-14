@@ -24,7 +24,7 @@ export function registerGuestChatRoute(app: FastifyInstance, services: RuntimeSe
       ? request.headers["x-guest-client-ip"].trim()
       : "";
     const guestIp = forwardedGuestIp || request.ip || "unknown";
-    const guestKey = `guest:${guestIp}`;
+    const guestKey = `guest:${guestId}:${guestIp}`;
     const allowed = services.rateLimiter?.allow ? await services.rateLimiter.allow(guestKey) : true;
     if (!allowed) {
       return reply.code(429).send({ error: "rate limit exceeded" });

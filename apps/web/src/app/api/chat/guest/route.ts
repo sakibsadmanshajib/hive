@@ -3,6 +3,31 @@ import { getServerApiBase } from "../../../../lib/api";
 import { isSameOriginBrowserRequest, readClientIp } from "../../guest-session/request";
 import { parseGuestSession } from "../../guest-session/session";
 
+async function buildProxyResponse(response: Response): Promise<NextResponse> {
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (typeof response.text !== "function") {
+    if (typeof response.json === "function") {
+      return NextResponse.json(await response.json(), { status: response.status });
+    }
+    return NextResponse.json({}, { status: response.status });
+  }
+  const rawBody = await response.text();
+
+  if (contentType.includes("application/json")) {
+    try {
+      const json = rawBody ? JSON.parse(rawBody) : {};
+      return NextResponse.json(json, { status: response.status });
+    } catch {
+      return NextResponse.json({ error: rawBody || "invalid upstream response" }, { status: response.status });
+    }
+  }
+
+  return new NextResponse(rawBody, {
+    status: response.status,
+    headers: contentType ? { "content-type": contentType } : undefined,
+  });
+}
+
 export async function POST(request: Request) {
   const guestToken = process.env.WEB_INTERNAL_GUEST_TOKEN;
   if (!guestToken) {
@@ -16,7 +41,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing guest session" }, { status: 401 });
   }
 
-  const payload = await request.json();
+  let payload: unknown;
+  try {
+    payload = await request.json();
+  } catch {
+    return NextResponse.json({ error: "malformed json" }, { status: 400 });
+  }
   const clientIp = readClientIp(request);
   const response = await fetch(`${getServerApiBase()}/v1/internal/chat/guest`, {
     method: "POST",
@@ -29,6 +59,5 @@ export async function POST(request: Request) {
     body: JSON.stringify(payload),
   });
 
-  const body = await response.json();
-  return NextResponse.json(body, { status: response.status });
+  return buildProxyResponse(response);
 }

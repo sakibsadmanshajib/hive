@@ -26,7 +26,9 @@ Hive web development and smoke verification should run against the rebuilt Docke
    - `curl -sI http://127.0.0.1:3000/auth`
 3. Read the live local Supabase anon key:
    - `npx supabase status -o env`
-4. Run smoke against the default origin:
+4. Install the browser used by `apps/web/e2e/**/*.spec.ts`:
+   - `pnpm --filter @hive/web exec playwright install chromium`
+5. Run smoke against the default origin:
    - `E2E_SUPABASE_ANON_KEY="<ANON_KEY>" pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts`
 
 ## Rules

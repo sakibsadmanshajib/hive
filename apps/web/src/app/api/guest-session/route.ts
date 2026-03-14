@@ -13,6 +13,7 @@ export async function POST(request: Request) {
   }
 
   const { cookieValue, session } = createGuestSession(secret);
+  const clientIp = readClientIp(request);
   const persisted = await fetch(`${getServerApiBase()}/v1/internal/guest/session`, {
     method: "POST",
     headers: {
@@ -22,7 +23,7 @@ export async function POST(request: Request) {
     body: JSON.stringify({
       guestId: session.guestId,
       expiresAt: session.expiresAt,
-      ...(readClientIp(request) ? { lastSeenIp: readClientIp(request) } : {}),
+      ...(clientIp ? { lastSeenIp: clientIp } : {}),
     }),
   });
   if (!persisted.ok) {

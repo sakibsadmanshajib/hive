@@ -44,4 +44,12 @@ describe("public env access", () => {
     const { getServerApiBase } = await import("../src/lib/api");
     expect(getServerApiBase()).toBe("http://api:8080");
   });
+
+  it("falls back to NEXT_PUBLIC_API_BASE_URL when INTERNAL_API_BASE_URL is blank", async () => {
+    process.env.INTERNAL_API_BASE_URL = "   ";
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
+
+    const { getServerApiBase } = await import("../src/lib/api");
+    expect(getServerApiBase()).toBe("http://127.0.0.1:8080");
+  });
 });

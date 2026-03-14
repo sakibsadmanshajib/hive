@@ -63,6 +63,8 @@ describe("PersistentUsageService", () => {
         expect(result.endpoint).toBe("/v1/web/chat/guest");
         expect(result.model).toBe("guest-free");
         expect(result.credits).toBe(0);
+        expect(result.channel).toBe("web");
+        expect(result.apiKeyId).toBeUndefined();
         expect(supabase.from).not.toHaveBeenCalled();
     });
 
@@ -258,84 +260,91 @@ describe("PersistentUsageService", () => {
     });
 
     it("computes conversion rate from the guest sessions created within the window", async () => {
-        const usageRows = {
-            data: [
-                { credits: 15, channel: "api", api_key_id: "key-1", created_at: "2026-03-13T09:00:00.000Z" },
-                { credits: 0, channel: "web", api_key_id: null, created_at: "2026-03-13T10:00:00.000Z" },
-            ],
-            error: null,
-        };
-        const guestUsageRows = {
-            data: [
-                { credits: 0, created_at: "2026-03-13T11:00:00.000Z" },
-                { credits: 0, created_at: "2026-03-13T12:00:00.000Z" },
-            ],
-            error: null,
-        };
-        const guestSessions = {
-            data: [
-                { guest_id: "guest-a" },
-                { guest_id: "guest-b" },
-            ],
-            error: null,
-        };
-        const guestLinks = {
-            data: [
-                { guest_id: "guest-a" },
-            ],
-            error: null,
-        };
+        vi.useFakeTimers();
+        try {
+            vi.setSystemTime(new Date("2026-03-14T12:00:00.000Z"));
 
-        const mockUsageGte = vi.fn().mockResolvedValue(usageRows);
-        const mockGuestUsageGte = vi.fn().mockResolvedValue(guestUsageRows);
-        const mockGuestSessionsGte = vi.fn().mockResolvedValue(guestSessions);
-        const mockGuestLinksIn = vi.fn().mockResolvedValue(guestLinks);
+            const usageRows = {
+                data: [
+                    { credits: 15, channel: "api", api_key_id: "key-1", created_at: "2026-03-13T09:00:00.000Z" },
+                    { credits: 0, channel: "web", api_key_id: null, created_at: "2026-03-13T10:00:00.000Z" },
+                ],
+                error: null,
+            };
+            const guestUsageRows = {
+                data: [
+                    { credits: 0, created_at: "2026-03-13T11:00:00.000Z" },
+                    { credits: 0, created_at: "2026-03-13T12:00:00.000Z" },
+                ],
+                error: null,
+            };
+            const guestSessions = {
+                data: [
+                    { guest_id: "guest-a" },
+                    { guest_id: "guest-b" },
+                ],
+                error: null,
+            };
+            const guestLinks = {
+                data: [
+                    { guest_id: "guest-a" },
+                ],
+                error: null,
+            };
 
-        const supabase = {
-            from: vi.fn().mockImplementation((table: string) => {
-                if (table === "usage_events") {
-                    return {
-                        select: vi.fn().mockReturnValue({
-                            gte: mockUsageGte,
-                        }),
-                    };
-                }
-                if (table === "guest_usage_events") {
-                    return {
-                        select: vi.fn().mockReturnValue({
-                            gte: mockGuestUsageGte,
-                        }),
-                    };
-                }
-                if (table === "guest_sessions") {
-                    return {
-                        select: vi.fn().mockReturnValue({
-                            gte: mockGuestSessionsGte,
-                        }),
-                    };
-                }
-                if (table === "guest_user_links") {
-                    return {
-                        select: vi.fn().mockReturnValue({
-                            in: mockGuestLinksIn,
-                        }),
-                    };
-                }
-                return {};
-            }),
-        } as any;
+            const mockUsageGte = vi.fn().mockResolvedValue(usageRows);
+            const mockGuestUsageGte = vi.fn().mockResolvedValue(guestUsageRows);
+            const mockGuestSessionsGte = vi.fn().mockResolvedValue(guestSessions);
+            const mockGuestLinksIn = vi.fn().mockResolvedValue(guestLinks);
 
-        const service = new PersistentUsageService(supabase);
-        const result = await service.trafficAnalytics(7);
+            const supabase = {
+                from: vi.fn().mockImplementation((table: string) => {
+                    if (table === "usage_events") {
+                        return {
+                            select: vi.fn().mockReturnValue({
+                                gte: mockUsageGte,
+                            }),
+                        };
+                    }
+                    if (table === "guest_usage_events") {
+                        return {
+                            select: vi.fn().mockReturnValue({
+                                gte: mockGuestUsageGte,
+                            }),
+                        };
+                    }
+                    if (table === "guest_sessions") {
+                        return {
+                            select: vi.fn().mockReturnValue({
+                                gte: mockGuestSessionsGte,
+                            }),
+                        };
+                    }
+                    if (table === "guest_user_links") {
+                        return {
+                            select: vi.fn().mockReturnValue({
+                                in: mockGuestLinksIn,
+                            }),
+                        };
+                    }
+                    return {};
+                }),
+            } as any;
 
-        expect(result.channels.api).toEqual({ requests: 1, credits: 15 });
-        expect(result.channels.web).toEqual({ requests: 3, credits: 0 });
-        expect(result.byApiKey).toEqual([{ key: "key-1", requests: 1, credits: 15 }]);
-        expect(result.webBreakdown.guestRequests).toBe(2);
-        expect(result.webBreakdown.authenticatedRequests).toBe(1);
-        expect(result.webBreakdown.guestSessions).toBe(2);
-        expect(result.webBreakdown.linkedGuests).toBe(1);
-        expect(result.webBreakdown.conversionRate).toBe(0.5);
-        expect(mockGuestLinksIn).toHaveBeenCalledWith("guest_id", ["guest-a", "guest-b"]);
+            const service = new PersistentUsageService(supabase);
+            const result = await service.trafficAnalytics(7);
+
+            expect(result.channels.api).toEqual({ requests: 1, credits: 15 });
+            expect(result.channels.web).toEqual({ requests: 3, credits: 0 });
+            expect(result.byApiKey).toEqual([{ key: "key-1", requests: 1, credits: 15 }]);
+            expect(result.webBreakdown.guestRequests).toBe(2);
+            expect(result.webBreakdown.authenticatedRequests).toBe(1);
+            expect(result.webBreakdown.guestSessions).toBe(2);
+            expect(result.webBreakdown.linkedGuests).toBe(1);
+            expect(result.webBreakdown.conversionRate).toBe(0.5);
+            expect(mockGuestLinksIn).toHaveBeenCalledWith("guest_id", ["guest-a", "guest-b"]);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });

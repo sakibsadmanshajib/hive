@@ -90,4 +90,36 @@ describe("analytics internal route", () => {
     expect(payload.data.channels.web.requests).toBe(5);
     expect(payload.data.webBreakdown.linkedGuests).toBe(1);
   });
+
+  it("rejects analytics requests without a valid admin token", async () => {
+    const app = new FakeApp();
+    registerRoutes(app as never, {
+      env: { adminStatusToken: "admin-token" },
+      usage: {
+        trafficAnalytics: async () => ({
+          windowDays: 7,
+          channels: {
+            api: { requests: 0, credits: 0 },
+            web: { requests: 0, credits: 0 },
+          },
+          byApiKey: [],
+          webBreakdown: {
+            guestRequests: 0,
+            authenticatedRequests: 0,
+            guestSessions: 0,
+            linkedGuests: 0,
+            conversionRate: 0,
+          },
+        }),
+      },
+    } as never);
+
+    const handler = app.handlers.get("GET /v1/analytics/internal");
+    const reply = createReply();
+
+    const payload = await handler?.({ headers: {} }, reply);
+
+    expect(reply.statusCode).toBe(401);
+    expect(payload).toEqual({ error: "unauthorized" });
+  });
 });

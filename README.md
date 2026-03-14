@@ -436,4 +436,6 @@ The live Supabase CLI migration source of truth is `supabase/migrations/`:
 - `20260223000001_auth_user_tables.sql` — User profiles, roles, permissions, settings
 - `20260223000002_api_keys.sql` — Hashed API key metadata
 - `20260223000003_billing_tables.sql` — Credit accounts, ledger, payment intents/events
-- `20260312_004_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events
+- `20260314000100_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events
+- `20260314000200_guest_attribution.sql` — Guest sessions, guest usage events, and guest-to-user links
+- `20260314000300_usage_reporting_channels.sql` — Usage event channel and stable API key attribution fields

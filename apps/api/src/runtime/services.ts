@@ -227,7 +227,7 @@ export class PersistentUsageService {
   }
 
   async add(entry: Omit<UsageEvent, "id" | "createdAt" | "channel"> & { channel?: UsageChannel }): Promise<UsageEvent> {
-    const channel = entry.channel ?? "api";
+    const channel = entry.channel ?? (entry.userId === "guest" ? "web" : "api");
     if (entry.userId === "guest") {
       return {
         id: `usage_guest_${randomUUID()}`,

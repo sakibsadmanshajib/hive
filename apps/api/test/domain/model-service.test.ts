@@ -15,4 +15,12 @@ describe("model service", () => {
 
     expect(service.pickDefault("chat").id).toBe("fast-chat");
   });
+
+  it("picks the free guest chat model as the guest default", () => {
+    const service = new ModelService();
+    const guestModel = service.pickGuestDefault("chat");
+
+    expect(guestModel.id).toBe("guest-free");
+    expect(service.isGuestAccessible(guestModel.id)).toBe(true);
+  });
 });

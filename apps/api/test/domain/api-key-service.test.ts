@@ -183,6 +183,7 @@ describe("SupabaseApiKeyStore", () => {
     });
 
     await expect(store.resolve(rawKey)).resolves.toMatchObject({
+      apiKeyId: expect.any(String),
       userId: "8c7d3298-b7b0-4ba0-a8f8-f9be8a6430cb",
       scopes: ["usage", "billing"],
     });

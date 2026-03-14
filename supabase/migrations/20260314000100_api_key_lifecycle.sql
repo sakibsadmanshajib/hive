@@ -26,7 +26,8 @@ create table if not exists public.api_key_events (
   user_id uuid not null references public.user_profiles(user_id) on delete cascade,
   event_type text not null,
   metadata jsonb not null default '{}'::jsonb,
-  event_at timestamptz not null default now()
+  event_at timestamptz not null default now(),
+  constraint api_key_events_event_type_check check (event_type in ('created', 'revoked', 'expired_observed'))
 );
 
 create index if not exists api_key_events_api_key_id_idx on public.api_key_events (api_key_id, event_at desc);

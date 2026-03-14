@@ -94,7 +94,7 @@ describe("guest chat route", () => {
     );
 
     expect(reply.statusCode).toBe(200);
-    expect(allowedKey).toBe("guest:203.0.113.10");
+    expect(allowedKey).toBe("guest:guest_123:203.0.113.10");
     expect(result).toEqual({ choices: [{ message: { content: "Guest reply" } }] });
   });
 
@@ -179,6 +179,7 @@ describe("guest chat route", () => {
       {
         headers: {
           "x-web-guest-token": "test-web-token",
+          "x-guest-id": "guest_123",
         },
         body: {
           model: "smart-reasoning",

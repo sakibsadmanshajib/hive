@@ -1,9 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { CreditService } from "./credit-service";
 import { ModelService } from "./model-service";
+import type { UsageChannel } from "./types";
 import { UsageService } from "./usage-service";
 
 type ChatMessage = { role: string; content: string };
+type UsageContext = { channel?: UsageChannel; apiKeyId?: string };
+type ImageRequest = {
+  prompt: string;
+  model?: string;
+  n?: number;
+  size?: string;
+  responseFormat?: "url" | "b64_json";
+  user?: string;
+};
 
 export class AiService {
   constructor(
@@ -12,7 +22,19 @@ export class AiService {
     private readonly usage: UsageService,
   ) {}
 
-  chatCompletions(userId: string, modelId: string | undefined, messages: ChatMessage[]) {
+  private buildUsageContext(context?: UsageContext) {
+    return {
+      channel: context?.channel ?? "api",
+      apiKeyId: context?.apiKeyId,
+    };
+  }
+
+  chatCompletions(
+    userId: string,
+    modelId: string | undefined,
+    messages: ChatMessage[],
+    usageContext?: UsageContext,
+  ) {
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -24,7 +46,13 @@ export class AiService {
     }
 
     const text = messages.map((msg) => msg.content).join(" ").trim();
-    this.usage.add({ userId, endpoint: "/v1/chat/completions", model: model.id, credits, channel: "api" });
+    this.usage.add({
+      userId,
+      endpoint: "/v1/chat/completions",
+      model: model.id,
+      credits,
+      ...this.buildUsageContext(usageContext),
+    });
 
     return {
       statusCode: 200 as const,
@@ -51,13 +79,19 @@ export class AiService {
     };
   }
 
-  responses(userId: string, input: string) {
+  responses(userId: string, input: string, usageContext?: UsageContext) {
     const model = this.models.pickDefault("chat");
     const credits = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
-    this.usage.add({ userId, endpoint: "/v1/responses", model: model.id, credits, channel: "api" });
+    this.usage.add({
+      userId,
+      endpoint: "/v1/responses",
+      model: model.id,
+      credits,
+      ...this.buildUsageContext(usageContext),
+    });
 
     return {
       statusCode: 200 as const,
@@ -70,13 +104,20 @@ export class AiService {
     };
   }
 
-  imageGeneration(userId: string, prompt: string) {
+  imageGeneration(userId: string, input: string | ImageRequest, usageContext?: UsageContext) {
     const model = this.models.pickDefault("image");
     const credits = this.models.creditsForRequest(model);
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
-    this.usage.add({ userId, endpoint: "/v1/images/generations", model: model.id, credits, channel: "api" });
+    this.usage.add({
+      userId,
+      endpoint: "/v1/images/generations",
+      model: model.id,
+      credits,
+      ...this.buildUsageContext(usageContext),
+    });
+    const prompt = typeof input === "string" ? input : input.prompt;
 
     return {
       statusCode: 200 as const,

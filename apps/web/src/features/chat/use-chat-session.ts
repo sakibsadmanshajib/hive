@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
@@ -35,27 +35,40 @@ export function useChatSession() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const accessToken = authSession?.accessToken ?? "";
   const guestMode = accessToken.trim().length === 0;
+  const guestSessionRefreshedRef = useRef(false);
+  const guestSessionRequestRef = useRef<Promise<GuestSession | null> | null>(null);
 
-  async function ensureGuestSession(): Promise<GuestSession | null> {
+  async function ensureGuestSession(forceRefresh = false): Promise<GuestSession | null> {
     const currentSession = readGuestSession();
-    if (!isGuestSessionExpired(currentSession)) {
+    if (!forceRefresh && guestSessionRefreshedRef.current && !isGuestSessionExpired(currentSession)) {
       return currentSession;
     }
-
-    try {
-      const response = await fetch(getAppUrl("/api/guest-session"), {
-        method: "POST",
-      });
-      if (!response.ok) {
-        return null;
-      }
-
-      const session = await response.json() as GuestSession;
-      writeGuestSession(session);
-      return session;
-    } catch {
-      return null;
+    if (guestSessionRequestRef.current) {
+      return guestSessionRequestRef.current;
     }
+
+    const request = (async () => {
+      try {
+        const response = await fetch(getAppUrl("/api/guest-session"), {
+          method: "POST",
+        });
+        if (!response.ok) {
+          return !isGuestSessionExpired(currentSession) ? currentSession : null;
+        }
+
+        const session = await response.json() as GuestSession;
+        writeGuestSession(session);
+        return session;
+      } catch {
+        return !isGuestSessionExpired(currentSession) ? currentSession : null;
+      } finally {
+        guestSessionRefreshedRef.current = true;
+        guestSessionRequestRef.current = null;
+      }
+    })();
+
+    guestSessionRequestRef.current = request;
+    return request;
   }
 
   const activeConversation = useMemo(
@@ -119,11 +132,15 @@ export function useChatSession() {
 
   useEffect(() => {
     if (!guestMode) {
+      guestSessionRefreshedRef.current = false;
+      guestSessionRequestRef.current = null;
       setAuthModalOpen(false);
       return;
     }
 
-    void ensureGuestSession();
+    guestSessionRefreshedRef.current = false;
+    guestSessionRequestRef.current = null;
+    void ensureGuestSession(true);
   }, [guestMode]);
 
   function handleModelChange(nextModelId: string) {

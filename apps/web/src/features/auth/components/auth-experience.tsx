@@ -135,8 +135,11 @@ export function AuthExperience({ variant = "page", onAuthenticated, onDismiss }:
         </CardHeader>
         <CardContent>
           <form className="space-y-3" onSubmit={login}>
-            <Input placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <label className="sr-only" htmlFor="login-email">Email</label>
+            <Input id="login-email" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <label className="sr-only" htmlFor="login-password">Password</label>
             <Input
+              id="login-password"
               placeholder="Password"
               type="password"
               value={password}
@@ -156,9 +159,13 @@ export function AuthExperience({ variant = "page", onAuthenticated, onDismiss }:
         </CardHeader>
         <CardContent>
           <form className="space-y-3" onSubmit={register}>
-            <Input placeholder="Name" value={name} onChange={(event) => setName(event.target.value)} />
-            <Input placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <label className="sr-only" htmlFor="register-name">Name</label>
+            <Input id="register-name" placeholder="Name" value={name} onChange={(event) => setName(event.target.value)} />
+            <label className="sr-only" htmlFor="register-email">Email</label>
+            <Input id="register-email" placeholder="Email" value={email} onChange={(event) => setEmail(event.target.value)} />
+            <label className="sr-only" htmlFor="register-password">Password</label>
             <Input
+              id="register-password"
               placeholder="Password"
               type="password"
               value={password}

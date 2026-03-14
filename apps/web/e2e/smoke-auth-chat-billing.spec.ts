@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 
 import { createSession, seedAuthSession } from "./fixtures/auth";
 
-async function mockBrowserSignup(page: Page, fallbackEmail: string) {
+async function mockBrowserSignup(page: Page) {
   await page.route("**/auth/v1/signup", async (route) => {
     const method = route.request().method();
     if (method === "OPTIONS") {
@@ -19,6 +19,16 @@ async function mockBrowserSignup(page: Page, fallbackEmail: string) {
     }
 
     const payload = route.request().postDataJSON() as { email?: string; options?: { data?: { name?: string } } } | null;
+    if (!payload?.email) {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ error: "Expected signup email in request payload" }),
+      });
+      return;
+    }
+
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -30,7 +40,7 @@ async function mockBrowserSignup(page: Page, fallbackEmail: string) {
         refresh_token: "e2e_mock_refresh_token",
         user: {
           id: "e2e_mock_user_id",
-          email: payload?.email ?? fallbackEmail,
+          email: payload.email,
           user_metadata: { name: payload?.options?.data?.name ?? "E2E UI User" },
         },
       }),
@@ -66,7 +76,7 @@ test("registering from the locked-model modal unlocks paid models in place", asy
   const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const email = `e2e_web_smoke_modal_${unique}@example.com`;
 
-  await mockBrowserSignup(page, email);
+  await mockBrowserSignup(page);
   await page.goto("/");
 
   await page.getByRole("combobox", { name: "Model" }).click();

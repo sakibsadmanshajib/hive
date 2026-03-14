@@ -2,7 +2,7 @@
 
 Source of truth for the Supabase CLI project: `supabase/migrations`
 
-The copies under `apps/api/supabase/migrations` are app-local references. Local bootstrap, CI smoke, and `npx supabase db reset --yes` execute the root `supabase/migrations/` directory, not this folder.
+There are no app-scoped canonical SQL files in this folder anymore. Local bootstrap, CI smoke, and `npx supabase db reset --yes` execute the root `supabase/migrations/` directory.
 
 Current CLI migration order:
 

@@ -1,5 +1,10 @@
 ## Goal
 
+## Status
+
+- `APPROVED`
+- Implementation may proceed because explicit maintainer approval was recorded in chat on `2026-03-13`.
+
 Complete the remaining issue `#19` product flow on `/` by showing paid chat models as locked for guests, opening a dismissible combined auth modal when a locked model is chosen, and unlocking paid models in place after authentication.
 
 ## Assumptions
@@ -11,31 +16,31 @@ Complete the remaining issue `#19` product flow on `/` by showing paid chat mode
 
 ## Plan
 
-1. Files: [apps/web/test/chat-guest-mode.test.tsx](/home/sakib/hive/apps/web/test/chat-guest-mode.test.tsx), [apps/web/test/chat-auth-gate.test.tsx](/home/sakib/hive/apps/web/test/chat-auth-gate.test.tsx)
+1. Files: `apps/web/test/chat-guest-mode.test.tsx`, `apps/web/test/chat-auth-gate.test.tsx`
    Change: add failing web tests for guest-visible locked paid models, locked-model click opening an auth modal, and dismissing the modal without losing guest chat capability.
    Verify: `pnpm --filter @hive/web exec vitest run test/chat-guest-mode.test.tsx test/chat-auth-gate.test.tsx`
 
-2. Files: [apps/web/src/features/chat/use-chat-session.ts](/home/sakib/hive/apps/web/src/features/chat/use-chat-session.ts)
+2. Files: `apps/web/src/features/chat/use-chat-session.ts`
    Change: replace the bare `string[]` model option state with richer chat model metadata and derive guest locked-state behavior from `costType`.
    Verify: `pnpm --filter @hive/web exec vitest run test/chat-guest-mode.test.tsx`
 
-3. Files: [apps/web/src/features/chat/components/message-composer.tsx](/home/sakib/hive/apps/web/src/features/chat/components/message-composer.tsx)
+3. Files: `apps/web/src/features/chat/components/message-composer.tsx`
    Change: update the model picker UI to render locked paid models with `Locked` and `Requires account and credits`, and route guest clicks on locked models into an auth-modal open action instead of a model switch.
    Verify: `pnpm --filter @hive/web exec vitest run test/chat-guest-mode.test.tsx test/chat-polish.test.tsx`
 
-4. Files: [apps/web/src/app/auth/page.tsx](/home/sakib/hive/apps/web/src/app/auth/page.tsx), new files under `/home/sakib/hive/apps/web/src/features/auth/components/`
+4. Files: `apps/web/src/app/auth/page.tsx`, new files under `apps/web/src/features/auth/components/`
    Change: extract the current combined auth form logic into reusable modal-friendly components without breaking the existing `/auth` page.
    Verify: `pnpm --filter @hive/web exec vitest run test/auth-page.test.tsx`
 
-5. Files: [apps/web/src/app/page.tsx](/home/sakib/hive/apps/web/src/app/page.tsx), new auth modal component files under `/home/sakib/hive/apps/web/src/features/auth/components/`
+5. Files: `apps/web/src/app/page.tsx`, new auth modal component files under `apps/web/src/features/auth/components/`
    Change: mount a dismissible combined auth modal on `/`, open it from locked-model selection, and close it after successful auth while preserving the active guest conversation.
    Verify: `pnpm --filter @hive/web exec vitest run test/chat-guest-mode.test.tsx test/chat-auth-gate.test.tsx test/supabase-auth-sync.test.tsx`
 
-6. Files: [apps/web/src/features/chat/use-chat-session.ts](/home/sakib/hive/apps/web/src/features/chat/use-chat-session.ts), [apps/web/test/chat-guest-mode.test.tsx](/home/sakib/hive/apps/web/test/chat-guest-mode.test.tsx)
+6. Files: `apps/web/src/features/chat/use-chat-session.ts`, `apps/web/test/chat-guest-mode.test.tsx`
    Change: refresh model availability after auth success so paid models unlock in place without navigating away from `/`.
    Verify: `pnpm --filter @hive/web exec vitest run test/chat-guest-mode.test.tsx test/supabase-auth-sync.test.tsx`
 
-7. Files: [README.md](/home/sakib/hive/README.md), [CHANGELOG.md](/home/sakib/hive/CHANGELOG.md), [docs/architecture/system-architecture.md](/home/sakib/hive/docs/architecture/system-architecture.md)
+7. Files: `README.md`, `CHANGELOG.md`, `docs/architecture/system-architecture.md`
    Change: document the locked-model guest upsell behavior, combined auth modal on `/`, and the fact that this completes the remaining issue `#19` conversion UX without implementing issue `#57`.
    Verify: `pnpm --filter @hive/web test`
 

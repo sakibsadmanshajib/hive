@@ -10,7 +10,7 @@
 
 ---
 
-### Task 1: Define failing API tests for guest chat access policy
+## Task 1: Define failing API tests for guest chat access policy
 
 **Files:**
 - Create: `apps/api/test/routes/guest-chat-route.test.ts`
@@ -34,7 +34,7 @@ Add or update a route test so unauthenticated calls to `/v1/chat/completions` st
 
 Verify: `pnpm --filter @hive/api exec vitest run apps/api/test/routes/guest-chat-route.test.ts apps/api/test/routes/chat-completions-route.test.ts`
 
-### Task 2: Add model cost metadata and guest-access policy helpers
+## Task 2: Add model cost metadata and guest-access policy helpers
 
 **Files:**
 - Modify: `apps/api/src/domain/types.ts`
@@ -69,7 +69,7 @@ Add methods such as:
 
 Verify: `pnpm --filter @hive/api exec vitest run apps/api/test/domain/model-service.test.ts`
 
-### Task 3: Implement guest chat execution in the API without credit consumption
+## Task 3: Implement guest chat execution in the API without credit consumption
 
 **Files:**
 - Modify: `apps/api/src/domain/ai-service.ts`
@@ -100,7 +100,7 @@ If no model is provided, default to a free chat model.
 
 Verify: `pnpm --filter @hive/api exec vitest run apps/api/test/routes/guest-chat-route.test.ts apps/api/test/routes/chat-completions-route.test.ts`
 
-### Task 4: Expose model metadata needed by the web app
+## Task 4: Expose model metadata needed by the web app
 
 **Files:**
 - Modify: `apps/api/src/routes/models.ts`
@@ -127,7 +127,7 @@ Verify that `/v1/models` returns the new metadata and remains public-safe.
 
 Verify: `pnpm --filter @hive/api exec vitest run apps/api/test/routes/models-route.test.ts`
 
-### Task 5: Make `/` guest-accessible in the web app
+## Task 5: Make `/` guest-accessible in the web app
 
 **Files:**
 - Inspect/Modify: `apps/web/src/app/page.tsx`
@@ -157,7 +157,7 @@ When a session exists, continue loading the broader model set and authenticated 
 
 Verify: `pnpm --filter @hive/web exec vitest run apps/web/test/chat-auth-gate.test.tsx apps/web/test/chat-guest-mode.test.tsx`
 
-### Task 6: Wire guest chat requests from the web app
+## Task 6: Wire guest chat requests from the web app
 
 **Files:**
 - Inspect/Modify: `apps/web/src/features/chat/use-chat-session.ts`
@@ -177,7 +177,7 @@ When a session exists, keep using the authenticated chat path.
 
 Verify: `pnpm --filter @hive/web exec vitest run apps/web/test/chat-guest-mode.test.tsx`
 
-### Task 7: Update docs and run required verification
+## Task 7: Update docs and run required verification
 
 **Files:**
 - Modify: `README.md`

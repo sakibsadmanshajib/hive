@@ -20,6 +20,9 @@ concurrency:
   group: web-e2e-smoke-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  SUPABASE_CLI_VERSION: 2.78.1
+
 jobs:
   smoke:
     name: Auth Chat Billing smoke
@@ -58,16 +61,16 @@ jobs:
         run: pnpm --filter @hive/web exec playwright install --with-deps chromium
 
       - name: Start local Supabase CLI stack
-        run: npx supabase start
+        run: npx supabase@${SUPABASE_CLI_VERSION} start
 
       - name: Reset local Supabase schema from repo migrations
-        run: npx supabase db reset --yes
+        run: npx supabase@${SUPABASE_CLI_VERSION} db reset --yes
 
       - name: Export local Supabase env
         shell: bash
         run: |
           set -a
-          source <(npx supabase status -o env)
+          source <(npx supabase@${SUPABASE_CLI_VERSION} status -o env)
           set +a
           echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
           echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
@@ -122,4 +125,4 @@ jobs:
 
       - name: Stop local Supabase CLI stack
         if: always()
-        run: npx supabase stop --no-backup
+        run: npx supabase@${SUPABASE_CLI_VERSION} stop --no-backup

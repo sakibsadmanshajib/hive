@@ -1,5 +1,10 @@
 # Issue 19 Guest Home Free-Model Access Design
 
+> APPROVED
+> Approver: repository maintainer (chat approval)
+> Approval date: 2026-03-13
+> Approval artifact: maintainer replied `yes` to each design section and approved execution in the implementation thread before work began.
+
 ## Goal
 
 Make `/` a guest-first chat entry in the web app while preserving authenticated API access rules and ensuring guest traffic can use only models that are explicitly free.

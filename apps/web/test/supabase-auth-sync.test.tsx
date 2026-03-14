@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSessionMock = vi.fn();
 const onAuthStateChangeMock = vi.fn();
@@ -23,6 +23,11 @@ describe("Supabase auth session sync", () => {
     window.localStorage.clear();
     process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-supabase-anon-key";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("writes refreshed Supabase sessions into the custom auth store", async () => {

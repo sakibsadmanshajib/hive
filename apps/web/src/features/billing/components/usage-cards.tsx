@@ -19,12 +19,12 @@ export type UsageSummary = {
     requests: number;
     credits: number;
   }>;
-  byChannel: Array<{
+  byChannel?: Array<{
     key: string;
     requests: number;
     credits: number;
   }>;
-  byApiKey: Array<{
+  byApiKey?: Array<{
     key: string;
     requests: number;
     credits: number;
@@ -72,8 +72,8 @@ export function UsageCards({ snapshot, usageSummary, usageCount }: UsageCardsPro
   const activeKeys = snapshot ? snapshot.api_keys.filter((key) => key.status === "active").length : 0;
   const topModel = usageSummary?.byModel[0];
   const topEndpoint = usageSummary?.byEndpoint[0];
-  const topChannel = usageSummary?.byChannel[0];
-  const topApiKey = usageSummary?.byApiKey[0];
+  const topChannel = usageSummary?.byChannel?.[0];
+  const topApiKey = usageSummary?.byApiKey?.[0];
 
   if (!snapshot) {
     return (

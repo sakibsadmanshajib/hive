@@ -77,6 +77,7 @@ set -a
 source <(npx supabase status -o env)
 set +a
 export WEB_INTERNAL_GUEST_TOKEN=dev-web-guest-token
+export E2E_SUPABASE_ANON_KEY="$ANON_KEY"
 ```
 
 Rebuild and start the Docker-local stack from the current working tree:

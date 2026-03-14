@@ -1,9 +1,16 @@
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === "127.0.0.1"
+    || hostname === "localhost"
+    || hostname === "::1"
+    || hostname === "[::1]"
+    || hostname === "0:0:0:0:0:0:0:1"
+    || hostname === "[0:0:0:0:0:0:0:1]";
+}
+
 function normalizeComparableOrigin(value: string): string | null {
   try {
     const url = new URL(value);
-    const hostname = url.hostname === "127.0.0.1" || url.hostname === "localhost"
-      ? "loopback"
-      : url.hostname;
+    const hostname = isLoopbackHostname(url.hostname) ? "loopback" : url.hostname;
     return `${url.protocol}//${hostname}${url.port ? `:${url.port}` : ""}`;
   } catch {
     return null;

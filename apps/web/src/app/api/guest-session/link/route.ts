@@ -3,6 +3,31 @@ import { getServerApiBase } from "../../../../lib/api";
 import { isSameOriginBrowserRequest } from "../request";
 import { parseGuestSession } from "../session";
 
+async function buildProxyResponse(response: Response): Promise<NextResponse> {
+  const contentType = response.headers?.get?.("content-type") ?? "";
+  if (typeof response.text !== "function") {
+    if (typeof response.json === "function") {
+      return NextResponse.json(await response.json(), { status: response.status });
+    }
+    return NextResponse.json({}, { status: response.status });
+  }
+  const rawBody = await response.text();
+
+  if (contentType.includes("application/json")) {
+    try {
+      const json = rawBody ? JSON.parse(rawBody) : {};
+      return NextResponse.json(json, { status: response.status });
+    } catch {
+      return NextResponse.json({ error: rawBody || "invalid upstream response" }, { status: response.status });
+    }
+  }
+
+  return new NextResponse(rawBody, {
+    status: response.status,
+    headers: contentType ? { "content-type": contentType } : undefined,
+  });
+}
+
 export async function POST(request: Request) {
   const guestToken = process.env.WEB_INTERNAL_GUEST_TOKEN;
   if (!guestToken) {
@@ -31,6 +56,5 @@ export async function POST(request: Request) {
     },
   });
 
-  const body = await response.json();
-  return NextResponse.json(body, { status: response.status });
+  return buildProxyResponse(response);
 }

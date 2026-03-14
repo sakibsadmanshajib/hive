@@ -71,5 +71,6 @@ export function parseGuestSession(cookieHeader: string | null, secret: string): 
 }
 
 export function buildGuestSessionCookie(cookieValue: string, expiresAt: string): string {
-  return `${COOKIE_NAME}=${cookieValue}; Path=/; HttpOnly; SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}`;
+  const secure = process.env.NODE_ENV === "production" ? " Secure;" : "";
+  return `${COOKIE_NAME}=${cookieValue}; Path=/; HttpOnly;${secure} SameSite=Lax; Expires=${new Date(expiresAt).toUTCString()}`;
 }

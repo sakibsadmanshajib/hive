@@ -30,6 +30,9 @@ create table if not exists public.guest_user_links (
 create index if not exists guest_usage_events_guest_created_idx
   on public.guest_usage_events (guest_id, created_at desc);
 
+create index if not exists guest_sessions_expires_at_idx
+  on public.guest_sessions (expires_at);
+
 create index if not exists guest_user_links_user_linked_idx
   on public.guest_user_links (user_id, linked_at desc);
 

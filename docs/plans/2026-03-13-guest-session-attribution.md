@@ -10,7 +10,9 @@
 
 ---
 
-### Task 1: Define failing tests for guest-session bootstrap and proxy requirements
+## Tasks
+
+## Task 1: Define failing tests for guest-session bootstrap and proxy requirements
 
 **Files:**
 - Modify: `apps/web/test/guest-chat-route.test.ts`
@@ -30,7 +32,7 @@ Guest chat route should reject when the signed guest session is missing or inval
 
 Verify: `pnpm --filter @hive/web exec vitest run test/guest-chat-route.test.ts test/guest-session.test.ts`
 
-### Task 2: Define failing API tests and persistence expectations for trusted guest identity
+## Task 2: Define failing API tests and persistence expectations for trusted guest identity
 
 **Files:**
 - Modify: `apps/api/test/routes/guest-chat-route.test.ts`
@@ -50,7 +52,7 @@ Require dedicated Supabase-backed guest attribution storage rather than storing 
 
 Verify: `pnpm --filter @hive/api exec vitest run test/routes/guest-chat-route.test.ts test/domain/guest-attribution.test.ts`
 
-### Task 3: Add Supabase schema and runtime support for guest attribution
+## Task 3: Add Supabase schema and runtime support for guest attribution
 
 **Files:**
 - Create: `apps/api/supabase/migrations/<timestamp>_guest_attribution.sql`
@@ -79,7 +81,7 @@ Implement reads/writes for:
 
 Verify: `pnpm --filter @hive/api exec vitest run test/domain/guest-attribution.test.ts`
 
-### Task 4: Implement guest-session bootstrap in the web app
+## Task 4: Implement guest-session bootstrap in the web app
 
 **Files:**
 - Create: `apps/web/src/app/api/guest-session/route.ts`
@@ -102,7 +104,7 @@ Mirror non-sensitive guest session data into browser storage for UI and analytic
 
 Verify: `pnpm --filter @hive/web exec vitest run test/guest-session.test.ts`
 
-### Task 5: Require guest session on the web guest chat route
+## Task 5: Require guest session on the web guest chat route
 
 **Files:**
 - Modify: `apps/web/src/app/api/chat/guest/route.ts`
@@ -130,7 +132,7 @@ The guest-facing home flow should ensure a guest session exists before first gue
 
 Verify: `pnpm --filter @hive/web exec vitest run test/guest-chat-route.test.ts test/chat-guest-mode.test.tsx`
 
-### Task 6: Enforce trusted forwarded guest identity in the API and record guest usage
+## Task 6: Enforce trusted forwarded guest identity in the API and record guest usage
 
 **Files:**
 - Create/Modify: guest attribution runtime/persistence under `apps/api/src/runtime/`
@@ -151,7 +153,7 @@ Write guest usage into `guest_usage_events`, not authenticated `usage_events`.
 
 Verify: `pnpm --filter @hive/api exec vitest run test/routes/guest-chat-route.test.ts test/domain/guest-attribution.test.ts`
 
-### Task 7: Link guest identity to authenticated users
+## Task 7: Link guest identity to authenticated users
 
 **Files:**
 - Modify: relevant auth/user route or runtime wiring in `apps/api/src/routes/` and `apps/api/src/runtime/`
@@ -169,7 +171,7 @@ Ensure the linkage is queryable and stable.
 
 Verify: `pnpm --filter @hive/api exec vitest run test/domain/guest-attribution.test.ts`
 
-### Task 8: Update docs and run full verification
+## Task 8: Update docs and run full verification
 
 **Files:**
 - Modify: `README.md`

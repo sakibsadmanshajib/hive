@@ -1,5 +1,11 @@
 # Issue 19 Guest Home Conversion Upsell Design
 
+## APPROVED
+
+- Approver: repository maintainer (chat approval)
+- Approval date: 2026-03-13
+- Approval artifact: maintainer approved the design in chat before implementation
+
 ## Goal
 
 Complete the remaining product scope for issue `#19` by turning the guest-first home into an explicit conversion surface: guests can keep chatting with free models, see paid models as locked, and authenticate through a dismissible modal without leaving `/`.
@@ -35,7 +41,7 @@ This keeps the conversion path visible without forcing guests off the chat surfa
 
 - Guests see both free and paid chat models.
 - Free models behave normally.
-- Paid models render as locked and are not selectable in guest mode.
+- Paid models render as locked and are not selectable as the active model in guest mode, but still clickable to launch the combined auth modal.
 - Locked entries show a small status label and a short explanation.
 
 ### Auth prompt

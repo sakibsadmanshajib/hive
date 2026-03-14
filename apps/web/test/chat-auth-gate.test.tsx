@@ -2,8 +2,8 @@
 
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { writeAuthSession } from "../src/features/auth/auth-session";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
 
 vi.mock("../src/lib/supabase-client", () => ({
   useSupabaseAuthSessionSync: () => undefined,
@@ -11,6 +11,7 @@ vi.mock("../src/lib/supabase-client", () => ({
 
 const pushMock = vi.fn();
 const replaceMock = vi.fn();
+const originalPublicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -27,6 +28,17 @@ describe("chat auth gate", () => {
     window.localStorage.clear();
     pushMock.mockReset();
     replaceMock.mockReset();
+  });
+
+  afterEach(() => {
+    clearAuthSession();
+    if (originalPublicApiBaseUrl === undefined) {
+      delete process.env.NEXT_PUBLIC_API_BASE_URL;
+    } else {
+      process.env.NEXT_PUBLIC_API_BASE_URL = originalPublicApiBaseUrl;
+    }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("renders chat workspace on root for unauthenticated users", async () => {

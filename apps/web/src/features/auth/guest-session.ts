@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 
 export type GuestSession = {
   guestId: string;
@@ -13,6 +13,17 @@ const listeners = new Set<() => void>();
 let cachedGuestSession: GuestSession | null | undefined;
 let storageListenerAttached = false;
 
+function isGuestSession(value: unknown): value is GuestSession {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.guestId === "string"
+    && typeof candidate.issuedAt === "string"
+    && typeof candidate.expiresAt === "string";
+}
+
 function readStoredGuestSession(): GuestSession | null {
   if (typeof window === "undefined") {
     return null;
@@ -24,7 +35,8 @@ function readStoredGuestSession(): GuestSession | null {
   }
 
   try {
-    return JSON.parse(rawValue) as GuestSession;
+    const parsed = JSON.parse(rawValue) as unknown;
+    return isGuestSession(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -101,16 +113,5 @@ export function subscribeGuestSession(listener: () => void): () => void {
 }
 
 export function useGuestSession(): GuestSession | null {
-  const [session, setSession] = useState<GuestSession | null>(null);
-
-  useEffect(() => {
-    const syncSession = () => {
-      setSession(readGuestSession());
-    };
-
-    syncSession();
-    return subscribeGuestSession(syncSession);
-  }, []);
-
-  return session;
+  return useSyncExternalStore(subscribeGuestSession, readGuestSession, () => null);
 }
