@@ -3,7 +3,7 @@ import { toast } from "sonner";
 
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
-import { useAuthSession } from "../auth/auth-session";
+import { useAuthSessionState } from "../auth/auth-session";
 import {
   isGuestSessionExpired,
   readGuestSession,
@@ -21,20 +21,22 @@ export type ChatModelOption = {
   lockReason?: string;
 };
 
+const DEFAULT_GUEST_MODEL_OPTIONS: ChatModelOption[] = [
+  { id: "guest-free", capability: "chat", costType: "free", locked: false },
+];
+
 export function useChatSession() {
   useSupabaseAuthSessionSync();
-  const authSession = useAuthSession();
+  const { ready: authReady, session: authSession } = useAuthSessionState();
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([
-    { id: "guest-free", capability: "chat", costType: "free", locked: false },
-  ]);
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>(DEFAULT_GUEST_MODEL_OPTIONS);
   const [model, setModel] = useState("guest-free");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const accessToken = authSession?.accessToken ?? "";
-  const guestMode = accessToken.trim().length === 0;
+  const guestMode = authReady && accessToken.trim().length === 0;
   const guestSessionRefreshedRef = useRef(false);
   const guestSessionRequestRef = useRef<Promise<GuestSession | null> | null>(null);
 
@@ -81,10 +83,28 @@ export function useChatSession() {
   useEffect(() => {
     let cancelled = false;
 
+    if (!authReady) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const resetGuestSafeModels = () => {
+      if (cancelled || !guestMode) {
+        return;
+      }
+
+      setModelOptions(DEFAULT_GUEST_MODEL_OPTIONS);
+      setModel("guest-free");
+    };
+
+    resetGuestSafeModels();
+
     async function loadModels() {
       try {
         const response = await fetch(`${getApiBase()}/v1/models`);
         if (!response.ok) {
+          resetGuestSafeModels();
           return;
         }
 
@@ -119,7 +139,7 @@ export function useChatSession() {
           });
         }
       } catch {
-        // Keep built-in model defaults if the catalog request fails.
+        resetGuestSafeModels();
       }
     }
 
@@ -128,9 +148,13 @@ export function useChatSession() {
     return () => {
       cancelled = true;
     };
-  }, [guestMode]);
+  }, [authReady, guestMode]);
 
   useEffect(() => {
+    if (!authReady) {
+      return;
+    }
+
     if (!guestMode) {
       guestSessionRefreshedRef.current = false;
       guestSessionRequestRef.current = null;
@@ -141,7 +165,7 @@ export function useChatSession() {
     guestSessionRefreshedRef.current = false;
     guestSessionRequestRef.current = null;
     void ensureGuestSession(true);
-  }, [guestMode]);
+  }, [authReady, guestMode]);
 
   function handleModelChange(nextModelId: string) {
     const nextModel = modelOptions.find((option) => option.id === nextModelId);
@@ -170,7 +194,7 @@ export function useChatSession() {
   }
 
   async function sendMessage() {
-    if (!activeConversation || !prompt.trim()) {
+    if (!authReady || !activeConversation || !prompt.trim()) {
       return;
     }
 

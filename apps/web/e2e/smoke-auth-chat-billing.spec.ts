@@ -67,7 +67,7 @@ test("unauthenticated root stays in guest mode, guest chat works, and locked pai
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
   await expect(dialog.getByText("Unlock paid models")).toBeVisible();
-  await page.mouse.click(10, 10);
+  await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
   await expect(page.getByText("Guest mode is active. Sign in to unlock paid models and top up credits.")).toBeVisible();
 });
@@ -84,9 +84,9 @@ test("registering from the locked-model modal unlocks paid models in place", asy
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
-  await dialog.getByPlaceholder("Name").fill("E2E Modal User");
-  await dialog.getByPlaceholder("Email").nth(1).fill(email);
-  await dialog.getByPlaceholder("Password").nth(1).fill("password123");
+  await dialog.locator("#register-name").fill("E2E Modal User");
+  await dialog.locator("#register-email").fill(email);
+  await dialog.locator("#register-password").fill("password123");
   await dialog.getByRole("button", { name: "Create account" }).scrollIntoViewIfNeeded();
   await dialog.getByRole("button", { name: "Create account" }).click();
 

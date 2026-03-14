@@ -1,5 +1,11 @@
 # Issue 19 Guest Home Free-Model Access Implementation Plan
 
+## APPROVED
+
+- Approver: repository maintainer (chat approval)
+- Approval date: 2026-03-13
+- Approval artifact: maintainer approved the plan flow in chat before execution
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make `/` guest-accessible in the web app, add model pricing metadata with `costType`, allow anonymous web chat only for free models, and keep direct API chat access authenticated.

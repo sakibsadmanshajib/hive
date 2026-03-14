@@ -3,6 +3,8 @@ import { getServerApiBase } from "../../../../lib/api";
 import { isSameOriginBrowserRequest } from "../request";
 import { parseGuestSession } from "../session";
 
+const INTERNAL_REQUEST_TIMEOUT_MS = 5_000;
+
 async function buildProxyResponse(response: Response): Promise<NextResponse> {
   const contentType = response.headers?.get?.("content-type") ?? "";
   if (typeof response.text !== "function") {
@@ -47,14 +49,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing guest session" }, { status: 401 });
   }
 
-  const response = await fetch(`${getServerApiBase()}/v1/internal/guest/link`, {
-    method: "POST",
-    headers: {
-      authorization,
-      "x-web-guest-token": guestToken,
-      "x-guest-id": guestSession.guestId,
-    },
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), INTERNAL_REQUEST_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await fetch(`${getServerApiBase()}/v1/internal/guest/link`, {
+      method: "POST",
+      headers: {
+        authorization,
+        "x-web-guest-token": guestToken,
+        "x-guest-id": guestSession.guestId,
+      },
+      signal: controller.signal,
+    });
+  } catch {
+    return NextResponse.json({ error: "guest session link unavailable" }, { status: 502 });
+  } finally {
+    clearTimeout(timeout);
+  }
 
   return buildProxyResponse(response);
 }

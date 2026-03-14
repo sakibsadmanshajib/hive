@@ -6,7 +6,8 @@ create table if not exists public.guest_sessions (
   updated_at timestamptz not null default now(),
   expires_at timestamptz not null,
   last_seen_at timestamptz,
-  last_seen_ip text
+  last_seen_ip text,
+  constraint guest_sessions_expires_after_created check (expires_at > created_at)
 );
 
 create table if not exists public.guest_usage_events (
@@ -16,7 +17,8 @@ create table if not exists public.guest_usage_events (
   model text not null,
   credits integer not null default 0,
   ip_address text,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  constraint guest_usage_events_credits_nonnegative check (credits >= 0)
 );
 
 create table if not exists public.guest_user_links (

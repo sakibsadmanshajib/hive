@@ -3,6 +3,8 @@ import { getServerApiBase } from "../../../lib/api";
 import { isSameOriginBrowserRequest, readClientIp } from "./request";
 import { buildGuestSessionCookie, createGuestSession } from "./session";
 
+const INTERNAL_REQUEST_TIMEOUT_MS = 5_000;
+
 export async function POST(request: Request) {
   const secret = process.env.WEB_INTERNAL_GUEST_TOKEN;
   if (!secret) {
@@ -14,18 +16,29 @@ export async function POST(request: Request) {
 
   const { cookieValue, session } = createGuestSession(secret);
   const clientIp = readClientIp(request);
-  const persisted = await fetch(`${getServerApiBase()}/v1/internal/guest/session`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-web-guest-token": secret,
-    },
-    body: JSON.stringify({
-      guestId: session.guestId,
-      expiresAt: session.expiresAt,
-      ...(clientIp ? { lastSeenIp: clientIp } : {}),
-    }),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), INTERNAL_REQUEST_TIMEOUT_MS);
+  let persisted: Response;
+  try {
+    persisted = await fetch(`${getServerApiBase()}/v1/internal/guest/session`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-web-guest-token": secret,
+      },
+      body: JSON.stringify({
+        guestId: session.guestId,
+        expiresAt: session.expiresAt,
+        ...(clientIp ? { lastSeenIp: clientIp } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    console.error("guest session bootstrap failed", error);
+    return NextResponse.json({ error: "guest chat unavailable" }, { status: 502 });
+  } finally {
+    clearTimeout(timeout);
+  }
   if (!persisted.ok) {
     return NextResponse.json({ error: "guest chat unavailable" }, { status: 502 });
   }

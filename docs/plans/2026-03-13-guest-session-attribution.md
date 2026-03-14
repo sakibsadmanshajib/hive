@@ -1,5 +1,11 @@
 # Guest Session Attribution Implementation Plan
 
+## APPROVED
+
+- Approver: repository maintainer (chat approval)
+- Approval date: 2026-03-13
+- Approval artifact: maintainer approved the design and implementation sequence in chat before execution
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add a server-trusted guest session with a mirrored browser-visible guest object, persist guest attribution data, and link guest usage to later authenticated accounts for conversion analysis.
@@ -55,7 +61,7 @@ Verify: `pnpm --filter @hive/api exec vitest run test/routes/guest-chat-route.te
 ## Task 3: Add Supabase schema and runtime support for guest attribution
 
 **Files:**
-- Create: `apps/api/supabase/migrations/<timestamp>_guest_attribution.sql`
+- Create: `supabase/migrations/<timestamp>_guest_attribution.sql`
 - Create/Modify: guest attribution runtime store under `apps/api/src/runtime/`
 - Test: `apps/api/test/domain/guest-attribution.test.ts`
 

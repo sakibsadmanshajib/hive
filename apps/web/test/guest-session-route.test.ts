@@ -130,4 +130,24 @@ describe("guest session bootstrap route", () => {
     await expect(response.json()).resolves.toEqual({ error: "forbidden" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("returns 502 when the internal guest-session persistence call fails", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await POST(
+      new Request("http://localhost/api/guest-session", {
+        method: "POST",
+        headers: {
+          origin: "http://localhost",
+          referer: "http://localhost/",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "guest chat unavailable" });
+    expect(consoleErrorSpy).toHaveBeenCalled();
+  });
 });

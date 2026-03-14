@@ -132,4 +132,25 @@ describe("guest session link route", () => {
     await expect(response.json()).resolves.toEqual({ error: "forbidden" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it("returns 502 when the internal guest-link request fails", async () => {
+    const { cookieValue } = createGuestSession("test-web-token", new Date("2026-03-13T00:00:00.000Z"));
+    const fetchMock = vi.fn().mockRejectedValue(new Error("network down"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new Request("http://localhost/api/guest-session/link", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer access-token",
+          origin: "http://localhost",
+          referer: "http://localhost/",
+          cookie: `hive_guest_session=${cookieValue}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(502);
+    await expect(response.json()).resolves.toEqual({ error: "guest session link unavailable" });
+  });
 });

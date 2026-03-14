@@ -72,6 +72,8 @@ Do not rerun `pnpm bootstrap:local` as a routine smoke step unless you explicitl
 Load the live local Supabase values used by the Docker-local stack:
 
 ```bash
+npx supabase start
+npx supabase status
 set -a
 # shellcheck disable=SC1090
 source <(npx supabase status -o env)

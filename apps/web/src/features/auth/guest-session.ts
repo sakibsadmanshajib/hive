@@ -100,7 +100,8 @@ export function isGuestSessionExpired(session: GuestSession | null): boolean {
   if (!session) {
     return true;
   }
-  return Number.isNaN(Date.parse(session.expiresAt)) || Date.parse(session.expiresAt) <= Date.now();
+  const expiresAtMs = Date.parse(session.expiresAt);
+  return Number.isNaN(expiresAtMs) || expiresAtMs <= Date.now();
 }
 
 export function subscribeGuestSession(listener: () => void): () => void {

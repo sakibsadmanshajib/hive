@@ -316,6 +316,7 @@ Use `.env.example` as the template. Key variables:
 ### Core
 - `NODE_ENV`, `PORT`, `REDIS_URL`, `RATE_LIMIT_PER_MINUTE`
 - `ADMIN_STATUS_TOKEN`, `ALLOW_DEMO_PAYMENT_CONFIRM`, `ALLOW_DEV_API_KEY_PREFIX`
+- `WEB_INTERNAL_GUEST_TOKEN` — server-only shared secret for guest web chat and guest attribution proxying; `pnpm stack:dev` and the GitHub smoke workflow inject a local dev token, but base Compose, staging, and production must provide a real secret explicitly
 
 ### Supabase
 - `SUPABASE_URL` — Supabase API endpoint (default: `http://127.0.0.1:54321`)
@@ -436,6 +437,8 @@ The live Supabase CLI migration source of truth is `supabase/migrations/`:
 - `20260223000001_auth_user_tables.sql` — User profiles, roles, permissions, settings
 - `20260223000002_api_keys.sql` — Hashed API key metadata
 - `20260223000003_billing_tables.sql` — Credit accounts, ledger, payment intents/events
+- `20260223000004_billing_rpcs.sql` — Billing RPCs
+- `20260313052000_refund_credits_rpc.sql` — Refund credits RPC
 - `20260314000100_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events
 - `20260314000200_guest_attribution.sql` — Guest sessions, guest usage events, and guest-to-user links
 - `20260314000300_usage_reporting_channels.sql` — Usage event channel and stable API key attribution fields

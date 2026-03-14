@@ -7,6 +7,10 @@ const PUBLIC_ENV_KEYS = [
   "NEXT_PUBLIC_SUPABASE_URL",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY",
 ] as const;
+const originalPublicApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+const originalPublicSupabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const originalPublicSupabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const originalInternalApiBaseUrl = process.env.INTERNAL_API_BASE_URL;
 
 function clearPublicEnv() {
   for (const key of PUBLIC_ENV_KEYS) {
@@ -16,10 +20,26 @@ function clearPublicEnv() {
 
 afterEach(() => {
   vi.resetModules();
-  process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
-  process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321";
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-supabase-anon-key";
-  delete process.env.INTERNAL_API_BASE_URL;
+  if (originalPublicApiBaseUrl === undefined) {
+    delete process.env.NEXT_PUBLIC_API_BASE_URL;
+  } else {
+    process.env.NEXT_PUBLIC_API_BASE_URL = originalPublicApiBaseUrl;
+  }
+  if (originalPublicSupabaseUrl === undefined) {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+  } else {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = originalPublicSupabaseUrl;
+  }
+  if (originalPublicSupabaseAnonKey === undefined) {
+    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  } else {
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = originalPublicSupabaseAnonKey;
+  }
+  if (originalInternalApiBaseUrl === undefined) {
+    delete process.env.INTERNAL_API_BASE_URL;
+  } else {
+    process.env.INTERNAL_API_BASE_URL = originalInternalApiBaseUrl;
+  }
 });
 
 describe("public env access", () => {

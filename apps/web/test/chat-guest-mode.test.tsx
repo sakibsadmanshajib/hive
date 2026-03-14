@@ -192,6 +192,49 @@ describe("chat guest mode", () => {
     expect(screen.getByText(/guest mode only supports free models/i)).toBeInTheDocument();
   });
 
+  it("falls back to the built-in guest-safe model when the catalog request fails in guest mode", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.endsWith("/v1/models")) {
+        return {
+          ok: false,
+          json: async () => ({ error: "catalog unavailable" }),
+        };
+      }
+
+      if (url.endsWith("/api/guest-session")) {
+        return {
+          ok: true,
+          json: async () => ({
+            guestId: "guest_123",
+            issuedAt: "2026-03-13T00:00:00.000Z",
+            expiresAt: "2026-03-20T00:00:00.000Z",
+          }),
+        };
+      }
+
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "Guest reply" } }],
+        }),
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    const modelTrigger = (await screen.findAllByRole("combobox")).at(-1)!;
+    await waitFor(() => {
+      expect(modelTrigger).toHaveTextContent("guest-free");
+    });
+    fireEvent.keyDown(modelTrigger, { key: "ArrowDown" });
+
+    expect(screen.queryByRole("option", { name: /fast-chat/i })).not.toBeInTheDocument();
+  });
+
   it("unlocks paid models in place after authenticating from the modal", async () => {
     const fetchMock = createGuestFetchMock();
     signInWithPasswordMock.mockResolvedValue({
