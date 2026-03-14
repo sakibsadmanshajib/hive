@@ -20,6 +20,7 @@ This file is the canonical operating policy for coding agents in this repository
 - If execution or verification uncovers a durable repo-specific lesson that is likely to matter again, update `AGENTS.md` before completion so the lesson persists for future sessions.
 - This override rule does not permit committing secrets, tokens, or credentials, leaking protected internal data, or otherwise bypassing hard safety constraints around sensitive information.
 - Current persisted maintainer preference: worktrees are optional in this repository and should not be treated as mandatory for normal task execution.
+- Current persisted maintainer preference: use the Docker-local stack as the default development and verification environment for Hive; do not rely on standalone local app servers or alternate local ports as a normal workflow.
 
 ## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
 
@@ -60,6 +61,7 @@ Custom skills are located in the following paths. Read the `SKILL.md` in each sk
 | GitHub Review Reading | `.agents/skills/gh-reading-reviews/SKILL.md` | Read PR review comments, review summaries, and PR conversation comments |
 | GitHub Review Replies | `.agents/skills/gh-responding-to-reviews/SKILL.md` | Reply inside inline review threads with the correct endpoint |
 | GitHub PR Editing | `.agents/skills/gh-editing-prs/SKILL.md` | Inspect and edit PR metadata, including REST fallbacks for `gh pr edit` failures |
+| Docker-Local Smoke Validation | `.agents/skills/docker-local-smoke-validation/SKILL.md` | Verify Hive web auth/chat/billing changes against the rebuilt Docker-local stack on the standard origin |
 
 ## Commands First (Run These Often)
 
@@ -340,7 +342,7 @@ When touching auth/chat/billing/settings routes or related API integration:
 
 1. Install browser:
    - `pnpm --filter @hive/web exec playwright install chromium`
-2. Start stack and verify readiness.
+2. Start the Docker-local stack and verify readiness.
 3. Run smoke spec:
    - `pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts`
 
@@ -348,13 +350,25 @@ E2E environment variables:
 
 - `E2E_BASE_URL` (default `http://127.0.0.1:3000`)
 - `E2E_API_BASE_URL` (used by API fixtures)
+- `E2E_SUPABASE_ANON_KEY` (required for smoke cases that create real Supabase users programmatically)
 
 Auth/session lessons that must persist:
 
 - Do not clear the custom browser auth session just because `supabase.auth.getSession()` returns `null` on startup; that can erase seeded smoke/dev sessions before Supabase has established any browser session.
 - Only let Supabase-driven sign-out clear the mirrored custom auth session after the browser runtime has observed a real Supabase session.
 - For protected web routes, wait until client auth-session hydration is ready before redirecting to `/auth`, or valid local sessions can be bounced to the login page during initial render.
-- When verifying auth/chat/billing smoke flows, prefer a rebuilt production app (`pnpm --filter @hive/web build` + `next start`) over assuming `next dev` behavior matches production hydration and routing.
+- Guest-session bootstrap and guest-to-user link side effects must fail closed on browser/network errors and preserve retryability; do not let background guest-session fetches create unhandled runtime rejections.
+- For this repository, use the rebuilt Docker-local stack as the default development and verification environment for web changes; do not use standalone `next start`/alternate-port workflows as a normal substitute for Docker-local verification.
+- Smoke verification should run on the standard Docker-local origin `http://127.0.0.1:3000`; alternate verification ports can invalidate web-to-API behavior because the API CORS allowlist is origin-sensitive.
+- If a product change intentionally changes the home-route auth model or other smoke-covered behavior, update `apps/web/e2e/smoke-auth-chat-billing.spec.ts` in the same change; a stale smoke spec is a merge blocker, not an acceptable known failure.
+- Smoke coverage for guest-first `/` must send at least one real guest chat message, not just render the guest UI, so missing guest-session bootstrap or missing `WEB_INTERNAL_GUEST_TOKEN` is caught before merge.
+- Guest web chat must stay behind the web app boundary: browser traffic should hit a Next.js route, the API guest endpoint must require a server-only token, and the web route should reject non-same-origin requests before forwarding.
+- When guest chat is proxied through the web app, preserve guest rate limiting by forwarding the caller IP to the internal API route instead of keying all guests to the web server address.
+- When the API runs inside Docker, `OLLAMA_BASE_URL` must point at the Docker service hostname such as `http://ollama:11434`; `127.0.0.1` inside the API container points at the wrong process and makes Ollama appear unhealthy.
+- Keep `WEB_INTERNAL_GUEST_TOKEN` fail-closed in base Compose and deployed environments. Only local dev wrappers such as `pnpm stack:dev` and CI smoke should inject the disposable `dev-web-guest-token`.
+- The Supabase CLI uses the root `supabase/migrations/` directory as the live schema source of truth for local bootstrap and CI smoke. If smoke-relevant schema changes land only under `apps/api/supabase/migrations/`, the workflow is incomplete.
+- OpenAI-compatible contract requirements apply to the API product surface. The web chat product is a separate analytics/reporting pipeline and must be tagged `web`, while API-product traffic must be tagged `api` and should include a stable API key id when available.
+- If authenticated web chat still shares runtime endpoints with the public API temporarily, document that as an explicit gap instead of folding web traffic into API-business analytics.
 
 API key lifecycle lessons that must persist:
 
@@ -378,12 +392,12 @@ Primary CI: `.github/workflows/ci.yml`
 
 Web smoke workflow: `.github/workflows/web-e2e-smoke.yml`
 
-- Runs for PR changes under `apps/web/**`, `apps/api/**`, `docker-compose.yml`, and workflow file.
+- Runs for PR changes under `apps/web/**`, `apps/api/**`, `supabase/**`, `docker-compose.yml`, `.env.example`, and workflow file.
 - Uses Node `24` (same as primary CI) so pnpm cache keys can be reused across workflows.
 - Restores cached Playwright browsers from `~/.cache/ms-playwright` before install.
 - Uses `pnpm install --prefer-offline` to maximize dependency cache reuse.
 - Uses workflow-level concurrency cancellation to stop stale in-progress smoke runs on the same branch/PR.
-- Installs Playwright Chromium, starts Docker stack, waits for readiness, runs smoke spec.
+- Installs Playwright Chromium, starts the Supabase CLI stack, resets the local schema from repo migrations, starts the required Docker services together, skips Ollama, waits for readiness, and runs smoke spec.
 - Uploads Playwright artifacts on failure.
 
 Post-merge cleanup: `.github/workflows/pr-cleanup.yml`

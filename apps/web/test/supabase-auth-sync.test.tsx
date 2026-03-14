@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const getSessionMock = vi.fn();
 const onAuthStateChangeMock = vi.fn();
@@ -23,6 +23,11 @@ describe("Supabase auth session sync", () => {
     window.localStorage.clear();
     process.env.NEXT_PUBLIC_SUPABASE_URL = "http://127.0.0.1:54321";
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "test-supabase-anon-key";
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("writes refreshed Supabase sessions into the custom auth store", async () => {
@@ -154,5 +159,55 @@ describe("Supabase auth session sync", () => {
     authStateHandler?.("SIGNED_OUT", null);
 
     expect(readAuthSession()).toBeNull();
+  });
+
+  it("links the current guest session after observing an authenticated Supabase session", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ linked: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.localStorage.setItem(
+      "bdai.guest.session",
+      JSON.stringify({
+        guestId: "guest_123",
+        issuedAt: "2026-03-13T00:00:00.000Z",
+        expiresAt: "2026-03-20T00:00:00.000Z",
+      }),
+    );
+
+    getSessionMock.mockResolvedValue({
+      data: {
+        session: {
+          access_token: "initial_token",
+          user: {
+            email: "demo@example.com",
+            user_metadata: { name: "Demo" },
+          },
+        },
+      },
+    });
+    onAuthStateChangeMock.mockImplementation(() => ({
+      data: {
+        subscription: {
+          unsubscribe: vi.fn(),
+        },
+      },
+    }));
+
+    const { ensureSupabaseAuthSessionSync } = await import("../src/lib/supabase-client");
+
+    ensureSupabaseAuthSessionSync();
+    await Promise.resolve();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/guest-session\/link$/),
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer initial_token",
+        }),
+      }),
+    );
   });
 });

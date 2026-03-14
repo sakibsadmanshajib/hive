@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import type { Session } from "@supabase/supabase-js";
 import { replaceAuthSession } from "../features/auth/auth-session";
+import { clearGuestSession, readGuestSession } from "../features/auth/guest-session";
+import { getAppUrl } from "./api";
 
 function requirePublicEnv(name: string, value: string | undefined): string {
   if (!value) {
@@ -33,6 +35,35 @@ let authSyncInitialized = false;
 let authSyncCleanup: (() => void) | null = null;
 let authSyncConsumers = 0;
 let hasObservedSupabaseSession = false;
+let linkedGuestIdentity: string | null = null;
+
+async function linkGuestSession(accessToken: string, userId?: string) {
+  const guestSession = readGuestSession();
+  if (!guestSession) {
+    return;
+  }
+
+  const identityKey = `${guestSession.guestId}:${userId ?? "unknown"}`;
+  if (linkedGuestIdentity === identityKey) {
+    return;
+  }
+
+  try {
+    const response = await fetch(getAppUrl("/api/guest-session/link"), {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (response.ok) {
+      linkedGuestIdentity = identityKey;
+      clearGuestSession();
+    }
+  } catch {
+    // Keep the guest session so a later authenticated event can retry the link.
+  }
+}
 
 export function ensureSupabaseAuthSessionSync(): () => void {
   if (typeof window === "undefined") {
@@ -47,10 +78,12 @@ export function ensureSupabaseAuthSessionSync(): () => void {
   authSyncInitialized = true;
 
   void supabase.auth.getSession().then(({ data }) => {
-    const nextSession = mapSessionToAuthSession(data.session);
-    if (nextSession) {
+    const session = data.session;
+    const nextSession = mapSessionToAuthSession(session);
+    if (nextSession && session) {
       hasObservedSupabaseSession = true;
       replaceAuthSession(nextSession);
+      void linkGuestSession(session.access_token, session.user.id);
     }
   });
 
@@ -58,14 +91,16 @@ export function ensureSupabaseAuthSessionSync(): () => void {
     data: { subscription },
   } = supabase.auth.onAuthStateChange((event, session) => {
     const nextSession = mapSessionToAuthSession(session);
-    if (nextSession) {
+    if (nextSession && session) {
       hasObservedSupabaseSession = true;
       replaceAuthSession(nextSession);
+      void linkGuestSession(session.access_token, session.user.id);
       return;
     }
 
     if (event === "SIGNED_OUT" && hasObservedSupabaseSession) {
       hasObservedSupabaseSession = false;
+      linkedGuestIdentity = null;
       replaceAuthSession(null);
     }
   });
@@ -75,6 +110,7 @@ export function ensureSupabaseAuthSessionSync(): () => void {
     authSyncCleanup = null;
     authSyncInitialized = false;
     hasObservedSupabaseSession = false;
+    linkedGuestIdentity = null;
   };
 
   return authSyncCleanup;

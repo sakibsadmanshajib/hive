@@ -24,12 +24,12 @@ Hive is an AI inference platform with:
 
 ## Getting Started
 
-Hive local development runs two Docker-managed systems:
+Hive local development runs two Docker-managed systems in conjunction:
 
 - the **Hive app stack**, started by this repo's Docker Compose files
 - the **Supabase local stack**, started by the Supabase CLI
 
-Both will appear in `docker ps`, but they are managed by different tools.
+Both will appear in `docker ps`, but they are managed by different tools and you need both for the full app to work.
 
 ### First-Time Setup
 
@@ -51,7 +51,8 @@ pnpm stack:dev
 1. starts or verifies the Supabase local stack
 2. reads the live local Supabase keys from `npx supabase status -o env`
 3. injects the required auth env vars for Hive
-4. starts the full Hive stack with hot reload for `api` and `web`
+4. injects a local-only `WEB_INTERNAL_GUEST_TOKEN` for guest web-chat proxying
+5. starts the full Hive stack with hot reload for `api` and `web`
 
 ### Daily Development
 
@@ -97,8 +98,11 @@ That means:
 
 - `docker compose up` alone is not enough for local auth
 - `npx supabase start` alone is not enough for the Hive app stack
+- `supabase/migrations/` is the live schema path used by the Supabase CLI for local bootstrap and CI resets
 - `pnpm bootstrap:local` owns first-time local schema/bootstrap
 - `pnpm stack:dev` is the standardized daily-development command because it handles both lifecycles together
+
+The GitHub web smoke workflow follows the same rule: it starts the Supabase CLI stack, resets the local schema from repo migrations, then starts the Hive Docker app stack on top of that state. It intentionally skips Ollama there because the smoke suite exercises guest chat through the free mock-backed model and stubs authenticated inference calls instead of validating local Ollama inference.
 
 ### Why `api` And `web` Are Separate Containers
 
@@ -121,6 +125,8 @@ curl -s http://127.0.0.1:8080/v1/providers/status
 curl -s http://127.0.0.1:54321/auth/v1/health
 curl -sI http://127.0.0.1:3000/auth
 ```
+
+For web auth/chat/billing smoke verification, use the rebuilt Docker-local stack on `http://127.0.0.1:3000` and the runbook at `docs/runbooks/active/web-e2e-smoke.md`. Do not treat standalone local app servers or alternate local ports as the normal verification path.
 
 ### Optional Production-Like Compose Mode
 
@@ -172,8 +178,14 @@ GitHub contributor intake and triage are repo-managed:
 
 ## Current Web Flow
 
-- `/` is the primary chat workspace (auth-guarded).
-- Unauthenticated users are redirected from `/` to `/auth`.
+- `/` is the primary chat workspace for both guests and authenticated users.
+- Guests stay on `/` in guest mode and are limited to `costType: "free"` chat models.
+- The model picker keeps paid chat models visible to guests, but renders them as locked with the reason `Requires account and credits`.
+- If the guest model catalog load fails or returns only paid chat models, the web app fails closed to the built-in `guest-free` option instead of selecting a locked paid model.
+- Selecting a locked paid model opens a dismissible combined auth modal on `/`; dismissing it keeps the current guest conversation intact.
+- Successful authentication from that modal closes it in place and immediately unlocks paid models on `/` without navigating away.
+- The web app bootstraps a signed `httpOnly` guest cookie through `/api/guest-session` and mirrors a browser-visible guest session object for UI state and analytics.
+- Guest chat flows through `/api/chat/guest`; the browser never calls the API guest runtime directly.
 - `/auth` hosts login/signup (backed by Supabase Auth).
 - `/chat` redirects to `/` (legacy compatibility).
 - Chat workspace includes:
@@ -211,7 +223,8 @@ GitHub contributor intake and triage are repo-managed:
 ### Billing and Usage
 
 - `GET /v1/credits/balance`
-- `GET /v1/usage` — raw usage events plus summary analytics by day, model, and endpoint
+- `GET /v1/usage` — raw usage events plus summary analytics by day, model, endpoint, channel (`api` vs `web`), and API key where applicable
+- `GET /v1/analytics/internal` — admin-only traffic snapshot across API and web channels, including per-key API usage and guest conversion metrics
 - `POST /v1/payments/intents`
 - `POST /v1/payments/demo/confirm` (demo-only top-up)
 - `POST /v1/payments/webhook`
@@ -229,7 +242,28 @@ The API also performs a zero-token startup readiness sweep for configured provid
 
 ### Auth
 
-Authentication is handled by **Supabase Auth** for session-based web flows and by Hive API keys for developer-facing inference routes. Inference endpoints accept either `x-api-key` or `Authorization: Bearer <api-key>`, while the web's session-authenticated management routes validate Supabase bearer tokens through `SupabaseAuthService.getSessionPrincipal()`.
+Authentication is handled by **Supabase Auth** for session-based web flows and by Hive API keys for developer-facing inference routes. The web home `/` supports guest chat through Next.js server routes in `apps/web`, which mint a signed guest cookie, mirror a browser-visible guest session object, and forward guest chat plus guest-to-user linking to internal API endpoints using a server-only token. Those web routes accept only same-origin browser traffic and forward the client IP so guest rate limiting still applies per visitor. The direct public inference endpoint `/v1/chat/completions` remains authenticated. Inference endpoints accept either `x-api-key` or `Authorization: Bearer <api-key>`, while the web's session-authenticated management routes validate Supabase bearer tokens through `SupabaseAuthService.getSessionPrincipal()`.
+
+OpenAI-compatible behavior is the API product contract, not the web chat product contract. Reporting now distinguishes the two businesses explicitly:
+
+- `api` traffic covers the OpenAI-compatible API surface and records the stable API key id when a key-backed call is used
+- `web` traffic covers the chat product, including guest chat and session-authenticated web chat inferred from trusted browser-origin signals while the runtime is still shared
+
+Issue `#19` now includes the guest-first conversion UX on `/`: guests can keep chatting on free models, see paid models as locked, and authenticate from an in-place modal to unlock them. Authenticated web chat still shares the public inference runtime path today; the deeper runtime split remains tracked separately in GitHub issue `#57`.
+
+Model metadata now includes a policy-oriented `costType` (`free`, `fixed`, `variable`). Guest web chat can use only `free` chat models, while authenticated users can access credit-charging models.
+
+Guest web chat and attribution proxying require a server-only `WEB_INTERNAL_GUEST_TOKEN` in both the web and API runtimes. `pnpm stack:dev` and the GitHub smoke workflow inject a local-only development token explicitly, but base Compose, staging, and production must set a real secret themselves. Without that token, guest chat is unavailable.
+
+When the API runs inside Docker, its Ollama target must stay on the Docker service hostname `http://ollama:11434`; using `http://127.0.0.1:11434` inside the API container points back at the API container itself and leaves Ollama degraded.
+
+Guest attribution is persisted in dedicated Supabase tables:
+
+- `guest_sessions`
+- `guest_usage_events`
+- `guest_user_links`
+
+The web auth/session sync links a validated `guestId` to the first authenticated user session through the internal guest-link route, which makes later signup and payment conversion analysis queryable through `guestId -> userId`.
 
 Session-authenticated developer key management endpoints:
 
@@ -253,6 +287,7 @@ Operator-only support endpoint:
 | User store | `src/runtime/supabase-user-store.ts` | User profiles and settings via Supabase |
 | API key store | `src/runtime/supabase-api-key-store.ts` | Hashed API key persistence plus lifecycle audit events via Supabase |
 | Billing store | `src/runtime/supabase-billing-store.ts` | Credits, ledger, and payment events via Supabase |
+| Guest attribution store | `src/runtime/supabase-guest-attribution-store.ts` | Guest sessions, guest usage events, and guest-to-user conversion links via Supabase |
 | Payment reconciliation | `src/runtime/payment-reconciliation.ts`, `src/runtime/payment-reconciliation-scheduler.ts` | Recent billing drift detection and opt-in scheduler |
 | Authorization | `src/runtime/authorization.ts` | RBAC via Supabase `user_roles`/`role_permissions` tables |
 | User settings | `src/runtime/user-settings.ts` | Feature gates (apiEnabled, generateImage, etc.) |
@@ -272,8 +307,9 @@ Operator-only support endpoint:
 - `fast-chat` → primary `ollama`, fallback `groq`, then `mock`
 - `smart-reasoning` → primary `groq`, fallback `ollama`, then `mock`
 - `image-basic` → primary `openai`, fallback `mock`
+- Explicit image requests honor the caller-selected image model id when one is supplied instead of silently rewriting them to the default image model.
 
-Chat and image response headers: `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits`.
+Chat, responses, and image response headers: `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits`.
 
 ## Environment Variables
 
@@ -282,6 +318,7 @@ Use `.env.example` as the template. Key variables:
 ### Core
 - `NODE_ENV`, `PORT`, `REDIS_URL`, `RATE_LIMIT_PER_MINUTE`
 - `ADMIN_STATUS_TOKEN`, `ALLOW_DEMO_PAYMENT_CONFIRM`, `ALLOW_DEV_API_KEY_PREFIX`
+- `WEB_INTERNAL_GUEST_TOKEN` — server-only shared secret for guest web chat and guest attribution proxying; `pnpm stack:dev` and the GitHub smoke workflow inject a local dev token, but base Compose, staging, and production must provide a real secret explicitly
 
 ### Supabase
 - `SUPABASE_URL` — Supabase API endpoint (default: `http://127.0.0.1:54321`)
@@ -398,8 +435,12 @@ pnpm --filter @hive/web build       # Web build
 
 ## Database Migrations
 
-Supabase migrations are located in `supabase/migrations/`:
+The live Supabase CLI migration source of truth is `supabase/migrations/`:
 - `20260223000001_auth_user_tables.sql` — User profiles, roles, permissions, settings
 - `20260223000002_api_keys.sql` — Hashed API key metadata
 - `20260223000003_billing_tables.sql` — Credit accounts, ledger, payment intents/events
-- `20260312_004_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events
+- `20260223000004_billing_rpcs.sql` — Billing RPCs
+- `20260313052000_refund_credits_rpc.sql` — Refund credits RPC
+- `20260314000100_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events
+- `20260314000200_guest_attribution.sql` — Guest sessions, guest usage events, and guest-to-user links
+- `20260314000300_usage_reporting_channels.sql` — Usage event channel and stable API key attribution fields

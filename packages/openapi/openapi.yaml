@@ -441,12 +441,19 @@ components:
   schemas:
     Model:
       type: object
+      required: [id, object, capability, costType]
       properties:
         id:
           type: string
         object:
           type: string
           example: model
+        capability:
+          type: string
+          enum: [chat, image]
+        costType:
+          type: string
+          enum: [free, fixed, variable]
     UserProfile:
       type: object
       properties:

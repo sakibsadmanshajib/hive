@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Traffic Analytics Channel Split:** Usage reporting now distinguishes the OpenAI-compatible API business from the web chat business.
+    - `/v1/usage` now includes channel breakdowns (`api` vs `web`) and per-key attribution buckets where applicable.
+    - Added admin-only `GET /v1/analytics/internal` for channel, API-key, guest-session, and conversion reporting.
+    - This change separates analytics/reporting first; the deeper authenticated web runtime split from the public API path remains tracked separately in GitHub issue `#57`.
+- **Guest-First Web Chat Path:** Added a guest chat path for the web app via a Next.js server-side route and an internal token-protected API endpoint, while keeping `/v1/chat/completions` authenticated for public API clients.
+    - The web/app-to-API handoff now requires a server-only `WEB_INTERNAL_GUEST_TOKEN`; there is no built-in default token.
+    - The web proxy now rejects non-same-origin requests and forwards the client IP to preserve guest rate limiting through the proxy boundary.
+- **Guest Session Attribution:** Added durable guest-session and conversion-attribution plumbing across the web and API runtimes.
+    - The web app now issues a signed `httpOnly` guest cookie plus a mirrored browser-visible guest session object through `/api/guest-session`.
+    - Guest attribution is persisted in dedicated Supabase tables: `guest_sessions`, `guest_usage_events`, and `guest_user_links`.
+    - Authenticated Supabase sessions now link the validated `guestId` to the user through an internal handoff so later signup/payment conversion analysis can join anonymous usage to authenticated activity.
 - **Usage Analytics and Support Snapshot:** Enriched `/v1/usage` with windowed request/credit analytics and added admin-only `GET /v1/support/users/{userId}` for single-user troubleshooting.
     - Usage summaries now include daily trend, model split, and endpoint split.
     - Developer Panel now shows the usage analytics summary instead of only a raw event count.
@@ -53,6 +64,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Duplicate OpenAPI Contract:** Removed `openapi/openapi.yaml`; `packages/openapi/openapi.yaml` is now the sole in-repo OpenAPI source.
 
 ### Changed
+- **Chat Home Access Model:** `/` now renders guest chat by default instead of redirecting unauthenticated users to `/auth`. Guest users are limited to free models and are prompted to sign in for paid capabilities.
+- **Guest Conversion UX On `/`:** Paid chat models now remain visible to guests as locked options instead of disappearing from the picker.
+    - Choosing a locked paid model opens a dismissible combined auth modal directly on `/`.
+    - Dismissing the modal preserves the active guest conversation and free-model flow.
+    - Successful modal auth unlocks paid models in place without navigating away from `/`.
+    - This completes issue `#19`'s guest-home conversion UX while leaving the deeper authenticated web runtime split tracked separately in GitHub issue `#57`.
+- **Guest Web Runtime:** Guest chat bootstrap now requires a durable guest session before the first anonymous chat request, and guest usage is recorded under `guestId` rather than a synthetic user id.
+- **Model Catalog Metadata:** API model responses now include `capability` and `costType`, and the underlying model catalog now carries structured pricing metadata in addition to fixed per-request credits.
 - **Image Routing:** `image-basic` now routes to the hosted OpenAI image adapter with `mock` fallback instead of returning a placeholder-only mock image URL.
 - **OpenAPI Image Contract:** Expanded `/v1/images/generations` in `packages/openapi/openapi.yaml` to document model, size, count, response format, and bearer/api-key auth compatibility.
 - **Product Positioning Docs:** Reframed top-level product and architecture docs around Hive as a broader AI inference platform, with Bangladesh-native payments positioned as one strategic wedge rather than the entire product definition.
@@ -62,9 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Local Development Workflow:** Standardized contributor onboarding around `pnpm stack:dev` as the canonical full-stack hot-reload entry point, and clarified that Supabase runs as Docker containers under the Supabase CLI rather than inside Hive's Compose file.
 - **Bootstrap Workflow:** Split first-time local setup into `pnpm bootstrap:local` and kept `pnpm stack:dev` as the daily startup command; bootstrap now provisions the default local Ollama model as well as Supabase schema state.
 - **PR Hygiene Docs:** Tightened guidance so pull request titles are expected to be scoped and Conventional-Commit-style where practical.
-- **Web Architecture:** Moved to a "Guarded Chat Home" structure.
-    - `/` is now the authenticated chat interface.
-    - Unauthenticated users are strictly redirected to `/auth`.
+- **Web Architecture:** Evolved from a guarded home to a guest-first chat home.
+    - `/` is now the primary chat interface for both guests and authenticated users.
+    - Unauthenticated users stay on `/` in guest mode and use the separate web guest chat route.
 - **Documentation:** Major restructuring of `AGENTS.md` to include the "Superpowers" workflow and stricter operational mandates.
 - **Git Workflow Policy:** Worktrees are now optional in this repository; they remain available for isolation but are no longer required by default.
 - **Browser Runtime Configuration:** Web runtime now requires explicit `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY` instead of implicit localhost or placeholder fallbacks.
@@ -72,10 +91,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
 
 ### Fixed
+- **Guest Model Fail-Closed Behavior:** Guest chat now stays pinned to the built-in `guest-free` model when the public model catalog fails or returns only paid chat models, instead of selecting a locked paid option.
+- **Domain Image Model Selection:** The domain image-generation path now honors an explicit requested image model id instead of always billing and logging against the default image model.
+- **Paid Inference Billing Guardrails:** `/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations` now refund consumed credits when the provider call fails or usage persistence fails before the response is returned.
+- **Responses Route Headers:** `/v1/responses` now emits the same routing and billing headers as the other paid inference routes: `x-model-routed`, `x-provider-used`, `x-provider-model`, and `x-actual-credits`.
+- **Guest Session Bootstrap Resilience:** Guest session bootstrap and guest-to-user link side effects now fail closed on network errors instead of surfacing unhandled browser/test rejections.
 - **API Browser CORS:** Added explicit Fastify CORS support for current local web origins so browser requests to the API no longer fail preflight by default.
 - **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
 - **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
-- **Smoke Workflow Guidance:** Clarified that the web smoke runbook is production-style validation guidance, not a `pnpm stack:dev` workflow.
+- **Smoke Workflow Guidance:** Clarified that web smoke validation must run against the rebuilt Docker-local stack on the standard `http://127.0.0.1:3000` origin, not against standalone local web servers or alternate ports.
+- **Smoke Workflow Coverage:** Updated the smoke spec and GitHub smoke workflow to cover the guest-first `/` flow, locked paid models, dismissible auth modal, and in-place unlock after signup.
+- **Docker-Local Guest Runtime Defaults:** Wired a local-only `WEB_INTERNAL_GUEST_TOKEN` into the Docker-local `api` and `web` services, fixed the API container to target Ollama via `http://ollama:11434`, and extended smoke coverage so guest chat itself must succeed.
+- **Guest Token Hardening:** Base Compose now fails closed for `WEB_INTERNAL_GUEST_TOKEN`; only `pnpm stack:dev` and the GitHub smoke workflow inject the disposable development token, while deployed environments must set an explicit secret.
+- **Smoke Trigger Coverage:** The web smoke workflow now also tracks changes under `supabase/**` and `.env.example` because guest bootstrap and auth smoke depend on the live Supabase CLI schema path and Compose env wiring.
+- **Smoke Workflow Orchestration:** Updated the GitHub smoke workflow to start the Supabase CLI stack, reset the local schema from repo migrations, then start the Docker app stack alongside it, while intentionally skipping Ollama in CI because the smoke suite does not validate local inference.
 - **Smoke Bootstrap Guidance:** Clarified that `pnpm bootstrap:local` is a fresh-environment setup step, not a routine smoke prerequisite, because it resets local Supabase state.
 - **Plans Index Organization:** Reorganized `docs/plans/` so only in-flight plans remain at the root while completed dated plans move under `docs/plans/completed/`.
 - **Provider Metrics Documentation:** Aligned README, runbook, and architecture docs with the new public/internal provider metrics boundary and in-memory reset behavior.

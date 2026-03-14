@@ -3,18 +3,30 @@ import { SendHorizontal } from "lucide-react";
 import { Button } from "../../../components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
+import type { ChatModelOption } from "../use-chat-session";
 import { useChatShortcuts } from "../hooks/use-chat-shortcuts";
 
 type MessageComposerProps = {
   prompt: string;
   model: string;
+  modelOptions: ChatModelOption[];
+  guestMode: boolean;
   loading: boolean;
   onPromptChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onSend: () => void;
 };
 
-export function MessageComposer({ prompt, model, loading, onPromptChange, onModelChange, onSend }: MessageComposerProps) {
+export function MessageComposer({
+  prompt,
+  model,
+  modelOptions,
+  guestMode,
+  loading,
+  onPromptChange,
+  onModelChange,
+  onSend,
+}: MessageComposerProps) {
   const canSend = prompt.trim().length > 0 && !loading;
   const onKeyDown = useChatShortcuts({ canSend, onSend });
 
@@ -26,8 +38,21 @@ export function MessageComposer({ prompt, model, loading, onPromptChange, onMode
             <SelectValue placeholder="Model" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="fast-chat">fast-chat</SelectItem>
-            <SelectItem value="smart-reasoning">smart-reasoning</SelectItem>
+            {modelOptions.map((option) => (
+              <SelectItem key={option.id} value={option.id}>
+                <span className="inline-flex w-full items-center justify-between gap-3">
+                  <span>{option.id}</span>
+                  {option.locked ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                      Locked
+                    </span>
+                  ) : null}
+                </span>
+                {option.locked && option.lockReason ? (
+                  <span className="mt-1 block text-xs text-muted-foreground">{option.lockReason}</span>
+                ) : null}
+              </SelectItem>
+            ))}
           </SelectContent>
         </Select>
         <Textarea
@@ -40,7 +65,9 @@ export function MessageComposer({ prompt, model, loading, onPromptChange, onMode
         />
       </div>
       <div className="flex items-center justify-between gap-2">
-        <p className="text-xs font-medium text-muted-foreground">Enter to send, Shift+Enter for newline</p>
+        <p className="text-xs font-medium text-muted-foreground">
+          {guestMode ? "Guest mode only supports free models." : "Enter to send, Shift+Enter for newline"}
+        </p>
         <Button type="button" disabled={!canSend} onClick={onSend}>
           <SendHorizontal className="h-4 w-4" />
           {loading ? "Sending..." : "Send"}

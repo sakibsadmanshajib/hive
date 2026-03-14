@@ -21,3 +21,5 @@ artifacts/
 !.agents/skills/gh-reading-reviews/
 !.agents/skills/gh-responding-to-reviews/
 !.agents/skills/gh-editing-prs/
+!.agents/skills/docker-local-smoke-validation/
+!.agents/skills/docker-local-smoke-validation/SKILL.md

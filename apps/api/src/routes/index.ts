@@ -1,7 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
+import { registerAnalyticsRoute } from "./analytics";
 import { registerChatCompletionsRoute } from "./chat-completions";
 import { registerCreditsBalanceRoute } from "./credits-balance";
+import { registerGuestAttributionRoutes } from "./guest-attribution";
+import { registerGuestChatRoute } from "./guest-chat";
 import { registerHealthRoute } from "./health";
 import { registerImagesGenerationsRoute } from "./images-generations";
 import { registerModelsRoute } from "./models";
@@ -17,7 +20,10 @@ import { registerUsageRoute } from "./usage";
 
 export function registerRoutes(app: FastifyInstance, services: RuntimeServices): void {
   registerHealthRoute(app);
+  registerAnalyticsRoute(app, services);
   registerModelsRoute(app, services);
+  registerGuestAttributionRoutes(app, services);
+  registerGuestChatRoute(app, services);
   registerChatCompletionsRoute(app, services);
   registerResponsesRoute(app, services);
   registerImagesGenerationsRoute(app, services);

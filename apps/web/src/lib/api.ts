@@ -9,6 +9,23 @@ export function getApiBase(): string {
   return requirePublicEnv("NEXT_PUBLIC_API_BASE_URL", process.env.NEXT_PUBLIC_API_BASE_URL);
 }
 
+export function getServerApiBase(): string {
+  const internalBase = process.env.INTERNAL_API_BASE_URL?.trim();
+  if (!internalBase || internalBase.length === 0) {
+    return getApiBase();
+  }
+
+  const normalized = internalBase.toLowerCase();
+  return normalized === "undefined" ? getApiBase() : internalBase;
+}
+
+export function getAppUrl(path: string): string {
+  if (typeof window === "undefined") {
+    return path;
+  }
+  return new URL(path, window.location.origin).toString();
+}
+
 /**
  * Build standard headers for Hive API calls authenticated via Supabase session.
  */

@@ -86,6 +86,9 @@ describe("images generations route", () => {
       size: "1024x1024",
       responseFormat: "url",
       user: "user-123",
+    }, {
+      channel: "api",
+      apiKeyId: undefined,
     });
     expect(statusCode).toBe(200);
     expect(headers.get("x-model-routed")).toBe("image-basic");
@@ -96,6 +99,69 @@ describe("images generations route", () => {
       created: 1_710_000_000,
       data: [{ url: "https://cdn.example.com/image.png" }],
     });
+  });
+
+  it("forwards the resolved stable api key id into image generation usage context", async () => {
+    const imageGeneration = vi.fn(async () => ({
+      statusCode: 200,
+      headers: {
+        "x-model-routed": "image-basic",
+        "x-actual-credits": "120",
+        "x-provider-used": "openai",
+        "x-provider-model": "gpt-image-1",
+      },
+      body: {
+        created: 1_710_000_000,
+        data: [{ url: "https://cdn.example.com/image.png" }],
+      },
+    }));
+    const app = new FakeApp();
+
+    registerImagesGenerationsRoute(app as never, {
+      env: { allowDevApiKeyPrefix: false },
+      auth: { getSessionPrincipal: async () => null },
+      users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"], apiKeyId: "key_123" }) },
+      authz: { requirePermission: async () => true },
+      userSettings: {
+        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
+        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
+      },
+      rateLimiter: { allow: async () => true },
+      ai: { imageGeneration },
+    } as never);
+
+    const handler = app.handlers.get("POST /v1/images/generations");
+    const reply = {
+      code: (_code: number) => ({
+        send: (body: unknown) => body,
+      }),
+      send: (body: unknown) => body,
+      header: () => reply,
+    };
+
+    await handler?.(
+      {
+        headers: { "x-api-key": "sk_1" },
+        body: {
+          model: "image-basic",
+          prompt: "a lighthouse in fog",
+          response_format: "url",
+        },
+      },
+      reply,
+    );
+
+    expect(imageGeneration).toHaveBeenCalledWith(
+      "user_1",
+      expect.objectContaining({
+        model: "image-basic",
+        prompt: "a lighthouse in fog",
+      }),
+      {
+        channel: "api",
+        apiKeyId: "key_123",
+      },
+    );
   });
 
   it("returns a sanitized provider failure without leaking internal diagnostics", async () => {

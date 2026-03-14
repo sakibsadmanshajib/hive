@@ -26,6 +26,11 @@ describe("chat polish", () => {
       <MessageComposer
         prompt=""
         model="fast-chat"
+        modelOptions={[
+          { id: "fast-chat", capability: "chat", costType: "fixed", locked: false },
+          { id: "smart-reasoning", capability: "chat", costType: "variable", locked: false },
+        ]}
+        guestMode={false}
         loading={false}
         onPromptChange={() => {}}
         onModelChange={() => {}}

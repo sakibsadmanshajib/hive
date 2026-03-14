@@ -1,21 +1,77 @@
-import { useMemo, useReducer, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { chatReducer, createInitialChatState } from "../../app/chat/chat-reducer";
 import type { ChatMessage } from "../../app/chat/chat-types";
-import { useAuthSession } from "../auth/auth-session";
-import { apiHeaders, getApiBase } from "../../lib/api";
+import { useAuthSessionState } from "../auth/auth-session";
+import {
+  isGuestSessionExpired,
+  readGuestSession,
+  writeGuestSession,
+  type GuestSession,
+} from "../auth/guest-session";
+import { apiHeaders, getApiBase, getAppUrl } from "../../lib/api";
 import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
+
+export type ChatModelOption = {
+  id: string;
+  capability: "chat" | "image";
+  costType: "free" | "fixed" | "variable";
+  locked: boolean;
+  lockReason?: string;
+};
+
+const DEFAULT_GUEST_MODEL_OPTIONS: ChatModelOption[] = [
+  { id: "guest-free", capability: "chat", costType: "free", locked: false },
+];
 
 export function useChatSession() {
   useSupabaseAuthSessionSync();
-  const authSession = useAuthSession();
+  const { ready: authReady, session: authSession } = useAuthSessionState();
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [model, setModel] = useState("fast-chat");
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>(DEFAULT_GUEST_MODEL_OPTIONS);
+  const [model, setModel] = useState("guest-free");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const accessToken = authSession?.accessToken ?? "";
+  const guestMode = authReady && accessToken.trim().length === 0;
+  const guestSessionRefreshedRef = useRef(false);
+  const guestSessionRequestRef = useRef<Promise<GuestSession | null> | null>(null);
+
+  async function ensureGuestSession(forceRefresh = false): Promise<GuestSession | null> {
+    const currentSession = readGuestSession();
+    if (!forceRefresh && guestSessionRefreshedRef.current && !isGuestSessionExpired(currentSession)) {
+      return currentSession;
+    }
+    if (guestSessionRequestRef.current) {
+      return guestSessionRequestRef.current;
+    }
+
+    const request = (async () => {
+      try {
+        const response = await fetch(getAppUrl("/api/guest-session"), {
+          method: "POST",
+        });
+        if (!response.ok) {
+          return !isGuestSessionExpired(currentSession) ? currentSession : null;
+        }
+
+        const session = await response.json() as GuestSession;
+        writeGuestSession(session);
+        return session;
+      } catch {
+        return !isGuestSessionExpired(currentSession) ? currentSession : null;
+      } finally {
+        guestSessionRefreshedRef.current = true;
+        guestSessionRequestRef.current = null;
+      }
+    })();
+
+    guestSessionRequestRef.current = request;
+    return request;
+  }
 
   const activeConversation = useMemo(
     () =>
@@ -23,6 +79,111 @@ export function useChatSession() {
       chatState.conversations[0],
     [chatState.activeConversationId, chatState.conversations],
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!authReady) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const resetGuestSafeModels = () => {
+      if (cancelled || !guestMode) {
+        return;
+      }
+
+      setModelOptions(DEFAULT_GUEST_MODEL_OPTIONS);
+      setModel("guest-free");
+    };
+
+    resetGuestSafeModels();
+
+    async function loadModels() {
+      try {
+        const response = await fetch(`${getApiBase()}/v1/models`);
+        if (!response.ok) {
+          resetGuestSafeModels();
+          return;
+        }
+
+        const json = await response.json() as {
+          data?: Array<{ id?: string; capability?: "chat" | "image"; costType?: "free" | "fixed" | "variable" }>;
+        };
+        const chatModels = (json.data ?? [])
+          .filter((entry) => entry.capability === "chat")
+          .map((entry) => ({
+            id: entry.id,
+            capability: entry.capability,
+            costType: entry.costType,
+          }))
+          .filter((entry): entry is { id: string; capability: "chat"; costType: "free" | "fixed" | "variable" } =>
+            Boolean(entry.id && entry.capability && entry.costType))
+          .map((entry) => ({
+            ...entry,
+            locked: guestMode && entry.costType !== "free",
+            lockReason: guestMode && entry.costType !== "free" ? "Requires account and credits" : undefined,
+          }));
+
+        if (!cancelled && chatModels.length > 0) {
+          const firstUnlockedModel = chatModels.find((entry) => !entry.locked);
+          const nextModelOptions = guestMode && !firstUnlockedModel
+            ? [...DEFAULT_GUEST_MODEL_OPTIONS, ...chatModels]
+            : chatModels;
+
+          setModelOptions(nextModelOptions);
+          setModel((currentModel) => {
+            const selectedModel = nextModelOptions.find((entry) => entry.id === currentModel);
+            if (selectedModel && !selectedModel.locked) {
+              return selectedModel.id;
+            }
+
+            const nextUnlockedModel = nextModelOptions.find((entry) => !entry.locked);
+            return nextUnlockedModel?.id ?? DEFAULT_GUEST_MODEL_OPTIONS[0].id;
+          });
+        }
+      } catch {
+        resetGuestSafeModels();
+      }
+    }
+
+    void loadModels();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, guestMode]);
+
+  useEffect(() => {
+    if (!authReady) {
+      return;
+    }
+
+    if (!guestMode) {
+      guestSessionRefreshedRef.current = false;
+      guestSessionRequestRef.current = null;
+      setAuthModalOpen(false);
+      return;
+    }
+
+    guestSessionRefreshedRef.current = false;
+    guestSessionRequestRef.current = null;
+    void ensureGuestSession(true);
+  }, [authReady, guestMode]);
+
+  function handleModelChange(nextModelId: string) {
+    const nextModel = modelOptions.find((option) => option.id === nextModelId);
+    if (!nextModel) {
+      return;
+    }
+    if (guestMode && nextModel.locked) {
+      setAuthModalOpen(true);
+      return;
+    }
+
+    setModel(nextModel.id);
+  }
 
   function addConversation() {
     dispatch({
@@ -41,13 +202,7 @@ export function useChatSession() {
   }
 
   async function sendMessage() {
-    if (!activeConversation || !prompt.trim()) {
-      return;
-    }
-    if (!accessToken.trim()) {
-      const nextError = "Not authenticated.";
-      setErrorMessage(nextError);
-      toast.error(nextError);
+    if (!authReady || !activeConversation || !prompt.trim()) {
       return;
     }
 
@@ -73,15 +228,26 @@ export function useChatSession() {
         role: message.role,
         content: message.content,
       }));
+      if (guestMode) {
+        const guestSession = await ensureGuestSession();
+        if (!guestSession) {
+          setErrorMessage("Guest chat unavailable");
+          toast.error("Guest chat unavailable");
+          return;
+        }
+      }
 
-      const response = await fetch(`${apiBase}/v1/chat/completions`, {
+      const response = await fetch(
+        guestMode ? getAppUrl("/api/chat/guest") : `${apiBase}/v1/chat/completions`,
+        {
         method: "POST",
-        headers: apiHeaders(accessToken),
+        headers: guestMode ? { "content-type": "application/json" } : apiHeaders(accessToken),
         body: JSON.stringify({
           model,
           messages: payloadMessages,
         }),
-      });
+        },
+      );
       const json = await response.json();
       if (!response.ok) {
         const nextError = json?.error ?? "Chat request failed";
@@ -125,5 +291,11 @@ export function useChatSession() {
     loading,
     errorMessage,
     sendMessage,
+    modelOptions,
+    guestMode,
+    authModalOpen,
+    openAuthModal: () => setAuthModalOpen(true),
+    closeAuthModal: () => setAuthModalOpen(false),
+    onModelChange: handleModelChange,
   };
 }

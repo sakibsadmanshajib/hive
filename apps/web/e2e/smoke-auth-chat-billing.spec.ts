@@ -1,29 +1,34 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 import { createSession, seedAuthSession } from "./fixtures/auth";
 
-test("unauthenticated root redirects to auth", async ({ page }) => {
-  await page.goto("/");
-
-  await expect(page).toHaveURL(/\/auth$/);
-  await expect(page.getByRole("heading", { name: "Welcome back" })).toBeVisible();
-});
-
-test("register happy path reaches chat workspace", async ({ page }) => {
-  const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const email = `e2e_web_smoke_ui_${unique}@example.com`;
-  const registerForm = page.locator("form").filter({ has: page.getByRole("button", { name: "Create account" }) });
-
-  // Mock Supabase Auth signup endpoint at the browser network level.
-  // The auth page calls supabase.auth.signUp which posts to /auth/v1/signup.
+async function mockBrowserSignup(page: Page) {
   await page.route("**/auth/v1/signup", async (route) => {
     const method = route.request().method();
     if (method === "OPTIONS") {
-      await route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*", "access-control-allow-methods": "POST, OPTIONS", "access-control-allow-headers": "*" }, body: "" });
+      await route.fulfill({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "POST, OPTIONS",
+          "access-control-allow-headers": "*",
+        },
+        body: "",
+      });
       return;
     }
 
     const payload = route.request().postDataJSON() as { email?: string; options?: { data?: { name?: string } } } | null;
+    if (!payload?.email) {
+      await route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        headers: { "access-control-allow-origin": "*" },
+        body: JSON.stringify({ error: "Expected signup email in request payload" }),
+      });
+      return;
+    }
+
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -35,22 +40,65 @@ test("register happy path reaches chat workspace", async ({ page }) => {
         refresh_token: "e2e_mock_refresh_token",
         user: {
           id: "e2e_mock_user_id",
-          email: payload?.email ?? email,
+          email: payload.email,
           user_metadata: { name: payload?.options?.data?.name ?? "E2E UI User" },
         },
       }),
     });
   });
+}
 
-  await page.goto("/auth");
-  await registerForm.getByPlaceholder("Name").fill("E2E UI User");
-  await registerForm.getByPlaceholder("Email").fill(email);
-  await registerForm.getByPlaceholder("Password").fill("password123");
-  await registerForm.getByRole("button", { name: "Create account" }).click();
+test("unauthenticated root stays in guest mode, guest chat works, and locked paid models open a dismissible auth modal", async ({ page }) => {
+  await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByText("Guest mode is active. Sign in to unlock paid models and top up credits.")).toBeVisible();
+  await expect(page.getByText("Guest mode only supports free models.")).toBeVisible();
+
+  await page.getByPlaceholder("Ask something...").fill("hello from guest smoke");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page.getByText("MVP response: hello from guest smoke")).toBeVisible();
+
+  await page.getByRole("combobox", { name: "Model" }).click();
+  const paidOption = page.getByRole("option", { name: /fast-chat/i });
+  await expect(paidOption).toContainText("Requires account and credits");
+  await paidOption.click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Unlock paid models")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText("Guest mode is active. Sign in to unlock paid models and top up credits.")).toBeVisible();
+});
+
+test("registering from the locked-model modal unlocks paid models in place", async ({ page }) => {
+  const unique = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const email = `e2e_web_smoke_modal_${unique}@example.com`;
+
+  await mockBrowserSignup(page);
+  await page.goto("/");
+
+  await page.getByRole("combobox", { name: "Model" }).click();
+  await page.getByRole("option", { name: /fast-chat/i }).click();
+
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toBeVisible();
+  await dialog.locator("#register-name").fill("E2E Modal User");
+  await dialog.locator("#register-email").fill(email);
+  await dialog.locator("#register-password").fill("password123");
+  await dialog.getByRole("button", { name: "Create account" }).scrollIntoViewIfNeeded();
+  await dialog.getByRole("button", { name: "Create account" }).click();
+
+  await expect(page).toHaveURL(/\/$/);
+  await expect(dialog).toBeHidden();
+  await expect(page.getByText(/guest mode is active/i)).toBeHidden();
   await expect(page.getByRole("button", { name: "Open profile menu" })).toBeVisible();
-  await expect(page.getByPlaceholder("Ask something...")).toBeVisible();
+
+  const modelPicker = page.getByRole("combobox", { name: "Model" });
+  await modelPicker.click();
+  await page.getByRole("option", { name: /fast-chat/i }).click();
+  await expect(modelPicker).toContainText("fast-chat");
 });
 
 test("chat success and failure messaging", async ({ page, request }) => {
