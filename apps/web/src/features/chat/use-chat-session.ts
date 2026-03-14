@@ -13,15 +13,26 @@ import {
 import { apiHeaders, getApiBase, getAppUrl } from "../../lib/api";
 import { useSupabaseAuthSessionSync } from "../../lib/supabase-client";
 
+export type ChatModelOption = {
+  id: string;
+  capability: "chat" | "image";
+  costType: "free" | "fixed" | "variable";
+  locked: boolean;
+  lockReason?: string;
+};
+
 export function useChatSession() {
   useSupabaseAuthSessionSync();
   const authSession = useAuthSession();
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
-  const [modelOptions, setModelOptions] = useState(["guest-free"]);
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([
+    { id: "guest-free", capability: "chat", costType: "free", locked: false },
+  ]);
   const [model, setModel] = useState("guest-free");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
   const accessToken = authSession?.accessToken ?? "";
   const guestMode = accessToken.trim().length === 0;
 
@@ -65,17 +76,34 @@ export function useChatSession() {
         }
 
         const json = await response.json() as {
-          data?: Array<{ id?: string; capability?: string; costType?: string }>;
+          data?: Array<{ id?: string; capability?: "chat" | "image"; costType?: "free" | "fixed" | "variable" }>;
         };
         const chatModels = (json.data ?? [])
           .filter((entry) => entry.capability === "chat")
-          .filter((entry) => !guestMode || entry.costType === "free")
-          .map((entry) => entry.id)
-          .filter((entry): entry is string => Boolean(entry));
+          .map((entry) => ({
+            id: entry.id,
+            capability: entry.capability,
+            costType: entry.costType,
+          }))
+          .filter((entry): entry is { id: string; capability: "chat"; costType: "free" | "fixed" | "variable" } =>
+            Boolean(entry.id && entry.capability && entry.costType))
+          .map((entry) => ({
+            ...entry,
+            locked: guestMode && entry.costType !== "free",
+            lockReason: guestMode && entry.costType !== "free" ? "Requires account and credits" : undefined,
+          }));
 
         if (!cancelled && chatModels.length > 0) {
           setModelOptions(chatModels);
-          setModel((currentModel) => (chatModels.includes(currentModel) ? currentModel : chatModels[0]));
+          setModel((currentModel) => {
+            const selectedModel = chatModels.find((entry) => entry.id === currentModel);
+            if (selectedModel && !selectedModel.locked) {
+              return selectedModel.id;
+            }
+
+            const firstUnlockedModel = chatModels.find((entry) => !entry.locked);
+            return firstUnlockedModel?.id ?? chatModels[0].id;
+          });
         }
       } catch {
         // Keep built-in model defaults if the catalog request fails.
@@ -91,11 +119,22 @@ export function useChatSession() {
 
   useEffect(() => {
     if (!guestMode) {
+      setAuthModalOpen(false);
       return;
     }
 
     void ensureGuestSession();
   }, [guestMode]);
+
+  function handleModelChange(nextModelId: string) {
+    const nextModel = modelOptions.find((option) => option.id === nextModelId);
+    if (guestMode && nextModel?.locked) {
+      setAuthModalOpen(true);
+      return;
+    }
+
+    setModel(nextModelId);
+  }
 
   function addConversation() {
     dispatch({
@@ -205,5 +244,9 @@ export function useChatSession() {
     sendMessage,
     modelOptions,
     guestMode,
+    authModalOpen,
+    openAuthModal: () => setAuthModalOpen(true),
+    closeAuthModal: () => setAuthModalOpen(false),
+    onModelChange: handleModelChange,
   };
 }

@@ -1,10 +1,23 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { signInWithPasswordMock, signInWithOAuthMock, signUpMock } = vi.hoisted(() => ({
+  signInWithPasswordMock: vi.fn(),
+  signInWithOAuthMock: vi.fn(),
+  signUpMock: vi.fn(),
+}));
 
 vi.mock("../src/lib/supabase-client", () => ({
+  createSupabaseBrowserClient: () => ({
+    auth: {
+      signInWithPassword: signInWithPasswordMock,
+      signInWithOAuth: signInWithOAuthMock,
+      signUp: signUpMock,
+    },
+  }),
   useSupabaseAuthSessionSync: () => undefined,
 }));
 
@@ -16,16 +29,15 @@ vi.mock("next/navigation", () => ({
 }));
 
 import HomePage from "../src/app/page";
+import { clearAuthSession } from "../src/features/auth/auth-session";
+import { clearGuestSession } from "../src/features/auth/guest-session";
 
-describe("chat guest mode", () => {
-  beforeEach(() => {
-    window.localStorage.clear();
-    vi.restoreAllMocks();
-  });
+function createGuestFetchMock() {
+  return vi.fn(async (input: RequestInfo | URL) => {
+    const url = typeof input === "string" ? input : input.toString();
 
-  it("shows guest messaging and sends chat through the guest web endpoint", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
+    if (url.endsWith("/v1/models")) {
+      return {
         ok: true,
         json: async () => ({
           data: [
@@ -33,35 +45,133 @@ describe("chat guest mode", () => {
             { id: "fast-chat", capability: "chat", costType: "fixed" },
           ],
         }),
-      })
-      .mockResolvedValueOnce({
+      };
+    }
+
+    if (url.endsWith("/api/guest-session")) {
+      return {
         ok: true,
         json: async () => ({
           guestId: "guest_123",
           issuedAt: "2026-03-13T00:00:00.000Z",
           expiresAt: "2026-03-20T00:00:00.000Z",
         }),
-      })
-      .mockResolvedValueOnce({
+      };
+    }
+
+    if (url.endsWith("/api/chat/guest")) {
+      return {
         ok: true,
         json: async () => ({
           choices: [{ message: { content: "Guest reply" } }],
         }),
+      };
+    }
+
+    return {
+      ok: false,
+      json: async () => ({ error: `Unhandled URL: ${url}` }),
+    };
+  });
+}
+
+describe("chat guest mode", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    window.localStorage.clear();
+    clearAuthSession();
+    clearGuestSession();
+    vi.restoreAllMocks();
+    signInWithPasswordMock.mockReset();
+    signInWithOAuthMock.mockReset();
+    signUpMock.mockReset();
+    if (!HTMLElement.prototype.hasPointerCapture) {
+      Object.defineProperty(HTMLElement.prototype, "hasPointerCapture", {
+        configurable: true,
+        value: () => false,
       });
+    }
+    if (!HTMLElement.prototype.setPointerCapture) {
+      Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+        configurable: true,
+        value: () => undefined,
+      });
+    }
+    if (!HTMLElement.prototype.releasePointerCapture) {
+      Object.defineProperty(HTMLElement.prototype, "releasePointerCapture", {
+        configurable: true,
+        value: () => undefined,
+      });
+    }
+    if (!HTMLElement.prototype.scrollIntoView) {
+      Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+        configurable: true,
+        value: () => undefined,
+      });
+    }
+  });
+
+  async function openModelPicker() {
+    const modelTrigger = (await screen.findAllByRole("combobox")).at(-1)!;
+    fireEvent.keyDown(modelTrigger, { key: "ArrowDown" });
+    return modelTrigger;
+  }
+
+  it("shows paid models as locked to guests instead of hiding them", async () => {
+    const fetchMock = createGuestFetchMock();
 
     vi.stubGlobal("fetch", fetchMock);
 
     render(<HomePage />);
 
-    expect(await screen.findByText(/guest mode is active/i)).toBeInTheDocument();
+    await openModelPicker();
+
+    expect(await screen.findByRole("option", { name: /fast-chat/i })).toBeInTheDocument();
+    expect(screen.getByText(/locked/i)).toBeInTheDocument();
+    expect(screen.getByText(/requires account and credits/i)).toBeInTheDocument();
+  });
+
+  it("opens a dismissible auth modal when a guest clicks a locked paid model", async () => {
+    const fetchMock = createGuestFetchMock();
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    await openModelPicker();
+    fireEvent.click(await screen.findByRole("option", { name: /fast-chat/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByRole("heading", { name: /login/i })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /create account/i })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: /continue with free models/i }));
+
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        2,
-        expect.stringMatching(/\/api\/guest-session$/),
-        expect.objectContaining({
-          method: "POST",
-        }),
-      );
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect((await screen.findAllByText(/guest mode is active/i)).length).toBeGreaterThan(0);
+  });
+
+  it("shows guest messaging and sends chat through the guest web endpoint", async () => {
+    const fetchMock = createGuestFetchMock();
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    expect((await screen.findAllByText(/guest mode is active/i)).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        /\/api\/guest-session$/.test(String(url)) &&
+        typeof init === "object" &&
+        init !== null &&
+        "method" in init &&
+        init.method === "POST"
+      )).toBe(true);
     });
 
     fireEvent.change(screen.getByPlaceholderText(/ask something/i), {
@@ -70,15 +180,70 @@ describe("chat guest mode", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenNthCalledWith(
-        3,
-        expect.stringMatching(/\/api\/chat\/guest$/),
-        expect.objectContaining({
-          method: "POST",
-        }),
-      );
+      expect(fetchMock.mock.calls.some(([url, init]) =>
+        /\/api\/chat\/guest$/.test(String(url)) &&
+        typeof init === "object" &&
+        init !== null &&
+        "method" in init &&
+        init.method === "POST"
+      )).toBe(true);
     });
 
     expect(screen.getByText(/guest mode only supports free models/i)).toBeInTheDocument();
+  });
+
+  it("unlocks paid models in place after authenticating from the modal", async () => {
+    const fetchMock = createGuestFetchMock();
+    signInWithPasswordMock.mockResolvedValue({
+      data: {
+        session: {
+          access_token: "auth_token",
+        },
+        user: {
+          email: "demo@example.com",
+          user_metadata: { name: "Demo" },
+        },
+      },
+      error: null,
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    await openModelPicker();
+    fireEvent.click(await screen.findByRole("option", { name: /fast-chat/i }));
+
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getAllByPlaceholderText("Email")[0]!, {
+      target: { value: "demo@example.com" },
+    });
+    fireEvent.change(within(dialog).getAllByPlaceholderText("Password")[0]!, {
+      target: { value: "password123" },
+    });
+    fireEvent.click(within(dialog).getAllByRole("button", { name: /login/i }).at(-1)!);
+
+    await waitFor(() => {
+      expect(signInWithPasswordMock).toHaveBeenCalledWith({
+        email: "demo@example.com",
+        password: "password123",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/guest mode is active/i)).not.toBeInTheDocument();
+    });
+
+    await openModelPicker();
+    const paidOption = await screen.findByRole("option", { name: /fast-chat/i });
+    expect(within(paidOption).queryByText(/locked/i)).not.toBeInTheDocument();
+    fireEvent.click(paidOption);
+
+    const modelTrigger = (await screen.findAllByRole("combobox")).at(-1)!;
+    await waitFor(() => {
+      expect(modelTrigger).toHaveTextContent("fast-chat");
+    });
   });
 });

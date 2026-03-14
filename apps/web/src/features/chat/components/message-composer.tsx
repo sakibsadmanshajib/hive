@@ -3,12 +3,13 @@ import { SendHorizontal } from "lucide-react";
 import { Button } from "../../../components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../../components/ui/select";
 import { Textarea } from "../../../components/ui/textarea";
+import type { ChatModelOption } from "../use-chat-session";
 import { useChatShortcuts } from "../hooks/use-chat-shortcuts";
 
 type MessageComposerProps = {
   prompt: string;
   model: string;
-  modelOptions: string[];
+  modelOptions: ChatModelOption[];
   guestMode: boolean;
   loading: boolean;
   onPromptChange: (value: string) => void;
@@ -38,8 +39,18 @@ export function MessageComposer({
           </SelectTrigger>
           <SelectContent>
             {modelOptions.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option}
+              <SelectItem key={option.id} value={option.id}>
+                <span className="inline-flex w-full items-center justify-between gap-3">
+                  <span>{option.id}</span>
+                  {option.locked ? (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-900">
+                      Locked
+                    </span>
+                  ) : null}
+                </span>
+                {option.locked && option.lockReason ? (
+                  <span className="mt-1 block text-xs text-muted-foreground">{option.lockReason}</span>
+                ) : null}
               </SelectItem>
             ))}
           </SelectContent>

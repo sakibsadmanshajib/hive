@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuthSessionState } from "../features/auth/auth-session";
+import { AuthModal } from "../features/auth/components/auth-modal";
 import { ChatWorkspaceShell } from "../features/chat/components/chat-workspace-shell";
 import { MessageComposer } from "../features/chat/components/message-composer";
 import { MessageList } from "../features/chat/components/message-list";
@@ -9,7 +9,6 @@ import { useSupabaseAuthSessionSync } from "../lib/supabase-client";
 
 export default function HomePage() {
   useSupabaseAuthSessionSync();
-  const { session: authSession } = useAuthSessionState();
   const {
     conversations,
     activeConversation,
@@ -17,7 +16,6 @@ export default function HomePage() {
     addConversation,
     selectConversation,
     model,
-    setModel,
     prompt,
     setPrompt,
     loading,
@@ -25,6 +23,9 @@ export default function HomePage() {
     sendMessage,
     modelOptions,
     guestMode,
+    authModalOpen,
+    closeAuthModal,
+    onModelChange,
   } = useChatSession();
 
   return (
@@ -49,11 +50,12 @@ export default function HomePage() {
             guestMode={guestMode}
             loading={loading}
             onPromptChange={setPrompt}
-            onModelChange={setModel}
+            onModelChange={onModelChange}
             onSend={sendMessage}
           />
         </div>
       </div>
+      <AuthModal open={authModalOpen} onClose={closeAuthModal} />
     </ChatWorkspaceShell>
   );
 }
