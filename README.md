@@ -24,12 +24,12 @@ Hive is an AI inference platform with:
 
 ## Getting Started
 
-Hive local development runs two Docker-managed systems:
+Hive local development runs two Docker-managed systems in conjunction:
 
 - the **Hive app stack**, started by this repo's Docker Compose files
 - the **Supabase local stack**, started by the Supabase CLI
 
-Both will appear in `docker ps`, but they are managed by different tools.
+Both will appear in `docker ps`, but they are managed by different tools and you need both for the full app to work.
 
 ### First-Time Setup
 
@@ -51,7 +51,8 @@ pnpm stack:dev
 1. starts or verifies the Supabase local stack
 2. reads the live local Supabase keys from `npx supabase status -o env`
 3. injects the required auth env vars for Hive
-4. starts the full Hive stack with hot reload for `api` and `web`
+4. injects a local-only `WEB_INTERNAL_GUEST_TOKEN` for guest web-chat proxying
+5. starts the full Hive stack with hot reload for `api` and `web`
 
 ### Daily Development
 
@@ -97,8 +98,11 @@ That means:
 
 - `docker compose up` alone is not enough for local auth
 - `npx supabase start` alone is not enough for the Hive app stack
+- `supabase/migrations/` is the live schema path used by the Supabase CLI for local bootstrap and CI resets
 - `pnpm bootstrap:local` owns first-time local schema/bootstrap
 - `pnpm stack:dev` is the standardized daily-development command because it handles both lifecycles together
+
+The GitHub web smoke workflow follows the same rule: it starts the Supabase CLI stack, resets the local schema from repo migrations, then starts the Hive Docker app stack on top of that state. It intentionally skips Ollama there because the smoke suite exercises guest chat through the free mock-backed model and stubs authenticated inference calls instead of validating local Ollama inference.
 
 ### Why `api` And `web` Are Separate Containers
 
@@ -121,6 +125,8 @@ curl -s http://127.0.0.1:8080/v1/providers/status
 curl -s http://127.0.0.1:54321/auth/v1/health
 curl -sI http://127.0.0.1:3000/auth
 ```
+
+For web auth/chat/billing smoke verification, use the rebuilt Docker-local stack on `http://127.0.0.1:3000` and the runbook at `docs/runbooks/active/web-e2e-smoke.md`. Do not treat standalone local app servers or alternate local ports as the normal verification path.
 
 ### Optional Production-Like Compose Mode
 
@@ -174,6 +180,9 @@ GitHub contributor intake and triage are repo-managed:
 
 - `/` is the primary chat workspace for both guests and authenticated users.
 - Guests stay on `/` in guest mode and are limited to `costType: "free"` chat models.
+- The model picker keeps paid chat models visible to guests, but renders them as locked with the reason `Requires account and credits`.
+- Selecting a locked paid model opens a dismissible combined auth modal on `/`; dismissing it keeps the current guest conversation intact.
+- Successful authentication from that modal closes it in place and immediately unlocks paid models on `/` without navigating away.
 - The web app bootstraps a signed `httpOnly` guest cookie through `/api/guest-session` and mirrors a browser-visible guest session object for UI state and analytics.
 - Guest chat flows through `/api/chat/guest`; the browser never calls the API guest runtime directly.
 - `/auth` hosts login/signup (backed by Supabase Auth).
@@ -239,11 +248,13 @@ OpenAI-compatible behavior is the API product contract, not the web chat product
 - `api` traffic covers the OpenAI-compatible API surface and records the stable API key id when a key-backed call is used
 - `web` traffic covers the chat product, including guest chat and session-authenticated web chat inferred from trusted browser-origin signals while the runtime is still shared
 
-This PR separates analytics/reporting first. Authenticated web chat still shares the public inference runtime path today; the deeper runtime split is tracked separately in GitHub issue `#57`.
+Issue `#19` now includes the guest-first conversion UX on `/`: guests can keep chatting on free models, see paid models as locked, and authenticate from an in-place modal to unlock them. Authenticated web chat still shares the public inference runtime path today; the deeper runtime split remains tracked separately in GitHub issue `#57`.
 
 Model metadata now includes a policy-oriented `costType` (`free`, `fixed`, `variable`). Guest web chat can use only `free` chat models, while authenticated users can access credit-charging models.
 
-Guest web chat and attribution proxying require a server-only `WEB_INTERNAL_GUEST_TOKEN` to be configured in both the web and API runtimes. Without it, guest chat is unavailable.
+Guest web chat and attribution proxying require a server-only `WEB_INTERNAL_GUEST_TOKEN` in both the web and API runtimes. `pnpm stack:dev` and the GitHub smoke workflow inject a local-only development token explicitly, but base Compose, staging, and production must set a real secret themselves. Without that token, guest chat is unavailable.
+
+When the API runs inside Docker, its Ollama target must stay on the Docker service hostname `http://ollama:11434`; using `http://127.0.0.1:11434` inside the API container points back at the API container itself and leaves Ollama degraded.
 
 Guest attribution is persisted in dedicated Supabase tables:
 
@@ -421,7 +432,7 @@ pnpm --filter @hive/web build       # Web build
 
 ## Database Migrations
 
-Supabase migrations are located in `supabase/migrations/`:
+The live Supabase CLI migration source of truth is `supabase/migrations/`:
 - `20260223000001_auth_user_tables.sql` — User profiles, roles, permissions, settings
 - `20260223000002_api_keys.sql` — Hashed API key metadata
 - `20260223000003_billing_tables.sql` — Credit accounts, ledger, payment intents/events

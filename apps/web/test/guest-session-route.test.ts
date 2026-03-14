@@ -5,6 +5,7 @@ describe("guest session bootstrap route", () => {
   beforeEach(() => {
     process.env.WEB_INTERNAL_GUEST_TOKEN = "test-web-token";
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
+    process.env.INTERNAL_API_BASE_URL = "http://api:8080";
   });
 
   it("issues a guest session cookie and returns a browser-visible guest session object", async () => {
@@ -28,7 +29,7 @@ describe("guest session bootstrap route", () => {
 
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/v1/internal/guest/session",
+      "http://api:8080/v1/internal/guest/session",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
@@ -42,5 +43,27 @@ describe("guest session bootstrap route", () => {
       issuedAt: expect.any(String),
       expiresAt: expect.any(String),
     });
+  });
+
+  it("accepts loopback alias origins used by the production smoke base URL", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ persisted: true }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new Request("http://localhost/api/guest-session", {
+        method: "POST",
+        headers: {
+          origin: "http://127.0.0.1",
+          referer: "http://127.0.0.1/",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

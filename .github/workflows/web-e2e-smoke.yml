@@ -7,7 +7,9 @@ on:
     paths:
       - "apps/web/**"
       - "apps/api/**"
+      - "supabase/**"
       - "docker-compose.yml"
+      - ".env.example"
       - ".github/workflows/web-e2e-smoke.yml"
   workflow_dispatch:
 
@@ -55,17 +57,40 @@ jobs:
       - name: Install Playwright browser dependencies
         run: pnpm --filter @hive/web exec playwright install --with-deps chromium
 
-      - name: Start docker stack
+      - name: Start local Supabase CLI stack
+        run: npx supabase start
+
+      - name: Reset local Supabase schema from repo migrations
+        run: npx supabase db reset --yes
+
+      - name: Export local Supabase env
+        shell: bash
+        run: |
+          set -a
+          source <(npx supabase status -o env)
+          set +a
+          echo "NEXT_PUBLIC_SUPABASE_URL=$API_URL" >> "$GITHUB_ENV"
+          echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
+          echo "E2E_SUPABASE_ANON_KEY=$ANON_KEY" >> "$GITHUB_ENV"
+          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
+
+      - name: Start docker support services
+        run: docker compose up -d redis langfuse-db langfuse
+
+      - name: Start docker app stack without Ollama
         env:
           NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8080
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: test-supabase-anon-key
-        run: docker compose up --build -d
+          NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          INTERNAL_API_BASE_URL: http://api:8080
+          SUPABASE_SERVICE_ROLE_KEY: ${{ env.SUPABASE_SERVICE_ROLE_KEY }}
+          WEB_INTERNAL_GUEST_TOKEN: dev-web-guest-token
+        run: docker compose up --build -d api web --no-deps
 
-      - name: Wait for API and web readiness
+      - name: Wait for Supabase, API, and web readiness
         run: |
           for i in {1..60}; do
-            if curl -fsS http://127.0.0.1:8080/health >/dev/null && curl -fsSL http://127.0.0.1:3000/auth >/dev/null; then
+            if curl -fsS http://127.0.0.1:54321/auth/v1/health >/dev/null && curl -fsS http://127.0.0.1:8080/health >/dev/null && curl -fsSL http://127.0.0.1:3000/auth >/dev/null; then
               exit 0
             fi
             sleep 2
@@ -78,7 +103,7 @@ jobs:
         env:
           E2E_BASE_URL: http://127.0.0.1:3000
           E2E_API_BASE_URL: http://127.0.0.1:8080
-          E2E_ALLOW_DEV_TOKEN_FALLBACK: "true"
+          E2E_SUPABASE_ANON_KEY: ${{ env.E2E_SUPABASE_ANON_KEY }}
         run: pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 
       - name: Upload Playwright artifacts
@@ -94,3 +119,7 @@ jobs:
       - name: Stop docker stack
         if: always()
         run: docker compose down -v
+
+      - name: Stop local Supabase CLI stack
+        if: always()
+        run: npx supabase stop --no-backup

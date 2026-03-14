@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getApiBase } from "../../../../lib/api";
+import { getServerApiBase } from "../../../../lib/api";
 import { isSameOriginBrowserRequest, readClientIp } from "../../guest-session/request";
 import { parseGuestSession } from "../../guest-session/session";
 
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
 
   const payload = await request.json();
   const clientIp = readClientIp(request);
-  const response = await fetch(`${getApiBase()}/v1/internal/chat/guest`, {
+  const response = await fetch(`${getServerApiBase()}/v1/internal/chat/guest`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

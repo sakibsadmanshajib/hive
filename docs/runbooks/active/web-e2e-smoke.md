@@ -1,6 +1,6 @@
 # Web E2E Smoke Runbook
 
-This runbook covers smoke validation for the guarded auth -> chat -> billing/settings flow in `apps/web`.
+This runbook covers smoke validation for the guest-first home, auth, chat, and billing/settings flow in `apps/web`.
 
 ## Scope
 
@@ -8,8 +8,10 @@ Smoke suite file: `apps/web/e2e/smoke-auth-chat-billing.spec.ts`
 
 Covered scenarios:
 
-- unauthenticated `/` redirects to `/auth`
-- register happy path reaches `/` chat workspace
+- unauthenticated `/` stays on the guest-first chat workspace
+- guest mode can send a real free-model chat message through the web guest route
+- locked paid models open a dismissible auth modal for guests
+- registering from that modal unlocks paid models in place
 - chat success and failure messaging
 - billing access from profile menu
 - top-up failure messaging in settings
@@ -38,8 +40,6 @@ export E2E_SUPABASE_ANON_KEY=<your-local-supabase-anon-key>
 ```
 
 `E2E_API_BASE_URL` is used by auth fixtures that call the API directly, and `E2E_BASE_URL` is used by Playwright `baseURL` for browser navigation.
-If you override the web port or host, set both variables to matching values for that environment.
-You can also place both exports in your local shell profile or env file used during Playwright runs.
 `E2E_SUPABASE_ANON_KEY` is required for the default fixture path, which creates a real Supabase user through the Auth REST API and seeds the shared web auth-session storage key.
 The smoke/dev fallback path also seeds that same browser auth-session key, so auth-session sync code must not clear it just because Supabase initially reports no browser session.
 
@@ -59,7 +59,7 @@ pnpm --filter @hive/web exec playwright install-deps chromium
 
 ## Local Run
 
-Use `pnpm stack:dev` for normal daily development. It is not the preferred target for this smoke runbook, because this runbook is meant to validate production-bundle and hydration behavior rather than `next dev`.
+Use the Docker-local stack for smoke verification. Do not switch to standalone local app servers or alternate web ports for this runbook; the repo’s web-to-API path is origin-sensitive and smoke should reflect the normal Docker-local wiring on `http://127.0.0.1:3000`.
 
 For local smoke validation on a fresh environment, run the one-time bootstrap first:
 
@@ -69,49 +69,34 @@ pnpm bootstrap:local
 
 Do not rerun `pnpm bootstrap:local` as a routine smoke step unless you explicitly want to reset your local Supabase data and repull the default Ollama model.
 
-Then use the non-destructive production-style build/serve flow below.
-
-Build the production web bundle with the required public envs:
-
-```bash
-ANON_KEY=<your-local-supabase-anon-key>
-
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
-pnpm --filter @hive/web build
-```
-
-Load the live local Supabase values used by the production-style stack:
+Load the live local Supabase values used by the Docker-local stack:
 
 ```bash
 set -a
 # shellcheck disable=SC1090
 source <(npx supabase status -o env)
 set +a
+export WEB_INTERNAL_GUEST_TOKEN=dev-web-guest-token
 ```
 
-Start the production-style stack:
+Rebuild and start the Docker-local stack from the current working tree:
 
 ```bash
-npx supabase start
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
-NEXT_PUBLIC_SUPABASE_URL=$API_URL \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
-SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY \
+docker compose down
 docker compose up --build -d
 docker compose ps
 ```
 
-If you are validating a local fix outside Docker, run the rebuilt production app instead of `next dev`:
+The Docker-local stack expects:
+
+- `WEB_INTERNAL_GUEST_TOKEN` to be present for both `web` and `api` so guest session bootstrap and guest chat work
+- the API container to reach Ollama over `http://ollama:11434`, not `http://127.0.0.1:11434`
+
+Verify readiness on the standard Docker-local ports:
 
 ```bash
-ANON_KEY=<your-local-supabase-anon-key>
-
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=$ANON_KEY \
-pnpm --filter @hive/web exec next start -p 3000
+curl -s http://127.0.0.1:8080/health
+curl -sI http://127.0.0.1:3000/auth
 ```
 
 Run smoke e2e:
@@ -120,20 +105,28 @@ Run smoke e2e:
 pnpm --filter @hive/web test:e2e -- e2e/smoke-auth-chat-billing.spec.ts
 ```
 
-This matters for auth/session fixes because production hydration can expose redirect races and session-clearing bugs that are easy to miss in unit tests or `next dev`.
+This matters for auth/session fixes because the current smoke flow depends on the real Docker-local origin and web-to-API path, including guest-first `/`, locked-model auth modal behavior, and billing navigation from the profile menu.
 
 ## CI Run
 
 Workflow: `.github/workflows/web-e2e-smoke.yml`
 
-Workflow installs browser dependencies, starts Docker stack, waits for readiness, and runs the smoke spec.
-The CI workflow currently enables `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` so smoke runs can proceed in ephemeral environments even if direct Supabase signup is unavailable.
+Workflow installs browser dependencies, starts the local Supabase CLI stack, resets the local schema from `supabase/migrations/`, exports the live local Supabase anon/service-role keys, injects a local-only `WEB_INTERNAL_GUEST_TOKEN`, then starts the Docker app stack on top of that state and runs the smoke spec on `http://127.0.0.1:3000`.
+
+CI service split:
+
+- Supabase CLI provides the auth/database stack required for real guest-session persistence and real Auth REST signup fixtures
+- Docker Compose provides `redis`, `langfuse-db`, `langfuse`, `api`, and `web`
+- Ollama is intentionally skipped in CI because this smoke suite validates guest bootstrap, auth, and billing UX, not local inference; guest chat uses the free mock-backed model and authenticated chat requests are browser-stubbed in the spec
 
 ## Troubleshooting
 
 - Missing browser executable: rerun the Playwright browser install command.
-- Missing `E2E_SUPABASE_ANON_KEY`: export the local Supabase anon key or opt into `E2E_ALLOW_DEV_TOKEN_FALLBACK=true` for smoke-only runs.
+- Missing `E2E_SUPABASE_ANON_KEY`: export the live local Supabase anon key from `npx supabase status -o env`.
 - API/web readiness timeout: run `docker compose ps` and inspect logs via `docker compose logs api web`.
-- Smoke run accidentally executed against `pnpm stack:dev`: stop the dev stack with `pnpm stack:down` and rerun the production-style commands above.
+- CI smoke fails before the app stack is healthy: verify both orchestration layers are up, not just one of them. `npx supabase start` must be running alongside the Docker app services.
+- CI guest bootstrap fails with missing tables such as `guest_sessions`: verify the workflow ran `npx supabase db reset --yes` before exporting the local Supabase env.
+- Smoke run accidentally executed against `pnpm stack:dev` or a standalone local server: stop that flow and rerun the Docker-local commands above.
+- Guest UI renders but guest chat fails immediately: verify `WEB_INTERNAL_GUEST_TOKEN` is present in both `web` and `api`, and confirm the API container is not pointing Ollama at `127.0.0.1`.
 - Missing local Linux shared libraries: use `playwright install-deps` or rely on CI runner provisioning.
 - Smoke redirects authenticated fixtures back to `/auth`: verify the browser auth-session mirror waits for client hydration and does not clear seeded sessions before a real Supabase session has been observed.

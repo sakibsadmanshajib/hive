@@ -1,17 +1,28 @@
+function normalizeComparableOrigin(value: string): string | null {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname === "127.0.0.1" || url.hostname === "localhost"
+      ? "loopback"
+      : url.hostname;
+    return `${url.protocol}//${hostname}${url.port ? `:${url.port}` : ""}`;
+  } catch {
+    return null;
+  }
+}
+
 export function isSameOriginBrowserRequest(request: Request): boolean {
-  const targetOrigin = new URL(request.url).origin;
+  const targetOrigin = normalizeComparableOrigin(request.url);
+  if (!targetOrigin) {
+    return false;
+  }
   const origin = request.headers.get("origin");
-  if (origin && origin === targetOrigin) {
+  if (origin && normalizeComparableOrigin(origin) === targetOrigin) {
     return true;
   }
 
   const referer = request.headers.get("referer");
   if (referer) {
-    try {
-      return new URL(referer).origin === targetOrigin;
-    } catch {
-      return false;
-    }
+    return normalizeComparableOrigin(referer) === targetOrigin;
   }
 
   return false;

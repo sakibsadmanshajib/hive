@@ -65,6 +65,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Chat Home Access Model:** `/` now renders guest chat by default instead of redirecting unauthenticated users to `/auth`. Guest users are limited to free models and are prompted to sign in for paid capabilities.
+- **Guest Conversion UX On `/`:** Paid chat models now remain visible to guests as locked options instead of disappearing from the picker.
+    - Choosing a locked paid model opens a dismissible combined auth modal directly on `/`.
+    - Dismissing the modal preserves the active guest conversation and free-model flow.
+    - Successful modal auth unlocks paid models in place without navigating away from `/`.
+    - This completes issue `#19`'s guest-home conversion UX while leaving the deeper authenticated web runtime split tracked separately in GitHub issue `#57`.
 - **Guest Web Runtime:** Guest chat bootstrap now requires a durable guest session before the first anonymous chat request, and guest usage is recorded under `guestId` rather than a synthetic user id.
 - **Model Catalog Metadata:** API model responses now include `capability` and `costType`, and the underlying model catalog now carries structured pricing metadata in addition to fixed per-request credits.
 - **Image Routing:** `image-basic` now routes to the hosted OpenAI image adapter with `mock` fallback instead of returning a placeholder-only mock image URL.
@@ -90,7 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API Browser CORS:** Added explicit Fastify CORS support for current local web origins so browser requests to the API no longer fail preflight by default.
 - **Repo Audit Tracking Docs:** Updated the repo-audit plan and decision-process docs to reflect that PR #36 is now partially implemented rather than still fully deferred.
 - **Planning Doc Placement:** Documented `docs/plans/` as the canonical location for persisted implementation plans.
-- **Smoke Workflow Guidance:** Clarified that the web smoke runbook is production-style validation guidance, not a `pnpm stack:dev` workflow.
+- **Smoke Workflow Guidance:** Clarified that web smoke validation must run against the rebuilt Docker-local stack on the standard `http://127.0.0.1:3000` origin, not against standalone local web servers or alternate ports.
+- **Smoke Workflow Coverage:** Updated the smoke spec and GitHub smoke workflow to cover the guest-first `/` flow, locked paid models, dismissible auth modal, and in-place unlock after signup.
+- **Docker-Local Guest Runtime Defaults:** Wired a local-only `WEB_INTERNAL_GUEST_TOKEN` into the Docker-local `api` and `web` services, fixed the API container to target Ollama via `http://ollama:11434`, and extended smoke coverage so guest chat itself must succeed.
+- **Guest Token Hardening:** Base Compose now fails closed for `WEB_INTERNAL_GUEST_TOKEN`; only `pnpm stack:dev` and the GitHub smoke workflow inject the disposable development token, while deployed environments must set an explicit secret.
+- **Smoke Trigger Coverage:** The web smoke workflow now also tracks changes under `supabase/**` and `.env.example` because guest bootstrap and auth smoke depend on the live Supabase CLI schema path and Compose env wiring.
+- **Smoke Workflow Orchestration:** Updated the GitHub smoke workflow to start the Supabase CLI stack, reset the local schema from repo migrations, then start the Docker app stack alongside it, while intentionally skipping Ollama in CI because the smoke suite does not validate local inference.
 - **Smoke Bootstrap Guidance:** Clarified that `pnpm bootstrap:local` is a fresh-environment setup step, not a routine smoke prerequisite, because it resets local Supabase state.
 - **Plans Index Organization:** Reorganized `docs/plans/` so only in-flight plans remain at the root while completed dated plans move under `docs/plans/completed/`.
 - **Provider Metrics Documentation:** Aligned README, runbook, and architecture docs with the new public/internal provider metrics boundary and in-memory reset behavior.

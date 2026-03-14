@@ -9,6 +9,10 @@ export function getApiBase(): string {
   return requirePublicEnv("NEXT_PUBLIC_API_BASE_URL", process.env.NEXT_PUBLIC_API_BASE_URL);
 }
 
+export function getServerApiBase(): string {
+  return process.env.INTERNAL_API_BASE_URL ?? getApiBase();
+}
+
 export function getAppUrl(path: string): string {
   if (typeof window === "undefined") {
     return path;

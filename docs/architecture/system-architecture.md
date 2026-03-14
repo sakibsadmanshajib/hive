@@ -38,6 +38,8 @@ graph TD
 - In local Docker-based development, those browser envs and the API's `SUPABASE_SERVICE_ROLE_KEY` must come from the live Supabase CLI stack (`npx supabase status -o env`), not placeholder defaults
 - The browser maintains a small mirrored auth-session store for app routing and API headers, but Supabase remains the source of truth. The mirror is synchronized from `getSession()` and `onAuthStateChange()` without clearing seeded local sessions until a real Supabase session has been observed.
 - The home route `/` is guest-accessible by default. Guest chat bootstraps a signed `httpOnly` guest cookie plus a mirrored browser-visible guest session object, is limited to models with `costType: "free"`, rejects non-same-origin browser traffic, and forwards the client IP plus validated `guestId` to the API for guest rate limiting and attribution.
+- The home model picker keeps paid chat models visible for guests as locked entries with the reason `Requires account and credits`; selecting one opens a dismissible combined auth modal on `/` rather than navigating away.
+- Successful auth from that modal updates the mirrored auth-session store and unlocks paid models in place on `/`, preserving the current conversation state.
 - Protected routes must wait for client auth-session hydration before redirecting to `/auth`; prerendered `null` auth state is not sufficient evidence that the browser is unauthenticated.
 
 ### 3. Supabase (Auth + Persistence)
@@ -112,20 +114,23 @@ Guest web chat:
 
 1. Browser stays on `/` without auth and bootstraps a guest session through `/api/guest-session`
 2. The Next.js route issues a signed guest cookie, mirrors a browser-visible guest session object, and persists/refreshes the guest session through the internal API
-3. Browser submits guest chat to `/api/chat/guest`
-4. The Next.js guest route rejects non-same-origin requests and forwards the internal request with a server-only token, validated `guestId`, and caller IP
-5. Redis rate-limit check uses a guest key derived from the forwarded client IP
-6. Requested model is validated against guest policy (`costType === "free"`)
-7. Provider registry executes only the guest-safe model and records usage under `guest_usage_events`
-8. No credit debit occurs
-9. Response returns without spilling into paid models
+3. The model picker exposes free models normally and renders paid models as locked options with an in-place auth upsell
+4. Browser submits guest chat to `/api/chat/guest`
+5. The Next.js guest route rejects non-same-origin requests and forwards the internal request with a server-only token, validated `guestId`, and caller IP
+6. Redis rate-limit check uses a guest key derived from the forwarded client IP
+7. Requested model is validated against guest policy (`costType === "free"`)
+8. Provider registry executes only the guest-safe model and records usage under `guest_usage_events`
+9. No credit debit occurs
+10. Response returns without spilling into paid models
 
 Guest-to-user conversion linkage:
 
-1. Browser later authenticates through Supabase Auth
-2. The web auth/session sync posts to `/api/guest-session/link` when a guest session is present
-3. The web route validates the signed guest cookie and forwards the link request to the API with the internal token plus authenticated bearer token
-4. The API resolves the authenticated user and persists the durable `guestId -> userId` link in `guest_user_links`
+1. Guest selects a locked paid model and opens the combined auth modal on `/`
+2. Browser later authenticates through Supabase Auth without leaving the current chat surface
+3. The web auth/session sync posts to `/api/guest-session/link` when a guest session is present
+4. The web route validates the signed guest cookie and forwards the link request to the API with the internal token plus authenticated bearer token
+5. The API resolves the authenticated user and persists the durable `guestId -> userId` link in `guest_user_links`
+6. The refreshed auth-session store causes paid models to unlock in place on `/`
 
 ## Billing and Ledger Architecture
 
@@ -208,7 +213,7 @@ Payment reconciliation scheduling is:
 └─────────────────┘
 ```
 
-Supabase is managed by the Supabase CLI rather than Hive's Compose file, but it still runs as Docker containers under the hood. The API container reaches that stack via `host.docker.internal`.
+Supabase is managed by the Supabase CLI rather than Hive's Compose file, but it still runs as Docker containers under the hood. The API container reaches that stack via `host.docker.internal`. For a working local or CI app runtime, the Supabase CLI stack and the Hive Docker app stack have to run together; neither one is sufficient on its own.
 
 The standardized local workflow is split deliberately:
 
@@ -229,4 +234,4 @@ This separation is useful even in local development because it:
 - makes it obvious which values are safe for browser exposure (`NEXT_PUBLIC_*`) versus server-only secrets
 - lets the web production bundle be validated independently from the API runtime
 
-The standardized daily-development workflow is `pnpm stack:dev`, which combines the Supabase CLI lifecycle with a Docker Compose dev override so `api` and `web` keep hot reload while still running as part of the full stack. First-time local setup should run `pnpm bootstrap:local` before that daily workflow.
+The standardized daily-development workflow is `pnpm stack:dev`, which combines the Supabase CLI lifecycle with a Docker Compose dev override so `api` and `web` keep hot reload while still running as part of the full stack. That path injects a local-only guest proxy token for the web guest-chat boundary. First-time local setup should run `pnpm bootstrap:local` before that daily workflow. The GitHub web smoke workflow mirrors the same Supabase-CLI-plus-Docker conjunction against the live `supabase/migrations/` path, but intentionally omits Ollama because the smoke suite does not validate local inference.

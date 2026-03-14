@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getApiBase } from "../../../../lib/api";
+import { getServerApiBase } from "../../../../lib/api";
 import { isSameOriginBrowserRequest } from "../request";
 import { parseGuestSession } from "../session";
 
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "missing guest session" }, { status: 401 });
   }
 
-  const response = await fetch(`${getApiBase()}/v1/internal/guest/link`, {
+  const response = await fetch(`${getServerApiBase()}/v1/internal/guest/link`, {
     method: "POST",
     headers: {
       authorization,

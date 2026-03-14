@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getApiBase } from "../../../lib/api";
+import { getServerApiBase } from "../../../lib/api";
 import { isSameOriginBrowserRequest, readClientIp } from "./request";
 import { buildGuestSessionCookie, createGuestSession } from "./session";
 
@@ -13,7 +13,7 @@ export async function POST(request: Request) {
   }
 
   const { cookieValue, session } = createGuestSession(secret);
-  const persisted = await fetch(`${getApiBase()}/v1/internal/guest/session`, {
+  const persisted = await fetch(`${getServerApiBase()}/v1/internal/guest/session`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

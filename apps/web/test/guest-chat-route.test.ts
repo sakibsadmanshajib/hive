@@ -5,6 +5,7 @@ import { createGuestSession } from "../src/app/api/guest-session/session";
 describe("guest chat web route", () => {
   beforeEach(() => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
+    process.env.INTERNAL_API_BASE_URL = "http://api:8080";
     process.env.WEB_INTERNAL_GUEST_TOKEN = "test-web-token";
     vi.restoreAllMocks();
   });
@@ -38,7 +39,7 @@ describe("guest chat web route", () => {
     );
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://127.0.0.1:8080/v1/internal/chat/guest",
+      "http://api:8080/v1/internal/chat/guest",
       expect.objectContaining({
         method: "POST",
         headers: expect.objectContaining({
