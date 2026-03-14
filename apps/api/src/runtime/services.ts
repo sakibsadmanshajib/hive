@@ -734,12 +734,14 @@ class RuntimeAiService {
       };
     }
 
-    await this.usage.add({
-      userId,
-      endpoint: "/v1/images/generations",
-      model: model.id,
-      credits: creditsCost,
-      ...resolvedUsageContext,
+    await this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/images/generations",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
     });
     return {
       statusCode: 200 as const,

@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Guest Model Fail-Closed Behavior:** Guest chat now stays pinned to the built-in `guest-free` model when the public model catalog fails or returns only paid chat models, instead of selecting a locked paid option.
 - **Domain Image Model Selection:** The domain image-generation path now honors an explicit requested image model id instead of always billing and logging against the default image model.
-- **Paid Inference Billing Guardrails:** `/v1/chat/completions` and `/v1/responses` now refund consumed credits when the provider call fails or usage persistence fails before the response is returned.
+- **Paid Inference Billing Guardrails:** `/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations` now refund consumed credits when the provider call fails or usage persistence fails before the response is returned.
 - **Responses Route Headers:** `/v1/responses` now emits the same routing and billing headers as the other paid inference routes: `x-model-routed`, `x-provider-used`, `x-provider-model`, and `x-actual-credits`.
 - **Guest Session Bootstrap Resilience:** Guest session bootstrap and guest-to-user link side effects now fail closed on network errors instead of surfacing unhandled browser/test rejections.
 - **API Browser CORS:** Added explicit Fastify CORS support for current local web origins so browser requests to the API no longer fail preflight by default.
