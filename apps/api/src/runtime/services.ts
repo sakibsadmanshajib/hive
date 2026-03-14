@@ -546,10 +546,10 @@ class RuntimeAiService {
     private readonly langfuse: LangfuseClient,
   ) { }
 
-  private buildUsageContext(context?: { channel?: UsageChannel; apiKeyId?: string }) {
+  private buildUsageContext(context: { channel: UsageChannel; apiKeyId?: string }) {
     return {
-      channel: context?.channel ?? "api",
-      apiKeyId: context?.apiKeyId,
+      channel: context.channel,
+      apiKeyId: context.apiKeyId,
     };
   }
 
@@ -557,8 +557,9 @@ class RuntimeAiService {
     userId: string,
     modelId: string | undefined,
     messages: ChatMessage[],
-    usageContext?: { channel?: UsageChannel; apiKeyId?: string },
+    usageContext: { channel: UsageChannel; apiKeyId?: string },
   ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -575,7 +576,7 @@ class RuntimeAiService {
       endpoint: "/v1/chat/completions",
       model: model.id,
       credits: creditsCost,
-      ...this.buildUsageContext(usageContext),
+      ...resolvedUsageContext,
     });
 
     let providerResult;
@@ -630,7 +631,8 @@ class RuntimeAiService {
     };
   }
 
-  async responses(userId: string, input: string, usageContext?: { channel?: UsageChannel; apiKeyId?: string }) {
+  async responses(userId: string, input: string, usageContext: { channel: UsageChannel; apiKeyId?: string }) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = this.models.pickDefault("chat");
     const creditsCost = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     const consumed = await this.credits.consume(userId, creditsCost);
@@ -642,7 +644,7 @@ class RuntimeAiService {
       endpoint: "/v1/responses",
       model: model.id,
       credits: creditsCost,
-      ...this.buildUsageContext(usageContext),
+      ...resolvedUsageContext,
     });
 
     let providerResult;
@@ -669,8 +671,9 @@ class RuntimeAiService {
   async imageGeneration(
     userId: string,
     request: ImageGenerationRequest,
-    usageContext?: { channel?: UsageChannel; apiKeyId?: string },
+    usageContext: { channel: UsageChannel; apiKeyId?: string },
   ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = request.model && request.model !== "auto" ? this.models.findById(request.model) : this.models.pickDefault("image");
     if (!model || model.capability !== "image") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -707,7 +710,7 @@ class RuntimeAiService {
       endpoint: "/v1/images/generations",
       model: model.id,
       credits: creditsCost,
-      ...this.buildUsageContext(usageContext),
+      ...resolvedUsageContext,
     });
     return {
       statusCode: 200 as const,

@@ -6,6 +6,11 @@ import { parseGuestSession } from "../session";
 const INTERNAL_REQUEST_TIMEOUT_MS = 5_000;
 
 async function buildProxyResponse(response: Response): Promise<NextResponse> {
+  if (!response.ok) {
+    const status = response.status >= 500 ? 502 : response.status;
+    return NextResponse.json({ error: "guest session link unavailable" }, { status });
+  }
+
   const contentType = response.headers?.get?.("content-type") ?? "";
   if (typeof response.text !== "function") {
     if (typeof response.json === "function") {

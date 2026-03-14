@@ -5,7 +5,7 @@ import type { UsageChannel } from "./types";
 import { UsageService } from "./usage-service";
 
 type ChatMessage = { role: string; content: string };
-type UsageContext = { channel?: UsageChannel; apiKeyId?: string };
+type UsageContext = { channel: UsageChannel; apiKeyId?: string };
 type ImageRequest = {
   prompt: string;
   model?: string;
@@ -22,10 +22,10 @@ export class AiService {
     private readonly usage: UsageService,
   ) {}
 
-  private buildUsageContext(context?: UsageContext) {
+  private buildUsageContext(context: UsageContext) {
     return {
-      channel: context?.channel ?? "api",
-      apiKeyId: context?.apiKeyId,
+      channel: context.channel,
+      apiKeyId: context.apiKeyId,
     };
   }
 
@@ -33,8 +33,9 @@ export class AiService {
     userId: string,
     modelId: string | undefined,
     messages: ChatMessage[],
-    usageContext?: UsageContext,
+    usageContext: UsageContext,
   ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -51,7 +52,7 @@ export class AiService {
       endpoint: "/v1/chat/completions",
       model: model.id,
       credits,
-      ...this.buildUsageContext(usageContext),
+      ...resolvedUsageContext,
     });
 
     return {
@@ -79,7 +80,8 @@ export class AiService {
     };
   }
 
-  responses(userId: string, input: string, usageContext?: UsageContext) {
+  responses(userId: string, input: string, usageContext: UsageContext) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = this.models.pickDefault("chat");
     const credits = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     if (!this.credits.consume(userId, credits)) {
@@ -90,7 +92,7 @@ export class AiService {
       endpoint: "/v1/responses",
       model: model.id,
       credits,
-      ...this.buildUsageContext(usageContext),
+      ...resolvedUsageContext,
     });
 
     return {
@@ -104,7 +106,8 @@ export class AiService {
     };
   }
 
-  imageGeneration(userId: string, input: string | ImageRequest, usageContext?: UsageContext) {
+  imageGeneration(userId: string, input: string | ImageRequest, usageContext: UsageContext) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = this.models.pickDefault("image");
     const credits = this.models.creditsForRequest(model);
     if (!this.credits.consume(userId, credits)) {
@@ -115,7 +118,7 @@ export class AiService {
       endpoint: "/v1/images/generations",
       model: model.id,
       credits,
-      ...this.buildUsageContext(usageContext),
+      ...resolvedUsageContext,
     });
     const prompt = typeof input === "string" ? input : input.prompt;
 

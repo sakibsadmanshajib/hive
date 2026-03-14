@@ -115,6 +115,8 @@ describe("runtime image generation billing", () => {
       model: "image-basic",
       prompt: "a lighthouse in fog",
       responseFormat: "url",
+    }, {
+      channel: "api",
     });
 
     expect(result).toMatchObject({
@@ -226,6 +228,8 @@ describe("runtime image generation billing", () => {
       model: "image-basic",
       prompt: "a lighthouse in fog",
       responseFormat: "url",
+    }, {
+      channel: "api",
     });
 
     expect(result).toMatchObject({

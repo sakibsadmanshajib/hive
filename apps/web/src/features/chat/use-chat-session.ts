@@ -169,12 +169,15 @@ export function useChatSession() {
 
   function handleModelChange(nextModelId: string) {
     const nextModel = modelOptions.find((option) => option.id === nextModelId);
-    if (guestMode && nextModel?.locked) {
+    if (!nextModel) {
+      return;
+    }
+    if (guestMode && nextModel.locked) {
       setAuthModalOpen(true);
       return;
     }
 
-    setModel(nextModelId);
+    setModel(nextModel.id);
   }
 
   function addConversation() {

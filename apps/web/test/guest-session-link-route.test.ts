@@ -153,4 +153,32 @@ describe("guest session link route", () => {
     expect(response.status).toBe(502);
     await expect(response.json()).resolves.toEqual({ error: "guest session link unavailable" });
   });
+
+  it("sanitizes non-ok upstream errors instead of forwarding raw payloads", async () => {
+    const { cookieValue } = createGuestSession("test-web-token", new Date("2026-03-13T00:00:00.000Z"));
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 403,
+      headers: {
+        get: () => "application/json",
+      },
+      text: async () => JSON.stringify({ error: "internal details" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await POST(
+      new Request("http://localhost/api/guest-session/link", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer access-token",
+          origin: "http://localhost",
+          referer: "http://localhost/",
+          cookie: `hive_guest_session=${cookieValue}`,
+        },
+      }),
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: "guest session link unavailable" });
+  });
 });

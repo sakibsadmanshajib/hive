@@ -11,7 +11,12 @@ export function getApiBase(): string {
 
 export function getServerApiBase(): string {
   const internalBase = process.env.INTERNAL_API_BASE_URL?.trim();
-  return internalBase && internalBase.length > 0 ? internalBase : getApiBase();
+  if (!internalBase || internalBase.length === 0) {
+    return getApiBase();
+  }
+
+  const normalized = internalBase.toLowerCase();
+  return normalized === "undefined" ? getApiBase() : internalBase;
 }
 
 export function getAppUrl(path: string): string {

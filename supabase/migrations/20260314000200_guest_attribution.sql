@@ -3,7 +3,6 @@ begin;
 create table if not exists public.guest_sessions (
   guest_id text primary key,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now(),
   expires_at timestamptz not null,
   last_seen_at timestamptz,
   last_seen_ip text,
