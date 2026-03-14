@@ -235,6 +235,75 @@ describe("chat guest mode", () => {
     expect(screen.queryByRole("option", { name: /fast-chat/i })).not.toBeInTheDocument();
   });
 
+  it("keeps the built-in guest-safe model active when the catalog returns only paid chat models", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.endsWith("/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [
+              { id: "fast-chat", capability: "chat", costType: "fixed" },
+              { id: "smart-reasoning", capability: "chat", costType: "variable" },
+            ],
+          }),
+        };
+      }
+
+      if (url.endsWith("/api/guest-session")) {
+        return {
+          ok: true,
+          json: async () => ({
+            guestId: "guest_123",
+            issuedAt: "2026-03-13T00:00:00.000Z",
+            expiresAt: "2026-03-20T00:00:00.000Z",
+          }),
+        };
+      }
+
+      if (url.endsWith("/api/chat/guest")) {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { content: "Guest reply" } }],
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        json: async () => ({ error: `Unhandled URL: ${url}` }),
+      };
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    const modelTrigger = (await screen.findAllByRole("combobox")).at(-1)!;
+    await waitFor(() => {
+      expect(modelTrigger).toHaveTextContent("guest-free");
+    });
+
+    fireEvent.change(screen.getByPlaceholderText(/ask something/i), {
+      target: { value: "hello from guest" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => {
+        if (!/\/api\/chat\/guest$/.test(String(url))) {
+          return false;
+        }
+        if (!init || typeof init !== "object" || !("body" in init)) {
+          return false;
+        }
+        return JSON.parse(String(init.body)).model === "guest-free";
+      })).toBe(true);
+    });
+  });
+
   it("unlocks paid models in place after authenticating from the modal", async () => {
     const fetchMock = createGuestFetchMock();
     signInWithPasswordMock.mockResolvedValue({

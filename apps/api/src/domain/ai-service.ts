@@ -108,7 +108,13 @@ export class AiService {
 
   imageGeneration(userId: string, input: string | ImageRequest, usageContext: UsageContext) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
-    const model = this.models.pickDefault("image");
+    const requestedModel = typeof input === "string" ? undefined : input.model;
+    const model = requestedModel && requestedModel !== "auto"
+      ? this.models.findById(requestedModel)
+      : this.models.pickDefault("image");
+    if (!model || model.capability !== "image") {
+      return { error: "unknown model", statusCode: 400 as const };
+    }
     const credits = this.models.creditsForRequest(model);
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };

@@ -127,15 +127,20 @@ export function useChatSession() {
           }));
 
         if (!cancelled && chatModels.length > 0) {
-          setModelOptions(chatModels);
+          const firstUnlockedModel = chatModels.find((entry) => !entry.locked);
+          const nextModelOptions = guestMode && !firstUnlockedModel
+            ? [...DEFAULT_GUEST_MODEL_OPTIONS, ...chatModels]
+            : chatModels;
+
+          setModelOptions(nextModelOptions);
           setModel((currentModel) => {
-            const selectedModel = chatModels.find((entry) => entry.id === currentModel);
+            const selectedModel = nextModelOptions.find((entry) => entry.id === currentModel);
             if (selectedModel && !selectedModel.locked) {
               return selectedModel.id;
             }
 
-            const firstUnlockedModel = chatModels.find((entry) => !entry.locked);
-            return firstUnlockedModel?.id ?? chatModels[0].id;
+            const nextUnlockedModel = nextModelOptions.find((entry) => !entry.locked);
+            return nextUnlockedModel?.id ?? DEFAULT_GUEST_MODEL_OPTIONS[0].id;
           });
         }
       } catch {

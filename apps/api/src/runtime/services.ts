@@ -553,6 +553,20 @@ class RuntimeAiService {
     };
   }
 
+  private async refundOnUsageFailure(
+    userId: string,
+    creditsCost: number,
+    chargeReferenceId: string,
+    operation: () => Promise<void>,
+  ) {
+    try {
+      await operation();
+    } catch (error) {
+      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      throw error;
+    }
+  }
+
   async chatCompletions(
     userId: string,
     modelId: string | undefined,
@@ -565,20 +579,13 @@ class RuntimeAiService {
       return { error: "unknown model", statusCode: 400 as const };
     }
     const creditsCost = this.models.creditsForRequest(model);
-    const consumed = await this.credits.consume(userId, creditsCost);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
     if (!consumed) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
     const text = messages.map((msg) => msg.content).join(" ").trim();
-    await this.usage.add({
-      userId,
-      endpoint: "/v1/chat/completions",
-      model: model.id,
-      credits: creditsCost,
-      ...resolvedUsageContext,
-    });
-
     let providerResult;
     try {
       providerResult = await this.providerRegistry.chat(
@@ -589,11 +596,22 @@ class RuntimeAiService {
         })),
       );
     } catch (error) {
+      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
         statusCode: 502 as const,
       };
     }
+
+    await this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/chat/completions",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
+    });
 
     await this.langfuse.trace({
       userId,
@@ -635,30 +653,41 @@ class RuntimeAiService {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
     const model = this.models.pickDefault("chat");
     const creditsCost = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
-    const consumed = await this.credits.consume(userId, creditsCost);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
     if (!consumed) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
-    await this.usage.add({
-      userId,
-      endpoint: "/v1/responses",
-      model: model.id,
-      credits: creditsCost,
-      ...resolvedUsageContext,
-    });
 
     let providerResult;
     try {
       providerResult = await this.providerRegistry.chat(model.id, [{ role: "user", content: input }]);
     } catch (error) {
+      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
         statusCode: 502 as const,
       };
     }
 
+    await this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/responses",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
+    });
+
     return {
       statusCode: 200 as const,
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": providerResult.providerUsed,
+        "x-provider-model": providerResult.providerModel,
+        "x-actual-credits": String(creditsCost),
+      },
       body: {
         id: `resp_${randomUUID().slice(0, 12)}`,
         object: "response",

@@ -10,6 +10,7 @@ Covered scenarios:
 
 - unauthenticated `/` stays on the guest-first chat workspace
 - guest mode can send a real free-model chat message through the web guest route
+- guest mode fails closed to the built-in `guest-free` model if the catalog does not expose any unlocked guest chat model
 - locked paid models open a dismissible auth modal for guests
 - registering from that modal unlocks paid models in place
 - chat success and failure messaging

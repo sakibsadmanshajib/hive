@@ -181,6 +181,7 @@ GitHub contributor intake and triage are repo-managed:
 - `/` is the primary chat workspace for both guests and authenticated users.
 - Guests stay on `/` in guest mode and are limited to `costType: "free"` chat models.
 - The model picker keeps paid chat models visible to guests, but renders them as locked with the reason `Requires account and credits`.
+- If the guest model catalog load fails or returns only paid chat models, the web app fails closed to the built-in `guest-free` option instead of selecting a locked paid model.
 - Selecting a locked paid model opens a dismissible combined auth modal on `/`; dismissing it keeps the current guest conversation intact.
 - Successful authentication from that modal closes it in place and immediately unlocks paid models on `/` without navigating away.
 - The web app bootstraps a signed `httpOnly` guest cookie through `/api/guest-session` and mirrors a browser-visible guest session object for UI state and analytics.
@@ -306,8 +307,9 @@ Operator-only support endpoint:
 - `fast-chat` → primary `ollama`, fallback `groq`, then `mock`
 - `smart-reasoning` → primary `groq`, fallback `ollama`, then `mock`
 - `image-basic` → primary `openai`, fallback `mock`
+- Explicit image requests honor the caller-selected image model id when one is supplied instead of silently rewriting them to the default image model.
 
-Chat and image response headers: `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits`.
+Chat, responses, and image response headers: `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits`.
 
 ## Environment Variables
 
