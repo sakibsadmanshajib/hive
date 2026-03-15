@@ -84,7 +84,7 @@ jobs:
         env:
           OLLAMA_SMOKE_MODEL: qwen2.5:0.5b
         run: |
-          for i in {1..60}; do
+          for _ in {1..60}; do
             if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
               break
             fi
@@ -107,7 +107,7 @@ jobs:
 
       - name: Wait for Supabase, API, and web readiness
         run: |
-          for i in {1..60}; do
+          for _ in {1..60}; do
             if curl -fsS http://127.0.0.1:54321/auth/v1/health >/dev/null && curl -fsS http://127.0.0.1:8080/health >/dev/null && curl -fsSL http://127.0.0.1:3000/auth >/dev/null; then
               exit 0
             fi

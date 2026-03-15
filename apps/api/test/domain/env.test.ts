@@ -15,6 +15,7 @@ const trackedKeys = [
   "PROVIDER_MAX_RETRIES",
   "OPENROUTER_API_KEY",
   "OPENROUTER_BASE_URL",
+  "OPENROUTER_MODEL",
   "OPENROUTER_FREE_MODEL",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
@@ -237,5 +238,17 @@ describe("getEnv provider timeout and retry controls", () => {
       baseUrl: "https://api.anthropic.com/v1",
       model: "claude-sonnet-4-5",
     });
+  });
+
+  it("treats blank OpenRouter model env vars as unset and falls back to the router default", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.OPENROUTER_MODEL = "";
+    process.env.OPENROUTER_FREE_MODEL = "";
+
+    const env = getEnv();
+
+    expect(env.providers.openrouter.model).toBe("openrouter/auto");
+    expect(env.providers.openrouter.freeModel).toBeUndefined();
   });
 });

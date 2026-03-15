@@ -142,6 +142,7 @@ describe("guest chat route", () => {
       reply,
     );
 
+    expect(reply.headers.get("x-model-routed")).toBe("guest-free");
     expect(reply.headers.get("x-provider-used")).toBe("openrouter");
     expect(reply.headers.get("x-provider-model")).toBe("openrouter/free-model");
     expect(reply.headers.get("x-actual-credits")).toBe("0");

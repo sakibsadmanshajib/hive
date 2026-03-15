@@ -10,6 +10,15 @@ function required(name: string, fallback?: string): string {
   return value;
 }
 
+function optional(name: string): string | undefined {
+  const value = process.env[name];
+  if (value === undefined) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function parseNumber(name: string, fallback: number): number {
   const raw = process.env[name];
   if (raw === undefined || raw.trim() === "") {
@@ -172,7 +181,7 @@ export function getEnv(): AppEnv {
     postgresUrl: required("POSTGRES_URL", "postgres://postgres:postgres@127.0.0.1:5432/postgres"),
     redisUrl: required("REDIS_URL", "redis://127.0.0.1:6379"),
     rateLimitPerMinute: parseNumber("RATE_LIMIT_PER_MINUTE", 60),
-    adminStatusToken: process.env.ADMIN_STATUS_TOKEN,
+    adminStatusToken: optional("ADMIN_STATUS_TOKEN"),
     allowDemoPaymentConfirm: parseBoolean("ALLOW_DEMO_PAYMENT_CONFIRM", true),
     allowDevApiKeyPrefix: parseBoolean("ALLOW_DEV_API_KEY_PREFIX", false),
     google: {
@@ -190,13 +199,13 @@ export function getEnv(): AppEnv {
       sslcommerz: required("SSLCOMMERZ_WEBHOOK_SECRET", "sslcommerz-secret"),
     },
     bkash: {
-      verifyEndpoint: process.env.BKASH_VERIFY_ENDPOINT,
-      bearerToken: process.env.BKASH_BEARER_TOKEN,
+      verifyEndpoint: optional("BKASH_VERIFY_ENDPOINT"),
+      bearerToken: optional("BKASH_BEARER_TOKEN"),
     },
     sslcommerz: {
-      validatorEndpoint: process.env.SSLCOMMERZ_VALIDATOR_ENDPOINT,
-      storeId: process.env.SSLCOMMERZ_STORE_ID,
-      storePassword: process.env.SSLCOMMERZ_STORE_PASSWORD,
+      validatorEndpoint: optional("SSLCOMMERZ_VALIDATOR_ENDPOINT"),
+      storeId: optional("SSLCOMMERZ_STORE_ID"),
+      storePassword: optional("SSLCOMMERZ_STORE_PASSWORD"),
     },
     supabase: {
       url: required("SUPABASE_URL", "http://127.0.0.1:54321"),
@@ -219,50 +228,50 @@ export function getEnv(): AppEnv {
         resetTimeoutMs: parsePositiveInteger("PROVIDER_CB_RESET_MS", 30000),
       },
       openrouter: {
-        apiKey: process.env.OPENROUTER_API_KEY,
+        apiKey: optional("OPENROUTER_API_KEY"),
         baseUrl: required("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
-        model: process.env.OPENROUTER_MODEL ?? required("OPENROUTER_FREE_MODEL", "openrouter/auto"),
-        freeModel: process.env.OPENROUTER_FREE_MODEL,
+        model: optional("OPENROUTER_MODEL") ?? optional("OPENROUTER_FREE_MODEL") ?? "openrouter/auto",
+        freeModel: optional("OPENROUTER_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("OPENROUTER_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OPENROUTER_MAX_RETRIES", providerMaxRetries),
       },
       ollama: {
         baseUrl: required("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         model: required("OLLAMA_MODEL", "llama3.1:8b"),
-        freeModel: process.env.OLLAMA_FREE_MODEL,
+        freeModel: optional("OLLAMA_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("OLLAMA_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OLLAMA_MAX_RETRIES", providerMaxRetries),
       },
       groq: {
-        apiKey: process.env.GROQ_API_KEY,
+        apiKey: optional("GROQ_API_KEY"),
         baseUrl: required("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
         model: required("GROQ_MODEL", "llama-3.1-8b-instant"),
-        freeModel: process.env.GROQ_FREE_MODEL,
+        freeModel: optional("GROQ_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GROQ_MAX_RETRIES", providerMaxRetries),
       },
       openai: {
-        apiKey: process.env.OPENAI_API_KEY,
+        apiKey: optional("OPENAI_API_KEY"),
         baseUrl: required("OPENAI_BASE_URL", "https://api.openai.com/v1"),
         chatModel: required("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
         imageModel: required("OPENAI_IMAGE_MODEL", "gpt-image-1"),
-        freeModel: process.env.OPENAI_FREE_MODEL,
+        freeModel: optional("OPENAI_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("OPENAI_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OPENAI_MAX_RETRIES", providerMaxRetries),
       },
       gemini: {
-        apiKey: process.env.GEMINI_API_KEY,
+        apiKey: optional("GEMINI_API_KEY"),
         baseUrl: required("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
         model: required("GEMINI_MODEL", "gemini-3-flash-preview"),
-        freeModel: process.env.GEMINI_FREE_MODEL,
+        freeModel: optional("GEMINI_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("GEMINI_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GEMINI_MAX_RETRIES", providerMaxRetries),
       },
       anthropic: {
-        apiKey: process.env.ANTHROPIC_API_KEY,
+        apiKey: optional("ANTHROPIC_API_KEY"),
         baseUrl: required("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
         model: required("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
-        freeModel: process.env.ANTHROPIC_FREE_MODEL,
+        freeModel: optional("ANTHROPIC_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("ANTHROPIC_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("ANTHROPIC_MAX_RETRIES", providerMaxRetries),
       },
@@ -270,8 +279,8 @@ export function getEnv(): AppEnv {
     langfuse: {
       enabled: parseBoolean("LANGFUSE_ENABLED", false),
       baseUrl: required("LANGFUSE_BASE_URL", "https://cloud.langfuse.com"),
-      publicKey: process.env.LANGFUSE_PUBLIC_KEY,
-      secretKey: process.env.LANGFUSE_SECRET_KEY,
+      publicKey: optional("LANGFUSE_PUBLIC_KEY"),
+      secretKey: optional("LANGFUSE_SECRET_KEY"),
     },
   };
 

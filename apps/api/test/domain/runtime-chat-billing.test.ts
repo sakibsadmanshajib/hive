@@ -35,12 +35,35 @@ function createEnv() {
       lookbackHours: 24,
     },
     providers: {
+      openrouter: {
+        apiKey: "openrouter-key",
+        baseUrl: "https://openrouter.ai/api/v1",
+        model: "openrouter/auto",
+        freeModel: "openrouter/free-model",
+        timeoutMs: 50,
+        maxRetries: 0,
+      },
       ollama: { baseUrl: "http://127.0.0.1:11434", model: "llama3.1:8b", timeoutMs: 50, maxRetries: 0 },
       groq: { baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.1-8b-instant", timeoutMs: 50, maxRetries: 0 },
       openai: {
         baseUrl: "https://api.openai.com/v1",
         apiKey: "test-key",
-        model: "gpt-image-1",
+        chatModel: "gpt-4o-mini",
+        imageModel: "gpt-image-1",
+        timeoutMs: 50,
+        maxRetries: 0,
+      },
+      gemini: {
+        apiKey: "gemini-key",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        model: "gemini-2.5-flash",
+        timeoutMs: 50,
+        maxRetries: 0,
+      },
+      anthropic: {
+        apiKey: "anthropic-key",
+        baseUrl: "https://api.anthropic.com/v1",
+        model: "claude-sonnet-4-5",
         timeoutMs: 50,
         maxRetries: 0,
       },
@@ -255,6 +278,7 @@ describe("runtime chat billing", () => {
     expect(consumeCredits).not.toHaveBeenCalled();
     expect(refundCredits).not.toHaveBeenCalled();
     expect(providerChat).toHaveBeenCalledTimes(1);
+    expect(usageSingle).not.toHaveBeenCalled();
     expect(guestUsageSingle).toHaveBeenCalledTimes(1);
   });
 

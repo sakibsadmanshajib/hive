@@ -5,7 +5,7 @@ Fix the current guest/auth chat regressions on the Docker-local stack so guest m
 - Assume the "Unknown user" label and logout button in guest mode are UI gating bugs caused by rendering authenticated account chrome during guest sessions.
 - Assume the guest-session link failure and authenticated `guest-free` 500 share the same backend root cause: Supabase-authenticated users can reach Hive before the required `user_profiles` row exists, so downstream inserts into `guest_user_links` and `usage_events` fail foreign-key checks.
 - Assume "guest chat is being persisted" refers incorrect guest/auth chat-state carryover in the web app, not a request for new durable server-side chat history.
-- Assume "logged in chat is not being persisted either" does not mean a regression in an existing persistence layer; this repository currently has no durable chat conversation store, so the implementation should only fix verified state-leakage bugs and make the current non-persistent behavior explicit.
+- Assume "logged-in chat is not being persisted either" does not mean a regression in an existing persistence layer; this repository currently has no durable chat conversation store, so the implementation should only fix verified state-leakage bugs and make the current non-persistent behavior explicit.
 
 ## Plan
 1. Files: `apps/web/test/chat-guest-mode.test.tsx`, `apps/web/test/chat-auth-gate.test.tsx`

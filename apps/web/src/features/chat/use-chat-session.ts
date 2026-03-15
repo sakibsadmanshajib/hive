@@ -36,8 +36,9 @@ export function useChatSession() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const accessToken = authSession?.accessToken ?? "";
   const guestMode = authReady && accessToken.trim().length === 0;
+  const stableSessionIdentity = authSession?.email?.trim() || "unknown";
   const authScopeKey = authReady
-    ? (guestMode ? "guest" : `session:${authSession?.email ?? accessToken}`)
+    ? (guestMode ? "guest" : `session:${stableSessionIdentity}`)
     : "booting";
   const guestSessionRefreshedRef = useRef(false);
   const guestSessionRequestRef = useRef<Promise<GuestSession | null> | null>(null);

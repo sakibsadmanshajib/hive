@@ -3,7 +3,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { clearAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
+import { clearAuthSession, replaceAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
 import { clearGuestSession } from "../src/features/auth/guest-session";
 
 vi.mock("../src/lib/supabase-client", () => ({
@@ -188,6 +188,60 @@ describe("chat auth gate", () => {
       })).toBe(true);
     });
     expect(fetchMock.mock.calls.some(([url]) => /\/api\/guest-session$/.test(String(url)))).toBe(false);
+  });
+
+  it("does not reset authenticated chat state when the access token refreshes for the same stored identity", async () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
+    replaceAuthSession({ accessToken: "sk_old" } as never);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.endsWith("/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ id: "fast-chat", capability: "chat", costType: "fixed" }],
+          }),
+        };
+      }
+
+      if (url === "http://127.0.0.1:8080/v1/chat/completions") {
+        return {
+          ok: true,
+          json: async () => ({
+            choices: [{ message: { content: "Authenticated reply" } }],
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        json: async () => ({ error: `Unhandled URL: ${url}` }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    const prompt = (await screen.findAllByPlaceholderText(/ask something/i)).at(-1)!;
+    fireEvent.change(prompt, {
+      target: { value: "hello from auth" },
+    });
+    const composer = prompt.closest("div.space-y-3");
+    if (!composer) {
+      throw new Error("expected prompt to be inside a message composer");
+    }
+    fireEvent.click(within(composer).getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText("hello from auth")).toBeInTheDocument();
+    expect(await screen.findByText("Authenticated reply")).toBeInTheDocument();
+
+    replaceAuthSession({ accessToken: "sk_new" } as never);
+
+    await waitFor(() => {
+      expect(screen.getByText("hello from auth")).toBeInTheDocument();
+      expect(screen.getByText("Authenticated reply")).toBeInTheDocument();
+    });
   });
 
   it("redirects legacy /chat route to root", async () => {

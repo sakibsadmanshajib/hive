@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ProviderRegistry } from "../../src/providers/registry";
-import type { ProviderClient } from "../../src/providers/types";
+import type { ProviderClient, ProviderName } from "../../src/providers/types";
 
 describe("provider status", () => {
   it("returns health summary for all providers", async () => {
@@ -139,43 +139,53 @@ describe("provider status", () => {
 
   it("surfaces openrouter, gemini, and anthropic in provider status summaries", async () => {
     const openrouter: ProviderClient = {
-      name: "openrouter" as never,
+      name: "openrouter",
       isEnabled: () => true,
       chat: vi.fn(async () => ({ content: "ok" })),
       status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
       checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
     };
     const gemini: ProviderClient = {
-      name: "gemini" as never,
+      name: "gemini",
       isEnabled: () => true,
       chat: vi.fn(async () => ({ content: "ok" })),
       status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
       checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
     };
     const anthropic: ProviderClient = {
-      name: "anthropic" as never,
+      name: "anthropic",
       isEnabled: () => true,
       chat: vi.fn(async () => ({ content: "ok" })),
       status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
       checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
     };
+    const providerModelMap: Record<ProviderName, string> = {
+      anthropic: "claude-sonnet-4-5",
+      gemini: "gemini-2.5-flash",
+      groq: "llama-3.1-8b-instant",
+      mock: "mock-chat",
+      ollama: "llama3.1:8b",
+      openai: "gpt-4o-mini",
+      openrouter: "openrouter/free-model",
+    };
+    const fallbackOrder: Record<ProviderName, ProviderName[]> = {
+      anthropic: [],
+      gemini: [],
+      groq: [],
+      mock: [],
+      ollama: [],
+      openai: [],
+      openrouter: [],
+    };
 
     const registry = new ProviderRegistry({
       clients: [openrouter, gemini, anthropic],
-      defaultProvider: "openrouter" as never,
+      defaultProvider: "openrouter",
       modelProviderMap: {
-        "guest-free": "openrouter" as never,
+        "guest-free": "openrouter",
       },
-      providerModelMap: {
-        openrouter: "openrouter/free-model",
-        gemini: "gemini-2.5-flash",
-        anthropic: "claude-sonnet-4-5",
-      } as never,
-      fallbackOrder: {
-        openrouter: [],
-        gemini: [],
-        anthropic: [],
-      } as never,
+      providerModelMap,
+      fallbackOrder,
     });
 
     const status = await registry.status();

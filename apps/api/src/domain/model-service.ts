@@ -59,16 +59,17 @@ export class ModelService {
   }
 
   list(): GatewayModel[] {
-    return MODELS.filter((model) => this.isModelEnabled(model));
+    return this.enabledModels();
   }
 
   findById(modelId: string): GatewayModel | undefined {
-    return MODELS.find((model) => model.id === modelId);
+    return this.enabledModels().find((model) => model.id === modelId);
   }
 
   pickDefault(capability: "chat" | "image"): GatewayModel {
-    const selected = MODELS.find((model) => model.capability === capability && model.costType !== "free")
-      ?? MODELS.find((model) => model.capability === capability);
+    const candidates = this.enabledModels().filter((model) => model.capability === capability);
+    const selected = candidates.find((model) => model.costType !== "free")
+      ?? candidates[0];
     if (!selected) {
       throw new Error(`No model for capability: ${capability}`);
     }
@@ -76,7 +77,7 @@ export class ModelService {
   }
 
   pickGuestDefault(capability: "chat" | "image"): GatewayModel {
-    const selected = MODELS.find((model) => model.capability === capability && model.costType === "free");
+    const selected = this.enabledModels().find((model) => model.capability === capability && model.costType === "free");
     if (!selected) {
       throw new Error(`No guest model for capability: ${capability}`);
     }
@@ -90,6 +91,10 @@ export class ModelService {
 
   creditsForRequest(model: GatewayModel): number {
     return model.pricing.creditsPerRequest ?? 0;
+  }
+
+  private enabledModels(): GatewayModel[] {
+    return MODELS.filter((model) => this.isModelEnabled(model));
   }
 
   private isModelEnabled(model: GatewayModel): boolean {

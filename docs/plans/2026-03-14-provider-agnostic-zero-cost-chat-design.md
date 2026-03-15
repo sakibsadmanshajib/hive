@@ -141,6 +141,9 @@ For the first slice, the offer catalog can stay code-defined and environment-bac
 6. Persist usage with the public model id and actual credits for that public model.
 7. Return an OpenAI-compatible response.
 
+Current gap:
+- Authenticated web chat still shares runtime endpoints with the public API today. Reporting tags that traffic as `web`, but the shared runtime endpoints remain a temporary gap until follow-up issue `#57` separates authenticated web traffic from API-business analytics at the execution boundary.
+
 ### Guest chat
 
 1. Resolve the requested public model id.
