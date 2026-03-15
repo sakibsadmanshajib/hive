@@ -63,7 +63,7 @@ function createEnv() {
       anthropic: {
         apiKey: "anthropic-key",
         baseUrl: "https://api.anthropic.com/v1",
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-20250514",
         timeoutMs: 50,
         maxRetries: 0,
       },
@@ -223,6 +223,7 @@ describe("runtime chat billing", () => {
     expect(consumeCredits).not.toHaveBeenCalled();
     expect(refundCredits).not.toHaveBeenCalled();
     expect(providerChat).toHaveBeenCalledTimes(1);
+    expect(usageSingle).toHaveBeenCalledTimes(1);
   });
 
   it("returns provider-backed guest-free completions without billing guest traffic", async () => {

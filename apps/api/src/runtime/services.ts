@@ -993,7 +993,7 @@ export function createRuntimeServices(): RuntimeServices {
   const anthropicConfig = env.providers.anthropic ?? {
     baseUrl: "https://api.anthropic.com/v1",
     apiKey: undefined,
-    model: "claude-sonnet-4-5",
+    model: "claude-sonnet-4-20250514",
     freeModel: undefined,
     timeoutMs: 4000,
     maxRetries: 1,

@@ -270,7 +270,7 @@ export function getEnv(): AppEnv {
       anthropic: {
         apiKey: optional("ANTHROPIC_API_KEY"),
         baseUrl: required("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
-        model: required("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+        model: required("ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
         freeModel: optional("ANTHROPIC_FREE_MODEL"),
         timeoutMs: parsePositiveInteger("ANTHROPIC_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("ANTHROPIC_MAX_RETRIES", providerMaxRetries),

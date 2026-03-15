@@ -212,7 +212,7 @@ describe("getEnv provider timeout and retry controls", () => {
     process.env.GEMINI_MODEL = "gemini-2.5-flash";
     process.env.ANTHROPIC_API_KEY = "anthropic-key";
     process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
-    process.env.ANTHROPIC_MODEL = "claude-sonnet-4-5";
+    process.env.ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
 
     const env = getEnv();
     const providers = env.providers as Record<string, any>;
@@ -236,7 +236,7 @@ describe("getEnv provider timeout and retry controls", () => {
     expect(providers.anthropic).toMatchObject({
       apiKey: "anthropic-key",
       baseUrl: "https://api.anthropic.com/v1",
-      model: "claude-sonnet-4-5",
+      model: "claude-sonnet-4-20250514",
     });
   });
 

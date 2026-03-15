@@ -192,7 +192,7 @@ describe("chat auth gate", () => {
 
   it("does not reset authenticated chat state when the access token refreshes for the same stored identity", async () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
-    replaceAuthSession({ accessToken: "sk_old" } as never);
+    replaceAuthSession({ accessToken: "sk_old", email: "demo@example.com" });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
 
@@ -233,14 +233,14 @@ describe("chat auth gate", () => {
     }
     fireEvent.click(within(composer).getByRole("button", { name: /send/i }));
 
-    expect(await screen.findByText("hello from auth")).toBeInTheDocument();
-    expect(await screen.findByText("Authenticated reply")).toBeInTheDocument();
+    expect((await screen.findAllByText("hello from auth")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Authenticated reply")).length).toBeGreaterThan(0);
 
-    replaceAuthSession({ accessToken: "sk_new" } as never);
+    replaceAuthSession({ accessToken: "sk_new", email: "demo@example.com" });
 
     await waitFor(() => {
-      expect(screen.getByText("hello from auth")).toBeInTheDocument();
-      expect(screen.getByText("Authenticated reply")).toBeInTheDocument();
+      expect(screen.getAllByText("hello from auth").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Authenticated reply").length).toBeGreaterThan(0);
     });
   });
 

@@ -160,7 +160,7 @@ describe("provider status", () => {
       checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
     };
     const providerModelMap: Record<ProviderName, string> = {
-      anthropic: "claude-sonnet-4-5",
+      anthropic: "claude-sonnet-4-20250514",
       gemini: "gemini-2.5-flash",
       groq: "llama-3.1-8b-instant",
       mock: "mock-chat",

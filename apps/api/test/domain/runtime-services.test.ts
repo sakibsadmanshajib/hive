@@ -184,7 +184,7 @@ describe("RuntimeServices", () => {
                     },
                     anthropic: {
                         baseUrl: "https://api.anthropic.com/v1",
-                        model: "claude-sonnet-4-5",
+                        model: "claude-sonnet-4-20250514",
                         freeModel: undefined,
                         timeoutMs: 50,
                         maxRetries: 0,
@@ -318,7 +318,7 @@ describe("RuntimeServices", () => {
                     },
                     anthropic: {
                         baseUrl: "https://api.anthropic.com/v1",
-                        model: "claude-sonnet-4-5",
+                        model: "claude-sonnet-4-20250514",
                         freeModel: undefined,
                         timeoutMs: 50,
                         maxRetries: 0,

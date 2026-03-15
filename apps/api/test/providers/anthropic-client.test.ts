@@ -11,7 +11,7 @@ describe("anthropic provider client chat support", () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
-          model: "claude-sonnet-4-5-20260301",
+          model: "claude-sonnet-4-20250514",
           content: [
             {
               type: "text",
@@ -37,12 +37,12 @@ describe("anthropic provider client chat support", () => {
 
     await expect(
       client.chat({
-        model: "claude-sonnet-4-5",
+        model: "claude-sonnet-4-20250514",
         messages: [{ role: "user", content: "hello" }],
       }),
     ).resolves.toEqual({
       content: "Anthropic reply",
-      providerModel: "claude-sonnet-4-5-20260301",
+      providerModel: "claude-sonnet-4-20250514",
       usage: {
         promptTokens: 13,
         completionTokens: 9,

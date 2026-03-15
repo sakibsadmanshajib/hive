@@ -4,7 +4,7 @@ Fix the current guest/auth chat regressions on the Docker-local stack so guest m
 ## Assumptions
 - Assume the "Unknown user" label and logout button in guest mode are UI gating bugs caused by rendering authenticated account chrome during guest sessions.
 - Assume the guest-session link failure and authenticated `guest-free` 500 share the same backend root cause: Supabase-authenticated users can reach Hive before the required `user_profiles` row exists, so downstream inserts into `guest_user_links` and `usage_events` fail foreign-key checks.
-- Assume "guest chat is being persisted" refers incorrect guest/auth chat-state carryover in the web app, not a request for new durable server-side chat history.
+- Assume "guest chat is being persisted" refers to incorrect guest/auth chat-state carryover in the web app, not a request for new durable server-side chat history.
 - Assume "logged-in chat is not being persisted either" does not mean a regression in an existing persistence layer; this repository currently has no durable chat conversation store, so the implementation should only fix verified state-leakage bugs and make the current non-persistent behavior explicit.
 
 ## Plan
@@ -22,6 +22,7 @@ Fix the current guest/auth chat regressions on the Docker-local stack so guest m
 
 4. Files: `apps/api/src/runtime/supabase-auth-service.ts`, `apps/api/src/runtime/supabase-user-store.ts`, `apps/api/src/runtime/services.ts`, `apps/api/src/domain/types.ts`
    Change: Enrich session-principal resolution with the auth user's profile fields and idempotently ensure the required local user/profile record exists before guest-link and usage persistence paths run; keep the public OpenAI-compatible API contract unchanged.
+   Gap: Authenticated web chat still shares runtime endpoints with the public API in this slice, so execution remains on the public OpenAI-compatible path while analytics/reporting separate `web` traffic as a temporary known gap.
    Verify: `pnpm --filter @hive/api exec vitest run apps/api/test/domain/supabase-auth-service.test.ts apps/api/test/routes/guest-attribution-route.test.ts apps/api/test/domain/runtime-chat-billing.test.ts apps/api/test/routes/chat-completions-route.test.ts`
 
 5. Files: `apps/web/test/guest-session-link-route.test.ts`, `apps/web/e2e/smoke-auth-chat-billing.spec.ts`, `apps/api/test/routes/guest-chat-route.test.ts`
