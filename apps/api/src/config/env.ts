@@ -105,9 +105,18 @@ export type AppEnv = {
       failureThreshold: number;
       resetTimeoutMs: number;
     };
+    openrouter: {
+      apiKey?: string;
+      baseUrl: string;
+      model: string;
+      freeModel?: string;
+      timeoutMs: number;
+      maxRetries: number;
+    };
     ollama: {
       baseUrl: string;
       model: string;
+      freeModel?: string;
       timeoutMs: number;
       maxRetries: number;
     };
@@ -115,13 +124,32 @@ export type AppEnv = {
       apiKey?: string;
       baseUrl: string;
       model: string;
+      freeModel?: string;
       timeoutMs: number;
       maxRetries: number;
     };
     openai: {
       apiKey?: string;
       baseUrl: string;
+      chatModel: string;
+      imageModel: string;
+      freeModel?: string;
+      timeoutMs: number;
+      maxRetries: number;
+    };
+    gemini: {
+      apiKey?: string;
+      baseUrl: string;
       model: string;
+      freeModel?: string;
+      timeoutMs: number;
+      maxRetries: number;
+    };
+    anthropic: {
+      apiKey?: string;
+      baseUrl: string;
+      model: string;
+      freeModel?: string;
       timeoutMs: number;
       maxRetries: number;
     };
@@ -190,9 +218,18 @@ export function getEnv(): AppEnv {
         failureThreshold: parsePositiveInteger("PROVIDER_CB_THRESHOLD", 5),
         resetTimeoutMs: parsePositiveInteger("PROVIDER_CB_RESET_MS", 30000),
       },
+      openrouter: {
+        apiKey: process.env.OPENROUTER_API_KEY,
+        baseUrl: required("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        model: process.env.OPENROUTER_MODEL ?? required("OPENROUTER_FREE_MODEL", "openrouter/auto"),
+        freeModel: process.env.OPENROUTER_FREE_MODEL,
+        timeoutMs: parsePositiveInteger("OPENROUTER_TIMEOUT_MS", providerTimeoutMs),
+        maxRetries: parseNonNegativeInteger("OPENROUTER_MAX_RETRIES", providerMaxRetries),
+      },
       ollama: {
         baseUrl: required("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         model: required("OLLAMA_MODEL", "llama3.1:8b"),
+        freeModel: process.env.OLLAMA_FREE_MODEL,
         timeoutMs: parsePositiveInteger("OLLAMA_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OLLAMA_MAX_RETRIES", providerMaxRetries),
       },
@@ -200,15 +237,34 @@ export function getEnv(): AppEnv {
         apiKey: process.env.GROQ_API_KEY,
         baseUrl: required("GROQ_BASE_URL", "https://api.groq.com/openai/v1"),
         model: required("GROQ_MODEL", "llama-3.1-8b-instant"),
+        freeModel: process.env.GROQ_FREE_MODEL,
         timeoutMs: parsePositiveInteger("GROQ_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("GROQ_MAX_RETRIES", providerMaxRetries),
       },
       openai: {
         apiKey: process.env.OPENAI_API_KEY,
         baseUrl: required("OPENAI_BASE_URL", "https://api.openai.com/v1"),
-        model: required("OPENAI_IMAGE_MODEL", "gpt-image-1"),
+        chatModel: required("OPENAI_CHAT_MODEL", "gpt-4o-mini"),
+        imageModel: required("OPENAI_IMAGE_MODEL", "gpt-image-1"),
+        freeModel: process.env.OPENAI_FREE_MODEL,
         timeoutMs: parsePositiveInteger("OPENAI_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OPENAI_MAX_RETRIES", providerMaxRetries),
+      },
+      gemini: {
+        apiKey: process.env.GEMINI_API_KEY,
+        baseUrl: required("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/"),
+        model: required("GEMINI_MODEL", "gemini-3-flash-preview"),
+        freeModel: process.env.GEMINI_FREE_MODEL,
+        timeoutMs: parsePositiveInteger("GEMINI_TIMEOUT_MS", providerTimeoutMs),
+        maxRetries: parseNonNegativeInteger("GEMINI_MAX_RETRIES", providerMaxRetries),
+      },
+      anthropic: {
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        baseUrl: required("ANTHROPIC_BASE_URL", "https://api.anthropic.com/v1"),
+        model: required("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+        freeModel: process.env.ANTHROPIC_FREE_MODEL,
+        timeoutMs: parsePositiveInteger("ANTHROPIC_TIMEOUT_MS", providerTimeoutMs),
+        maxRetries: parseNonNegativeInteger("ANTHROPIC_MAX_RETRIES", providerMaxRetries),
       },
     },
     langfuse: {

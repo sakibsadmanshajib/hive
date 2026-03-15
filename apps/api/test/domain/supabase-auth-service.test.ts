@@ -6,7 +6,13 @@ describe("SupabaseAuthService", () => {
         const supabase = {
             auth: {
                 getUser: vi.fn(async () => ({
-                    data: { user: { id: "user_abc" } },
+                    data: {
+                        user: {
+                            id: "user_abc",
+                            email: "demo@example.com",
+                            user_metadata: { name: "Demo User" },
+                        },
+                    },
                     error: null,
                 })),
             },
@@ -15,7 +21,11 @@ describe("SupabaseAuthService", () => {
         const service = new SupabaseAuthService(supabase as never);
         const principal = await service.getSessionPrincipal("valid_token");
 
-        expect(principal).toEqual({ userId: "user_abc" });
+        expect(principal).toEqual({
+            userId: "user_abc",
+            email: "demo@example.com",
+            name: "Demo User",
+        });
         expect(supabase.auth.getUser).toHaveBeenCalledWith("valid_token");
     });
 

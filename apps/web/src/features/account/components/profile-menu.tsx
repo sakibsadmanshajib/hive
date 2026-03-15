@@ -12,13 +12,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu";
-import { clearAuthSession, useAuthSession } from "../../auth/auth-session";
+import { clearAuthSession, useAuthSessionState } from "../../auth/auth-session";
 import { createSupabaseBrowserClient, useSupabaseAuthSessionSync } from "../../../lib/supabase-client";
 
 export function ProfileMenu() {
   const router = useRouter();
   useSupabaseAuthSessionSync();
-  const session = useAuthSession();
+  const { ready, session } = useAuthSessionState();
 
   const initials = useMemo(() => {
     const source = session?.name?.trim() || session?.email || "User";
@@ -28,6 +28,10 @@ export function ProfileMenu() {
       .map((part) => part[0]?.toUpperCase() ?? "")
       .join("");
   }, [session?.email, session?.name]);
+
+  if (!ready || !session) {
+    return null;
+  }
 
   function openRoute(path: string) {
     router.push(path);

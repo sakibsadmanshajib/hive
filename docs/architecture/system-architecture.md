@@ -64,7 +64,7 @@ graph TD
 - Runs as a Docker container with its own dedicated Postgres (`langfuse-db`)
 
 ### 7. External Integrations
-- Groq API for hosted inference
+- OpenRouter, OpenAI, Groq, Gemini, and Anthropic APIs for hosted inference
 - bKash/SSLCOMMERZ payment webhooks
 
 ## Product Posture
@@ -80,7 +80,7 @@ Already platform-like:
 - lightweight web and developer surfaces
 
 Still missing for a fuller platform posture:
-- broader provider/catalog coverage
+- dynamic provider/catalog management and pricing automation
 - richer analytics and operator tooling
 - organization/team controls
 - stronger deployment and SLO guidance
@@ -104,8 +104,8 @@ Authenticated chat:
 1. Bearer token validated against Supabase Auth (`SupabaseAuthService`) or API key resolution
 2. Redis rate-limit check
 3. Model selection (`fast-chat`, `smart-reasoning`, etc.)
-4. Credit debit attempt via `SupabaseBillingStore`
-5. Provider registry execution with fallback chain and circuit breaker
+4. If the selected public model has positive cost, attempt credit debit via `SupabaseBillingStore`; zero-cost public models skip this step
+5. Provider registry execution with fallback chain and circuit breaker or with zero-cost offer routing when the public model is `guest-free`
 6. Usage event persisted with `channel = "api"` for API-product traffic and `channel = "web"` for session-authenticated web chat traffic
 7. Trace sent to Langfuse (if enabled)
 8. Response returned with routing headers
@@ -144,12 +144,16 @@ Guest-to-user conversion linkage:
 
 ## Provider Routing Architecture
 
-| Model | Primary | Fallback 1 | Fallback 2 |
-|-------|---------|------------|------------|
-| `guest-free` | Mock | — | — |
-| `fast-chat` | Ollama | Groq | Mock |
-| `smart-reasoning` | Groq | Ollama | Mock |
-| `image-basic` | OpenAI | Mock | — |
+Public model ids stay stable at the API boundary, while the registry can route them through internal provider offers.
+
+| Public model | Routing policy |
+|--------------|----------------|
+| `guest-free` | zero-cost offers only from configured `ollama`, `openrouter`, `openai`, `groq`, `gemini`, or `anthropic` offers; fail closed if none are healthy |
+| `fast-chat` | primary `ollama`, fallback `groq`, then `mock` |
+| `smart-reasoning` | primary `groq`, fallback `ollama`, then `mock` |
+| `image-basic` | primary `openai`, fallback `mock` |
+
+OpenRouter, OpenAI, Groq, and Gemini share an internal OpenAI-compatible chat transport. Anthropic uses a native Messages adapter internally and is translated back into OpenAI-compatible response objects before returning to clients.
 
 Circuit breaker protects against cascading provider failures:
 - **CLOSED** → normal operation
@@ -176,7 +180,10 @@ The API requires:
 Provider health depends on:
 - Ollama availability and pulled model
 - Groq API key validity and network reachability
+- OpenRouter API key validity and network reachability
 - OpenAI API key validity and network reachability
+- Gemini API key validity and network reachability
+- Anthropic API key validity and network reachability
 
 Provider metrics are:
 - collected in-process inside the API provider registry

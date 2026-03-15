@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Provider-Agnostic Zero-Cost Chat Routing:** Added an internal provider-offer catalog so public models can stay stable while routing across provider-specific offers.
+    - `guest-free` is now a provider-backed zero-cost chat model instead of a mock-only path.
+    - Zero-cost offers can come from Ollama, OpenRouter, OpenAI, Groq, Gemini, Anthropic, or future providers without changing the public model id.
+    - Zero-cost routing now fails closed instead of silently falling through to paid providers.
+- **Hosted Chat Provider Readiness:** Added first-class OpenRouter, Gemini, and Anthropic provider wiring alongside the existing OpenAI and Groq paths.
+    - OpenRouter, OpenAI, Groq, and Gemini share an internal OpenAI-compatible chat transport.
+    - Anthropic uses a native Messages adapter internally while the public API remains OpenAI-compatible.
+    - Provider status and startup readiness now cover the expanded hosted-provider set.
 - **Traffic Analytics Channel Split:** Usage reporting now distinguishes the OpenAI-compatible API business from the web chat business.
     - `/v1/usage` now includes channel breakdowns (`api` vs `web`) and per-key attribution buckets where applicable.
     - Added admin-only `GET /v1/analytics/internal` for channel, API-key, guest-session, and conversion reporting.
@@ -59,11 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Automated PR cleanup workflow.
 
 ### Removed
-- **OpenRouter & CostCalculator:** Removed inadvertently added/restored implementations to maintain project scope and avoid token-based billing complexity.
+- **Earlier Incomplete OpenRouter Spike:** Removed the earlier half-wired OpenRouter/CostCalculator experiment that did not fit the final billing model.
 - **Legacy Python MVP:** Removed deprecated root `app/` and `tests/` Python implementation paths after documenting TypeScript migration mapping.
 - **Duplicate OpenAPI Contract:** Removed `openapi/openapi.yaml`; `packages/openapi/openapi.yaml` is now the sole in-repo OpenAPI source.
 
 ### Changed
+- **Public Model Routing:** Chat model selection now routes public virtual model ids through internal provider offers instead of binding public models directly to concrete providers.
+- **Provider Configuration Surface:** `.env.example` and runtime env parsing now include OpenRouter, OpenAI chat, Groq free-model, Gemini, and Anthropic configuration for provider-backed chat.
 - **Chat Home Access Model:** `/` now renders guest chat by default instead of redirecting unauthenticated users to `/auth`. Guest users are limited to free models and are prompted to sign in for paid capabilities.
 - **Guest Conversion UX On `/`:** Paid chat models now remain visible to guests as locked options instead of disappearing from the picker.
     - Choosing a locked paid model opens a dismissible combined auth modal directly on `/`.
@@ -91,7 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
 
 ### Fixed
-- **Guest Model Fail-Closed Behavior:** Guest chat now stays pinned to the built-in `guest-free` model when the public model catalog fails or returns only paid chat models, instead of selecting a locked paid option.
+- **`guest-free` Billing Regression:** Authenticated requests to `guest-free` now bypass credit-consumption RPCs instead of failing with `failed to consume credits via rpc: invalid credits amount`.
+- **`guest-free` Mock Echo Regression:** Guest and authenticated `guest-free` requests now use the provider-backed zero-cost routing path instead of returning the mock `MVP response` echo.
+- **Guest/Auth Persistence Foreign Keys:** Session-authenticated guest linking and authenticated `guest-free` usage writes now ensure the local `user_profiles` row exists before persistence, preventing `guest_user_links_user_id_fkey` and `usage_events_user_id_fkey` `500` failures on the Docker-local stack.
+- **Guest Chrome Hydration:** Guest mode on `/` no longer renders authenticated profile chrome such as `Unknown user` and `Log out` during initial auth-session hydration.
+- **Guest Model Fail-Closed Behavior:** Guest chat now disables sending when the public model catalog fails or returns only paid chat models, instead of inventing a free model or selecting a locked paid option.
 - **Domain Image Model Selection:** The domain image-generation path now honors an explicit requested image model id instead of always billing and logging against the default image model.
 - **Paid Inference Billing Guardrails:** `/v1/chat/completions`, `/v1/responses`, and `/v1/images/generations` now refund consumed credits when the provider call fails or usage persistence fails before the response is returned.
 - **Responses Route Headers:** `/v1/responses` now emits the same routing and billing headers as the other paid inference routes: `x-model-routed`, `x-provider-used`, `x-provider-model`, and `x-actual-credits`.
@@ -104,8 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docker-Local Guest Runtime Defaults:** Wired a local-only `WEB_INTERNAL_GUEST_TOKEN` into the Docker-local `api` and `web` services, fixed the API container to target Ollama via `http://ollama:11434`, and extended smoke coverage so guest chat itself must succeed.
 - **Guest Token Hardening:** Base Compose now fails closed for `WEB_INTERNAL_GUEST_TOKEN`; only `pnpm stack:dev` and the GitHub smoke workflow inject the disposable development token, while deployed environments must set an explicit secret.
 - **Smoke Trigger Coverage:** The web smoke workflow now also tracks changes under `supabase/**` and `.env.example` because guest bootstrap and auth smoke depend on the live Supabase CLI schema path and Compose env wiring.
-- **Smoke Workflow Orchestration:** Updated the GitHub smoke workflow to start the Supabase CLI stack, reset the local schema from repo migrations, then start the Docker app stack alongside it, while intentionally skipping Ollama in CI because the smoke suite does not validate local inference.
+- **Smoke Workflow Orchestration:** Updated the GitHub smoke workflow to start the Supabase CLI stack, reset the local schema from repo migrations, pull a small local Ollama model for `guest-free`, and then start the Docker app stack alongside it so guest smoke still sends one real free-model message.
 - **Smoke Bootstrap Guidance:** Clarified that `pnpm bootstrap:local` is a fresh-environment setup step, not a routine smoke prerequisite, because it resets local Supabase state.
+- **Docker-Local Rebuild Guidance:** Clarified that manual localhost verification must use rebuilt `api` and `web` containers from the current working tree because stale compiled containers can continue serving pre-fix behavior.
 - **Plans Index Organization:** Reorganized `docs/plans/` so only in-flight plans remain at the root while completed dated plans move under `docs/plans/completed/`.
 - **Provider Metrics Documentation:** Aligned README, runbook, and architecture docs with the new public/internal provider metrics boundary and in-memory reset behavior.
 - **Web Auth Session Sync:** Fixed stale browser auth-session behavior by synchronizing the mirrored local auth store with Supabase session refresh events, while preserving seeded smoke/dev sessions until a real Supabase session has been observed.

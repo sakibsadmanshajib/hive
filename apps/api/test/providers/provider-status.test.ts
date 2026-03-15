@@ -35,10 +35,15 @@ describe("provider status", () => {
     });
 
     const status = await registry.status();
-    expect(status.providers).toHaveLength(4);
+    expect(status.providers).toHaveLength(7);
     expect(status.providers.find((provider) => provider.name === "ollama")?.healthy).toBe(true);
     expect(status.providers.find((provider) => provider.name === "groq")?.enabled).toBe(false);
     expect(status.providers.find((provider) => provider.name === "openai")).toMatchObject({
+      enabled: false,
+      healthy: false,
+      detail: "not registered",
+    });
+    expect(status.providers.find((provider) => provider.name === "openrouter")).toMatchObject({
       enabled: false,
       healthy: false,
       detail: "not registered",
@@ -129,6 +134,66 @@ describe("provider status", () => {
       enabled: false,
       healthy: false,
       detail: "missing key",
+    });
+  });
+
+  it("surfaces openrouter, gemini, and anthropic in provider status summaries", async () => {
+    const openrouter: ProviderClient = {
+      name: "openrouter" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const gemini: ProviderClient = {
+      name: "gemini" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const anthropic: ProviderClient = {
+      name: "anthropic" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [openrouter, gemini, anthropic],
+      defaultProvider: "openrouter" as never,
+      modelProviderMap: {
+        "guest-free": "openrouter" as never,
+      },
+      providerModelMap: {
+        openrouter: "openrouter/free-model",
+        gemini: "gemini-2.5-flash",
+        anthropic: "claude-sonnet-4-5",
+      } as never,
+      fallbackOrder: {
+        openrouter: [],
+        gemini: [],
+        anthropic: [],
+      } as never,
+    });
+
+    const status = await registry.status();
+
+    expect(status.providers.find((provider) => provider.name === "openrouter")).toMatchObject({
+      enabled: true,
+      healthy: true,
+      detail: "reachable",
+    });
+    expect(status.providers.find((provider) => provider.name === "gemini")).toMatchObject({
+      enabled: true,
+      healthy: true,
+      detail: "reachable",
+    });
+    expect(status.providers.find((provider) => provider.name === "anthropic")).toMatchObject({
+      enabled: true,
+      healthy: true,
+      detail: "reachable",
     });
   });
 });

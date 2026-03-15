@@ -14,12 +14,22 @@ type ConversationItem = {
 type ChatWorkspaceShellProps = {
   conversations: ConversationItem[];
   activeConversationId: string;
+  guestMode: boolean;
   children: ReactNode;
   onNewChat: () => void;
+  onOpenAuthModal: () => void;
   onSelectConversation: (conversationId: string) => void;
 };
 
-export function ChatWorkspaceShell({ conversations, activeConversationId, children, onNewChat, onSelectConversation }: ChatWorkspaceShellProps) {
+export function ChatWorkspaceShell({
+  conversations,
+  activeConversationId,
+  guestMode,
+  children,
+  onNewChat,
+  onOpenAuthModal,
+  onSelectConversation,
+}: ChatWorkspaceShellProps) {
   return (
     <section className="flex min-h-[calc(100vh-4.5rem)] flex-col gap-4">
       <div className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-slate-950/90 px-3 py-2 sm:px-4">
@@ -42,7 +52,18 @@ export function ChatWorkspaceShell({ conversations, activeConversationId, childr
           </Sheet>
           <p className="hidden text-sm font-medium text-slate-400 sm:block">BD AI Chat</p>
         </div>
-        <ProfileMenu />
+        {guestMode ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800 hover:text-slate-50"
+            onClick={onOpenAuthModal}
+          >
+            Sign in
+          </Button>
+        ) : (
+          <ProfileMenu />
+        )}
       </div>
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[280px_1fr]">

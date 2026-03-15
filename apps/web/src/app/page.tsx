@@ -24,6 +24,7 @@ export default function HomePage() {
     modelOptions,
     guestMode,
     authModalOpen,
+    openAuthModal,
     closeAuthModal,
     onModelChange,
   } = useChatSession();
@@ -32,7 +33,9 @@ export default function HomePage() {
     <ChatWorkspaceShell
       conversations={conversations}
       activeConversationId={activeConversationId}
+      guestMode={guestMode}
       onNewChat={addConversation}
+      onOpenAuthModal={openAuthModal}
       onSelectConversation={selectConversation}
     >
       <div className="flex h-full min-h-[60vh] flex-col gap-4">

@@ -3,6 +3,7 @@ import { ProviderMetrics } from "./provider-metrics";
 import type {
   ProviderChatMessage,
   ProviderClient,
+  ProviderCostClass,
   ProviderImageRequest,
   ProviderMetricsResult,
   ProviderName,
@@ -14,7 +15,17 @@ type ProviderRegistryConfig = {
   defaultProvider: ProviderName;
   modelProviderMap: Record<string, ProviderName>;
   providerModelMap: Record<ProviderName, string>;
+  providerReadinessModels?: Record<ProviderName, string[]>;
   fallbackOrder: Record<ProviderName, ProviderName[]>;
+  offerCatalog?: Record<string, {
+    provider: ProviderName;
+    upstreamModel: string;
+    costClass: ProviderCostClass;
+  }>;
+  modelOfferMap?: Record<string, string[]>;
+  modelOfferPolicyMap?: Record<string, {
+    allowedCostClasses?: ProviderCostClass[];
+  }>;
   circuitBreaker?: CircuitBreakerConfig;
 };
 
@@ -48,7 +59,7 @@ export type ProviderStatusResult = {
   }>;
 };
 
-const ALL_PROVIDERS = ["ollama", "groq", "openai", "mock"] as const;
+const ALL_PROVIDERS = ["ollama", "groq", "openai", "openrouter", "gemini", "anthropic", "mock"] as const;
 const METRICS_STATUS_CACHE_TTL_MS = 5000;
 
 /**
@@ -82,6 +93,11 @@ export class ProviderRegistry {
    * @throws Error if no provider succeeds or if all candidates are blocked by circuit breakers.
    */
   async chat(modelId: string, messages: ProviderChatMessage[]): Promise<ProviderExecutionResult> {
+    const offerIds = this.config.modelOfferMap?.[modelId];
+    if (offerIds) {
+      return this.chatWithOffers(modelId, offerIds, messages);
+    }
+
     const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
     const candidateProviders = this.buildCandidates(primaryProvider);
     const errors: string[] = [];
@@ -241,8 +257,8 @@ export class ProviderRegistry {
 
       let readiness: ProviderReadinessStatus;
       try {
-        const providerModel = this.config.providerModelMap[providerName];
-        readiness = await client.checkModelReadiness(providerModel);
+        const providerModels = this.getProviderReadinessModels(providerName);
+        readiness = await this.captureProviderReadiness(client, providerModels);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         readiness = { ready: false, detail: `startup readiness failed: ${reason}` };
@@ -260,6 +276,116 @@ export class ProviderRegistry {
   private buildCandidates(primary: ProviderName): ProviderName[] {
     const ordered = [primary, ...(this.config.fallbackOrder[primary] ?? [])];
     return [...new Set(ordered)];
+  }
+
+  private async chatWithOffers(
+    modelId: string,
+    offerIds: string[],
+    messages: ProviderChatMessage[],
+  ): Promise<ProviderExecutionResult> {
+    const errors: string[] = [];
+    const allowedCostClasses = this.config.modelOfferPolicyMap?.[modelId]?.allowedCostClasses;
+
+    for (const offerId of offerIds) {
+      const offer = this.config.offerCatalog?.[offerId];
+      if (!offer) {
+        errors.push(`${offerId}: offer not configured`);
+        continue;
+      }
+      if (allowedCostClasses && !allowedCostClasses.includes(offer.costClass)) {
+        errors.push(`${offerId}: cost class ${offer.costClass} not allowed for ${modelId}`);
+        continue;
+      }
+
+      const client = this.clientsByName.get(offer.provider);
+      const breaker = this.circuitBreakers.get(offer.provider);
+
+      if (!client || !client.isEnabled()) {
+        errors.push(`${offer.provider}: unavailable`);
+        continue;
+      }
+
+      if (breaker) {
+        breaker.evaluateState();
+        if (breaker.isOpen()) {
+          errors.push(`${offer.provider}: circuit open`);
+          continue;
+        }
+        if (breaker.isHalfOpen() && !breaker.tryAcquireProbe()) {
+          errors.push(`${offer.provider}: half-open probe in-flight`);
+          continue;
+        }
+      }
+
+      const startedAt = Date.now();
+      try {
+        const response = await client.chat({ model: offer.upstreamModel, messages });
+        this.metricsCollector.recordAttempt(offer.provider, Date.now() - startedAt, false);
+        breaker?.recordSuccess();
+        return {
+          content: response.content,
+          providerUsed: offer.provider,
+          providerModel: response.providerModel ?? offer.upstreamModel,
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.metricsCollector.recordAttempt(offer.provider, Date.now() - startedAt, true);
+        breaker?.recordFailure(reason);
+        errors.push(`${offer.provider}: ${reason}`);
+      }
+    }
+
+    throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
+  }
+
+  private getProviderReadinessModels(providerName: ProviderName): string[] {
+    const configured = this.config.providerReadinessModels?.[providerName];
+    if (configured && configured.length > 0) {
+      return [...new Set(configured)];
+    }
+
+    const fallback = this.config.providerModelMap[providerName];
+    return fallback ? [fallback] : [];
+  }
+
+  private async captureProviderReadiness(
+    client: ProviderClient,
+    providerModels: string[],
+  ): Promise<ProviderReadinessStatus> {
+    if (providerModels.length === 0) {
+      return { ready: false, detail: "no readiness models configured" };
+    }
+
+    const results: Array<{ model: string; readiness: ProviderReadinessStatus }> = [];
+    for (const model of providerModels) {
+      results.push({
+        model,
+        readiness: await client.checkModelReadiness(model),
+      });
+    }
+
+    const failures = results.filter((entry) => !entry.readiness.ready);
+    if (results.length === 1) {
+      return results[0].readiness;
+    }
+
+    if (failures.length === 0) {
+      return {
+        ready: true,
+        detail: `startup models ready: ${results.map((entry) => entry.model).join(", ")}`,
+      };
+    }
+
+    const allDisabled = failures.length === results.length
+      && failures.every((entry) => entry.readiness.detail === "disabled by config");
+    if (allDisabled) {
+      return { ready: false, detail: "disabled by config" };
+    }
+
+    return {
+      ready: false,
+      detail: failures.map((entry) => `${entry.model}: ${entry.readiness.detail}`).join("; "),
+    };
   }
 
   private async getCachedMetricsStatus(): Promise<ProviderStatusResult> {

@@ -13,7 +13,6 @@ const MODELS: GatewayModel[] = [
       cacheReadTokensPer1m: 0,
       cacheWriteTokensPer1m: 0,
     },
-    provider: "mock",
   },
   {
     id: "fast-chat",
@@ -23,7 +22,6 @@ const MODELS: GatewayModel[] = [
     pricing: {
       creditsPerRequest: 8,
     },
-    provider: "ollama",
   },
   {
     id: "smart-reasoning",
@@ -35,7 +33,6 @@ const MODELS: GatewayModel[] = [
       inputTokensPer1m: 4,
       outputTokensPer1m: 12,
     },
-    provider: "groq",
   },
   {
     id: "image-basic",
@@ -45,13 +42,24 @@ const MODELS: GatewayModel[] = [
     pricing: {
       creditsPerRequest: 120,
     },
-    provider: "openai",
   },
 ];
 
+type ModelServiceOptions = {
+  enabledFreeModelIds?: Iterable<string>;
+};
+
 export class ModelService {
+  private readonly enabledFreeModelIds?: Set<string>;
+
+  constructor(options?: ModelServiceOptions) {
+    this.enabledFreeModelIds = options?.enabledFreeModelIds
+      ? new Set(options.enabledFreeModelIds)
+      : undefined;
+  }
+
   list(): GatewayModel[] {
-    return MODELS;
+    return MODELS.filter((model) => this.isModelEnabled(model));
   }
 
   findById(modelId: string): GatewayModel | undefined {
@@ -82,5 +90,15 @@ export class ModelService {
 
   creditsForRequest(model: GatewayModel): number {
     return model.pricing.creditsPerRequest ?? 0;
+  }
+
+  private isModelEnabled(model: GatewayModel): boolean {
+    if (model.costType !== "free") {
+      return true;
+    }
+    if (!this.enabledFreeModelIds) {
+      return true;
+    }
+    return this.enabledFreeModelIds.has(model.id);
   }
 }

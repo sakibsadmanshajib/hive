@@ -12,12 +12,18 @@ echo "==> Resetting local Supabase database and applying migrations"
 npx supabase db reset --yes
 
 OLLAMA_MODEL="${OLLAMA_MODEL:-llama3.1:8b}"
+OLLAMA_FREE_MODEL="${OLLAMA_FREE_MODEL:-${OLLAMA_MODEL}}"
 
 echo "==> Starting local Ollama service for default model bootstrap"
 docker compose up -d ollama
 
 echo "==> Pulling default Ollama model: ${OLLAMA_MODEL}"
 docker compose exec ollama ollama pull "${OLLAMA_MODEL}"
+
+if [[ "${OLLAMA_FREE_MODEL}" != "${OLLAMA_MODEL}" ]]; then
+  echo "==> Pulling guest-free Ollama model: ${OLLAMA_FREE_MODEL}"
+  docker compose exec ollama ollama pull "${OLLAMA_FREE_MODEL}"
+fi
 
 echo "==> Local bootstrap complete"
 echo "Run 'pnpm stack:dev' for daily development startup."

@@ -60,11 +60,13 @@ function mockRuntime({
   refundCredits,
   providerChat,
   usageSingle,
+  guestUsageSingle,
 }: {
   consumeCredits: ReturnType<typeof vi.fn>;
   refundCredits: ReturnType<typeof vi.fn>;
   providerChat: ReturnType<typeof vi.fn>;
   usageSingle: ReturnType<typeof vi.fn>;
+  guestUsageSingle?: ReturnType<typeof vi.fn>;
 }) {
   vi.doMock("../../src/config/env", () => ({
     getEnv: () => createEnv(),
@@ -80,6 +82,18 @@ function mockRuntime({
             insert: vi.fn().mockReturnValue({
               select: vi.fn().mockReturnValue({
                 single: usageSingle,
+              }),
+            }),
+          };
+        }
+        if (table === "guest_usage_events") {
+          return {
+            insert: vi.fn().mockReturnValue({
+              select: vi.fn().mockReturnValue({
+                single: guestUsageSingle ?? vi.fn().mockResolvedValue({
+                  data: { created_at: "2026-03-14T00:00:00.000Z" },
+                  error: null,
+                }),
               }),
             }),
           };
@@ -125,6 +139,123 @@ describe("runtime chat billing", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.resetModules();
+  });
+
+  it("bypasses credit consumption for authenticated zero-cost chat models", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const consumeCredits = vi.fn(async () => {
+      throw new Error("consumeCredits should not be called for zero-cost models");
+    });
+    const refundCredits = vi.fn(async () => ({
+      userId: "user-1",
+      availableCredits: 100,
+      purchasedCredits: 100,
+      promoCredits: 0,
+    }));
+    const providerChat = vi.fn(async () => ({
+      content: "provider-backed free reply",
+      providerUsed: "openrouter",
+      providerModel: "openrouter/free-model",
+    }));
+    const usageSingle = vi.fn(async () => ({
+      data: {
+        id: "usage-1",
+        user_id: "user-1",
+        endpoint: "/v1/chat/completions",
+        model: "guest-free",
+        credits: 0,
+        channel: "api",
+        api_key_id: null,
+        created_at: "2026-03-14T00:00:00.000Z",
+      },
+      error: null,
+    }));
+
+    mockRuntime({ consumeCredits, refundCredits, providerChat, usageSingle });
+
+    const { createRuntimeServices } = await import("../../src/runtime/services");
+    const services = createRuntimeServices();
+
+    await expect(
+      services.ai.chatCompletions(
+        "user-1",
+        "guest-free",
+        [{ role: "user", content: "hello" }],
+        { channel: "api" },
+      ),
+    ).resolves.toMatchObject({
+      statusCode: 200,
+      headers: {
+        "x-model-routed": "guest-free",
+        "x-provider-used": "openrouter",
+        "x-provider-model": "openrouter/free-model",
+        "x-actual-credits": "0",
+      },
+      body: {
+        choices: [{ message: { content: "provider-backed free reply" } }],
+      },
+    });
+
+    expect(consumeCredits).not.toHaveBeenCalled();
+    expect(refundCredits).not.toHaveBeenCalled();
+    expect(providerChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns provider-backed guest-free completions without billing guest traffic", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const consumeCredits = vi.fn(async () => {
+      throw new Error("consumeCredits should not be called for guest-free chat");
+    });
+    const refundCredits = vi.fn(async () => ({
+      userId: "guest-1",
+      availableCredits: 0,
+      purchasedCredits: 0,
+      promoCredits: 0,
+    }));
+    const providerChat = vi.fn(async () => ({
+      content: "provider-backed guest reply",
+      providerUsed: "openrouter",
+      providerModel: "openrouter/free-model",
+    }));
+    const usageSingle = vi.fn();
+    const guestUsageSingle = vi.fn(async () => ({
+      data: {
+        created_at: "2026-03-14T00:00:00.000Z",
+      },
+      error: null,
+    }));
+
+    mockRuntime({ consumeCredits, refundCredits, providerChat, usageSingle, guestUsageSingle });
+
+    const { createRuntimeServices } = await import("../../src/runtime/services");
+    const services = createRuntimeServices();
+
+    await expect(
+      services.ai.guestChatCompletions(
+        "guest-1",
+        "guest-free",
+        [{ role: "user", content: "hello" }],
+        "203.0.113.10",
+      ),
+    ).resolves.toMatchObject({
+      statusCode: 200,
+      headers: {
+        "x-model-routed": "guest-free",
+        "x-provider-used": "openrouter",
+        "x-provider-model": "openrouter/free-model",
+        "x-actual-credits": "0",
+      },
+      body: {
+        choices: [{ message: { content: "provider-backed guest reply" } }],
+      },
+    });
+
+    expect(consumeCredits).not.toHaveBeenCalled();
+    expect(refundCredits).not.toHaveBeenCalled();
+    expect(providerChat).toHaveBeenCalledTimes(1);
+    expect(guestUsageSingle).toHaveBeenCalledTimes(1);
   });
 
   it("refunds credits and skips usage writes when chat provider calls fail", async () => {

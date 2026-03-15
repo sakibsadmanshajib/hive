@@ -124,4 +124,50 @@ describe("PersistentUserService", () => {
         expect(result).toBe(true);
         expect(mockApiKeyStore.revokeById).toHaveBeenCalledWith("key-1", "user-x");
     });
+
+    it("does not clear a persisted profile name when the session identity omits name", async () => {
+        const mockApiKeyStore = {} as any;
+        const mockUserStore = {
+            findById: vi.fn().mockResolvedValue({
+                userId: "user-1",
+                email: "demo@example.com",
+                name: "Persisted Name",
+                createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+            upsertProfile: vi.fn(),
+        } as any;
+
+        const service = new PersistentUserService(mockApiKeyStore, mockUserStore, {} as any);
+        await service.ensureSessionUser({
+            userId: "user-1",
+            email: "demo@example.com",
+        });
+
+        expect(mockUserStore.upsertProfile).not.toHaveBeenCalled();
+    });
+
+    it("preserves the existing profile name when refreshing session identity fields", async () => {
+        const mockApiKeyStore = {} as any;
+        const mockUserStore = {
+            findById: vi.fn().mockResolvedValue({
+                userId: "user-1",
+                email: "old@example.com",
+                name: "Persisted Name",
+                createdAt: "2026-01-01T00:00:00.000Z",
+            }),
+            upsertProfile: vi.fn().mockResolvedValue(undefined),
+        } as any;
+
+        const service = new PersistentUserService(mockApiKeyStore, mockUserStore, {} as any);
+        await service.ensureSessionUser({
+            userId: "user-1",
+            email: "new@example.com",
+        });
+
+        expect(mockUserStore.upsertProfile).toHaveBeenCalledWith({
+            userId: "user-1",
+            email: "new@example.com",
+            name: "Persisted Name",
+        });
+    });
 });

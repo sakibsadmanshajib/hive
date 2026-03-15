@@ -1,4 +1,6 @@
-export type ProviderName = "mock" | "ollama" | "groq" | "openai";
+export type ProviderName = "mock" | "ollama" | "groq" | "openai" | "openrouter" | "gemini" | "anthropic";
+
+export type ProviderCostClass = "zero" | "fixed" | "variable";
 
 export type ProviderChatMessage = {
   role: "system" | "user" | "assistant";
@@ -13,7 +15,6 @@ export type ProviderChatRequest = {
 export type ProviderChatResponse = {
   content: string;
   providerModel?: string;
-  // New: Token usage tracking
   usage?: {
     promptTokens: number;
     completionTokens: number;
