@@ -69,6 +69,7 @@ async function resolvePrincipal(
   if (bearerToken && services.env.supabase.flags.authEnabled) {
     const principal = await services.supabaseAuth.getSessionPrincipal(bearerToken);
     if (principal) {
+      await services.users.ensureSessionUser?.(principal);
       return {
         userId: principal.userId,
         authType: "session",

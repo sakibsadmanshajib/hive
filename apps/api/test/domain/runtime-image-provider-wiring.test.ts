@@ -51,7 +51,8 @@ describe("runtime image provider wiring", () => {
           openai: {
             baseUrl: "https://api.openai.com/v1",
             apiKey: "test-key",
-            model: "gpt-image-1",
+            chatModel: "gpt-4o-mini",
+            imageModel: "gpt-image-1",
             timeoutMs: 50,
             maxRetries: 0,
           },

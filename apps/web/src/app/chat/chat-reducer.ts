@@ -23,6 +23,9 @@ export function createInitialChatState(): ChatState {
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
+    case "stateReset": {
+      return createInitialChatState();
+    }
     case "conversationAdded": {
       const conversation: ChatConversation = {
         id: action.payload.id,

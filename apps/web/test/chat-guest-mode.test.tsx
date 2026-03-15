@@ -192,7 +192,22 @@ describe("chat guest mode", () => {
     expect(screen.getByText(/guest mode only supports free models/i)).toBeInTheDocument();
   });
 
-  it("falls back to the built-in guest-safe model when the catalog request fails in guest mode", async () => {
+  it("renders a guest-safe sign-in action instead of the authenticated profile menu", async () => {
+    const fetchMock = createGuestFetchMock();
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    expect(await screen.findByRole("button", { name: /sign in/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open profile menu/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("keeps guest chat unavailable when the catalog request fails in guest mode", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input.toString();
 
@@ -228,14 +243,14 @@ describe("chat guest mode", () => {
 
     const modelTrigger = (await screen.findAllByRole("combobox")).at(-1)!;
     await waitFor(() => {
-      expect(modelTrigger).toHaveTextContent("guest-free");
+      expect(modelTrigger).toHaveTextContent(/model/i);
     });
     fireEvent.keyDown(modelTrigger, { key: "ArrowDown" });
 
     expect(screen.queryByRole("option", { name: /fast-chat/i })).not.toBeInTheDocument();
   });
 
-  it("keeps the built-in guest-safe model active when the catalog returns only paid chat models", async () => {
+  it("does not invent guest-free when the catalog returns only paid chat models", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
 
@@ -283,24 +298,18 @@ describe("chat guest mode", () => {
 
     const modelTrigger = (await screen.findAllByRole("combobox")).at(-1)!;
     await waitFor(() => {
-      expect(modelTrigger).toHaveTextContent("guest-free");
+      expect(modelTrigger).toHaveTextContent(/model/i);
     });
 
     fireEvent.change(screen.getByPlaceholderText(/ask something/i), {
       target: { value: "hello from guest" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /send/i }));
+    const sendButton = screen.getByRole("button", { name: /send/i });
+    expect(sendButton).toBeDisabled();
+    fireEvent.click(sendButton);
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url, init]) => {
-        if (!/\/api\/chat\/guest$/.test(String(url))) {
-          return false;
-        }
-        if (!init || typeof init !== "object" || !("body" in init)) {
-          return false;
-        }
-        return JSON.parse(String(init.body)).model === "guest-free";
-      })).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => /\/api\/chat\/guest$/.test(String(url)))).toBe(false);
     });
   });
 

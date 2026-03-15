@@ -122,4 +122,57 @@ describe("guest attribution routes", () => {
       userId: "user_123",
     });
   });
+
+  it("ensures the session-authenticated user exists locally before linking a guest", async () => {
+    process.env.WEB_INTERNAL_GUEST_TOKEN = "test-web-token";
+    const ensureSessionUser = vi.fn(async () => undefined);
+    const linkGuest = vi.fn(async () => undefined);
+    const app = new FakeApp();
+    registerRoutes(app as never, {
+      env: {
+        supabase: {
+          flags: {
+            authEnabled: true,
+          },
+        },
+        allowDevApiKeyPrefix: false,
+      },
+      supabaseAuth: {
+        getSessionPrincipal: async () => ({
+          userId: "user_session",
+          email: "demo@example.com",
+          name: "Demo User",
+        }),
+      },
+      authz: { requirePermission: async () => true },
+      userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
+      users: {
+        ensureSessionUser,
+        resolveApiKey: async () => null,
+        linkGuest,
+      },
+    } as never);
+
+    const handler = app.handlers.get("POST /v1/internal/guest/link");
+    const reply = createReply();
+
+    await handler?.(
+      {
+        headers: {
+          authorization: "Bearer session-token",
+          "x-web-guest-token": "test-web-token",
+          "x-guest-id": "guest_123",
+        },
+      },
+      reply,
+    );
+
+    expect(reply.statusCode).toBe(200);
+    expect(ensureSessionUser).toHaveBeenCalledWith({
+      userId: "user_session",
+      email: "demo@example.com",
+      name: "Demo User",
+    });
+    expect(ensureSessionUser.mock.invocationCallOrder[0]).toBeLessThan(linkGuest.mock.invocationCallOrder[0]);
+  });
 });

@@ -23,6 +23,9 @@ export type ChatAction =
       payload: { id: string };
     }
   | {
+      type: "stateReset";
+    }
+  | {
       type: "conversationSelected";
       payload: { conversationId: string };
     }

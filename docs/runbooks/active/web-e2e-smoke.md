@@ -10,7 +10,7 @@ Covered scenarios:
 
 - unauthenticated `/` stays on the guest-first chat workspace
 - guest mode can send a real free-model chat message through the web guest route
-- guest mode fails closed to the built-in `guest-free` model if the catalog does not expose any unlocked guest chat model
+- guest mode fails closed if the catalog does not expose any unlocked guest chat model
 - locked paid models open a dismissible auth modal for guests
 - registering from that modal unlocks paid models in place
 - chat success and failure messaging
@@ -81,6 +81,7 @@ source <(npx supabase status -o env)
 set +a
 export WEB_INTERNAL_GUEST_TOKEN=dev-web-guest-token
 export E2E_SUPABASE_ANON_KEY="$ANON_KEY"
+export OLLAMA_FREE_MODEL="${OLLAMA_FREE_MODEL:-${OLLAMA_MODEL:-llama3.1:8b}}"
 ```
 
 Rebuild and start the Docker-local stack from the current working tree:
@@ -91,9 +92,17 @@ docker compose up --build -d
 docker compose ps
 ```
 
+If you only changed `api` or `web` code and want a faster rerun, rebuild those services explicitly:
+
+```bash
+docker compose up --build -d api web
+docker compose ps
+```
+
 The Docker-local stack expects:
 
 - `WEB_INTERNAL_GUEST_TOKEN` to be present for both `web` and `api` so guest session bootstrap and guest chat work
+- `OLLAMA_FREE_MODEL` to point at a pulled local Ollama model so `guest-free` has a real zero-cost provider offer
 - the API container to reach Ollama over `http://ollama:11434`, not `http://127.0.0.1:11434`
 
 Verify readiness on the standard Docker-local ports:
@@ -115,19 +124,20 @@ This matters for auth/session fixes because the current smoke flow depends on th
 
 Workflow: `.github/workflows/web-e2e-smoke.yml`
 
-Workflow installs browser dependencies, starts the local Supabase CLI stack, resets the local schema from `supabase/migrations/`, exports the live local Supabase anon/service-role keys, injects a local-only `WEB_INTERNAL_GUEST_TOKEN`, then starts the Docker app stack on top of that state and runs the smoke spec on `http://127.0.0.1:3000`.
+Workflow installs browser dependencies, starts the local Supabase CLI stack, resets the local schema from `supabase/migrations/`, exports the live local Supabase anon/service-role keys, pulls a small local Ollama model for `guest-free`, injects a local-only `WEB_INTERNAL_GUEST_TOKEN`, then starts the Docker app stack on top of that state and runs the smoke spec on `http://127.0.0.1:3000`.
 
 CI service split:
 
 - Supabase CLI provides the auth/database stack required for real guest-session persistence and real Auth REST signup fixtures
-- Docker Compose provides `redis`, `langfuse-db`, `langfuse`, `api`, and `web`
-- Ollama is intentionally skipped in CI because this smoke suite validates guest bootstrap, auth, and billing UX, not local inference; guest chat uses the free mock-backed model and authenticated chat requests are browser-stubbed in the spec
+- Docker Compose provides `redis`, `langfuse-db`, `langfuse`, `ollama`, `api`, and `web`
+- CI guest chat uses a pulled local Ollama free model so the smoke suite still sends one real guest chat message through the web boundary
 
 ## Troubleshooting
 
 - Missing browser executable: rerun the Playwright browser install command.
 - Missing `E2E_SUPABASE_ANON_KEY`: export the live local Supabase anon key from `npx supabase status -o env`.
 - API/web readiness timeout: run `docker compose ps` and inspect logs via `docker compose logs api web`.
+- Browser behavior still reflects an already-fixed bug: rebuild `api` and `web` from the current working tree, then confirm the running containers were recreated before trusting localhost results.
 - CI smoke fails before the app stack is healthy: verify both orchestration layers are up, not just one of them. `npx supabase start` must be running alongside the Docker app services.
 - CI guest bootstrap fails with missing tables such as `guest_sessions`: verify the workflow ran `npx supabase db reset --yes` before exporting the local Supabase env.
 - Smoke run accidentally executed against `pnpm stack:dev` or a standalone local server: stop that flow and rerun the Docker-local commands above.

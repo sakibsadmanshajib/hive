@@ -27,7 +27,7 @@ export function MessageComposer({
   onModelChange,
   onSend,
 }: MessageComposerProps) {
-  const canSend = prompt.trim().length > 0 && !loading;
+  const canSend = prompt.trim().length > 0 && !loading && (!guestMode || model.trim().length > 0);
   const onKeyDown = useChatShortcuts({ canSend, onSend });
 
   return (

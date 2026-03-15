@@ -49,15 +49,20 @@ async function mockBrowserSignup(page: Page) {
 }
 
 test("unauthenticated root stays in guest mode, guest chat works, and locked paid models open a dismissible auth modal", async ({ page }) => {
+  test.setTimeout(180000);
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByText("Guest mode is active. Sign in to unlock paid models and top up credits.")).toBeVisible();
   await expect(page.getByText("Guest mode only supports free models.")).toBeVisible();
+  const messageArticles = page.locator("article");
+  await expect(messageArticles).toHaveCount(1);
 
   await page.getByPlaceholder("Ask something...").fill("hello from guest smoke");
   await page.getByRole("button", { name: "Send" }).click();
-  await expect(page.getByText("MVP response: hello from guest smoke")).toBeVisible();
+  await expect(messageArticles).toHaveCount(3, { timeout: 120000 });
+  await expect(messageArticles.nth(1)).toContainText("hello from guest smoke");
+  await expect(messageArticles.nth(2)).toContainText("Assistant");
 
   await page.getByRole("combobox", { name: "Model" }).click();
   const paidOption = page.getByRole("option", { name: /fast-chat/i });

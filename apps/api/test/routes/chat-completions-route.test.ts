@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerChatCompletionsRoute } from "../../src/routes/chat-completions";
 
 type Handler = (request?: any, reply?: any) => Promise<unknown>;
@@ -44,28 +44,32 @@ function createReply() {
 describe("chat completions route", () => {
   it("tags authenticated browser chat as web analytics traffic", async () => {
     const app = new FakeApp();
-    let captured: unknown[] = [];
+    const ensureSessionUser = vi.fn(async () => undefined);
+    const chatCompletions = vi.fn(async (...args: unknown[]) => ({
+      statusCode: 200,
+      headers: {
+        "x-model-routed": "fast-chat",
+        "x-provider-used": "ollama",
+        "x-provider-model": "llama3.1:8b",
+        "x-actual-credits": "10",
+      },
+      body: { choices: [{ message: { content: "hello" } }] },
+    }));
     registerChatCompletionsRoute(app as never, {
       env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
-      supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user-1" }) },
+      supabaseAuth: {
+        getSessionPrincipal: async () => ({
+          userId: "user-1",
+          email: "demo@example.com",
+          name: "Demo User",
+        }),
+      },
       authz: { requirePermission: async () => true },
       userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
       rateLimiter: { allow: async () => true },
-      users: { resolveApiKey: async () => null },
+      users: { ensureSessionUser, resolveApiKey: async () => null },
       ai: {
-        chatCompletions: async (...args: unknown[]) => {
-          captured = args;
-          return {
-            statusCode: 200,
-            headers: {
-              "x-model-routed": "fast-chat",
-              "x-provider-used": "ollama",
-              "x-provider-model": "llama3.1:8b",
-              "x-actual-credits": "10",
-            },
-            body: { choices: [{ message: { content: "hello" } }] },
-          };
-        },
+        chatCompletions,
       },
     } as never);
 
@@ -86,38 +90,48 @@ describe("chat completions route", () => {
       reply,
     );
 
-    expect(captured).toEqual([
+    expect(chatCompletions).toHaveBeenCalledWith(
       "user-1",
       "fast-chat",
       [{ role: "user", content: "hello" }],
       { channel: "web" },
-    ]);
+    );
+    expect(ensureSessionUser).toHaveBeenCalledWith({
+      userId: "user-1",
+      email: "demo@example.com",
+      name: "Demo User",
+    });
+    expect(ensureSessionUser.mock.invocationCallOrder[0]).toBeLessThan(chatCompletions.mock.invocationCallOrder[0]);
   });
 
   it("keeps session-authenticated traffic on the api channel when no trusted browser origin is present", async () => {
     const app = new FakeApp();
-    let captured: unknown[] = [];
+    const ensureSessionUser = vi.fn(async () => undefined);
+    const chatCompletions = vi.fn(async (...args: unknown[]) => ({
+      statusCode: 200,
+      headers: {
+        "x-model-routed": "fast-chat",
+        "x-provider-used": "ollama",
+        "x-provider-model": "llama3.1:8b",
+        "x-actual-credits": "10",
+      },
+      body: { choices: [{ message: { content: "hello" } }] },
+    }));
     registerChatCompletionsRoute(app as never, {
       env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
-      supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user-1" }) },
+      supabaseAuth: {
+        getSessionPrincipal: async () => ({
+          userId: "user-1",
+          email: "demo@example.com",
+          name: "Demo User",
+        }),
+      },
       authz: { requirePermission: async () => true },
       userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
       rateLimiter: { allow: async () => true },
-      users: { resolveApiKey: async () => null },
+      users: { ensureSessionUser, resolveApiKey: async () => null },
       ai: {
-        chatCompletions: async (...args: unknown[]) => {
-          captured = args;
-          return {
-            statusCode: 200,
-            headers: {
-              "x-model-routed": "fast-chat",
-              "x-provider-used": "ollama",
-              "x-provider-model": "llama3.1:8b",
-              "x-actual-credits": "10",
-            },
-            body: { choices: [{ message: { content: "hello" } }] },
-          };
-        },
+        chatCompletions,
       },
     } as never);
 
@@ -137,12 +151,18 @@ describe("chat completions route", () => {
       reply,
     );
 
-    expect(captured).toEqual([
+    expect(chatCompletions).toHaveBeenCalledWith(
       "user-1",
       "fast-chat",
       [{ role: "user", content: "hello" }],
       { channel: "api", apiKeyId: undefined },
-    ]);
+    );
+    expect(ensureSessionUser).toHaveBeenCalledWith({
+      userId: "user-1",
+      email: "demo@example.com",
+      name: "Demo User",
+    });
+    expect(ensureSessionUser.mock.invocationCallOrder[0]).toBeLessThan(chatCompletions.mock.invocationCallOrder[0]);
   });
 
   it("tags API-key chat as api traffic and includes the stable api key id", async () => {

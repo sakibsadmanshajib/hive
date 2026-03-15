@@ -13,10 +13,25 @@ const trackedKeys = [
   "PAYMENT_RECONCILIATION_LOOKBACK_HOURS",
   "PROVIDER_TIMEOUT_MS",
   "PROVIDER_MAX_RETRIES",
+  "OPENROUTER_API_KEY",
+  "OPENROUTER_BASE_URL",
+  "OPENROUTER_MODEL",
+  "OPENROUTER_FREE_MODEL",
+  "OPENAI_API_KEY",
+  "OPENAI_BASE_URL",
+  "OPENAI_CHAT_MODEL",
+  "OPENAI_IMAGE_MODEL",
+  "OLLAMA_FREE_MODEL",
   "OLLAMA_TIMEOUT_MS",
   "OLLAMA_MAX_RETRIES",
   "GROQ_TIMEOUT_MS",
   "GROQ_MAX_RETRIES",
+  "GEMINI_API_KEY",
+  "GEMINI_BASE_URL",
+  "GEMINI_MODEL",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_MODEL",
 ] as const;
 
 const originalValues = new Map<string, string | undefined>(
@@ -150,6 +165,17 @@ describe("getEnv provider timeout and retry controls", () => {
     expect(env.providers.groq.maxRetries).toBe(3);
   });
 
+  it("reads an explicit zero-cost Ollama model without making it implicit", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.OLLAMA_FREE_MODEL = "qwen2.5:0.5b";
+
+    const env = getEnv();
+
+    expect(env.providers.ollama.model).toBe("llama3.1:8b");
+    expect(env.providers.ollama.freeModel).toBe("qwen2.5:0.5b");
+  });
+
   it("treats empty timeout overrides as unset and falls back to shared timeout", () => {
     process.env.SUPABASE_URL = "https://demo.supabase.co";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
@@ -169,5 +195,60 @@ describe("getEnv provider timeout and retry controls", () => {
     process.env.PROVIDER_TIMEOUT_MS = "0";
 
     expect(() => getEnv()).toThrowError(/PROVIDER_TIMEOUT_MS/);
+  });
+
+  it("reads hosted provider chat configuration for openrouter, openai, gemini, and anthropic", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.OPENROUTER_API_KEY = "openrouter-key";
+    process.env.OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+    process.env.OPENROUTER_FREE_MODEL = "openrouter/free-model";
+    process.env.OPENAI_API_KEY = "openai-key";
+    process.env.OPENAI_BASE_URL = "https://api.openai.com/v1";
+    process.env.OPENAI_CHAT_MODEL = "gpt-4o-mini";
+    process.env.OPENAI_IMAGE_MODEL = "gpt-image-1";
+    process.env.GEMINI_API_KEY = "gemini-key";
+    process.env.GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/";
+    process.env.GEMINI_MODEL = "gemini-2.5-flash";
+    process.env.ANTHROPIC_API_KEY = "anthropic-key";
+    process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1";
+    process.env.ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+
+    const env = getEnv();
+    const providers = env.providers as Record<string, any>;
+
+    expect(providers.openrouter).toMatchObject({
+      apiKey: "openrouter-key",
+      baseUrl: "https://openrouter.ai/api/v1",
+      model: "openrouter/free-model",
+    });
+    expect(providers.openai).toMatchObject({
+      apiKey: "openai-key",
+      baseUrl: "https://api.openai.com/v1",
+      chatModel: "gpt-4o-mini",
+      imageModel: "gpt-image-1",
+    });
+    expect(providers.gemini).toMatchObject({
+      apiKey: "gemini-key",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+      model: "gemini-2.5-flash",
+    });
+    expect(providers.anthropic).toMatchObject({
+      apiKey: "anthropic-key",
+      baseUrl: "https://api.anthropic.com/v1",
+      model: "claude-sonnet-4-20250514",
+    });
+  });
+
+  it("treats blank OpenRouter model env vars as unset and falls back to the router default", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.OPENROUTER_MODEL = "";
+    process.env.OPENROUTER_FREE_MODEL = "";
+
+    const env = getEnv();
+
+    expect(env.providers.openrouter.model).toBe("openrouter/auto");
+    expect(env.providers.openrouter.freeModel).toBeUndefined();
   });
 });

@@ -23,4 +23,12 @@ describe("model service", () => {
     expect(guestModel.id).toBe("guest-free");
     expect(service.isGuestAccessible(guestModel.id)).toBe(true);
   });
+
+  it("fails closed when free models are disabled", () => {
+    const service = new ModelService({ enabledFreeModelIds: [] });
+
+    expect(service.findById("guest-free")).toBeUndefined();
+    expect(service.isGuestAccessible("guest-free")).toBe(false);
+    expect(() => service.pickGuestDefault("chat")).toThrowError(/No guest model/);
+  });
 });

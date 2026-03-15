@@ -22,7 +22,6 @@ export type ChatModelOption = {
 };
 
 const DEFAULT_GUEST_MODEL_OPTIONS: ChatModelOption[] = [
-  { id: "guest-free", capability: "chat", costType: "free", locked: false },
 ];
 
 export function useChatSession() {
@@ -30,15 +29,20 @@ export function useChatSession() {
   const { ready: authReady, session: authSession } = useAuthSessionState();
   const [chatState, dispatch] = useReducer(chatReducer, undefined, createInitialChatState);
   const [modelOptions, setModelOptions] = useState<ChatModelOption[]>(DEFAULT_GUEST_MODEL_OPTIONS);
-  const [model, setModel] = useState("guest-free");
+  const [model, setModel] = useState("");
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const accessToken = authSession?.accessToken ?? "";
   const guestMode = authReady && accessToken.trim().length === 0;
+  const stableSessionIdentity = authSession?.email?.trim() || "unknown";
+  const authScopeKey = authReady
+    ? (guestMode ? "guest" : `session:${stableSessionIdentity}`)
+    : "booting";
   const guestSessionRefreshedRef = useRef(false);
   const guestSessionRequestRef = useRef<Promise<GuestSession | null> | null>(null);
+  const previousAuthScopeRef = useRef<string | null>(null);
 
   async function ensureGuestSession(forceRefresh = false): Promise<GuestSession | null> {
     const currentSession = readGuestSession();
@@ -95,7 +99,7 @@ export function useChatSession() {
       }
 
       setModelOptions(DEFAULT_GUEST_MODEL_OPTIONS);
-      setModel("guest-free");
+      setModel("");
     };
 
     resetGuestSafeModels();
@@ -127,10 +131,7 @@ export function useChatSession() {
           }));
 
         if (!cancelled && chatModels.length > 0) {
-          const firstUnlockedModel = chatModels.find((entry) => !entry.locked);
-          const nextModelOptions = guestMode && !firstUnlockedModel
-            ? [...DEFAULT_GUEST_MODEL_OPTIONS, ...chatModels]
-            : chatModels;
+          const nextModelOptions = chatModels;
 
           setModelOptions(nextModelOptions);
           setModel((currentModel) => {
@@ -140,7 +141,7 @@ export function useChatSession() {
             }
 
             const nextUnlockedModel = nextModelOptions.find((entry) => !entry.locked);
-            return nextUnlockedModel?.id ?? DEFAULT_GUEST_MODEL_OPTIONS[0].id;
+            return nextUnlockedModel?.id ?? "";
           });
         }
       } catch {
@@ -154,6 +155,27 @@ export function useChatSession() {
       cancelled = true;
     };
   }, [authReady, guestMode]);
+
+  useEffect(() => {
+    if (!authReady) {
+      return;
+    }
+
+    if (previousAuthScopeRef.current === null) {
+      previousAuthScopeRef.current = authScopeKey;
+      return;
+    }
+
+    if (previousAuthScopeRef.current !== authScopeKey) {
+      dispatch({ type: "stateReset" });
+      setPrompt("");
+      setLoading(false);
+      setErrorMessage(null);
+      setAuthModalOpen(false);
+    }
+
+    previousAuthScopeRef.current = authScopeKey;
+  }, [authReady, authScopeKey]);
 
   useEffect(() => {
     if (!authReady) {
@@ -203,6 +225,13 @@ export function useChatSession() {
 
   async function sendMessage() {
     if (!authReady || !activeConversation || !prompt.trim()) {
+      return;
+    }
+
+    const selectedModel = modelOptions.find((option) => option.id === model);
+    if (guestMode && (!selectedModel || selectedModel.locked || selectedModel.costType !== "free")) {
+      setErrorMessage("Guest chat unavailable");
+      toast.error("Guest chat unavailable");
       return;
     }
 

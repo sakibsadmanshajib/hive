@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { UserSettings } from "./user-settings";
+import type { SessionUserIdentity } from "../domain/types";
 
 type UserProfileRow = {
   user_id: string;
@@ -59,6 +60,28 @@ export class SupabaseUserStore {
       name: data.name ?? undefined,
       createdAt: new Date(data.created_at).toISOString(),
     };
+  }
+
+  async upsertProfile(profile: SessionUserIdentity): Promise<void> {
+    const normalizedEmail = profile.email.trim().toLowerCase();
+    const normalizedName = typeof profile.name === "string" && profile.name.trim().length > 0
+      ? profile.name.trim()
+      : null;
+
+    const { error } = await this.supabase.from("user_profiles").upsert(
+      {
+        user_id: profile.userId,
+        gateway_user_id: profile.userId,
+        email: normalizedEmail,
+        name: normalizedName,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" },
+    );
+
+    if (error) {
+      throw new Error(`failed to upsert user profile: ${error.message}`);
+    }
   }
 
   async upsertSettings(userId: string, patch: Partial<UserSettings>): Promise<void> {

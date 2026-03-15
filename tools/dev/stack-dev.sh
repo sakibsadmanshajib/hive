@@ -24,6 +24,7 @@ export NEXT_PUBLIC_SUPABASE_URL="${API_URL}"
 export SUPABASE_SERVICE_ROLE_KEY="${SERVICE_ROLE_KEY}"
 export NEXT_PUBLIC_SUPABASE_ANON_KEY="${ANON_KEY}"
 export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8080}"
+export OLLAMA_FREE_MODEL="${OLLAMA_FREE_MODEL:-${OLLAMA_MODEL:-llama3.1:8b}}"
 
 echo "==> Using local Supabase API: ${SUPABASE_URL}"
 echo "==> Starting Hive dev stack with hot reload"

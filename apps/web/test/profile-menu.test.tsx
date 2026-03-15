@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { readAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
+import { clearAuthSession, readAuthSession, writeAuthSession } from "../src/features/auth/auth-session";
 
 const pushMock = vi.fn();
 const signOutMock = vi.fn();
@@ -53,11 +53,24 @@ vi.mock("../src/components/ui/dropdown-menu", () => ({
 import { ProfileMenu } from "../src/features/account/components/profile-menu";
 
 describe("ProfileMenu", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     pushMock.mockReset();
     signOutMock.mockReset();
     window.localStorage.clear();
     writeAuthSession({ accessToken: "sk_test", email: "demo@example.com", name: "Demo User" });
+  });
+
+  it("does not render authenticated profile controls without a session", () => {
+    clearAuthSession();
+
+    render(<ProfileMenu />);
+
+    expect(screen.queryByRole("button", { name: /open profile menu/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/signed in/i)).not.toBeInTheDocument();
   });
 
   it("clears the local session and redirects even if sign out fails", async () => {

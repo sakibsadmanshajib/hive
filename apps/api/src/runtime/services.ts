@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   CreditBalance,
+  SessionUserIdentity,
   TrafficAnalyticsSnapshot,
   UsageChannel,
   UsageDailyTrendPoint,
@@ -11,9 +12,13 @@ import type {
 import { ModelService } from "../domain/model-service";
 import { getEnv, type AppEnv } from "../config/env";
 import { BkashAdapter, SslcommerzAdapter } from "./provider-adapters";
+import { AnthropicProviderClient } from "../providers/anthropic-client";
+import { GeminiProviderClient } from "../providers/gemini-client";
 import { GroqProviderClient } from "../providers/groq-client";
 import { MockProviderClient } from "../providers/mock-client";
 import { OpenAIProviderClient } from "../providers/openai-client";
+import { OpenRouterProviderClient } from "../providers/openrouter-client";
+import { buildProviderOfferCatalog } from "../providers/provider-offers";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderName, ProviderReadinessStatus } from "../providers/types";
@@ -529,6 +534,29 @@ export class PersistentUserService {
     return this.apiKeys.revokeById(id, userId);
   }
 
+  async ensureSessionUser(sessionUser: SessionUserIdentity): Promise<void> {
+    const normalizedEmail = sessionUser.email.trim().toLowerCase();
+    const normalizedName = typeof sessionUser.name === "string" && sessionUser.name.trim().length > 0
+      ? sessionUser.name.trim()
+      : undefined;
+    const existingUser = await this.supabaseUsers.findById(sessionUser.userId);
+    const nextName = normalizedName ?? existingUser?.name;
+
+    if (
+      existingUser
+      && existingUser.email.toLowerCase() === normalizedEmail
+      && (normalizedName === undefined || (existingUser.name ?? undefined) === normalizedName)
+    ) {
+      return;
+    }
+
+    await this.supabaseUsers.upsertProfile({
+      userId: sessionUser.userId,
+      email: normalizedEmail,
+      name: nextName,
+    });
+  }
+
   linkGuest(guestId: string, userId: string, linkSource = "auth_session"): Promise<void> {
     return this.guests.linkGuestToUser({ guestId, userId, linkSource });
   }
@@ -559,6 +587,11 @@ class RuntimeAiService {
     chargeReferenceId: string,
     operation: () => Promise<void>,
   ) {
+    if (creditsCost <= 0) {
+      await operation();
+      return;
+    }
+
     try {
       await operation();
     } catch (error) {
@@ -580,7 +613,7 @@ class RuntimeAiService {
     }
     const creditsCost = this.models.creditsForRequest(model);
     const chargeReferenceId = `req_${randomUUID()}`;
-    const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
+    const consumed = creditsCost > 0 ? await this.credits.consume(userId, creditsCost, chargeReferenceId) : true;
     if (!consumed) {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
@@ -596,7 +629,9 @@ class RuntimeAiService {
         })),
       );
     } catch (error) {
-      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      if (creditsCost > 0) {
+        await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      }
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
         statusCode: 502 as const,
@@ -898,7 +933,6 @@ function startProviderReadinessCapture(providerRegistry: ProviderRegistry): void
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const supabase = createSupabaseAdminClient(env);
-  const models = new ModelService();
   const billingStore: BillingStore = new SupabaseBillingStore(supabase);
   const credits = new PersistentCreditService(billingStore);
   const usage = new PersistentUsageService(supabase);
@@ -934,16 +968,59 @@ export function createRuntimeServices(): RuntimeServices {
   const openaiConfig = env.providers.openai ?? {
     baseUrl: "https://api.openai.com/v1",
     apiKey: undefined,
-    model: "gpt-image-1",
+    chatModel: "gpt-4o-mini",
+    imageModel: "gpt-image-1",
+    freeModel: undefined,
     timeoutMs: 4000,
     maxRetries: 1,
   };
+  const openrouterConfig = env.providers.openrouter ?? {
+    baseUrl: "https://openrouter.ai/api/v1",
+    apiKey: undefined,
+    model: "openrouter/auto",
+    freeModel: undefined,
+    timeoutMs: 4000,
+    maxRetries: 1,
+  };
+  const geminiConfig = env.providers.gemini ?? {
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    apiKey: undefined,
+    model: "gemini-3-flash-preview",
+    freeModel: undefined,
+    timeoutMs: 4000,
+    maxRetries: 1,
+  };
+  const anthropicConfig = env.providers.anthropic ?? {
+    baseUrl: "https://api.anthropic.com/v1",
+    apiKey: undefined,
+    model: "claude-sonnet-4-20250514",
+    freeModel: undefined,
+    timeoutMs: 4000,
+    maxRetries: 1,
+  };
+  const providerOffers = buildProviderOfferCatalog(env);
+  const enabledFreeModelIds = Object.entries(providerOffers.modelOffers)
+    .filter(([, offers]) => offers.length > 0)
+    .map(([modelId]) => modelId);
+  const models = new ModelService({ enabledFreeModelIds });
 
   const providerModelMap: Record<ProviderName, string> = {
     mock: "mock-chat",
     ollama: env.providers.ollama.model,
     groq: env.providers.groq.model,
-    openai: openaiConfig.model,
+    openai: "imageModel" in openaiConfig ? openaiConfig.imageModel : (openaiConfig as { model?: string }).model ?? "gpt-image-1",
+    openrouter: openrouterConfig.model,
+    gemini: geminiConfig.model,
+    anthropic: anthropicConfig.model,
+  };
+  const providerReadinessModels: Record<ProviderName, string[]> = {
+    mock: ["mock-chat"],
+    ollama: [env.providers.ollama.model, env.providers.ollama.freeModel].filter((value): value is string => Boolean(value)),
+    groq: [env.providers.groq.model, env.providers.groq.freeModel].filter((value): value is string => Boolean(value)),
+    openai: [openaiConfig.chatModel, openaiConfig.imageModel, openaiConfig.freeModel].filter((value): value is string => Boolean(value)),
+    openrouter: [openrouterConfig.model, openrouterConfig.freeModel].filter((value): value is string => Boolean(value)),
+    gemini: [geminiConfig.model, geminiConfig.freeModel].filter((value): value is string => Boolean(value)),
+    anthropic: [anthropicConfig.model, anthropicConfig.freeModel].filter((value): value is string => Boolean(value)),
   };
   const providerRegistry = new ProviderRegistry({
     clients: [
@@ -958,11 +1035,29 @@ export function createRuntimeServices(): RuntimeServices {
         timeoutMs: env.providers.groq.timeoutMs,
         maxRetries: env.providers.groq.maxRetries,
       }),
+      new OpenRouterProviderClient({
+        baseUrl: openrouterConfig.baseUrl,
+        apiKey: openrouterConfig.apiKey,
+        timeoutMs: openrouterConfig.timeoutMs,
+        maxRetries: openrouterConfig.maxRetries,
+      }),
       new OpenAIProviderClient({
         baseUrl: openaiConfig.baseUrl,
         apiKey: openaiConfig.apiKey,
         timeoutMs: openaiConfig.timeoutMs,
         maxRetries: openaiConfig.maxRetries,
+      }),
+      new GeminiProviderClient({
+        baseUrl: geminiConfig.baseUrl,
+        apiKey: geminiConfig.apiKey,
+        timeoutMs: geminiConfig.timeoutMs,
+        maxRetries: geminiConfig.maxRetries,
+      }),
+      new AnthropicProviderClient({
+        baseUrl: anthropicConfig.baseUrl,
+        apiKey: anthropicConfig.apiKey,
+        timeoutMs: anthropicConfig.timeoutMs,
+        maxRetries: anthropicConfig.maxRetries,
       }),
       new MockProviderClient(),
     ],
@@ -973,9 +1068,20 @@ export function createRuntimeServices(): RuntimeServices {
       "image-basic": "openai",
     },
     providerModelMap,
+    providerReadinessModels,
+    offerCatalog: providerOffers.offers,
+    modelOfferMap: providerOffers.modelOffers,
+    modelOfferPolicyMap: {
+      "guest-free": {
+        allowedCostClasses: ["zero"],
+      },
+    },
     fallbackOrder: {
       ollama: ["groq", "mock"],
       groq: ["ollama", "mock"],
+      openrouter: ["mock"],
+      gemini: ["mock"],
+      anthropic: ["mock"],
       openai: ["mock"],
       mock: [],
     },

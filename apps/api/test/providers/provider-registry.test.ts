@@ -16,6 +16,11 @@ function createRegistry(clients: ProviderClient[]) {
       groq: "llama-3.1-8b-instant",
       mock: "mock-image",
     },
+    providerReadinessModels: {
+      ollama: ["llama3.1:8b"],
+      groq: ["llama-3.1-8b-instant"],
+      mock: ["mock-image"],
+    },
     fallbackOrder: {
       ollama: ["groq", "mock"],
       groq: ["ollama", "mock"],
@@ -101,6 +106,108 @@ describe("provider registry", () => {
     expect(groq.chat).not.toHaveBeenCalled();
   });
 
+  it("does not fall back from guest-free zero-cost routing into paid providers", async () => {
+    const openrouter: ProviderClient = {
+      name: "openrouter" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => {
+        throw new Error("free offer exhausted");
+      }),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+    const groq: ProviderClient = {
+      name: "groq",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "paid fallback reply" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [openrouter, groq],
+      defaultProvider: "openrouter" as never,
+      modelProviderMap: {},
+      modelOfferMap: {
+        "guest-free": ["zero-free"],
+      },
+      modelOfferPolicyMap: {
+        "guest-free": {
+          allowedCostClasses: ["zero"],
+        },
+      },
+      offerCatalog: {
+        "zero-free": {
+          provider: "openrouter" as never,
+          upstreamModel: "openrouter/free-model",
+          costClass: "zero",
+        },
+      },
+      providerModelMap: {
+        openrouter: "openrouter/free-model",
+        groq: "llama-3.1-8b-instant",
+      } as never,
+      providerReadinessModels: {
+        openrouter: ["openrouter/free-model"],
+        groq: ["llama-3.1-8b-instant"],
+      } as never,
+      fallbackOrder: {
+        openrouter: ["groq"] as never,
+        groq: [],
+      } as never,
+    });
+
+    await expect(
+      registry.chat("guest-free", [{ role: "user", content: "hello" }]),
+    ).rejects.toThrow(/free offer exhausted|no provider succeeded/);
+    expect(groq.chat).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-zero-cost offers for guest-free before provider dispatch", async () => {
+    const openrouter: ProviderClient = {
+      name: "openrouter" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "should not be called" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [openrouter],
+      defaultProvider: "openrouter" as never,
+      modelProviderMap: {},
+      modelOfferMap: {
+        "guest-free": ["misconfigured-offer"],
+      },
+      modelOfferPolicyMap: {
+        "guest-free": {
+          allowedCostClasses: ["zero"],
+        },
+      },
+      offerCatalog: {
+        "misconfigured-offer": {
+          provider: "openrouter" as never,
+          upstreamModel: "openrouter/paid-model",
+          costClass: "fixed",
+        },
+      },
+      providerModelMap: {
+        openrouter: "openrouter/paid-model",
+      } as never,
+      providerReadinessModels: {
+        openrouter: ["openrouter/paid-model"],
+      } as never,
+      fallbackOrder: {
+        openrouter: [],
+      } as never,
+    });
+
+    await expect(
+      registry.chat("guest-free", [{ role: "user", content: "hello" }]),
+    ).rejects.toThrow(/cost class fixed not allowed/i);
+    expect(openrouter.chat).not.toHaveBeenCalled();
+  });
+
   it("continues startup readiness capture after one provider readiness check throws", async () => {
     const ollama: ProviderClient = {
       name: "ollama",
@@ -146,6 +253,56 @@ describe("provider registry", () => {
     });
     expect(groq.checkModelReadiness).toHaveBeenCalledTimes(1);
     expect(mock.checkModelReadiness).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks free-offer readiness in addition to the provider default model", async () => {
+    const openrouterCheck = vi.fn(async (model: string) => ({
+      ready: true,
+      detail: `startup model ready: ${model}`,
+    }));
+    const openrouter: ProviderClient = {
+      name: "openrouter" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "ok" })),
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "reachable" })),
+      checkModelReadiness: openrouterCheck,
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [openrouter],
+      defaultProvider: "openrouter" as never,
+      modelProviderMap: {},
+      modelOfferMap: {
+        "guest-free": ["openrouter-free"],
+      },
+      modelOfferPolicyMap: {
+        "guest-free": {
+          allowedCostClasses: ["zero"],
+        },
+      },
+      offerCatalog: {
+        "openrouter-free": {
+          provider: "openrouter" as never,
+          upstreamModel: "openrouter/free-model",
+          costClass: "zero",
+        },
+      },
+      providerModelMap: {
+        openrouter: "openrouter/default-model",
+      } as never,
+      providerReadinessModels: {
+        openrouter: ["openrouter/default-model", "openrouter/free-model"],
+      } as never,
+      fallbackOrder: {
+        openrouter: [],
+      } as never,
+    });
+
+    await registry.captureStartupReadiness();
+
+    expect(openrouterCheck).toHaveBeenCalledTimes(2);
+    expect(openrouterCheck).toHaveBeenNthCalledWith(1, "openrouter/default-model");
+    expect(openrouterCheck).toHaveBeenNthCalledWith(2, "openrouter/free-model");
   });
 
   it("records provider-level request, error, and latency metrics across fallback attempts", async () => {

@@ -2,7 +2,7 @@
 
 Hive is an AI inference platform with:
 - OpenAI-compatible API endpoints for chat, responses, and model access
-- provider routing across Ollama, Groq, and mock fallback
+- provider routing across Ollama, OpenRouter, OpenAI, Groq, Gemini, and Anthropic, with mock fallback where configured
 - prepaid credits, billing persistence, and reconciliation controls
 - Supabase-backed auth, user data, API keys, and settings
 - self-hosted Langfuse for LLM observability
@@ -44,7 +44,7 @@ pnpm stack:dev
 1. starts or verifies the local Supabase CLI stack
 2. resets the local Supabase database
 3. applies repo migrations to the local database
-4. starts the local `ollama` service and pulls the default `OLLAMA_MODEL`
+4. starts the local `ollama` service and pulls the default `OLLAMA_MODEL` plus `OLLAMA_FREE_MODEL` when it differs
 
 `pnpm stack:dev` is the canonical daily-development entry point. It:
 
@@ -52,7 +52,8 @@ pnpm stack:dev
 2. reads the live local Supabase keys from `npx supabase status -o env`
 3. injects the required auth env vars for Hive
 4. injects a local-only `WEB_INTERNAL_GUEST_TOKEN` for guest web-chat proxying
-5. starts the full Hive stack with hot reload for `api` and `web`
+5. exports `OLLAMA_FREE_MODEL` for the local zero-cost guest route when you have not set one explicitly
+6. starts the full Hive stack with hot reload for `api` and `web`
 
 ### Daily Development
 
@@ -102,7 +103,7 @@ That means:
 - `pnpm bootstrap:local` owns first-time local schema/bootstrap
 - `pnpm stack:dev` is the standardized daily-development command because it handles both lifecycles together
 
-The GitHub web smoke workflow follows the same rule: it starts the Supabase CLI stack, resets the local schema from repo migrations, then starts the Hive Docker app stack on top of that state. It intentionally skips Ollama there because the smoke suite exercises guest chat through the free mock-backed model and stubs authenticated inference calls instead of validating local Ollama inference.
+The GitHub web smoke workflow follows the same rule: it starts the Supabase CLI stack, resets the local schema from repo migrations, pulls a small local Ollama model for `guest-free`, then starts the Hive Docker app stack on top of that state.
 
 ### Why `api` And `web` Are Separate Containers
 
@@ -125,6 +126,15 @@ curl -s http://127.0.0.1:8080/v1/providers/status
 curl -s http://127.0.0.1:54321/auth/v1/health
 curl -sI http://127.0.0.1:3000/auth
 ```
+
+If localhost behavior does not match the current source tree or recent test results, rebuild the production-style Docker containers from the current working tree before debugging further:
+
+```bash
+docker compose up --build -d api web
+docker compose ps
+```
+
+The `api` and `web` containers run compiled artifacts, so a stale container can keep serving old behavior even when local source and unit tests are already fixed.
 
 For web auth/chat/billing smoke verification, use the rebuilt Docker-local stack on `http://127.0.0.1:3000` and the runbook at `docs/runbooks/active/web-e2e-smoke.md`. Do not treat standalone local app servers or alternate local ports as the normal verification path.
 
@@ -165,7 +175,7 @@ GitHub contributor intake and triage are repo-managed:
 - Auth: Supabase Auth handles all user registration, login, OAuth, and MFA.
 - Persistence: Supabase Postgres via `@supabase/supabase-js` for user profiles, API keys, billing/credits, and settings.
 - Observability: Self-hosted Langfuse v2 for LLM tracing and analytics.
-- Providers: Ollama + Groq for chat, OpenAI-backed image generation, all behind a provider registry with circuit breaker and mock fallback where configured.
+- Providers: Ollama plus hosted OpenRouter, OpenAI, Groq, Gemini, and Anthropic adapters, all behind a provider registry with circuit breaker and mock fallback where configured.
 - Legacy Python MVP and in-house `PostgresStore` have been fully removed.
 
 ## Product Direction
@@ -180,8 +190,10 @@ GitHub contributor intake and triage are repo-managed:
 
 - `/` is the primary chat workspace for both guests and authenticated users.
 - Guests stay on `/` in guest mode and are limited to `costType: "free"` chat models.
+- `guest-free` is a provider-backed zero-cost chat model. It routes to configured zero-cost offers only and fails closed if no healthy free offer is available.
+- Web chat state on `/` is currently browser-session state only. Guest and authenticated conversations are not durably persisted across reloads or devices yet.
 - The model picker keeps paid chat models visible to guests, but renders them as locked with the reason `Requires account and credits`.
-- If the guest model catalog load fails or returns only paid chat models, the web app fails closed to the built-in `guest-free` option instead of selecting a locked paid model.
+- If the guest model catalog load fails or returns only paid chat models, the web app fails closed instead of inventing a free model or selecting a locked paid model.
 - Selecting a locked paid model opens a dismissible combined auth modal on `/`; dismissing it keeps the current guest conversation intact.
 - Successful authentication from that modal closes it in place and immediately unlocks paid models on `/` without navigating away.
 - The web app bootstraps a signed `httpOnly` guest cookie through `/api/guest-session` and mirrors a browser-visible guest session object for UI state and analytics.
@@ -298,12 +310,19 @@ Operator-only support endpoint:
 
 - `src/providers/ollama-client.ts` — Ollama adapter
 - `src/providers/groq-client.ts` — Groq adapter
-- `src/providers/openai-client.ts` — OpenAI-compatible hosted image adapter
+- `src/providers/openai-compatible-client.ts` — shared OpenAI-compatible hosted chat transport
+- `src/providers/openrouter-client.ts` — OpenRouter chat adapter
+- `src/providers/openai-client.ts` — OpenAI chat and image adapter
+- `src/providers/gemini-client.ts` — Gemini OpenAI-compatible chat adapter
+- `src/providers/anthropic-client.ts` — Anthropic native Messages adapter exposed through OpenAI-compatible API responses
 - `src/providers/mock-client.ts` — Mock fallback adapter
+- `src/providers/provider-offers.ts` — internal provider-offer catalog for virtual-model routing
 - `src/providers/registry.ts` — Orchestration with circuit breaker and fallback
 
 ## Provider Routing
 
+- Public model ids stay stable and OpenAI-compatible at the API boundary. Internal routing chooses provider offers behind those public ids.
+- `guest-free` routes only to configured zero-cost offers from `ollama`, `openrouter`, `openai`, `groq`, `gemini`, and `anthropic`. It never falls through to paid providers and never consumes credits.
 - `fast-chat` → primary `ollama`, fallback `groq`, then `mock`
 - `smart-reasoning` → primary `groq`, fallback `ollama`, then `mock`
 - `image-basic` → primary `openai`, fallback `mock`
@@ -334,8 +353,11 @@ Use `.env.example` as the template. Key variables:
 
 ### Providers
 - `OLLAMA_*` — local chat provider base URL, model, timeout, retries
-- `GROQ_*` — hosted chat provider API key, base URL, model, timeout, retries
-- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_IMAGE_MODEL`, `OPENAI_TIMEOUT_MS`, `OPENAI_MAX_RETRIES` — hosted image provider configuration
+- `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`, `OPENROUTER_FREE_MODEL`, `OPENROUTER_TIMEOUT_MS`, `OPENROUTER_MAX_RETRIES` — hosted OpenRouter chat configuration and optional zero-cost offer
+- `GROQ_API_KEY`, `GROQ_BASE_URL`, `GROQ_MODEL`, `GROQ_FREE_MODEL`, `GROQ_TIMEOUT_MS`, `GROQ_MAX_RETRIES` — hosted Groq chat configuration and optional zero-cost offer
+- `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_CHAT_MODEL`, `OPENAI_IMAGE_MODEL`, `OPENAI_FREE_MODEL`, `OPENAI_TIMEOUT_MS`, `OPENAI_MAX_RETRIES` — hosted OpenAI chat/image configuration and optional zero-cost offer
+- `GEMINI_API_KEY`, `GEMINI_BASE_URL`, `GEMINI_MODEL`, `GEMINI_FREE_MODEL`, `GEMINI_TIMEOUT_MS`, `GEMINI_MAX_RETRIES` — hosted Gemini chat configuration and optional zero-cost offer
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL`, `ANTHROPIC_FREE_MODEL`, `ANTHROPIC_TIMEOUT_MS`, `ANTHROPIC_MAX_RETRIES` — hosted Anthropic chat configuration and optional zero-cost offer
 - `PROVIDER_TIMEOUT_MS` (default `4000`), `PROVIDER_MAX_RETRIES` (default `1`)
 
 ### Payments

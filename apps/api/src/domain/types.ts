@@ -15,7 +15,6 @@ export type GatewayModel = {
   capability: "chat" | "image";
   costType: ModelCostType;
   pricing: GatewayModelPricing;
-  provider?: "mock" | "ollama" | "groq" | "openai";
 };
 
 export type UsageEvent = {
@@ -27,6 +26,12 @@ export type UsageEvent = {
   channel: UsageChannel;
   apiKeyId?: string;
   createdAt: string;
+};
+
+export type SessionUserIdentity = {
+  userId: string;
+  email: string;
+  name?: string;
 };
 
 export type UsageSummaryBucket = {
