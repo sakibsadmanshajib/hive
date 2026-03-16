@@ -51,21 +51,18 @@ Install dependencies separately when needed:
 pnpm install
 ```
 
-Common verification commands:
+Common verification commands (builds run inside Docker only; start stack with `docker compose up -d` first):
 
 ```bash
 pnpm --filter @hive/api test
-pnpm --filter @hive/api build
-pnpm --filter @hive/web build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
 If your change touches web auth/bootstrap, browser env usage, or smoke flows, also verify the production bundle with required public envs:
 
 ```bash
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
-pnpm --filter @hive/web build
+docker compose exec -e NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 -e NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 -e NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
 If your change touches auth, chat, billing, or related integration flows, run the smoke flow when your environment supports it:
@@ -101,13 +98,13 @@ For API-impacting changes:
 
 ```bash
 pnpm --filter @hive/api test
-pnpm --filter @hive/api build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"
 ```
 
 For web-impacting changes:
 
 ```bash
-pnpm --filter @hive/web build
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
 For docs-only or policy-only changes, provide explicit verification checks such as file presence, link discoverability, and any repo-wide sanity build requested by the issue.

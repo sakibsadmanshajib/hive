@@ -59,6 +59,7 @@ async function linkGuestSession(accessToken: string, userId?: string) {
     if (response.ok) {
       linkedGuestIdentity = identityKey;
       clearGuestSession();
+      window.dispatchEvent(new Event("guest-sessions-linked"));
     }
   } catch {
     // Keep the guest session so a later authenticated event can retry the link.

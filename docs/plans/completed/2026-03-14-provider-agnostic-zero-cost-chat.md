@@ -48,9 +48,9 @@ Fix the `guest-free` regressions and implement a provider-agnostic zero-cost cha
    Change: Extend startup readiness and provider status handling to include OpenRouter, OpenAI chat, Gemini, and Anthropic using safe metadata endpoints where available.
    Verify: `pnpm --filter @hive/api exec vitest run test/providers/provider-status.test.ts test/providers/provider-registry.test.ts`
 
-10. Files: `README.md`, `CHANGELOG.md`, `docs/architecture/system-architecture.md`, `docs/plans/2026-03-14-provider-agnostic-zero-cost-chat-design.md`
+10. Files: `README.md`, `CHANGELOG.md`, `docs/architecture/system-architecture.md`, `docs/plans/completed/2026-03-14-provider-agnostic-zero-cost-chat-design.md`
     Change: Document the provider-backed zero-cost architecture, the new provider env vars, the OpenAI-compatibility boundary, and the no-paid-fallback rule for zero-cost traffic.
-    Verify: `rg -n "OPENROUTER_|GEMINI_|ANTHROPIC_|guest-free|zero-cost|OpenAI-compatible" README.md CHANGELOG.md docs/architecture/system-architecture.md docs/plans/2026-03-14-provider-agnostic-zero-cost-chat-design.md`
+    Verify: `rg -n "OPENROUTER_|GEMINI_|ANTHROPIC_|guest-free|zero-cost|OpenAI-compatible" README.md CHANGELOG.md docs/architecture/system-architecture.md docs/plans/completed/2026-03-14-provider-agnostic-zero-cost-chat-design.md`
 
 11. Files: touched API files, touched docs, touched web files if any web assertions need adjustment
     Change: Run the required verification suite, fix regressions, and confirm the final implementation against the Docker-local workflow expectations.

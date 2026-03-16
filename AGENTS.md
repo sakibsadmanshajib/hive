@@ -21,6 +21,9 @@ This file is the canonical operating policy for coding agents in this repository
 - This override rule does not permit committing secrets, tokens, or credentials, leaking protected internal data, or otherwise bypassing hard safety constraints around sensitive information.
 - Current persisted maintainer preference: worktrees are optional in this repository and should not be treated as mandatory for normal task execution.
 - Current persisted maintainer preference: use the Docker-local stack as the default development and verification environment for Hive; do not rely on standalone local app servers or alternate local ports as a normal workflow.
+- Current persisted maintainer preference: run builds only inside Docker containers (`docker compose exec api/web ... build`); do not run local `pnpm --filter @hive/api build` or `pnpm --filter @hive/web build`.
+- Current persisted maintainer preference: hands-free execution—the agent runs all commands (build, test, git, Docker, etc.); the maintainer only approves or rejects. Do not ask the maintainer to run commands; run them and report results.
+- Current persisted maintainer preference: **always commit** when work is done or at a verifiable checkpoint; do not leave the working tree with uncommitted changes as the normal outcome. Commit so that the commit id reflects what is running in containers and can be reproduced.
 
 ## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
 
@@ -77,25 +80,22 @@ API tests:
 pnpm --filter @hive/api test
 ```
 
-API build:
+API build (run inside Docker only; do not run local builds):
 
 ```bash
-pnpm --filter @hive/api build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"
 ```
 
-Web build:
+Web build (run inside Docker only; do not run local builds):
 
 ```bash
-pnpm --filter @hive/web build
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
-If web changes touch browser auth/bootstrap, `NEXT_PUBLIC_*` env usage, or smoke flows, also verify the production bundle with the required public envs set:
+Requires the stack to be up (`docker compose up -d` or `docker compose up --build -d`). If web changes touch browser auth/bootstrap, `NEXT_PUBLIC_*` env usage, or smoke flows, also verify the production bundle with the required public envs set (same exec, with env vars passed into the container):
 
 ```bash
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 \
-NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 \
-NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key \
-pnpm --filter @hive/web build
+docker compose exec -e NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8080 -e NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54321 -e NEXT_PUBLIC_SUPABASE_ANON_KEY=test-supabase-anon-key web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
 Unit tests are not sufficient evidence for those changes; they can miss prerender-time and browser-bundle env failures.
@@ -297,7 +297,36 @@ git worktree prune
 
 ## Docker Compose Lifecycle
 
-Use this lifecycle to avoid stale containers and bad local verification:
+Use this lifecycle to avoid stale containers and bad local verification.
+
+### Run latest code without rebuilding images
+
+To test code changes in Docker **without** rebuilding api/web images (saves several minutes):
+
+1. Use the dev override so api and web run from **mounted source** and dev servers (hot reload).
+2. From repo root, with Supabase already running (`npx supabase start`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d api web
+```
+
+No `--build` is needed: the dev override mounts `./` into the containers and overrides the command to `pnpm ... dev`, so containers use your current working tree. Restart after code changes is only needed if the dev server doesn’t pick them up.
+
+For full dev stack (Supabase env + dev override) in one go, use:
+
+```bash
+pnpm stack:dev
+```
+
+To run latest code **without rebuilding** api/web images (e.g. after editing code; typically &lt;30s):
+
+```bash
+pnpm stack:latest
+```
+
+This uses the same dev override (mounted source + dev servers) but skips `--build`. Use `stack:dev` when bringing the stack up from cold or when dependencies change; use `stack:latest` when you only need api/web to pick up code changes.
+
+### Full rebuild lifecycle
 
 1. Stop existing stack:
 
@@ -333,6 +362,41 @@ docker compose down -v
 ```
 
 Use `docker compose down -v` when stale DB/Redis state is likely causing flakiness.
+
+### Commit behaviour
+
+- **Always commit** when a task or verifiable checkpoint is complete. Do not leave the working tree with a long list of uncommitted changes as the default outcome.
+- Commit so that (1) the repo has a clear revision for what was done, (2) the commit id can be used to verify what is running in containers, and (3) the maintainer can reproduce or roll back from a known commit.
+- Use `git commit --no-gpg-sign -m "..."` when the maintainer has requested no GPG signing. Prefer Conventional Commit style for the message.
+- Before reporting "done" or running verification that depends on container state, commit first so the commit id matches the code you are testing.
+
+### Getting latest code in api and web containers
+
+We **do not** rely on rebuilding images to get the latest code during normal development. Use one of these approaches:
+
+1. **Mounted source (recommended for daily work)**  
+   Run api and web with the **dev override** so the host working tree is mounted into the containers and dev servers (e.g. Next.js, ts-node or similar) serve the current files:
+   - `pnpm stack:dev` — full dev stack with mounted source and dev servers.
+   - `pnpm stack:latest` — same but skip image build; use after dependencies are already installed.
+   Containers then run whatever is on the host (committed or not). To have a **meaningful commit id** printed on startup, **commit first**, then start or restart so `api git-commit:` / `web git-commit:` in logs match `git rev-parse HEAD`.
+
+2. **Build inside running containers (verify build, same source)**  
+   With the stack up (production-style or dev override with mounted source), run the build **inside** the container so the build environment is Docker, not the host:
+   - `docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"`
+   - `docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"`
+   With mounted source, `/app` in the container is your host repo; the container is building the same tree you have locally. With production-style images (no mount), the container builds whatever was baked into the image at `docker compose up --build`.
+
+3. **Production-style images (full rebuild)**  
+   To bake the current tree into new images and run them: `docker compose up --build -d api web`. Optionally set `GIT_COMMIT=$(git rev-parse HEAD)` so the image build-arg and container CMD echo that commit. Use when you need to verify the exact production build path or when you are not using mounted source.
+
+### Verifying containers run latest code (commit id)
+
+To confirm api/web are running the code you expect:
+
+1. **Commit your changes** (e.g. `git commit --no-gpg-sign -m "your message"`). Then the commit id reflects the code you are about to run.
+2. **With dev override (mounted source):** Start or restart with `pnpm stack:latest` or `pnpm stack:dev`. On startup, api and web each print `api git-commit: <sha>` and `web git-commit: <sha>` from the mounted repo (host’s `git rev-parse HEAD`). Check that the printed commit matches your latest commit.
+3. **To verify build inside containers:** Run `docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"` and the same for `web`. If the build fails, fix and re-run; if it passes, the container can build the current tree.
+4. **Production-style (baked image):** Use `GIT_COMMIT=$(git rev-parse HEAD) docker compose up --build -d api web` so the image logs that commit on start.
 
 ## Playwright Smoke E2E Expectations
 
@@ -448,6 +512,8 @@ Never force-push rewritten history unless explicitly required and safe.
 - Update `docs/` runbooks/architecture/plans for operational or architectural changes.
 - Prefer concrete examples (commands, payloads, env vars) over abstract prose.
 - Keep docs synchronized with implementation.
+- Keep `docs/plans/` root limited to currently in-flight session plans only (for example: the handful of dated plans being actively executed right now). When a plan is no longer the active execution surface, move it out of the root into `docs/plans/completed/` (for finished work) or `docs/plans/active/` (for long-lived tracks), rather than leaving old plans in the root.
+- Before creating a new plan under `docs/plans/YYYY-MM-DD-<task-name>.md`, quickly audit the root of `docs/plans/` and relocate any obviously stale plans so that only truly current work remains there.
 
 Reference: `docs/engineering/git-and-ai-practices.md`
 

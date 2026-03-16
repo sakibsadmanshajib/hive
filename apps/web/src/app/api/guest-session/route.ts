@@ -43,7 +43,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "guest chat unavailable" }, { status: 502 });
   }
 
-  const response = NextResponse.json(session, { status: 200 });
+  const response = NextResponse.json(
+    { ...session, cookieValue },
+    { status: 200 },
+  );
   response.headers.set("set-cookie", buildGuestSessionCookie(cookieValue, session.expiresAt));
   return response;
 }

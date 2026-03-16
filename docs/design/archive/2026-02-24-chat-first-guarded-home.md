@@ -43,8 +43,8 @@ This design was implemented initially, but the home-route policy has since been 
   - `pnpm --filter @hive/web test`
   - `pnpm --filter @hive/web build`
 
-See the current smoke/build commands in `docs/plans/2026-03-13-issue-19-guest-home-free-models-design.md` and `docs/runbooks/active/web-e2e-smoke.md`.
+See the current smoke/build commands in `docs/plans/completed/2026-03-13-issue-19-guest-home-free-models-design.md` and `docs/runbooks/active/web-e2e-smoke.md`.
 
 ## Superseded By
 
-- `docs/plans/2026-03-13-issue-19-guest-home-free-models-design.md`
+- `docs/plans/completed/2026-03-13-issue-19-guest-home-free-models-design.md`

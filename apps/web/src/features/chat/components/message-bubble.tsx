@@ -25,7 +25,12 @@ export function MessageBubble({ role, content, timestamp }: MessageBubbleProps) 
           {speaker}
         </p>
         {isUser ? <p className="whitespace-pre-wrap leading-relaxed">{content}</p> : <MarkdownMessage content={content} />}
-        <p className={cn("mt-2 text-[10px] uppercase tracking-wide", isUser ? "text-slate-300" : "text-slate-400")}>{timestamp ?? "just now"}</p>
+        <p
+          className={cn("mt-2 text-[10px] uppercase tracking-wide", isUser ? "text-slate-300" : "text-slate-400")}
+          suppressHydrationWarning
+        >
+          {timestamp ?? "just now"}
+        </p>
       </div>
     </article>
   );

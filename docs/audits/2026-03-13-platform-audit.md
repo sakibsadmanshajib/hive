@@ -17,12 +17,12 @@ Audit Hive's current repository, documentation, and GitHub backlog state to dete
 - Docs indexes: `docs/README.md`, `docs/design/README.md`, `docs/runbooks/README.md`, `docs/release/README.md`, `docs/plans/README.md`
 - Architecture and product docs:
   - `docs/architecture/system-architecture.md`
-  - `docs/architecture/2026-02-28-python-mvp-migration-map.md`
+  - `docs/architecture/archive/2026-02-28-python-mvp-migration-map.md`
   - `docs/design/active/product-and-routing.md`
-  - `docs/design/active/2026-02-24-chat-first-guarded-home.md`
-  - `docs/design/active/2026-02-24-web-flow-critical-review.md`
-  - `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
-  - `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
+  - `docs/design/archive/2026-02-24-chat-first-guarded-home.md`
+  - `docs/design/archive/2026-02-24-web-flow-critical-review.md`
+  - `docs/design/archive/2026-02-28-repo-audit-cleanup-design.md`
+  - `docs/design/archive/2026-02-28-repo-audit-cleanup-decision-process.md`
 - Runbooks and release docs:
   - `docs/runbooks/active/*.md`
   - `docs/release/active/*.md`

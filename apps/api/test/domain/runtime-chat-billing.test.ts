@@ -305,7 +305,7 @@ describe("runtime chat billing", () => {
 
     const result = await services.ai.chatCompletions(
       "user-1",
-      "fast-chat",
+      "smart-reasoning",
       [{ role: "user", content: "hello" }],
       { channel: "api" },
     );

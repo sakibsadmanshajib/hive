@@ -13,7 +13,7 @@ describe("model service", () => {
   it("uses a paid chat model as the authenticated default", () => {
     const service = new ModelService();
 
-    expect(service.pickDefault("chat").id).toBe("fast-chat");
+    expect(service.pickDefault("chat").id).toBe("smart-reasoning");
   });
 
   it("picks the free guest chat model as the guest default", () => {

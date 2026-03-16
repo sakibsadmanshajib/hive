@@ -14,7 +14,9 @@ RUN pnpm --filter @hive/api build
 
 FROM deps AS runner
 WORKDIR /app
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
 ENV NODE_ENV=production
 COPY --from=builder /app /app
 EXPOSE 8080
-CMD ["pnpm", "--filter", "@hive/api", "start"]
+CMD ["sh", "-c", "echo \"api git-commit: $GIT_COMMIT\" && exec pnpm --filter @hive/api start"]

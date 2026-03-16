@@ -68,13 +68,13 @@ For API-impacting changes:
 
 ```bash
 pnpm --filter @hive/api test
-pnpm --filter @hive/api build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"
 ```
 
 For web-impacting changes:
 
 ```bash
-pnpm --filter @hive/web build
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
 For infra/runtime changes (when Docker is available):

@@ -1,5 +1,9 @@
 # Supabase CLI And Docker Smoke Fix
 
+## Status (Superseded in part)
+
+This plan reflects an intermediate direction. The current CI smoke workflow (`.github/workflows/web-e2e-smoke.yml`) runs a small local Ollama model for `guest-free` rather than skipping Ollama entirely. Treat the "skip Ollama" portions below as historical intent; the canonical operational behavior is documented in `docs/runbooks/active/web-e2e-smoke.md`.
+
 ## Goal
 Align local and CI smoke orchestration around the real Supabase CLI project plus the Docker app stack, make the root `supabase/migrations/` directory the schema source of truth for smoke-critical guest/session tables, and explicitly skip Ollama in the GitHub smoke workflow.
 

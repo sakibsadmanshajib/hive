@@ -37,6 +37,8 @@ import { SupabaseBillingStore } from "./supabase-billing-store";
 import { PaymentReconciliationService } from "./payment-reconciliation";
 import { PaymentReconciliationScheduler } from "./payment-reconciliation-scheduler";
 import { SupabaseGuestAttributionStore } from "./supabase-guest-attribution-store";
+import { PersistentChatHistoryService, type ChatHistoryStore } from "./chat-history-service";
+import { SupabaseChatHistoryStore } from "./supabase-chat-history-store";
 
 type ChatMessage = { role: string; content: string };
 type ImageGenerationRequest = {
@@ -595,7 +597,9 @@ class RuntimeAiService {
     try {
       await operation();
     } catch (error) {
-      await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      if (creditsCost > 0) {
+        await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      }
       throw error;
     }
   }
@@ -893,6 +897,7 @@ export type RuntimeServices = {
   reconciliationScheduler?: PaymentReconciliationScheduler;
   users: PersistentUserService;
   guests: GuestAttributionStore;
+  chatHistory: PersistentChatHistoryService;
   authz: AuthorizationService;
   userSettings: UserSettingsService;
   supabaseAuth: SupabaseAuthService;
@@ -934,6 +939,7 @@ export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const supabase = createSupabaseAdminClient(env);
   const billingStore: BillingStore = new SupabaseBillingStore(supabase);
+  const chatHistoryStore: ChatHistoryStore = new SupabaseChatHistoryStore(supabase);
   const credits = new PersistentCreditService(billingStore);
   const usage = new PersistentUsageService(supabase);
   const guests = new SupabaseGuestAttributionStore(supabase);
@@ -1015,7 +1021,7 @@ export function createRuntimeServices(): RuntimeServices {
   };
   const providerReadinessModels: Record<ProviderName, string[]> = {
     mock: ["mock-chat"],
-    ollama: [env.providers.ollama.model, env.providers.ollama.freeModel].filter((value): value is string => Boolean(value)),
+    ollama: [],
     groq: [env.providers.groq.model, env.providers.groq.freeModel].filter((value): value is string => Boolean(value)),
     openai: [openaiConfig.chatModel, openaiConfig.imageModel, openaiConfig.freeModel].filter((value): value is string => Boolean(value)),
     openrouter: [openrouterConfig.model, openrouterConfig.freeModel].filter((value): value is string => Boolean(value)),
@@ -1061,9 +1067,8 @@ export function createRuntimeServices(): RuntimeServices {
       }),
       new MockProviderClient(),
     ],
-    defaultProvider: "mock",
+    defaultProvider: "openrouter",
     modelProviderMap: {
-      "fast-chat": "ollama",
       "smart-reasoning": "groq",
       "image-basic": "openai",
     },
@@ -1077,12 +1082,12 @@ export function createRuntimeServices(): RuntimeServices {
       },
     },
     fallbackOrder: {
-      ollama: ["groq", "mock"],
-      groq: ["ollama", "mock"],
-      openrouter: ["mock"],
-      gemini: ["mock"],
-      anthropic: ["mock"],
-      openai: ["mock"],
+      ollama: [],
+      groq: [],
+      openrouter: [],
+      gemini: [],
+      anthropic: [],
+      openai: [],
       mock: [],
     },
     circuitBreaker: env.providers.circuitBreaker,
@@ -1090,6 +1095,7 @@ export function createRuntimeServices(): RuntimeServices {
   startProviderReadinessCapture(providerRegistry);
 
   const ai = new RuntimeAiService(models, credits, usage, guests, providerRegistry, langfuse);
+  const chatHistory = new PersistentChatHistoryService(chatHistoryStore, ai);
 
   return {
     env,
@@ -1101,6 +1107,7 @@ export function createRuntimeServices(): RuntimeServices {
     reconciliationScheduler,
     users,
     guests,
+    chatHistory,
     authz,
     userSettings,
     supabaseAuth,

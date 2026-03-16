@@ -43,12 +43,7 @@ export function buildProviderOfferCatalog(env: AppEnv): ProviderOfferCatalog {
   const offers: Record<string, ProviderOffer> = {};
   const guestFreeOffers: string[] = [];
 
-  addChatOffer(offers, guestFreeOffers, {
-    id: "ollama-free",
-    provider: "ollama",
-    upstreamModel: providers.ollama?.freeModel,
-    costClass: "zero",
-  });
+
   addChatOffer(offers, guestFreeOffers, {
     id: "openrouter-free",
     provider: "openrouter",

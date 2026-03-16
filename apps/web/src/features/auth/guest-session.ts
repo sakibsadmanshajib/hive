@@ -4,6 +4,8 @@ export type GuestSession = {
   guestId: string;
   issuedAt: string;
   expiresAt: string;
+  /** Signed token for x-guest-session header when cookie is not sent (e.g. after reload). */
+  cookieValue?: string;
 };
 
 export const GUEST_SESSION_STORAGE_KEY = "bdai.guest.session";
@@ -17,11 +19,12 @@ function isGuestSession(value: unknown): value is GuestSession {
   if (!value || typeof value !== "object") {
     return false;
   }
-
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.guestId === "string"
-    && typeof candidate.issuedAt === "string"
-    && typeof candidate.expiresAt === "string";
+  return (
+    typeof candidate.guestId === "string" &&
+    typeof candidate.issuedAt === "string" &&
+    typeof candidate.expiresAt === "string"
+  );
 }
 
 function readStoredGuestSession(): GuestSession | null {

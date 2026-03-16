@@ -11,31 +11,23 @@ This folder is organized by plan status to reduce ambiguity and keep active work
 
 ## In Flight
 
-The root `docs/plans/` folder should stay small and contain only currently active session plans.
+The root `docs/plans/` folder should stay small and contain only currently active session plans for work that is being executed right now. At any given moment, there should be only a small handful of dated plan files directly under `docs/plans/` (not in a subfolder); those are the in-flight plans.
 
-- `docs/plans/2026-03-12-bootstrap-and-smoke-doc-fixes.md`
-- `docs/plans/2026-03-13-exhaustive-repo-audit.md`
+Current in-flight plans:
+
+- `docs/plans/2026-03-15-docs-structure-cleanup.md`
+- `docs/plans/2026-03-15-persist-chat-history-across-guest-and-user-plan.md`
 
 ## Active Track Docs
 
-Use these documents for current planning and execution:
+Long-lived planning tracks that guide ongoing streams of work:
 
-- `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
-- `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
-- `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-design.md`
-- `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-implementation.md`
 - `docs/plans/active/future-implementation-roadmap.md`
-- `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
 - `docs/plans/active/2026-02-24-public-beta-mvp-gap-and-oss-organization-design.md`
 
 ## Completed
 
 Completed dated plans live under `docs/plans/completed/`.
-
-Examples:
-
-- `docs/plans/completed/2026-02-24-ci-quality-and-pr-cleanup-implementation.md`
-- `docs/plans/completed/2026-03-13-unified-local-stack.md`
 
 ## Archive (Obsolete)
 

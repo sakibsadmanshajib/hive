@@ -107,11 +107,11 @@ gh api repos/{owner}/{repo}/labels --paginate --jq '.[] | {name,color,descriptio
 gh api repos/{owner}/{repo}/milestones --jq '.[] | {title,description,state}'
 ```
 
-After template or runbook changes, also run the repository sanity builds required by policy:
+After template or runbook changes, also run the repository sanity builds required by policy (Docker only; stack must be up):
 
 ```bash
-pnpm --filter @hive/api build
-pnpm --filter @hive/web build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
 
 ## Maintenance Notes

@@ -19,21 +19,25 @@ export type ChatState = {
 
 export type ChatAction =
   | {
-      type: "conversationAdded";
-      payload: { id: string };
-    }
+    type: "conversationAdded";
+    payload: { id: string };
+  }
   | {
-      type: "stateReset";
-    }
+    type: "stateReset";
+  }
   | {
-      type: "conversationSelected";
-      payload: { conversationId: string };
-    }
+    type: "sessionsLoaded";
+    payload: { conversations: ChatConversation[] };
+  }
   | {
-      type: "userMessageQueued";
-      payload: { conversationId: string; message: ChatMessage };
-    }
+    type: "conversationSelected";
+    payload: { conversationId: string };
+  }
   | {
-      type: "assistantMessageReceived";
-      payload: { conversationId: string; message: ChatMessage };
-    };
+    type: "userMessageQueued";
+    payload: { conversationId: string; message: ChatMessage };
+  }
+  | {
+    type: "assistantMessageReceived";
+    payload: { conversationId: string; message: ChatMessage };
+  };

@@ -131,7 +131,7 @@ importers:
         specifier: 19.2.14
         version: 19.2.14
       autoprefixer:
-        specifier: ^10.4.21
+        specifier: ^10.4.24
         version: 10.4.24(postcss@8.5.6)
       jsdom:
         specifier: ^26.1.0
@@ -140,7 +140,7 @@ importers:
         specifier: ^8.5.6
         version: 8.5.6
       tailwindcss:
-        specifier: ^3.4.17
+        specifier: ^3.4.19
         version: 3.4.19(tsx@4.21.0)
 
   packages/shared: {}

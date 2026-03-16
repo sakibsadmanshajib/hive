@@ -54,6 +54,7 @@ export function registerGuestAttributionRoutes(app: FastifyInstance, services: R
     }
 
     await services.users.linkGuest(guestId, principal.userId, "auth_session");
+    await services.chatHistory.claimGuestSessionsForUser(guestId, principal.userId);
     return { guestId, linked: true, userId: principal.userId };
   });
 }

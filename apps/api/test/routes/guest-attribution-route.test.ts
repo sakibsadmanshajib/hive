@@ -84,6 +84,7 @@ describe("guest attribution routes", () => {
   it("links guest identities to authenticated users", async () => {
     process.env.WEB_INTERNAL_GUEST_TOKEN = "test-web-token";
     const linkGuest = vi.fn(async () => undefined);
+    const claimGuestSessionsForUser = vi.fn(async () => undefined);
     const app = new FakeApp();
     registerRoutes(app as never, {
       env: {
@@ -98,6 +99,7 @@ describe("guest attribution routes", () => {
         resolveApiKey: async () => ({ userId: "user_123", scopes: ["chat"] }),
         linkGuest,
       },
+      chatHistory: { claimGuestSessionsForUser },
     } as never);
 
     const handler = app.handlers.get("POST /v1/internal/guest/link");
@@ -116,6 +118,7 @@ describe("guest attribution routes", () => {
 
     expect(reply.statusCode).toBe(200);
     expect(linkGuest).toHaveBeenCalledWith("guest_123", "user_123", "auth_session");
+    expect(claimGuestSessionsForUser).toHaveBeenCalledWith("guest_123", "user_123");
     expect(result).toEqual({
       guestId: "guest_123",
       linked: true,
@@ -151,6 +154,7 @@ describe("guest attribution routes", () => {
         resolveApiKey: async () => null,
         linkGuest,
       },
+      chatHistory: { claimGuestSessionsForUser: vi.fn(async () => undefined) },
     } as never);
 
     const handler = app.handlers.get("POST /v1/internal/guest/link");

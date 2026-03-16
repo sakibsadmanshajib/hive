@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Persisted Chat History:** Guest and authenticated chat conversations are now stored server-side and survive reloads and devices.
+  - New Supabase tables: `chat_sessions` and `chat_messages` with ownership for both user and guest; guest sessions are claimed for the user on guest-link.
+  - API: authenticated `GET/POST /v1/chat/sessions` and `GET /v1/chat/sessions/:id`, `POST /v1/chat/sessions/:id/messages`; internal guest session endpoints under `WEB_INTERNAL_GUEST_TOKEN` for list/create/get/send and claim-on-link in `/v1/internal/guest/link`.
+  - Web: same-origin proxy routes at `/api/chat/guest/sessions` and `/api/chat/guest/sessions/[id]` and `.../messages`; sidebar and transcript hydrate from server and new messages are sent through the session API.
 - **Provider-Agnostic Zero-Cost Chat Routing:** Added an internal provider-offer catalog so public models can stay stable while routing across provider-specific offers.
     - `guest-free` is now a provider-backed zero-cost chat model instead of a mock-only path.
     - Zero-cost offers can come from Ollama, OpenRouter, OpenAI, Groq, Gemini, Anthropic, or future providers without changing the public model id.
