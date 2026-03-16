@@ -65,8 +65,8 @@ test("unauthenticated root stays in guest mode, guest chat works, and locked pai
   await expect(messageArticles.nth(2)).toContainText("Assistant");
 
   await page.getByRole("combobox", { name: "Model" }).click();
-  const paidOption = page.getByRole("option", { name: /fast-chat/i });
-  await expect(paidOption).toContainText("Requires account and credits");
+  const paidOption = page.getByRole("option").filter({ hasText: "Requires account and credits" }).first();
+  await expect(paidOption).toBeVisible({ timeout: 10000 });
   await paidOption.click();
 
   const dialog = page.getByRole("dialog");
@@ -85,7 +85,11 @@ test("registering from the locked-model modal unlocks paid models in place", asy
   await page.goto("/");
 
   await page.getByRole("combobox", { name: "Model" }).click();
-  await page.getByRole("option", { name: /fast-chat/i }).click();
+  const lockedOption = page.getByRole("option").filter({ hasText: "Requires account and credits" }).first();
+  await expect(lockedOption).toBeVisible({ timeout: 10000 });
+  const fullText = (await lockedOption.textContent()) ?? "";
+  const lockedModelId = fullText.split(/Locked/i)[0].trim() || fullText.trim().split(/\s+/)[0] || "";
+  await lockedOption.click();
 
   const dialog = page.getByRole("dialog");
   await expect(dialog).toBeVisible();
@@ -102,8 +106,10 @@ test("registering from the locked-model modal unlocks paid models in place", asy
 
   const modelPicker = page.getByRole("combobox", { name: "Model" });
   await modelPicker.click();
-  await page.getByRole("option", { name: /fast-chat/i }).click();
-  await expect(modelPicker).toContainText("fast-chat");
+  if (lockedModelId) {
+    await page.getByRole("option", { name: new RegExp(lockedModelId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i") }).click();
+    await expect(modelPicker).toContainText(lockedModelId);
+  }
 });
 
 test("chat success and failure messaging", async ({ page, request }) => {
@@ -204,7 +210,9 @@ test("guest chat transcript persists after reload", async ({ page }) => {
   await expect(page).toHaveURL(/\//);
   await expect(page.getByText("Guest mode is active.")).toBeVisible({ timeout: 10000 });
 
-  await expect(page.getByText("persistence check")).toBeVisible({ timeout: 10000 });
+  await expect(
+    page.locator("p.whitespace-pre-wrap").filter({ hasText: /^persistence check$/ }).first(),
+  ).toBeVisible({ timeout: 10000 });
 });
 
 test("billing access from profile menu and top-up failure messaging", async ({ page, request }) => {

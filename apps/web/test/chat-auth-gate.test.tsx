@@ -21,8 +21,21 @@ vi.mock("next/navigation", () => ({
   }),
 }));
 
+vi.mock("../src/components/ui/select", () => import("./__mocks__/select-mock"));
+
 import HomePage from "../src/app/page";
 import ChatPage from "../src/app/chat/page";
+
+function mockJsonResponse(ok: boolean, body: unknown) {
+  const bodyStr = JSON.stringify(body);
+  return {
+    ok,
+    status: ok ? 200 : 400,
+    headers: new Headers({ "content-type": "application/json" }),
+    text: async () => bodyStr,
+    json: async () => body,
+  };
+}
 
 describe("chat auth gate", () => {
   beforeEach(() => {
@@ -66,67 +79,58 @@ describe("chat auth gate", () => {
       const method = (init?.method ?? "GET") as string;
 
       if (url.endsWith("/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            data: [
-              { id: "guest-free", capability: "chat", costType: "free" },
-              { id: "fast-chat", capability: "chat", costType: "fixed" },
-            ],
-          }),
-        };
+        return mockJsonResponse(true, {
+          data: [
+            { id: "guest-free", capability: "chat", costType: "free" },
+            { id: "fast-chat", capability: "chat", costType: "fixed" },
+          ],
+        });
       }
 
       if (url.endsWith("/api/guest-session")) {
-        return {
-          ok: true,
-          json: async () => ({
-            guestId: "guest_123",
-            issuedAt: "2026-03-13T00:00:00.000Z",
-            expiresAt: "2026-03-20T00:00:00.000Z",
-          }),
-        };
+        return mockJsonResponse(true, {
+          guestId: "guest_123",
+          issuedAt: "2026-03-13T00:00:00.000Z",
+          expiresAt: "2026-03-20T00:00:00.000Z",
+        });
       }
 
       if (url.endsWith("/api/chat/guest/sessions") && method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "chat_sess_guest_1",
-            title: "New Chat",
-            createdAt: "2026-03-15T10:00:00.000Z",
-            updatedAt: "2026-03-15T10:00:00.000Z",
-            lastMessageAt: null,
-          }),
-        };
+        return mockJsonResponse(true, {
+          id: "chat_sess_guest_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        });
       }
 
       if (url.includes("/api/chat/guest/sessions/") && url.endsWith("/messages") && method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "chat_sess_guest_1",
-            title: "New Chat",
-            messages: [
-              { role: "user", content: "guest hello", createdAt: "2026-03-15T10:00:30.000Z" },
-              { role: "assistant", content: "Guest reply", createdAt: "2026-03-15T10:01:00.000Z" },
-            ],
-          }),
-        };
+        return mockJsonResponse(true, {
+          id: "chat_sess_guest_1",
+          title: "New Chat",
+          messages: [
+            { role: "user", content: "guest hello", createdAt: "2026-03-15T10:00:30.000Z" },
+            { role: "assistant", content: "Guest reply", createdAt: "2026-03-15T10:01:00.000Z" },
+          ],
+        });
       }
 
       if (url.endsWith("/api/chat/guest/sessions") && method === "GET") {
-        return { ok: true, json: async () => ({ object: "list", data: [] }) };
+        return mockJsonResponse(true, { object: "list", data: [] });
       }
 
-      return {
-        ok: false,
-        json: async () => ({ error: `Unhandled URL: ${url}` }),
-      };
+      return mockJsonResponse(false, { error: `Unhandled URL: ${url}` });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<HomePage />);
+
+    // Wait for models to load AND React to auto-select the free model
+    await waitFor(() => {
+      const trigger = screen.getAllByRole("combobox").at(-1)!;
+      expect(trigger.textContent).toContain("guest-free");
+    });
 
     const prompt = (await screen.findAllByPlaceholderText(/ask something/i)).at(-1)!;
     fireEvent.change(prompt, {
@@ -159,53 +163,47 @@ describe("chat auth gate", () => {
       const url = typeof input === "string" ? input : input.toString();
 
       if (url.endsWith("/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            data: [{ id: "fast-chat", capability: "chat", costType: "fixed" }],
-          }),
-        };
+        return mockJsonResponse(true, {
+          data: [{ id: "fast-chat", capability: "chat", costType: "fixed" }],
+        });
       }
 
       if (url.endsWith("/v1/chat/sessions") && (init?.method ?? "GET") === "GET") {
-        return { ok: true, json: async () => ({ data: [] }) };
+        return mockJsonResponse(true, { data: [] });
       }
 
       if (url.endsWith("/v1/chat/sessions") && init?.method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "chat_sess_1",
-            title: "New Chat",
-            createdAt: "2026-03-15T10:00:00.000Z",
-            updatedAt: "2026-03-15T10:00:00.000Z",
-            lastMessageAt: null,
-          }),
-        };
+        return mockJsonResponse(true, {
+          id: "chat_sess_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        });
       }
 
       if (/\/v1\/chat\/sessions\/[^/]+\/messages$/.test(url) && init?.method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "chat_sess_1",
-            title: "New Chat",
-            messages: [
-              { role: "user", content: "hello from auth", createdAt: "" },
-              { role: "assistant", content: "Authenticated reply", createdAt: "" },
-            ],
-          }),
-        };
+        return mockJsonResponse(true, {
+          id: "chat_sess_1",
+          title: "New Chat",
+          messages: [
+            { role: "user", content: "hello from auth", createdAt: "" },
+            { role: "assistant", content: "Authenticated reply", createdAt: "" },
+          ],
+        });
       }
 
-      return {
-        ok: false,
-        json: async () => ({ error: `Unhandled URL: ${url}` }),
-      };
+      return mockJsonResponse(false, { error: `Unhandled URL: ${url}` });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<HomePage />);
+
+    // Wait for models to load AND React to auto-select the model
+    await waitFor(() => {
+      const trigger = screen.getAllByRole("combobox").at(-1)!;
+      expect(trigger.textContent).toContain("fast-chat");
+    });
 
     const prompt = (await screen.findAllByPlaceholderText(/ask something/i)).at(-1)!;
     fireEvent.change(prompt, {
@@ -238,56 +236,50 @@ describe("chat auth gate", () => {
       const url = typeof input === "string" ? input : input.toString();
 
       if (url.endsWith("/v1/models")) {
-        return {
-          ok: true,
-          json: async () => ({
-            data: [{ id: "fast-chat", capability: "chat", costType: "fixed" }],
-          }),
-        };
+        return mockJsonResponse(true, {
+          data: [{ id: "fast-chat", capability: "chat", costType: "fixed" }],
+        });
       }
 
       if (url.endsWith("/v1/chat/sessions") && (init?.method ?? "GET") === "GET") {
-        return { ok: true, json: async () => ({ data: [] }) };
+        return mockJsonResponse(true, { data: [] });
       }
 
       if (url.endsWith("/v1/chat/sessions") && init?.method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "chat_sess_auth_1",
-            title: "New Chat",
-            createdAt: "2026-03-15T10:00:00.000Z",
-            updatedAt: "2026-03-15T10:00:00.000Z",
-            lastMessageAt: null,
-          }),
-        };
+        return mockJsonResponse(true, {
+          id: "chat_sess_auth_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        });
       }
 
       if (/\/v1\/chat\/sessions\/[^/]+\/messages$/.test(url) && init?.method === "POST") {
-        return {
-          ok: true,
-          json: async () => ({
-            id: "chat_sess_auth_1",
-            title: "New Chat",
-            createdAt: "2026-03-15T10:00:00.000Z",
-            updatedAt: "2026-03-15T10:01:00.000Z",
-            lastMessageAt: "2026-03-15T10:01:00.000Z",
-            messages: [
-              { id: "m1", role: "user", content: "hello from auth", createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_auth_1" },
-              { id: "m2", role: "assistant", content: "Authenticated reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_auth_1" },
-            ],
-          }),
-        };
+        return mockJsonResponse(true, {
+          id: "chat_sess_auth_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:01:00.000Z",
+          lastMessageAt: "2026-03-15T10:01:00.000Z",
+          messages: [
+            { id: "m1", role: "user", content: "hello from auth", createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_auth_1" },
+            { id: "m2", role: "assistant", content: "Authenticated reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_auth_1" },
+          ],
+        });
       }
 
-      return {
-        ok: false,
-        json: async () => ({ error: `Unhandled URL: ${url}` }),
-      };
+      return mockJsonResponse(false, { error: `Unhandled URL: ${url}` });
     });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<HomePage />);
+
+    // Wait for models to load AND React to auto-select the model
+    await waitFor(() => {
+      const trigger = screen.getAllByRole("combobox").at(-1)!;
+      expect(trigger.textContent).toContain("fast-chat");
+    });
 
     const prompt = (await screen.findAllByPlaceholderText(/ask something/i)).at(-1)!;
     fireEvent.change(prompt, {
