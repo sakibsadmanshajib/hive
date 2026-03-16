@@ -2,7 +2,7 @@
 Persist guest and authenticated chat sessions/messages server-side so the web sidebar and active transcript survive reloads, guest-to-user linking, and later authenticated sessions without weakening the existing guest/web security boundary or current billing behavior.
 
 ## Assumptions
-- This plan artifact was written directly to `docs/plans/2026-03-15-persist-chat-history-across-sessions.md` because `.agent/skills/superpowers-workflow/scripts/write_artifact.py` is unavailable in this repository.
+- This plan artifact was written directly to this plan file (it originally lived at `docs/plans/2026-03-15-persist-chat-history-across-sessions.md`) because `.agent/skills/superpowers-workflow/scripts/write_artifact.py` is unavailable in this repository.
 - Keep `POST /v1/chat/completions` OpenAI-compatible for API-product callers; add dedicated session/history routes for the web product instead of overloading the current public completion payload.
 - Server persistence in Supabase/Postgres becomes the source of truth for transcripts; the web reducer remains an optimistic/hydration layer, not the durable store.
 - Guest-owned sessions are keyed by `guest_id`; successful guest linking claims those sessions for `user_id` without copying or dropping message rows.
