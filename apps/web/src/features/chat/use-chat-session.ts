@@ -53,7 +53,8 @@ export function useChatSession() {
   const guestSessionRequestRef = useRef<Promise<GuestSession | null> | null>(null);
   const previousAuthScopeRef = useRef<string | null>(null);
   const serverSessionMapRef = useRef<Map<string, string>>(new Map());
-  const sessionsLoadedRef = useRef(false);
+  const lastLoadedAuthScopeRef = useRef<string | null>(null);
+  const [sessionReloadTrigger, setSessionReloadTrigger] = useState(0);
   const guestSessionsLoadedRef = useRef(false);
 
   async function ensureGuestSession(forceRefresh = false): Promise<GuestSession | null> {
@@ -210,6 +211,12 @@ export function useChatSession() {
   }, [authReady, guestMode]);
 
   useEffect(() => {
+    const handler = () => setSessionReloadTrigger((n) => n + 1);
+    window.addEventListener("guest-sessions-linked", handler);
+    return () => window.removeEventListener("guest-sessions-linked", handler);
+  }, []);
+
+  useEffect(() => {
     if (!authReady || !guestMode || guestSessionsLoadedRef.current) {
       return;
     }
@@ -302,10 +309,14 @@ export function useChatSession() {
   }, [authReady, guestMode]);
 
   useEffect(() => {
-    if (!authReady || guestMode || !accessToken || sessionsLoadedRef.current) {
+    if (!authReady || guestMode || !accessToken) {
       return;
     }
-    sessionsLoadedRef.current = true;
+    const currentScope = `${authScopeKey}:${sessionReloadTrigger}`;
+    if (lastLoadedAuthScopeRef.current === currentScope) {
+      return;
+    }
+    lastLoadedAuthScopeRef.current = currentScope;
     let cancelled = false;
 
     async function loadSessions() {
@@ -372,7 +383,7 @@ export function useChatSession() {
     return () => {
       cancelled = true;
     };
-  }, [authReady, guestMode, accessToken]);
+  }, [authReady, guestMode, accessToken, authScopeKey, sessionReloadTrigger]);
 
   function handleModelChange(nextModelId: string) {
     const nextModel = modelOptions.find((option) => option.id === nextModelId);
