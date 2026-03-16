@@ -49,8 +49,8 @@ Initially deferred from this tracking PR:
 
 ## Canonical Doc Placement for This Track
 
-- Design artifact: `docs/design/active/2026-02-28-repo-audit-cleanup-design.md`
-- Decision process log: `docs/design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
+- Design artifact: `docs/design/archive/2026-02-28-repo-audit-cleanup-design.md`
+- Decision process log: `docs/design/archive/2026-02-28-repo-audit-cleanup-decision-process.md`
 - Execution plan artifact (tracked copy): `docs/plans/completed/2026-02-28-repo-audit-cleanup-plan.md`
 
 ## Next Trigger

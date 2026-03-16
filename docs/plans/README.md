@@ -20,24 +20,14 @@ Current in-flight plans:
 
 ## Active Track Docs
 
-Use these documents for current planning and execution:
+Long-lived planning tracks that guide ongoing streams of work:
 
-- `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
-- `docs/plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
-- `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-design.md`
-- `docs/plans/active/2026-02-23-chat-first-frontend-information-architecture-implementation.md`
 - `docs/plans/active/future-implementation-roadmap.md`
-- `docs/plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
 - `docs/plans/active/2026-02-24-public-beta-mvp-gap-and-oss-organization-design.md`
 
 ## Completed
 
 Completed dated plans live under `docs/plans/completed/`.
-
-Examples:
-
-- `docs/plans/completed/2026-02-24-ci-quality-and-pr-cleanup-implementation.md`
-- `docs/plans/completed/2026-03-13-unified-local-stack.md`
 
 ## Archive (Obsolete)
 

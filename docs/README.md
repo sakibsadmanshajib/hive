@@ -7,46 +7,25 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 - Local bootstrap and daily development: `../README.md`
 - Architecture: `architecture/system-architecture.md`
 - Product direction: `design/active/product-and-routing.md`
-- Python MVP migration map: `architecture/2026-02-28-python-mvp-migration-map.md`
 - Contributing: `../CONTRIBUTING.md`
 - Code of Conduct: `../CODE_OF_CONDUCT.md`
 - Security policy: `../SECURITY.md`
 - Support: `../SUPPORT.md`
 - Governance: `../GOVERNANCE.md`
-- Product and design decisions: `design/README.md`
 - Changelog: `../CHANGELOG.md`
+
+## Active Work
+
 - Plans overview: `plans/README.md`
 - Active roadmap: `plans/active/future-implementation-roadmap.md`
-- Current in-flight bootstrap/docs workflow plan: `plans/2026-03-12-bootstrap-and-smoke-doc-fixes.md`
-- Current exhaustive audit plan: `plans/2026-03-13-exhaustive-repo-audit.md`
-- Current architecture migration design: `plans/active/2026-02-23-supabase-option-a-backend-simplification-design.md`
-- Current architecture migration implementation plan: `plans/active/2026-02-23-supabase-option-a-backend-simplification-implementation.md`
-- Current chat-first frontend IA design: `plans/active/2026-02-23-chat-first-frontend-information-architecture-design.md`
-- Current chat-first frontend IA implementation plan: `plans/active/2026-02-23-chat-first-frontend-information-architecture-implementation.md`
-- Current web flow audit: `design/active/2026-02-24-web-flow-critical-review.md`
-- Current chat-first guarded-home design: `design/active/2026-02-24-chat-first-guarded-home.md`
-- Current chat-first guarded-home implementation plan: `plans/active/2026-02-24-chat-first-guarded-home-implementation.md`
-- Current repo audit design: `design/active/2026-02-28-repo-audit-cleanup-design.md`
-- Current repo audit decision process: `design/active/2026-02-28-repo-audit-cleanup-decision-process.md`
-- Repo audit outputs: `audits/2026-02-28-redundancy-inventory.md`, `audits/2026-02-28-final-audit-report.md`
-- Current platform audit: `audits/2026-03-13-platform-audit.md`
+- Public beta MVP gap analysis: `plans/active/2026-02-24-public-beta-mvp-gap-and-oss-organization-design.md`
+- Current in-flight plans: see `plans/README.md` → In Flight
 
-## Planning Docs Status
+## Design
 
-- `plans/` root is for in-flight tracked plans only.
-- `plans/active/` contains long-lived current plans that should guide implementation.
-- `plans/completed/` contains completed dated execution artifacts retained for history.
-- `plans/archive/pre-supabase/` contains pre-Supabase plans kept only for historical reference and should be treated as obsolete for current direction.
-- Active design artifacts may live under `design/active/` when they capture UX or product decisions that are not implementation plans.
-
-## Docs Structure Conventions
-
-- New implementation plans: add under `plans/YYYY-MM-DD-<task-name>.md`.
-- Long-lived planning tracks: move into `plans/active/` when they become the canonical guide for an ongoing stream of work.
-- Completed plans: move into `plans/completed/` once no longer used as the active execution surface.
-- Historical or pre-Supabase plans: keep only under `plans/archive/pre-supabase/`.
-- Active product and UX design docs that are not implementation plans: add under `design/active/` and link from `design/README.md`.
-- Runbooks and operational guides: keep under `runbooks/` (with `runbooks/active/` for current runbooks and `runbooks/archive/` for pre-Supabase or obsolete flows).
+- Product and design decisions: `design/README.md`
+- Product direction and routing: `design/active/product-and-routing.md`
+- Chat history persistence design (in-flight): `design/active/2026-03-15-persist-chat-history-across-guest-and-user-design.md`
 
 ## Operations
 
@@ -65,6 +44,26 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 ## Engineering Standards
 
 - Git and AI practices: `engineering/git-and-ai-practices.md`
+
+## Reference / Historical
+
+- Python MVP migration map (historical): `architecture/archive/2026-02-28-python-mvp-migration-map.md`
+- Repo audit outputs: `audits/2026-02-28-redundancy-inventory.md`, `audits/2026-02-28-final-audit-report.md`
+- Platform audit: `audits/2026-03-13-platform-audit.md`
+- Completed plans: `plans/completed/`
+- Archived designs: `design/archive/`
+- Pre-Supabase plans: `plans/archive/pre-supabase/`
+
+## Docs Structure Conventions
+
+- **In-flight session plans**: `plans/YYYY-MM-DD-<task-name>.md` (root). Keep to a small handful at any time.
+- **Long-lived planning tracks**: `plans/active/` — canonical guides for ongoing streams of work.
+- **Completed plans**: `plans/completed/` — no longer the active execution surface.
+- **Archived/obsolete plans**: `plans/archive/pre-supabase/` — historical reference only.
+- **Active product/UX designs**: `design/active/` — link from `design/README.md`.
+- **Completed/superseded designs**: `design/archive/` — kept for historical reference.
+- **Runbooks**: `runbooks/active/` for current, `runbooks/archive/` for obsolete.
+- **Architecture**: `architecture/` for current ground truth, `architecture/archive/` for historical snapshots.
 
 ## Conventions
 

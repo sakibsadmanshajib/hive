@@ -189,7 +189,7 @@ Verify: `pnpm --filter @hive/web exec vitest run apps/web/test/chat-guest-mode.t
 - Modify: `README.md`
 - Modify: `CHANGELOG.md`
 - Modify: `docs/architecture/system-architecture.md`
-- Modify: `docs/design/active/2026-02-24-chat-first-guarded-home.md`
+- Modify: `docs/design/archive/2026-02-24-chat-first-guarded-home.md`
 
 **Step 1: Document guest-first home and free-model policy**
 
