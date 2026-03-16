@@ -52,6 +52,7 @@ graph TD
 - **RBAC**: `user_roles` + `role_permissions` tables queried by `AuthorizationService`
 - **Settings**: `user_settings` table for feature gates
 - **Guest Attribution**: `guest_sessions`, `guest_usage_events`, and `guest_user_links` via `SupabaseGuestAttributionStore`
+- **Chat History**: `chat_sessions` and `chat_messages` via `SupabaseChatHistoryStore`; guest-owned sessions are claimed for the user when linking guest to account
 
 ### 4. Redis
 - Rate limiting and short-window traffic control
@@ -115,7 +116,7 @@ Guest web chat:
 1. Browser stays on `/` without auth and bootstraps a guest session through `/api/guest-session`
 2. The Next.js route issues a signed guest cookie, mirrors a browser-visible guest session object, and persists/refreshes the guest session through the internal API
 3. The model picker exposes free models normally and renders paid models as locked options with an in-place auth upsell
-4. Browser submits guest chat to `/api/chat/guest`
+4. Browser creates/sends guest chat through `/api/chat/guest/sessions` (list, create, get, send messages); legacy completion path remains at `/api/chat/guest`
 5. The Next.js guest route rejects non-same-origin requests and forwards the internal request with a server-only token, validated `guestId`, and caller IP
 6. Redis rate-limit check uses a guest key derived from the forwarded client IP
 7. Requested model is validated against guest policy (`costType === "free"`)

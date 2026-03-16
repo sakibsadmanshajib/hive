@@ -15,15 +15,6 @@ const MODELS: GatewayModel[] = [
     },
   },
   {
-    id: "fast-chat",
-    object: "model",
-    capability: "chat",
-    costType: "fixed",
-    pricing: {
-      creditsPerRequest: 8,
-    },
-  },
-  {
     id: "smart-reasoning",
     object: "model",
     capability: "chat",

@@ -305,7 +305,7 @@ describe("RuntimeServices", () => {
                     openrouter: {
                         baseUrl: "https://openrouter.ai/api/v1",
                         model: "openrouter/auto",
-                        freeModel: undefined,
+                        freeModel: "openrouter/free-model",
                         timeoutMs: 50,
                         maxRetries: 0,
                     },

@@ -63,6 +63,112 @@ paths:
           description: Missing API key
         "402":
           description: Insufficient credits
+  /v1/chat/sessions:
+    get:
+      summary: List persisted browser chat sessions for the authenticated user
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Chat session summaries ordered by recent activity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data]
+                properties:
+                  object:
+                    type: string
+                    example: list
+                  data:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ChatSessionSummary"
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden for non-session callers
+    post:
+      summary: Create a persisted browser chat session for the authenticated user
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChatSessionRequest"
+      responses:
+        "201":
+          description: Created chat session summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSessionSummary"
+        "400":
+          description: Invalid session create request
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden for non-session callers
+  /v1/chat/sessions/{sessionId}:
+    get:
+      summary: Load one persisted browser chat session with its messages
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Full persisted chat session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          description: Missing session id
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden for non-session callers
+        "404":
+          description: Chat session not found
+  /v1/chat/sessions/{sessionId}/messages:
+    post:
+      summary: Persist a new message on an existing browser chat session and return the refreshed transcript
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: sessionId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateChatMessageRequest"
+      responses:
+        "200":
+          description: Refreshed chat session with the new assistant reply
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatSession"
+        "400":
+          description: Invalid chat message request
+        "401":
+          description: Missing or invalid session token
+        "403":
+          description: Forbidden for non-session callers
+        "404":
+          description: Chat session not found
   /v1/responses:
     post:
       summary: OpenAI-compatible responses endpoint
@@ -494,6 +600,65 @@ components:
         createdAt:
           type: string
           format: date-time
+    ChatMessage:
+      type: object
+      required: [id, sessionId, role, content, createdAt, sequence]
+      properties:
+        id:
+          type: string
+        sessionId:
+          type: string
+        role:
+          type: string
+          enum: [system, user, assistant]
+        content:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        sequence:
+          type: integer
+    ChatSessionSummary:
+      type: object
+      required: [id, title, createdAt, updatedAt, lastMessageAt]
+      properties:
+        id:
+          type: string
+        title:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        lastMessageAt:
+          type: string
+          format: date-time
+          nullable: true
+    ChatSession:
+      allOf:
+        - $ref: "#/components/schemas/ChatSessionSummary"
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              items:
+                $ref: "#/components/schemas/ChatMessage"
+    CreateChatSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+    CreateChatMessageRequest:
+      type: object
+      required: [content]
+      properties:
+        model:
+          type: string
+        content:
+          type: string
     UsageSummaryBucket:
       type: object
       required: [key, requests, credits]

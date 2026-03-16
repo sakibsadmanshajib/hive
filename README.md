@@ -191,13 +191,13 @@ GitHub contributor intake and triage are repo-managed:
 - `/` is the primary chat workspace for both guests and authenticated users.
 - Guests stay on `/` in guest mode and are limited to `costType: "free"` chat models.
 - `guest-free` is a provider-backed zero-cost chat model. It routes to configured zero-cost offers only and fails closed if no healthy free offer is available.
-- Web chat state on `/` is currently browser-session state only. Guest and authenticated conversations are not durably persisted across reloads or devices yet.
+- Guest and authenticated chat conversations are persisted server-side in `chat_sessions` and `chat_messages`. The sidebar and active transcript survive reloads, and guest-owned sessions are claimed for the user on sign-in/link.
 - The model picker keeps paid chat models visible to guests, but renders them as locked with the reason `Requires account and credits`.
 - If the guest model catalog load fails or returns only paid chat models, the web app fails closed instead of inventing a free model or selecting a locked paid model.
 - Selecting a locked paid model opens a dismissible combined auth modal on `/`; dismissing it keeps the current guest conversation intact.
 - Successful authentication from that modal closes it in place and immediately unlocks paid models on `/` without navigating away.
 - The web app bootstraps a signed `httpOnly` guest cookie through `/api/guest-session` and mirrors a browser-visible guest session object for UI state and analytics.
-- Guest chat flows through `/api/chat/guest`; the browser never calls the API guest runtime directly.
+- Guest chat and session history flow through same-origin Next.js routes (`/api/chat/guest` for legacy completion, `/api/chat/guest/sessions` for list/create/get/send); the browser never calls the API guest runtime directly.
 - `/auth` hosts login/signup (backed by Supabase Auth).
 - `/chat` redirects to `/` (legacy compatibility).
 - Chat workspace includes:
@@ -434,8 +434,8 @@ pnpm stack:dev                     # Start full local stack with hot reload
 pnpm stack:down                    # Stop the Hive dev stack
 pnpm stack:reset                   # Stop Hive stack, remove Compose volumes, stop Supabase
 pnpm --filter @hive/api test        # Run API tests (23 suites, 64 tests)
-pnpm --filter @hive/api build       # TypeScript build check
-pnpm --filter @hive/web build       # Web build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"   # API build (Docker only)
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"   # Web build (Docker only)
 ```
 
 ## Test Coverage
@@ -465,4 +465,5 @@ The live Supabase CLI migration source of truth is `supabase/migrations/`:
 - `20260313052000_refund_credits_rpc.sql` — Refund credits RPC
 - `20260314000100_api_key_lifecycle.sql` — API key stable ids, nickname, expiration, and audit events
 - `20260314000200_guest_attribution.sql` — Guest sessions, guest usage events, and guest-to-user links
+- `20260315000000_chat_history.sql` — Chat sessions and messages for guest and authenticated web chat persistence
 - `20260314000300_usage_reporting_channels.sql` — Usage event channel and stable API key attribution fields

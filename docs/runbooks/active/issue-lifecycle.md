@@ -262,9 +262,9 @@ Runnable checks:
   `gh issue view <issue-number> --json labels,milestone,state,url`
 - Verify linked PR:
   `gh pr view <pr-number> --json state,mergeStateStatus,closingIssuesReferences,url`
-- Run required builds:
-  `pnpm --filter @hive/api build`
-  `pnpm --filter @hive/web build`
+- Run required builds (Docker only; stack must be up):
+  `docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"`
+  `docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"`
 
 ## Maintenance Notes
 

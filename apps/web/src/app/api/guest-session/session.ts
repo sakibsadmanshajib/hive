@@ -30,32 +30,17 @@ export function createGuestSession(secret: string, now = new Date()): { cookieVa
   };
 }
 
-export function parseGuestSession(cookieHeader: string | null, secret: string): IssuedGuestSession | null {
-  if (!cookieHeader) {
-    return null;
-  }
-
-  const cookiePart = cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .find((part) => part.startsWith(`${COOKIE_NAME}=`));
-  if (!cookiePart) {
-    return null;
-  }
-
-  const rawValue = cookiePart.slice(`${COOKIE_NAME}=`.length);
+function parseSignedGuestValue(rawValue: string, secret: string): IssuedGuestSession | null {
   const [payload, signature] = rawValue.split(".");
   if (!payload || !signature) {
     return null;
   }
-
   const expectedSignature = signPayload(payload, secret);
   const received = Buffer.from(signature);
   const expected = Buffer.from(expectedSignature);
   if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
     return null;
   }
-
   try {
     const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as IssuedGuestSession;
     if (!parsed.guestId || !parsed.issuedAt || !parsed.expiresAt) {
@@ -68,6 +53,29 @@ export function parseGuestSession(cookieHeader: string | null, secret: string): 
   } catch {
     return null;
   }
+}
+
+export function parseGuestSession(cookieHeader: string | null, secret: string): IssuedGuestSession | null {
+  if (!cookieHeader) {
+    return null;
+  }
+  const cookiePart = cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(`${COOKIE_NAME}=`));
+  if (!cookiePart) {
+    return null;
+  }
+  const rawValue = cookiePart.slice(`${COOKIE_NAME}=`.length);
+  return parseSignedGuestValue(rawValue, secret);
+}
+
+/** Parse guest session from raw cookie value (e.g. from x-guest-session header). Same verification as cookie. */
+export function parseGuestSessionFromValue(value: string | null, secret: string): IssuedGuestSession | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  return parseSignedGuestValue(value.trim(), secret);
 }
 
 export function buildGuestSessionCookie(cookieValue: string, expiresAt: string): string {

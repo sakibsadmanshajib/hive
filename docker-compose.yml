@@ -4,17 +4,13 @@ services:
     ports:
       - "6379:6379"
 
-  ollama:
-    image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama_data:/root/.ollama
 
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
     env_file:
       - .env.example
     environment:
@@ -27,21 +23,17 @@ services:
       PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-4000}
       PROVIDER_MAX_RETRIES: ${PROVIDER_MAX_RETRIES:-1}
       WEB_INTERNAL_GUEST_TOKEN: ${WEB_INTERNAL_GUEST_TOKEN:-}
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.1:8b}
-      OLLAMA_FREE_MODEL: ${OLLAMA_FREE_MODEL:-}
-      OLLAMA_TIMEOUT_MS: ${OLLAMA_TIMEOUT_MS:-}
-      OLLAMA_MAX_RETRIES: ${OLLAMA_MAX_RETRIES:-}
+
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
-      OPENROUTER_FREE_MODEL: ${OPENROUTER_FREE_MODEL:-}
+      OPENROUTER_FREE_MODEL: ${OPENROUTER_FREE_MODEL:-google/gemini-2.0-pro-exp-02-05:free}
       OPENROUTER_TIMEOUT_MS: ${OPENROUTER_TIMEOUT_MS:-}
       OPENROUTER_MAX_RETRIES: ${OPENROUTER_MAX_RETRIES:-}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
       GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
-      GROQ_FREE_MODEL: ${GROQ_FREE_MODEL:-}
+      GROQ_FREE_MODEL: ${GROQ_FREE_MODEL:-llama-3.1-8b-instant}
       GROQ_TIMEOUT_MS: ${GROQ_TIMEOUT_MS:-}
       GROQ_MAX_RETRIES: ${GROQ_MAX_RETRIES:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -77,7 +69,6 @@ services:
       - "host.docker.internal:host-gateway"
     depends_on:
       - redis
-      - ollama
       - langfuse
     ports:
       - "8080:8080"
@@ -87,6 +78,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
         NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8080}
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-http://127.0.0.1:54321}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY:-test-supabase-anon-key}
@@ -141,5 +133,4 @@ services:
       retries: 5
 
 volumes:
-  ollama_data:
   langfuse_db_data:

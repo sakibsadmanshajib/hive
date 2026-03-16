@@ -61,8 +61,9 @@ describe("chat auth gate", () => {
 
   it("clears guest conversation state when the browser session becomes authenticated", async () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
+      const method = (init?.method ?? "GET") as string;
 
       if (url.endsWith("/v1/models")) {
         return {
@@ -87,22 +88,35 @@ describe("chat auth gate", () => {
         };
       }
 
-      if (url.endsWith("/api/chat/guest")) {
+      if (url.endsWith("/api/chat/guest/sessions") && method === "POST") {
         return {
           ok: true,
           json: async () => ({
-            choices: [{ message: { content: "Guest reply" } }],
+            id: "chat_sess_guest_1",
+            title: "New Chat",
+            createdAt: "2026-03-15T10:00:00.000Z",
+            updatedAt: "2026-03-15T10:00:00.000Z",
+            lastMessageAt: null,
           }),
         };
       }
 
-      if (url === "http://127.0.0.1:8080/v1/chat/completions") {
+      if (url.includes("/api/chat/guest/sessions/") && url.endsWith("/messages") && method === "POST") {
         return {
           ok: true,
           json: async () => ({
-            choices: [{ message: { content: "Authenticated reply" } }],
+            id: "chat_sess_guest_1",
+            title: "New Chat",
+            messages: [
+              { role: "user", content: "guest hello", createdAt: "2026-03-15T10:00:30.000Z" },
+              { role: "assistant", content: "Guest reply", createdAt: "2026-03-15T10:01:00.000Z" },
+            ],
           }),
         };
+      }
+
+      if (url.endsWith("/api/chat/guest/sessions") && method === "GET") {
+        return { ok: true, json: async () => ({ object: "list", data: [] }) };
       }
 
       return {
@@ -141,59 +155,7 @@ describe("chat auth gate", () => {
   it("tags authenticated chat requests as web traffic for reporting", async () => {
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
     writeAuthSession({ accessToken: "sk_test", email: "demo@example.com" });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
-
-      if (url === "http://127.0.0.1:8080/v1/chat/completions") {
-        return {
-          ok: true,
-          json: async () => ({
-            choices: [{ message: { content: "Authenticated reply" } }],
-          }),
-        };
-      }
-
-      return {
-        ok: true,
-        json: async () => ({
-          data: [
-            { id: "fast-chat", capability: "chat", costType: "fixed" },
-          ],
-        }),
-      };
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<HomePage />);
-
-    const prompt = (await screen.findAllByPlaceholderText(/ask something/i)).at(-1)!;
-    fireEvent.change(prompt, {
-      target: { value: "hello from auth" },
-    });
-    const composer = prompt.closest("div.space-y-3");
-    if (!composer) {
-      throw new Error("expected prompt to be inside a message composer");
-    }
-    fireEvent.click(within(composer).getByRole("button", { name: /send/i }));
-
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url, init]) => {
-        if (url !== "http://127.0.0.1:8080/v1/chat/completions") {
-          return false;
-        }
-        const headers = init && typeof init === "object" && "headers" in init
-          ? init.headers as Record<string, string>
-          : undefined;
-        return headers?.Authorization === "Bearer sk_test" && headers["content-type"] === "application/json";
-      })).toBe(true);
-    });
-    expect(fetchMock.mock.calls.some(([url]) => /\/api\/guest-session$/.test(String(url)))).toBe(false);
-  });
-
-  it("does not reset authenticated chat state when the access token refreshes for the same stored identity", async () => {
-    process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
-    replaceAuthSession({ accessToken: "sk_old", email: "demo@example.com" });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
 
       if (url.endsWith("/v1/models")) {
@@ -205,11 +167,33 @@ describe("chat auth gate", () => {
         };
       }
 
-      if (url === "http://127.0.0.1:8080/v1/chat/completions") {
+      if (url.endsWith("/v1/chat/sessions") && (init?.method ?? "GET") === "GET") {
+        return { ok: true, json: async () => ({ data: [] }) };
+      }
+
+      if (url.endsWith("/v1/chat/sessions") && init?.method === "POST") {
         return {
           ok: true,
           json: async () => ({
-            choices: [{ message: { content: "Authenticated reply" } }],
+            id: "chat_sess_1",
+            title: "New Chat",
+            createdAt: "2026-03-15T10:00:00.000Z",
+            updatedAt: "2026-03-15T10:00:00.000Z",
+            lastMessageAt: null,
+          }),
+        };
+      }
+
+      if (/\/v1\/chat\/sessions\/[^/]+\/messages$/.test(url) && init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "chat_sess_1",
+            title: "New Chat",
+            messages: [
+              { role: "user", content: "hello from auth", createdAt: "" },
+              { role: "assistant", content: "Authenticated reply", createdAt: "" },
+            ],
           }),
         };
       }
@@ -233,8 +217,92 @@ describe("chat auth gate", () => {
     }
     fireEvent.click(within(composer).getByRole("button", { name: /send/i }));
 
-    expect((await screen.findAllByText("hello from auth")).length).toBeGreaterThan(0);
-    expect((await screen.findAllByText("Authenticated reply")).length).toBeGreaterThan(0);
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url, init]) => {
+        if (!/\/v1\/chat\/sessions\/[^/]+\/messages$/.test(String(url))) {
+          return false;
+        }
+        const headers = init && typeof init === "object" && "headers" in init
+          ? init.headers as Record<string, string>
+          : undefined;
+        return headers?.Authorization === "Bearer sk_test" && headers["content-type"] === "application/json";
+      })).toBe(true);
+    });
+    expect(fetchMock.mock.calls.some(([url]) => /\/api\/guest-session$/.test(String(url)))).toBe(false);
+  });
+
+  it("does not reset authenticated chat state when the access token refreshes for the same stored identity", async () => {
+    process.env.NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8080";
+    replaceAuthSession({ accessToken: "sk_old", email: "demo@example.com" });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.endsWith("/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            data: [{ id: "fast-chat", capability: "chat", costType: "fixed" }],
+          }),
+        };
+      }
+
+      if (url.endsWith("/v1/chat/sessions") && (init?.method ?? "GET") === "GET") {
+        return { ok: true, json: async () => ({ data: [] }) };
+      }
+
+      if (url.endsWith("/v1/chat/sessions") && init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "chat_sess_auth_1",
+            title: "New Chat",
+            createdAt: "2026-03-15T10:00:00.000Z",
+            updatedAt: "2026-03-15T10:00:00.000Z",
+            lastMessageAt: null,
+          }),
+        };
+      }
+
+      if (/\/v1\/chat\/sessions\/[^/]+\/messages$/.test(url) && init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            id: "chat_sess_auth_1",
+            title: "New Chat",
+            createdAt: "2026-03-15T10:00:00.000Z",
+            updatedAt: "2026-03-15T10:01:00.000Z",
+            lastMessageAt: "2026-03-15T10:01:00.000Z",
+            messages: [
+              { id: "m1", role: "user", content: "hello from auth", createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_auth_1" },
+              { id: "m2", role: "assistant", content: "Authenticated reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_auth_1" },
+            ],
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        json: async () => ({ error: `Unhandled URL: ${url}` }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<HomePage />);
+
+    const prompt = (await screen.findAllByPlaceholderText(/ask something/i)).at(-1)!;
+    fireEvent.change(prompt, {
+      target: { value: "hello from auth" },
+    });
+    const composer = prompt.closest("div.space-y-3");
+    if (!composer) {
+      throw new Error("expected prompt to be inside a message composer");
+    }
+    fireEvent.click(within(composer).getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      expect(screen.getAllByText("hello from auth").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Authenticated reply").length).toBeGreaterThan(0);
+    });
 
     replaceAuthSession({ accessToken: "sk_new", email: "demo@example.com" });
 

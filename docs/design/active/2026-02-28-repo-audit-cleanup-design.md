@@ -123,8 +123,8 @@ This is intentionally destructive and acceptable for this MVP stage.
 
 ## Verification Strategy
 
-- API: `pnpm --filter @hive/api test` and `pnpm --filter @hive/api build`
-- Web: `pnpm --filter @hive/web test` and `pnpm --filter @hive/web build`
+- API: `pnpm --filter @hive/api test` and `docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"`
+- Web: `pnpm --filter @hive/web test` and `docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"`
 - Route/contract checks:
   - route inventory vs README/OpenAPI diff checks.
   - provider status public/internal boundary checks in tests.

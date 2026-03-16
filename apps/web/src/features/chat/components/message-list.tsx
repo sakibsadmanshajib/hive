@@ -17,7 +17,8 @@ type MessageListProps = {
 
 function formatTimestamp(timestamp: string): string {
   const date = new Date(timestamp);
-  return Number.isNaN(date.getTime()) ? "just now" : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (Number.isNaN(date.getTime())) return "just now";
+  return date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 }
 
 export function MessageList({ messages, loading, errorMessage }: MessageListProps) {

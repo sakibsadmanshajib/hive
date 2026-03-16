@@ -26,6 +26,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "stateReset": {
       return createInitialChatState();
     }
+    case "sessionsLoaded": {
+      const loaded = action.payload.conversations;
+      if (loaded.length === 0) {
+        return state;
+      }
+      return {
+        conversations: loaded,
+        activeConversationId: loaded[0].id,
+      };
+    }
     case "conversationAdded": {
       const conversation: ChatConversation = {
         id: action.payload.id,

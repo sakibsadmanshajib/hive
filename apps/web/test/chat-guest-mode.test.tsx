@@ -33,8 +33,9 @@ import { clearAuthSession } from "../src/features/auth/auth-session";
 import { clearGuestSession } from "../src/features/auth/guest-session";
 
 function createGuestFetchMock() {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
+    const method = (init?.method ?? (typeof input === "object" && input instanceof Request ? input.method : undefined)) ?? "GET";
 
     if (url.endsWith("/v1/models")) {
       return {
@@ -66,6 +67,56 @@ function createGuestFetchMock() {
           choices: [{ message: { content: "Guest reply" } }],
         }),
       };
+    }
+
+    if (url.includes("/api/chat/guest/sessions") && url.endsWith("/messages")) {
+      return {
+        ok: true,
+        json: async () => ({
+          id: "chat_sess_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:01:00.000Z",
+          lastMessageAt: "2026-03-15T10:01:00.000Z",
+          messages: [
+            { id: "m1", role: "user", content: "hello from guest", createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_1" },
+            { id: "m2", role: "assistant", content: "Guest reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_1" },
+          ],
+        }),
+      };
+    }
+
+    if (url.endsWith("/api/chat/guest/sessions") && method === "POST") {
+      return {
+        ok: true,
+        json: async () => ({
+          id: "chat_sess_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        }),
+      };
+    }
+
+    if (url.includes("/api/chat/guest/sessions") && !url.endsWith("/messages")) {
+      const getMatch = url.match(/\/api\/chat\/guest\/sessions\/([^/]+)$/);
+      if (getMatch && method === "GET") {
+        return {
+          ok: true,
+          json: async () => ({
+            id: getMatch[1],
+            title: "New Chat",
+            createdAt: "2026-03-15T10:00:00.000Z",
+            updatedAt: "2026-03-15T10:00:00.000Z",
+            lastMessageAt: null,
+            messages: [],
+          }),
+        };
+      }
+      if (url.endsWith("/api/chat/guest/sessions")) {
+        return { ok: true, json: async () => ({ object: "list", data: [] }) };
+      }
     }
 
     return {
@@ -164,15 +215,6 @@ describe("chat guest mode", () => {
     render(<HomePage />);
 
     expect((await screen.findAllByText(/guest mode is active/i)).length).toBeGreaterThan(0);
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url, init]) =>
-        /\/api\/guest-session$/.test(String(url)) &&
-        typeof init === "object" &&
-        init !== null &&
-        "method" in init &&
-        init.method === "POST"
-      )).toBe(true);
-    });
 
     fireEvent.change(screen.getByPlaceholderText(/ask something/i), {
       target: { value: "hello from guest" },
@@ -180,13 +222,22 @@ describe("chat guest mode", () => {
     fireEvent.click(screen.getByRole("button", { name: /send/i }));
 
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url, init]) =>
-        /\/api\/chat\/guest$/.test(String(url)) &&
+      const postToGuestSession = fetchMock.mock.calls.some(([url, init]) =>
+        /\/api\/guest-session$/.test(String(url)) &&
         typeof init === "object" &&
         init !== null &&
         "method" in init &&
         init.method === "POST"
-      )).toBe(true);
+      );
+      const postToSessionMessages = fetchMock.mock.calls.some(([url, init]) =>
+        /\/api\/chat\/guest\/sessions\/[^/]+\/messages$/.test(String(url)) &&
+        typeof init === "object" &&
+        init !== null &&
+        "method" in init &&
+        init.method === "POST"
+      );
+      expect(postToGuestSession).toBe(true);
+      expect(postToSessionMessages).toBe(true);
     });
 
     expect(screen.getByText(/guest mode only supports free models/i)).toBeInTheDocument();

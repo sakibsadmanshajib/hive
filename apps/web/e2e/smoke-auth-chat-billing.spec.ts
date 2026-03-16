@@ -114,35 +114,66 @@ test("chat success and failure messaging", async ({ page, request }) => {
     name: session.name,
   });
 
-  await page.route("**/v1/chat/completions", async (route) => {
-    const payload = route.request().postDataJSON() as { messages?: Array<{ content?: string }> };
-    const prompt = payload.messages?.at(-1)?.content ?? "";
+  await page.route("**/v1/chat/sessions**", async (route) => {
+    const request = route.request();
+    const url = request.url();
 
-    if (prompt.includes("fail")) {
+    if (url.endsWith("/v1/chat/sessions") && request.method() === "GET") {
       await route.fulfill({
-        status: 500,
+        status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ error: "Chat backend unavailable" }),
+        body: JSON.stringify({ data: [] }),
       });
       return;
     }
 
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        id: "chatcmpl_e2e",
-        object: "chat.completion",
-        model: "mock-chat-model",
-        choices: [
-          {
-            index: 0,
-            finish_reason: "stop",
-            message: { role: "assistant", content: "Mocked assistant reply" },
-          },
-        ],
-      }),
-    });
+    if (url.endsWith("/v1/chat/sessions") && request.method() === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_e2e",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        }),
+      });
+      return;
+    }
+
+    if (/\/v1\/chat\/sessions\/[^/]+\/messages$/.test(url) && request.method() === "POST") {
+      const payload = request.postDataJSON() as { content?: string };
+      const content = payload?.content ?? "";
+
+      if (content.includes("fail")) {
+        await route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          body: JSON.stringify({ error: "Chat backend unavailable" }),
+        });
+        return;
+      }
+
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_e2e",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:01:00.000Z",
+          lastMessageAt: "2026-03-15T10:01:00.000Z",
+          messages: [
+            { id: "m1", role: "user", content, createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_e2e" },
+            { id: "m2", role: "assistant", content: "Mocked assistant reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_e2e" },
+          ],
+        }),
+      });
+      return;
+    }
+
+    await route.continue();
   });
 
   await page.goto("/");
@@ -153,6 +184,27 @@ test("chat success and failure messaging", async ({ page, request }) => {
   await page.getByPlaceholder("Ask something...").fill("please fail now");
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page.getByRole("main").getByText("Chat backend unavailable").first()).toBeVisible();
+});
+
+test("guest chat transcript persists after reload", async ({ page }) => {
+  test.setTimeout(120000);
+  await page.goto("/");
+
+  await expect(page.getByText("Guest mode is active.")).toBeVisible();
+  const messageArticles = page.locator("article");
+  await expect(messageArticles).toHaveCount(1);
+
+  await page.getByPlaceholder("Ask something...").fill("persistence check");
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(messageArticles).toHaveCount(3, { timeout: 90000 });
+  await expect(messageArticles.nth(1)).toContainText("persistence check");
+  await expect(messageArticles.nth(2)).toContainText("Assistant");
+
+  await page.reload();
+  await expect(page).toHaveURL(/\//);
+  await expect(page.getByText("Guest mode is active.")).toBeVisible({ timeout: 10000 });
+
+  await expect(page.getByText("persistence check")).toBeVisible({ timeout: 10000 });
 });
 
 test("billing access from profile menu and top-up failure messaging", async ({ page, request }) => {

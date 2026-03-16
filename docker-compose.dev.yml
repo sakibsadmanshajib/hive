@@ -1,6 +1,11 @@
 services:
   api:
-    command: ["pnpm", "--filter", "@hive/api", "dev"]
+    command:
+      - sh
+      - -c
+      - |
+        echo "api git-commit: $(git -C /app rev-parse HEAD 2>/dev/null || echo unknown)"
+        exec pnpm --filter @hive/api dev
     environment:
       WEB_INTERNAL_GUEST_TOKEN: ${WEB_INTERNAL_GUEST_TOKEN:-dev-web-guest-token}
     volumes:
@@ -11,8 +16,14 @@ services:
       - /app/packages/shared/node_modules
 
   web:
-    command: ["pnpm", "--filter", "@hive/web", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]
+    command:
+      - sh
+      - -c
+      - |
+        echo "web git-commit: $(git -C /app rev-parse HEAD 2>/dev/null || echo unknown)"
+        exec pnpm --filter @hive/web dev --hostname 0.0.0.0 --port 3000
     environment:
+      NODE_ENV: development
       WEB_INTERNAL_GUEST_TOKEN: ${WEB_INTERNAL_GUEST_TOKEN:-dev-web-guest-token}
     volumes:
       - ./:/app

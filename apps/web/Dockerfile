@@ -20,7 +20,9 @@ RUN pnpm --filter @hive/web build
 
 FROM deps AS runner
 WORKDIR /app
+ARG GIT_COMMIT=unknown
+ENV GIT_COMMIT=$GIT_COMMIT
 ENV NODE_ENV=production
 COPY --from=builder /app /app
 EXPOSE 3000
-CMD ["pnpm", "--filter", "@hive/web", "start"]
+CMD ["sh", "-c", "echo \"web git-commit: $GIT_COMMIT\" && exec pnpm --filter @hive/web start"]

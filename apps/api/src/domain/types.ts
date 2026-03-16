@@ -34,6 +34,29 @@ export type SessionUserIdentity = {
   name?: string;
 };
 
+export type ChatMessageRole = "system" | "user" | "assistant";
+
+export type PersistedChatMessage = {
+  id: string;
+  sessionId: string;
+  role: ChatMessageRole;
+  content: string;
+  createdAt: string;
+  sequence: number;
+};
+
+export type PersistedChatSessionSummary = {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  lastMessageAt: string | null;
+};
+
+export type PersistedChatSession = PersistedChatSessionSummary & {
+  messages: PersistedChatMessage[];
+};
+
 export type UsageSummaryBucket = {
   key: string;
   requests: number;

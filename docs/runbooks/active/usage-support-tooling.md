@@ -67,6 +67,6 @@ pnpm --filter @hive/api exec vitest run test/domain/persistent-usage-service.tes
 pnpm --filter @hive/api exec vitest run test/routes/usage-route.test.ts
 pnpm --filter @hive/api exec vitest run test/routes/support-route.test.ts
 pnpm --filter @hive/api test
-pnpm --filter @hive/api build
-pnpm --filter @hive/web build
+docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"
+docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 ```
