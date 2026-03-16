@@ -29,7 +29,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "sessionsLoaded": {
       const loaded = action.payload.conversations;
       if (loaded.length === 0) {
-        return state;
+        return createInitialChatState();
       }
       return {
         conversations: loaded,

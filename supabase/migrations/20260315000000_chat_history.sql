@@ -3,7 +3,7 @@ begin;
 create table if not exists public.chat_sessions (
   id text primary key,
   user_id uuid references public.user_profiles(user_id) on delete cascade,
-  guest_id text references public.guest_sessions(guest_id) on delete cascade,
+  guest_id text references public.guest_sessions(guest_id) on delete set null,
   title text not null default 'New Chat',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),

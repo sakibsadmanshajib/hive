@@ -78,29 +78,15 @@ jobs:
           echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_ROLE_KEY" >> "$GITHUB_ENV"
 
       - name: Start docker support services
-        run: docker compose up -d redis langfuse-db langfuse ollama
+        run: docker compose up -d redis langfuse-db langfuse
 
-      - name: Pull local zero-cost guest model for smoke
-        env:
-          OLLAMA_SMOKE_MODEL: qwen2.5:0.5b
-        run: |
-          for _ in {1..60}; do
-            if curl -fsS http://127.0.0.1:11434/api/tags >/dev/null; then
-              break
-            fi
-            sleep 2
-          done
-          docker compose exec -T ollama ollama pull "$OLLAMA_SMOKE_MODEL"
-
-      - name: Start docker app stack with zero-cost guest model
+      - name: Start docker app stack with openrouter free model
         env:
           NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8080
           NEXT_PUBLIC_SUPABASE_URL: ${{ env.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ env.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           INTERNAL_API_BASE_URL: http://api:8080
-          OLLAMA_BASE_URL: http://ollama:11434
-          OLLAMA_MODEL: qwen2.5:0.5b
-          OLLAMA_FREE_MODEL: qwen2.5:0.5b
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ env.SUPABASE_SERVICE_ROLE_KEY }}
           WEB_INTERNAL_GUEST_TOKEN: dev-web-guest-token
         run: docker compose up --build -d api web --no-deps

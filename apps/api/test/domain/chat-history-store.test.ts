@@ -258,7 +258,8 @@ describe("SupabaseChatHistoryStore", () => {
 
   it("returns null when loading a guest session that does not exist", async () => {
     const single = vi.fn(async () => ({ data: null, error: { code: "PGRST116" } }));
-    const eqGuest = vi.fn(() => ({ single }));
+    const isFilter = vi.fn(() => ({ single }));
+    const eqGuest = vi.fn(() => ({ is: isFilter }));
     const eqId = vi.fn(() => ({ eq: eqGuest }));
     const select = vi.fn(() => ({ eq: eqId }));
     const supabase = {
@@ -275,7 +276,8 @@ describe("SupabaseChatHistoryStore", () => {
   });
 
   it("claims all guest-owned sessions for the given user while retaining guest_id", async () => {
-    const eq = vi.fn(() => Promise.resolve({ error: null }));
+    const isFilter = vi.fn(() => Promise.resolve({ error: null }));
+    const eq = vi.fn(() => ({ is: isFilter }));
     const update = vi.fn(() => ({ eq }));
     const supabase = {
       from: vi.fn((table: string) => {
@@ -289,6 +291,7 @@ describe("SupabaseChatHistoryStore", () => {
 
     expect(update).toHaveBeenCalledWith({ user_id: "4be9070e-4fe8-4da1-bda7-d105ec913af4" });
     expect(eq).toHaveBeenCalledWith("guest_id", "guest_claim_me");
+    expect(isFilter).toHaveBeenCalledWith("user_id", null);
   });
 
   it("guest listing excludes sessions that have been linked to a user", async () => {

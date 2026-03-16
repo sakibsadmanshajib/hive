@@ -181,6 +181,7 @@ export function useChatSession() {
 
     if (previousAuthScopeRef.current !== authScopeKey) {
       dispatch({ type: "stateReset" });
+      serverSessionMapRef.current.clear();
       setPrompt("");
       setLoading(false);
       setErrorMessage(null);
@@ -247,10 +248,14 @@ export function useChatSession() {
           });
         }
         if (!listResponse.ok || cancelled) {
+          guestSessionsLoadedRef.current = false;
           return;
         }
         const listParsed = await parseJsonResponse(listResponse);
-        if (!listParsed.ok) return;
+        if (!listParsed.ok) {
+          guestSessionsLoadedRef.current = false;
+          return;
+        }
         const listJson = listParsed.data as {
           data?: Array<{ id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt: string | null }>;
         };
@@ -325,10 +330,14 @@ export function useChatSession() {
           headers: apiHeaders(accessToken),
         });
         if (!response.ok || cancelled) {
+          lastLoadedAuthScopeRef.current = null;
           return;
         }
         const parsed = await parseJsonResponse(response);
-        if (!parsed.ok) return;
+        if (!parsed.ok) {
+          lastLoadedAuthScopeRef.current = null;
+          return;
+        }
         const json = parsed.data as {
           data?: Array<{ id: string; title: string; createdAt: string; updatedAt: string; lastMessageAt: string | null }>;
         };
@@ -374,7 +383,7 @@ export function useChatSession() {
           });
         }
       } catch {
-        // silently fail
+        lastLoadedAuthScopeRef.current = null;
       }
     }
 

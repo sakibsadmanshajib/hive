@@ -111,6 +111,7 @@ export class SupabaseChatHistoryStore {
       .select("id,title,created_at,updated_at,last_message_at")
       .eq("id", sessionId)
       .eq("guest_id", guestId)
+      .is("user_id", null)
       .single();
 
     if (sessionError) {
@@ -144,7 +145,8 @@ export class SupabaseChatHistoryStore {
     const { error } = await this.supabase
       .from("chat_sessions")
       .update({ user_id: userId })
-      .eq("guest_id", guestId);
+      .eq("guest_id", guestId)
+      .is("user_id", null);
 
     if (error) {
       throw new Error(`failed to claim guest chat sessions: ${error.message}`);
