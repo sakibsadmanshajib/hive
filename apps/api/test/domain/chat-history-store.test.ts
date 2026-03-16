@@ -229,7 +229,8 @@ describe("SupabaseChatHistoryStore", () => {
       ],
       error: null,
     }));
-    const eq = vi.fn(() => ({ order }));
+    const isFilter = vi.fn(() => ({ order }));
+    const eq = vi.fn(() => ({ is: isFilter }));
     const select = vi.fn(() => ({ eq }));
     const supabase = {
       from: vi.fn((table: string) => {
@@ -242,6 +243,7 @@ describe("SupabaseChatHistoryStore", () => {
     const sessions = await store.listSessionsForGuest("guest_abc");
 
     expect(eq).toHaveBeenCalledWith("guest_id", "guest_abc");
+    expect(isFilter).toHaveBeenCalledWith("user_id", null);
     expect(order).toHaveBeenCalledWith("updated_at", { ascending: false });
     expect(sessions).toEqual([
       {
@@ -272,7 +274,7 @@ describe("SupabaseChatHistoryStore", () => {
     expect(session).toBeNull();
   });
 
-  it("claims all guest-owned sessions for the given user", async () => {
+  it("claims all guest-owned sessions for the given user while retaining guest_id", async () => {
     const eq = vi.fn(() => Promise.resolve({ error: null }));
     const update = vi.fn(() => ({ eq }));
     const supabase = {
@@ -285,7 +287,47 @@ describe("SupabaseChatHistoryStore", () => {
     const store = new SupabaseChatHistoryStore(supabase as never);
     await store.claimGuestSessionsForUser("guest_claim_me", "4be9070e-4fe8-4da1-bda7-d105ec913af4");
 
-    expect(update).toHaveBeenCalledWith({ user_id: "4be9070e-4fe8-4da1-bda7-d105ec913af4", guest_id: null });
+    expect(update).toHaveBeenCalledWith({ user_id: "4be9070e-4fe8-4da1-bda7-d105ec913af4" });
     expect(eq).toHaveBeenCalledWith("guest_id", "guest_claim_me");
+  });
+
+  it("guest listing excludes sessions that have been linked to a user", async () => {
+    const order = vi.fn(async () => ({
+      data: [
+        {
+          id: "chat_sess_unlinked",
+          title: "Still guest",
+          created_at: "2026-03-15T10:00:00.000Z",
+          updated_at: "2026-03-15T10:05:00.000Z",
+          last_message_at: "2026-03-15T10:05:00.000Z",
+        },
+      ],
+      error: null,
+    }));
+    const isFilter = vi.fn(() => ({ order }));
+    const eq = vi.fn(() => ({ is: isFilter }));
+    const select = vi.fn(() => ({ eq }));
+    const supabase = {
+      from: vi.fn((table: string) => {
+        if (table !== "chat_sessions") throw new Error(`unexpected table ${table}`);
+        return { select };
+      }),
+    };
+
+    const store = new SupabaseChatHistoryStore(supabase as never);
+    const sessions = await store.listSessionsForGuest("guest_abc");
+
+    expect(eq).toHaveBeenCalledWith("guest_id", "guest_abc");
+    expect(isFilter).toHaveBeenCalledWith("user_id", null);
+    expect(order).toHaveBeenCalledWith("updated_at", { ascending: false });
+    expect(sessions).toEqual([
+      {
+        id: "chat_sess_unlinked",
+        title: "Still guest",
+        createdAt: "2026-03-15T10:00:00.000Z",
+        updatedAt: "2026-03-15T10:05:00.000Z",
+        lastMessageAt: "2026-03-15T10:05:00.000Z",
+      },
+    ]);
   });
 });

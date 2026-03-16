@@ -95,6 +95,7 @@ export class SupabaseChatHistoryStore {
       .from("chat_sessions")
       .select("id,title,created_at,updated_at,last_message_at")
       .eq("guest_id", guestId)
+      .is("user_id", null)
       .order("updated_at", { ascending: false });
 
     if (error) {
@@ -142,7 +143,7 @@ export class SupabaseChatHistoryStore {
   async claimGuestSessionsForUser(guestId: string, userId: string): Promise<void> {
     const { error } = await this.supabase
       .from("chat_sessions")
-      .update({ user_id: userId, guest_id: null })
+      .update({ user_id: userId })
       .eq("guest_id", guestId);
 
     if (error) {
