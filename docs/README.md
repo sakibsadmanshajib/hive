@@ -39,6 +39,15 @@ This folder is the canonical documentation hub for Hive's product direction, arc
 - `plans/archive/pre-supabase/` contains pre-Supabase plans kept only for historical reference and should be treated as obsolete for current direction.
 - Active design artifacts may live under `design/active/` when they capture UX or product decisions that are not implementation plans.
 
+## Docs Structure Conventions
+
+- New implementation plans: add under `plans/YYYY-MM-DD-<task-name>.md`.
+- Long-lived planning tracks: move into `plans/active/` when they become the canonical guide for an ongoing stream of work.
+- Completed plans: move into `plans/completed/` once no longer used as the active execution surface.
+- Historical or pre-Supabase plans: keep only under `plans/archive/pre-supabase/`.
+- Active product and UX design docs that are not implementation plans: add under `design/active/` and link from `design/README.md`.
+- Runbooks and operational guides: keep under `runbooks/` (with `runbooks/active/` for current runbooks and `runbooks/archive/` for pre-Supabase or obsolete flows).
+
 ## Operations
 
 - Canonical local bootstrap and stack startup: `../README.md`
