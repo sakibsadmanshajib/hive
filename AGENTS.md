@@ -512,6 +512,8 @@ Never force-push rewritten history unless explicitly required and safe.
 - Update `docs/` runbooks/architecture/plans for operational or architectural changes.
 - Prefer concrete examples (commands, payloads, env vars) over abstract prose.
 - Keep docs synchronized with implementation.
+- Keep `docs/plans/` root limited to currently in-flight session plans only (for example: the handful of dated plans being actively executed right now). When a plan is no longer the active execution surface, move it out of the root into `docs/plans/completed/` (for finished work) or `docs/plans/active/` (for long-lived tracks), rather than leaving old plans in the root.
+- Before creating a new plan under `docs/plans/YYYY-MM-DD-<task-name>.md`, quickly audit the root of `docs/plans/` and relocate any obviously stale plans so that only truly current work remains there.
 
 Reference: `docs/engineering/git-and-ai-practices.md`
 

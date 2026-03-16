@@ -11,12 +11,10 @@ This folder is organized by plan status to reduce ambiguity and keep active work
 
 ## In Flight
 
-The root `docs/plans/` folder should stay small and contain only currently active session plans for work that is being executed right now.
+The root `docs/plans/` folder should stay small and contain only currently active session plans for work that is being executed right now. At any given moment, there should be only a small handful of dated plan files directly under `docs/plans/` (not in a subfolder); those are the in-flight plans.
 
-Examples of current in-flight plans:
+Current in-flight plans:
 
-- `docs/plans/2026-03-12-bootstrap-and-smoke-doc-fixes.md`
-- `docs/plans/2026-03-13-exhaustive-repo-audit.md`
 - `docs/plans/2026-03-15-docs-structure-cleanup.md`
 - `docs/plans/2026-03-15-persist-chat-history-across-guest-and-user-plan.md`
 
