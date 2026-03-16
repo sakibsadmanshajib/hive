@@ -50,6 +50,54 @@ async function mockBrowserSignup(page: Page) {
 
 test("unauthenticated root stays in guest mode, guest chat works, and locked paid models open a dismissible auth modal", async ({ page }) => {
   test.setTimeout(180000);
+
+  // Mock guest chat API routes so tests don't depend on external provider (OpenRouter)
+  await page.route("**/api/chat/guest/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+
+    if (path === "/api/chat/guest/sessions" && method === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ object: "list", data: [] }),
+      });
+      return;
+    }
+    if (path === "/api/chat/guest/sessions" && method === "POST") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_smoke_1",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        }),
+      });
+      return;
+    }
+    if (/\/api\/chat\/guest\/sessions\/[^/]+\/messages$/.test(path) && method === "POST") {
+      const payload = route.request().postDataJSON() as { content?: string } | null;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_smoke_1",
+          title: "New Chat",
+          messages: [
+            { id: "m1", role: "user", content: payload?.content ?? "", createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_smoke_1" },
+            { id: "m2", role: "assistant", content: "Mocked guest assistant reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_smoke_1" },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
@@ -194,6 +242,94 @@ test("chat success and failure messaging", async ({ page, request }) => {
 
 test("guest chat transcript persists after reload", async ({ page }) => {
   test.setTimeout(120000);
+
+  let sentContent = "";
+  let sessionCreated = false;
+
+  // Mock guest chat API routes with state tracking for persistence verification
+  await page.route("**/api/chat/guest/sessions**", async (route) => {
+    const url = new URL(route.request().url());
+    const path = url.pathname;
+    const method = route.request().method();
+
+    if (path === "/api/chat/guest/sessions" && method === "GET") {
+      if (!sessionCreated) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ object: "list", data: [] }),
+        });
+      } else {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            object: "list",
+            data: [{
+              id: "chat_sess_persist",
+              title: "New Chat",
+              createdAt: "2026-03-15T10:00:00.000Z",
+              updatedAt: "2026-03-15T10:01:00.000Z",
+              lastMessageAt: "2026-03-15T10:01:00.000Z",
+            }],
+          }),
+        });
+      }
+      return;
+    }
+    if (path === "/api/chat/guest/sessions" && method === "POST") {
+      sessionCreated = true;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_persist",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:00:00.000Z",
+          lastMessageAt: null,
+        }),
+      });
+      return;
+    }
+    if (/\/api\/chat\/guest\/sessions\/[^/]+\/messages$/.test(path) && method === "POST") {
+      const payload = route.request().postDataJSON() as { content?: string } | null;
+      sentContent = payload?.content ?? "";
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_persist",
+          title: "New Chat",
+          messages: [
+            { id: "m1", role: "user", content: sentContent, createdAt: "2026-03-15T10:00:30.000Z", sequence: 1, sessionId: "chat_sess_persist" },
+            { id: "m2", role: "assistant", content: "Persisted assistant reply", createdAt: "2026-03-15T10:01:00.000Z", sequence: 2, sessionId: "chat_sess_persist" },
+          ],
+        }),
+      });
+      return;
+    }
+    if (/\/api\/chat\/guest\/sessions\/[^/]+$/.test(path) && method === "GET") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          id: "chat_sess_persist",
+          title: "New Chat",
+          createdAt: "2026-03-15T10:00:00.000Z",
+          updatedAt: "2026-03-15T10:01:00.000Z",
+          lastMessageAt: "2026-03-15T10:01:00.000Z",
+          messages: [
+            { role: "user", content: sentContent || "persistence check", createdAt: "2026-03-15T10:00:30.000Z" },
+            { role: "assistant", content: "Persisted assistant reply", createdAt: "2026-03-15T10:01:00.000Z" },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
   await page.goto("/");
 
   await expect(page.getByText("Guest mode is active.")).toBeVisible();
