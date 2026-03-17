@@ -161,8 +161,10 @@ describe("v1Plugin", () => {
   it("does not affect non-v1 routes outside the plugin", async () => {
     const app = Fastify();
 
-    // Register plugin in a scoped context
-    await app.register(v1Plugin, { services: {} as any });
+    // Register plugin in a scoped context (encapsulated)
+    await app.register(async (scoped) => {
+      await scoped.register(v1Plugin, { services: {} as any });
+    });
 
     // Register a non-v1 route OUTSIDE the plugin scope
     app.get("/health", async () => {
