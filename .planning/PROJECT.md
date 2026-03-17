@@ -106,5 +106,25 @@ Two distinct API surfaces:
 | Supabase for all persistence | Unified auth + data, reduces operational surface | ✓ Good |
 | Credit-based billing (not subscription) | Simpler for pay-as-you-go, matches inference economics | ✓ Good |
 
+## Current Milestone: OpenAI API Compliance (v1)
+
+**Goal:** Transform Hive's `/v1/*` endpoints into a fully OpenAI-SDK-compatible API surface — a true drop-in replacement verifiable with the official `openai` npm SDK.
+
+**Full roadmap:** `.planning/ROADMAP.md` | **Requirements:** `.planning/REQUIREMENTS.md`
+
+| Phase | Name | Requirements | Status |
+|-------|------|-------------|--------|
+| 1 | Error Format Standardization | FOUND-01 | In planning |
+| 2 | Type Infrastructure | FOUND-06, FOUND-07 | Not started |
+| 3 | Auth Compliance | FOUND-02, FOUND-05 | Not started |
+| 4 | Models Endpoint | FOUND-03, FOUND-04 | Not started |
+| 5 | Chat Completions (Non-Streaming) | CHAT-01, CHAT-02, CHAT-03 | Not started |
+| 6 | Chat Completions (Streaming) | CHAT-04, CHAT-05 | Not started |
+| 7 | Surface Expansion | SURF-01, SURF-02, SURF-03 | Not started |
+| 8 | Differentiators | DIFF-01, DIFF-02, DIFF-03, DIFF-04 | Not started |
+| 9 | Operational Hardening | OPS-01, OPS-02 | Not started |
+
+**Execution order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 (see ROADMAP.md for dependency graph)
+
 ---
-*Last updated: 2026-03-16 after project initialization*
+*Last updated: 2026-03-17 — current milestone and phase table added*
