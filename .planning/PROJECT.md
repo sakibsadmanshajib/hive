@@ -81,12 +81,40 @@ Two distinct API surfaces:
 - Realtime API (WebSocket) — defer to future milestone
 - Web pipeline OpenAI compliance — deliberately proprietary to prevent abuse
 
+## Two Product Tiers
+
+Hive operates two fundamentally different product surfaces with separate rate limits, separate analytics pipelines, and separate billing treatment.
+
+### Tier 1: API (B2B / Developer)
+**Who:** Developers building apps, hobbyists, tools like Claude Code / OpenCode / OpenClaw systems
+**Interface:** `/v1/*` OpenAI-compatible endpoints, Bearer token auth, standard API keys
+**Model:** Pay-per-token, prepaid credits, programmatic access
+**Rate limits:** Separate from web — API clients get their own quota buckets
+**Analytics:** Tracked separately from web usage — API business metrics are distinct from consumer metrics
+**Commitment:** Drop-in OpenAI replacement. If it works with the OpenAI SDK, it works with Hive.
+
+### Tier 2: Web (Consumer)
+**Who:** Everyone else — individuals, students, professionals wanting a ChatGPT-like experience with more power and local accessibility
+**Interface:** Web app (OSS frontend, see #72), WhatsApp, Messenger, phone/SMS
+**Capabilities (target):**
+- Text chat with all models (more model choice than ChatGPT)
+- Image generation
+- Video generation
+- RAG / Projects (Retrieval-Augmented Generation over user documents, Recursive Language Model chains)
+- Voice input and full voice conversation
+- **Phone:** Register a phone number with your account → call or text Hive's number to chat (charged per call/SMS; Bangladesh rates)
+- **WhatsApp:** Same registered phone number, lower charge than SMS/calls; supports text, voice messages, and video calls via WhatsApp
+- **Messenger:** Facebook OAuth login → chat via Messenger; uses Facebook account identity
+**Rate limits:** Separate from API — web consumers have their own quota, different throttles
+**Analytics:** Separate pipeline from API analytics — consumer product metrics tracked independently
+**Billing:** Per-credit (same credit system), but channel-specific pricing (SMS > WhatsApp > web)
+
 ## Context
 
 - **Provider strategy:** OpenRouter is the primary routing layer for all providers. Ollama and mock providers have been removed. Free models on OpenRouter serve as the guest/basic tier.
-- **Two-surface architecture:** The public API must be OpenAI-compatible for SDK drop-in. The web↔API pipeline is proprietary — different auth mechanism, different request/response shapes, different rate limiting. This prevents users from reverse-engineering the web connection to get free API access.
+- **Two-tier architecture:** API tier is OpenAI-compatible (strict), web tier is proprietary (prevents reverse-engineering). They share the same backend inference infrastructure but have independent rate limiting, analytics, and billing treatment.
 - **OpenAI schema reference:** Full OpenAPI spec stored at `docs/reference/openai-openapi.yml` for compliance validation.
-- **Bangladesh market:** Local payment rails (Bkash, SSLCommerz) are a competitive wedge, not the entire product story. Credit system designed for decimal-safe BDT conversion.
+- **Bangladesh market:** Local payment rails (Bkash, SSLCommerz), phone/WhatsApp integration, and BDT credit conversion are first-class features — not afterthoughts. SMS/calls use local carrier rates; WhatsApp is cheaper due to internet-based delivery.
 
 ## Constraints
 
@@ -115,6 +143,30 @@ Two distinct API surfaces:
 **API-side work that can proceed independently:** #50 (/v1/users/settings endpoint), #71 API enforcement
 
 Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, credit/billing display, MIT/Apache 2.0 license, Next.js preferred.
+
+## Planned Milestone: Consumer Web Platform
+
+**Goal:** Build out the Tier 2 consumer product — a full-featured AI assistant exceeding ChatGPT's capabilities, accessible via web, WhatsApp, Messenger, phone, and SMS.
+
+**Depends on:** Web Frontend Revamp (need the base UI first)
+
+**Feature clusters (each will become its own phase/milestone):**
+
+| Cluster | Features | Issues |
+|---------|----------|--------|
+| Separate tier limits | Independent rate limits + analytics for API vs Web | TBD |
+| Multimedia generation | Video generation endpoint + UI | TBD |
+| RAG / Projects | Document upload, project contexts, retrieval-augmented generation | TBD |
+| Voice | Voice input, voice conversation (speech-to-speech) | TBD |
+| Phone / SMS | Register phone number → call or text Hive to chat (Bangladesh carrier rates) | TBD |
+| WhatsApp | Same registered number, text + voice + video calls, lower cost than SMS | TBD |
+| Messenger | Facebook OAuth login, chat via Messenger | TBD |
+
+**Channel billing model:**
+- Web: standard credit rate
+- WhatsApp: lower rate (internet delivery, cheaper in Bangladesh)
+- SMS: separate charge (carrier-billed)
+- Calls (voice/video): separate charge (carrier-billed)
 
 ---
 
