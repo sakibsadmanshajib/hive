@@ -192,21 +192,22 @@ describe("images generations route", () => {
 
     const handler = app.handlers.get("POST /v1/images/generations");
     let statusCode = 200;
+    let sentPayload: unknown;
     const headers = new Map<string, string>();
     const reply = {
       code: (code: number) => {
         statusCode = code;
         return {
-          send: (body: unknown) => body,
+          send: (body: unknown) => { sentPayload = body; return body; },
         };
       },
-      send: (body: unknown) => body,
+      send: (body: unknown) => { sentPayload = body; return body; },
       header: (key: string, value: string) => {
         headers.set(key, value);
         return reply;
       },
     };
-    const response = (await handler?.(
+    await handler?.(
       {
         headers: { "x-api-key": "sk_1" },
         body: {
@@ -216,14 +217,21 @@ describe("images generations route", () => {
         },
       },
       reply,
-    )) as { error: string };
+    );
 
     expect(statusCode).toBe(502);
     expect(headers.get("x-model-routed")).toBe("image-basic");
-    expect(response).toEqual({ error: "provider unavailable" });
+    expect(sentPayload).toEqual({
+      error: {
+        message: "provider unavailable",
+        type: "server_error",
+        param: null,
+        code: null,
+      },
+    });
     expect(headers.get("x-provider-used")).toBe("openai");
     expect(headers.get("x-provider-model")).toBe("gpt-image-1");
-    expect(JSON.stringify(response)).not.toContain("internal");
+    expect(JSON.stringify(sentPayload)).not.toContain("internal");
   });
 
   it("rejects empty prompts before calling the runtime service", async () => {
@@ -245,24 +253,32 @@ describe("images generations route", () => {
 
     const handler = app.handlers.get("POST /v1/images/generations");
     let statusCode = 200;
+    let sentPayload: unknown;
     const reply = {
       code: (code: number) => {
         statusCode = code;
         return {
-          send: (body: unknown) => body,
+          send: (body: unknown) => { sentPayload = body; return body; },
         };
       },
-      send: (body: unknown) => body,
+      send: (body: unknown) => { sentPayload = body; return body; },
       header: () => reply,
     };
 
-    const response = (await handler?.(
+    await handler?.(
       { headers: { "x-api-key": "sk_1" }, body: { prompt: "   " } },
       reply,
-    )) as { error: string };
+    );
 
     expect(statusCode).toBe(400);
-    expect(response).toEqual({ error: "prompt is required" });
+    expect(sentPayload).toEqual({
+      error: {
+        message: "prompt is required",
+        type: "invalid_request_error",
+        param: "prompt",
+        code: null,
+      },
+    });
     expect(imageGeneration).not.toHaveBeenCalled();
   });
 });

@@ -49,8 +49,8 @@ describe("rbac + settings enforcement", () => {
     )) as { error: string } | undefined;
 
     expect(statusCode).toBe(403);
-    const payload = (response ?? sentPayload) as { error: string };
-    expect(payload.error).toContain("setting disabled");
+    const payload = (response ?? sentPayload) as { error: { message: string } };
+    expect(payload.error.message).toContain("setting disabled");
   });
 
   it("keeps provider status internal endpoint token-protected", async () => {

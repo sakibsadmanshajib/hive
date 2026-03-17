@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
 import { inferUsageChannel, requirePrincipal } from "./auth";
+import { sendApiError } from "./api-error";
 
 type ImageBody = {
   model?: string;
@@ -23,12 +24,12 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
 
     const allowed = await services.rateLimiter.allow(principal.userId);
     if (!allowed) {
-      return reply.code(429).send({ error: "rate limit exceeded" });
+      return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
     }
 
     const prompt = request.body?.prompt?.trim();
     if (!prompt) {
-      return reply.code(400).send({ error: "prompt is required" });
+      return sendApiError(reply, 400, "prompt is required", { param: "prompt" });
     }
 
     const result = await services.ai.imageGeneration(principal.userId, {
@@ -48,7 +49,7 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
           reply.header(key, value);
         }
       }
-      return reply.code(result.statusCode).send({ error: result.error });
+      return sendApiError(reply, result.statusCode, result.error);
     }
 
     for (const [key, value] of Object.entries(result.headers)) {

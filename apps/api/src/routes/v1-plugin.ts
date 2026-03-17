@@ -1,11 +1,16 @@
 import type { FastifyInstance, FastifyError } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
 import { STATUS_TO_TYPE } from "./api-error";
+import { registerChatCompletionsRoute } from "./chat-completions";
+import { registerModelsRoute } from "./models";
+import { registerImagesGenerationsRoute } from "./images-generations";
+import { registerResponsesRoute } from "./responses";
 
 export async function v1Plugin(
   app: FastifyInstance,
-  _opts: { services: RuntimeServices },
+  opts: { services: RuntimeServices },
 ): Promise<void> {
+  const { services } = opts;
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     const status = error.statusCode ?? 500;
     const message = error.message || "Internal server error";
@@ -29,6 +34,11 @@ export async function v1Plugin(
       },
     });
   });
+
+  registerChatCompletionsRoute(app, services);
+  registerModelsRoute(app, services);
+  registerImagesGenerationsRoute(app, services);
+  registerResponsesRoute(app, services);
 }
 
 // Break encapsulation so error/not-found handlers apply to the registering scope.

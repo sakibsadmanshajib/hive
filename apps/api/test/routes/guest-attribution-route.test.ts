@@ -11,6 +11,13 @@ class FakeApp {
   post(path: string, handler: (request?: any, reply?: any) => Promise<unknown>) {
     this.handlers.set(`POST ${path}`, handler);
   }
+
+  register(plugin: (app: any, opts: any) => Promise<void>, opts: any) {
+    return plugin(this, opts);
+  }
+
+  setErrorHandler() {}
+  setNotFoundHandler() {}
 }
 
 function createReply() {

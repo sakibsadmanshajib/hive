@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import type { RuntimeServices } from "../runtime/services";
 import { inferUsageChannel, requireApiPrincipal } from "./auth";
+import { sendApiError } from "./api-error";
 
 type ChatBody = {
   model?: string;
@@ -16,7 +17,7 @@ export function registerChatCompletionsRoute(app: FastifyInstance, services: Run
 
     const allowed = await services.rateLimiter.allow(principal.userId);
     if (!allowed) {
-      return reply.code(429).send({ error: "rate limit exceeded" });
+      return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
     }
 
     const result = await services.ai.chatCompletions(
@@ -29,7 +30,7 @@ export function registerChatCompletionsRoute(app: FastifyInstance, services: Run
       },
     );
     if ("error" in result) {
-      return reply.code(result.statusCode).send({ error: result.error });
+      return sendApiError(reply, result.statusCode, result.error);
     }
 
     reply
