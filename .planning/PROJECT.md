@@ -154,13 +154,13 @@ Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, c
 
 | Cluster | Features | Issues |
 |---------|----------|--------|
-| Separate tier limits | Independent rate limits + analytics for API vs Web | TBD |
-| Multimedia generation | Video generation endpoint + UI | TBD |
-| RAG / Projects | Document upload, project contexts, retrieval-augmented generation | TBD |
-| Voice | Voice input, voice conversation (speech-to-speech) | TBD |
-| Phone / SMS | Register phone number → call or text Hive to chat (Bangladesh carrier rates) | TBD |
-| WhatsApp | Same registered number, text + voice + video calls, lower cost than SMS | TBD |
-| Messenger | Facebook OAuth login, chat via Messenger | TBD |
+| Separate tier limits | Independent rate limits + analytics for API vs Web | #74 |
+| Multimedia generation | Video generation endpoint + UI | #75 |
+| RAG / Projects | Document upload, project contexts, retrieval-augmented generation | #76 |
+| Voice | Voice input, voice conversation (speech-to-speech) | #77 |
+| Phone / SMS | Register phone number → call or text Hive to chat (Bangladesh carrier rates) | #78 |
+| WhatsApp | Same registered number, text + voice + video calls, lower cost than SMS | #79 |
+| Messenger | Facebook OAuth login, chat via Messenger | #80 |
 
 **Channel billing model:**
 - Web: standard credit rate
