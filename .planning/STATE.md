@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Roadmap created, ready to plan Phase 1
-last_updated: "2026-03-17T21:30:00.108Z"
-last_activity: 2026-03-17 — Roadmap created
+status: executing
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-03-17T21:36:18Z"
+last_activity: 2026-03-17 — Completed 01-02 (route error migration)
 progress:
   total_phases: 9
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 2
-  completed_plans: 1
-  percent: 50
+  completed_plans: 2
+  percent: 100
 ---
 
 # Project State
@@ -25,25 +25,25 @@ See: .planning/PROJECT.md (updated 2026-03-16)
 
 ## Current Position
 
-Phase: 1 of 9 (Error Format Standardization)
-Plan: 1 of 2 in current phase
-Status: Executing
-Last activity: 2026-03-17 — Completed 01-01 (error format infrastructure)
+Phase: 1 of 9 (Error Format Standardization) -- COMPLETE
+Plan: 2 of 2 in current phase
+Status: Phase 1 complete
+Last activity: 2026-03-17 — Completed 01-02 (route error migration)
 
-Progress: [█████░░░░░] 50%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 1
-- Average duration: 3min
-- Total execution time: 0.05 hours
+- Total plans completed: 2
+- Average duration: 4min
+- Total execution time: 0.13 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-error-format | 1 | 3min | 3min |
+| 01-error-format | 2 | 8min | 4min |
 
 **Recent Trend:**
 - Last 5 plans: -
@@ -63,6 +63,8 @@ Recent decisions affecting current work:
 - Roadmap: Phases 3 and 7 can run in parallel with phases 4-6 (auth + surface expansion don't depend on chat completions)
 - 01-01: Used Symbol.for('skip-override') instead of fastify-plugin dependency for Fastify scope control
 - 01-01: OpenAI error envelope pattern: { error: { message, type, param, code } } with all four fields always present
+- 01-02: Test FakeApp mocks extended with register/setErrorHandler stubs for v1Plugin scope
+- 01-02: Reply mock capture pattern uses sentPayload for void sendApiError calls
 
 ### Pending Todos
 
@@ -77,5 +79,5 @@ None yet.
 ## Session Continuity
 
 Last session: 2026-03-17
-Stopped at: Completed 01-01-PLAN.md
+Stopped at: Completed 01-02-PLAN.md (Phase 1 complete)
 Resume file: None

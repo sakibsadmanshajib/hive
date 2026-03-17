@@ -12,7 +12,7 @@ This milestone transforms Hive's existing `/v1/*` endpoints from "routes that wo
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Error Format Standardization** - All API errors use OpenAI's nested error object format
+- [x] **Phase 1: Error Format Standardization** - All API errors use OpenAI's nested error object format (completed 2026-03-17)
 - [ ] **Phase 2: Type Infrastructure** - TypeBox schemas and generated OpenAI types provide compile-time and runtime validation
 - [ ] **Phase 3: Auth Compliance** - Bearer token auth works identically to OpenAI across all official SDKs
 - [ ] **Phase 4: Models Endpoint** - `/v1/models` and `/v1/models/{model}` return fully compliant model objects
@@ -161,7 +161,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Error Format Standardization | 1/2 | In Progress|  |
+| 1. Error Format Standardization | 2/2 | Complete   | 2026-03-17 |
 | 2. Type Infrastructure | 0/2 | Not started | - |
 | 3. Auth Compliance | 0/1 | Not started | - |
 | 4. Models Endpoint | 0/2 | Not started | - |
