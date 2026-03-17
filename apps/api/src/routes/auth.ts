@@ -4,6 +4,7 @@ import type { RuntimeServices } from "../runtime/services";
 import { isAllowedBrowserOrigin } from "../runtime/cors-origins";
 import { mapScopeToPrimaryPermission, type PermissionKey } from "../runtime/authorization";
 import type { UserSettingKey } from "../runtime/user-settings";
+import { sendApiError } from "./api-error";
 
 const DEMO_KEY_PREFIX = "dev-user-";
 
@@ -112,7 +113,7 @@ export async function requirePrincipal(
 ): Promise<AuthPrincipal | undefined> {
   const principal = await resolvePrincipal(request, services, requirements.requiredScope);
   if (!principal) {
-    reply.code(401).send({ error: "missing or invalid credentials" });
+    sendApiError(reply, 401, "missing or invalid credentials", { code: "invalid_api_key" });
     return undefined;
   }
 
@@ -121,7 +122,7 @@ export async function requirePrincipal(
   if (permission) {
     const allowed = await services.authz.requirePermission(principal, permission);
     if (!allowed) {
-      reply.code(403).send({ error: "forbidden" });
+      sendApiError(reply, 403, "forbidden");
       return undefined;
     }
   }
@@ -129,7 +130,7 @@ export async function requirePrincipal(
   if (requirements.requiredSetting) {
     const settings = await services.userSettings.getForUser(principal.userId);
     if (!services.userSettings.canUse(requirements.requiredSetting, settings)) {
-      reply.code(403).send({ error: `setting disabled: ${requirements.requiredSetting}` });
+      sendApiError(reply, 403, `setting disabled: ${requirements.requiredSetting}`);
       return undefined;
     }
   }
