@@ -106,6 +106,18 @@ Two distinct API surfaces:
 | Supabase for all persistence | Unified auth + data, reduces operational surface | ✓ Good |
 | Credit-based billing (not subscription) | Simpler for pay-as-you-go, matches inference economics | ✓ Good |
 
+## Planned Milestone: Web Frontend Revamp
+
+**Goal:** Replace the custom `apps/web` Next.js frontend with an adopted or forked open-source LLM chat UI. Hive's API-first strategy (OpenAI compatibility) makes it a clean integration target for any OpenAI-compatible frontend.
+
+**Status:** Evaluation in progress — see GitHub issue #72
+**Blocks:** #49 (Web IA), #71 (Anonymous chat gate), #73 (Chat titles), #63/#64 (Guest proxy hardening)
+**API-side work that can proceed independently:** #50 (/v1/users/settings endpoint), #71 API enforcement
+
+Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, credit/billing display, MIT/Apache 2.0 license, Next.js preferred.
+
+---
+
 ## Current Milestone: OpenAI API Compliance (v1)
 
 **Goal:** Transform Hive's `/v1/*` endpoints into a fully OpenAI-SDK-compatible API surface — a true drop-in replacement verifiable with the official `openai` npm SDK.
