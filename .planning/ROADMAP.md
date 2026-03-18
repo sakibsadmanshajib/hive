@@ -106,8 +106,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 06-01: TBD
-- [ ] 06-02: TBD
+- [ ] 06-01-PLAN.md — Streaming pipeline: chatStream() on provider/registry/service + route SSE branch
+- [ ] 06-02-PLAN.md — SSE streaming compliance tests for CHAT-04/CHAT-05
 
 ### Phase 7: Surface Expansion
 **Goal**: Embeddings, image generation, and responses endpoints are fully schema-compliant
