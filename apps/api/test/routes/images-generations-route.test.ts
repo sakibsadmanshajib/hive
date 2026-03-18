@@ -13,8 +13,8 @@ type Handler = (
 class FakeApp {
   handlers = new Map<string, Handler>();
 
-  post(path: string, handler: Handler) {
-    this.handlers.set(`POST ${path}`, handler);
+  post(path: string, optsOrHandler: Handler | Record<string, unknown>, handler?: Handler) {
+    this.handlers.set(`POST ${path}`, handler ?? (optsOrHandler as Handler));
   }
 }
 

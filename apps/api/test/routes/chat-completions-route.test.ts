@@ -6,8 +6,8 @@ type Handler = (request?: any, reply?: any) => Promise<unknown>;
 class FakeApp {
   readonly handlers = new Map<string, Handler>();
 
-  post(path: string, handler: Handler) {
-    this.handlers.set(path, handler);
+  post(path: string, optsOrHandler: Handler | Record<string, unknown>, handler?: Handler) {
+    this.handlers.set(path, handler ?? (optsOrHandler as Handler));
   }
 }
 
