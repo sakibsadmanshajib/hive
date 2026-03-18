@@ -91,9 +91,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 05-01: TBD
-- [ ] 05-02: TBD
-- [ ] 05-03: TBD
+- [ ] 05-01-PLAN.md — Provider pipeline + service + route for full non-streaming compliance
+- [ ] 05-02-PLAN.md — Unit, route, and compliance tests for CHAT-01/02/03
 
 ### Phase 6: Chat Completions (Streaming)
 **Goal**: Streaming chat completions follow the OpenAI SSE protocol exactly, including usage telemetry in the final chunk
@@ -166,7 +165,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Type Infrastructure | 2/2 | Complete   | 2026-03-18 |
 | 3. Auth Compliance | 2/2 | Complete   | 2026-03-18 |
 | 4. Models Endpoint | 2/2 | Complete   | 2026-03-18 |
-| 5. Chat Completions (Non-Streaming) | 0/3 | Not started | - |
+| 5. Chat Completions (Non-Streaming) | 0/2 | Not started | - |
 | 6. Chat Completions (Streaming) | 0/2 | Not started | - |
 | 7. Surface Expansion | 0/3 | Not started | - |
 | 8. Differentiators | 0/3 | Not started | - |
