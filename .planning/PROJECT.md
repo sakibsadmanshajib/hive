@@ -133,6 +133,10 @@ Hive operates two fundamentally different product surfaces with separate rate li
 | Bearer token auth for public API | Match OpenAI SDK expectations, minimize switching friction | — Pending |
 | Supabase for all persistence | Unified auth + data, reduces operational surface | ✓ Good |
 | Credit-based billing (not subscription) | Simpler for pay-as-you-go, matches inference economics | ✓ Good |
+| BDT-denominated credit wallet (not USD) | Reduces user confusion, aligns with local payments, avoids presenting balance as foreign-currency account | — Pending |
+| Separate logging posture: API vs web | Public API: minimal retention, no raw prompt storage by default. Web app: full conversation analytics, tool traces. Separates enterprise sales posture from product learning | — Pending |
+| Two-front-door system architecture | Public OpenAI-compatible API + separate web app backend protocol feeding one internal core. Preserves commercial flexibility, separates privacy postures, reduces abuse risk | — Pending |
+| API gateway first, web app second | Payment friction is the strongest validated pain point; backend billing/routing/abuse controls must stabilize before investing in richer consumer UX | — Pending |
 
 ## Planned Milestone: Web Frontend Revamp
 
@@ -144,11 +148,35 @@ Hive operates two fundamentally different product surfaces with separate rate li
 
 Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, credit/billing display, MIT/Apache 2.0 license, Next.js preferred.
 
+## Planned Milestone: Payment & Finance Hardening
+
+**Goal:** Harden the local payment rails, credit ledger, and billing operations to production-grade reliability — the operational foundation that makes the Bangladesh market thesis real.
+
+**Depends on:** OpenAI API Compliance (v1) — billing engine and abuse controls must be stable first
+
+**Scope:**
+- bKash and SSLCommerz integration hardened to production (idempotency, reconciliation, webhook verification)
+- Order ledger: payment success → wallet credit issuance as atomic operation with audit trail
+- Tax invoice format for Bangladesh VAT compliance; reverse-charge treatment documented for imported SaaS spend
+- Refund policy enforcement and credit expiry lifecycle
+- Upstream vendor reconciliation and margin reporting (provider cost vs credit consumed)
+- Customer support ops: escalation playbooks, admin wallet adjustment tooling, refund tooling
+- Abuse controls: spend caps, org quotas, anomaly detection on credit consumption
+
+**Key constraints:**
+- BDT-denominated credit wallet (not stored USD) — confirmed decision
+- Do not expose internal cost-plus-margin to end users; publish a clean tariff instead
+- Any BD→foreign-company service flow must be documented for VAT review before scale
+
+**Reference:** `docs/reference/2026-03-17-bangladesh-ai-gateway-strategy.md` §5
+
 ## Planned Milestone: Consumer Web Platform
 
 **Goal:** Build out the Tier 2 consumer product — a full-featured AI assistant exceeding ChatGPT's capabilities, accessible via web, WhatsApp, Messenger, phone, and SMS.
 
 **Depends on:** Web Frontend Revamp (need the base UI first)
+
+**Architecture note (from Bangladesh strategy memo):** The web app must use a custom backend-for-frontend protocol — NOT the public OpenAI-compatible API shape. This enables separate analytics, separate abuse controls, project semantics, and wallet state management. Frontend must never be the source of truth for pricing, routing, or entitlement.
 
 **Feature clusters (each will become its own phase/milestone):**
 
@@ -168,6 +196,26 @@ Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, c
 - SMS: separate charge (carrier-billed)
 - Calls (voice/video): separate charge (carrier-billed)
 
+**Regulatory rollout order:** API → web → messaging channels → voice notes → voice calling (BTRC licensing required for regulated telephony; text-based channels are a safer expansion path)
+
+## Planned Milestone: Vertical Products & Efficiency
+
+**Goal:** Add high-value, measurable Bangladesh-market workflow products and drive down cost of serving them.
+
+**Depends on:** Consumer Web Platform (need stable web surface and validated user base first)
+
+**Scope:**
+- One or two vertical workflows with measurable ROI (e.g. business copilot / customer support tools)
+- Bangla UX work: prompt defaults, message guidance, mixed-language and transliterated-Bangla support
+- Benchmark self-hosted multilingual embedding model for Bangla/English/mixed inputs
+- Batch-processing offers for business clients (non-real-time enterprise workloads)
+- Caching and deduplication of repeated prompts/tool responses where safe
+- Selective self-hosting of open models for embeddings, summarization, classification
+
+**Key principle:** Add one or two high-value workflows with measurable ROI rather than a broad shallow feature list. Owned inference infrastructure follows validated demand — do not evaluate GPU/accelerator commitments before clear volume thresholds.
+
+**Reference:** `docs/reference/2026-03-17-bangladesh-ai-gateway-strategy.md` §11–§12
+
 ---
 
 ## Current Milestone: OpenAI API Compliance (v1)
@@ -178,7 +226,7 @@ Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, c
 
 | Phase | Name | Requirements | Status |
 |-------|------|-------------|--------|
-| 1 | Error Format Standardization | FOUND-01 | In planning |
+| 1 | Error Format Standardization | FOUND-01 | Complete |
 | 2 | Type Infrastructure | FOUND-06, FOUND-07 | Not started |
 | 3 | Auth Compliance | FOUND-02, FOUND-05 | Not started |
 | 4 | Models Endpoint | FOUND-03, FOUND-04 | Not started |
@@ -191,4 +239,4 @@ Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, c
 **Execution order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 (see ROADMAP.md for dependency graph)
 
 ---
-*Last updated: 2026-03-17 — current milestone and phase table added*
+*Last updated: 2026-03-17 — Phase 1 marked complete; added Payment & Finance Hardening and Vertical Products & Efficiency milestones; added key decisions from Bangladesh AI Gateway strategy memo*

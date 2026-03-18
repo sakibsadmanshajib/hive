@@ -2,6 +2,8 @@
 
 This roadmap reflects Hive after the provider-hardening and OSS-governance wave that shipped through late February and early March 2026.
 
+**Updated 2026-03-17:** Stages below are now informed by the Bangladesh AI Gateway strategy memo. See `docs/reference/2026-03-17-bangladesh-ai-gateway-strategy.md` for full context. The memo validates the API-gateway-first sequencing and adds three explicit execution stages beyond the current compliance work: payment hardening, web app, and vertical products.
+
 ## Already Delivered Baseline
 
 The following platform primitives are already in place and should no longer be treated as future roadmap work:
@@ -16,6 +18,9 @@ The following platform primitives are already in place and should no longer be t
 - API key lifecycle management
 - web auth -> chat -> billing smoke coverage
 - GitHub issue templates, metadata sync, and maintainer lifecycle docs
+- bKash + SSLCommerz payment webhooks (basic integration)
+- BDT-denominated credit wallet (1 BDT = 100 AI Credits)
+- Error format standardization for OpenAI-compatible API (Phase 1 of compliance milestone — complete 2026-03-17)
 
 ## Phase 1 - Platform Positioning And Backlog Quality
 
@@ -64,13 +69,21 @@ Tasks:
 
 Goals:
 - improve monetization flexibility without weakening billing correctness
+- harden local payment rails and financial operations to production-grade reliability
 
 Tasks:
 1. Reframe and implement the free-tier / zero-cost access-control track.
 2. Add refundable-balance decomposition and clearer credit accounting surfaces.
 3. Add campaign/promo management with explicit lifecycle rules.
-4. Add stronger abuse controls and tier-aware limits.
+4. Add stronger abuse controls and tier-aware limits (spend caps, org quotas, anomaly detection).
 5. Add cost and margin visibility for provider-backed traffic.
+6. Harden bKash/SSLCommerz integration: idempotency, reconciliation, webhook verification.
+7. Order ledger: payment success → wallet credit issuance as audited atomic operation.
+8. Tax invoice format for Bangladesh VAT; document reverse-charge treatment for imported SaaS.
+9. Upstream vendor reconciliation and margin reporting.
+10. Customer support ops tooling: admin wallet adjustment, refund tooling, escalation playbooks.
+
+**Note:** This phase maps to the "Payment & Finance Hardening" planned milestone in PROJECT.md. Do not start this phase before the API compliance milestone stabilizes the billing engine and abuse controls.
 
 ## Phase 5 - Team And Operator Maturity
 
@@ -84,6 +97,19 @@ Tasks:
 4. Add SLOs and incident runbooks for provider, billing, and auth failures.
 5. Add backup and restore guidance for Supabase/Postgres-dependent operations.
 
+## Milestone Sequencing (Bangladesh AI Gateway Strategy)
+
+Informed by the 2026-03-17 strategy memo. Four stages mapping to PROJECT.md milestones:
+
+| Stage | Milestone | Status |
+|-------|-----------|--------|
+| 1 | OpenAI API Compliance (v1) — gateway spine: auth, routing, compliance, abuse controls | In progress (Phase 1 complete) |
+| 2 | Payment & Finance Hardening — local payments, order ledger, VAT, reconciliation, support ops | Planned |
+| 3 | Web Frontend Revamp + Consumer Web Platform — custom BFF protocol, Bangla UX, channels | Planned |
+| 4 | Vertical Products & Efficiency — workflow products, self-hosted embeddings, cost-down levers | Planned |
+
+**Key sequencing rule:** Owned inference infrastructure (GPU/accelerator commitments) must follow validated demand at Stage 4. Do not evaluate before clear volume thresholds.
+
 ## Recommended Execution Order
 
 1. Phase 1 immediately, because narrative and backlog quality now limit execution more than missing fundamentals do.
@@ -93,6 +119,8 @@ Tasks:
 
 ## Planning Notes
 
-- Bangladesh-native payments should remain a strategic wedge and monetization advantage, not the sole framing for product direction.
+- Bangladesh-native payments are a proven strategic wedge — not just a monetization afterthought. The moat is operations and distribution (local payments, invoicing, BDT credits, Bangla UX), not raw model capability.
+- The web app must use a custom backend-for-frontend protocol, not the public OpenAI-compatible API shape. This preserves separate analytics, pricing logic, credits, and anti-abuse controls.
+- Do not publish internal cost-plus-margin line items to end users. Publish a clean tariff.
 - Avoid reopening broad provider integrations until metadata, billing, and acceptance criteria are disciplined enough to prevent scope sprawl.
 - Prefer small, evidence-backed GitHub issues over umbrella issues that mix strategy, implementation detail, and speculative market claims.
