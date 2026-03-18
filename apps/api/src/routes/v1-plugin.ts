@@ -36,6 +36,15 @@ export async function v1Plugin(
     });
   });
 
+  app.addHook('onSend', async (_request, reply, payload) => {
+    const ct = reply.getHeader('content-type');
+    if (typeof ct === 'string' && ct.includes('text/event-stream')) {
+      return payload;
+    }
+    reply.header('content-type', 'application/json; charset=utf-8');
+    return payload;
+  });
+
   registerChatCompletionsRoute(app, services);
   registerModelsRoute(app, services);
   registerImagesGenerationsRoute(app, services);

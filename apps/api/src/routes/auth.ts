@@ -166,6 +166,32 @@ export async function requireApiPrincipal(
   });
 }
 
+export async function requireV1ApiPrincipal(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  services: RuntimeServices,
+  requiredScope: "chat" | "image" | "usage" | "billing",
+): Promise<AuthPrincipal | undefined> {
+  const bearerToken = readBearerToken(request);
+  if (!bearerToken) {
+    sendApiError(reply, 401, "No API key provided", { code: "invalid_api_key" });
+    return undefined;
+  }
+
+  const resolved = await services.users.resolveApiKey(bearerToken);
+  if (!resolved) {
+    sendApiError(reply, 401, "Incorrect API key provided", { code: "invalid_api_key" });
+    return undefined;
+  }
+
+  return {
+    userId: resolved.userId,
+    authType: "apiKey",
+    scopes: resolved.scopes,
+    apiKeyId: resolved.apiKeyId,
+  };
+}
+
 export function inferUsageChannel(request: FastifyRequest, principal: AuthPrincipal): UsageChannel {
   if (principal.authType !== "session") {
     return "api";
