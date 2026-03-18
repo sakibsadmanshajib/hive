@@ -118,6 +118,48 @@ export class OpenAICompatibleProviderClient {
     };
   }
 
+  async chatStream(request: ProviderChatRequest): Promise<Response> {
+    if (!this.config.apiKey) {
+      throw new Error(`${this.name} api key missing`);
+    }
+
+    const response = await fetchWithRetry({
+      provider: this.name,
+      url: joinUrl(this.config.baseUrl, "/chat/completions"),
+      timeoutMs: 120_000,
+      maxRetries: 0,
+      init: {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json",
+          ...(this.config.extraHeaders ?? {}),
+        },
+        body: JSON.stringify({
+          model: request.model,
+          messages: request.messages,
+          ...request.params,
+          stream: true,
+        }),
+      },
+    });
+
+    if (!response.ok) {
+      let errorMessage = `${this.name} request failed with status ${response.status}`;
+      try {
+        const errorBody = await response.json() as { error?: { message?: string } };
+        if (errorBody?.error?.message) {
+          errorMessage = errorBody.error.message;
+        }
+      } catch { /* ignore parse failures */ }
+      const err = new Error(errorMessage);
+      (err as any).statusCode = response.status;
+      throw err;
+    }
+
+    return response;
+  }
+
   async status(): Promise<ProviderHealthStatus> {
     const enabled = this.isEnabled();
     if (!enabled) {

@@ -47,6 +47,12 @@ export type ProviderImageExecutionResult = {
   providerModel: string;
 };
 
+export type ProviderStreamExecutionResult = {
+  response: Response;
+  providerUsed: ProviderName;
+  providerModel: string;
+};
+
 export type ProviderStatusResult = {
   providers: Array<{
     name: ProviderName;
@@ -145,6 +151,50 @@ export class ProviderRegistry {
     }
 
     throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
+  }
+
+  async chatStream(
+    modelId: string,
+    messages: ProviderChatMessage[],
+    params?: Record<string, unknown>,
+  ): Promise<ProviderStreamExecutionResult> {
+    const offerIds = this.config.modelOfferMap?.[modelId];
+    let providerName: ProviderName;
+    let providerModel: string;
+
+    if (offerIds && offerIds.length > 0) {
+      const offerId = offerIds[0];
+      const offer = this.config.offerCatalog?.[offerId];
+      if (!offer) throw new Error(`${offerId}: offer not configured`);
+      providerName = offer.provider;
+      providerModel = offer.upstreamModel;
+    } else {
+      providerName = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
+      providerModel = this.config.providerModelMap[providerName] ?? modelId;
+    }
+
+    const client = this.clientsByName.get(providerName);
+    if (!client?.isEnabled() || !client.chatStream) {
+      throw new Error(`${providerName}: streaming not supported`);
+    }
+
+    const breaker = this.circuitBreakers.get(providerName);
+    if (breaker) {
+      breaker.evaluateState();
+      if (breaker.isOpen()) throw new Error(`${providerName}: circuit open`);
+    }
+
+    const startedAt = Date.now();
+    try {
+      const response = await client.chatStream({ model: providerModel, messages, params });
+      this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
+      breaker?.recordSuccess();
+      return { response, providerUsed: providerName, providerModel };
+    } catch (error) {
+      this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, true);
+      breaker?.recordFailure(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   async imageGeneration(modelId: string, request: Omit<ProviderImageRequest, "model">): Promise<ProviderImageExecutionResult> {
