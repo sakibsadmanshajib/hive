@@ -1,19 +1,17 @@
 import type { FastifyInstance } from "fastify";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
+import { ImagesGenerationsBodySchema } from "../schemas/images-generations";
 import { inferUsageChannel, requirePrincipal } from "./auth";
 import { sendApiError } from "./api-error";
 
-type ImageBody = {
-  model?: string;
-  prompt?: string;
-  n?: number;
-  size?: string;
-  response_format?: "url" | "b64_json";
-  user?: string;
-};
-
-export function registerImagesGenerationsRoute(app: FastifyInstance, services: RuntimeServices): void {
-  app.post<{ Body: ImageBody }>("/v1/images/generations", async (request, reply) => {
+export function registerImagesGenerationsRoute(
+  app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
+  services: RuntimeServices,
+): void {
+  app.post("/v1/images/generations", {
+    schema: { body: ImagesGenerationsBodySchema },
+  }, async (request, reply) => {
     const principal = await requirePrincipal(request, reply, services, {
       requiredScope: "image",
       requiredSetting: "generateImage",
@@ -49,7 +47,7 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
           reply.header(key, value);
         }
       }
-      return sendApiError(reply, result.statusCode, result.error);
+      return sendApiError(reply, result.statusCode, result.error ?? "Unknown error");
     }
 
     for (const [key, value] of Object.entries(result.headers)) {

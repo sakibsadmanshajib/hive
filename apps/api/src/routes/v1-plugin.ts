@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyError } from "fastify";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
 import { STATUS_TO_TYPE } from "./api-error";
 import { registerChatCompletionsRoute } from "./chat-completions";
@@ -7,7 +8,7 @@ import { registerImagesGenerationsRoute } from "./images-generations";
 import { registerResponsesRoute } from "./responses";
 
 export async function v1Plugin(
-  app: FastifyInstance,
+  app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
   opts: { services: RuntimeServices },
 ): Promise<void> {
   const { services } = opts;

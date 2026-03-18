@@ -1,14 +1,17 @@
 import type { FastifyInstance } from "fastify";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
+import { ResponsesBodySchema } from "../schemas/responses";
 import { inferUsageChannel, requireApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
 
-type ResponseBody = {
-  input?: string;
-};
-
-export function registerResponsesRoute(app: FastifyInstance, services: RuntimeServices): void {
-  app.post<{ Body: ResponseBody }>("/v1/responses", async (request, reply) => {
+export function registerResponsesRoute(
+  app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
+  services: RuntimeServices,
+): void {
+  app.post("/v1/responses", {
+    schema: { body: ResponsesBodySchema },
+  }, async (request, reply) => {
     const principal = await requireApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;
@@ -24,7 +27,7 @@ export function registerResponsesRoute(app: FastifyInstance, services: RuntimeSe
       apiKeyId: principal.apiKeyId,
     });
     if ("error" in result) {
-      return sendApiError(reply, result.statusCode, result.error);
+      return sendApiError(reply, result.statusCode, result.error ?? "Unknown error");
     }
 
     if (result.headers) {

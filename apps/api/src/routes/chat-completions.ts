@@ -1,15 +1,17 @@
 import type { FastifyInstance } from "fastify";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
+import { ChatCompletionsBodySchema } from "../schemas/chat-completions";
 import { inferUsageChannel, requireApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
 
-type ChatBody = {
-  model?: string;
-  messages?: Array<{ role: string; content: string }>;
-};
-
-export function registerChatCompletionsRoute(app: FastifyInstance, services: RuntimeServices): void {
-  app.post<{ Body: ChatBody }>("/v1/chat/completions", async (request, reply) => {
+export function registerChatCompletionsRoute(
+  app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
+  services: RuntimeServices,
+): void {
+  app.post("/v1/chat/completions", {
+    schema: { body: ChatCompletionsBodySchema },
+  }, async (request, reply) => {
     const principal = await requireApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;
@@ -30,7 +32,7 @@ export function registerChatCompletionsRoute(app: FastifyInstance, services: Run
       },
     );
     if ("error" in result) {
-      return sendApiError(reply, result.statusCode, result.error);
+      return sendApiError(reply, result.statusCode, result.error ?? "Unknown error");
     }
 
     reply
