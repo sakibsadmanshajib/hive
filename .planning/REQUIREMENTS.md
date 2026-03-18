@@ -14,8 +14,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [ ] **FOUND-03**: `GET /v1/models` returns OpenAI-compliant list with required `id`, `object: "model"`, `created` (unix timestamp), `owned_by` fields on each model object
 - [ ] **FOUND-04**: `GET /v1/models/{model}` returns a single model object or 404 with proper error format
 - [ ] **FOUND-05**: All `/v1/*` endpoints return correct `Content-Type` headers (`application/json` for non-streaming, `text/event-stream` for streaming)
-- [ ] **FOUND-06**: TypeBox + Fastify type provider set up for request validation on all `/v1/*` routes
-- [ ] **FOUND-07**: OpenAI TypeScript types generated from `docs/reference/openai-openapi.yml` via `openapi-typescript` for compile-time response shape validation
+- [x] **FOUND-06**: TypeBox + Fastify type provider set up for request validation on all `/v1/*` routes
+- [x] **FOUND-07**: OpenAI TypeScript types generated from `docs/reference/openai-openapi.yml` via `openapi-typescript` for compile-time response shape validation
 
 ### Chat Completions
 
@@ -98,8 +98,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | FOUND-03 | Phase 4 | Pending |
 | FOUND-04 | Phase 4 | Pending |
 | FOUND-05 | Phase 3 | Pending |
-| FOUND-06 | Phase 2 | Pending |
-| FOUND-07 | Phase 2 | Pending |
+| FOUND-06 | Phase 2 | Complete |
+| FOUND-07 | Phase 2 | Complete |
 | CHAT-01 | Phase 5 | Pending |
 | CHAT-02 | Phase 5 | Pending |
 | CHAT-03 | Phase 5 | Pending |
