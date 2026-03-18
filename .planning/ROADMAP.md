@@ -63,7 +63,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 03-01: TBD
+- [ ] 03-01-PLAN.md — Simplify /v1/* auth to bearer-only + Content-Type onSend hook
+- [ ] 03-02-PLAN.md — SDK integration tests for auth compliance and Content-Type
 
 ### Phase 4: Models Endpoint
 **Goal**: Developers can call `/v1/models` and `/v1/models/{model}` and get responses that match OpenAI's schema
@@ -163,7 +164,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Error Format Standardization | 2/2 | Complete   | 2026-03-17 |
 | 2. Type Infrastructure | 2/2 | Complete   | 2026-03-18 |
-| 3. Auth Compliance | 0/1 | Not started | - |
+| 3. Auth Compliance | 0/2 | Not started | - |
 | 4. Models Endpoint | 0/2 | Not started | - |
 | 5. Chat Completions (Non-Streaming) | 0/3 | Not started | - |
 | 6. Chat Completions (Streaming) | 0/2 | Not started | - |
