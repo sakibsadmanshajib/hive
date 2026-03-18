@@ -21,6 +21,12 @@ export type MockServices = {
     getForUser: () => Promise<{ apiEnabled: boolean }>;
     canUse: () => boolean;
   };
+  models: {
+    list: () => Array<{ id: string; object: string; capability: string; costType: string }>;
+  };
+  rateLimiter: {
+    allow: () => Promise<boolean>;
+  };
 };
 
 export function createMockServices(validApiKey: string, userId: string): MockServices {
@@ -46,6 +52,14 @@ export function createMockServices(validApiKey: string, userId: string): MockSer
     userSettings: {
       getForUser: async () => ({ apiEnabled: true }),
       canUse: () => true,
+    },
+    models: {
+      list: () => [
+        { id: "mock-chat", object: "model", capability: "chat", costType: "paid" },
+      ],
+    },
+    rateLimiter: {
+      allow: async () => true,
     },
   };
 }
