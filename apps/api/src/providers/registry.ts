@@ -2,6 +2,7 @@ import { CircuitBreaker, type CircuitBreakerConfig, type CircuitState } from "./
 import { ProviderMetrics } from "./provider-metrics";
 import type {
   ProviderChatMessage,
+  ProviderChatResponse,
   ProviderClient,
   ProviderCostClass,
   ProviderImageRequest,
@@ -33,6 +34,7 @@ export type ProviderExecutionResult = {
   content: string;
   providerUsed: ProviderName;
   providerModel: string;
+  rawResponse?: ProviderChatResponse["rawResponse"];
 };
 
 export type ProviderImageExecutionResult = {
@@ -92,10 +94,10 @@ export class ProviderRegistry {
    * @param messages - The chat messages to process.
    * @throws Error if no provider succeeds or if all candidates are blocked by circuit breakers.
    */
-  async chat(modelId: string, messages: ProviderChatMessage[]): Promise<ProviderExecutionResult> {
+  async chat(modelId: string, messages: ProviderChatMessage[], params?: Record<string, unknown>): Promise<ProviderExecutionResult> {
     const offerIds = this.config.modelOfferMap?.[modelId];
     if (offerIds) {
-      return this.chatWithOffers(modelId, offerIds, messages);
+      return this.chatWithOffers(modelId, offerIds, messages, params);
     }
 
     const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
@@ -125,13 +127,14 @@ export class ProviderRegistry {
       const providerModel = this.config.providerModelMap[providerName] ?? modelId;
       const startedAt = Date.now();
       try {
-        const response = await client.chat({ model: providerModel, messages });
+        const response = await client.chat({ model: providerModel, messages, params });
         this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
         breaker?.recordSuccess();
         return {
           content: response.content,
           providerUsed: providerName,
           providerModel: response.providerModel ?? providerModel,
+          rawResponse: response.rawResponse,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -282,6 +285,7 @@ export class ProviderRegistry {
     modelId: string,
     offerIds: string[],
     messages: ProviderChatMessage[],
+    params?: Record<string, unknown>,
   ): Promise<ProviderExecutionResult> {
     const errors: string[] = [];
     const allowedCostClasses = this.config.modelOfferPolicyMap?.[modelId]?.allowedCostClasses;
@@ -319,13 +323,14 @@ export class ProviderRegistry {
 
       const startedAt = Date.now();
       try {
-        const response = await client.chat({ model: offer.upstreamModel, messages });
+        const response = await client.chat({ model: offer.upstreamModel, messages, params });
         this.metricsCollector.recordAttempt(offer.provider, Date.now() - startedAt, false);
         breaker?.recordSuccess();
         return {
           content: response.content,
           providerUsed: offer.provider,
           providerModel: response.providerModel ?? offer.upstreamModel,
+          rawResponse: response.rawResponse,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);

@@ -14,11 +14,20 @@ type OpenAICompatibleModelsResponse = {
 };
 
 type OpenAICompatibleChatResponse = {
+  id?: string;
+  object?: string;
+  created?: number;
   model?: string;
   choices?: Array<{
+    index?: number;
+    finish_reason?: string;
     message?: {
+      role?: string;
       content?: string;
+      refusal?: string | null;
+      tool_calls?: unknown[];
     };
+    logprobs?: unknown | null;
   }>;
   usage?: {
     prompt_tokens?: number;
@@ -72,19 +81,27 @@ export class OpenAICompatibleProviderClient {
         body: JSON.stringify({
           model: request.model,
           messages: request.messages,
+          ...request.params,
+          stream: false,
         }),
       },
     });
 
     if (!response.ok) {
-      throw new Error(`${this.name} request failed with status ${response.status}`);
+      let errorMessage = `${this.name} request failed with status ${response.status}`;
+      try {
+        const errorBody = await response.json() as { error?: { message?: string } };
+        if (errorBody?.error?.message) {
+          errorMessage = errorBody.error.message;
+        }
+      } catch { /* ignore parse failures */ }
+      const err = new Error(errorMessage);
+      (err as any).statusCode = response.status;
+      throw err;
     }
 
     const payload = (await response.json()) as OpenAICompatibleChatResponse;
-    const content = payload.choices?.[0]?.message?.content?.trim();
-    if (!content) {
-      throw new Error(`${this.name} response missing content`);
-    }
+    const content = payload.choices?.[0]?.message?.content?.trim() ?? "";
 
     return {
       content,
@@ -97,6 +114,7 @@ export class OpenAICompatibleProviderClient {
             ?? (payload.usage.prompt_tokens ?? 0) + (payload.usage.completion_tokens ?? 0),
         }
         : undefined,
+      rawResponse: payload,
     };
   }
 

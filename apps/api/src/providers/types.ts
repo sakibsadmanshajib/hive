@@ -10,6 +10,7 @@ export type ProviderChatMessage = {
 export type ProviderChatRequest = {
   model: string;
   messages: ProviderChatMessage[];
+  params?: Record<string, unknown>;
 };
 
 export type ProviderChatResponse = {
@@ -19,6 +20,28 @@ export type ProviderChatResponse = {
     promptTokens: number;
     completionTokens: number;
     totalTokens: number;
+  };
+  rawResponse?: {
+    id?: string;
+    object?: string;
+    created?: number;
+    model?: string;
+    choices?: Array<{
+      index?: number;
+      finish_reason?: string;
+      message?: {
+        role?: string;
+        content?: string | null;
+        refusal?: string | null;
+        tool_calls?: unknown[];
+      };
+      logprobs?: unknown | null;
+    }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+    };
   };
 };
 
