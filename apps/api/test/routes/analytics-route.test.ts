@@ -16,6 +16,7 @@ class FakeApp {
     return plugin(this, opts);
   }
 
+  addHook() {}
   setErrorHandler() {}
   setNotFoundHandler() {}
 }

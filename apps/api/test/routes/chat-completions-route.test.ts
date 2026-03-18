@@ -42,9 +42,8 @@ function createReply() {
 }
 
 describe("chat completions route", () => {
-  it("tags authenticated browser chat as web analytics traffic", async () => {
+  it("tags bearer-authenticated API-key chat as api traffic from trusted browser origin", async () => {
     const app = new FakeApp();
-    const ensureSessionUser = vi.fn(async () => undefined);
     const chatCompletions = vi.fn(async (...args: unknown[]) => ({
       statusCode: 200,
       headers: {
@@ -56,18 +55,8 @@ describe("chat completions route", () => {
       body: { choices: [{ message: { content: "hello" } }] },
     }));
     registerChatCompletionsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
-      supabaseAuth: {
-        getSessionPrincipal: async () => ({
-          userId: "user-1",
-          email: "demo@example.com",
-          name: "Demo User",
-        }),
-      },
-      authz: { requirePermission: async () => true },
-      userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
       rateLimiter: { allow: async () => true },
-      users: { ensureSessionUser, resolveApiKey: async () => null },
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: {
         chatCompletions,
       },
@@ -79,7 +68,7 @@ describe("chat completions route", () => {
     await handler?.(
       {
         headers: {
-          authorization: "Bearer session-token",
+          authorization: "Bearer sk_test_key",
           origin: "http://127.0.0.1:3000",
         },
         body: {
@@ -94,45 +83,16 @@ describe("chat completions route", () => {
       "user-1",
       "fast-chat",
       [{ role: "user", content: "hello" }],
-      { channel: "web" },
+      { channel: "api", apiKeyId: "key-1" },
     );
-    expect(ensureSessionUser).toHaveBeenCalledWith({
-      userId: "user-1",
-      email: "demo@example.com",
-      name: "Demo User",
-    });
-    expect(ensureSessionUser.mock.invocationCallOrder[0]).toBeLessThan(chatCompletions.mock.invocationCallOrder[0]);
   });
 
-  it("keeps session-authenticated traffic on the api channel when no trusted browser origin is present", async () => {
+  it("returns 401 when no authorization header is present", async () => {
     const app = new FakeApp();
-    const ensureSessionUser = vi.fn(async () => undefined);
-    const chatCompletions = vi.fn(async (...args: unknown[]) => ({
-      statusCode: 200,
-      headers: {
-        "x-model-routed": "fast-chat",
-        "x-provider-used": "ollama",
-        "x-provider-model": "llama3.1:8b",
-        "x-actual-credits": "10",
-      },
-      body: { choices: [{ message: { content: "hello" } }] },
-    }));
     registerChatCompletionsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
-      supabaseAuth: {
-        getSessionPrincipal: async () => ({
-          userId: "user-1",
-          email: "demo@example.com",
-          name: "Demo User",
-        }),
-      },
-      authz: { requirePermission: async () => true },
-      userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
       rateLimiter: { allow: async () => true },
-      users: { ensureSessionUser, resolveApiKey: async () => null },
-      ai: {
-        chatCompletions,
-      },
+      users: { resolveApiKey: async () => null },
+      ai: { chatCompletions: vi.fn() },
     } as never);
 
     const handler = app.handlers.get("/v1/chat/completions");
@@ -140,9 +100,7 @@ describe("chat completions route", () => {
 
     await handler?.(
       {
-        headers: {
-          authorization: "Bearer session-token",
-        },
+        headers: {},
         body: {
           model: "fast-chat",
           messages: [{ role: "user", content: "hello" }],
@@ -151,28 +109,21 @@ describe("chat completions route", () => {
       reply,
     );
 
-    expect(chatCompletions).toHaveBeenCalledWith(
-      "user-1",
-      "fast-chat",
-      [{ role: "user", content: "hello" }],
-      { channel: "api", apiKeyId: undefined },
-    );
-    expect(ensureSessionUser).toHaveBeenCalledWith({
-      userId: "user-1",
-      email: "demo@example.com",
-      name: "Demo User",
+    expect(reply.statusCode).toBe(401);
+    expect(reply.sentPayload).toEqual({
+      error: {
+        message: "No API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
     });
-    expect(ensureSessionUser.mock.invocationCallOrder[0]).toBeLessThan(chatCompletions.mock.invocationCallOrder[0]);
   });
 
   it("tags API-key chat as api traffic and includes the stable api key id", async () => {
     const app = new FakeApp();
     let captured: unknown[] = [];
     registerChatCompletionsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: false } } },
-      supabaseAuth: { getSessionPrincipal: async () => null },
-      authz: { requirePermission: async () => true },
-      userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
       rateLimiter: { allow: async () => true },
       users: {
         resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-123" }),
@@ -200,8 +151,7 @@ describe("chat completions route", () => {
     await handler?.(
       {
         headers: {
-          "x-api-key": "sk_test",
-          origin: "http://127.0.0.1:3000",
+          authorization: "Bearer sk_test",
         },
         body: {
           model: "fast-chat",

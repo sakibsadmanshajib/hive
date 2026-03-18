@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
 import { ChatCompletionsBodySchema } from "../schemas/chat-completions";
-import { inferUsageChannel, requireApiPrincipal } from "./auth";
+import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
 
 export function registerChatCompletionsRoute(
@@ -12,7 +12,7 @@ export function registerChatCompletionsRoute(
   app.post("/v1/chat/completions", {
     schema: { body: ChatCompletionsBodySchema },
   }, async (request, reply) => {
-    const principal = await requireApiPrincipal(request, reply, services, "chat");
+    const principal = await requireV1ApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;
     }

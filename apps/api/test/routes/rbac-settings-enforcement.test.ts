@@ -18,17 +18,10 @@ class FakeApp {
 }
 
 describe("rbac + settings enforcement", () => {
-  it("returns 403 when permission exists but setting disabled", async () => {
+  it("returns 401 when bearer token is invalid for v1 image generation", async () => {
     const app = new FakeApp();
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
-      users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: false, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
+      users: { resolveApiKey: async () => null },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration: vi.fn() },
     } as never);
@@ -37,7 +30,7 @@ describe("rbac + settings enforcement", () => {
     let statusCode = 200;
     let sentPayload: unknown;
     const response = (await handler?.(
-      { headers: { "x-api-key": "sk_1" }, body: { prompt: "a cat" } },
+      { headers: { authorization: "Bearer bad_key" }, body: { prompt: "a cat" } },
       {
         code: (code: number) => {
           statusCode = code;
@@ -48,9 +41,9 @@ describe("rbac + settings enforcement", () => {
       },
     )) as { error: string } | undefined;
 
-    expect(statusCode).toBe(403);
+    expect(statusCode).toBe(401);
     const payload = (response ?? sentPayload) as { error: { message: string } };
-    expect(payload.error.message).toContain("setting disabled");
+    expect(payload.error.message).toBe("Incorrect API key provided");
   });
 
   it("keeps provider status internal endpoint token-protected", async () => {

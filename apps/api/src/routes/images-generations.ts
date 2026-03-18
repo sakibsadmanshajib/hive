@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
 import { ImagesGenerationsBodySchema } from "../schemas/images-generations";
-import { inferUsageChannel, requirePrincipal } from "./auth";
+import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
 
 export function registerImagesGenerationsRoute(
@@ -12,10 +12,7 @@ export function registerImagesGenerationsRoute(
   app.post("/v1/images/generations", {
     schema: { body: ImagesGenerationsBodySchema },
   }, async (request, reply) => {
-    const principal = await requirePrincipal(request, reply, services, {
-      requiredScope: "image",
-      requiredSetting: "generateImage",
-    });
+    const principal = await requireV1ApiPrincipal(request, reply, services, "image");
     if (!principal) {
       return;
     }

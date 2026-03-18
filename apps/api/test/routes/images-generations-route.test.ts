@@ -36,14 +36,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
     } as never);
@@ -66,7 +59,7 @@ describe("images generations route", () => {
     };
     const payload = await handler?.(
       {
-        headers: { "x-api-key": "sk_1" },
+        headers: { authorization: "Bearer sk_1" },
         body: {
           model: "image-basic",
           prompt: "a lighthouse in fog",
@@ -118,14 +111,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"], apiKeyId: "key_123" }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
     } as never);
@@ -141,7 +127,7 @@ describe("images generations route", () => {
 
     await handler?.(
       {
-        headers: { "x-api-key": "sk_1" },
+        headers: { authorization: "Bearer sk_1" },
         body: {
           model: "image-basic",
           prompt: "a lighthouse in fog",
@@ -168,14 +154,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: {
         imageGeneration: vi.fn(async () => ({
@@ -209,7 +188,7 @@ describe("images generations route", () => {
     };
     await handler?.(
       {
-        headers: { "x-api-key": "sk_1" },
+        headers: { authorization: "Bearer sk_1" },
         body: {
           model: "image-basic",
           prompt: "a lighthouse in fog",
@@ -239,14 +218,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
     } as never);
@@ -266,7 +238,7 @@ describe("images generations route", () => {
     };
 
     await handler?.(
-      { headers: { "x-api-key": "sk_1" }, body: { prompt: "   " } },
+      { headers: { authorization: "Bearer sk_1" }, body: { prompt: "   " } },
       reply,
     );
 
