@@ -10,10 +10,10 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Foundation
 
 - [x] **FOUND-01**: All API error responses use OpenAI error format `{ error: { message, type, param, code } }` with correct status-to-type mapping (400=invalid_request_error, 401=authentication_error, 429=rate_limit_error, 500=server_error)
-- [ ] **FOUND-02**: Bearer token auth (`Authorization: Bearer <key>`) is verified compatible with official OpenAI Python, Node, and Go SDKs — no edge cases with x-api-key fallback breaking SDK expectations
+- [x] **FOUND-02**: Bearer token auth (`Authorization: Bearer <key>`) is verified compatible with official OpenAI Python, Node, and Go SDKs — no edge cases with x-api-key fallback breaking SDK expectations
 - [ ] **FOUND-03**: `GET /v1/models` returns OpenAI-compliant list with required `id`, `object: "model"`, `created` (unix timestamp), `owned_by` fields on each model object
 - [ ] **FOUND-04**: `GET /v1/models/{model}` returns a single model object or 404 with proper error format
-- [ ] **FOUND-05**: All `/v1/*` endpoints return correct `Content-Type` headers (`application/json` for non-streaming, `text/event-stream` for streaming)
+- [x] **FOUND-05**: All `/v1/*` endpoints return correct `Content-Type` headers (`application/json` for non-streaming, `text/event-stream` for streaming)
 - [x] **FOUND-06**: TypeBox + Fastify type provider set up for request validation on all `/v1/*` routes
 - [x] **FOUND-07**: OpenAI TypeScript types generated from `docs/reference/openai-openapi.yml` via `openapi-typescript` for compile-time response shape validation
 
@@ -94,10 +94,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Complete |
-| FOUND-02 | Phase 3 | Pending |
+| FOUND-02 | Phase 3 | Complete |
 | FOUND-03 | Phase 4 | Pending |
 | FOUND-04 | Phase 4 | Pending |
-| FOUND-05 | Phase 3 | Pending |
+| FOUND-05 | Phase 3 | Complete |
 | FOUND-06 | Phase 2 | Complete |
 | FOUND-07 | Phase 2 | Complete |
 | CHAT-01 | Phase 5 | Pending |
