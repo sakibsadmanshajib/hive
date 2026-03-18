@@ -12,6 +12,7 @@ export type GatewayModelPricing = {
 export type GatewayModel = {
   id: string;
   object: "model";
+  created: number;
   capability: "chat" | "image";
   costType: ModelCostType;
   pricing: GatewayModelPricing;
