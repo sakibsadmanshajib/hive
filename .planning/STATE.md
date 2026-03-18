@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-18T07:31:30.987Z"
-last_activity: 2026-03-18 — Completed 04-01 (models endpoint compliance)
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-18T07:34:04Z"
+last_activity: 2026-03-18 — Completed 04-02 (models endpoint tests)
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 8
-  completed_plans: 7
-  percent: 88
+  completed_plans: 8
+  percent: 100
 ---
 
 # Project State
@@ -21,21 +21,21 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Developers can use Hive as a drop-in OpenAI-compatible API with transparent multi-provider routing and prepaid credit billing.
-**Current focus:** Phase 4 in progress — models endpoint compliance
+**Current focus:** Phase 4 complete — models endpoint compliance
 
 ## Current Position
 
-Phase: 4 of 9 (Models Endpoint) - IN PROGRESS
-Plan: 1 of 2 in current phase
-Status: 04-01 complete
-Last activity: 2026-03-18 — Completed 04-01 (models endpoint compliance)
+Phase: 4 of 9 (Models Endpoint) - COMPLETE
+Plan: 2 of 2 in current phase
+Status: 04-02 complete (phase done)
+Last activity: 2026-03-18 — Completed 04-02 (models endpoint tests)
 
-Progress: [█████████░] 88%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
-- Total plans completed: 6
+- Total plans completed: 8
 - Average duration: 4min
 - Total execution time: 0.38 hours
 
@@ -53,6 +53,7 @@ Progress: [█████████░] 88%
 
 *Updated after each plan completion*
 | Phase 04 P01 | 2min | 2 tasks | 3 files |
+| Phase 04 P02 | 2min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -80,6 +81,8 @@ Recent decisions affecting current work:
 - [Phase 04]: deriveOwnedBy uses model ID prefix convention to derive owned_by field
 - [Phase 04]: serializeModel centralizes spec-compliant field selection, preventing internal field leakage
 - [Phase 04]: 404 uses type: invalid_request_error and code: model_not_found to match OpenAI behavior
+- 04-02: FakeApp updated to capture schema options for routes with params validation
+- 04-02: SDK integration tests use openai client against real Fastify server on random port
 
 ### Pending Todos
 
@@ -93,6 +96,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-18T07:31:30.985Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-03-18T07:34:04Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
