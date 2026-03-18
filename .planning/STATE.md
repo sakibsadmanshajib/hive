@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: completed
-stopped_at: Phase 4 context gathered
-last_updated: "2026-03-18T04:23:12.446Z"
-last_activity: 2026-03-18 — Completed 03-02 (SDK auth compliance tests)
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-18T07:31:30.987Z"
+last_activity: 2026-03-18 — Completed 04-01 (models endpoint compliance)
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 6
-  completed_plans: 6
-  percent: 100
+  total_plans: 8
+  completed_plans: 7
+  percent: 88
 ---
 
 # Project State
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-16)
 
 **Core value:** Developers can use Hive as a drop-in OpenAI-compatible API with transparent multi-provider routing and prepaid credit billing.
-**Current focus:** Phase 3 complete — auth compliance done
+**Current focus:** Phase 4 in progress — models endpoint compliance
 
 ## Current Position
 
-Phase: 3 of 9 (Auth Compliance) - COMPLETE
-Plan: 2 of 2 in current phase
-Status: 03-01 complete, 03-02 complete
-Last activity: 2026-03-18 — Completed 03-02 (SDK auth compliance tests)
+Phase: 4 of 9 (Models Endpoint) - IN PROGRESS
+Plan: 1 of 2 in current phase
+Status: 04-01 complete
+Last activity: 2026-03-18 — Completed 04-01 (models endpoint compliance)
 
-Progress: [██████████] 100%
+Progress: [█████████░] 88%
 
 ## Performance Metrics
 
@@ -52,6 +52,7 @@ Progress: [██████████] 100%
 - Trend: -
 
 *Updated after each plan completion*
+| Phase 04 P01 | 2min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -76,6 +77,9 @@ Recent decisions affecting current work:
 - 03-01: onSend hook skips Content-Type override when text/event-stream detected (preserves streaming)
 - 03-02: Mock services include models.list() and rateLimiter.allow() stubs so all registered routes boot without real services
 - 03-02: Used openai SDK as HTTP client for auth tests; raw fetch only for edge cases SDK cannot reproduce
+- [Phase 04]: deriveOwnedBy uses model ID prefix convention to derive owned_by field
+- [Phase 04]: serializeModel centralizes spec-compliant field selection, preventing internal field leakage
+- [Phase 04]: 404 uses type: invalid_request_error and code: model_not_found to match OpenAI behavior
 
 ### Pending Todos
 
@@ -89,6 +93,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-18T04:23:12.445Z
-Stopped at: Phase 4 context gathered
-Resume file: .planning/phases/04-models-endpoint/04-CONTEXT.md
+Last session: 2026-03-18T07:31:30.985Z
+Stopped at: Completed 04-01-PLAN.md
+Resume file: None
