@@ -22,8 +22,8 @@ Requirements for this milestone. Each maps to roadmap phases.
 - [x] **CHAT-01**: `POST /v1/chat/completions` response includes all required fields: `id`, `object: "chat.completion"`, `choices` (with `finish_reason`, `index`, `message`, `logprobs`), `created`, `model`
 - [x] **CHAT-02**: All `CreateChatCompletionRequest` parameters are forwarded to upstream provider: `temperature`, `top_p`, `n`, `stop`, `max_completion_tokens`, `presence_penalty`, `frequency_penalty`, `logprobs`, `top_logprobs`, `response_format`, `seed`, `tools`, `tool_choice`, `parallel_tool_calls`, `user`, `reasoning_effort`
 - [x] **CHAT-03**: Non-streaming responses include `usage` object with `prompt_tokens`, `completion_tokens`, `total_tokens` (sourced from upstream provider response)
-- [ ] **CHAT-04**: `stream=true` returns SSE format (`text/event-stream`, `data: {json}\n\n` lines, `data: [DONE]\n\n` terminator) with `CreateChatCompletionStreamResponse` chunks using `choices[].delta` instead of `choices[].message`
-- [ ] **CHAT-05**: `stream_options: { include_usage: true }` emits a final chunk with `usage` object and empty `choices: []` before `[DONE]`; intermediate chunks have `usage: null`
+- [x] **CHAT-04**: `stream=true` returns SSE format (`text/event-stream`, `data: {json}\n\n` lines, `data: [DONE]\n\n` terminator) with `CreateChatCompletionStreamResponse` chunks using `choices[].delta` instead of `choices[].message`
+- [x] **CHAT-05**: `stream_options: { include_usage: true }` emits a final chunk with `usage` object and empty `choices: []` before `[DONE]`; intermediate chunks have `usage: null`
 
 ### Surface Expansion
 
@@ -103,8 +103,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHAT-01 | Phase 5 | Complete |
 | CHAT-02 | Phase 5 | Complete |
 | CHAT-03 | Phase 5 | Complete |
-| CHAT-04 | Phase 6 | Pending |
-| CHAT-05 | Phase 6 | Pending |
+| CHAT-04 | Phase 6 | Complete |
+| CHAT-05 | Phase 6 | Complete |
 | SURF-01 | Phase 7 | Pending |
 | SURF-02 | Phase 7 | Pending |
 | SURF-03 | Phase 7 | Pending |

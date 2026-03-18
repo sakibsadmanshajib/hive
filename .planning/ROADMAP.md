@@ -166,7 +166,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Auth Compliance | 2/2 | Complete   | 2026-03-18 |
 | 4. Models Endpoint | 2/2 | Complete   | 2026-03-18 |
 | 5. Chat Completions (Non-Streaming) | 2/2 | Complete    | 2026-03-18 |
-| 6. Chat Completions (Streaming) | 0/2 | Not started | - |
+| 6. Chat Completions (Streaming) | 1/2 | In Progress|  |
 | 7. Surface Expansion | 0/3 | Not started | - |
 | 8. Differentiators | 0/3 | Not started | - |
 | 9. Operational Hardening | 0/2 | Not started | - |
