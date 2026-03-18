@@ -22,7 +22,8 @@ export type MockServices = {
     canUse: () => boolean;
   };
   models: {
-    list: () => Array<{ id: string; object: string; capability: string; costType: string }>;
+    list: () => Array<{ id: string; object: string; created: number; capability: string; costType: string }>;
+    findById: (modelId: string) => { id: string; object: string; created: number; capability: string; costType: string } | undefined;
   };
   rateLimiter: {
     allow: () => Promise<boolean>;
@@ -55,8 +56,14 @@ export function createMockServices(validApiKey: string, userId: string): MockSer
     },
     models: {
       list: () => [
-        { id: "mock-chat", object: "model", capability: "chat", costType: "paid" },
+        { id: "mock-chat", object: "model", created: 1700000000, capability: "chat", costType: "paid" },
       ],
+      findById: (modelId: string) => {
+        const models = [
+          { id: "mock-chat", object: "model", created: 1700000000, capability: "chat", costType: "paid" },
+        ];
+        return models.find((m) => m.id === modelId);
+      },
     },
     rateLimiter: {
       allow: async () => true,
