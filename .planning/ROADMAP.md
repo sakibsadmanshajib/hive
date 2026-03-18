@@ -77,8 +77,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 04-01: TBD
-- [ ] 04-02: TBD
+- [ ] 04-01-PLAN.md — Expand model catalog, add created/owned_by fields, fix list serialization, add retrieve route
+- [ ] 04-02-PLAN.md — Unit tests and SDK integration tests for models compliance
 
 ### Phase 5: Chat Completions (Non-Streaming)
 **Goal**: Non-streaming `/v1/chat/completions` responses are schema-complete and all request parameters are forwarded to providers
