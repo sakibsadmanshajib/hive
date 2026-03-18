@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
@@ -18,10 +19,37 @@ export function registerChatCompletionsRoute(
     }
 
     if (request.body?.stream === true) {
-      return sendApiError(reply, 400,
-        "Streaming is not yet supported. Set stream: false or omit the stream parameter.",
-        { code: "unsupported_parameter" },
+      const streamResult = await services.ai.chatCompletionsStream(
+        principal.userId,
+        request.body,
+        {
+          channel: inferUsageChannel(request, principal),
+          apiKeyId: principal.apiKeyId,
+        },
       );
+      if ("error" in streamResult) {
+        return sendApiError(reply, streamResult.statusCode, streamResult.error ?? "Unknown error");
+      }
+
+      reply
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .header("connection", "keep-alive")
+        .header("x-model-routed", streamResult.headers["x-model-routed"])
+        .header("x-provider-used", streamResult.headers["x-provider-used"])
+        .header("x-provider-model", streamResult.headers["x-provider-model"])
+        .header("x-actual-credits", streamResult.headers["x-actual-credits"]);
+
+      const nodeStream = Readable.fromWeb(streamResult.response.body as any);
+
+      // Abort upstream connection if client disconnects
+      request.raw.on("close", () => {
+        if (!nodeStream.destroyed) {
+          nodeStream.destroy();
+        }
+      });
+
+      return reply.send(nodeStream);
     }
 
     const allowed = await services.rateLimiter.allow(principal.userId);

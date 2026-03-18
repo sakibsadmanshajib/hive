@@ -167,12 +167,28 @@ describe("chat completions route", () => {
     ]);
   });
 
-  it("returns 400 when stream is true", async () => {
+  it("pipes SSE stream when stream is true", async () => {
     const app = new FakeApp();
+    const fakeBody = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("data: {}\n\n"));
+        controller.close();
+      },
+    });
+    const chatCompletionsStream = vi.fn(async () => ({
+      statusCode: 200 as const,
+      response: { body: fakeBody } as unknown as Response,
+      headers: {
+        "x-model-routed": "fast-chat",
+        "x-provider-used": "openrouter",
+        "x-provider-model": "openai/gpt-4o",
+        "x-actual-credits": "10",
+      },
+    }));
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
       users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
-      ai: { chatCompletions: vi.fn() },
+      ai: { chatCompletions: vi.fn(), chatCompletionsStream },
     } as never);
 
     const handler = app.handlers.get("/v1/chat/completions");
@@ -181,6 +197,45 @@ describe("chat completions route", () => {
     await handler?.(
       {
         headers: { authorization: "Bearer sk_test" },
+        raw: { on: vi.fn() },
+        body: {
+          model: "fast-chat",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+        },
+      },
+      reply,
+    );
+
+    expect(reply.headers.get("content-type")).toBe("text/event-stream");
+    expect(reply.headers.get("cache-control")).toBe("no-cache");
+    expect(reply.headers.get("x-model-routed")).toBe("fast-chat");
+    expect(chatCompletionsStream).toHaveBeenCalledWith(
+      "user-1",
+      { model: "fast-chat", messages: [{ role: "user", content: "hello" }], stream: true },
+      { channel: "api", apiKeyId: "key-1" },
+    );
+  });
+
+  it("returns sendApiError when chatCompletionsStream returns error", async () => {
+    const app = new FakeApp();
+    const chatCompletionsStream = vi.fn(async () => ({
+      error: "unknown model",
+      statusCode: 400 as const,
+    }));
+    registerChatCompletionsRoute(app as never, {
+      rateLimiter: { allow: async () => true },
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
+      ai: { chatCompletions: vi.fn(), chatCompletionsStream },
+    } as never);
+
+    const handler = app.handlers.get("/v1/chat/completions");
+    const reply = createReply();
+
+    await handler?.(
+      {
+        headers: { authorization: "Bearer sk_test" },
+        raw: { on: vi.fn() },
         body: {
           model: "fast-chat",
           messages: [{ role: "user", content: "hello" }],
@@ -193,10 +248,10 @@ describe("chat completions route", () => {
     expect(reply.statusCode).toBe(400);
     expect(reply.sentPayload).toEqual({
       error: {
-        message: expect.stringContaining("Streaming"),
+        message: "unknown model",
         type: "invalid_request_error",
         param: null,
-        code: "unsupported_parameter",
+        code: null,
       },
     });
   });

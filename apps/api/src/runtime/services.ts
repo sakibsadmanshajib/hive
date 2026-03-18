@@ -21,6 +21,7 @@ import { OpenRouterProviderClient } from "../providers/openrouter-client";
 import { buildProviderOfferCatalog } from "../providers/provider-offers";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
+import type { ProviderStreamExecutionResult } from "../providers/registry";
 import type { ProviderName, ProviderReadinessStatus } from "../providers/types";
 import type { PersistentApiKey, PersistentApiKeyEvent, PersistentPaymentIntent } from "../domain/types";
 import { bdtToCredits } from "../domain/credits-conversion";
@@ -720,6 +721,82 @@ class RuntimeAiService {
         "x-model-routed": model.id,
         "x-provider-used": providerResult.providerUsed,
         "x-provider-model": providerResult.providerModel,
+        "x-actual-credits": String(creditsCost),
+      },
+    };
+  }
+
+  async chatCompletionsStream(
+    userId: string,
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
+    usageContext: { channel: UsageChannel; apiKeyId?: string },
+  ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const modelId = body.model;
+    const messages: ChatMessage[] = (body.messages ?? []) as ChatMessage[];
+    const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: "unknown model", statusCode: 400 as const };
+    }
+    const creditsCost = this.models.creditsForRequest(model);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = creditsCost > 0 ? await this.credits.consume(userId, creditsCost, chargeReferenceId) : true;
+    if (!consumed) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+
+    const { model: _model, messages: _messages, stream: _stream, ...params } = body;
+
+    let streamResult: ProviderStreamExecutionResult;
+    try {
+      streamResult = await this.providerRegistry.chatStream(
+        model.id,
+        messages.map((message) => ({
+          role: this.normalizeRole(message.role),
+          content: message.content,
+        })),
+        Object.keys(params).length > 0 ? params : undefined,
+      );
+    } catch (error) {
+      if (creditsCost > 0) {
+        await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      }
+      const statusCode = (error as any)?.statusCode;
+      return {
+        error: error instanceof Error ? error.message : "provider unavailable",
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
+      };
+    }
+
+    // Record usage with pre-charged amount (fire-and-forget)
+    // Exact token counts from the final chunk are a future enhancement
+    void this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/chat/completions",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
+    });
+
+    const text = messages.map((msg) => msg.content).join(" ").trim();
+    void this.langfuse.trace({
+      userId,
+      model: model.id,
+      provider: streamResult.providerUsed,
+      endpoint: "/v1/chat/completions",
+      credits: creditsCost,
+      promptPreview: text.slice(0, 160),
+    });
+
+    return {
+      statusCode: 200 as const,
+      response: streamResult.response,
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": streamResult.providerUsed,
+        "x-provider-model": streamResult.providerModel,
         "x-actual-credits": String(creditsCost),
       },
     };
