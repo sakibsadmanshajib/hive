@@ -16,7 +16,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 2: Type Infrastructure** - TypeBox schemas and generated OpenAI types provide compile-time and runtime validation (completed 2026-03-18)
 - [x] **Phase 3: Auth Compliance** - Bearer token auth works identically to OpenAI across all official SDKs (completed 2026-03-18)
 - [x] **Phase 4: Models Endpoint** - `/v1/models` and `/v1/models/{model}` return fully compliant model objects (completed 2026-03-18)
-- [ ] **Phase 5: Chat Completions (Non-Streaming)** - Non-streaming chat completions match OpenAI response schema exactly
+- [x] **Phase 5: Chat Completions (Non-Streaming)** - Non-streaming chat completions match OpenAI response schema exactly (completed 2026-03-18)
 - [ ] **Phase 6: Chat Completions (Streaming)** - SSE streaming with proper chunk format, usage telemetry, and termination
 - [ ] **Phase 7: Surface Expansion** - Embeddings, images, and responses endpoints are schema-compliant
 - [ ] **Phase 8: Differentiators** - Hive-specific headers, credit cost, model aliasing, and request IDs on all endpoints
@@ -165,7 +165,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Type Infrastructure | 2/2 | Complete   | 2026-03-18 |
 | 3. Auth Compliance | 2/2 | Complete   | 2026-03-18 |
 | 4. Models Endpoint | 2/2 | Complete   | 2026-03-18 |
-| 5. Chat Completions (Non-Streaming) | 1/2 | In Progress|  |
+| 5. Chat Completions (Non-Streaming) | 2/2 | Complete   | 2026-03-18 |
 | 6. Chat Completions (Streaming) | 0/2 | Not started | - |
 | 7. Surface Expansion | 0/3 | Not started | - |
 | 8. Differentiators | 0/3 | Not started | - |
