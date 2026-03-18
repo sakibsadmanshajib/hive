@@ -66,8 +66,7 @@ describe("guest chat route", () => {
     const guestChatCompletions = async (...args: unknown[]) => {
       expect(args).toEqual([
         "guest_123",
-        "guest-free",
-        [{ role: "user", content: "hello" }],
+        { model: "guest-free", messages: [{ role: "user", content: "hello" }] },
         "203.0.113.10",
       ]);
       return {

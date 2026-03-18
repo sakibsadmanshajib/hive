@@ -96,8 +96,7 @@ describe("PersistentChatHistoryService", () => {
 
     expect(ai.chatCompletions).toHaveBeenCalledWith(
       "4be9070e-4fe8-4da1-bda7-d105ec913af4",
-      "fast-chat",
-      [{ role: "user", content: "hello from history" }],
+      { model: "fast-chat", messages: [{ role: "user", content: "hello from history" }] },
       { channel: "web" },
     );
     expect(appendMessage).toHaveBeenNthCalledWith(1, {

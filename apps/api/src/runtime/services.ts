@@ -606,11 +606,12 @@ class RuntimeAiService {
 
   async chatCompletions(
     userId: string,
-    modelId: string | undefined,
-    messages: ChatMessage[],
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     usageContext: { channel: UsageChannel; apiKeyId?: string },
   ) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const modelId = body.model;
+    const messages: ChatMessage[] = (body.messages ?? []) as ChatMessage[];
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -622,6 +623,7 @@ class RuntimeAiService {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
+    const { model: _model, messages: _messages, stream: _stream, ...params } = body;
     const text = messages.map((msg) => msg.content).join(" ").trim();
     let providerResult;
     try {
@@ -631,14 +633,16 @@ class RuntimeAiService {
           role: this.normalizeRole(message.role),
           content: message.content,
         })),
+        Object.keys(params).length > 0 ? params : undefined,
       );
     } catch (error) {
       if (creditsCost > 0) {
         await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       }
+      const statusCode = (error as any)?.statusCode;
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
-        statusCode: 502 as const,
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
       };
     }
 
@@ -661,23 +665,56 @@ class RuntimeAiService {
       promptPreview: text.slice(0, 160),
     });
 
+    const raw = providerResult.rawResponse;
+
+    if (!raw) {
+      return {
+        statusCode: 200 as const,
+        body: {
+          id: `chatcmpl-${randomUUID().slice(0, 12)}`,
+          object: "chat.completion" as const,
+          created: Math.floor(Date.now() / 1000),
+          model: model.id,
+          choices: [{
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant" as const, content: providerResult.content, refusal: null },
+            logprobs: null,
+          }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        headers: {
+          "x-model-routed": model.id,
+          "x-provider-used": providerResult.providerUsed,
+          "x-provider-model": providerResult.providerModel,
+          "x-actual-credits": String(creditsCost),
+        },
+      };
+    }
+
     return {
       statusCode: 200 as const,
       body: {
-        id: `chatcmpl_${randomUUID().slice(0, 12)}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: model.id,
-        choices: [
-          {
-            index: 0,
-            finish_reason: "stop",
-            message: {
-              role: "assistant",
-              content: providerResult.content || `MVP response: ${text || "Your request was processed."}`,
-            },
+        id: raw.id ?? `chatcmpl-${randomUUID().slice(0, 12)}`,
+        object: "chat.completion" as const,
+        created: raw.created ?? Math.floor(Date.now() / 1000),
+        model: raw.model ?? model.id,
+        choices: (raw.choices ?? []).map((choice: any, i: number) => ({
+          index: choice.index ?? i,
+          finish_reason: choice.finish_reason ?? "stop",
+          message: {
+            role: "assistant" as const,
+            content: choice.message?.content ?? null,
+            refusal: choice.message?.refusal ?? null,
+            ...(choice.message?.tool_calls ? { tool_calls: choice.message.tool_calls } : {}),
           },
-        ],
+          logprobs: choice.logprobs ?? null,
+        })),
+        usage: {
+          prompt_tokens: raw.usage?.prompt_tokens ?? 0,
+          completion_tokens: raw.usage?.completion_tokens ?? 0,
+          total_tokens: raw.usage?.total_tokens ?? 0,
+        },
       },
       headers: {
         "x-model-routed": model.id,
@@ -802,10 +839,11 @@ class RuntimeAiService {
 
   async guestChatCompletions(
     guestId: string,
-    modelId: string | undefined,
-    messages: ChatMessage[],
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     guestIp?: string,
   ) {
+    const modelId = body.model;
+    const messages: ChatMessage[] = (body.messages ?? []) as ChatMessage[];
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickGuestDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -814,7 +852,7 @@ class RuntimeAiService {
       return { error: "forbidden", statusCode: 403 as const };
     }
 
-    const text = messages.map((msg) => msg.content).join(" ").trim();
+    const { model: _model, messages: _messages, stream: _stream, ...params } = body;
 
     let providerResult;
     try {
@@ -824,11 +862,13 @@ class RuntimeAiService {
           role: this.normalizeRole(message.role),
           content: message.content,
         })),
+        Object.keys(params).length > 0 ? params : undefined,
       );
     } catch (error) {
+      const statusCode = (error as any)?.statusCode;
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
-        statusCode: 502 as const,
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
       };
     }
 
@@ -840,23 +880,56 @@ class RuntimeAiService {
       ipAddress: guestIp,
     });
 
+    const raw = providerResult.rawResponse;
+
+    if (!raw) {
+      return {
+        statusCode: 200 as const,
+        body: {
+          id: `chatcmpl-${randomUUID().slice(0, 12)}`,
+          object: "chat.completion" as const,
+          created: Math.floor(Date.now() / 1000),
+          model: model.id,
+          choices: [{
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant" as const, content: providerResult.content, refusal: null },
+            logprobs: null,
+          }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        headers: {
+          "x-model-routed": model.id,
+          "x-provider-used": providerResult.providerUsed,
+          "x-provider-model": providerResult.providerModel,
+          "x-actual-credits": "0",
+        },
+      };
+    }
+
     return {
       statusCode: 200 as const,
       body: {
-        id: `chatcmpl_${randomUUID().slice(0, 12)}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: model.id,
-        choices: [
-          {
-            index: 0,
-            finish_reason: "stop",
-            message: {
-              role: "assistant",
-              content: providerResult.content || `MVP response: ${text || "Your request was processed."}`,
-            },
+        id: raw.id ?? `chatcmpl-${randomUUID().slice(0, 12)}`,
+        object: "chat.completion" as const,
+        created: raw.created ?? Math.floor(Date.now() / 1000),
+        model: raw.model ?? model.id,
+        choices: (raw.choices ?? []).map((choice: any, i: number) => ({
+          index: choice.index ?? i,
+          finish_reason: choice.finish_reason ?? "stop",
+          message: {
+            role: "assistant" as const,
+            content: choice.message?.content ?? null,
+            refusal: choice.message?.refusal ?? null,
+            ...(choice.message?.tool_calls ? { tool_calls: choice.message.tool_calls } : {}),
           },
-        ],
+          logprobs: choice.logprobs ?? null,
+        })),
+        usage: {
+          prompt_tokens: raw.usage?.prompt_tokens ?? 0,
+          completion_tokens: raw.usage?.completion_tokens ?? 0,
+          total_tokens: raw.usage?.total_tokens ?? 0,
+        },
       },
       headers: {
         "x-model-routed": model.id,

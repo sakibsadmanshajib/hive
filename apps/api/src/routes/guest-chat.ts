@@ -32,8 +32,7 @@ export function registerGuestChatRoute(app: FastifyInstance, services: RuntimeSe
 
     const result = await services.ai.guestChatCompletions(
       guestId,
-      request.body?.model,
-      request.body?.messages ?? [],
+      request.body,
       guestIp,
     );
     if ("error" in result) {

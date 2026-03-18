@@ -17,6 +17,13 @@ export function registerChatCompletionsRoute(
       return;
     }
 
+    if (request.body?.stream === true) {
+      return sendApiError(reply, 400,
+        "Streaming is not yet supported. Set stream: false or omit the stream parameter.",
+        { code: "unsupported_parameter" },
+      );
+    }
+
     const allowed = await services.rateLimiter.allow(principal.userId);
     if (!allowed) {
       return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
@@ -24,8 +31,7 @@ export function registerChatCompletionsRoute(
 
     const result = await services.ai.chatCompletions(
       principal.userId,
-      request.body?.model,
-      request.body?.messages ?? [],
+      request.body,
       {
         channel: inferUsageChannel(request, principal),
         apiKeyId: principal.apiKeyId,

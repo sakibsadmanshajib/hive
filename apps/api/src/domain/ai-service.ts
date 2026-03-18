@@ -31,11 +31,12 @@ export class AiService {
 
   chatCompletions(
     userId: string,
-    modelId: string | undefined,
-    messages: ChatMessage[],
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     usageContext: UsageContext,
   ) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const modelId = body.model;
+    const messages = (body.messages ?? []) as ChatMessage[];
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -69,9 +70,16 @@ export class AiService {
             message: {
               role: "assistant",
               content: `MVP response: ${text || "Your request was processed."}`,
+              refusal: null,
             },
+            logprobs: null,
           },
         ],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        },
       },
       headers: {
         "x-model-routed": model.id,

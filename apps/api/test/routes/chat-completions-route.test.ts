@@ -81,8 +81,7 @@ describe("chat completions route", () => {
 
     expect(chatCompletions).toHaveBeenCalledWith(
       "user-1",
-      "fast-chat",
-      [{ role: "user", content: "hello" }],
+      { model: "fast-chat", messages: [{ role: "user", content: "hello" }] },
       { channel: "api", apiKeyId: "key-1" },
     );
   });
@@ -163,8 +162,7 @@ describe("chat completions route", () => {
 
     expect(captured).toEqual([
       "user-1",
-      "fast-chat",
-      [{ role: "user", content: "hello" }],
+      { model: "fast-chat", messages: [{ role: "user", content: "hello" }] },
       { channel: "api", apiKeyId: "key-123" },
     ]);
   });
