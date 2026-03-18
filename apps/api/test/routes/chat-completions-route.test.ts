@@ -166,4 +166,93 @@ describe("chat completions route", () => {
       { channel: "api", apiKeyId: "key-123" },
     ]);
   });
+
+  it("returns 400 when stream is true", async () => {
+    const app = new FakeApp();
+    registerChatCompletionsRoute(app as never, {
+      rateLimiter: { allow: async () => true },
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
+      ai: { chatCompletions: vi.fn() },
+    } as never);
+
+    const handler = app.handlers.get("/v1/chat/completions");
+    const reply = createReply();
+
+    await handler?.(
+      {
+        headers: { authorization: "Bearer sk_test" },
+        body: {
+          model: "fast-chat",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+        },
+      },
+      reply,
+    );
+
+    expect(reply.statusCode).toBe(400);
+    expect(reply.sentPayload).toEqual({
+      error: {
+        message: expect.stringContaining("Streaming"),
+        type: "invalid_request_error",
+        param: null,
+        code: "unsupported_parameter",
+      },
+    });
+  });
+
+  it("passes full request body to service including extra params", async () => {
+    const app = new FakeApp();
+    const chatCompletions = vi.fn(async () => ({
+      statusCode: 200,
+      headers: {
+        "x-model-routed": "fast-chat",
+        "x-provider-used": "openrouter",
+        "x-provider-model": "openai/gpt-4o",
+        "x-actual-credits": "10",
+      },
+      body: {
+        id: "chatcmpl-test",
+        object: "chat.completion",
+        created: 1234567890,
+        model: "fast-chat",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "hi" }, logprobs: null }],
+        usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+      },
+    }));
+    registerChatCompletionsRoute(app as never, {
+      rateLimiter: { allow: async () => true },
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
+      ai: { chatCompletions },
+    } as never);
+
+    const handler = app.handlers.get("/v1/chat/completions");
+    const reply = createReply();
+
+    await handler?.(
+      {
+        headers: { authorization: "Bearer sk_test" },
+        body: {
+          model: "fast-chat",
+          messages: [{ role: "user", content: "hello" }],
+          temperature: 0.7,
+          top_p: 0.9,
+          max_completion_tokens: 100,
+        },
+      },
+      reply,
+    );
+
+    expect(chatCompletions).toHaveBeenCalledWith(
+      "user-1",
+      {
+        model: "fast-chat",
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 0.7,
+        top_p: 0.9,
+        max_completion_tokens: 100,
+      },
+      expect.objectContaining({ channel: "api" }),
+    );
+  });
 });
