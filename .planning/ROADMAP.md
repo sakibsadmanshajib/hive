@@ -49,8 +49,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 02-01: TBD
-- [ ] 02-02: TBD
+- [ ] 02-01: Install TypeBox + type provider, generate OpenAI types, configure Fastify AJV, create schemas
+- [ ] 02-02: Wire schemas into route handlers + validation integration tests
 
 ### Phase 3: Auth Compliance
 **Goal**: Bearer token authentication and content-type headers work identically to OpenAI across Python, Node, and Go SDKs
