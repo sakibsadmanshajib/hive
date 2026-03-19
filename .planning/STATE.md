@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 08-differentiators
-current_plan: 02 complete
+current_phase: 09-operational-hardening
+current_plan: 01 complete
 status: executing
-last_updated: "2026-03-19T02:40:36.358Z"
+last_updated: "2026-03-19T06:29:24.305Z"
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 17
-  completed_plans: 17
+  total_plans: 19
+  completed_plans: 18
 ---
 
 # Session State
@@ -22,8 +22,8 @@ See: .planning/PROJECT.md
 ## Position
 
 **Milestone:** v1.0 milestone
-**Current phase:** 08-differentiators
-**Current plan:** 02 complete
+**Current phase:** 09-operational-hardening
+**Current plan:** 01 complete
 **Status:** Executing
 
 ## Decisions
@@ -47,6 +47,7 @@ See: .planning/PROJECT.md
 - [08-01] Model aliases use static map with passthrough for unknown names (no breaking change)
 - [08-02] Used topUp() to provision test credits rather than direct balance manipulation
 - [08-02] Reused real-service test pattern from Phase 5/6/7 compliance tests
+- [09-01] Routes use /v1/ prefix matching existing codebase pattern (not without prefix as plan suggested)
 
 ## Session Log
 
@@ -60,3 +61,4 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 07-03-PLAN.md (surface expansion compliance tests)
 - 2026-03-19: Completed 08-01-PLAN.md (differentiator headers and model aliases)
 - 2026-03-19: Completed 08-02-PLAN.md (differentiator compliance tests)
+- 2026-03-19: Completed 09-01-PLAN.md (stub endpoint error format for unsupported endpoints)
