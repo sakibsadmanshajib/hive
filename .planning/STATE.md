@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 07-surface-expansion
-current_plan: 01 complete
+current_plan: 02 complete
 status: executing
-last_updated: "2026-03-19T01:53:00.000Z"
+last_updated: "2026-03-19T01:58:25.000Z"
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 15
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Session State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md
 
 **Milestone:** v1.0 milestone
 **Current phase:** 07-surface-expansion
-**Current plan:** 01 complete
+**Current plan:** 02 complete
 **Status:** Executing
 
 ## Decisions
@@ -38,6 +38,8 @@ See: .planning/PROJECT.md
 - [06-02] Static fixture tests validate SSE contract without Fastify app or service mocks
 - [07-01] Embeddings method added to RuntimeAiService following established real-provider pattern
 - [07-01] ProviderEmbeddingsExecutionResult includes providerUsed/providerModel for header propagation consistency
+- [07-02] Responses endpoint translates input+instructions to chat messages via registry.chat()
+- [07-02] Response usage maps prompt_tokens->input_tokens, completion_tokens->output_tokens per Responses API spec
 
 ## Session Log
 
@@ -47,3 +49,4 @@ See: .planning/PROJECT.md
 - 2026-03-18: Completed 06-01-PLAN.md (SSE streaming pipeline)
 - 2026-03-18: Completed 06-02-PLAN.md (SSE streaming compliance tests)
 - 2026-03-19: Completed 07-01-PLAN.md (POST /v1/embeddings endpoint pipeline)
+- 2026-03-19: Completed 07-02-PLAN.md (images & responses compliance)
