@@ -10,7 +10,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Foundation
 
 - [x] **FOUND-01**: All API error responses use OpenAI error format `{ error: { message, type, param, code } }` with correct status-to-type mapping (400=invalid_request_error, 401=authentication_error, 429=rate_limit_error, 500=server_error)
-- [x] **FOUND-02**: Bearer token auth (`Authorization: Bearer <key>`) is verified compatible with official OpenAI Python, Node, and Go SDKs — no edge cases with x-api-key fallback breaking SDK expectations
+- [ ] **FOUND-02**: Bearer token auth (`Authorization: Bearer <key>`) is verified compatible with official OpenAI Python, Node, and Go SDKs — no edge cases with x-api-key fallback breaking SDK expectations
 - [x] **FOUND-03**: `GET /v1/models` returns OpenAI-compliant list with required `id`, `object: "model"`, `created` (unix timestamp), `owned_by` fields on each model object
 - [x] **FOUND-04**: `GET /v1/models/{model}` returns a single model object or 404 with proper error format
 - [x] **FOUND-05**: All `/v1/*` endpoints return correct `Content-Type` headers (`application/json` for non-streaming, `text/event-stream` for streaming)
@@ -33,7 +33,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Differentiators
 
-- [x] **DIFF-01**: All `/v1/*` endpoints include `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits` response headers
+- [ ] **DIFF-01**: All `/v1/*` endpoints include `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits` response headers
 - [x] **DIFF-02**: Usage object or response headers include actual credit cost for the request
 - [x] **DIFF-03**: Model aliasing — accept standard OpenAI model names (e.g., `gpt-4o`, `gpt-4o-mini`) and route to the best available provider
 - [x] **DIFF-04**: All `/v1/*` responses include `x-request-id` header for debugging and support
@@ -94,7 +94,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | Requirement | Phase | Status |
 |-------------|-------|--------|
 | FOUND-01 | Phase 1 | Complete |
-| FOUND-02 | Phase 3 | Complete |
+| FOUND-02 | Phase 10 | Pending |
 | FOUND-03 | Phase 4 | Complete |
 | FOUND-04 | Phase 4 | Complete |
 | FOUND-05 | Phase 3 | Complete |
@@ -108,7 +108,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SURF-01 | Phase 7 | Complete |
 | SURF-02 | Phase 7 | Complete |
 | SURF-03 | Phase 7 | Complete |
-| DIFF-01 | Phase 8 | Complete |
+| DIFF-01 | Phase 10 | Pending |
 | DIFF-02 | Phase 8 | Complete |
 | DIFF-03 | Phase 8 | Complete |
 | DIFF-04 | Phase 8 | Complete |
@@ -119,6 +119,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 - v1 requirements: 21 total
 - Mapped to phases: 21
 - Unmapped: 0
+- Pending (gap closure): 2 (FOUND-02, DIFF-01 → Phase 10)
 
 ---
 *Requirements defined: 2026-03-17*

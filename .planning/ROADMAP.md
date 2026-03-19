@@ -21,6 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Surface Expansion** - Embeddings, images, and responses endpoints are schema-compliant (completed 2026-03-19)
 - [x] **Phase 8: Differentiators** - Hive-specific headers, credit cost, model aliasing, and request IDs on all endpoints (completed 2026-03-19)
 - [x] **Phase 9: Operational Hardening** - Stub endpoints for unsupported APIs and GitHub issue tracking for deferred work (completed 2026-03-19)
+- [ ] **Phase 10: Models Route Compliance** - Auth guard and differentiator headers on GET /v1/models routes to close gaps found by milestone audit
 
 ## Phase Details
 
@@ -153,6 +154,18 @@ Plans:
 - [ ] 09-01-PLAN.md — Stub routes for unsupported endpoints + compliance tests
 - [ ] 09-02-PLAN.md — GitHub issues for deferred endpoint groups
 
+### Phase 10: Models Route Compliance
+**Goal**: Close auth and header gaps on GET /v1/models routes discovered by milestone audit — SDK clients with invalid keys must get 401, and all differentiator headers must be present
+**Depends on**: Phase 3, Phase 4, Phase 8
+**Requirements**: FOUND-02, DIFF-01
+**Gap Closure**: Closes gaps from v1.0 milestone audit
+**Success Criteria** (what must be TRUE):
+  1. `GET /v1/models` and `GET /v1/models/{model}` return 401 with `authentication_error` when called with an invalid or missing API key
+  2. The official `openai` SDK's `client.models.list()` with an invalid key raises `AuthenticationError` (not returns a list)
+  3. All responses from `GET /v1/models` and `GET /v1/models/{model}` include `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits` headers (with static catalog-appropriate values)
+  4. Existing models endpoint tests continue to pass with a valid API key
+**Plans**: 1 plan
+
 ## Progress
 
 **Execution Order:**
@@ -169,3 +182,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Surface Expansion | 3/3 | Complete    | 2026-03-19 |
 | 8. Differentiators | 2/2 | Complete   | 2026-03-19 |
 | 9. Operational Hardening | 2/2 | Complete    | 2026-03-19 |
+| 10. Models Route Compliance | 0/1 | Pending | — |
