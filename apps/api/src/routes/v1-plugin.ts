@@ -8,6 +8,7 @@ import { registerModelsRoute } from "./models";
 import { registerEmbeddingsRoute } from "./embeddings";
 import { registerImagesGenerationsRoute } from "./images-generations";
 import { registerResponsesRoute } from "./responses";
+import { registerV1StubRoutes } from "./v1-stubs";
 
 export async function v1Plugin(
   app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
@@ -57,6 +58,7 @@ export async function v1Plugin(
   registerEmbeddingsRoute(app, services);
   registerImagesGenerationsRoute(app, services);
   registerResponsesRoute(app, services);
+  registerV1StubRoutes(app);
 }
 
 // Break encapsulation so error/not-found handlers apply to the registering scope.
