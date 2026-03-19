@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 06-chat-completions-streaming
-current_plan: 02 complete
-status: planning
-last_updated: "2026-03-18T23:52:34.645Z"
+current_phase: 07-surface-expansion
+current_plan: 01 complete
+status: executing
+last_updated: "2026-03-19T01:53:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 12
-  completed_plans: 12
+  total_plans: 15
+  completed_plans: 13
 ---
 
 # Session State
@@ -22,9 +22,9 @@ See: .planning/PROJECT.md
 ## Position
 
 **Milestone:** v1.0 milestone
-**Current phase:** 06-chat-completions-streaming
-**Current plan:** 02 complete
-**Status:** Ready to plan
+**Current phase:** 07-surface-expansion
+**Current plan:** 01 complete
+**Status:** Executing
 
 ## Decisions
 
@@ -36,6 +36,8 @@ See: .planning/PROJECT.md
 - [06-01] Fire-and-forget usage tracking for streams -- exact token counts deferred
 - [06-01] No fallback chain for streaming -- single provider dispatch with circuit breaker
 - [06-02] Static fixture tests validate SSE contract without Fastify app or service mocks
+- [07-01] Embeddings method added to RuntimeAiService following established real-provider pattern
+- [07-01] ProviderEmbeddingsExecutionResult includes providerUsed/providerModel for header propagation consistency
 
 ## Session Log
 
@@ -44,3 +46,4 @@ See: .planning/PROJECT.md
 - 2026-03-18: Completed 05-02-PLAN.md (chat completions test coverage)
 - 2026-03-18: Completed 06-01-PLAN.md (SSE streaming pipeline)
 - 2026-03-18: Completed 06-02-PLAN.md (SSE streaming compliance tests)
+- 2026-03-19: Completed 07-01-PLAN.md (POST /v1/embeddings endpoint pipeline)

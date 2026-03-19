@@ -27,7 +27,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Surface Expansion
 
-- [ ] **SURF-01**: `POST /v1/embeddings` endpoint routes to OpenRouter embedding models and returns `CreateEmbeddingResponse` with `object: "list"`, `data[].embedding`, `data[].index`, `model`, `usage`
+- [x] **SURF-01**: `POST /v1/embeddings` endpoint routes to OpenRouter embedding models and returns `CreateEmbeddingResponse` with `object: "list"`, `data[].embedding`, `data[].index`, `model`, `usage`
 - [ ] **SURF-02**: `POST /v1/images/generations` response is schema-compliant with `created` (int) and `data` array of Image objects (with `url` or `b64_json`, optional `revised_prompt`)
 - [ ] **SURF-03**: `POST /v1/responses` endpoint is audited and hardened against the full OpenAI `Response` and `CreateResponse` schemas
 
@@ -105,7 +105,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CHAT-03 | Phase 5 | Complete |
 | CHAT-04 | Phase 6 | Complete |
 | CHAT-05 | Phase 6 | Complete |
-| SURF-01 | Phase 7 | Pending |
+| SURF-01 | Phase 7 | Complete |
 | SURF-02 | Phase 7 | Pending |
 | SURF-03 | Phase 7 | Pending |
 | DIFF-01 | Phase 8 | Pending |
