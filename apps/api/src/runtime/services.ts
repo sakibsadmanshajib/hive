@@ -22,7 +22,8 @@ import { buildProviderOfferCatalog } from "../providers/provider-offers";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
 import type { ProviderStreamExecutionResult } from "../providers/registry";
-import type { ProviderName, ProviderReadinessStatus } from "../providers/types";
+import type { ProviderChatMessage, ProviderName, ProviderReadinessStatus } from "../providers/types";
+import type { ResponsesBody } from "../schemas/responses";
 import type { PersistentApiKey, PersistentApiKeyEvent, PersistentPaymentIntent } from "../domain/types";
 import { bdtToCredits } from "../domain/credits-conversion";
 import { RedisRateLimiter } from "./redis-rate-limiter";
@@ -804,9 +805,14 @@ class RuntimeAiService {
     };
   }
 
-  async responses(userId: string, input: string, usageContext: { channel: UsageChannel; apiKeyId?: string }) {
+  async responses(userId: string, body: ResponsesBody, usageContext: { channel: UsageChannel; apiKeyId?: string }) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
-    const model = this.models.pickDefault("chat");
+    const model = body.model
+      ? this.models.findById(body.model)
+      : this.models.pickDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: `Unknown model: ${body.model}`, statusCode: 400 as const };
+    }
     const creditsCost = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     const chargeReferenceId = `req_${randomUUID()}`;
     const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
@@ -814,9 +820,38 @@ class RuntimeAiService {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
+    // Build chat messages from Responses API input
+    const messages: ProviderChatMessage[] = [];
+    if (body.instructions) {
+      messages.push({ role: "system", content: body.instructions });
+    }
+    if (typeof body.input === "string") {
+      messages.push({ role: "user", content: body.input });
+    } else if (Array.isArray(body.input)) {
+      for (const item of body.input) {
+        if (item.role && item.content) {
+          messages.push({
+            role: this.normalizeRole(item.role),
+            content: typeof item.content === "string" ? item.content : JSON.stringify(item.content),
+          });
+        }
+      }
+    }
+
+    // Forward optional params to chat
+    const params: Record<string, unknown> = {};
+    if (body.temperature !== undefined) params.temperature = body.temperature;
+    if (body.max_output_tokens !== undefined) params.max_completion_tokens = body.max_output_tokens;
+    if (body.tools !== undefined) params.tools = body.tools;
+    if (body.tool_choice !== undefined) params.tool_choice = body.tool_choice;
+
     let providerResult;
     try {
-      providerResult = await this.providerRegistry.chat(model.id, [{ role: "user", content: input }]);
+      providerResult = await this.providerRegistry.chat(
+        model.id,
+        messages,
+        Object.keys(params).length > 0 ? params : undefined,
+      );
     } catch (error) {
       await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       return {
@@ -835,6 +870,30 @@ class RuntimeAiService {
       });
     });
 
+    const raw = providerResult.rawResponse;
+    const responseBody = {
+      id: `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+      object: "response" as const,
+      created_at: Math.floor(Date.now() / 1000),
+      status: "completed" as const,
+      model: raw?.model ?? model.id,
+      output: [{
+        type: "message" as const,
+        id: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+        role: "assistant" as const,
+        status: "completed" as const,
+        content: [{
+          type: "output_text" as const,
+          text: raw?.choices?.[0]?.message?.content ?? providerResult.content ?? "",
+        }],
+      }],
+      usage: {
+        input_tokens: raw?.usage?.prompt_tokens ?? 0,
+        output_tokens: raw?.usage?.completion_tokens ?? 0,
+        total_tokens: raw?.usage?.total_tokens ?? 0,
+      },
+    };
+
     return {
       statusCode: 200 as const,
       headers: {
@@ -843,12 +902,7 @@ class RuntimeAiService {
         "x-provider-model": providerResult.providerModel,
         "x-actual-credits": String(creditsCost),
       },
-      body: {
-        id: `resp_${randomUUID().slice(0, 12)}`,
-        object: "response",
-        model: model.id,
-        output: [{ type: "text", text: providerResult.content || `MVP output: ${input || "No input provided."}` }],
-      },
+      body: responseBody,
     };
   }
 

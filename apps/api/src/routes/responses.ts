@@ -22,7 +22,7 @@ export function registerResponsesRoute(
       return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
     }
 
-    const result = await services.ai.responses(principal.userId, request.body?.input ?? "", {
+    const result = await services.ai.responses(principal.userId, request.body, {
       channel: inferUsageChannel(request, principal),
       apiKeyId: principal.apiKeyId,
     });
@@ -31,11 +31,9 @@ export function registerResponsesRoute(
     }
 
     if (result.headers) {
-      reply
-        .header("x-model-routed", result.headers["x-model-routed"])
-        .header("x-provider-used", result.headers["x-provider-used"])
-        .header("x-provider-model", result.headers["x-provider-model"])
-        .header("x-actual-credits", result.headers["x-actual-credits"]);
+      for (const [key, value] of Object.entries(result.headers)) {
+        reply.header(key, value);
+      }
     }
     reply.code(result.statusCode);
     return result.body;

@@ -71,7 +71,7 @@ describe("TypeBox validation -- extra fields rejected", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/responses",
-      payload: { input: "hello", extra: 123 },
+      payload: { model: "gpt-4o", input: "hello", extra: 123 },
       headers: { "content-type": "application/json" },
     });
     expect(res.statusCode).toBe(400);
@@ -119,7 +119,7 @@ describe("TypeBox validation -- valid requests pass", () => {
     const res = await app.inject({
       method: "POST",
       url: "/v1/responses",
-      payload: { input: "hello world" },
+      payload: { model: "gpt-4o", input: "hello world" },
       headers: { "content-type": "application/json" },
     });
     expect(res.statusCode).not.toBe(400);

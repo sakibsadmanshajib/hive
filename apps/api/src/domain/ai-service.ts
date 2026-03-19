@@ -88,9 +88,14 @@ export class AiService {
     };
   }
 
-  responses(userId: string, input: string, usageContext: UsageContext) {
+  responses(userId: string, body: { model?: string; input: string | unknown[]; instructions?: string; [key: string]: unknown }, usageContext: UsageContext) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
-    const model = this.models.pickDefault("chat");
+    const model = body.model
+      ? this.models.findById(body.model)
+      : this.models.pickDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: `Unknown model: ${body.model}`, statusCode: 400 as const };
+    }
     const credits = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
@@ -103,13 +108,30 @@ export class AiService {
       ...resolvedUsageContext,
     });
 
+    const inputText = typeof body.input === "string" ? body.input : JSON.stringify(body.input);
     return {
       statusCode: 200 as const,
       body: {
-        id: `resp_${randomUUID().slice(0, 12)}`,
-        object: "response",
+        id: `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+        object: "response" as const,
+        created_at: Math.floor(Date.now() / 1000),
+        status: "completed" as const,
         model: model.id,
-        output: [{ type: "text", text: `MVP output: ${input || "No input provided."}` }],
+        output: [{
+          type: "message" as const,
+          id: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+          role: "assistant" as const,
+          status: "completed" as const,
+          content: [{
+            type: "output_text" as const,
+            text: `MVP output: ${inputText || "No input provided."}`,
+          }],
+        }],
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+        },
       },
     };
   }
