@@ -28,8 +28,8 @@ describe("AiService.chatCompletions", () => {
       usageContext,
     );
 
-    expect(result.statusCode).toBe(200);
-    expect("body" in result && result.body.model).toBe("gpt-4o");
+    if (result.statusCode !== 200) throw new Error(`Expected 200, got ${result.statusCode}`);
+    expect(result.body.model).toBe("gpt-4o");
   });
 
   it("response includes all CHAT-01 required fields", () => {
@@ -39,9 +39,8 @@ describe("AiService.chatCompletions", () => {
       usageContext,
     );
 
-    expect(result.statusCode).toBe(200);
-    if (!("body" in result)) throw new Error("Expected body in result");
-    const body = result.body;
+    if (result.statusCode !== 200) throw new Error(`Expected 200, got ${result.statusCode}`);
+    const { body } = result;
 
     expect(body.id).toMatch(/^chatcmpl_/);
     expect(body.object).toBe("chat.completion");
@@ -61,11 +60,11 @@ describe("AiService.chatCompletions", () => {
       usageContext,
     );
 
-    expect(result.statusCode).toBe(200);
-    if (!("body" in result)) throw new Error("Expected body in result");
+    if (result.statusCode !== 200) throw new Error(`Expected 200, got ${result.statusCode}`);
+    const { body } = result;
 
-    expect(result.body.choices[0].logprobs).toBeNull();
-    expect("logprobs" in result.body.choices[0]).toBe(true);
+    expect(body.choices[0].logprobs).toBeNull();
+    expect("logprobs" in body.choices[0]).toBe(true);
   });
 
   it("response includes usage object (CHAT-03)", () => {
@@ -75,13 +74,13 @@ describe("AiService.chatCompletions", () => {
       usageContext,
     );
 
-    expect(result.statusCode).toBe(200);
-    if (!("body" in result)) throw new Error("Expected body in result");
+    if (result.statusCode !== 200) throw new Error(`Expected 200, got ${result.statusCode}`);
+    const { body } = result;
 
-    expect(result.body.usage).toBeDefined();
-    expect(typeof result.body.usage.prompt_tokens).toBe("number");
-    expect(typeof result.body.usage.completion_tokens).toBe("number");
-    expect(typeof result.body.usage.total_tokens).toBe("number");
+    expect(body.usage).toBeDefined();
+    expect(typeof body.usage.prompt_tokens).toBe("number");
+    expect(typeof body.usage.completion_tokens).toBe("number");
+    expect(typeof body.usage.total_tokens).toBe("number");
   });
 
   it("returns 400 for unknown model", () => {
@@ -91,8 +90,8 @@ describe("AiService.chatCompletions", () => {
       usageContext,
     );
 
-    expect(result.statusCode).toBe(400);
-    expect("error" in result && result.error).toBe("unknown model");
+    if (result.statusCode !== 400) throw new Error(`Expected 400, got ${result.statusCode}`);
+    expect(result.error).toBe("unknown model");
   });
 
   it("returns 402 for insufficient credits", () => {
@@ -103,7 +102,7 @@ describe("AiService.chatCompletions", () => {
       usageContext,
     );
 
-    expect(result.statusCode).toBe(402);
-    expect("error" in result && result.error).toBe("insufficient credits");
+    if (result.statusCode !== 402) throw new Error(`Expected 402, got ${result.statusCode}`);
+    expect(result.error).toBe("insufficient credits");
   });
 });
