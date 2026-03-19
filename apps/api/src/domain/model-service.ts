@@ -1,4 +1,5 @@
 import type { GatewayModel } from "./types";
+import { resolveModelAlias } from "../config/model-aliases";
 
 export function deriveOwnedBy(modelId: string): string {
   if (modelId.startsWith("openrouter/")) return "openrouter";
@@ -176,7 +177,8 @@ export class ModelService {
   }
 
   findById(modelId: string): GatewayModel | undefined {
-    return this.enabledModels().find((model) => model.id === modelId);
+    const resolved = resolveModelAlias(modelId);
+    return this.enabledModels().find((model) => model.id === resolved);
   }
 
   pickDefault(capability: "chat" | "image" | "embedding"): GatewayModel {

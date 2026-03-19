@@ -83,6 +83,8 @@ export class AiService {
       },
       headers: {
         "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
         "x-actual-credits": String(credits),
       },
     };
@@ -111,6 +113,12 @@ export class AiService {
     const inputText = typeof body.input === "string" ? body.input : JSON.stringify(body.input);
     return {
       statusCode: 200 as const,
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
+        "x-actual-credits": String(credits),
+      },
       body: {
         id: `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
         object: "response" as const,
@@ -172,6 +180,8 @@ export class AiService {
       },
       headers: {
         "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
         "x-actual-credits": String(credits),
       },
     };
@@ -201,7 +211,12 @@ export class AiService {
 
     return {
       statusCode: 200 as const,
-      headers: { "x-actual-credits": String(credits) },
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
+        "x-actual-credits": String(credits),
+      },
       body: {
         created: Math.floor(Date.now() / 1000),
         data: [
