@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 07-surface-expansion
-current_plan: 03 complete
-status: planning
-last_updated: "2026-03-19T02:06:12.034Z"
+current_phase: 08-differentiators
+current_plan: 01 complete
+status: executing
+last_updated: "2026-03-19T02:37:22.526Z"
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 15
-  completed_plans: 15
+  total_plans: 17
+  completed_plans: 16
 ---
 
 # Session State
@@ -22,9 +22,9 @@ See: .planning/PROJECT.md
 ## Position
 
 **Milestone:** v1.0 milestone
-**Current phase:** 07-surface-expansion
-**Current plan:** 03 complete
-**Status:** Ready to plan
+**Current phase:** 08-differentiators
+**Current plan:** 01 complete
+**Status:** Executing
 
 ## Decisions
 
@@ -42,6 +42,9 @@ See: .planning/PROJECT.md
 - [07-02] Response usage maps prompt_tokens->input_tokens, completion_tokens->output_tokens per Responses API spec
 - [07-03] Static fixture pattern reused from Phase 5/6 compliance tests for consistency
 - [07-03] Critical regression tests: ImagesResponse has NO object field, Responses usage uses input_tokens/output_tokens NOT prompt_tokens/completion_tokens
+- [08-01] x-request-id via onRequest hook ensures presence on all responses including errors/404s
+- [08-01] hive-mvp as provider name for MVP AiService since no real provider dispatch
+- [08-01] Model aliases use static map with passthrough for unknown names (no breaking change)
 
 ## Session Log
 
@@ -53,3 +56,4 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 07-01-PLAN.md (POST /v1/embeddings endpoint pipeline)
 - 2026-03-19: Completed 07-02-PLAN.md (images & responses compliance)
 - 2026-03-19: Completed 07-03-PLAN.md (surface expansion compliance tests)
+- 2026-03-19: Completed 08-01-PLAN.md (differentiator headers and model aliases)

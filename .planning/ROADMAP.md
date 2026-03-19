@@ -167,5 +167,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Chat Completions (Non-Streaming) | 2/2 | Complete    | 2026-03-18 |
 | 6. Chat Completions (Streaming) | 1/2 | Complete    | 2026-03-18 |
 | 7. Surface Expansion | 3/3 | Complete    | 2026-03-19 |
-| 8. Differentiators | 0/2 | Not started | - |
+| 8. Differentiators | 1/2 | In Progress|  |
 | 9. Operational Hardening | 0/2 | Not started | - |
