@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyError } from "fastify";
 import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
@@ -13,6 +14,11 @@ export async function v1Plugin(
   opts: { services: RuntimeServices },
 ): Promise<void> {
   const { services } = opts;
+
+  app.addHook('onRequest', async (_request, reply) => {
+    reply.header('x-request-id', randomUUID());
+  });
+
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     const status = error.statusCode ?? 500;
     const message = error.message || "Internal server error";
