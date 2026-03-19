@@ -16,6 +16,7 @@ class FakeApp {
     return plugin(this, opts);
   }
 
+  delete(..._args: any[]) {}
   addHook() {}
   setErrorHandler() {}
   setNotFoundHandler() {}
