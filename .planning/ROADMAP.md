@@ -118,12 +118,12 @@ Plans:
   2. `POST /v1/images/generations` returns `{ "created": <int>, "data": [{ "url": "..." }] }` matching the OpenAI Image schema
   3. `POST /v1/responses` handles the full `CreateResponse` request schema and returns a compliant `Response` object
   4. The `openai` SDK's `client.embeddings.create()` and `client.images.generate()` work without errors
-**Plans**: 2 plans
+**Plans**: 3 plans
 
 Plans:
-- [ ] 07-01: TBD
-- [ ] 07-02: TBD
-- [ ] 07-03: TBD
+- [ ] 07-01-PLAN.md — Embeddings endpoint: new route, schema, provider method, service method
+- [ ] 07-02-PLAN.md — Images fix (real provider call, no object field) + Responses expansion (full CreateResponse schema)
+- [ ] 07-03-PLAN.md — Compliance tests for embeddings, images, and responses response shapes
 
 ### Phase 8: Differentiators
 **Goal**: All `/v1/*` responses include Hive-specific metadata headers for transparency and debugging
