@@ -150,8 +150,8 @@ Plans:
 **Plans**: 2 plans
 
 Plans:
-- [ ] 09-01: TBD
-- [ ] 09-02: TBD
+- [ ] 09-01-PLAN.md — Stub routes for unsupported endpoints + compliance tests
+- [ ] 09-02-PLAN.md — GitHub issues for deferred endpoint groups
 
 ## Progress
 
