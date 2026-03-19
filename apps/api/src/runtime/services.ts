@@ -48,6 +48,8 @@ type ImageGenerationRequest = {
   n?: number;
   size?: string;
   responseFormat?: "url" | "b64_json";
+  quality?: string;
+  style?: string;
   user?: string;
 };
 
@@ -874,6 +876,8 @@ class RuntimeAiService {
         n: request.n ?? 1,
         size: request.size,
         responseFormat: request.responseFormat ?? "url",
+        quality: request.quality,
+        style: request.style,
         user: request.user,
       });
     } catch {
@@ -909,7 +913,64 @@ class RuntimeAiService {
         data: providerResult.data.map((entry) => ({
           ...(entry.url ? { url: entry.url } : {}),
           ...(entry.b64Json ? { b64_json: entry.b64Json } : {}),
+          ...(entry.revisedPrompt ? { revised_prompt: entry.revisedPrompt } : {}),
         })),
+      },
+    };
+  }
+
+  async embeddings(
+    userId: string,
+    body: { model: string; input: string | string[]; encoding_format?: "float" | "base64"; dimensions?: number; user?: string },
+    usageContext: { channel: UsageChannel; apiKeyId?: string },
+  ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const model = this.models.findById(body.model);
+    if (!model || model.capability !== "embedding") {
+      return { error: `Unknown embedding model: ${body.model}`, statusCode: 400 as const };
+    }
+    const creditsCost = this.models.creditsForRequest(model);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = creditsCost > 0 ? await this.credits.consume(userId, creditsCost, chargeReferenceId) : true;
+    if (!consumed) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+
+    let providerResult;
+    try {
+      providerResult = await this.providerRegistry.embeddings(model.id, {
+        input: body.input,
+        encodingFormat: body.encoding_format,
+        dimensions: body.dimensions,
+        user: body.user,
+      });
+    } catch (error) {
+      if (creditsCost > 0) {
+        await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      }
+      const statusCode = (error as any)?.statusCode;
+      return {
+        error: error instanceof Error ? error.message : "provider unavailable",
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
+      };
+    }
+
+    void this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/embeddings",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
+    });
+
+    return {
+      statusCode: providerResult.statusCode as 200,
+      body: providerResult.body,
+      headers: {
+        ...providerResult.headers,
+        "x-actual-credits": String(creditsCost),
       },
     };
   }

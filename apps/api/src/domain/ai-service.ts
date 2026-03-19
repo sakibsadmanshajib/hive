@@ -114,6 +114,47 @@ export class AiService {
     };
   }
 
+  embeddings(
+    userId: string,
+    body: { model: string; input: string | string[]; encoding_format?: "float" | "base64"; dimensions?: number; user?: string },
+    usageContext: UsageContext,
+  ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const model = this.models.findById(body.model);
+    if (!model || model.capability !== "embedding") {
+      return { error: `Unknown embedding model: ${body.model}`, statusCode: 400 as const };
+    }
+    const credits = this.models.creditsForRequest(model);
+    if (!this.credits.consume(userId, credits)) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+    this.usage.add({
+      userId,
+      endpoint: "/v1/embeddings",
+      model: model.id,
+      credits,
+      ...resolvedUsageContext,
+    });
+    const inputArray = Array.isArray(body.input) ? body.input : [body.input];
+    return {
+      statusCode: 200 as const,
+      body: {
+        object: "list" as const,
+        data: inputArray.map((_, index) => ({
+          object: "embedding" as const,
+          embedding: [0.0, 0.0, 0.0],
+          index,
+        })),
+        model: model.id,
+        usage: { prompt_tokens: 0, total_tokens: 0 },
+      },
+      headers: {
+        "x-model-routed": model.id,
+        "x-actual-credits": String(credits),
+      },
+    };
+  }
+
   imageGeneration(userId: string, input: string | ImageRequest, usageContext: UsageContext) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
     const requestedModel = typeof input === "string" ? undefined : input.model;
@@ -141,10 +182,9 @@ export class AiService {
       headers: { "x-actual-credits": String(credits) },
       body: {
         created: Math.floor(Date.now() / 1000),
-        object: "list",
         data: [
           {
-            url: `https://example.invalid/generated/${encodeURIComponent(prompt || "image")}.png`,
+            url: `https://placeholder.test/generated/${encodeURIComponent(prompt || "image")}.png`,
           },
         ],
       },

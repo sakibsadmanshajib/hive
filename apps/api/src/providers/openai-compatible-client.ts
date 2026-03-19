@@ -1,7 +1,11 @@
 import type {
   ProviderChatRequest,
   ProviderChatResponse,
+  ProviderEmbeddingsRequest,
+  ProviderEmbeddingsResponse,
   ProviderHealthStatus,
+  ProviderImageRequest,
+  ProviderImageResponse,
   ProviderName,
   ProviderReadinessStatus,
 } from "./types";
@@ -34,6 +38,15 @@ type OpenAICompatibleChatResponse = {
     completion_tokens?: number;
     total_tokens?: number;
   };
+};
+
+type OpenAICompatibleImageResponse = {
+  created?: number;
+  data?: Array<{
+    url?: string;
+    b64_json?: string;
+    revised_prompt?: string;
+  }>;
 };
 
 export type OpenAICompatibleClientConfig = {
@@ -158,6 +171,131 @@ export class OpenAICompatibleProviderClient {
     }
 
     return response;
+  }
+
+  async generateImage(request: ProviderImageRequest): Promise<ProviderImageResponse> {
+    if (!this.config.apiKey) {
+      throw new Error(`${this.name} api key missing`);
+    }
+
+    const body: Record<string, unknown> = {
+      model: request.model,
+      prompt: request.prompt,
+      n: request.n,
+      size: request.size,
+      response_format: request.responseFormat,
+    };
+    if (request.quality) body.quality = request.quality;
+    if (request.style) body.style = request.style;
+    if (request.user) body.user = request.user;
+
+    const response = await fetchWithRetry({
+      provider: this.name,
+      url: joinUrl(this.config.baseUrl, "/images/generations"),
+      timeoutMs: this.config.timeoutMs,
+      maxRetries: 0,
+      init: {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json",
+          ...(this.config.extraHeaders ?? {}),
+        },
+        body: JSON.stringify(body),
+      },
+    });
+
+    if (!response.ok) {
+      let errorMessage = `${this.name} request failed with status ${response.status}`;
+      try {
+        const errorBody = await response.json() as { error?: { message?: string } };
+        if (errorBody?.error?.message) {
+          errorMessage = errorBody.error.message;
+        }
+      } catch { /* ignore parse failures */ }
+      throw new Error(errorMessage);
+    }
+
+    const payload = (await response.json()) as OpenAICompatibleImageResponse;
+    const data = (payload.data ?? []).map((entry) => ({
+      ...(entry.url ? { url: entry.url } : {}),
+      ...(entry.b64_json ? { b64Json: entry.b64_json } : {}),
+      ...(entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {}),
+    }));
+    if (data.length === 0) {
+      throw new Error(`${this.name} response missing image data`);
+    }
+
+    return {
+      created: payload.created ?? Math.floor(Date.now() / 1000),
+      data,
+      providerModel: request.model,
+    };
+  }
+
+  async embeddings(request: ProviderEmbeddingsRequest): Promise<ProviderEmbeddingsResponse> {
+    if (!this.config.apiKey) {
+      throw new Error(`${this.name} api key missing`);
+    }
+
+    const body: Record<string, unknown> = {
+      model: request.model,
+      input: request.input,
+    };
+    if (request.encodingFormat !== undefined) body.encoding_format = request.encodingFormat;
+    if (request.dimensions !== undefined) body.dimensions = request.dimensions;
+    if (request.user !== undefined) body.user = request.user;
+
+    const response = await fetchWithRetry({
+      provider: this.name,
+      url: joinUrl(this.config.baseUrl, "/embeddings"),
+      timeoutMs: this.config.timeoutMs,
+      maxRetries: this.config.maxRetries,
+      init: {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.config.apiKey}`,
+          "content-type": "application/json",
+          ...(this.config.extraHeaders ?? {}),
+        },
+        body: JSON.stringify(body),
+      },
+    });
+
+    if (!response.ok) {
+      let errorMessage = `${this.name} request failed with status ${response.status}`;
+      try {
+        const errorBody = await response.json() as { error?: { message?: string } };
+        if (errorBody?.error?.message) {
+          errorMessage = errorBody.error.message;
+        }
+      } catch { /* ignore parse failures */ }
+      const err = new Error(errorMessage);
+      (err as any).statusCode = response.status;
+      throw err;
+    }
+
+    const payload = await response.json() as {
+      data?: Array<{ embedding?: number[]; index?: number }>;
+      model?: string;
+      usage?: { prompt_tokens?: number; total_tokens?: number };
+    };
+
+    return {
+      data: (payload.data ?? []).map((item, i) => ({
+        embedding: item.embedding ?? [],
+        index: item.index ?? i,
+      })),
+      model: payload.model ?? request.model,
+      providerModel: payload.model ?? request.model,
+      usage: payload.usage
+        ? {
+          promptTokens: payload.usage.prompt_tokens ?? 0,
+          totalTokens: payload.usage.total_tokens ?? 0,
+        }
+        : undefined,
+      rawResponse: payload,
+    };
   }
 
   async status(): Promise<ProviderHealthStatus> {

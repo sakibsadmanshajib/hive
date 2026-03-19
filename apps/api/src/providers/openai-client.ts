@@ -21,6 +21,7 @@ type OpenAIImageResponse = {
   data?: Array<{
     url?: string;
     b64_json?: string;
+    revised_prompt?: string;
   }>;
 };
 
@@ -69,7 +70,9 @@ export class OpenAIProviderClient implements ProviderClient {
           n: request.n,
           size: request.size,
           response_format: request.responseFormat,
-          user: request.user,
+          ...(request.quality ? { quality: request.quality } : {}),
+          ...(request.style ? { style: request.style } : {}),
+          ...(request.user ? { user: request.user } : {}),
         }),
       },
     });
@@ -81,8 +84,9 @@ export class OpenAIProviderClient implements ProviderClient {
     const payload = (await response.json()) as OpenAIImageResponse;
     const data =
       payload.data?.map((entry) => ({
-        url: entry.url,
-        b64Json: entry.b64_json,
+        ...(entry.url ? { url: entry.url } : {}),
+        ...(entry.b64_json ? { b64Json: entry.b64_json } : {}),
+        ...(entry.revised_prompt ? { revisedPrompt: entry.revised_prompt } : {}),
       })) ?? [];
     if (data.length === 0) {
       throw new Error("openai response missing image data");

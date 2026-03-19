@@ -33,6 +33,8 @@ export function registerImagesGenerationsRoute(
       n: request.body?.n,
       size: request.body?.size,
       responseFormat: request.body?.response_format,
+      quality: request.body?.quality,
+      style: request.body?.style,
       user: request.body?.user,
     }, {
       channel: inferUsageChannel(request, principal),

@@ -4,6 +4,7 @@ import type { RuntimeServices } from "../runtime/services";
 import { STATUS_TO_TYPE } from "./api-error";
 import { registerChatCompletionsRoute } from "./chat-completions";
 import { registerModelsRoute } from "./models";
+import { registerEmbeddingsRoute } from "./embeddings";
 import { registerImagesGenerationsRoute } from "./images-generations";
 import { registerResponsesRoute } from "./responses";
 
@@ -47,6 +48,7 @@ export async function v1Plugin(
 
   registerChatCompletionsRoute(app, services);
   registerModelsRoute(app, services);
+  registerEmbeddingsRoute(app, services);
   registerImagesGenerationsRoute(app, services);
   registerResponsesRoute(app, services);
 }

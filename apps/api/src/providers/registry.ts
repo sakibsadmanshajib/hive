@@ -5,6 +5,7 @@ import type {
   ProviderChatResponse,
   ProviderClient,
   ProviderCostClass,
+  ProviderEmbeddingsRequest,
   ProviderImageRequest,
   ProviderMetricsResult,
   ProviderName,
@@ -42,6 +43,7 @@ export type ProviderImageExecutionResult = {
   data: Array<{
     url?: string;
     b64Json?: string;
+    revisedPrompt?: string;
   }>;
   providerUsed: ProviderName;
   providerModel: string;
@@ -49,6 +51,14 @@ export type ProviderImageExecutionResult = {
 
 export type ProviderStreamExecutionResult = {
   response: Response;
+  providerUsed: ProviderName;
+  providerModel: string;
+};
+
+export type ProviderEmbeddingsExecutionResult = {
+  statusCode: number;
+  body: unknown;
+  headers: Record<string, string>;
   providerUsed: ProviderName;
   providerModel: string;
 };
@@ -238,6 +248,76 @@ export class ProviderRegistry {
           data: response.data,
           providerUsed: providerName,
           providerModel: response.providerModel ?? providerModel,
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, true);
+        breaker?.recordFailure(reason);
+        errors.push(`${providerName}: ${reason}`);
+      }
+    }
+
+    throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
+  }
+
+  async embeddings(modelId: string, request: Omit<ProviderEmbeddingsRequest, "model">): Promise<ProviderEmbeddingsExecutionResult> {
+    const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
+    const candidateProviders = this.buildCandidates(primaryProvider);
+    const errors: string[] = [];
+
+    for (const providerName of candidateProviders) {
+      const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
+      if (!client || !client.isEnabled()) {
+        continue;
+      }
+
+      if (!client.embeddings) {
+        errors.push(`${providerName}: unsupported embeddings capability`);
+        continue;
+      }
+
+      if (breaker) {
+        breaker.evaluateState();
+        if (breaker.isOpen()) {
+          errors.push(`${providerName}: circuit open`);
+          continue;
+        }
+        if (breaker.isHalfOpen() && !breaker.tryAcquireProbe()) {
+          errors.push(`${providerName}: half-open probe in-flight`);
+          continue;
+        }
+      }
+
+      const providerModel = this.config.providerModelMap[providerName] ?? modelId;
+      const startedAt = Date.now();
+      try {
+        const result = await client.embeddings({ ...request, model: providerModel });
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
+        breaker?.recordSuccess();
+        return {
+          statusCode: 200,
+          body: {
+            object: "list",
+            data: result.data.map((item, index) => ({
+              object: "embedding",
+              embedding: item.embedding,
+              index,
+            })),
+            model: result.providerModel,
+            usage: {
+              prompt_tokens: result.usage?.promptTokens ?? 0,
+              total_tokens: result.usage?.totalTokens ?? 0,
+            },
+          },
+          headers: {
+            "x-model-routed": modelId,
+            "x-provider-used": providerName,
+            "x-provider-model": result.providerModel,
+          },
+          providerUsed: providerName,
+          providerModel: result.providerModel,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);

@@ -51,12 +51,15 @@ export type ProviderImageRequest = {
   n: number;
   size?: string;
   responseFormat: "url" | "b64_json";
+  quality?: string;
+  style?: string;
   user?: string;
 };
 
 export type ProviderImageData = {
   url?: string;
   b64Json?: string;
+  revisedPrompt?: string;
 };
 
 export type ProviderImageResponse = {
