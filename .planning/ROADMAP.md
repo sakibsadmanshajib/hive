@@ -19,7 +19,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 5: Chat Completions (Non-Streaming)** - Non-streaming chat completions match OpenAI response schema exactly (completed 2026-03-18)
 - [x] **Phase 6: Chat Completions (Streaming)** - SSE streaming with proper chunk format, usage telemetry, and termination (completed 2026-03-18)
 - [x] **Phase 7: Surface Expansion** - Embeddings, images, and responses endpoints are schema-compliant (completed 2026-03-19)
-- [ ] **Phase 8: Differentiators** - Hive-specific headers, credit cost, model aliasing, and request IDs on all endpoints
+- [x] **Phase 8: Differentiators** - Hive-specific headers, credit cost, model aliasing, and request IDs on all endpoints (completed 2026-03-19)
 - [ ] **Phase 9: Operational Hardening** - Stub endpoints for unsupported APIs and GitHub issue tracking for deferred work
 
 ## Phase Details
@@ -167,5 +167,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Chat Completions (Non-Streaming) | 2/2 | Complete    | 2026-03-18 |
 | 6. Chat Completions (Streaming) | 1/2 | Complete    | 2026-03-18 |
 | 7. Surface Expansion | 3/3 | Complete    | 2026-03-19 |
-| 8. Differentiators | 1/2 | In Progress|  |
+| 8. Differentiators | 2/2 | Complete   | 2026-03-19 |
 | 9. Operational Hardening | 0/2 | Not started | - |

@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 08-differentiators
-current_plan: 01 complete
+current_plan: 02 complete
 status: executing
-last_updated: "2026-03-19T02:37:22.526Z"
+last_updated: "2026-03-19T02:40:36.358Z"
 progress:
   total_phases: 9
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Session State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md
 
 **Milestone:** v1.0 milestone
 **Current phase:** 08-differentiators
-**Current plan:** 01 complete
+**Current plan:** 02 complete
 **Status:** Executing
 
 ## Decisions
@@ -45,6 +45,8 @@ See: .planning/PROJECT.md
 - [08-01] x-request-id via onRequest hook ensures presence on all responses including errors/404s
 - [08-01] hive-mvp as provider name for MVP AiService since no real provider dispatch
 - [08-01] Model aliases use static map with passthrough for unknown names (no breaking change)
+- [08-02] Used topUp() to provision test credits rather than direct balance manipulation
+- [08-02] Reused real-service test pattern from Phase 5/6/7 compliance tests
 
 ## Session Log
 
@@ -57,3 +59,4 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 07-02-PLAN.md (images & responses compliance)
 - 2026-03-19: Completed 07-03-PLAN.md (surface expansion compliance tests)
 - 2026-03-19: Completed 08-01-PLAN.md (differentiator headers and model aliases)
+- 2026-03-19: Completed 08-02-PLAN.md (differentiator compliance tests)
