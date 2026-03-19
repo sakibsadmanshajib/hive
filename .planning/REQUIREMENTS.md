@@ -41,7 +41,7 @@ Requirements for this milestone. Each maps to roadmap phases.
 ### Operational
 
 - [x] **OPS-01**: Stub endpoints registered for known-but-unsupported OpenAI APIs (`/v1/audio/*`, `/v1/files`, `/v1/uploads`, `/v1/batches`, `/v1/completions`, `/v1/fine_tuning/*`, `/v1/moderations`) returning 404 with proper OpenAI error format and a "coming soon" message
-- [ ] **OPS-02**: GitHub issues created for each deferred endpoint following the feature issue template with acceptance criteria, so they are tracked for future milestones
+- [x] **OPS-02**: GitHub issues created for each deferred endpoint following the feature issue template with acceptance criteria, so they are tracked for future milestones
 
 ## v2 Requirements
 
@@ -113,7 +113,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | DIFF-03 | Phase 8 | Complete |
 | DIFF-04 | Phase 8 | Complete |
 | OPS-01 | Phase 9 | Complete |
-| OPS-02 | Phase 9 | Pending |
+| OPS-02 | Phase 9 | Complete |
 
 **Coverage:**
 - v1 requirements: 21 total

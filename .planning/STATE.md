@@ -5,12 +5,12 @@ milestone_name: milestone
 current_phase: 09-operational-hardening
 current_plan: 01 complete
 status: executing
-last_updated: "2026-03-19T06:29:24.305Z"
+last_updated: "2026-03-19T06:31:47.988Z"
 progress:
   total_phases: 9
-  completed_phases: 8
+  completed_phases: 9
   total_plans: 19
-  completed_plans: 18
+  completed_plans: 19
 ---
 
 # Session State
@@ -48,6 +48,7 @@ See: .planning/PROJECT.md
 - [08-02] Used topUp() to provision test credits rather than direct balance manipulation
 - [08-02] Reused real-service test pattern from Phase 5/6/7 compliance tests
 - [09-01] Routes use /v1/ prefix matching existing codebase pattern (not without prefix as plan suggested)
+- [Phase 09]: Used gh CLI to create 7 deferred endpoint issues directly (#81-#87)
 
 ## Session Log
 
