@@ -104,12 +104,29 @@ export type ProviderMetricsResult = {
   providers: ProviderMetricsSummary[];
 };
 
+export type ProviderEmbeddingsRequest = {
+  model: string;
+  input: string | string[];
+  encodingFormat?: "float" | "base64";
+  dimensions?: number;
+  user?: string;
+};
+
+export type ProviderEmbeddingsResponse = {
+  data: Array<{ embedding: number[]; index: number }>;
+  model: string;
+  providerModel: string;
+  usage?: { promptTokens: number; totalTokens: number };
+  rawResponse?: unknown;
+};
+
 export interface ProviderClient {
   readonly name: ProviderName;
   isEnabled(): boolean;
   chat(request: ProviderChatRequest): Promise<ProviderChatResponse>;
   chatStream?(request: ProviderChatRequest): Promise<Response>;
   generateImage?(request: ProviderImageRequest): Promise<ProviderImageResponse>;
+  embeddings?(request: ProviderEmbeddingsRequest): Promise<ProviderEmbeddingsResponse>;
   status(): Promise<ProviderHealthStatus>;
   checkModelReadiness(model: string): Promise<ProviderReadinessStatus>;
 }

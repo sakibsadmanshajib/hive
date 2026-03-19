@@ -13,7 +13,7 @@ export type GatewayModel = {
   id: string;
   object: "model";
   created: number;
-  capability: "chat" | "image";
+  capability: "chat" | "image" | "embedding";
   costType: ModelCostType;
   pricing: GatewayModelPricing;
 };

@@ -141,6 +141,14 @@ const MODELS: GatewayModel[] = [
     pricing: { creditsPerRequest: 120 },
   },
   {
+    id: "openai/text-embedding-3-small",
+    object: "model",
+    created: 1705948997,
+    capability: "embedding",
+    costType: "variable",
+    pricing: { inputTokensPer1m: 2 },
+  },
+  {
     id: "openrouter/auto",
     object: "model",
     created: 1700000000,
@@ -171,7 +179,7 @@ export class ModelService {
     return this.enabledModels().find((model) => model.id === modelId);
   }
 
-  pickDefault(capability: "chat" | "image"): GatewayModel {
+  pickDefault(capability: "chat" | "image" | "embedding"): GatewayModel {
     const candidates = this.enabledModels().filter((model) => model.capability === capability);
     const selected = candidates.find((model) => model.costType !== "free")
       ?? candidates[0];
@@ -181,7 +189,7 @@ export class ModelService {
     return selected;
   }
 
-  pickGuestDefault(capability: "chat" | "image"): GatewayModel {
+  pickGuestDefault(capability: "chat" | "image" | "embedding"): GatewayModel {
     const selected = this.enabledModels().find((model) => model.capability === capability && model.costType === "free");
     if (!selected) {
       throw new Error(`No guest model for capability: ${capability}`);
