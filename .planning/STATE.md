@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 07-surface-expansion
-current_plan: 02 complete
+current_plan: 03 complete
 status: executing
-last_updated: "2026-03-19T01:58:25.000Z"
+last_updated: "2026-03-19T02:02:50.406Z"
 progress:
   total_phases: 9
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 15
 ---
 
 # Session State
@@ -23,7 +23,7 @@ See: .planning/PROJECT.md
 
 **Milestone:** v1.0 milestone
 **Current phase:** 07-surface-expansion
-**Current plan:** 02 complete
+**Current plan:** 03 complete
 **Status:** Executing
 
 ## Decisions
@@ -40,6 +40,8 @@ See: .planning/PROJECT.md
 - [07-01] ProviderEmbeddingsExecutionResult includes providerUsed/providerModel for header propagation consistency
 - [07-02] Responses endpoint translates input+instructions to chat messages via registry.chat()
 - [07-02] Response usage maps prompt_tokens->input_tokens, completion_tokens->output_tokens per Responses API spec
+- [07-03] Static fixture pattern reused from Phase 5/6 compliance tests for consistency
+- [07-03] Critical regression tests: ImagesResponse has NO object field, Responses usage uses input_tokens/output_tokens NOT prompt_tokens/completion_tokens
 
 ## Session Log
 
@@ -50,3 +52,4 @@ See: .planning/PROJECT.md
 - 2026-03-18: Completed 06-02-PLAN.md (SSE streaming compliance tests)
 - 2026-03-19: Completed 07-01-PLAN.md (POST /v1/embeddings endpoint pipeline)
 - 2026-03-19: Completed 07-02-PLAN.md (images & responses compliance)
+- 2026-03-19: Completed 07-03-PLAN.md (surface expansion compliance tests)
