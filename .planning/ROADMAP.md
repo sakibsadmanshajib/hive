@@ -183,3 +183,18 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Differentiators | 2/2 | Complete   | 2026-03-19 |
 | 9. Operational Hardening | 2/2 | Complete    | 2026-03-19 |
 | 10. Models Route Compliance | 0/1 | Pending | — |
+
+### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
+
+**Goal:** Expand the existing 5-test OpenAI SDK regression suite into a comprehensive CI-ready test suite covering all implemented endpoints with success and error paths via the real OpenAI Node.js SDK.
+**Requirements**:
+- CI-01: Success-path coverage for all endpoints (models list/retrieve, chat, embeddings, images, responses)
+- CI-02: Streaming coverage via async iterator (chat.completions with stream:true)
+- CI-03: Error-path coverage (401 auth, 402 credits, 429 rate-limit, 422 validation, 404 stubs)
+- CI-04: Strict TypeScript compliance — no any/unknown/unsafe casts in test code or helpers
+- CI-05: `pnpm --filter @hive/api test` exits 0 with all regression tests passing
+**Depends on:** Phase 10
+**Plans:** 1 plan
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 11 to break down)
