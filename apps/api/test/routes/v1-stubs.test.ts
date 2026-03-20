@@ -1,28 +1,21 @@
-import { describe, it, expect, beforeAll } from "vitest";
-import Fastify from "fastify";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
-import { v1Plugin } from "../v1-plugin";
-import { ModelService } from "../../domain/model-service";
-import { CreditService } from "../../domain/credit-service";
-import { UsageService } from "../../domain/usage-service";
-import { AiService } from "../../domain/ai-service";
+import type { HTTPMethods } from "fastify";
+import { createTestApp, createMockServices } from "../helpers/test-app";
 
 let app: FastifyInstance;
 
 beforeAll(async () => {
-  app = Fastify();
-  const models = new ModelService();
-  const credits = new CreditService();
-  const usage = new UsageService();
-  const ai = new AiService(models, credits, usage);
-  await app.register(v1Plugin, {
-    services: { ai, models, credits, usage },
-  });
-  await app.ready();
+  const result = await createTestApp(createMockServices("valid-api-key", "user-1"));
+  app = result.app;
+});
+
+afterAll(async () => {
+  await app.close();
 });
 
 describe("OPS-01: Stub endpoint error format", () => {
-  const stubEndpoints: [string, string][] = [
+  const stubEndpoints: [HTTPMethods, string][] = [
     ["POST", "/v1/audio/speech"],
     ["GET", "/v1/files"],
     ["POST", "/v1/uploads"],
@@ -35,10 +28,11 @@ describe("OPS-01: Stub endpoint error format", () => {
   it.each(stubEndpoints)(
     "%s %s returns 404 with OpenAI stub error format",
     async (method, url) => {
-      const response = await app.inject({ method: method as any, url });
+      const response = await app.inject({ method, url });
       expect(response.statusCode).toBe(404);
 
-      const body = response.json();
+      const body: { error: { type: string; code: string; param: null; message: string } } =
+        response.json();
       expect(body.error).toBeDefined();
       expect(body.error.type).toBe("not_found_error");
       expect(body.error.code).toBe("unsupported_endpoint");
@@ -54,7 +48,8 @@ describe("OPS-01: Stub endpoint error format", () => {
     });
     expect(response.statusCode).toBe(404);
 
-    const body = response.json();
+    const body: { error: { type: string; code: string; param: null; message: string } } =
+      response.json();
     expect(body.error.type).toBe("not_found_error");
     expect(body.error.code).toBe("unsupported_endpoint");
     expect(body.error.param).toBeNull();
@@ -66,7 +61,7 @@ describe("OPS-01: Stub endpoint error format", () => {
       method: "POST",
       url: "/v1/audio/speech",
     });
-    const body = response.json();
+    const body: { error: { message: string } } = response.json();
     expect(body.error.message).toContain("/v1/audio/speech");
   });
 
@@ -81,7 +76,7 @@ describe("OPS-01: Stub endpoint error format", () => {
     // It may return 400/401/other errors due to missing auth/body,
     // but it must NOT return the stub 404 with "unsupported_endpoint"
     if (response.statusCode === 404) {
-      const body = response.json();
+      const body: { error: { code: string } } = response.json();
       expect(body.error.code).not.toBe("unsupported_endpoint");
     }
   });
