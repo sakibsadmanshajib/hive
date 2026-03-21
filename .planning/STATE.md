@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 09-operational-hardening
-current_plan: 01 complete
+current_phase: 11
+current_plan: 1
 status: completed
-last_updated: "2026-03-19T06:33:23.590Z"
+last_updated: "2026-03-21T23:51:00.000Z"
 progress:
-  total_phases: 9
-  completed_phases: 9
-  total_plans: 19
-  completed_plans: 19
+  total_phases: 11
+  completed_phases: 11
+  total_plans: 20
+  completed_plans: 20
 ---
 
 # Session State
@@ -22,9 +22,15 @@ See: .planning/PROJECT.md
 ## Position
 
 **Milestone:** v1.0 milestone
-**Current phase:** 09-operational-hardening
-**Current plan:** 01 complete
-**Status:** Milestone complete
+**Current phase:** 11
+**Current plan:** 1 (complete)
+**Status:** Phase 11 complete — all plans done
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 11 added: Real OpenAI SDK regression tests — CI-style e2e
 
 ## Decisions
 
@@ -49,6 +55,10 @@ See: .planning/PROJECT.md
 - [08-02] Reused real-service test pattern from Phase 5/6/7 compliance tests
 - [09-01] Routes use /v1/ prefix matching existing codebase pattern (not without prefix as plan suggested)
 - [Phase 09]: Used gh CLI to create 7 deferred endpoint issues directly (#81-#87)
+- [11-01] MockAiService uses discriminated union return types matching route handler expectations (not OpenAI SDK types)
+- [11-01] rateLimiterOverride parameter added to createMockServices for 429 path testing
+- [11-01] Per-test Fastify instances used for error-path tests to avoid shared state
+- [11-01] 422 test uses 400 (BadRequestError) since Fastify schema defines messages as optional
 
 ## Session Log
 
@@ -63,3 +73,4 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 08-01-PLAN.md (differentiator headers and model aliases)
 - 2026-03-19: Completed 08-02-PLAN.md (differentiator compliance tests)
 - 2026-03-19: Completed 09-01-PLAN.md (stub endpoint error format for unsupported endpoints)
+- 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests — CI-style e2e, 345 tests passing)
