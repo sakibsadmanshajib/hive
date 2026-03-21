@@ -260,6 +260,7 @@ export function createMockServices(
   validApiKey: string,
   userId: string,
   aiOverrides?: Partial<MockAiService>,
+  rateLimiterOverride?: { allow: () => Promise<boolean> },
 ): MockServices {
   const defaultAi = createDefaultMockAiService();
   return {
@@ -300,7 +301,7 @@ export function createMockServices(
         return models.find((m) => m.id === modelId);
       },
     },
-    rateLimiter: {
+    rateLimiter: rateLimiterOverride ?? {
       allow: async () => true,
     },
     ai: { ...defaultAi, ...aiOverrides },
