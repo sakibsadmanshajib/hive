@@ -29,6 +29,74 @@ describe("v1 auth compliance (FOUND-02) and Content-Type (FOUND-05)", () => {
     expect(Array.isArray(response.data)).toBe(true);
   });
 
+  it("GET /v1/models without Bearer auth returns 401 authentication_error", async () => {
+    const response = await fetch(`${address}/v1/models`);
+
+    expect(response.status).toBe(401);
+
+    const body = await response.json();
+    expect(body).toEqual({
+      error: {
+        message: "No API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+  });
+
+  it("GET /v1/models with an invalid Bearer auth returns 401 authentication_error", async () => {
+    const response = await fetch(`${address}/v1/models`, {
+      headers: { Authorization: "Bearer sk-wrong-key" },
+    });
+
+    expect(response.status).toBe(401);
+
+    const body = await response.json();
+    expect(body).toEqual({
+      error: {
+        message: "Incorrect API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+  });
+
+  it("GET /v1/models/:model without Bearer auth returns 401 authentication_error", async () => {
+    const response = await fetch(`${address}/v1/models/mock-chat`);
+
+    expect(response.status).toBe(401);
+
+    const body = await response.json();
+    expect(body).toEqual({
+      error: {
+        message: "No API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+  });
+
+  it("GET /v1/models/:model with an invalid Bearer auth returns 401 authentication_error", async () => {
+    const response = await fetch(`${address}/v1/models/mock-chat`, {
+      headers: { Authorization: "Bearer sk-wrong-key" },
+    });
+
+    expect(response.status).toBe(401);
+
+    const body = await response.json();
+    expect(body).toEqual({
+      error: {
+        message: "Incorrect API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+  });
+
   it("missing Authorization header returns 401 with correct error body", async () => {
     const response = await fetch(`${address}/v1/chat/completions`, {
       method: "POST",
@@ -98,7 +166,9 @@ describe("v1 auth compliance (FOUND-02) and Content-Type (FOUND-05)", () => {
   // --- FOUND-05: Content-Type ---
 
   it("non-streaming response has Content-Type: application/json", async () => {
-    const response = await fetch(`${address}/v1/models`);
+    const response = await fetch(`${address}/v1/models`, {
+      headers: { Authorization: `Bearer ${VALID_KEY}` },
+    });
 
     expect(response.status).toBe(200);
     const contentType = response.headers.get("content-type");

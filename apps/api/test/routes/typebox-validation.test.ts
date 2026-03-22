@@ -125,13 +125,12 @@ describe("TypeBox validation -- valid requests pass", () => {
     expect(res.statusCode).not.toBe(400);
   });
 
-  it("GET /v1/models with no body succeeds", async () => {
+  it("GET /v1/models stays schema-valid even though auth now protects it", async () => {
     const res = await app.inject({
       method: "GET",
       url: "/v1/models",
     });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toHaveProperty("object", "list");
+    expect(res.statusCode).not.toBe(400);
   });
 });
 

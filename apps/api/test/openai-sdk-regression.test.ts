@@ -21,11 +21,14 @@ afterAll(async () => {
 describe("OpenAI SDK regression tests", () => {
   // ─── Existing auth / stub tests ───────────────────────────────────────────
 
-  it("models.list() with any key returns a model list (public endpoint)", async () => {
+  it("models.list() with an invalid key throws AuthenticationError", async () => {
     const client = new OpenAI({ apiKey: "invalid-key", baseURL: `${baseUrl}/v1`, maxRetries: 0 });
-    const result = await client.models.list();
-    expect(result.object).toBe("list");
-    expect(Array.isArray(result.data)).toBe(true);
+    let caught: unknown = null;
+    await client.models.list().catch((err: unknown) => { caught = err; });
+    expect(caught).toBeInstanceOf(OpenAI.AuthenticationError);
+    if (caught instanceof OpenAI.AuthenticationError) {
+      expect(caught.status).toBe(401);
+    }
   });
 
   it("chat.completions.create() with invalid key throws AuthenticationError", async () => {
