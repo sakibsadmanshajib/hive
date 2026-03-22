@@ -4,13 +4,13 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 13
 current_plan: 2 (complete)
-status: verifying
-stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-03-22T09:13:27Z"
+status: completed
+stopped_at: Completed phase 12 verification and roadmap closure after phase 13
+last_updated: "2026-03-22T09:21:27.152Z"
 last_activity: 2026-03-22
 progress:
   total_phases: 13
-  completed_phases: 12
+  completed_phases: 13
   total_plans: 25
   completed_plans: 25
   percent: 100
@@ -29,9 +29,9 @@ See: .planning/PROJECT.md
 **Current plan:** 2 (complete)
 **Total Plans in Phase:** 2
 **Progress:** [██████████] 100%
-**Status:** Phase complete — ready for verification
+**Status:** Milestone complete
 **Last Activity:** 2026-03-22
-**Last Activity Description:** Recovered 12-02 summary/tracking and finished Phase 12 plan execution without regressing Phase 13 state
+**Last Activity Description:** Phase 12 complete; milestone remains complete after out-of-order closure
 
 ## Session Info
 
@@ -46,6 +46,7 @@ See: .planning/PROJECT.md
 - Phase 11 added: Real OpenAI SDK regression tests — CI-style e2e
 - Phase 12 plan 01 recovered: public embeddings id canonicalization and provider-boundary verification documented
 - Phase 12 plan 02 recovered: real-runtime embeddings SDK regression and helper/runtime wiring documented
+- Phase 12 completed after out-of-order recovery and verification
 - Phase 13 completed: Error-Path DIFF Headers
 
 ## Decisions
@@ -104,6 +105,7 @@ See: .planning/PROJECT.md
 - 2026-03-22: Completed 13-02-PLAN.md (plugin-level validation and not-found errors now preserve DIFF headers; 363 API tests passing; Docker API build passing)
 - 2026-03-22: Completed 12-01-PLAN.md via artifact recovery after Phase 13 (canonical public embeddings id/provider boundary confirmed; focused regressions 44/44 passing; full API suite 368/368 passing; Docker API build passing)
 - 2026-03-22: Completed 12-02-PLAN.md via artifact recovery after Phase 13 (real-runtime embeddings SDK path confirmed; helper/runtime regressions 32/32 passing; targeted SDK path 1/1 passing; SDK regression file 15/15 passing; full API suite 368/368 passing; Docker API build passing)
+- 2026-03-22: Completed Phase 12 verification and roadmap closure after Phase 13 (8/8 must-haves verified; DIFF-03 complete; milestone remains complete)
 
 ## Performance Metrics
 

@@ -23,7 +23,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 9: Operational Hardening** - Stub endpoints for unsupported APIs and GitHub issue tracking for deferred work (completed 2026-03-19)
 - [x] **Phase 10: Models Route Compliance** - Auth guard and differentiator headers on GET /v1/models routes to close gaps found by milestone audit (completed 2026-03-22)
 - [x] **Phase 11: Real OpenAI SDK Regression Tests** - Comprehensive SDK coverage for implemented endpoints, success/error paths, and CI-ready execution (completed 2026-03-22)
-- [ ] **Phase 12: Embeddings Alias Runtime Compliance** - Accept the standard SDK-facing embeddings model id in the real runtime and lock it with regression coverage
+- [x] **Phase 12: Embeddings Alias Runtime Compliance** - Accept the standard SDK-facing embeddings model id in the real runtime and lock it with regression coverage (completed 2026-03-22)
 - [x] **Phase 13: Error-Path DIFF Headers** - Preserve DIFF headers on all `/v1/*` error and stub responses (completed 2026-03-22)
 
 ## Phase Details
@@ -187,7 +187,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 9. Operational Hardening | 2/2 | Complete    | 2026-03-19 |
 | 10. Models Route Compliance | 1/1 | Complete   | 2026-03-22 |
 | 11. Real OpenAI SDK Regression Tests | 1/1 | Complete | 2026-03-22 |
-| 12. Embeddings Alias Runtime Compliance | 2/2 | In Progress | - |
+| 12. Embeddings Alias Runtime Compliance | 2/2 | Complete    | 2026-03-22 |
 | 13. Error-Path DIFF Headers | 2/2 | Complete    | 2026-03-22 |
 
 ### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
