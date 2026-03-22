@@ -1,10 +1,11 @@
 ---
 phase: 5
 slug: chat-completions-non-streaming
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-18
+audited: 2026-03-21
 ---
 
 # Phase 5 — Validation Strategy
@@ -38,12 +39,12 @@ created: 2026-03-18
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 5-01-01 | 01 | 1 | CHAT-02 | unit | `pnpm --filter api test --run src/domain/ai-service` | ❌ W0 | ⬜ pending |
-| 5-01-02 | 01 | 1 | CHAT-01, CHAT-03 | unit | `pnpm --filter api test --run src/domain/ai-service` | ❌ W0 | ⬜ pending |
-| 5-01-03 | 01 | 1 | CHAT-02 | unit | `pnpm --filter api test --run src/domain` | ❌ W0 | ⬜ pending |
-| 5-02-01 | 02 | 2 | CHAT-01 | integration | `pnpm --filter api test --run src/routes/chat-completions` | ❌ W0 | ⬜ pending |
-| 5-02-02 | 02 | 2 | CHAT-02 | integration | `pnpm --filter api test --run src/routes/chat-completions` | ❌ W0 | ⬜ pending |
-| 5-02-03 | 02 | 2 | CHAT-03 | integration | `pnpm --filter api test --run src/routes/chat-completions` | ❌ W0 | ⬜ pending |
+| 5-01-01 | 01 | 1 | CHAT-02 | unit | `pnpm --filter api test --run src/domain/ai-service` | ✅ | ✅ green |
+| 5-01-02 | 01 | 1 | CHAT-01, CHAT-03 | unit | `pnpm --filter api test --run src/domain/ai-service` | ✅ | ✅ green |
+| 5-01-03 | 01 | 1 | CHAT-02 | unit | `pnpm --filter api test --run src/domain` | ✅ | ✅ green |
+| 5-02-01 | 02 | 2 | CHAT-01 | integration | `pnpm --filter api test --run src/routes/chat-completions` | ✅ | ✅ green |
+| 5-02-02 | 02 | 2 | CHAT-02 | integration | `pnpm --filter api test --run src/routes/chat-completions` | ✅ | ✅ green |
+| 5-02-03 | 02 | 2 | CHAT-03 | integration | `pnpm --filter api test --run src/routes/chat-completions` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -51,8 +52,9 @@ created: 2026-03-18
 
 ## Wave 0 Requirements
 
-- [ ] `apps/api/src/domain/__tests__/ai-service.chat.test.ts` — unit tests for updated `chatCompletions()` params forwarding and response shaping (CHAT-01, CHAT-02, CHAT-03)
-- [ ] `apps/api/src/routes/__tests__/chat-completions.test.ts` — integration tests for route handler (stream guard, full params pass-through, response fields)
+- [x] `apps/api/src/domain/__tests__/ai-service.chat.test.ts` — unit tests for updated `chatCompletions()` params forwarding and response shaping (CHAT-01, CHAT-02, CHAT-03)
+- [x] `apps/api/src/routes/__tests__/chat-completions-compliance.test.ts` — compliance tests for OpenAI response schema shape
+- [x] `apps/api/test/routes/chat-completions-route.test.ts` — route tests for stream guard and full body forwarding
 
 *Existing vitest infrastructure covers the framework — only test files need creation.*
 
@@ -68,11 +70,23 @@ created: 2026-03-18
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 20s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 20s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** 2026-03-21
+
+---
+
+## Validation Audit 2026-03-21
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 6 |
+| Resolved | 6 |
+| Escalated | 0 |
+
+All 6 task requirements were in MISSING/pending state (Wave 0 not updated post-execution). Tests were already written during Plan 02 execution. Verified 18/18 tests passing across 3 files: `ai-service.chat.test.ts` (6), `chat-completions-compliance.test.ts` (6), `chat-completions-route.test.ts` (6).
