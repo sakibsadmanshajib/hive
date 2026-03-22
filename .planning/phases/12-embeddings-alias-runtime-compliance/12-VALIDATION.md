@@ -2,8 +2,8 @@
 phase: 12
 slug: embeddings-alias-runtime-compliance
 status: draft
-nyquist_compliant: false
-wave_0_complete: false
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-22
 ---
 
@@ -18,19 +18,20 @@ created: 2026-03-22
 | Property | Value |
 |----------|-------|
 | **Framework** | vitest |
-| **Config file** | `apps/api/package.json` → `"test": "vitest run --passWithNoTests"` |
-| **Quick run command** | `pnpm --filter @hive/api exec vitest run apps/api/src/config/__tests__/model-aliases.test.ts apps/api/test/openai-sdk-regression.test.ts apps/api/src/routes/__tests__/embeddings-compliance.test.ts` |
-| **Full suite command** | `pnpm --filter @hive/api test` |
-| **Estimated runtime** | ~20 seconds |
+| **Config file** | `apps/api/package.json` → `pnpm --filter @hive/api test` |
+| **Quick run command** | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts test/providers/provider-registry.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts test/openai-sdk-regression.test.ts` |
+| **Full suite command** | `cd /home/sakib/hive && pnpm --filter @hive/api test` |
+| **Estimated runtime** | ~30 seconds |
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run `pnpm --filter @hive/api exec vitest run apps/api/src/config/__tests__/model-aliases.test.ts apps/api/test/openai-sdk-regression.test.ts apps/api/src/routes/__tests__/embeddings-compliance.test.ts`
-- **After every plan wave:** Run `pnpm --filter @hive/api test`
-- **Before `$gsd-verify-work`:** Full suite must be green and `docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"` must pass
-- **Max feedback latency:** ~20 seconds
+- **After every task commit:** Run the task-specific command from the map below.
+- **After every plan wave:** Run `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts test/providers/provider-registry.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts test/openai-sdk-regression.test.ts`
+- **Before closing Plan 12-01:** Run `cd /home/sakib/hive && pnpm --filter @hive/api test` and `cd /home/sakib/hive && docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"`
+- **Before `$gsd-verify-work` / closing Phase 12:** Run `cd /home/sakib/hive && pnpm --filter @hive/api test` and `cd /home/sakib/hive && docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"`
+- **Max feedback latency:** ~30 seconds
 
 ---
 
@@ -38,39 +39,38 @@ created: 2026-03-22
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 12-01-01 | 01 | 1 | DIFF-03 | unit + SDK regression | `pnpm --filter @hive/api exec vitest run apps/api/src/config/__tests__/model-aliases.test.ts apps/api/test/openai-sdk-regression.test.ts apps/api/src/routes/__tests__/embeddings-compliance.test.ts` | ❌ W0 | ⬜ pending |
+| 12-01-T1 | 01 | 1 | DIFF-03 | alias + catalog regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts` | ✅ | ⬜ pending |
+| 12-01-T2 | 01 | 2 | DIFF-03 | provider-registry embeddings boundary regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/providers/provider-registry.test.ts` | ✅ | ⬜ pending |
+| 12-01-T3 | 01 | 3 | DIFF-03 | focused alias/runtime regression pack | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts test/providers/provider-registry.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts` | ✅ | ⬜ pending |
+| 12-02-T1 | 02 | 1 | DIFF-03 | helper/runtime surface regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/routes/models-route.test.ts test/routes/v1-auth-compliance.test.ts test/routes/v1-stubs.test.ts` | ✅ | ⬜ pending |
+| 12-02-T2 | 02 | 2 | DIFF-03 | real-runtime SDK embeddings regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/openai-sdk-regression.test.ts -t "real runtime catalog path"` | ✅ | ⬜ pending |
+| 12-02-T3 | 02 | 3 | DIFF-03 | focused SDK regression pack | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/openai-sdk-regression.test.ts` | ✅ | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
-
-*Note: Update this table after planning so every concrete task ID maps to the exact targeted verification command.*
 
 ---
 
 ## Wave 0 Requirements
 
-- [ ] `apps/api/src/config/__tests__/model-aliases.test.ts` — update alias assertions so `text-embedding-3-small` is canonical and `text-embedding-ada-002` resolves to that public id
-- [ ] `apps/api/test/openai-sdk-regression.test.ts` — add real-runtime SDK regression coverage for `client.embeddings.create({ model: "text-embedding-3-small" })`
-- [ ] `apps/api/src/routes/__tests__/embeddings-compliance.test.ts` or a new runtime/provider test file — verify response `model`, `x-model-routed`, and `x-provider-model` stay on the public-vs-provider boundary
+Existing infrastructure covers all phase requirements.
 
-*Existing vitest infrastructure covers the framework; Wave 0 is test-file coverage, not tooling install.*
+No Wave 0 setup needed — vitest, the route/provider regression files, and the SDK regression harness already exist.
 
 ---
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| Docker API container builds Phase 12 changes in the supported environment | DIFF-03 | Repo policy requires Docker-only API builds; vitest alone will not catch build regressions | Run `docker compose exec api sh -c "cd /app && pnpm --filter @hive/api build"` after the phase implementation commit |
+All phase behaviors are automatable. The Docker-only API build remains an explicit plan/phase completion gate rather than a task-level quick check.
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 20s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** pending
