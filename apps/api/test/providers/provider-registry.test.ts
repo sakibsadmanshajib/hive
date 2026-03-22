@@ -30,6 +30,50 @@ function createRegistry(clients: ProviderClient[]) {
 }
 
 describe("provider registry", () => {
+  it("routes embeddings through the upstream provider model while preserving the public model id", async () => {
+    const embeddings = vi.fn(async () => ({
+      data: [{ embedding: [0.1, 0.2, 0.3], index: 0 }],
+      model: "text-embedding-3-small",
+      providerModel: "openai/text-embedding-3-small",
+      usage: { promptTokens: 3, totalTokens: 3 },
+    }));
+    const mock: ProviderClient = {
+      name: "mock",
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      embeddings,
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [mock],
+      defaultProvider: "mock",
+      modelProviderMap: {
+        "text-embedding-3-small": "mock",
+      },
+      providerModelMap: {
+        mock: "mock-image",
+      },
+      fallbackOrder: {
+        mock: [],
+      },
+    });
+
+    const result = await registry.embeddings("text-embedding-3-small", { input: "hello world" });
+
+    expect(embeddings).toHaveBeenCalledWith({
+      input: "hello world",
+      model: "openai/text-embedding-3-small",
+    });
+    expect(result.body).toMatchObject({
+      model: "text-embedding-3-small",
+    });
+    expect(result.headers["x-model-routed"]).toBe("text-embedding-3-small");
+    expect(result.headers["x-provider-model"]).toBe("openai/text-embedding-3-small");
+    expect(result.providerModel).toBe("openai/text-embedding-3-small");
+  });
+
   it("persists startup readiness snapshots for internal status", async () => {
     const ollama: ProviderClient = {
       name: "ollama",

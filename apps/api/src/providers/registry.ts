@@ -79,6 +79,9 @@ export type ProviderStatusResult = {
 
 const ALL_PROVIDERS = ["ollama", "groq", "openai", "openrouter", "gemini", "anthropic", "mock"] as const;
 const METRICS_STATUS_CACHE_TTL_MS = 5000;
+const EMBEDDING_PROVIDER_MODEL_MAP: Record<string, string> = {
+  "text-embedding-3-small": "openai/text-embedding-3-small",
+};
 
 /**
  * ProviderRegistry manages multiple AI provider clients, handling model routing,
@@ -290,7 +293,9 @@ export class ProviderRegistry {
         }
       }
 
-      const providerModel = this.config.providerModelMap[providerName] ?? modelId;
+      const providerModel = EMBEDDING_PROVIDER_MODEL_MAP[modelId]
+        ?? this.config.providerModelMap[providerName]
+        ?? modelId;
       const startedAt = Date.now();
       try {
         const result = await client.embeddings({ ...request, model: providerModel });
@@ -305,7 +310,7 @@ export class ProviderRegistry {
               embedding: item.embedding,
               index,
             })),
-            model: result.providerModel,
+            model: modelId,
             usage: {
               prompt_tokens: result.usage?.promptTokens ?? 0,
               total_tokens: result.usage?.totalTokens ?? 0,
@@ -314,10 +319,10 @@ export class ProviderRegistry {
           headers: {
             "x-model-routed": modelId,
             "x-provider-used": providerName,
-            "x-provider-model": result.providerModel,
+            "x-provider-model": result.providerModel ?? providerModel,
           },
           providerUsed: providerName,
-          providerModel: result.providerModel,
+          providerModel: result.providerModel ?? providerModel,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
