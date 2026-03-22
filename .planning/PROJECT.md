@@ -57,17 +57,11 @@ Two distinct API surfaces:
 
 ### Active
 
-- [ ] Full OpenAI schema compliance for `/v1/chat/completions` (request/response fields, error format, usage telemetry)
-- [ ] Full OpenAI schema compliance for `/v1/models` (object shape, permission fields)
-- [ ] Full OpenAI schema compliance for `/v1/images/generations` (all parameters, response format)
-- [ ] OpenAI-compatible auth model — canonical Bearer token behavior matching OpenAI SDK expectations
-- [ ] Streaming telemetry — `usage` object in final streaming chunk per OpenAI spec
-- [ ] OpenAI-compatible error responses (error object shape, status codes, error types)
-- [ ] `/v1/embeddings` endpoint (routed to OpenRouter embedding models)
-- [ ] OpenRouter metadata capture for token/cost tracking (generation metadata persistence)
-- [ ] Separate authenticated web chat from public API pipeline (proprietary web routes)
-- [ ] Provider/model catalog layer with normalized metadata
-- [ ] Enhanced `/v1/models` with capability/pricing context
+- [ ] Payment & finance hardening milestone execution (reconciliation, refund ops, ledger/support tooling)
+- [ ] Separate authenticated web chat from the public API analytics/runtime path
+- [ ] OpenRouter metadata capture for richer token and cost tracking
+- [ ] Provider/model catalog enrichment with more normalized capability and pricing metadata
+- [ ] Web frontend revamp evaluation and migration planning
 
 ### Out of Scope
 
@@ -218,7 +212,7 @@ Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, c
 
 ---
 
-## Current Milestone: OpenAI API Compliance (v1)
+## Completed Milestone: OpenAI API Compliance (v1)
 
 **Goal:** Transform Hive's `/v1/*` endpoints into a fully OpenAI-SDK-compatible API surface — a true drop-in replacement verifiable with the official `openai` npm SDK.
 
@@ -227,16 +221,26 @@ Evaluation criteria: Supabase Auth integration, OpenAI-compatible API backend, c
 | Phase | Name | Requirements | Status |
 |-------|------|-------------|--------|
 | 1 | Error Format Standardization | FOUND-01 | Complete |
-| 2 | Type Infrastructure | FOUND-06, FOUND-07 | Not started |
-| 3 | Auth Compliance | FOUND-02, FOUND-05 | Not started |
-| 4 | Models Endpoint | FOUND-03, FOUND-04 | Not started |
-| 5 | Chat Completions (Non-Streaming) | CHAT-01, CHAT-02, CHAT-03 | Not started |
-| 6 | Chat Completions (Streaming) | CHAT-04, CHAT-05 | Not started |
-| 7 | Surface Expansion | SURF-01, SURF-02, SURF-03 | Not started |
-| 8 | Differentiators | DIFF-01, DIFF-02, DIFF-03, DIFF-04 | Not started |
-| 9 | Operational Hardening | OPS-01, OPS-02 | Not started |
+| 2 | Type Infrastructure | FOUND-06, FOUND-07 | Complete |
+| 3 | Auth Compliance | FOUND-02, FOUND-05 | Complete |
+| 4 | Models Endpoint | FOUND-03, FOUND-04 | Complete |
+| 5 | Chat Completions (Non-Streaming) | CHAT-01, CHAT-02, CHAT-03 | Complete |
+| 6 | Chat Completions (Streaming) | CHAT-04, CHAT-05 | Complete |
+| 7 | Surface Expansion | SURF-01, SURF-02, SURF-03 | Complete |
+| 8 | Differentiators | DIFF-01, DIFF-02, DIFF-03, DIFF-04 | Complete |
+| 9 | Operational Hardening | OPS-01, OPS-02 | Complete |
+| 10 | Models Route Compliance | FOUND-02, FOUND-03, FOUND-04 | Complete |
+| 11 | Real OpenAI SDK Regression Tests | CI-style regression closure | Complete |
+| 12 | Embeddings Alias Runtime Compliance | SURF-01, DIFF-03 | Complete |
+| 13 | Error Path DIFF Headers | DIFF-01, DIFF-04 | Complete |
 
-**Execution order:** 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 (see ROADMAP.md for dependency graph)
+**Current state (2026-03-22):**
+
+- v1 is implemented across all 13 phases and audited in `.planning/v1.0-MILESTONE-AUDIT.md`
+- Docker-local real SDK verification is documented in [openai-real-sdk-local-verification.md](/home/sakib/hive/docs/runbooks/active/openai-real-sdk-local-verification.md)
+- The remaining live embeddings blocker in the 2026-03-22 local run was an upstream OpenRouter key-limit condition, not a Hive public-API routing or auth failure
+
+**Next planning track:** Payment & Finance Hardening
 
 ---
-*Last updated: 2026-03-17 — Phase 1 marked complete; added Payment & Finance Hardening and Vertical Products & Efficiency milestones; added key decisions from Bangladesh AI Gateway strategy memo*
+*Last updated: 2026-03-22 — OpenAI API Compliance (v1) marked complete in project tracking; added Docker-local real SDK verification reference and updated active work to the post-v1 planning track*

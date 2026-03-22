@@ -233,6 +233,7 @@ For provider/routing changes, verify headers remain correct:
 Provider readiness lesson that must persist:
 
 - Startup provider model readiness checks must use zero-token metadata endpoints such as Ollama `/api/tags` and Groq `/models`; do not spend chat tokens just to verify configured model availability.
+- Verification-only provider models must be gated behind explicit local/dev env vars and must not be enabled in base Compose or production-facing public catalogs by default.
 
 For ops/status changes:
 

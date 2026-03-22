@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Real Local OpenAI SDK Verification Report:** Added a runbook-style report covering the 2026-03-22 Docker-local verification run with real Supabase auth, Hive API-key issuance, local payment funding, official OpenAI SDK requests, and persisted billing evidence.
 - **Persisted Chat History:** Guest and authenticated chat conversations are now stored server-side and survive reloads and devices.
   - New Supabase tables: `chat_sessions` and `chat_messages` with ownership for both user and guest; guest sessions are claimed for the user on guest-link.
   - API: authenticated `GET/POST /v1/chat/sessions` and `GET /v1/chat/sessions/:id`, `POST /v1/chat/sessions/:id/messages`; internal guest session endpoints under `WEB_INTERNAL_GUEST_TOKEN` for list/create/get/send and claim-on-link in `/v1/internal/guest/link`.
@@ -105,6 +106,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **API Key Metadata:** Persistent API key records now expose only `keyPrefix` metadata instead of a plaintext-looking `key` field.
 
 ### Fixed
+- **Local Verification Embeddings Routing:** Added a dev-only `OPENROUTER_FREE_EMBEDDING_MODEL` path so Docker-local verification can expose `nvidia/llama-nemotron-embed-vl-1b-v2:free` without changing base/prod defaults, and embeddings now route unmapped model ids to the requested provider model instead of falling back to `openrouter/auto`.
 - **`guest-free` Billing Regression:** Authenticated requests to `guest-free` now bypass credit-consumption RPCs instead of failing with `failed to consume credits via rpc: invalid credits amount`.
 - **`guest-free` Mock Echo Regression:** Guest and authenticated `guest-free` requests now use the provider-backed zero-cost routing path instead of returning the mock `MVP response` echo.
 - **Guest/Auth Persistence Foreign Keys:** Session-authenticated guest linking and authenticated `guest-free` usage writes now ensure the local `user_profiles` row exists before persistence, preventing `guest_user_links_user_id_fkey` and `usage_events_user_id_fkey` `500` failures on the Docker-local stack.

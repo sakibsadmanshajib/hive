@@ -4,6 +4,8 @@
 
 This runbook documents managed user API keys with nicknames, optional expiration, revocation, and immutable lifecycle audit events.
 
+See also: [Real OpenAI SDK Local Verification](/home/sakib/hive/docs/runbooks/active/openai-real-sdk-local-verification.md)
+
 ## Data Model
 
 - Current key state lives in `public.api_keys`
@@ -65,3 +67,4 @@ docker compose exec web sh -c "cd /app && pnpm --filter @hive/web build"
 - Treat copied raw keys as secrets; rotate immediately if exposed.
 - Revoke keys by stable key id from the management API, not by re-submitting the raw secret.
 - Duplicate `expired_observed` events across restarts indicate audit dedupe drift and should be investigated.
+- The 2026-03-22 real local verification run created a disposable user, minted a Hive API key through `POST /v1/users/api-keys`, and confirmed that `/v1/usage` persisted the stable `api_key_id` for real SDK chat traffic.
