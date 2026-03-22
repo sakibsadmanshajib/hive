@@ -215,6 +215,10 @@ For API-impacting changes:
 3. Run full API test suite.
 4. Run API build.
 
+Repo lesson:
+
+- Some route-level unit tests use lightweight mock replies where `reply.header()` is not chainable; shared route helpers should set headers without relying on Fastify-style chaining unless the tests are updated in the same change.
+
 For provider/routing changes, verify headers remain correct:
 
 - `x-model-routed`

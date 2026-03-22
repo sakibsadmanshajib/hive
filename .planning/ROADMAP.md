@@ -24,7 +24,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 10: Models Route Compliance** - Auth guard and differentiator headers on GET /v1/models routes to close gaps found by milestone audit (completed 2026-03-22)
 - [x] **Phase 11: Real OpenAI SDK Regression Tests** - Comprehensive SDK coverage for implemented endpoints, success/error paths, and CI-ready execution (completed 2026-03-22)
 - [ ] **Phase 12: Embeddings Alias Runtime Compliance** - Accept the standard SDK-facing embeddings model id in the real runtime and lock it with regression coverage
-- [ ] **Phase 13: Error-Path DIFF Headers** - Preserve DIFF headers on all `/v1/*` error and stub responses
+- [x] **Phase 13: Error-Path DIFF Headers** - Preserve DIFF headers on all `/v1/*` error and stub responses (completed 2026-03-22)
 
 ## Phase Details
 
@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 10. Models Route Compliance | 1/1 | Complete   | 2026-03-22 |
 | 11. Real OpenAI SDK Regression Tests | 1/1 | Complete | 2026-03-22 |
 | 12. Embeddings Alias Runtime Compliance | 0/1 | Planned | - |
-| 13. Error-Path DIFF Headers | 0/1 | Planned | - |
+| 13. Error-Path DIFF Headers | 1/1 | Complete   | 2026-03-22 |
 
 ### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
 
@@ -232,7 +232,7 @@ Plans:
   2. Unsupported `/v1/*` stub routes include the same DIFF headers on 404 responses
   3. Route handlers seed DIFF headers before calling `sendApiError()` or equivalent early-return paths
   4. Regression coverage proves the header contract on representative live error paths and stub responses
-**Plans:** 0/1 plans complete
+**Plans:** 1/1 plans complete
 
 Plans:
-- [ ] TBD (run `$gsd-plan-phase 13` to break down)
+- [x] 13-PLAN.md — Seed DIFF headers on v1 error and stub paths, then lock with live regressions (completed 2026-03-22)

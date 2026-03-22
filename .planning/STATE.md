@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 11
+current_phase: 13
 current_plan: 1 (complete)
-status: completed
-last_updated: "2026-03-22T04:04:38.507Z"
+status: active
+last_updated: "2026-03-22T05:23:12Z"
 progress:
-  total_phases: 11
-  completed_phases: 11
-  total_plans: 21
-  completed_plans: 21
+  total_phases: 13
+  completed_phases: 12
+  total_plans: 22
+  completed_plans: 22
 ---
 
 # Session State
@@ -22,15 +22,16 @@ See: .planning/PROJECT.md
 ## Position
 
 **Milestone:** v1.0 milestone
-**Current phase:** 11
+**Current phase:** 13
 **Current plan:** 1 (complete)
-**Status:** Milestone complete
+**Status:** Phase 13 complete; Phase 12 remains pending
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
 - Phase 11 added: Real OpenAI SDK regression tests — CI-style e2e
+- Phase 13 completed: Error-Path DIFF Headers
 
 ## Decisions
 
@@ -61,6 +62,8 @@ See: .planning/PROJECT.md
 - [11-01] rateLimiterOverride parameter added to createMockServices for 429 path testing
 - [11-01] Per-test Fastify instances used for error-path tests to avoid shared state
 - [11-01] 422 test uses 400 (BadRequestError) since Fastify schema defines messages as optional
+- [Phase 13]: Route handlers and stub routes seed static no-dispatch DIFF headers before shared auth and error helpers can terminate the response
+- [Phase 13]: Shared reply header helpers in this repo should set headers sequentially instead of assuming reply.header chaining in lightweight tests
 
 ## Session Log
 
@@ -78,3 +81,4 @@ See: .planning/PROJECT.md
 - 2026-03-21: Completed 10-PLAN.md (models routes now require Bearer auth, return static DIFF-01 headers, and pass 353 API tests plus Docker API build)
 - 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests — CI-style e2e, 345 tests passing)
 - 2026-03-22: Captured Phase 13 context at `.planning/phases/13-error-path-diff-headers/13-CONTEXT.md`
+- 2026-03-22: Completed 13-01-PLAN.md (v1 error and stub responses now preserve DIFF headers; 361 API tests passing; Docker API build passing)
