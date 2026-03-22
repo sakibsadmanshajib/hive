@@ -5,6 +5,7 @@ import type { RuntimeServices } from "../runtime/services";
 import { ChatCompletionsBodySchema } from "../schemas/chat-completions";
 import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
 export function registerChatCompletionsRoute(
   app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
@@ -13,6 +14,8 @@ export function registerChatCompletionsRoute(
   app.post("/v1/chat/completions", {
     schema: { body: ChatCompletionsBodySchema },
   }, async (request, reply) => {
+    setNoDispatchDiffHeaders(reply);
+
     const principal = await requireV1ApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;

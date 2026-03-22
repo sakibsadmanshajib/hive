@@ -4,6 +4,7 @@ import type { RuntimeServices } from "../runtime/services";
 import { ImagesGenerationsBodySchema } from "../schemas/images-generations";
 import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
 export function registerImagesGenerationsRoute(
   app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
@@ -12,6 +13,8 @@ export function registerImagesGenerationsRoute(
   app.post("/v1/images/generations", {
     schema: { body: ImagesGenerationsBodySchema },
   }, async (request, reply) => {
+    setNoDispatchDiffHeaders(reply);
+
     const principal = await requireV1ApiPrincipal(request, reply, services, "image");
     if (!principal) {
       return;

@@ -4,6 +4,7 @@ import type { RuntimeServices } from "../runtime/services";
 import { ResponsesBodySchema } from "../schemas/responses";
 import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
 export function registerResponsesRoute(
   app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
@@ -12,6 +13,8 @@ export function registerResponsesRoute(
   app.post("/v1/responses", {
     schema: { body: ResponsesBodySchema },
   }, async (request, reply) => {
+    setNoDispatchDiffHeaders(reply);
+
     const principal = await requireV1ApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;

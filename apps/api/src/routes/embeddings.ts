@@ -4,6 +4,7 @@ import type { RuntimeServices } from "../runtime/services";
 import { EmbeddingsBodySchema } from "../schemas/embeddings";
 import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
 import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
 export function registerEmbeddingsRoute(
   app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
@@ -12,6 +13,8 @@ export function registerEmbeddingsRoute(
   app.post("/v1/embeddings", {
     schema: { body: EmbeddingsBodySchema },
   }, async (request, reply) => {
+    setNoDispatchDiffHeaders(reply);
+
     const principal = await requireV1ApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;

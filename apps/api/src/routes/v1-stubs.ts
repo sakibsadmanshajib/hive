@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
 function stubHandler(endpoint: string) {
   return (_request: FastifyRequest, reply: FastifyReply) => {
+    setNoDispatchDiffHeaders(reply);
     sendApiError(reply, 404,
       `The ${endpoint} endpoint is not yet supported. Please check our roadmap for availability.`,
       { code: "unsupported_endpoint" },
