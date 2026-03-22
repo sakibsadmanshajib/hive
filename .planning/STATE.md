@@ -77,3 +77,4 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 09-01-PLAN.md (stub endpoint error format for unsupported endpoints)
 - 2026-03-21: Completed 10-PLAN.md (models routes now require Bearer auth, return static DIFF-01 headers, and pass 353 API tests plus Docker API build)
 - 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests — CI-style e2e, 345 tests passing)
+- 2026-03-22: Captured Phase 13 context at `.planning/phases/13-error-path-diff-headers/13-CONTEXT.md`
