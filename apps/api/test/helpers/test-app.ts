@@ -1,9 +1,18 @@
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
+import type {
+  CreditBalance,
+  PersistedChatSessionSummary,
+  TrafficAnalyticsSnapshot,
+  UsageEvent,
+  UsageSummary,
+} from "../../src/domain/types";
+import { ProviderRegistry } from "../../src/providers/registry";
+import type { ProviderName } from "../../src/providers/types";
 import { v1Plugin } from "../../src/routes/v1-plugin";
 import type { ChatCompletionsBody } from "../../src/schemas/chat-completions";
-import type { RuntimeServices } from "../../src/runtime/services";
+import { RuntimeAiService, type RuntimeServices } from "../../src/runtime/services";
 
 // Discriminated union return types matching RuntimeAiService
 type AiSuccess<T> = {
@@ -87,6 +96,26 @@ type V1TestAiService =
 
 type V1TestServices = V1MockServices & { ai: V1TestAiService };
 
+const TEST_PROVIDER_MODEL_MAP = {
+  mock: "mock-chat",
+  ollama: "ollama/mock",
+  groq: "groq/mock",
+  openai: "gpt-4o-mini",
+  openrouter: "openrouter/auto",
+  gemini: "gemini-2.0-flash",
+  anthropic: "claude-3-5-haiku-latest",
+} satisfies Record<ProviderName, string>;
+
+const TEST_PROVIDER_FALLBACK_ORDER = {
+  mock: [],
+  ollama: [],
+  groq: [],
+  openai: [],
+  openrouter: [],
+  gemini: [],
+  anthropic: [],
+} satisfies Record<ProviderName, ProviderName[]>;
+
 export type MockAiService = {
   chatCompletions: (
     userId: string,
@@ -126,6 +155,193 @@ function makeDefaultHeaders(): Record<string, string> {
     "x-provider-model": "mock-model",
     "x-actual-credits": "1",
   };
+}
+
+function createEmptyCreditBalance(userId: string): CreditBalance {
+  return {
+    userId,
+    availableCredits: 0,
+    purchasedCredits: 0,
+    promoCredits: 0,
+  };
+}
+
+function createEmptyUsageSummary(windowDays: number): UsageSummary {
+  return {
+    windowDays,
+    totalRequests: 0,
+    totalCredits: 0,
+    daily: [],
+    byModel: [],
+    byEndpoint: [],
+    byChannel: [],
+    byApiKey: [],
+  };
+}
+
+function createEmptyTrafficAnalytics(windowDays: number): TrafficAnalyticsSnapshot {
+  return {
+    windowDays,
+    channels: {
+      api: { requests: 0, credits: 0 },
+      web: { requests: 0, credits: 0 },
+    },
+    byApiKey: [],
+    webBreakdown: {
+      guestRequests: 0,
+      authenticatedRequests: 0,
+      guestSessions: 0,
+      linkedGuests: 0,
+      conversionRate: 0,
+    },
+  };
+}
+
+function createUsageEvent(
+  entry: Parameters<RuntimeServices["usage"]["add"]>[0],
+): UsageEvent {
+  return {
+    id: `usage_${randomUUID().slice(0, 12)}`,
+    userId: entry.userId,
+    endpoint: entry.endpoint,
+    model: entry.model,
+    credits: entry.credits,
+    channel: entry.channel ?? (entry.userId === "guest" ? "web" : "api"),
+    apiKeyId: entry.apiKeyId,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function createSessionSummary(): PersistedChatSessionSummary {
+  const now = new Date().toISOString();
+  return {
+    id: `session_${randomUUID().slice(0, 12)}`,
+    title: "New Chat",
+    createdAt: now,
+    updatedAt: now,
+    lastMessageAt: null,
+  };
+}
+
+function createGuestAttributionStore(): RuntimeServices["guests"] {
+  return {
+    upsertSession: async () => undefined,
+    addUsage: async () => undefined,
+    linkGuestToUser: async () => undefined,
+  };
+}
+
+function createUnusedRuntimeServices(): Pick<
+  RuntimeServices,
+  "credits" | "usage" | "payments" | "reconciliation" | "guests" | "chatHistory" | "adapters"
+> {
+  const guests = createGuestAttributionStore();
+
+  return {
+    credits: {
+      getBalance: async (userId: string) => createEmptyCreditBalance(userId),
+      consume: async () => true,
+      refund: async (userId: string) => createEmptyCreditBalance(userId),
+      topUp: async (userId: string) => createEmptyCreditBalance(userId),
+    },
+    usage: {
+      add: async (entry) => createUsageEvent(entry),
+      list: async () => [],
+      listRecent: async () => [],
+      listWithSummary: async (_userId: string, windowDays = 7) => ({
+        data: [],
+        summary: createEmptyUsageSummary(windowDays),
+      }),
+      trafficAnalytics: async (windowDays = 7) => createEmptyTrafficAnalytics(windowDays),
+    },
+    payments: {
+      createIntent: async ({ userId, provider, bdtAmount }) => ({
+        intentId: `intent_${randomUUID().slice(0, 12)}`,
+        userId,
+        provider,
+        bdtAmount,
+        status: "initiated" as const,
+        mintedCredits: 0,
+      }),
+      getIntent: async () => undefined,
+      applyWebhook: async ({ intent_id, provider }) => ({
+        intentId: intent_id,
+        userId: "user-1",
+        provider,
+        bdtAmount: 0,
+        status: "credited" as const,
+        mintedCredits: 0,
+      }),
+      confirmDemoIntent: async ({ intentId }) => ({
+        intentId,
+        userId: "user-1",
+        provider: "bkash" as const,
+        bdtAmount: 0,
+        status: "credited" as const,
+        mintedCredits: 0,
+      }),
+    },
+    reconciliation: {
+      reconcileRecentPayments: async () => ({
+        summary: {
+          totalFindings: 0,
+          verifiedEventWithoutCreditedIntent: 0,
+          creditedIntentWithoutVerifiedEvent: 0,
+          creditedAmountMismatch: 0,
+          missingPaymentLedgerEntry: 0,
+        },
+        findings: [],
+      }),
+    },
+    guests,
+    chatHistory: {
+      listSessions: async () => [],
+      createSession: async () => createSessionSummary(),
+      getSession: async () => null,
+      listSessionsForGuest: async () => [],
+      createSessionForGuest: async () => createSessionSummary(),
+      getSessionForGuest: async () => null,
+      claimGuestSessionsForUser: async () => undefined,
+      sendMessage: async () => ({ type: "not_found" as const }),
+      sendMessageForGuest: async () => ({ type: "not_found" as const }),
+    },
+    adapters: {
+      bkash: { verifyWebhook: async () => true },
+      sslcommerz: { verifyWebhook: async () => true },
+    },
+  };
+}
+
+function toRuntimeAiService(models: RuntimeServices["models"], ai: V1TestAiService): RuntimeServices["ai"] {
+  if (ai instanceof RuntimeAiService) {
+    return ai;
+  }
+
+  const runtimeAi = new RuntimeAiService(
+    models,
+    {
+      consume: async () => true,
+      refund: async (userId: string) => createEmptyCreditBalance(userId),
+    },
+    { add: async (entry) => createUsageEvent(entry) },
+    createGuestAttributionStore(),
+    new ProviderRegistry({
+      clients: [],
+      defaultProvider: "mock",
+      modelProviderMap: {},
+      providerModelMap: TEST_PROVIDER_MODEL_MAP,
+      fallbackOrder: TEST_PROVIDER_FALLBACK_ORDER,
+    }),
+    { trace: async () => undefined },
+  );
+
+  runtimeAi.chatCompletions = ai.chatCompletions;
+  runtimeAi.chatCompletionsStream = ai.chatCompletionsStream;
+  runtimeAi.imageGeneration = ai.imageGeneration;
+  runtimeAi.embeddings = ai.embeddings;
+  runtimeAi.responses = ai.responses;
+
+  return runtimeAi;
 }
 
 function createDefaultMockAiService(): MockAiService {
@@ -306,7 +522,13 @@ export async function createTestAppWithServices(services: V1TestServices) {
     },
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  await app.register(v1Plugin, { services: services as RuntimeServices });
+  const runtimeServices = {
+    ...createUnusedRuntimeServices(),
+    ...services,
+    ai: toRuntimeAiService(services.models, services.ai),
+  } satisfies RuntimeServices;
+
+  await app.register(v1Plugin, { services: runtimeServices });
 
   const address = await app.listen({ port: 0 });
   return { app, address };

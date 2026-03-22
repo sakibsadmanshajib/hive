@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import type { FastifyInstance } from "fastify";
 import { ModelService } from "../src/domain/model-service";
 import { ProviderRegistry } from "../src/providers/registry";
-import type { ProviderClient } from "../src/providers/types";
+import type { ProviderClient, ProviderName } from "../src/providers/types";
 import { RuntimeAiService } from "../src/runtime/services";
 import { createTestApp, createMockServices, createTestAppWithServices } from "./helpers/test-app";
 
@@ -130,13 +130,32 @@ describe("OpenAI SDK regression tests", () => {
       status: async () => ({ enabled: true, healthy: true, detail: "ok" }),
       checkModelReadiness: async () => ({ ready: true, detail: "ok" }),
     };
+    const openrouter: ProviderName = "openrouter";
+    const providerModelMap = {
+      mock: "mock-chat",
+      ollama: "ollama/mock",
+      groq: "groq/mock",
+      openai: "gpt-4o-mini",
+      openrouter: "openrouter/auto",
+      gemini: "gemini-2.0-flash",
+      anthropic: "claude-3-5-haiku-latest",
+    } satisfies Record<ProviderName, string>;
+    const fallbackOrder = {
+      mock: [],
+      ollama: [],
+      groq: [],
+      openai: [],
+      openrouter: [],
+      gemini: [],
+      anthropic: [],
+    } satisfies Record<ProviderName, ProviderName[]>;
     const registry = new ProviderRegistry({
       clients: [providerClient],
-      defaultProvider: "openrouter" as never,
-      modelProviderMap: { "text-embedding-3-small": "openrouter" } as never,
-      providerModelMap: { openrouter: "openrouter/auto" } as never,
-      providerReadinessModels: { openrouter: ["openai/text-embedding-3-small"] } as never,
-      fallbackOrder: { openrouter: [] } as never,
+      defaultProvider: openrouter,
+      modelProviderMap: { "text-embedding-3-small": openrouter },
+      providerModelMap,
+      providerReadinessModels: { openrouter: ["openai/text-embedding-3-small"] },
+      fallbackOrder,
     });
     const ai = new RuntimeAiService(
       models,
@@ -301,12 +320,12 @@ describe("Error-path regression tests", () => {
     }
   });
 
-  it("422 Validation — SDK throws error when service returns 422-equivalent status", async () => {
+  it("422 Validation — SDK throws UnprocessableEntityError when service returns 422", async () => {
     const { app: validationApp, address: validationBaseUrl } = await createTestApp(
       createMockServices("valid-api-key", "user-1", {
         chatCompletions: async () => ({
           error: "invalid request: model field is required",
-          statusCode: 400 as const,
+          statusCode: 422 as const,
         }),
       }),
     );
@@ -317,8 +336,8 @@ describe("Error-path regression tests", () => {
         model: "mock-chat",
         messages: [{ role: "user" as const, content: "hi" }],
       });
-      await expect(request).rejects.toBeInstanceOf(OpenAI.BadRequestError);
-      await expect(request).rejects.toMatchObject({ status: 400 });
+      await expect(request).rejects.toBeInstanceOf(OpenAI.UnprocessableEntityError);
+      await expect(request).rejects.toMatchObject({ status: 422 });
     } finally {
       await validationApp.close();
     }
