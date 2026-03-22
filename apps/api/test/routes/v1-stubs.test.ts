@@ -5,6 +5,13 @@ import { createTestApp, createMockServices } from "../helpers/test-app";
 
 let app: FastifyInstance;
 
+function expectNoDispatchHeaders(response: { headers: Record<string, unknown> }): void {
+  expect(response.headers["x-model-routed"]).toBe("");
+  expect(response.headers["x-provider-used"]).toBe("");
+  expect(response.headers["x-provider-model"]).toBe("");
+  expect(response.headers["x-actual-credits"]).toBe("0");
+}
+
 beforeAll(async () => {
   const result = await createTestApp(createMockServices("valid-api-key", "user-1"));
   app = result.app;
@@ -30,6 +37,7 @@ describe("OPS-01: Stub endpoint error format", () => {
     async (method, url) => {
       const response = await app.inject({ method, url });
       expect(response.statusCode).toBe(404);
+      expectNoDispatchHeaders(response);
 
       const body: { error: { type: string; code: string; param: null; message: string } } =
         response.json();
@@ -47,6 +55,7 @@ describe("OPS-01: Stub endpoint error format", () => {
       url: "/v1/files/test-file-id",
     });
     expect(response.statusCode).toBe(404);
+    expectNoDispatchHeaders(response);
 
     const body: { error: { type: string; code: string; param: null; message: string } } =
       response.json();
