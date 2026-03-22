@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   CreditBalance,
+  GatewayModel,
   SessionUserIdentity,
   TrafficAnalyticsSnapshot,
   UsageChannel,
@@ -1202,6 +1203,23 @@ function startProviderReadinessCapture(providerRegistry: ProviderRegistry): void
     });
 }
 
+function buildVerificationModels(freeEmbeddingModel?: string): GatewayModel[] {
+  if (!freeEmbeddingModel) {
+    return [];
+  }
+
+  return [{
+    id: freeEmbeddingModel,
+    object: "model",
+    created: 1744675200,
+    capability: "embedding",
+    costType: "variable",
+    pricing: {
+      inputTokensPer1m: 2,
+    },
+  }];
+}
+
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const supabase = createSupabaseAdminClient(env);
@@ -1252,6 +1270,7 @@ export function createRuntimeServices(): RuntimeServices {
     apiKey: undefined,
     model: "openrouter/auto",
     freeModel: undefined,
+    freeEmbeddingModel: undefined,
     timeoutMs: 4000,
     maxRetries: 1,
   };
@@ -1275,7 +1294,11 @@ export function createRuntimeServices(): RuntimeServices {
   const enabledFreeModelIds = Object.entries(providerOffers.modelOffers)
     .filter(([, offers]) => offers.length > 0)
     .map(([modelId]) => modelId);
-  const models = new ModelService({ enabledFreeModelIds });
+  const verificationModels = buildVerificationModels(openrouterConfig.freeEmbeddingModel);
+  const models = new ModelService({
+    enabledFreeModelIds,
+    extraModels: verificationModels,
+  });
 
   const providerModelMap: Record<ProviderName, string> = {
     mock: "mock-chat",
@@ -1291,7 +1314,11 @@ export function createRuntimeServices(): RuntimeServices {
     ollama: [],
     groq: [env.providers.groq.model, env.providers.groq.freeModel].filter((value): value is string => Boolean(value)),
     openai: [openaiConfig.chatModel, openaiConfig.imageModel, openaiConfig.freeModel].filter((value): value is string => Boolean(value)),
-    openrouter: [openrouterConfig.model, openrouterConfig.freeModel].filter((value): value is string => Boolean(value)),
+    openrouter: [
+      openrouterConfig.model,
+      openrouterConfig.freeModel,
+      openrouterConfig.freeEmbeddingModel,
+    ].filter((value): value is string => Boolean(value)),
     gemini: [geminiConfig.model, geminiConfig.freeModel].filter((value): value is string => Boolean(value)),
     anthropic: [anthropicConfig.model, anthropicConfig.freeModel].filter((value): value is string => Boolean(value)),
   };
@@ -1338,6 +1365,7 @@ export function createRuntimeServices(): RuntimeServices {
     modelProviderMap: {
       "smart-reasoning": "groq",
       "image-basic": "openai",
+      ...Object.fromEntries(verificationModels.map((model) => [model.id, "openrouter" as const])),
     },
     providerModelMap,
     providerReadinessModels,

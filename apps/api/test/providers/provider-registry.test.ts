@@ -74,6 +74,50 @@ describe("provider registry", () => {
     expect(result.providerModel).toBe("openai/text-embedding-3-small");
   });
 
+  it("passes through the requested embedding model id when no explicit upstream alias exists", async () => {
+    const embeddings = vi.fn(async () => ({
+      data: [{ embedding: [0.4, 0.5, 0.6], index: 0 }],
+      model: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+      providerModel: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+      usage: { promptTokens: 2, totalTokens: 2 },
+    }));
+    const openrouter: ProviderClient = {
+      name: "openrouter" as never,
+      isEnabled: () => true,
+      chat: vi.fn(async () => ({ content: "mock ok" })),
+      embeddings,
+      status: vi.fn(async () => ({ enabled: true, healthy: true, detail: "ok" })),
+      checkModelReadiness: vi.fn(async () => ({ ready: true, detail: "startup model ready" })),
+    };
+
+    const registry = new ProviderRegistry({
+      clients: [openrouter],
+      defaultProvider: "openrouter" as never,
+      modelProviderMap: {
+        "nvidia/llama-nemotron-embed-vl-1b-v2:free": "openrouter" as never,
+      },
+      providerModelMap: {
+        openrouter: "openrouter/auto",
+      } as never,
+      fallbackOrder: {
+        openrouter: [],
+      } as never,
+    });
+
+    const result = await registry.embeddings("nvidia/llama-nemotron-embed-vl-1b-v2:free", {
+      input: "verification probe",
+    });
+
+    expect(embeddings).toHaveBeenCalledWith({
+      input: "verification probe",
+      model: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+    });
+    expect(result.body).toMatchObject({
+      model: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+    });
+    expect(result.headers["x-provider-model"]).toBe("nvidia/llama-nemotron-embed-vl-1b-v2:free");
+  });
+
   it("persists startup readiness snapshots for internal status", async () => {
     const ollama: ProviderClient = {
       name: "ollama",

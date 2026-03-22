@@ -51,4 +51,22 @@ describe("model service", () => {
     expect(modelIds).toContain("text-embedding-3-small");
     expect(modelIds).not.toContain("openai/text-embedding-3-small");
   });
+
+  it("lists a verification-only embedding model when the runtime injects it", () => {
+    const service = new ModelService({
+      extraModels: [
+        {
+          id: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+          object: "model",
+          created: 1744675200,
+          capability: "embedding",
+          costType: "variable",
+          pricing: { inputTokensPer1m: 2 },
+        },
+      ],
+    } as any);
+
+    expect(service.findById("nvidia/llama-nemotron-embed-vl-1b-v2:free")?.id)
+      .toBe("nvidia/llama-nemotron-embed-vl-1b-v2:free");
+  });
 });

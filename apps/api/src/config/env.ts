@@ -119,6 +119,7 @@ export type AppEnv = {
       baseUrl: string;
       model: string;
       freeModel?: string;
+      freeEmbeddingModel?: string;
       timeoutMs: number;
       maxRetries: number;
     };
@@ -232,6 +233,7 @@ export function getEnv(): AppEnv {
         baseUrl: required("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         model: optional("OPENROUTER_MODEL") ?? optional("OPENROUTER_FREE_MODEL") ?? "openrouter/auto",
         freeModel: optional("OPENROUTER_FREE_MODEL"),
+        freeEmbeddingModel: optional("OPENROUTER_FREE_EMBEDDING_MODEL"),
         timeoutMs: parsePositiveInteger("OPENROUTER_TIMEOUT_MS", providerTimeoutMs),
         maxRetries: parseNonNegativeInteger("OPENROUTER_MAX_RETRIES", providerMaxRetries),
       },

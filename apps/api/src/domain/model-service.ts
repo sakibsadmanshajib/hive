@@ -161,15 +161,18 @@ const MODELS: GatewayModel[] = [
 
 type ModelServiceOptions = {
   enabledFreeModelIds?: Iterable<string>;
+  extraModels?: GatewayModel[];
 };
 
 export class ModelService {
   private readonly enabledFreeModelIds?: Set<string>;
+  private readonly models: GatewayModel[];
 
   constructor(options?: ModelServiceOptions) {
     this.enabledFreeModelIds = options?.enabledFreeModelIds
       ? new Set(options.enabledFreeModelIds)
       : undefined;
+    this.models = mergeModels(MODELS, options?.extraModels ?? []);
   }
 
   list(): GatewayModel[] {
@@ -209,7 +212,7 @@ export class ModelService {
   }
 
   private enabledModels(): GatewayModel[] {
-    return MODELS.filter((model) => this.isModelEnabled(model));
+    return this.models.filter((model) => this.isModelEnabled(model));
   }
 
   private isModelEnabled(model: GatewayModel): boolean {
@@ -221,4 +224,16 @@ export class ModelService {
     }
     return this.enabledFreeModelIds.has(model.id);
   }
+}
+
+function mergeModels(baseModels: GatewayModel[], extraModels: GatewayModel[]): GatewayModel[] {
+  if (extraModels.length === 0) {
+    return baseModels;
+  }
+
+  const merged = new Map(baseModels.map((model) => [model.id, model]));
+  for (const model of extraModels) {
+    merged.set(model.id, model);
+  }
+  return Array.from(merged.values());
 }

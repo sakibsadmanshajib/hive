@@ -293,9 +293,7 @@ export class ProviderRegistry {
         }
       }
 
-      const providerModel = EMBEDDING_PROVIDER_MODEL_MAP[modelId]
-        ?? this.config.providerModelMap[providerName]
-        ?? modelId;
+      const providerModel = EMBEDDING_PROVIDER_MODEL_MAP[modelId] ?? modelId;
       const startedAt = Date.now();
       try {
         const result = await client.embeddings({ ...request, model: providerModel });
