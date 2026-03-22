@@ -1,10 +1,11 @@
 ---
 phase: 7
 slug: surface-expansion
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: executed
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-18
+audited: 2026-03-21
 ---
 
 # Phase 7 — Validation Strategy
@@ -38,12 +39,12 @@ created: 2026-03-18
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 7-01-01 | 01 | 0 | SURF-01 | unit | `cd apps/api && npx vitest run src/routes/__tests__/embeddings-compliance.test.ts` | ❌ W0 | ⬜ pending |
-| 7-01-02 | 01 | 0 | SURF-02 | unit | `cd apps/api && npx vitest run src/routes/__tests__/images-compliance.test.ts` | ❌ W0 | ⬜ pending |
-| 7-01-03 | 01 | 0 | SURF-03 | unit | `cd apps/api && npx vitest run src/routes/__tests__/responses-compliance.test.ts` | ❌ W0 | ⬜ pending |
-| 7-02-01 | 02 | 1 | SURF-01 | unit | `cd apps/api && npx vitest run src/routes/__tests__/embeddings-compliance.test.ts` | ❌ W0 | ⬜ pending |
-| 7-02-02 | 02 | 1 | SURF-02 | unit | `cd apps/api && npx vitest run src/routes/__tests__/images-compliance.test.ts` | ❌ W0 | ⬜ pending |
-| 7-02-03 | 02 | 1 | SURF-03 | unit | `cd apps/api && npx vitest run src/routes/__tests__/responses-compliance.test.ts` | ❌ W0 | ⬜ pending |
+| 7-01-01 | 01 | 0 | SURF-01 | unit | `cd apps/api && npx vitest run src/routes/__tests__/embeddings-compliance.test.ts` | ✅ | ✅ green |
+| 7-01-02 | 01 | 0 | SURF-02 | unit | `cd apps/api && npx vitest run src/routes/__tests__/images-compliance.test.ts` | ✅ | ✅ green |
+| 7-01-03 | 01 | 0 | SURF-03 | unit | `cd apps/api && npx vitest run src/routes/__tests__/responses-compliance.test.ts` | ✅ | ✅ green |
+| 7-02-01 | 02 | 1 | SURF-01 | unit | `cd apps/api && npx vitest run src/routes/__tests__/embeddings-compliance.test.ts` | ✅ | ✅ green |
+| 7-02-02 | 02 | 1 | SURF-02 | unit | `cd apps/api && npx vitest run src/routes/__tests__/images-compliance.test.ts` | ✅ | ✅ green |
+| 7-02-03 | 02 | 1 | SURF-03 | unit | `cd apps/api && npx vitest run src/routes/__tests__/responses-compliance.test.ts` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -51,9 +52,9 @@ created: 2026-03-18
 
 ## Wave 0 Requirements
 
-- [ ] `apps/api/src/routes/__tests__/embeddings-compliance.test.ts` — stubs for SURF-01
-- [ ] `apps/api/src/routes/__tests__/images-compliance.test.ts` — stubs for SURF-02
-- [ ] `apps/api/src/routes/__tests__/responses-compliance.test.ts` — stubs for SURF-03
+- [x] `apps/api/src/routes/__tests__/embeddings-compliance.test.ts` — stubs for SURF-01
+- [x] `apps/api/src/routes/__tests__/images-compliance.test.ts` — stubs for SURF-02
+- [x] `apps/api/src/routes/__tests__/responses-compliance.test.ts` — stubs for SURF-03
 
 ---
 
@@ -68,11 +69,23 @@ created: 2026-03-18
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** passed 2026-03-21
+
+---
+
+## Validation Audit 2026-03-21
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+| Tests verified green | 30 (3 files) |
+
+All Wave 0 test files were created by Plan 3 (07-03) but VALIDATION.md remained as draft scaffold. Audit confirmed full coverage — no new tests needed.
