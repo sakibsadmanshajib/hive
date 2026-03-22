@@ -23,25 +23,19 @@ describe("OpenAI SDK regression tests", () => {
 
   it("models.list() with an invalid key throws AuthenticationError", async () => {
     const client = new OpenAI({ apiKey: "invalid-key", baseURL: `${baseUrl}/v1`, maxRetries: 0 });
-    let caught: unknown = null;
-    await client.models.list().catch((err: unknown) => { caught = err; });
-    expect(caught).toBeInstanceOf(OpenAI.AuthenticationError);
-    if (caught instanceof OpenAI.AuthenticationError) {
-      expect(caught.status).toBe(401);
-    }
+    const request = client.models.list();
+    await expect(request).rejects.toBeInstanceOf(OpenAI.AuthenticationError);
+    await expect(request).rejects.toMatchObject({ status: 401 });
   });
 
   it("chat.completions.create() with invalid key throws AuthenticationError", async () => {
     const client = new OpenAI({ apiKey: "invalid-key", baseURL: `${baseUrl}/v1`, maxRetries: 0 });
-    let caught: unknown = null;
-    await client.chat.completions.create({
+    const request = client.chat.completions.create({
       model: "mock-chat",
       messages: [{ role: "user" as const, content: "hi" }],
-    }).catch((err: unknown) => { caught = err; });
-    expect(caught).toBeInstanceOf(OpenAI.AuthenticationError);
-    if (caught instanceof OpenAI.AuthenticationError) {
-      expect(caught.status).toBe(401);
-    }
+    });
+    await expect(request).rejects.toBeInstanceOf(OpenAI.AuthenticationError);
+    await expect(request).rejects.toMatchObject({ status: 401 });
   });
 
   it("POST /v1/audio/speech returns 404 with unsupported_endpoint", async () => {
@@ -89,12 +83,9 @@ describe("OpenAI SDK regression tests", () => {
 
   it("models.retrieve('nonexistent-model') throws NotFoundError (404)", async () => {
     const client = new OpenAI({ apiKey: "valid-api-key", baseURL: `${baseUrl}/v1`, maxRetries: 0 });
-    let caught: unknown = null;
-    await client.models.retrieve("nonexistent-model-id").catch((err: unknown) => { caught = err; });
-    expect(caught).toBeInstanceOf(OpenAI.NotFoundError);
-    if (caught instanceof OpenAI.NotFoundError) {
-      expect(caught.status).toBe(404);
-    }
+    const request = client.models.retrieve("nonexistent-model-id");
+    await expect(request).rejects.toBeInstanceOf(OpenAI.NotFoundError);
+    await expect(request).rejects.toMatchObject({ status: 404 });
   });
 
   it("chat.completions.create() returns a valid completion with correct shape", async () => {
@@ -224,16 +215,12 @@ describe("Error-path regression tests", () => {
 
     try {
       const client = new OpenAI({ apiKey: "valid-api-key", baseURL: `${errorBaseUrl}/v1`, maxRetries: 0 });
-      let caught: unknown = null;
-      await client.chat.completions.create({
+      const request = client.chat.completions.create({
         model: "mock-chat",
         messages: [{ role: "user" as const, content: "hi" }],
-      }).catch((err: unknown) => { caught = err; });
-
-      expect(caught).toBeInstanceOf(OpenAI.APIError);
-      if (caught instanceof OpenAI.APIError) {
-        expect(caught.status).toBe(402);
-      }
+      });
+      await expect(request).rejects.toBeInstanceOf(OpenAI.APIError);
+      await expect(request).rejects.toMatchObject({ status: 402 });
     } finally {
       await errorApp.close();
     }
@@ -246,16 +233,12 @@ describe("Error-path regression tests", () => {
 
     try {
       const client = new OpenAI({ apiKey: "valid-api-key", baseURL: `${rateLimitBaseUrl}/v1`, maxRetries: 0 });
-      let caught: unknown = null;
-      await client.chat.completions.create({
+      const request = client.chat.completions.create({
         model: "mock-chat",
         messages: [{ role: "user" as const, content: "hi" }],
-      }).catch((err: unknown) => { caught = err; });
-
-      expect(caught).toBeInstanceOf(OpenAI.RateLimitError);
-      if (caught instanceof OpenAI.RateLimitError) {
-        expect(caught.status).toBe(429);
-      }
+      });
+      await expect(request).rejects.toBeInstanceOf(OpenAI.RateLimitError);
+      await expect(request).rejects.toMatchObject({ status: 429 });
     } finally {
       await rateLimitApp.close();
     }
@@ -273,17 +256,12 @@ describe("Error-path regression tests", () => {
 
     try {
       const client = new OpenAI({ apiKey: "valid-api-key", baseURL: `${validationBaseUrl}/v1`, maxRetries: 0 });
-      let caught: unknown = null;
-      await client.chat.completions.create({
+      const request = client.chat.completions.create({
         model: "mock-chat",
         messages: [{ role: "user" as const, content: "hi" }],
-      }).catch((err: unknown) => { caught = err; });
-
-      // SDK maps 400 → BadRequestError
-      expect(caught).toBeInstanceOf(OpenAI.BadRequestError);
-      if (caught instanceof OpenAI.BadRequestError) {
-        expect(caught.status).toBe(400);
-      }
+      });
+      await expect(request).rejects.toBeInstanceOf(OpenAI.BadRequestError);
+      await expect(request).rejects.toMatchObject({ status: 400 });
     } finally {
       await validationApp.close();
     }

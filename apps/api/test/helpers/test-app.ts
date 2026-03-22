@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import Fastify from "fastify";
 import { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
-import { registerRoutes } from "../../src/routes";
+import { v1Plugin } from "../../src/routes/v1-plugin";
+import type { ChatCompletionsBody } from "../../src/schemas/chat-completions";
 import type { RuntimeServices } from "../../src/runtime/services";
 
 // Discriminated union return types matching RuntimeAiService
@@ -65,43 +66,49 @@ type ResponseBody = {
 };
 
 type UsageContext = { channel: string; apiKeyId?: string };
+type ChatCompletionsResult = Awaited<ReturnType<RuntimeServices["ai"]["chatCompletions"]>>;
+type ChatCompletionsStreamResult = Awaited<ReturnType<RuntimeServices["ai"]["chatCompletionsStream"]>>;
+type ImageGenerationRequest = Parameters<RuntimeServices["ai"]["imageGeneration"]>[1];
+type ImageGenerationResult = Awaited<ReturnType<RuntimeServices["ai"]["imageGeneration"]>>;
+type EmbeddingsRequest = Parameters<RuntimeServices["ai"]["embeddings"]>[1];
+type EmbeddingsResult = Awaited<ReturnType<RuntimeServices["ai"]["embeddings"]>>;
+type ResponsesRequest = Parameters<RuntimeServices["ai"]["responses"]>[1];
+type ResponsesResult = Awaited<ReturnType<RuntimeServices["ai"]["responses"]>>;
+type V1MockServices = Pick<
+  RuntimeServices,
+  "users" | "env" | "supabaseAuth" | "authz" | "userSettings" | "models" | "rateLimiter"
+>;
 
 export type MockAiService = {
   chatCompletions: (
     userId: string,
-    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
+    body: ChatCompletionsBody,
     usageContext: UsageContext,
-  ) => Promise<AiSuccess<ChatCompletionBody> | AiError>;
+  ) => Promise<ChatCompletionsResult>;
 
   chatCompletionsStream: (
     userId: string,
-    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
+    body: ChatCompletionsBody,
     usageContext: UsageContext,
-  ) => Promise<AiStreamSuccess | AiError>;
+  ) => Promise<ChatCompletionsStreamResult>;
 
   imageGeneration: (
     userId: string,
-    request: { model?: string; prompt: string; n?: number; size?: string; responseFormat?: string; quality?: string; style?: string; user?: string },
+    request: ImageGenerationRequest,
     usageContext: UsageContext,
-  ) => Promise<AiSuccess<ImagesBody> | (AiError & { headers?: Record<string, string> })>;
+  ) => Promise<ImageGenerationResult>;
 
   embeddings: (
     userId: string,
-    body: { model: string; input: string | string[]; encoding_format?: "float" | "base64"; dimensions?: number; user?: string },
+    body: EmbeddingsRequest,
     usageContext: UsageContext,
-  ) => Promise<AiSuccess<EmbeddingBody> | AiError>;
+  ) => Promise<EmbeddingsResult>;
 
   responses: (
     userId: string,
-    body: { model?: string; input: string | string[] | Array<{ role: string; content: string | unknown[] }>; instructions?: string; [key: string]: unknown },
+    body: ResponsesRequest,
     usageContext: UsageContext,
-  ) => Promise<AiSuccess<ResponseBody> | AiError>;
-
-  // Additional methods needed by other routes
-  providersMetrics: () => Promise<unknown>;
-  providersMetricsPrometheus: () => Promise<string>;
-  providersStatus: () => Promise<unknown>;
-  guestChatCompletions: (...args: unknown[]) => Promise<AiError>;
+  ) => Promise<ResponsesResult>;
 };
 
 function makeDefaultHeaders(): Record<string, string> {
@@ -220,39 +227,10 @@ function createDefaultMockAiService(): MockAiService {
         usage: { input_tokens: 5, output_tokens: 10, total_tokens: 15 },
       },
     }),
-
-    providersMetrics: async () => ({ providers: [] }),
-    providersMetricsPrometheus: async () => "# mock prometheus\n",
-    providersStatus: async () => ({ providers: [] }),
-    guestChatCompletions: async () => ({ error: "not implemented", statusCode: 502 as const }),
   };
 }
 
-export type MockServices = {
-  users: {
-    resolveApiKey: (key: string) => Promise<{ userId: string; scopes: string[]; apiKeyId?: string } | null>;
-  };
-  env: {
-    allowDevApiKeyPrefix: boolean;
-    supabase: { flags: { authEnabled: boolean } };
-  };
-  supabaseAuth: {
-    getSessionPrincipal: () => Promise<null>;
-  };
-  authz: {
-    requirePermission: () => Promise<boolean>;
-  };
-  userSettings: {
-    getForUser: () => Promise<{ apiEnabled: boolean }>;
-    canUse: () => boolean;
-  };
-  models: {
-    list: () => Array<{ id: string; object: string; created: number; capability: string; costType: string }>;
-    findById: (modelId: string) => { id: string; object: string; created: number; capability: string; costType: string } | undefined;
-  };
-  rateLimiter: {
-    allow: () => Promise<boolean>;
-  };
+export type MockServices = V1MockServices & {
   ai: MockAiService;
 };
 
@@ -318,7 +296,7 @@ export async function createTestApp(mockServices: MockServices) {
     },
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  registerRoutes(app, mockServices as unknown as RuntimeServices);
+  await app.register(v1Plugin, { services: mockServices as RuntimeServices });
 
   const address = await app.listen({ port: 0 });
   return { app, address };
