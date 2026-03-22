@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 10. Models Route Compliance | 1/1 | Complete   | 2026-03-22 |
 | 11. Real OpenAI SDK Regression Tests | 1/1 | Complete | 2026-03-22 |
 | 12. Embeddings Alias Runtime Compliance | 0/1 | Planned | - |
-| 13. Error-Path DIFF Headers | 2/2 | Complete   | 2026-03-22 |
+| 13. Error-Path DIFF Headers | 2/2 | Complete    | 2026-03-22 |
 
 ### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
 
