@@ -147,6 +147,10 @@ If user replies `APPROVED`:
 - Do not implement yet.
 - Reply exactly: `Plan approved. Run /superpowers-execute-plan to begin implementation.`
 
+Repo lesson:
+
+- If roadmap phases execute out of numeric order, `gsd-tools phase complete <phase>` can mark the milestone complete because it treats the highest phase number as terminal. After completing any out-of-order phase, manually verify `.planning/ROADMAP.md` and `.planning/STATE.md` still reflect any earlier pending phases before trusting `next_phase`, `is_last_phase`, or milestone-complete output.
+
 ## Agent Persona and Scope
 
 You are a senior platform engineer for this repository.
