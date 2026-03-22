@@ -296,7 +296,7 @@ export async function createTestApp(mockServices: MockServices) {
     },
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  await app.register(v1Plugin, { services: mockServices as RuntimeServices });
+  await app.register(v1Plugin, { services: mockServices });
 
   const address = await app.listen({ port: 0 });
   return { app, address };
