@@ -1,10 +1,11 @@
 ---
 phase: 12
 slug: embeddings-alias-runtime-compliance
-status: draft
+status: audited
 nyquist_compliant: true
 wave_0_complete: true
 created: 2026-03-22
+audited: 2026-03-22
 ---
 
 # Phase 12 — Validation Strategy
@@ -39,12 +40,12 @@ created: 2026-03-22
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 12-01-T1 | 01 | 1 | DIFF-03 | alias + catalog regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts` | ✅ | ⬜ pending |
-| 12-01-T2 | 01 | 2 | DIFF-03 | provider-registry embeddings boundary regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/providers/provider-registry.test.ts` | ✅ | ⬜ pending |
-| 12-01-T3 | 01 | 3 | DIFF-03 | focused alias/runtime regression pack | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts test/providers/provider-registry.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts` | ✅ | ⬜ pending |
-| 12-02-T1 | 02 | 1 | DIFF-03 | helper/runtime surface regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/routes/models-route.test.ts test/routes/v1-auth-compliance.test.ts test/routes/v1-stubs.test.ts` | ✅ | ⬜ pending |
-| 12-02-T2 | 02 | 2 | DIFF-03 | real-runtime SDK embeddings regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/openai-sdk-regression.test.ts -t "real runtime catalog path"` | ✅ | ⬜ pending |
-| 12-02-T3 | 02 | 3 | DIFF-03 | focused SDK regression pack | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/openai-sdk-regression.test.ts` | ✅ | ⬜ pending |
+| 12-01-T1 | 01 | 1 | DIFF-03 | alias + catalog regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts` | ✅ | ✅ green |
+| 12-01-T2 | 01 | 2 | DIFF-03 | provider-registry embeddings boundary regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/providers/provider-registry.test.ts` | ✅ | ✅ green |
+| 12-01-T3 | 01 | 3 | DIFF-03 | focused alias/runtime regression pack | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run src/config/__tests__/model-aliases.test.ts test/domain/model-service.test.ts test/providers/provider-registry.test.ts src/routes/__tests__/embeddings-compliance.test.ts src/routes/__tests__/differentiators-headers.test.ts` | ✅ | ✅ green |
+| 12-02-T1 | 02 | 1 | DIFF-03 | helper/runtime surface regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/routes/models-route.test.ts test/routes/v1-auth-compliance.test.ts test/routes/v1-stubs.test.ts` | ✅ | ✅ green |
+| 12-02-T2 | 02 | 2 | DIFF-03 | real-runtime SDK embeddings regression | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/openai-sdk-regression.test.ts -t "real runtime catalog path"` | ✅ | ✅ green |
+| 12-02-T3 | 02 | 3 | DIFF-03 | focused SDK regression pack | `cd /home/sakib/hive && pnpm --filter @hive/api exec vitest run test/openai-sdk-regression.test.ts` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -73,4 +74,15 @@ All phase behaviors are automatable. The Docker-only API build remains an explic
 - [x] Feedback latency < 30s
 - [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** audited 2026-03-22 — alias/catalog, provider-boundary, helper/runtime-surface, and SDK regression commands green
+
+## Validation Audit 2026-03-22
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+| Commands run | 6 |
+
+All requirements COVERED. No remaining manual-only gaps. `nyquist_compliant: true`.
