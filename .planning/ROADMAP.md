@@ -187,7 +187,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10
 | 9. Operational Hardening | 2/2 | Complete    | 2026-03-19 |
 | 10. Models Route Compliance | 1/1 | Complete   | 2026-03-22 |
 | 11. Real OpenAI SDK Regression Tests | 1/1 | Complete | 2026-03-22 |
-| 12. Embeddings Alias Runtime Compliance | 0/2 | Planned | - |
+| 12. Embeddings Alias Runtime Compliance | 1/2 | In Progress | - |
 | 13. Error-Path DIFF Headers | 2/2 | Complete    | 2026-03-22 |
 
 ### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
@@ -216,10 +216,10 @@ Plans:
   2. `resolveModelAlias()` maps standard SDK-facing embeddings model ids to production catalog entries consistently
   3. The official `openai` npm SDK's `client.embeddings.create({ model: "text-embedding-3-small" })` succeeds against the real runtime path
   4. Regression coverage exercises the production catalog path so the alias gap cannot hide behind mocks again
-**Plans:** 0/2 plans complete
+**Plans:** 1/2 plans complete
 
 Plans:
-- [ ] 12-01-PLAN.md — Canonicalize the public embeddings id and keep provider namespacing internal
+- [x] 12-01-PLAN.md — Canonicalize the public embeddings id and keep provider namespacing internal (completed 2026-03-22)
 - [ ] 12-02-PLAN.md — Replace the mock-only embeddings SDK success case with a real runtime regression path
 
 ### Phase 13: Error-Path DIFF Headers
