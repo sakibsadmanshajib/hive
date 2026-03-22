@@ -5,6 +5,7 @@ Refresh the v1 OpenAI API Compliance milestone around live public-API evidence: 
 ## Assumptions
 
 - `.env` contains a usable `OPENROUTER_API_KEY`, and the configured OpenRouter free model is callable from this machine.
+- The local verification environment may temporarily exercise a free upstream model for evidence gathering, but that does not create a production commitment to expose free models on the public API.
 - The maintainer approves starting the local Supabase and Docker stack and making real upstream OpenRouter calls from the local dev environment.
 - A disposable local Supabase auth user, API key, payment intent, and credit balance may be created on this machine for verification.
 - If live verification exposes product gaps, we can patch code, tests, and docs in the same task after approval instead of stopping at an audit note.
@@ -14,7 +15,7 @@ Refresh the v1 OpenAI API Compliance milestone around live public-API evidence: 
 
 1. **Stack bootstrap and provider readiness**
    - **Files**: `tools/dev/stack-dev.sh`, `tools/dev/stack-dev-latest.sh`, `docker-compose.yml`, `docker-compose.dev.yml`, `.env`, `.planning/ROADMAP.md`, `.planning/v1.0-MILESTONE-AUDIT.md`
-   - **Change**: Start the approved Docker-local stack (local Supabase plus Docker `api`/`web` services), confirm the API and web origins, and capture provider-readiness evidence for the configured OpenRouter free model so the milestone report is anchored to a real running environment.
+   - **Change**: Start the approved Docker-local stack (local Supabase plus Docker `api`/`web` services), confirm the API and web origins, and capture provider-readiness evidence for the configured OpenRouter free chat model plus the temporary embeddings verification model `nvidia/llama-nemotron-embed-vl-1b-v2:free` so the milestone report is anchored to a real running environment.
    - **Verify**: `pnpm stack:dev`; `docker compose ps`; `curl -s http://127.0.0.1:8080/health`; `curl -s http://127.0.0.1:8080/v1/providers/status`
 
 2. **Create a disposable local user and issue a Hive API key**
@@ -27,19 +28,19 @@ Refresh the v1 OpenAI API Compliance milestone around live public-API evidence: 
    - **Change**: Fund the disposable user through the local payment-intent plus demo-confirm path so the credit balance is created by the same billing flow the API owns; fall back to a controlled service-role top-up only if the demo path is blocked by local bootstrap issues.
    - **Verify**: `curl -s -X POST http://127.0.0.1:8080/v1/payments/intents -H "Authorization: Bearer <session-token>" -H "content-type: application/json" --data '{"bdt_amount":50,"provider":"bkash"}'`; `curl -s -X POST http://127.0.0.1:8080/v1/payments/demo/confirm -H "Authorization: Bearer <session-token>" -H "content-type: application/json" --data '{"intent_id":"<intent-id>"}'`; `curl -s http://127.0.0.1:8080/v1/credits/balance -H "Authorization: Bearer <hive-api-key>"`
 
-4. **Run a real OpenAI SDK chat call against Hive's public API**
-   - **Files**: `apps/api/test/openai-sdk-regression.test.ts`, `apps/api/src/routes/models.ts`, `apps/api/src/routes/chat-completions.ts`, `apps/api/src/routes/usage.ts`, `packages/openapi/openapi.yaml`
-   - **Change**: Execute a real OpenAI Node SDK script against `http://127.0.0.1:8080` using the Hive API key, first proving `models.list()` and `models.retrieve()` and then sending at least one real `chat.completions.create()` request against the configured OpenRouter free chat model; capture the SDK result shape, headers, and any parsing behavior from the actual client.
-   - **Verify**: `node` or `tsx` script using the `openai` SDK with `baseURL=http://127.0.0.1:8080/v1`; `curl -si http://127.0.0.1:8080/v1/models -H "Authorization: Bearer <hive-api-key>"`; compare SDK output with OpenAI-style response fields and expected DIFF headers
+4. **Run real OpenAI SDK chat and embeddings calls against Hive's public API**
+   - **Files**: `apps/api/test/openai-sdk-regression.test.ts`, `apps/api/src/routes/models.ts`, `apps/api/src/routes/chat-completions.ts`, `apps/api/src/routes/embeddings.ts`, `apps/api/src/routes/usage.ts`, `packages/openapi/openapi.yaml`
+   - **Change**: Execute a real OpenAI Node SDK script against `http://127.0.0.1:8080` using the Hive API key, first proving `models.list()` and `models.retrieve()`, then sending at least one real `chat.completions.create()` request against the configured OpenRouter free chat model, and at least one real `embeddings.create()` request using `nvidia/llama-nemotron-embed-vl-1b-v2:free` as a verification-only embeddings target; capture the SDK result shapes, headers, and any parsing behavior from the actual client. If that embedding model is not currently exposed safely through the public model catalog, the task includes adding a local/test-only verification path without turning "free embeddings" into a production contract.
+   - **Verify**: `node` or `tsx` script using the `openai` SDK with `baseURL=http://127.0.0.1:8080/v1`; `curl -si http://127.0.0.1:8080/v1/models -H "Authorization: Bearer <hive-api-key>"`; `curl -s http://127.0.0.1:8080/v1/embeddings -H "Authorization: Bearer <hive-api-key>" -H "content-type: application/json" --data '{"model":"nvidia/llama-nemotron-embed-vl-1b-v2:free","input":"verification probe"}'`; compare SDK output with OpenAI-style chat and embeddings response fields plus expected DIFF headers
 
-5. **Prove metering and billing attribution on the same real request**
+5. **Prove metering and billing attribution on the same real requests**
    - **Files**: `apps/api/src/runtime/services.ts`, `apps/api/src/runtime/supabase-billing-store.ts`, `apps/api/src/routes/credits-balance.ts`, `apps/api/src/routes/usage.ts`, `supabase/migrations/20260314000300_usage_reporting_channels.sql`
-   - **Change**: Validate metering and billing on the same API-key path by comparing pre/post balances, `/v1/usage` output, and persisted records (`credit_accounts`, `credit_ledger`, `usage_events`, `api_keys`, and relevant payment rows) so we can prove the API request is attributed to Hive's API key id and charged the intended amount.
-   - **Verify**: `curl -s http://127.0.0.1:8080/v1/credits/balance -H "Authorization: Bearer <hive-api-key>"` before and after the SDK call; `curl -s http://127.0.0.1:8080/v1/usage -H "Authorization: Bearer <hive-api-key>"`; service-role SQL or REST reads against `credit_accounts`, `credit_ledger`, `usage_events`, `api_keys`, `payment_intents`, and `payment_events` for the disposable user
+   - **Change**: Validate metering and billing on the same API-key path by comparing pre/post balances, `/v1/usage` output, and persisted records (`credit_accounts`, `credit_ledger`, `usage_events`, `api_keys`, and relevant payment rows) so we can prove the chat and embeddings requests are attributed to Hive's API key id and charged the intended amount.
+   - **Verify**: `curl -s http://127.0.0.1:8080/v1/credits/balance -H "Authorization: Bearer <hive-api-key>"` before and after the SDK calls; `curl -s http://127.0.0.1:8080/v1/usage -H "Authorization: Bearer <hive-api-key>"`; service-role SQL or REST reads against `credit_accounts`, `credit_ledger`, `usage_events`, `api_keys`, `payment_intents`, and `payment_events` for the disposable user
 
 6. **Refresh milestone artifacts and add a durable real-integration report**
    - **Files**: `.planning/phases/11-real-openai-sdk-regression-tests-ci-style-e2e/11-VERIFICATION.md`, `.planning/v1.0-MILESTONE-AUDIT.md`, `.planning/PROJECT.md`, `docs/runbooks/active/api-key-lifecycle.md`, `docs/runbooks/active/credit-ledger-audit.md`, `CHANGELOG.md`
-   - **Change**: Update the stale milestone artifacts and add durable documentation covering the real local SDK flow, the exact endpoints exercised, how the Hive-issued API key owns the request for metering, which parts are OpenAI-compatible, which parts are intentionally Hive-specific, and what real-integration evidence was captured.
+   - **Change**: Update the stale milestone artifacts and add durable documentation covering the real local SDK flow, the exact chat and embeddings endpoints exercised, how the Hive-issued API key owns the requests for metering, which parts are OpenAI-compatible, which parts are intentionally Hive-specific, and that the temporary free embedding model is verification-only and not a production public-API pricing commitment.
    - **Verify**: `rg -n "real OpenAI SDK|OpenRouter|api_key_id|x-actual-credits|usage_events|368/368" .planning docs CHANGELOG.md`
 
 7. **Close any live gaps and checkpoint the result**
@@ -52,7 +53,9 @@ Refresh the v1 OpenAI API Compliance milestone around live public-API evidence: 
 - **Risk**: The local environment cannot start because Supabase CLI or Docker bootstrap is missing or blocked.
   - **Mitigation**: Verify bootstrap prerequisites first; if `npx supabase` must be downloaded or Docker needs approval, request escalation immediately and document the exact prerequisite gap in the plan execution notes.
 - **Risk**: The configured OpenRouter free model changes or the upstream key is invalid, which would make a "real integration" failure ambiguous.
-  - **Mitigation**: Capture provider-status output and the exact configured free model before the SDK call; if the upstream is unavailable, separate bootstrap or provider failure from Hive API contract failure in the report.
+  - **Mitigation**: Capture provider-status output and the exact configured free chat model plus temporary embedding verification model before the SDK calls; if the upstream is unavailable, separate bootstrap or provider failure from Hive API contract failure in the report.
+- **Risk**: Using `nvidia/llama-nemotron-embed-vl-1b-v2:free` directly could accidentally turn a verification shortcut into a product contract.
+  - **Mitigation**: Keep the plan explicit that this model is for local verification only and, if code changes are required, scope them to local/test-safe behavior plus documentation that production public API pricing and model exposure remain independent.
 - **Risk**: Creating a user or key directly in the database would bypass the product surface and weaken the evidence.
   - **Mitigation**: Prefer the real Supabase-auth plus `/v1/users/api-keys` route; only use controlled service-role intervention for credit seeding if the payment-confirm path is the blocker, and call that out explicitly in the report.
 - **Risk**: Billing evidence looks correct at the API boundary but the persisted attribution is missing `api_key_id`, wrong `channel`, or mismatched ledger rows.
