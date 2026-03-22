@@ -9,6 +9,7 @@ import { registerEmbeddingsRoute } from "./embeddings";
 import { registerImagesGenerationsRoute } from "./images-generations";
 import { registerResponsesRoute } from "./responses";
 import { registerV1StubRoutes } from "./v1-stubs";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
 export async function v1Plugin(
   app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
@@ -23,6 +24,7 @@ export async function v1Plugin(
   app.setErrorHandler((error: FastifyError, _request, reply) => {
     const status = error.statusCode ?? 500;
     const message = error.message || "Internal server error";
+    setNoDispatchDiffHeaders(reply);
     reply.code(status).send({
       error: {
         message,
@@ -34,6 +36,7 @@ export async function v1Plugin(
   });
 
   app.setNotFoundHandler((_request, reply) => {
+    setNoDispatchDiffHeaders(reply);
     reply.code(404).send({
       error: {
         message: `Unknown API route: ${_request.method} ${_request.url}`,
