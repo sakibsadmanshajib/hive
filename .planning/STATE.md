@@ -3,14 +3,17 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 13
-current_plan: 1 (complete)
-status: active
-last_updated: "2026-03-22T05:23:12Z"
+current_plan: 2 (complete)
+status: completed
+stopped_at: Completed 13-02-PLAN.md
+last_updated: "2026-03-22T07:19:25.191Z"
+last_activity: 2026-03-22
 progress:
   total_phases: 13
   completed_phases: 12
-  total_plans: 22
-  completed_plans: 22
+  total_plans: 23
+  completed_plans: 23
+  percent: 100
 ---
 
 # Session State
@@ -23,8 +26,18 @@ See: .planning/PROJECT.md
 
 **Milestone:** v1.0 milestone
 **Current phase:** 13
-**Current plan:** 1 (complete)
+**Current plan:** 2 (complete)
+**Total Plans in Phase:** 2
+**Progress:** [██████████] 100%
 **Status:** Phase 13 complete; Phase 12 remains pending
+**Last Activity:** 2026-03-22
+**Last Activity Description:** Completed 13-02-PLAN.md
+
+## Session Info
+
+**Last session:** 2026-03-22T07:19:25.188Z
+**Stopped At:** Completed 13-02-PLAN.md
+**Resume File:** None
 
 ## Accumulated Context
 
@@ -64,6 +77,8 @@ See: .planning/PROJECT.md
 - [11-01] 422 test uses 400 (BadRequestError) since Fastify schema defines messages as optional
 - [Phase 13]: Route handlers and stub routes seed static no-dispatch DIFF headers before shared auth and error helpers can terminate the response
 - [Phase 13]: Shared reply header helpers in this repo should set headers sequentially instead of assuming reply.header chaining in lightweight tests
+- [Phase 13]: Plugin-level Fastify validation and not-found handlers now seed shared no-dispatch DIFF headers before sending /v1 error payloads
+- [Phase 13]: TypeBox validation regressions now assert both OpenAI error shape and DIFF headers on live /v1 plugin 400 responses, including embeddings
 
 ## Session Log
 
@@ -82,3 +97,10 @@ See: .planning/PROJECT.md
 - 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests — CI-style e2e, 345 tests passing)
 - 2026-03-22: Captured Phase 13 context at `.planning/phases/13-error-path-diff-headers/13-CONTEXT.md`
 - 2026-03-22: Completed 13-01-PLAN.md (v1 error and stub responses now preserve DIFF headers; 361 API tests passing; Docker API build passing)
+- 2026-03-22: Completed 13-02-PLAN.md (plugin-level validation and not-found errors now preserve DIFF headers; 363 API tests passing; Docker API build passing)
+
+## Performance Metrics
+
+| Phase/Plan | Duration | Scope | Files |
+| --- | --- | --- | --- |
+| Phase 13 P02 | 4m | 3 tasks | 2 files |
