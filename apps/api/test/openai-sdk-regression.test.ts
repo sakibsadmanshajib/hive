@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import OpenAI from "openai";
 import type { FastifyInstance } from "fastify";
-import { createTestApp, createMockServices } from "./helpers/test-app";
+import { ModelService } from "../src/domain/model-service";
+import { ProviderRegistry } from "../src/providers/registry";
+import type { ProviderClient } from "../src/providers/types";
+import { RuntimeAiService } from "../src/runtime/services";
+import { createTestApp, createMockServices, createTestAppWithServices } from "./helpers/test-app";
 
 type OpenAiErrorBody = { error: { type: string; code: string | null; param: null; message: string } };
 
@@ -107,20 +111,73 @@ describe("OpenAI SDK regression tests", () => {
     }
   });
 
-  it("embeddings.create() returns a list of embeddings", async () => {
-    const client = new OpenAI({ apiKey: "valid-api-key", baseURL: `${baseUrl}/v1`, maxRetries: 0 });
-    const result = await client.embeddings.create({
-      model: "text-embedding-3-small",
-      input: "hello world",
+  it("embeddings.create() succeeds against the real runtime catalog path with text-embedding-3-small", async () => {
+    const baseServices = createMockServices("valid-api-key", "user-1");
+    const models = new ModelService();
+    const embeddings = vi.fn(async (request) => ({
+      data: [{ embedding: [0.1, 0.2, 0.3], index: 0 }],
+      model: request.model,
+      providerModel: request.model,
+      usage: { promptTokens: 2, totalTokens: 2 },
+    }));
+    const providerClient: ProviderClient = {
+      name: "openrouter",
+      isEnabled: () => true,
+      chat: async () => {
+        throw new Error("chat should not be called in embeddings test");
+      },
+      embeddings,
+      status: async () => ({ enabled: true, healthy: true, detail: "ok" }),
+      checkModelReadiness: async () => ({ ready: true, detail: "ok" }),
+    };
+    const registry = new ProviderRegistry({
+      clients: [providerClient],
+      defaultProvider: "openrouter" as never,
+      modelProviderMap: { "text-embedding-3-small": "openrouter" } as never,
+      providerModelMap: { openrouter: "openrouter/auto" } as never,
+      providerReadinessModels: { openrouter: ["openai/text-embedding-3-small"] } as never,
+      fallbackOrder: { openrouter: [] } as never,
     });
-    expect(result.object).toBe("list");
-    expect(Array.isArray(result.data)).toBe(true);
-    expect(result.data.length).toBeGreaterThan(0);
-    const firstEmbedding = result.data[0];
-    expect(firstEmbedding).toBeDefined();
-    if (firstEmbedding) {
-      expect(firstEmbedding.object).toBe("embedding");
-      expect(Array.isArray(firstEmbedding.embedding)).toBe(true);
+    const ai = new RuntimeAiService(
+      models,
+      {
+        consume: async () => true,
+        refund: async () => ({
+          userId: "user-1",
+          availableCredits: 0,
+          purchasedCredits: 0,
+          promoCredits: 0,
+        }),
+      },
+      { add: async () => undefined },
+      {
+        upsertSession: async () => undefined,
+        addUsage: async () => undefined,
+        linkGuestToUser: async () => undefined,
+      },
+      registry,
+      { trace: async () => undefined },
+    );
+    const { app: runtimeApp, address: runtimeBaseUrl } = await createTestAppWithServices({
+      ...baseServices,
+      models,
+      ai,
+    });
+
+    try {
+      const client = new OpenAI({ apiKey: "valid-api-key", baseURL: `${runtimeBaseUrl}/v1`, maxRetries: 0 });
+      const result = await client.embeddings.create({
+        model: "text-embedding-3-small",
+        input: "hello world",
+      });
+
+      expect(result.object).toBe("list");
+      expect(result.model).toBe("text-embedding-3-small");
+      expect(result.data[0]?.object).toBe("embedding");
+      expect(Array.isArray(result.data[0]?.embedding)).toBe(true);
+      expect(embeddings).toHaveBeenCalledWith(expect.objectContaining({ model: "openai/text-embedding-3-small" }));
+    } finally {
+      await runtimeApp.close();
     }
   });
 
