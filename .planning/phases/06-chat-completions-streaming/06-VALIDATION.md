@@ -1,10 +1,11 @@
 ---
 phase: 6
 slug: chat-completions-streaming
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: executed
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-18
+audited: 2026-03-21
 ---
 
 # Phase 6 — Validation Strategy
@@ -38,11 +39,11 @@ created: 2026-03-18
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 6-01-01 | 01 | 0 | CHAT-04, CHAT-05 | unit | `npx vitest run apps/api/src/routes/__tests__/chat-completions-streaming-compliance.test.ts -x` | ❌ W0 | ⬜ pending |
-| 6-01-02 | 01 | 1 | CHAT-04 | unit | `npx vitest run apps/api/src/routes/__tests__/chat-completions-streaming-compliance.test.ts -x` | ❌ W0 | ⬜ pending |
-| 6-01-03 | 01 | 1 | CHAT-04 | unit | Same | ❌ W0 | ⬜ pending |
-| 6-01-04 | 01 | 1 | CHAT-05 | unit | Same | ❌ W0 | ⬜ pending |
-| 6-02-01 | 02 | 2 | CHAT-04, CHAT-05 | unit | `npx vitest run` | ❌ W0 | ⬜ pending |
+| 6-01-01 | 01 | 0 | CHAT-04, CHAT-05 | unit | `npx vitest run apps/api/src/routes/__tests__/chat-completions-streaming-compliance.test.ts -x` | ✅ | ✅ green |
+| 6-01-02 | 01 | 1 | CHAT-04 | unit | `npx vitest run apps/api/src/routes/__tests__/chat-completions-streaming-compliance.test.ts -x` | ✅ | ✅ green |
+| 6-01-03 | 01 | 1 | CHAT-04 | unit | Same | ✅ | ✅ green |
+| 6-01-04 | 01 | 1 | CHAT-05 | unit | Same | ✅ | ✅ green |
+| 6-02-01 | 02 | 2 | CHAT-04, CHAT-05 | unit | `npx vitest run` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -50,8 +51,8 @@ created: 2026-03-18
 
 ## Wave 0 Requirements
 
-- [ ] `apps/api/src/routes/__tests__/chat-completions-streaming-compliance.test.ts` — SSE chunk shape validation (CHAT-04, CHAT-05)
-- [ ] Test helper to create mock SSE ReadableStream for unit tests (simulates OpenRouter response)
+- [x] `apps/api/src/routes/__tests__/chat-completions-streaming-compliance.test.ts` — SSE chunk shape validation (CHAT-04, CHAT-05)
+- [x] Test helper to create mock SSE ReadableStream for unit tests (simulates OpenRouter response)
 
 *Wave 0 must be complete before Wave 1 execution begins.*
 
@@ -67,11 +68,23 @@ created: 2026-03-18
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 15s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** 2026-03-21 — all 14 tests green (14/14 passed, 827ms)
+
+---
+
+## Validation Audit 2026-03-21
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+| Tests run | 14 |
+| Tests passing | 14 |
