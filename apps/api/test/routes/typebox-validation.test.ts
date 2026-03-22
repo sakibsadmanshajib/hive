@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type LightMyRequestResponse } from "fastify";
 import { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { v1Plugin } from "../../src/routes/v1-plugin";
 
@@ -24,6 +24,13 @@ const mockServices = {
   users: {},
   settings: { get: async () => null },
 } as any;
+
+function expectNoDispatchHeaders(response: LightMyRequestResponse): void {
+  expect(response.headers["x-model-routed"]).toBe("");
+  expect(response.headers["x-provider-used"]).toBe("");
+  expect(response.headers["x-provider-model"]).toBe("");
+  expect(response.headers["x-actual-credits"]).toBe("0");
+}
 
 // ---------------------------------------------------------------------------
 // Extra fields rejected with 400
@@ -54,6 +61,19 @@ describe("TypeBox validation -- extra fields rejected", () => {
     expect(body.error).toHaveProperty("message");
     expect(body.error).toHaveProperty("param");
     expect(body.error).toHaveProperty("code");
+    expectNoDispatchHeaders(res);
+  });
+
+  it("POST /v1/embeddings rejects unknown field with 400", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/embeddings",
+      payload: { model: "text-embedding-3-small", input: "hello", extra: 123 },
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.type).toBe("invalid_request_error");
+    expectNoDispatchHeaders(res);
   });
 
   it("POST /v1/images/generations rejects unknown field with 400", async () => {
@@ -65,6 +85,7 @@ describe("TypeBox validation -- extra fields rejected", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.type).toBe("invalid_request_error");
+    expectNoDispatchHeaders(res);
   });
 
   it("POST /v1/responses rejects unknown field with 400", async () => {
@@ -76,6 +97,7 @@ describe("TypeBox validation -- extra fields rejected", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.type).toBe("invalid_request_error");
+    expectNoDispatchHeaders(res);
   });
 });
 
@@ -110,6 +132,16 @@ describe("TypeBox validation -- valid requests pass", () => {
       method: "POST",
       url: "/v1/images/generations",
       payload: { prompt: "a sunset", model: "dall-e-3" },
+      headers: { "content-type": "application/json" },
+    });
+    expect(res.statusCode).not.toBe(400);
+  });
+
+  it("POST /v1/embeddings with valid body does NOT return 400", async () => {
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/embeddings",
+      payload: { model: "text-embedding-3-small", input: "hello" },
       headers: { "content-type": "application/json" },
     });
     expect(res.statusCode).not.toBe(400);
@@ -161,6 +193,7 @@ describe("TypeBox validation -- error format matches Phase 1", () => {
     expect(Object.keys(body.error).sort()).toEqual(["code", "message", "param", "type"]);
     expect(body.error.type).toBe("invalid_request_error");
     expect(typeof body.error.message).toBe("string");
+    expectNoDispatchHeaders(res);
   });
 
   it("nested unknown field in messages is rejected", async () => {
@@ -175,5 +208,6 @@ describe("TypeBox validation -- error format matches Phase 1", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error.type).toBe("invalid_request_error");
+    expectNoDispatchHeaders(res);
   });
 });
