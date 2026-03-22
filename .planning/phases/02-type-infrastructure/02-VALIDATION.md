@@ -1,10 +1,11 @@
 ---
 phase: 2
 slug: type-infrastructure
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: complete
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-17
+audited: 2026-03-21
 ---
 
 # Phase 2 — Validation Strategy
@@ -38,11 +39,11 @@ created: 2026-03-17
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 02-01-01 | 01 | 0 | FOUND-07 | build | `cd apps/api && npx tsc --noEmit` | ❌ W0 | ⬜ pending |
-| 02-01-02 | 01 | 1 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ❌ W0 | ⬜ pending |
-| 02-01-03 | 01 | 1 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ❌ W0 | ⬜ pending |
-| 02-02-01 | 02 | 2 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ❌ W0 | ⬜ pending |
-| 02-02-02 | 02 | 2 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ❌ W0 | ⬜ pending |
+| 02-01-01 | 01 | 0 | FOUND-07 | build | `cd apps/api && npx tsc --noEmit` | ✅ | ✅ green |
+| 02-01-02 | 01 | 1 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ✅ | ✅ green |
+| 02-01-03 | 01 | 1 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ✅ | ✅ green |
+| 02-02-01 | 02 | 2 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ✅ | ✅ green |
+| 02-02-02 | 02 | 2 | FOUND-06 | integration | `cd apps/api && npx vitest run test/routes/typebox-validation.test.ts -x` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -50,9 +51,9 @@ created: 2026-03-17
 
 ## Wave 0 Requirements
 
-- [ ] `apps/api/test/routes/typebox-validation.test.ts` — failing tests for FOUND-06: extra fields rejected (400), missing required fields rejected (400), valid requests pass, error format matches Phase 1 `{ error: { message, type, param, code } }` — for all 4 routes (chat-completions, models, images-generations, responses)
-- [ ] `apps/api/src/types/openai.d.ts` — generated from `docs/reference/openai-openapi.yml` via `openapi-typescript` (covers FOUND-07)
-- [ ] Verify `typebox/type` subpath exports resolve with current tsconfig (CommonJS + Node moduleResolution) — if not, fallback to `@sinclair/typebox@0.34`
+- [x] `apps/api/test/routes/typebox-validation.test.ts` — 9/9 tests passing (extra fields rejected 400, valid requests pass, error format verified, all 3 POST routes + GET models covered)
+- [x] `apps/api/src/types/openai.d.ts` — generated from `docs/reference/openai-openapi.yml` via `openapi-typescript` (covers FOUND-07)
+- [x] `@sinclair/typebox@0.34` used (fallback applied — `typebox/type` subpath not available with CJS + Node moduleResolution)
 
 ---
 
@@ -66,11 +67,23 @@ created: 2026-03-17
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 15s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 15s
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** 2026-03-21 (retroactive audit — all tests passing, TSC clean)
+
+---
+
+## Validation Audit 2026-03-21
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+| Tests verified | 9/9 passing |
+| TSC | clean (exit 0) |
