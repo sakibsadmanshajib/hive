@@ -5,12 +5,12 @@ milestone_name: milestone
 current_phase: 11
 current_plan: 1 (complete)
 status: completed
-last_updated: "2026-03-21T23:54:59.962Z"
+last_updated: "2026-03-22T04:04:38.507Z"
 progress:
   total_phases: 11
-  completed_phases: 10
-  total_plans: 20
-  completed_plans: 20
+  completed_phases: 11
+  total_plans: 21
+  completed_plans: 21
 ---
 
 # Session State
@@ -55,6 +55,8 @@ See: .planning/PROJECT.md
 - [08-02] Reused real-service test pattern from Phase 5/6/7 compliance tests
 - [09-01] Routes use /v1/ prefix matching existing codebase pattern (not without prefix as plan suggested)
 - [Phase 09]: Used gh CLI to create 7 deferred endpoint issues directly (#81-#87)
+- [10-01] Models routes seed static DIFF-01 headers before auth and lookup so 200, 401, and 404 responses all satisfy the catalog contract
+- [10-01] Models routes call requireV1ApiPrincipal without a scope so any valid API key can list or retrieve models
 - [11-01] MockAiService uses discriminated union return types matching route handler expectations (not OpenAI SDK types)
 - [11-01] rateLimiterOverride parameter added to createMockServices for 429 path testing
 - [11-01] Per-test Fastify instances used for error-path tests to avoid shared state
@@ -73,4 +75,5 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 08-01-PLAN.md (differentiator headers and model aliases)
 - 2026-03-19: Completed 08-02-PLAN.md (differentiator compliance tests)
 - 2026-03-19: Completed 09-01-PLAN.md (stub endpoint error format for unsupported endpoints)
+- 2026-03-21: Completed 10-PLAN.md (models routes now require Bearer auth, return static DIFF-01 headers, and pass 353 API tests plus Docker API build)
 - 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests — CI-style e2e, 345 tests passing)

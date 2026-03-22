@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Surface Expansion** - Embeddings, images, and responses endpoints are schema-compliant (completed 2026-03-19)
 - [x] **Phase 8: Differentiators** - Hive-specific headers, credit cost, model aliasing, and request IDs on all endpoints (completed 2026-03-19)
 - [x] **Phase 9: Operational Hardening** - Stub endpoints for unsupported APIs and GitHub issue tracking for deferred work (completed 2026-03-19)
-- [ ] **Phase 10: Models Route Compliance** - Auth guard and differentiator headers on GET /v1/models routes to close gaps found by milestone audit
+- [x] **Phase 10: Models Route Compliance** - Auth guard and differentiator headers on GET /v1/models routes to close gaps found by milestone audit (completed 2026-03-22)
 
 ## Phase Details
 
@@ -182,7 +182,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Surface Expansion | 3/3 | Complete    | 2026-03-19 |
 | 8. Differentiators | 2/2 | Complete   | 2026-03-19 |
 | 9. Operational Hardening | 2/2 | Complete    | 2026-03-19 |
-| 10. Models Route Compliance | 0/1 | Pending | — |
+| 10. Models Route Compliance | 1/1 | Complete   | 2026-03-22 |
 
 ### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
 
