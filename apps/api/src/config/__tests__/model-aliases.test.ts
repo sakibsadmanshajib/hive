@@ -14,8 +14,12 @@ describe("DIFF-03: Model alias resolution", () => {
     expect(resolveModelAlias("gpt-4-turbo")).toBe("gpt-4o");
   });
 
-  it("resolves text-embedding-ada-002 to openai/text-embedding-3-small", () => {
-    expect(resolveModelAlias("text-embedding-ada-002")).toBe("openai/text-embedding-3-small");
+  it("resolves text-embedding-ada-002 to text-embedding-3-small", () => {
+    expect(resolveModelAlias("text-embedding-ada-002")).toBe("text-embedding-3-small");
+  });
+
+  it("passes through text-embedding-3-small unchanged (first-class ID, not aliased)", () => {
+    expect(resolveModelAlias("text-embedding-3-small")).toBe("text-embedding-3-small");
   });
 
   it("passes through gpt-4o unchanged (first-class ID, not aliased)", () => {
@@ -32,9 +36,10 @@ describe("DIFF-03: Model alias resolution", () => {
   });
 
   it("MODEL_ALIASES does not contain first-class model IDs as keys", () => {
-    // gpt-4o and gpt-4o-mini exist as real model IDs — they must NOT be alias keys
+    // First-class model IDs must NOT be alias keys.
     expect(MODEL_ALIASES).not.toHaveProperty("gpt-4o");
     expect(MODEL_ALIASES).not.toHaveProperty("gpt-4o-mini");
+    expect(MODEL_ALIASES).not.toHaveProperty("text-embedding-3-small");
   });
 
   it("MODEL_ALIASES has at least 3 entries", () => {

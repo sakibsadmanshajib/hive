@@ -81,7 +81,7 @@ describe("DIFF-01/DIFF-02: AI service header completeness", () => {
 
   it("embeddings returns all 4 required headers", () => {
     const result = ai.embeddings("test-user", {
-      model: "openai/text-embedding-3-small",
+      model: "text-embedding-3-small",
       input: "test input",
     }, usageCtx);
     expect("error" in result).toBe(false);

@@ -7,7 +7,7 @@ export const MODEL_ALIASES: Record<string, string> = {
   'gpt-3.5-turbo': 'gpt-4o-mini',
   'gpt-4': 'gpt-4o',
   'gpt-4-turbo': 'gpt-4o',
-  'text-embedding-ada-002': 'openai/text-embedding-3-small',
+  'text-embedding-ada-002': 'text-embedding-3-small',
 };
 
 export function resolveModelAlias(modelId: string): string {

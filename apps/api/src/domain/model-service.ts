@@ -142,7 +142,7 @@ const MODELS: GatewayModel[] = [
     pricing: { creditsPerRequest: 120 },
   },
   {
-    id: "openai/text-embedding-3-small",
+    id: "text-embedding-3-small",
     object: "model",
     created: 1705948997,
     capability: "embedding",

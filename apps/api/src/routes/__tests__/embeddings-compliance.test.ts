@@ -9,7 +9,7 @@ const EMBEDDING_FIXTURE = {
     { object: "embedding", embedding: [0.1, 0.2, 0.3, -0.4, 0.5], index: 0 },
     { object: "embedding", embedding: [0.6, 0.7, 0.8, -0.9, 1.0], index: 1 },
   ],
-  model: "openai/text-embedding-3-small",
+  model: "text-embedding-3-small",
   usage: { prompt_tokens: 8, total_tokens: 8 },
 };
 
