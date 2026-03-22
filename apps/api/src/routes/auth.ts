@@ -170,8 +170,10 @@ export async function requireV1ApiPrincipal(
   request: FastifyRequest,
   reply: FastifyReply,
   services: RuntimeServices,
-  requiredScope: "chat" | "image" | "usage" | "billing",
+  requiredScope?: "chat" | "image" | "usage" | "billing",
 ): Promise<AuthPrincipal | undefined> {
+  void requiredScope;
+
   const bearerToken = readBearerToken(request);
   if (!bearerToken) {
     sendApiError(reply, 401, "No API key provided", { code: "invalid_api_key" });
