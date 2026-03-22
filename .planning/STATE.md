@@ -1,12 +1,12 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
-current_phase: 13
-current_plan: 2 (complete)
+milestone_name: OpenAI API Compliance
+current_phase: null
+current_plan: null
 status: completed
-stopped_at: Completed phase 12 verification and roadmap closure after phase 13
-last_updated: "2026-03-22T09:21:27.152Z"
+stopped_at: Milestone archived; awaiting next milestone planning
+last_updated: "2026-03-22T22:58:01Z"
 last_activity: 2026-03-22
 progress:
   total_phases: 13
@@ -20,34 +20,38 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md
+See: .planning/PROJECT.md (updated 2026-03-22)
+
+**Core value:** Developers can use Hive as a drop-in OpenAI-compatible API with transparent multi-provider routing and prepaid credit billing.
+**Current focus:** Planning the next milestone, starting with Payment & Finance Hardening.
 
 ## Position
 
-**Milestone:** v1.0 milestone
-**Current phase:** 13
-**Current plan:** 2 (complete)
-**Total Plans in Phase:** 2
+**Milestone:** v1.0 OpenAI API Compliance
+**Current phase:** none
+**Current plan:** none
+**Total Plans in Phase:** n/a
 **Progress:** [██████████] 100%
-**Status:** Milestone complete
+**Status:** v1.0 milestone archived
 **Last Activity:** 2026-03-22
-**Last Activity Description:** Phase 12 complete; milestone remains complete after out-of-order closure
+**Last Activity Description:** Archived v1.0 and reset the root planning surface for next-milestone definition
 
 ## Session Info
 
 **Last session:** 2026-03-22T09:13:27Z
-**Stopped At:** Completed 13-02-PLAN.md
+**Stopped At:** Milestone archived; awaiting next milestone planning
 **Resume File:** None
 
 ## Accumulated Context
 
 ### Roadmap Evolution
 
-- Phase 11 added: Real OpenAI SDK regression tests — CI-style e2e
+- Phase 11 added: Real OpenAI SDK regression tests - CI-style e2e
 - Phase 12 plan 01 recovered: public embeddings id canonicalization and provider-boundary verification documented
 - Phase 12 plan 02 recovered: real-runtime embeddings SDK regression and helper/runtime wiring documented
 - Phase 12 completed after out-of-order recovery and verification
 - Phase 13 completed: Error-Path DIFF Headers
+- v1.0 milestone archived into `.planning/milestones/`; `.planning/ROADMAP.md` collapsed to milestone summaries and `REQUIREMENTS.md` was cleared for the next cycle
 
 ## Decisions
 
@@ -99,13 +103,14 @@ See: .planning/PROJECT.md
 - 2026-03-19: Completed 08-02-PLAN.md (differentiator compliance tests)
 - 2026-03-19: Completed 09-01-PLAN.md (stub endpoint error format for unsupported endpoints)
 - 2026-03-21: Completed 10-PLAN.md (models routes now require Bearer auth, return static DIFF-01 headers, and pass 353 API tests plus Docker API build)
-- 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests — CI-style e2e, 345 tests passing)
+- 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests - CI-style e2e, 345 tests passing)
 - 2026-03-22: Captured Phase 13 context at `.planning/phases/13-error-path-diff-headers/13-CONTEXT.md`
 - 2026-03-22: Completed 13-01-PLAN.md (v1 error and stub responses now preserve DIFF headers; 361 API tests passing; Docker API build passing)
 - 2026-03-22: Completed 13-02-PLAN.md (plugin-level validation and not-found errors now preserve DIFF headers; 363 API tests passing; Docker API build passing)
 - 2026-03-22: Completed 12-01-PLAN.md via artifact recovery after Phase 13 (canonical public embeddings id/provider boundary confirmed; focused regressions 44/44 passing; full API suite 368/368 passing; Docker API build passing)
 - 2026-03-22: Completed 12-02-PLAN.md via artifact recovery after Phase 13 (real-runtime embeddings SDK path confirmed; helper/runtime regressions 32/32 passing; targeted SDK path 1/1 passing; SDK regression file 15/15 passing; full API suite 368/368 passing; Docker API build passing)
 - 2026-03-22: Completed Phase 12 verification and roadmap closure after Phase 13 (8/8 must-haves verified; DIFF-03 complete; milestone remains complete)
+- 2026-03-22: Archived v1.0 milestone artifacts and prepared the root planning surface for the next milestone
 
 ## Performance Metrics
 
