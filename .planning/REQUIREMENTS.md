@@ -33,9 +33,9 @@ Requirements for this milestone. Each maps to roadmap phases.
 
 ### Differentiators
 
-- [x] **DIFF-01**: All `/v1/*` endpoints include `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits` response headers
+- [ ] **DIFF-01**: All `/v1/*` endpoints include `x-model-routed`, `x-provider-used`, `x-provider-model`, `x-actual-credits` response headers
 - [x] **DIFF-02**: Usage object or response headers include actual credit cost for the request
-- [x] **DIFF-03**: Model aliasing — accept standard OpenAI model names (e.g., `gpt-4o`, `gpt-4o-mini`) and route to the best available provider
+- [ ] **DIFF-03**: Model aliasing — accept standard OpenAI model names (e.g., `gpt-4o`, `gpt-4o-mini`) and route to the best available provider
 - [x] **DIFF-04**: All `/v1/*` responses include `x-request-id` header for debugging and support
 
 ### Operational
@@ -108,9 +108,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | SURF-01 | Phase 7 | Complete |
 | SURF-02 | Phase 7 | Complete |
 | SURF-03 | Phase 7 | Complete |
-| DIFF-01 | Phase 10 | Complete |
+| DIFF-01 | Phase 13 | Pending |
 | DIFF-02 | Phase 8 | Complete |
-| DIFF-03 | Phase 8 | Complete |
+| DIFF-03 | Phase 12 | Pending |
 | DIFF-04 | Phase 8 | Complete |
 | OPS-01 | Phase 9 | Complete |
 | OPS-02 | Phase 9 | Complete |
@@ -119,8 +119,8 @@ Which phases cover which requirements. Updated during roadmap creation.
 - v1 requirements: 21 total
 - Mapped to phases: 21
 - Unmapped: 0
-- Pending (gap closure): 2 (FOUND-02, DIFF-01 → Phase 10)
+- Pending (gap closure): 2 (DIFF-03 -> Phase 12, DIFF-01 -> Phase 13)
 
 ---
 *Requirements defined: 2026-03-17*
-*Last updated: 2026-03-17 after roadmap creation*
+*Last updated: 2026-03-22 after milestone gap closure phase creation*

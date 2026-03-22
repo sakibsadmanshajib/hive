@@ -22,6 +22,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 8: Differentiators** - Hive-specific headers, credit cost, model aliasing, and request IDs on all endpoints (completed 2026-03-19)
 - [x] **Phase 9: Operational Hardening** - Stub endpoints for unsupported APIs and GitHub issue tracking for deferred work (completed 2026-03-19)
 - [x] **Phase 10: Models Route Compliance** - Auth guard and differentiator headers on GET /v1/models routes to close gaps found by milestone audit (completed 2026-03-22)
+- [x] **Phase 11: Real OpenAI SDK Regression Tests** - Comprehensive SDK coverage for implemented endpoints, success/error paths, and CI-ready execution (completed 2026-03-22)
+- [ ] **Phase 12: Embeddings Alias Runtime Compliance** - Accept the standard SDK-facing embeddings model id in the real runtime and lock it with regression coverage
+- [ ] **Phase 13: Error-Path DIFF Headers** - Preserve DIFF headers on all `/v1/*` error and stub responses
 
 ## Phase Details
 
@@ -169,7 +172,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 11 -> 12 -> 13
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -183,6 +186,9 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 8. Differentiators | 2/2 | Complete   | 2026-03-19 |
 | 9. Operational Hardening | 2/2 | Complete    | 2026-03-19 |
 | 10. Models Route Compliance | 1/1 | Complete   | 2026-03-22 |
+| 11. Real OpenAI SDK Regression Tests | 1/1 | Complete | 2026-03-22 |
+| 12. Embeddings Alias Runtime Compliance | 0/1 | Planned | - |
+| 13. Error-Path DIFF Headers | 0/1 | Planned | - |
 
 ### Phase 11: Real OpenAI SDK regression tests — CI-style e2e
 
@@ -198,3 +204,35 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 Plans:
 - [x] TBD (run /gsd:plan-phase 11 to break down) (completed 2026-03-21)
+
+### Phase 12: Embeddings Alias Runtime Compliance
+
+**Goal:** Close the remaining embeddings alias gap so standard OpenAI SDK model IDs resolve in the real runtime catalog
+**Depends on:** Phase 7, Phase 8, Phase 11
+**Requirements:** DIFF-03
+**Gap Closure:** Closes the remaining v1.0 milestone audit gaps for embeddings aliasing and the broken real-runtime SDK embeddings flow
+**Success Criteria** (what must be TRUE):
+  1. `POST /v1/embeddings` accepts `text-embedding-3-small` in the real runtime, not only the mock regression harness
+  2. `resolveModelAlias()` maps standard SDK-facing embeddings model ids to production catalog entries consistently
+  3. The official `openai` npm SDK's `client.embeddings.create({ model: "text-embedding-3-small" })` succeeds against the real runtime path
+  4. Regression coverage exercises the production catalog path so the alias gap cannot hide behind mocks again
+**Plans:** 0/1 plans complete
+
+Plans:
+- [ ] TBD (run `$gsd-plan-phase 12` to break down)
+
+### Phase 13: Error-Path DIFF Headers
+
+**Goal:** Close the remaining DIFF header contract gaps so all `/v1/*` error and stub responses preserve the differentiator headers
+**Depends on:** Phase 1, Phase 7, Phase 8, Phase 9, Phase 10, Phase 11
+**Requirements:** DIFF-01
+**Gap Closure:** Closes the remaining v1.0 milestone audit gaps for non-success response headers across chat, embeddings, images, responses, and stub routes
+**Success Criteria** (what must be TRUE):
+  1. Auth and service-error paths for `POST /v1/chat/completions`, `/v1/embeddings`, `/v1/images/generations`, and `/v1/responses` include `x-model-routed`, `x-provider-used`, `x-provider-model`, and `x-actual-credits`
+  2. Unsupported `/v1/*` stub routes include the same DIFF headers on 404 responses
+  3. Route handlers seed DIFF headers before calling `sendApiError()` or equivalent early-return paths
+  4. Regression coverage proves the header contract on representative live error paths and stub responses
+**Plans:** 0/1 plans complete
+
+Plans:
+- [ ] TBD (run `$gsd-plan-phase 13` to break down)
