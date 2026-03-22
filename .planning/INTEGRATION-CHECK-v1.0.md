@@ -1,4 +1,4 @@
-# Integration Check Report — Milestone v1.0
+# Integration Check Report - Milestone v1.0
 
 **Date:** 2026-03-22
 **Phases verified:** 01 through 13
@@ -11,6 +11,7 @@
 **Connected:** 20 requirement integrations confirmed in the current tree
 **Partial:** 1 (`FOUND-07`)
 **Missing:** 0 expected connections missing
+**Process-only:** 1 (`OPS-02`, satisfied through tracked issues rather than cross-phase runtime wiring)
 
 ## API Coverage
 
@@ -55,15 +56,15 @@
 
 ### Non-Blocking Artifact Debt
 
-- `.planning/phases/10-models-route-compliance/10-VALIDATION.md` is stale: it still says `status: draft` and leaves every task pending even though Phase 10 is complete.
 - `.planning/phases/11-real-openai-sdk-regression-tests-ci-style-e2e/11-VERIFICATION.md` is stale: it still says `human_needed` and references the pre-Phase-12/13 `345/68` snapshot while current evidence is `368/69`.
 - `apps/api/src/routes/__tests__/differentiators-headers.test.ts` still validates DIFF headers through the legacy `AiService` fixture rather than the current `RuntimeAiService` route stack.
-- `DIFF-04` is centrally wired in `v1Plugin`, but live `x-request-id` assertions remain lighter than DIFF-header coverage on the rest of the contract.
+- `DIFF-04` is centrally wired in `v1Plugin`, but live `x-request-id` assertions remain lighter than the rest of the DIFF-header coverage.
 
 ### Closed Prior Gaps
 
 - Phase 12 closed the embeddings alias gap: `text-embedding-3-small` now succeeds on the real runtime path and remains provider-namespaced only internally.
 - Phase 13 closed the DIFF-header error-path gap: route, stub, validation, and plugin-generated `/v1/*` error responses now preserve the DIFF headers.
+- Phase 10 Nyquist validation is current and compliant; the prior stale-draft claim no longer applies.
 
 ---
 
@@ -71,29 +72,29 @@
 
 | Requirement | Integration Path | Status | Issue |
 |-------------|------------------|--------|-------|
-| FOUND-01 | `sendApiError -> v1Plugin -> routes/stubs/plugin errors` | WIRED | — |
-| FOUND-02 | `requireV1ApiPrincipal -> models/chat/embeddings/images/responses -> SDK regressions` | WIRED | — |
-| FOUND-03 | `ModelService.serializeModel -> GET /v1/models -> SDK list` | WIRED | — |
-| FOUND-04 | `findById + sendApiError(404) -> GET /v1/models/:model -> SDK retrieve` | WIRED | — |
-| FOUND-05 | `v1Plugin onSend + chat stream branch` | WIRED | — |
-| FOUND-06 | `TypeBox schemas -> Fastify validation -> live route tests` | WIRED | — |
+| FOUND-01 | `sendApiError -> v1Plugin -> routes/stubs/plugin errors` | WIRED | - |
+| FOUND-02 | `requireV1ApiPrincipal -> models/chat/embeddings/images/responses -> SDK regressions` | WIRED | - |
+| FOUND-03 | `ModelService.serializeModel -> GET /v1/models -> SDK list` | WIRED | - |
+| FOUND-04 | `findById + sendApiError(404) -> GET /v1/models/:model -> SDK retrieve` | WIRED | - |
+| FOUND-05 | `v1Plugin onSend + chat stream branch` | WIRED | - |
+| FOUND-06 | `TypeBox schemas -> Fastify validation -> live route tests` | WIRED | - |
 | FOUND-07 | `generated openai.d.ts -> downstream consumers` | PARTIAL | Types are generated but not directly imported downstream |
-| CHAT-01 | `chat route -> RuntimeAiService.chatCompletions -> SDK create` | WIRED | — |
-| CHAT-02 | `request body -> RuntimeAiService -> ProviderRegistry.chat` | WIRED | — |
-| CHAT-03 | `provider/raw usage -> response.usage` | WIRED | — |
-| CHAT-04 | `chat stream route -> RuntimeAiService.chatCompletionsStream -> SDK async iterator` | WIRED | — |
-| CHAT-05 | `stream_options -> provider client stream request` | WIRED | — |
-| SURF-01 | `embeddings route -> RuntimeAiService.embeddings -> ProviderRegistry.embeddings` | WIRED | — |
-| SURF-02 | `images route -> RuntimeAiService.imageGeneration -> provider client` | WIRED | — |
-| SURF-03 | `responses route -> RuntimeAiService.responses` | WIRED | — |
-| DIFF-01 | `success headers + no-dispatch helper + plugin error handlers` | WIRED | — |
-| DIFF-02 | `RuntimeAiService/provider headers -> x-actual-credits/usage` | WIRED | — |
-| DIFF-03 | `resolveModelAlias -> ModelService.findById -> ProviderRegistry` | WIRED | — |
+| CHAT-01 | `chat route -> RuntimeAiService.chatCompletions -> SDK create` | WIRED | - |
+| CHAT-02 | `request body -> RuntimeAiService -> ProviderRegistry.chat` | WIRED | - |
+| CHAT-03 | `provider/raw usage -> response.usage` | WIRED | - |
+| CHAT-04 | `chat stream route -> RuntimeAiService.chatCompletionsStream -> SDK async iterator` | WIRED | - |
+| CHAT-05 | `stream_options -> provider client stream request` | WIRED | - |
+| SURF-01 | `embeddings route -> RuntimeAiService.embeddings -> ProviderRegistry.embeddings` | WIRED | - |
+| SURF-02 | `images route -> RuntimeAiService.imageGeneration -> provider client` | WIRED | - |
+| SURF-03 | `responses route -> RuntimeAiService.responses` | WIRED | - |
+| DIFF-01 | `success headers + no-dispatch helper + plugin error handlers` | WIRED | - |
+| DIFF-02 | `RuntimeAiService/provider headers -> x-actual-credits/usage` | WIRED | - |
+| DIFF-03 | `resolveModelAlias -> ModelService.findById -> ProviderRegistry` | WIRED | - |
 | DIFF-04 | `v1Plugin onRequest -> x-request-id` | WIRED | Live assertions are thinner than the rest of DIFF coverage |
-| OPS-01 | `v1Plugin -> v1-stubs -> sendApiError` | WIRED | — |
-| OPS-02 | `phase-local GitHub issue tracking artifacts` | UNWIRED | Satisfied as process/docs work, not cross-phase code wiring |
+| OPS-01 | `v1Plugin -> v1-stubs -> sendApiError` | WIRED | - |
+| OPS-02 | `phase-local GitHub issue tracking artifacts` | PROCESS | Satisfied as documentation/process work, not a cross-phase runtime wiring path |
 
-Requirements with no cross-phase wiring: `OPS-02`.
+Requirements with no cross-phase runtime wiring: `OPS-02`.
 
 ---
 
@@ -104,5 +105,5 @@ Current milestone integration status is `tech_debt`.
 There are no broken end-to-end flows and no missing cross-phase connections in the implemented API surface. The remaining issues are:
 
 1. partial downstream adoption of the generated OpenAI spec types (`FOUND-07` quality debt, not a requirement blocker)
-2. stale milestone-phase verification/validation artifacts
+2. one stale milestone verification artifact (`11-VERIFICATION.md`)
 3. lighter live assertion depth on the `x-request-id` contract than on the rest of the DIFF-header surface
