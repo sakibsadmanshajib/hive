@@ -6,13 +6,13 @@ current_phase: 13
 current_plan: 2 (complete)
 status: verifying
 stopped_at: Completed 13-02-PLAN.md
-last_updated: "2026-03-22T09:00:27Z"
+last_updated: "2026-03-22T09:13:27Z"
 last_activity: 2026-03-22
 progress:
   total_phases: 13
   completed_phases: 12
   total_plans: 25
-  completed_plans: 24
+  completed_plans: 25
   percent: 100
 ---
 
@@ -31,11 +31,11 @@ See: .planning/PROJECT.md
 **Progress:** [██████████] 100%
 **Status:** Phase complete — ready for verification
 **Last Activity:** 2026-03-22
-**Last Activity Description:** Recovered 12-01 summary/tracking without regressing Phase 13 state
+**Last Activity Description:** Recovered 12-02 summary/tracking and finished Phase 12 plan execution without regressing Phase 13 state
 
 ## Session Info
 
-**Last session:** 2026-03-22T09:00:27Z
+**Last session:** 2026-03-22T09:13:27Z
 **Stopped At:** Completed 13-02-PLAN.md
 **Resume File:** None
 
@@ -45,6 +45,7 @@ See: .planning/PROJECT.md
 
 - Phase 11 added: Real OpenAI SDK regression tests — CI-style e2e
 - Phase 12 plan 01 recovered: public embeddings id canonicalization and provider-boundary verification documented
+- Phase 12 plan 02 recovered: real-runtime embeddings SDK regression and helper/runtime wiring documented
 - Phase 13 completed: Error-Path DIFF Headers
 
 ## Decisions
@@ -77,6 +78,7 @@ See: .planning/PROJECT.md
 - [11-01] Per-test Fastify instances used for error-path tests to avoid shared state
 - [11-01] 422 test uses 400 (BadRequestError) since Fastify schema defines messages as optional
 - [12-01] Embeddings responses keep the public model id in the body and x-model-routed while x-provider-model preserves the upstream namespaced id
+- [12-02] Embeddings SDK regressions must use the real ModelService plus RuntimeAiService plus ProviderRegistry path instead of helper-only catalog entries
 - [Phase 13]: Route handlers and stub routes seed static no-dispatch DIFF headers before shared auth and error helpers can terminate the response
 - [Phase 13]: Shared reply header helpers in this repo should set headers sequentially instead of assuming reply.header chaining in lightweight tests
 - [Phase 13]: Plugin-level Fastify validation and not-found handlers now seed shared no-dispatch DIFF headers before sending /v1 error payloads
@@ -101,9 +103,11 @@ See: .planning/PROJECT.md
 - 2026-03-22: Completed 13-01-PLAN.md (v1 error and stub responses now preserve DIFF headers; 361 API tests passing; Docker API build passing)
 - 2026-03-22: Completed 13-02-PLAN.md (plugin-level validation and not-found errors now preserve DIFF headers; 363 API tests passing; Docker API build passing)
 - 2026-03-22: Completed 12-01-PLAN.md via artifact recovery after Phase 13 (canonical public embeddings id/provider boundary confirmed; focused regressions 44/44 passing; full API suite 368/368 passing; Docker API build passing)
+- 2026-03-22: Completed 12-02-PLAN.md via artifact recovery after Phase 13 (real-runtime embeddings SDK path confirmed; helper/runtime regressions 32/32 passing; targeted SDK path 1/1 passing; SDK regression file 15/15 passing; full API suite 368/368 passing; Docker API build passing)
 
 ## Performance Metrics
 
 | Phase/Plan | Duration | Scope | Files |
 | --- | --- | --- | --- |
+| Phase 12 P02 | artifact recovery | 3 tasks | 3 files |
 | Phase 13 P02 | 4m | 3 tasks | 2 files |
