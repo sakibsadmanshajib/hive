@@ -78,6 +78,14 @@ type V1MockServices = Pick<
   RuntimeServices,
   "users" | "env" | "supabaseAuth" | "authz" | "userSettings" | "models" | "rateLimiter"
 >;
+type V1TestAiService =
+  | MockAiService
+  | Pick<
+      RuntimeServices["ai"],
+      "chatCompletions" | "chatCompletionsStream" | "imageGeneration" | "embeddings" | "responses"
+    >;
+
+type V1TestServices = V1MockServices & { ai: V1TestAiService };
 
 export type MockAiService = {
   chatCompletions: (
@@ -267,13 +275,11 @@ export function createMockServices(
     models: {
       list: () => [
         { id: "mock-chat", object: "model", created: 1700000000, capability: "chat", costType: "paid" },
-        { id: "text-embedding-3-small", object: "model", created: 1700000000, capability: "embedding", costType: "paid" },
         { id: "dall-e-3", object: "model", created: 1700000000, capability: "image", costType: "paid" },
       ],
       findById: (modelId: string) => {
         const models = [
           { id: "mock-chat", object: "model", created: 1700000000, capability: "chat", costType: "paid" },
-          { id: "text-embedding-3-small", object: "model", created: 1700000000, capability: "embedding", costType: "paid" },
           { id: "dall-e-3", object: "model", created: 1700000000, capability: "image", costType: "paid" },
         ];
         return models.find((m) => m.id === modelId);
@@ -287,6 +293,10 @@ export function createMockServices(
 }
 
 export async function createTestApp(mockServices: MockServices) {
+  return createTestAppWithServices(mockServices);
+}
+
+export async function createTestAppWithServices(services: V1TestServices) {
   const app = Fastify({
     logger: false,
     ajv: {
@@ -296,7 +306,7 @@ export async function createTestApp(mockServices: MockServices) {
     },
   }).withTypeProvider<TypeBoxTypeProvider>();
 
-  await app.register(v1Plugin, { services: mockServices });
+  await app.register(v1Plugin, { services: services as RuntimeServices });
 
   const address = await app.listen({ port: 0 });
   return { app, address };

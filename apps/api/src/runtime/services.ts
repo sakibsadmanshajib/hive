@@ -113,6 +113,10 @@ type GuestAttributionStore = {
   }): Promise<void>;
 };
 
+type RuntimeAiCredits = Pick<PersistentCreditService, "consume" | "refund">;
+type RuntimeAiUsage = Pick<PersistentUsageService, "add">;
+type RuntimeAiLangfuse = Pick<LangfuseClient, "trace">;
+
 class PersistentCreditService {
   constructor(private readonly store: BillingStore) { }
 
@@ -568,16 +572,14 @@ export class PersistentUserService {
   }
 }
 
-
-
-class RuntimeAiService {
+export class RuntimeAiService {
   constructor(
     private readonly models: ModelService,
-    private readonly credits: PersistentCreditService,
-    private readonly usage: PersistentUsageService,
+    private readonly credits: RuntimeAiCredits,
+    private readonly usage: RuntimeAiUsage,
     private readonly guests: GuestAttributionStore,
     private readonly providerRegistry: ProviderRegistry,
-    private readonly langfuse: LangfuseClient,
+    private readonly langfuse: RuntimeAiLangfuse,
   ) { }
 
   private buildUsageContext(context: { channel: UsageChannel; apiKeyId?: string }) {
