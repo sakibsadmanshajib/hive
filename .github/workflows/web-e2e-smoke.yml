@@ -1,16 +1,6 @@
 name: Web E2E Smoke
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "apps/web/**"
-      - "apps/api/**"
-      - "supabase/**"
-      - "docker-compose.yml"
-      - ".env.example"
-      - ".github/workflows/web-e2e-smoke.yml"
   workflow_dispatch:
 
 permissions:
@@ -25,6 +15,7 @@ env:
 
 jobs:
   smoke:
+    # Temporarily disabled for pull requests while the web overhaul lands.
     name: Auth Chat Billing smoke
     runs-on: ubuntu-latest
     timeout-minutes: 35

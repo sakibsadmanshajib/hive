@@ -18,6 +18,14 @@ class FakeApp {
   }
 }
 
+const v1AuthServices = {
+  authz: { requirePermission: async () => true },
+  userSettings: {
+    getForUser: async () => ({ apiEnabled: true, generateImage: true }),
+    canUse: () => true,
+  },
+};
+
 describe("images generations route", () => {
   it("forwards an OpenAI-compatible image request payload to the runtime service", async () => {
     const imageGeneration = vi.fn(async () => ({
@@ -36,6 +44,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
@@ -111,6 +120,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"], apiKeyId: "key_123" }) },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
@@ -154,6 +164,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
       rateLimiter: { allow: async () => true },
       ai: {
@@ -218,6 +229,7 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },

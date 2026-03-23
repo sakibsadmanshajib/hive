@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Temporarily short-circuited web lint/test/build in the monorepo CI workflow and disabled the dedicated web smoke workflow while the web overhaul is in progress; API checks remain active.
+
 ### Added
 - **Real Local OpenAI SDK Verification Report:** Added a runbook-style report covering the 2026-03-22 Docker-local verification run with real Supabase auth, Hive API-key issuance, local payment funding, official OpenAI SDK requests, and persisted billing evidence.
 - **Persisted Chat History:** Guest and authenticated chat conversations are now stored server-side and survive reloads and devices.

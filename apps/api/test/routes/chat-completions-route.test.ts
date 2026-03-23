@@ -11,6 +11,14 @@ class FakeApp {
   }
 }
 
+const v1AuthServices = {
+  authz: { requirePermission: async () => true },
+  userSettings: {
+    getForUser: async () => ({ apiEnabled: true }),
+    canUse: () => true,
+  },
+};
+
 function createReply() {
   let statusCode = 200;
   let sentPayload: unknown;
@@ -56,6 +64,7 @@ describe("chat completions route", () => {
     }));
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: {
         chatCompletions,
@@ -90,6 +99,7 @@ describe("chat completions route", () => {
     const app = new FakeApp();
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => null },
       ai: { chatCompletions: vi.fn() },
     } as never);
@@ -124,6 +134,7 @@ describe("chat completions route", () => {
     let captured: unknown[] = [];
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: {
         resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-123" }),
       },
@@ -187,6 +198,7 @@ describe("chat completions route", () => {
     }));
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: { chatCompletions: vi.fn(), chatCompletionsStream },
     } as never);
@@ -225,6 +237,7 @@ describe("chat completions route", () => {
     }));
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: { chatCompletions: vi.fn(), chatCompletionsStream },
     } as never);
@@ -256,6 +269,46 @@ describe("chat completions route", () => {
     });
   });
 
+  it("rate limits streaming requests before dispatching the upstream stream", async () => {
+    const app = new FakeApp();
+    const allow = vi.fn(async () => false);
+    const chatCompletionsStream = vi.fn();
+    registerChatCompletionsRoute(app as never, {
+      rateLimiter: { allow },
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
+      ...v1AuthServices,
+      ai: { chatCompletions: vi.fn(), chatCompletionsStream },
+    } as never);
+
+    const handler = app.handlers.get("/v1/chat/completions");
+    const reply = createReply();
+
+    await handler?.(
+      {
+        headers: { authorization: "Bearer sk_test" },
+        raw: { on: vi.fn() },
+        body: {
+          model: "fast-chat",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+        },
+      },
+      reply,
+    );
+
+    expect(allow).toHaveBeenCalledWith("user-1");
+    expect(chatCompletionsStream).not.toHaveBeenCalled();
+    expect(reply.statusCode).toBe(429);
+    expect(reply.sentPayload).toEqual({
+      error: {
+        message: "rate limit exceeded",
+        type: "rate_limit_error",
+        param: null,
+        code: "rate_limit_exceeded",
+      },
+    });
+  });
+
   it("passes full request body to service including extra params", async () => {
     const app = new FakeApp();
     const chatCompletions = vi.fn(async () => ({
@@ -277,6 +330,7 @@ describe("chat completions route", () => {
     }));
     registerChatCompletionsRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: { chatCompletions },
     } as never);

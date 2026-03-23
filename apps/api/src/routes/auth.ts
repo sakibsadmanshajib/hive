@@ -21,6 +21,33 @@ type AuthRequirements = {
   requiredSetting?: UserSettingKey;
 };
 
+async function enforceRequirements(
+  principal: AuthPrincipal,
+  reply: FastifyReply,
+  services: RuntimeServices,
+  requirements: AuthRequirements,
+): Promise<AuthPrincipal | undefined> {
+  const permission = requirements.requiredPermission
+    ?? (requirements.requiredScope ? mapScopeToPrimaryPermission(requirements.requiredScope) : undefined);
+  if (permission) {
+    const allowed = await services.authz.requirePermission(principal, permission);
+    if (!allowed) {
+      sendApiError(reply, 403, "forbidden");
+      return undefined;
+    }
+  }
+
+  if (requirements.requiredSetting) {
+    const settings = await services.userSettings.getForUser(principal.userId);
+    if (!services.userSettings.canUse(requirements.requiredSetting, settings)) {
+      sendApiError(reply, 403, `setting disabled: ${requirements.requiredSetting}`);
+      return undefined;
+    }
+  }
+
+  return principal;
+}
+
 function readSingleHeaderValue(header: string | string[] | undefined): string | undefined {
   if (typeof header === "string") {
     return header;
@@ -117,25 +144,7 @@ export async function requirePrincipal(
     return undefined;
   }
 
-  const permission = requirements.requiredPermission
-    ?? (requirements.requiredScope ? mapScopeToPrimaryPermission(requirements.requiredScope) : undefined);
-  if (permission) {
-    const allowed = await services.authz.requirePermission(principal, permission);
-    if (!allowed) {
-      sendApiError(reply, 403, "forbidden");
-      return undefined;
-    }
-  }
-
-  if (requirements.requiredSetting) {
-    const settings = await services.userSettings.getForUser(principal.userId);
-    if (!services.userSettings.canUse(requirements.requiredSetting, settings)) {
-      sendApiError(reply, 403, `setting disabled: ${requirements.requiredSetting}`);
-      return undefined;
-    }
-  }
-
-  return principal;
+  return enforceRequirements(principal, reply, services, requirements);
 }
 
 export async function requireApiUser(
@@ -186,12 +195,34 @@ export async function requireV1ApiPrincipal(
     return undefined;
   }
 
-  return {
+  const principal: AuthPrincipal = {
     userId: resolved.userId,
     authType: "apiKey",
     scopes: resolved.scopes,
     apiKeyId: resolved.apiKeyId,
   };
+
+  const allowed = await enforceRequirements(principal, reply, services, { requiredScope });
+  if (!allowed) {
+    return undefined;
+  }
+
+  const requiredSettings: UserSettingKey[] = requiredScope
+    ? ["apiEnabled", ...(requiredScope === "image" ? ["generateImage"] : [])]
+    : [];
+  if (requiredSettings.length === 0) {
+    return principal;
+  }
+
+  const settings = await services.userSettings.getForUser(principal.userId);
+  for (const requiredSetting of requiredSettings) {
+    if (!services.userSettings.canUse(requiredSetting, settings)) {
+      sendApiError(reply, 403, `setting disabled: ${requiredSetting}`);
+      return undefined;
+    }
+  }
+
+  return principal;
 }
 
 export function inferUsageChannel(request: FastifyRequest, principal: AuthPrincipal): UsageChannel {

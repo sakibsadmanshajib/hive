@@ -21,6 +21,11 @@ export function registerChatCompletionsRoute(
       return;
     }
 
+    const allowed = await services.rateLimiter.allow(principal.userId);
+    if (!allowed) {
+      return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
+    }
+
     if (request.body?.stream === true) {
       const streamResult = await services.ai.chatCompletionsStream(
         principal.userId,
@@ -53,11 +58,6 @@ export function registerChatCompletionsRoute(
       });
 
       return reply.send(nodeStream);
-    }
-
-    const allowed = await services.rateLimiter.allow(principal.userId);
-    if (!allowed) {
-      return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
     }
 
     const result = await services.ai.chatCompletions(

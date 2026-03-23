@@ -12,6 +12,14 @@ class FakeApp {
   }
 }
 
+const v1AuthServices = {
+  authz: { requirePermission: async () => true },
+  userSettings: {
+    getForUser: async () => ({ apiEnabled: true }),
+    canUse: () => true,
+  },
+};
+
 function createReply() {
   let statusCode = 200;
   let sentPayload: unknown;
@@ -47,6 +55,7 @@ describe("responses route", () => {
     const app = new FakeApp();
     registerResponsesRoute(app as never, {
       rateLimiter: { allow: async () => true },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: {
         responses: async () => ({

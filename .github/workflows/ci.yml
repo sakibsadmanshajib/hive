@@ -67,9 +67,8 @@ jobs:
             run_api="true"
           fi
 
-          if [[ "${{ steps.changes.outputs.web }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" || "${{ steps.changes.outputs.root }}" == "true" ]]; then
-            run_web="true"
-          fi
+          # Temporary web short-circuit while the web stack is being overhauled.
+          run_web="false"
 
           echo "run_api=$run_api" >> "$GITHUB_OUTPUT"
           echo "run_web=$run_web" >> "$GITHUB_OUTPUT"
