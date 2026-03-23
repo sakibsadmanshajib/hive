@@ -207,9 +207,12 @@ export async function requireV1ApiPrincipal(
     return undefined;
   }
 
-  const requiredSettings: UserSettingKey[] = requiredScope
-    ? ["apiEnabled", ...(requiredScope === "image" ? ["generateImage"] : [])]
-    : [];
+  const requiredSettings =
+    requiredScope === "image"
+      ? (["apiEnabled", "generateImage"] as const)
+      : requiredScope
+        ? (["apiEnabled"] as const)
+        : ([] as const);
   if (requiredSettings.length === 0) {
     return principal;
   }
