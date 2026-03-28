@@ -1,35 +1,75 @@
+import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
-import { inferUsageChannel, requireApiPrincipal } from "./auth";
+import { ChatCompletionsBodySchema } from "../schemas/chat-completions";
+import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
+import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
-type ChatBody = {
-  model?: string;
-  messages?: Array<{ role: string; content: string }>;
-};
+export function registerChatCompletionsRoute(
+  app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
+  services: RuntimeServices,
+): void {
+  app.post("/v1/chat/completions", {
+    schema: { body: ChatCompletionsBodySchema },
+  }, async (request, reply) => {
+    setNoDispatchDiffHeaders(reply);
 
-export function registerChatCompletionsRoute(app: FastifyInstance, services: RuntimeServices): void {
-  app.post<{ Body: ChatBody }>("/v1/chat/completions", async (request, reply) => {
-    const principal = await requireApiPrincipal(request, reply, services, "chat");
+    const principal = await requireV1ApiPrincipal(request, reply, services, "chat");
     if (!principal) {
       return;
     }
 
     const allowed = await services.rateLimiter.allow(principal.userId);
     if (!allowed) {
-      return reply.code(429).send({ error: "rate limit exceeded" });
+      return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
+    }
+
+    if (request.body?.stream === true) {
+      const streamResult = await services.ai.chatCompletionsStream(
+        principal.userId,
+        request.body,
+        {
+          channel: inferUsageChannel(request, principal),
+          apiKeyId: principal.apiKeyId,
+        },
+      );
+      if ("error" in streamResult) {
+        return sendApiError(reply, streamResult.statusCode, streamResult.error ?? "Unknown error");
+      }
+
+      reply
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .header("connection", "keep-alive")
+        .header("x-model-routed", streamResult.headers["x-model-routed"])
+        .header("x-provider-used", streamResult.headers["x-provider-used"])
+        .header("x-provider-model", streamResult.headers["x-provider-model"])
+        .header("x-actual-credits", streamResult.headers["x-actual-credits"]);
+
+      const nodeStream = Readable.fromWeb(streamResult.response.body as any);
+
+      // Abort upstream connection if client disconnects
+      request.raw.on("close", () => {
+        if (!nodeStream.destroyed) {
+          nodeStream.destroy();
+        }
+      });
+
+      return reply.send(nodeStream);
     }
 
     const result = await services.ai.chatCompletions(
       principal.userId,
-      request.body?.model,
-      request.body?.messages ?? [],
+      request.body,
       {
         channel: inferUsageChannel(request, principal),
         apiKeyId: principal.apiKeyId,
       },
     );
     if ("error" in result) {
-      return reply.code(result.statusCode).send({ error: result.error });
+      return sendApiError(reply, result.statusCode, result.error ?? "Unknown error");
     }
 
     reply

@@ -44,6 +44,15 @@ describe("openai provider client image support", () => {
         completionTokens: 7,
         totalTokens: 18,
       },
+      rawResponse: {
+        model: "gpt-4o-mini-2026-03-01",
+        choices: [{ message: { content: "Chat reply" } }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 7,
+          total_tokens: 18,
+        },
+      },
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -57,6 +66,7 @@ describe("openai provider client image support", () => {
         body: JSON.stringify({
           model: "gpt-4o-mini",
           messages: [{ role: "user", content: "hello" }],
+          stream: false,
         }),
       }),
     );

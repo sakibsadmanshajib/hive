@@ -31,4 +31,42 @@ describe("model service", () => {
     expect(service.isGuestAccessible("guest-free")).toBe(false);
     expect(() => service.pickGuestDefault("chat")).toThrowError(/No guest model/);
   });
+
+  it("resolves the canonical public embeddings model id", () => {
+    const service = new ModelService();
+
+    expect(service.findById("text-embedding-3-small")?.id).toBe("text-embedding-3-small");
+  });
+
+  it("resolves the legacy embeddings alias to the canonical public id", () => {
+    const service = new ModelService();
+
+    expect(service.findById("text-embedding-ada-002")?.id).toBe("text-embedding-3-small");
+  });
+
+  it("lists only the canonical public embeddings id", () => {
+    const service = new ModelService();
+    const modelIds = service.list().map((model) => model.id);
+
+    expect(modelIds).toContain("text-embedding-3-small");
+    expect(modelIds).not.toContain("openai/text-embedding-3-small");
+  });
+
+  it("lists a verification-only embedding model when the runtime injects it", () => {
+    const service = new ModelService({
+      extraModels: [
+        {
+          id: "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+          object: "model",
+          created: 1744675200,
+          capability: "embedding",
+          costType: "variable",
+          pricing: { inputTokensPer1m: 2 },
+        },
+      ],
+    } as any);
+
+    expect(service.findById("nvidia/llama-nemotron-embed-vl-1b-v2:free")?.id)
+      .toBe("nvidia/llama-nemotron-embed-vl-1b-v2:free");
+  });
 });

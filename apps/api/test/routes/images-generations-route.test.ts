@@ -13,10 +13,18 @@ type Handler = (
 class FakeApp {
   handlers = new Map<string, Handler>();
 
-  post(path: string, handler: Handler) {
-    this.handlers.set(`POST ${path}`, handler);
+  post(path: string, optsOrHandler: Handler | Record<string, unknown>, handler?: Handler) {
+    this.handlers.set(`POST ${path}`, handler ?? (optsOrHandler as Handler));
   }
 }
+
+const v1AuthServices = {
+  authz: { requirePermission: async () => true },
+  userSettings: {
+    getForUser: async () => ({ apiEnabled: true, generateImage: true }),
+    canUse: () => true,
+  },
+};
 
 describe("images generations route", () => {
   it("forwards an OpenAI-compatible image request payload to the runtime service", async () => {
@@ -36,14 +44,8 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
     } as never);
@@ -66,7 +68,7 @@ describe("images generations route", () => {
     };
     const payload = await handler?.(
       {
-        headers: { "x-api-key": "sk_1" },
+        headers: { authorization: "Bearer sk_1" },
         body: {
           model: "image-basic",
           prompt: "a lighthouse in fog",
@@ -118,14 +120,8 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"], apiKeyId: "key_123" }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
     } as never);
@@ -141,7 +137,7 @@ describe("images generations route", () => {
 
     await handler?.(
       {
-        headers: { "x-api-key": "sk_1" },
+        headers: { authorization: "Bearer sk_1" },
         body: {
           model: "image-basic",
           prompt: "a lighthouse in fog",
@@ -168,14 +164,8 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: {
         imageGeneration: vi.fn(async () => ({
@@ -192,23 +182,24 @@ describe("images generations route", () => {
 
     const handler = app.handlers.get("POST /v1/images/generations");
     let statusCode = 200;
+    let sentPayload: unknown;
     const headers = new Map<string, string>();
     const reply = {
       code: (code: number) => {
         statusCode = code;
         return {
-          send: (body: unknown) => body,
+          send: (body: unknown) => { sentPayload = body; return body; },
         };
       },
-      send: (body: unknown) => body,
+      send: (body: unknown) => { sentPayload = body; return body; },
       header: (key: string, value: string) => {
         headers.set(key, value);
         return reply;
       },
     };
-    const response = (await handler?.(
+    await handler?.(
       {
-        headers: { "x-api-key": "sk_1" },
+        headers: { authorization: "Bearer sk_1" },
         body: {
           model: "image-basic",
           prompt: "a lighthouse in fog",
@@ -216,14 +207,21 @@ describe("images generations route", () => {
         },
       },
       reply,
-    )) as { error: string };
+    );
 
     expect(statusCode).toBe(502);
     expect(headers.get("x-model-routed")).toBe("image-basic");
-    expect(response).toEqual({ error: "provider unavailable" });
+    expect(sentPayload).toEqual({
+      error: {
+        message: "provider unavailable",
+        type: "server_error",
+        param: null,
+        code: null,
+      },
+    });
     expect(headers.get("x-provider-used")).toBe("openai");
     expect(headers.get("x-provider-model")).toBe("gpt-image-1");
-    expect(JSON.stringify(response)).not.toContain("internal");
+    expect(JSON.stringify(sentPayload)).not.toContain("internal");
   });
 
   it("rejects empty prompts before calling the runtime service", async () => {
@@ -231,38 +229,40 @@ describe("images generations route", () => {
     const app = new FakeApp();
 
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
+      ...v1AuthServices,
       users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: true, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration },
     } as never);
 
     const handler = app.handlers.get("POST /v1/images/generations");
     let statusCode = 200;
+    let sentPayload: unknown;
     const reply = {
       code: (code: number) => {
         statusCode = code;
         return {
-          send: (body: unknown) => body,
+          send: (body: unknown) => { sentPayload = body; return body; },
         };
       },
-      send: (body: unknown) => body,
+      send: (body: unknown) => { sentPayload = body; return body; },
       header: () => reply,
     };
 
-    const response = (await handler?.(
-      { headers: { "x-api-key": "sk_1" }, body: { prompt: "   " } },
+    await handler?.(
+      { headers: { authorization: "Bearer sk_1" }, body: { prompt: "   " } },
       reply,
-    )) as { error: string };
+    );
 
     expect(statusCode).toBe(400);
-    expect(response).toEqual({ error: "prompt is required" });
+    expect(sentPayload).toEqual({
+      error: {
+        message: "prompt is required",
+        type: "invalid_request_error",
+        param: "prompt",
+        code: null,
+      },
+    });
     expect(imageGeneration).not.toHaveBeenCalled();
   });
 });

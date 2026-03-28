@@ -31,11 +31,12 @@ export class AiService {
 
   chatCompletions(
     userId: string,
-    modelId: string | undefined,
-    messages: ChatMessage[],
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     usageContext: UsageContext,
   ) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const modelId = body.model;
+    const messages = (body.messages ?? []) as ChatMessage[];
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -69,20 +70,34 @@ export class AiService {
             message: {
               role: "assistant",
               content: `MVP response: ${text || "Your request was processed."}`,
+              refusal: null,
             },
+            logprobs: null,
           },
         ],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0,
+        },
       },
       headers: {
         "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
         "x-actual-credits": String(credits),
       },
     };
   }
 
-  responses(userId: string, input: string, usageContext: UsageContext) {
+  responses(userId: string, body: { model?: string; input: string | unknown[]; instructions?: string; [key: string]: unknown }, usageContext: UsageContext) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
-    const model = this.models.pickDefault("chat");
+    const model = body.model
+      ? this.models.findById(body.model)
+      : this.models.pickDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: `Unknown model: ${body.model}`, statusCode: 400 as const };
+    }
     const credits = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     if (!this.credits.consume(userId, credits)) {
       return { error: "insufficient credits", statusCode: 402 as const };
@@ -95,13 +110,79 @@ export class AiService {
       ...resolvedUsageContext,
     });
 
+    const inputText = typeof body.input === "string" ? body.input : JSON.stringify(body.input);
+    return {
+      statusCode: 200 as const,
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
+        "x-actual-credits": String(credits),
+      },
+      body: {
+        id: `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+        object: "response" as const,
+        created_at: Math.floor(Date.now() / 1000),
+        status: "completed" as const,
+        model: model.id,
+        output: [{
+          type: "message" as const,
+          id: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+          role: "assistant" as const,
+          status: "completed" as const,
+          content: [{
+            type: "output_text" as const,
+            text: `MVP output: ${inputText || "No input provided."}`,
+          }],
+        }],
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          total_tokens: 0,
+        },
+      },
+    };
+  }
+
+  embeddings(
+    userId: string,
+    body: { model: string; input: string | string[]; encoding_format?: "float" | "base64"; dimensions?: number; user?: string },
+    usageContext: UsageContext,
+  ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const model = this.models.findById(body.model);
+    if (!model || model.capability !== "embedding") {
+      return { error: `Unknown embedding model: ${body.model}`, statusCode: 400 as const };
+    }
+    const credits = this.models.creditsForRequest(model);
+    if (!this.credits.consume(userId, credits)) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+    this.usage.add({
+      userId,
+      endpoint: "/v1/embeddings",
+      model: model.id,
+      credits,
+      ...resolvedUsageContext,
+    });
+    const inputArray = Array.isArray(body.input) ? body.input : [body.input];
     return {
       statusCode: 200 as const,
       body: {
-        id: `resp_${randomUUID().slice(0, 12)}`,
-        object: "response",
+        object: "list" as const,
+        data: inputArray.map((_, index) => ({
+          object: "embedding" as const,
+          embedding: [0.0, 0.0, 0.0],
+          index,
+        })),
         model: model.id,
-        output: [{ type: "text", text: `MVP output: ${input || "No input provided."}` }],
+        usage: { prompt_tokens: 0, total_tokens: 0 },
+      },
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
+        "x-actual-credits": String(credits),
       },
     };
   }
@@ -130,13 +211,17 @@ export class AiService {
 
     return {
       statusCode: 200 as const,
-      headers: { "x-actual-credits": String(credits) },
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": "hive-mvp",
+        "x-provider-model": model.id,
+        "x-actual-credits": String(credits),
+      },
       body: {
         created: Math.floor(Date.now() / 1000),
-        object: "list",
         data: [
           {
-            url: `https://example.invalid/generated/${encodeURIComponent(prompt || "image")}.png`,
+            url: `https://placeholder.test/generated/${encodeURIComponent(prompt || "image")}.png`,
           },
         ],
       },

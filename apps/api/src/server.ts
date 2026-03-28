@@ -1,11 +1,19 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import { createRuntimeServices } from "./runtime/services";
 import { registerRoutes } from "./routes";
 import { readAllowedOrigins } from "./runtime/cors-origins";
 
 export function createApp() {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: true,
+    ajv: {
+      customOptions: {
+        removeAdditional: false,
+      },
+    },
+  }).withTypeProvider<TypeBoxTypeProvider>();
   const allowedOrigins = readAllowedOrigins();
 
   void app.register(cors, {

@@ -7,10 +7,18 @@ type Handler = (request?: any, reply?: any) => Promise<unknown>;
 class FakeApp {
   readonly handlers = new Map<string, Handler>();
 
-  post(path: string, handler: Handler) {
-    this.handlers.set(path, handler);
+  post(path: string, optsOrHandler: Handler | Record<string, unknown>, handler?: Handler) {
+    this.handlers.set(path, handler ?? (optsOrHandler as Handler));
   }
 }
+
+const v1AuthServices = {
+  authz: { requirePermission: async () => true },
+  userSettings: {
+    getForUser: async () => ({ apiEnabled: true }),
+    canUse: () => true,
+  },
+};
 
 function createReply() {
   let statusCode = 200;
@@ -46,12 +54,9 @@ describe("responses route", () => {
   it("forwards routing and billing headers from the runtime response", async () => {
     const app = new FakeApp();
     registerResponsesRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false, supabase: { flags: { authEnabled: true } } },
-      supabaseAuth: { getSessionPrincipal: async () => ({ userId: "user-1" }) },
-      authz: { requirePermission: async () => true },
-      userSettings: { getForUser: async () => ({ apiEnabled: true }), canUse: () => true },
       rateLimiter: { allow: async () => true },
-      users: { resolveApiKey: async () => null },
+      ...v1AuthServices,
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
       ai: {
         responses: async () => ({
           statusCode: 200,
@@ -77,8 +82,7 @@ describe("responses route", () => {
     const result = await handler?.(
       {
         headers: {
-          authorization: "Bearer session-token",
-          origin: "http://127.0.0.1:3000",
+          authorization: "Bearer sk_test_key",
         },
         body: {
           input: "hello",

@@ -1,0 +1,120 @@
+---
+gsd_state_version: 1.0
+milestone: v1.0
+milestone_name: OpenAI API Compliance
+current_phase: null
+current_plan: null
+status: completed
+stopped_at: Milestone archived; awaiting next milestone planning
+last_updated: "2026-03-22T22:58:01Z"
+last_activity: 2026-03-22
+progress:
+  total_phases: 13
+  completed_phases: 13
+  total_plans: 25
+  completed_plans: 25
+  percent: 100
+---
+
+# Session State
+
+## Project Reference
+
+See: .planning/PROJECT.md (updated 2026-03-22)
+
+**Core value:** Developers can use Hive as a drop-in OpenAI-compatible API with transparent multi-provider routing and prepaid credit billing.
+**Current focus:** Planning the next milestone, starting with Payment & Finance Hardening.
+
+## Position
+
+**Milestone:** v1.0 OpenAI API Compliance
+**Current phase:** none
+**Current plan:** none
+**Total Plans in Phase:** n/a
+**Progress:** [██████████] 100%
+**Status:** v1.0 milestone archived
+**Last Activity:** 2026-03-22
+**Last Activity Description:** Archived v1.0 and reset the root planning surface for next-milestone definition
+
+## Session Info
+
+**Last session:** 2026-03-22T09:13:27Z
+**Stopped At:** Milestone archived; awaiting next milestone planning
+**Resume File:** None
+
+## Accumulated Context
+
+### Roadmap Evolution
+
+- Phase 11 added: Real OpenAI SDK regression tests - CI-style e2e
+- Phase 12 plan 01 recovered: public embeddings id canonicalization and provider-boundary verification documented
+- Phase 12 plan 02 recovered: real-runtime embeddings SDK regression and helper/runtime wiring documented
+- Phase 12 completed after out-of-order recovery and verification
+- Phase 13 completed: Error-Path DIFF Headers
+- v1.0 milestone archived into `.planning/milestones/`; `.planning/ROADMAP.md` collapsed to milestone summaries and `REQUIREMENTS.md` was cleared for the next cycle
+
+## Decisions
+
+- [05-01] Body-based service signatures for transparent param forwarding through provider pipeline
+- [05-01] Raw response passthrough for faithful OpenAI compliance
+- [05-02] Used real services in unit tests for higher fidelity over mocks
+- [05-02] Compliance tests use static fixture for fast schema shape validation
+- [06-01] No retry for streaming requests (maxRetries:0) -- retrying mid-stream leaks connections
+- [06-01] Fire-and-forget usage tracking for streams -- exact token counts deferred
+- [06-01] No fallback chain for streaming -- single provider dispatch with circuit breaker
+- [06-02] Static fixture tests validate SSE contract without Fastify app or service mocks
+- [07-01] Embeddings method added to RuntimeAiService following established real-provider pattern
+- [07-01] ProviderEmbeddingsExecutionResult includes providerUsed/providerModel for header propagation consistency
+- [07-02] Responses endpoint translates input+instructions to chat messages via registry.chat()
+- [07-02] Response usage maps prompt_tokens->input_tokens, completion_tokens->output_tokens per Responses API spec
+- [07-03] Static fixture pattern reused from Phase 5/6 compliance tests for consistency
+- [07-03] Critical regression tests: ImagesResponse has NO object field, Responses usage uses input_tokens/output_tokens NOT prompt_tokens/completion_tokens
+- [08-01] x-request-id via onRequest hook ensures presence on all responses including errors/404s
+- [08-01] hive-mvp as provider name for MVP AiService since no real provider dispatch
+- [08-01] Model aliases use static map with passthrough for unknown names (no breaking change)
+- [08-02] Used topUp() to provision test credits rather than direct balance manipulation
+- [08-02] Reused real-service test pattern from Phase 5/6/7 compliance tests
+- [09-01] Routes use /v1/ prefix matching existing codebase pattern (not without prefix as plan suggested)
+- [Phase 09]: Used gh CLI to create 7 deferred endpoint issues directly (#81-#87)
+- [10-01] Models routes seed static DIFF-01 headers before auth and lookup so 200, 401, and 404 responses all satisfy the catalog contract
+- [10-01] Models routes call requireV1ApiPrincipal without a scope so any valid API key can list or retrieve models
+- [11-01] MockAiService uses discriminated union return types matching route handler expectations (not OpenAI SDK types)
+- [11-01] rateLimiterOverride parameter added to createMockServices for 429 path testing
+- [11-01] Per-test Fastify instances used for error-path tests to avoid shared state
+- [11-01] 422 test uses 400 (BadRequestError) since Fastify schema defines messages as optional
+- [12-01] Embeddings responses keep the public model id in the body and x-model-routed while x-provider-model preserves the upstream namespaced id
+- [12-02] Embeddings SDK regressions must use the real ModelService plus RuntimeAiService plus ProviderRegistry path instead of helper-only catalog entries
+- [Phase 13]: Route handlers and stub routes seed static no-dispatch DIFF headers before shared auth and error helpers can terminate the response
+- [Phase 13]: Shared reply header helpers in this repo should set headers sequentially instead of assuming reply.header chaining in lightweight tests
+- [Phase 13]: Plugin-level Fastify validation and not-found handlers now seed shared no-dispatch DIFF headers before sending /v1 error payloads
+- [Phase 13]: TypeBox validation regressions now assert both OpenAI error shape and DIFF headers on live /v1 plugin 400 responses, including embeddings
+
+## Session Log
+
+- 2026-03-18: STATE.md regenerated by /gsd:health --repair
+- 2026-03-18: Completed 05-01-PLAN.md (non-streaming chat completions pipeline)
+- 2026-03-18: Completed 05-02-PLAN.md (chat completions test coverage)
+- 2026-03-18: Completed 06-01-PLAN.md (SSE streaming pipeline)
+- 2026-03-18: Completed 06-02-PLAN.md (SSE streaming compliance tests)
+- 2026-03-19: Completed 07-01-PLAN.md (POST /v1/embeddings endpoint pipeline)
+- 2026-03-19: Completed 07-02-PLAN.md (images & responses compliance)
+- 2026-03-19: Completed 07-03-PLAN.md (surface expansion compliance tests)
+- 2026-03-19: Completed 08-01-PLAN.md (differentiator headers and model aliases)
+- 2026-03-19: Completed 08-02-PLAN.md (differentiator compliance tests)
+- 2026-03-19: Completed 09-01-PLAN.md (stub endpoint error format for unsupported endpoints)
+- 2026-03-21: Completed 10-PLAN.md (models routes now require Bearer auth, return static DIFF-01 headers, and pass 353 API tests plus Docker API build)
+- 2026-03-21: Completed 11-01-PLAN.md (real OpenAI SDK regression tests - CI-style e2e, 345 tests passing)
+- 2026-03-22: Captured Phase 13 context at `.planning/phases/13-error-path-diff-headers/13-CONTEXT.md`
+- 2026-03-22: Completed 13-01-PLAN.md (v1 error and stub responses now preserve DIFF headers; 361 API tests passing; Docker API build passing)
+- 2026-03-22: Completed 13-02-PLAN.md (plugin-level validation and not-found errors now preserve DIFF headers; 363 API tests passing; Docker API build passing)
+- 2026-03-22: Completed 12-01-PLAN.md via artifact recovery after Phase 13 (canonical public embeddings id/provider boundary confirmed; focused regressions 44/44 passing; full API suite 368/368 passing; Docker API build passing)
+- 2026-03-22: Completed 12-02-PLAN.md via artifact recovery after Phase 13 (real-runtime embeddings SDK path confirmed; helper/runtime regressions 32/32 passing; targeted SDK path 1/1 passing; SDK regression file 15/15 passing; full API suite 368/368 passing; Docker API build passing)
+- 2026-03-22: Completed Phase 12 verification and roadmap closure after Phase 13 (8/8 must-haves verified; DIFF-03 complete; milestone remains complete)
+- 2026-03-22: Archived v1.0 milestone artifacts and prepared the root planning surface for the next milestone
+
+## Performance Metrics
+
+| Phase/Plan | Duration | Scope | Files |
+| --- | --- | --- | --- |
+| Phase 12 P02 | artifact recovery | 3 tasks | 3 files |
+| Phase 13 P02 | 4m | 3 tasks | 2 files |

@@ -1,34 +1,299 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import OpenAI from "openai";
+import type { FastifyInstance } from "fastify";
 import { registerModelsRoute } from "../../src/routes/models";
+import { createTestApp, createMockServices } from "../helpers/test-app";
+
+/* ------------------------------------------------------------------ */
+/*  Part A: Unit tests using FakeApp pattern                          */
+/* ------------------------------------------------------------------ */
 
 class FakeApp {
-  readonly handlers = new Map<string, (request?: any, reply?: any) => Promise<unknown> | unknown>();
+  readonly handlers = new Map<string, { handler: Function; opts?: any }>();
 
-  get(path: string, handler: (request?: any, reply?: any) => Promise<unknown> | unknown) {
-    this.handlers.set(`GET ${path}`, handler);
+  get(path: string, ...args: any[]) {
+    if (args.length === 2) {
+      this.handlers.set(`GET ${path}`, { handler: args[1], opts: args[0] });
+    } else {
+      this.handlers.set(`GET ${path}`, { handler: args[0] });
+    }
   }
 }
 
+const mockModels = [
+  {
+    id: "test-model",
+    object: "model" as const,
+    created: 1700000000,
+    capability: "chat" as const,
+    costType: "variable" as const,
+    pricing: { creditsPerRequest: 5 },
+  },
+];
+
+const mockServices = {
+  models: {
+    list: () => mockModels,
+    findById: (id: string) => mockModels.find((m) => m.id === id),
+  },
+  users: {
+    resolveApiKey: async (apiKey: string) => {
+      if (apiKey !== "sk-test") {
+        return null;
+      }
+      return {
+        userId: "user_test",
+        apiKeyId: "key_test",
+        scopes: ["chat", "image", "usage", "billing"],
+      };
+    },
+  },
+} as never;
+
+function createFakeReply() {
+  const headers = new Map<string, string>();
+  const reply = {
+    statusCode: 200,
+    payload: undefined as unknown,
+    header(name: string, value: string) {
+      headers.set(name, value);
+      return this;
+    },
+    code(statusCode: number) {
+      this.statusCode = statusCode;
+      return this;
+    },
+    send(payload: unknown) {
+      this.payload = payload;
+      return this;
+    },
+  };
+
+  return { headers, reply };
+}
+
+function expectModelsRouteHeaders(headers: Map<string, string>) {
+  expect(headers.get("x-model-routed")).toBe("");
+  expect(headers.get("x-provider-used")).toBe("");
+  expect(headers.get("x-provider-model")).toBe("");
+  expect(headers.get("x-actual-credits")).toBe("0");
+}
+
 describe("models route", () => {
-  it("returns cost metadata needed by the web app", async () => {
-    const app = new FakeApp();
-    registerModelsRoute(app as never, {
-      models: {
-        list: () => [
-          { id: "guest-free", object: "model", capability: "chat", costType: "free" },
-          { id: "smart-reasoning", object: "model", capability: "chat", costType: "variable" },
-        ],
-      },
-    } as never);
+  const app = new FakeApp();
+  registerModelsRoute(app as never, mockServices);
 
-    const handler = app.handlers.get("GET /v1/models");
-
-    await expect(handler?.()).resolves.toEqual({
+  it("list returns object: list with data array", async () => {
+    const entry = app.handlers.get("GET /v1/models");
+    const { headers, reply } = createFakeReply();
+    const result = await entry!.handler({ headers: { authorization: "Bearer sk-test" } }, reply);
+    expect(result).toEqual({
       object: "list",
-      data: [
-        { id: "guest-free", object: "model", capability: "chat", costType: "free" },
-        { id: "smart-reasoning", object: "model", capability: "chat", costType: "variable" },
-      ],
+      data: expect.any(Array),
     });
+    expect(result.data.length).toBe(1);
+    expectModelsRouteHeaders(headers);
+  });
+
+  it("each model in list has exactly id, object, created, owned_by fields", async () => {
+    const entry = app.handlers.get("GET /v1/models");
+    const result = await entry!.handler(
+      { headers: { authorization: "Bearer sk-test" } },
+      createFakeReply().reply,
+    );
+    for (const item of result.data) {
+      expect(Object.keys(item).sort()).toEqual(["created", "id", "object", "owned_by"]);
+    }
+  });
+
+  it("list does not leak internal fields", async () => {
+    const entry = app.handlers.get("GET /v1/models");
+    const result = await entry!.handler(
+      { headers: { authorization: "Bearer sk-test" } },
+      createFakeReply().reply,
+    );
+    for (const item of result.data) {
+      expect(item).not.toHaveProperty("capability");
+      expect(item).not.toHaveProperty("costType");
+      expect(item).not.toHaveProperty("pricing");
+    }
+  });
+
+  it("list returns 401 when the bearer key is missing", async () => {
+    const entry = app.handlers.get("GET /v1/models");
+    const { headers, reply } = createFakeReply();
+
+    const result = await entry!.handler({ headers: {} }, reply);
+
+    expect(result).toBeUndefined();
+    expect(reply.statusCode).toBe(401);
+    expect(reply.payload).toEqual({
+      error: {
+        message: "No API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+    expectModelsRouteHeaders(headers);
+  });
+
+  it("list returns 401 when the bearer key is invalid", async () => {
+    const entry = app.handlers.get("GET /v1/models");
+    const { headers, reply } = createFakeReply();
+
+    const result = await entry!.handler({ headers: { authorization: "Bearer sk-bad" } }, reply);
+
+    expect(result).toBeUndefined();
+    expect(reply.statusCode).toBe(401);
+    expect(reply.payload).toEqual({
+      error: {
+        message: "Incorrect API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+    expectModelsRouteHeaders(headers);
+  });
+
+  it("retrieve returns single model object", async () => {
+    const entry = app.handlers.get("GET /v1/models/:model");
+    const { headers, reply } = createFakeReply();
+    const result = await entry!.handler(
+      {
+        headers: { authorization: "Bearer sk-test" },
+        params: { model: "test-model" },
+      },
+      reply,
+    );
+    expect(result).toEqual({
+      id: "test-model",
+      object: "model",
+      created: 1700000000,
+      owned_by: "hive",
+    });
+    expectModelsRouteHeaders(headers);
+  });
+
+  it("retrieve unknown model returns 404 error", async () => {
+    const entry = app.handlers.get("GET /v1/models/:model");
+    const { headers, reply } = createFakeReply();
+    await entry!.handler(
+      {
+        headers: { authorization: "Bearer sk-test" },
+        params: { model: "nonexistent" },
+      },
+      reply,
+    );
+    expect(reply.statusCode).toBe(404);
+    expect(reply.payload).toEqual({
+      error: {
+        message: expect.stringContaining("does not exist"),
+        type: "invalid_request_error",
+        param: null,
+        code: "model_not_found",
+      },
+    });
+    expectModelsRouteHeaders(headers);
+  });
+
+  it("retrieve returns 401 when the bearer key is missing", async () => {
+    const entry = app.handlers.get("GET /v1/models/:model");
+    const { headers, reply } = createFakeReply();
+
+    const result = await entry!.handler({ headers: {}, params: { model: "test-model" } }, reply);
+
+    expect(result).toBeUndefined();
+    expect(reply.statusCode).toBe(401);
+    expect(reply.payload).toEqual({
+      error: {
+        message: "No API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+    expectModelsRouteHeaders(headers);
+  });
+
+  it("retrieve returns 401 when the bearer key is invalid", async () => {
+    const entry = app.handlers.get("GET /v1/models/:model");
+    const { headers, reply } = createFakeReply();
+
+    const result = await entry!.handler(
+      {
+        headers: { authorization: "Bearer sk-bad" },
+        params: { model: "test-model" },
+      },
+      reply,
+    );
+
+    expect(result).toBeUndefined();
+    expect(reply.statusCode).toBe(401);
+    expect(reply.payload).toEqual({
+      error: {
+        message: "Incorrect API key provided",
+        type: "authentication_error",
+        param: null,
+        code: "invalid_api_key",
+      },
+    });
+    expectModelsRouteHeaders(headers);
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/*  Part B: SDK integration tests                                     */
+/* ------------------------------------------------------------------ */
+
+describe("models SDK integration (FOUND-03, FOUND-04)", () => {
+  let app: FastifyInstance;
+  let address: string;
+
+  beforeAll(async () => {
+    const result = await createTestApp(createMockServices("sk-test", "user_test"));
+    app = result.app;
+    address = result.address;
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("client.models.list() returns model objects", async () => {
+    const client = new OpenAI({ apiKey: "sk-test", baseURL: address + "/v1" });
+    const response = await client.models.list();
+    const models = [];
+    for await (const model of response) {
+      models.push(model);
+    }
+    expect(models.length).toBeGreaterThan(0);
+    for (const model of models) {
+      expect(model.id).toEqual(expect.any(String));
+      expect(model.object).toBe("model");
+      expect(model.created).toEqual(expect.any(Number));
+      expect(model.owned_by).toEqual(expect.any(String));
+    }
+  });
+
+  it("client.models.retrieve() returns single model", async () => {
+    const client = new OpenAI({ apiKey: "sk-test", baseURL: address + "/v1" });
+    const response = await client.models.retrieve("mock-chat");
+    expect(response.id).toBe("mock-chat");
+    expect(response.object).toBe("model");
+    expect(response.created).toEqual(expect.any(Number));
+    expect(response.owned_by).toEqual(expect.any(String));
+  });
+
+  it("client.models.retrieve() throws NotFoundError for unknown model", async () => {
+    const client = new OpenAI({ apiKey: "sk-test", baseURL: address + "/v1" });
+    try {
+      await client.models.retrieve("nonexistent");
+      expect.fail("Expected NotFoundError");
+    } catch (err) {
+      expect(err).toBeInstanceOf(OpenAI.NotFoundError);
+      expect((err as OpenAI.NotFoundError).status).toBe(404);
+    }
   });
 });

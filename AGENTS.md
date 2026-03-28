@@ -25,34 +25,6 @@ This file is the canonical operating policy for coding agents in this repository
 - Current persisted maintainer preference: hands-free execution—the agent runs all commands (build, test, git, Docker, etc.); the maintainer only approves or rejects. Do not ask the maintainer to run commands; run them and report results.
 - Current persisted maintainer preference: **always commit** when work is done or at a verifiable checkpoint; do not leave the working tree with uncommitted changes as the normal outcome. Commit so that the commit id reflects what is running in containers and can be reproduced.
 
-## ⛔ Superpowers Prerequisite Gate (Mandatory — Execute First)
-
-**Before doing ANY work**, verify that Superpowers skills are installed locally:
-
-```bash
-ls .agents/skills/using-superpowers/SKILL.md
-```
-
-- **If the file exists**: proceed normally. You MUST load skills directly from `.agents/skills/` when needed.
-- **If the file does NOT exist or the path is broken**: **STOP ALL WORK IMMEDIATELY.** Do not read code, do not plan, do not edit files.
-
-When superpowers is missing, reply with **exactly** this message and nothing else:
-
-> ⛔ **Superpowers skills not found.**
->
-> This repository requires [Obra Superpowers](https://github.com/obra/superpowers) to be installed before any agent work can proceed.
->
-> **Setup (one-time):**
-> ```bash
-> git clone https://github.com/obra/superpowers.git ~/.agents/superpowers
-> mkdir -p .agents/skills
-> cp -r ~/.agents/superpowers/skills/* .agents/skills/
-> ```
->
-> After setup, re-run your request.
-
-Unless the maintainer explicitly directs otherwise, do not attempt to self-install, skip, or work around this gate.
-
 ## Agent Skills Reference
 
 Custom skills are located in the following paths. Read the `SKILL.md` in each skill folder for full instructions before using.
@@ -175,6 +147,10 @@ If user replies `APPROVED`:
 - Do not implement yet.
 - Reply exactly: `Plan approved. Run /superpowers-execute-plan to begin implementation.`
 
+Repo lesson:
+
+- If roadmap phases execute out of numeric order, `gsd-tools phase complete <phase>` can mark the milestone complete because it treats the highest phase number as terminal. After completing any out-of-order phase, manually verify `.planning/ROADMAP.md` and `.planning/STATE.md` still reflect any earlier pending phases before trusting `next_phase`, `is_last_phase`, or milestone-complete output.
+
 ## Agent Persona and Scope
 
 You are a senior platform engineer for this repository.
@@ -243,6 +219,10 @@ For API-impacting changes:
 3. Run full API test suite.
 4. Run API build.
 
+Repo lesson:
+
+- Some route-level unit tests use lightweight mock replies where `reply.header()` is not chainable; shared route helpers should set headers without relying on Fastify-style chaining unless the tests are updated in the same change.
+
 For provider/routing changes, verify headers remain correct:
 
 - `x-model-routed`
@@ -253,6 +233,7 @@ For provider/routing changes, verify headers remain correct:
 Provider readiness lesson that must persist:
 
 - Startup provider model readiness checks must use zero-token metadata endpoints such as Ollama `/api/tags` and Groq `/models`; do not spend chat tokens just to verify configured model availability.
+- Verification-only provider models must be gated behind explicit local/dev env vars and must not be enabled in base Compose or production-facing public catalogs by default.
 
 For ops/status changes:
 

@@ -8,8 +8,8 @@ type Handler = (request?: { headers?: Record<string, string>; body?: unknown }, 
 class FakeApp {
   handlers = new Map<string, Handler>();
 
-  post(path: string, handler: Handler) {
-    this.handlers.set(`POST ${path}`, handler);
+  post(path: string, optsOrHandler: Handler | Record<string, unknown>, handler?: Handler) {
+    this.handlers.set(`POST ${path}`, handler ?? (optsOrHandler as Handler));
   }
 
   get(path: string, handler: Handler) {
@@ -18,17 +18,10 @@ class FakeApp {
 }
 
 describe("rbac + settings enforcement", () => {
-  it("returns 403 when permission exists but setting disabled", async () => {
+  it("returns 401 when bearer token is invalid for v1 image generation", async () => {
     const app = new FakeApp();
     registerImagesGenerationsRoute(app as never, {
-      env: { allowDevApiKeyPrefix: false },
-      auth: { getSessionPrincipal: async () => null },
-      users: { resolveApiKey: async () => ({ userId: "user_1", scopes: ["image"] }) },
-      authz: { requirePermission: async () => true },
-      userSettings: {
-        getForUser: async () => ({ apiEnabled: true, generateImage: false, twoFactorEnabled: false }),
-        canUse: vi.fn((key: string, settings: Record<string, boolean>) => settings[key]),
-      },
+      users: { resolveApiKey: async () => null },
       rateLimiter: { allow: async () => true },
       ai: { imageGeneration: vi.fn() },
     } as never);
@@ -37,7 +30,7 @@ describe("rbac + settings enforcement", () => {
     let statusCode = 200;
     let sentPayload: unknown;
     const response = (await handler?.(
-      { headers: { "x-api-key": "sk_1" }, body: { prompt: "a cat" } },
+      { headers: { authorization: "Bearer bad_key" }, body: { prompt: "a cat" } },
       {
         code: (code: number) => {
           statusCode = code;
@@ -48,9 +41,132 @@ describe("rbac + settings enforcement", () => {
       },
     )) as { error: string } | undefined;
 
+    expect(statusCode).toBe(401);
+    const payload = (response ?? sentPayload) as { error: { message: string } };
+    expect(payload.error.message).toBe("Incorrect API key provided");
+  });
+
+  it("returns 403 when the API key lacks image scope for v1 image generation", async () => {
+    const app = new FakeApp();
+    const imageGeneration = vi.fn();
+    registerImagesGenerationsRoute(app as never, {
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["chat"], apiKeyId: "key-1" }) },
+      authz: { requirePermission: async () => false },
+      userSettings: {
+        getForUser: async () => ({ apiEnabled: true, generateImage: true }),
+        canUse: (key: string, settings: Record<string, boolean>) => settings[key] ?? false,
+      },
+      rateLimiter: { allow: async () => true },
+      ai: { imageGeneration },
+    } as never);
+
+    const handler = app.handlers.get("POST /v1/images/generations");
+    let statusCode = 200;
+    let sentPayload: unknown;
+    await handler?.(
+      { headers: { authorization: "Bearer sk-valid" }, body: { prompt: "a cat" } },
+      {
+        code: (code: number) => {
+          statusCode = code;
+          return { send: (payload: unknown) => { sentPayload = payload; return payload; } };
+        },
+        send: (payload: unknown) => { sentPayload = payload; return payload; },
+        header: () => undefined,
+      },
+    );
+
     expect(statusCode).toBe(403);
-    const payload = (response ?? sentPayload) as { error: string };
-    expect(payload.error).toContain("setting disabled");
+    expect(sentPayload).toEqual({
+      error: {
+        message: "forbidden",
+        type: "permission_error",
+        param: null,
+        code: null,
+      },
+    });
+    expect(imageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when apiEnabled is disabled for v1 image generation", async () => {
+    const app = new FakeApp();
+    const imageGeneration = vi.fn();
+    registerImagesGenerationsRoute(app as never, {
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["image"], apiKeyId: "key-1" }) },
+      authz: { requirePermission: async () => true },
+      userSettings: {
+        getForUser: async () => ({ apiEnabled: false, generateImage: true }),
+        canUse: (key: string, settings: Record<string, boolean>) => settings[key] ?? false,
+      },
+      rateLimiter: { allow: async () => true },
+      ai: { imageGeneration },
+    } as never);
+
+    const handler = app.handlers.get("POST /v1/images/generations");
+    let statusCode = 200;
+    let sentPayload: unknown;
+    await handler?.(
+      { headers: { authorization: "Bearer sk-valid" }, body: { prompt: "a cat" } },
+      {
+        code: (code: number) => {
+          statusCode = code;
+          return { send: (payload: unknown) => { sentPayload = payload; return payload; } };
+        },
+        send: (payload: unknown) => { sentPayload = payload; return payload; },
+        header: () => undefined,
+      },
+    );
+
+    expect(statusCode).toBe(403);
+    expect(sentPayload).toEqual({
+      error: {
+        message: "setting disabled: apiEnabled",
+        type: "permission_error",
+        param: null,
+        code: null,
+      },
+    });
+    expect(imageGeneration).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 when generateImage is disabled for v1 image generation", async () => {
+    const app = new FakeApp();
+    const imageGeneration = vi.fn();
+    registerImagesGenerationsRoute(app as never, {
+      users: { resolveApiKey: async () => ({ userId: "user-1", scopes: ["image"], apiKeyId: "key-1" }) },
+      authz: { requirePermission: async () => true },
+      userSettings: {
+        getForUser: async () => ({ apiEnabled: true, generateImage: false }),
+        canUse: (key: string, settings: Record<string, boolean>) => settings[key] ?? false,
+      },
+      rateLimiter: { allow: async () => true },
+      ai: { imageGeneration },
+    } as never);
+
+    const handler = app.handlers.get("POST /v1/images/generations");
+    let statusCode = 200;
+    let sentPayload: unknown;
+    await handler?.(
+      { headers: { authorization: "Bearer sk-valid" }, body: { prompt: "a cat" } },
+      {
+        code: (code: number) => {
+          statusCode = code;
+          return { send: (payload: unknown) => { sentPayload = payload; return payload; } };
+        },
+        send: (payload: unknown) => { sentPayload = payload; return payload; },
+        header: () => undefined,
+      },
+    );
+
+    expect(statusCode).toBe(403);
+    expect(sentPayload).toEqual({
+      error: {
+        message: "setting disabled: generateImage",
+        type: "permission_error",
+        param: null,
+        code: null,
+      },
+    });
+    expect(imageGeneration).not.toHaveBeenCalled();
   });
 
   it("keeps provider status internal endpoint token-protected", async () => {

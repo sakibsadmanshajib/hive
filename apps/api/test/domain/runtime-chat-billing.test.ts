@@ -203,8 +203,7 @@ describe("runtime chat billing", () => {
     await expect(
       services.ai.chatCompletions(
         "user-1",
-        "guest-free",
-        [{ role: "user", content: "hello" }],
+        { model: "guest-free", messages: [{ role: "user", content: "hello" }] },
         { channel: "api" },
       ),
     ).resolves.toMatchObject({
@@ -259,8 +258,7 @@ describe("runtime chat billing", () => {
     await expect(
       services.ai.guestChatCompletions(
         "guest-1",
-        "guest-free",
-        [{ role: "user", content: "hello" }],
+        { model: "guest-free", messages: [{ role: "user", content: "hello" }] },
         "203.0.113.10",
       ),
     ).resolves.toMatchObject({
@@ -305,8 +303,7 @@ describe("runtime chat billing", () => {
 
     const result = await services.ai.chatCompletions(
       "user-1",
-      "smart-reasoning",
-      [{ role: "user", content: "hello" }],
+      { model: "smart-reasoning", messages: [{ role: "user", content: "hello" }] },
       { channel: "api" },
     );
 

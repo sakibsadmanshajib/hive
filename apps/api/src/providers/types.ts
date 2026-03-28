@@ -10,6 +10,7 @@ export type ProviderChatMessage = {
 export type ProviderChatRequest = {
   model: string;
   messages: ProviderChatMessage[];
+  params?: Record<string, unknown>;
 };
 
 export type ProviderChatResponse = {
@@ -20,6 +21,28 @@ export type ProviderChatResponse = {
     completionTokens: number;
     totalTokens: number;
   };
+  rawResponse?: {
+    id?: string;
+    object?: string;
+    created?: number;
+    model?: string;
+    choices?: Array<{
+      index?: number;
+      finish_reason?: string;
+      message?: {
+        role?: string;
+        content?: string | null;
+        refusal?: string | null;
+        tool_calls?: unknown[];
+      };
+      logprobs?: unknown | null;
+    }>;
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+    };
+  };
 };
 
 export type ProviderImageRequest = {
@@ -28,12 +51,15 @@ export type ProviderImageRequest = {
   n: number;
   size?: string;
   responseFormat: "url" | "b64_json";
+  quality?: string;
+  style?: string;
   user?: string;
 };
 
 export type ProviderImageData = {
   url?: string;
   b64Json?: string;
+  revisedPrompt?: string;
 };
 
 export type ProviderImageResponse = {
@@ -81,11 +107,29 @@ export type ProviderMetricsResult = {
   providers: ProviderMetricsSummary[];
 };
 
+export type ProviderEmbeddingsRequest = {
+  model: string;
+  input: string | string[];
+  encodingFormat?: "float" | "base64";
+  dimensions?: number;
+  user?: string;
+};
+
+export type ProviderEmbeddingsResponse = {
+  data: Array<{ embedding: number[]; index: number }>;
+  model: string;
+  providerModel: string;
+  usage?: { promptTokens: number; totalTokens: number };
+  rawResponse?: unknown;
+};
+
 export interface ProviderClient {
   readonly name: ProviderName;
   isEnabled(): boolean;
   chat(request: ProviderChatRequest): Promise<ProviderChatResponse>;
+  chatStream?(request: ProviderChatRequest): Promise<Response>;
   generateImage?(request: ProviderImageRequest): Promise<ProviderImageResponse>;
+  embeddings?(request: ProviderEmbeddingsRequest): Promise<ProviderEmbeddingsResponse>;
   status(): Promise<ProviderHealthStatus>;
   checkModelReadiness(model: string): Promise<ProviderReadinessStatus>;
 }

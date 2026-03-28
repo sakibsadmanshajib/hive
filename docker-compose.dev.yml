@@ -8,6 +8,7 @@ services:
         exec pnpm --filter @hive/api dev
     environment:
       WEB_INTERNAL_GUEST_TOKEN: ${WEB_INTERNAL_GUEST_TOKEN:-dev-web-guest-token}
+      OPENROUTER_FREE_EMBEDDING_MODEL: ${OPENROUTER_FREE_EMBEDDING_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2:free}
     volumes:
       - ./:/app
       - /app/node_modules

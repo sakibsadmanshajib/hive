@@ -42,14 +42,12 @@ export type ChatHistoryStore = {
 type ChatCompletionExecutor = {
   chatCompletions(
     userId: string,
-    modelId: string | undefined,
-    messages: Array<{ role: string; content: string }>,
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     usageContext: { channel: "web"; apiKeyId?: string },
   ): Promise<ChatCompletionResult>;
   guestChatCompletions?(
     guestId: string,
-    modelId: string | undefined,
-    messages: Array<{ role: string; content: string }>,
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     guestIp?: string,
   ): Promise<ChatCompletionResult>;
 };
@@ -121,11 +119,13 @@ export class PersistentChatHistoryService {
 
     const completion = await this.ai.chatCompletions(
       userId,
-      input.model,
-      [...session.messages, userMessage].map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      {
+        model: input.model,
+        messages: [...session.messages, userMessage].map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      },
       { channel: "web" },
     );
     if ("error" in completion) {
@@ -183,11 +183,13 @@ export class PersistentChatHistoryService {
 
     const completion = await this.ai.guestChatCompletions(
       guestId,
-      input.model,
-      [...session.messages, userMessage].map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
+      {
+        model: input.model,
+        messages: [...session.messages, userMessage].map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+      },
       guestIp,
     );
     if ("error" in completion) {

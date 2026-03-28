@@ -1,34 +1,33 @@
 import type { FastifyInstance } from "fastify";
+import type { TypeBoxTypeProvider } from "@fastify/type-provider-typebox";
 import type { RuntimeServices } from "../runtime/services";
-import { inferUsageChannel, requirePrincipal } from "./auth";
+import { ImagesGenerationsBodySchema } from "../schemas/images-generations";
+import { inferUsageChannel, requireV1ApiPrincipal } from "./auth";
+import { sendApiError } from "./api-error";
+import { setNoDispatchDiffHeaders } from "./diff-headers";
 
-type ImageBody = {
-  model?: string;
-  prompt?: string;
-  n?: number;
-  size?: string;
-  response_format?: "url" | "b64_json";
-  user?: string;
-};
+export function registerImagesGenerationsRoute(
+  app: FastifyInstance<any, any, any, any, TypeBoxTypeProvider>,
+  services: RuntimeServices,
+): void {
+  app.post("/v1/images/generations", {
+    schema: { body: ImagesGenerationsBodySchema },
+  }, async (request, reply) => {
+    setNoDispatchDiffHeaders(reply);
 
-export function registerImagesGenerationsRoute(app: FastifyInstance, services: RuntimeServices): void {
-  app.post<{ Body: ImageBody }>("/v1/images/generations", async (request, reply) => {
-    const principal = await requirePrincipal(request, reply, services, {
-      requiredScope: "image",
-      requiredSetting: "generateImage",
-    });
+    const principal = await requireV1ApiPrincipal(request, reply, services, "image");
     if (!principal) {
       return;
     }
 
     const allowed = await services.rateLimiter.allow(principal.userId);
     if (!allowed) {
-      return reply.code(429).send({ error: "rate limit exceeded" });
+      return sendApiError(reply, 429, "rate limit exceeded", { code: "rate_limit_exceeded" });
     }
 
     const prompt = request.body?.prompt?.trim();
     if (!prompt) {
-      return reply.code(400).send({ error: "prompt is required" });
+      return sendApiError(reply, 400, "prompt is required", { param: "prompt" });
     }
 
     const result = await services.ai.imageGeneration(principal.userId, {
@@ -37,6 +36,8 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
       n: request.body?.n,
       size: request.body?.size,
       responseFormat: request.body?.response_format,
+      quality: request.body?.quality,
+      style: request.body?.style,
       user: request.body?.user,
     }, {
       channel: inferUsageChannel(request, principal),
@@ -48,7 +49,7 @@ export function registerImagesGenerationsRoute(app: FastifyInstance, services: R
           reply.header(key, value);
         }
       }
-      return reply.code(result.statusCode).send({ error: result.error });
+      return sendApiError(reply, result.statusCode, result.error ?? "Unknown error");
     }
 
     for (const [key, value] of Object.entries(result.headers)) {

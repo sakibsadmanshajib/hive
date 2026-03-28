@@ -17,6 +17,7 @@ const trackedKeys = [
   "OPENROUTER_BASE_URL",
   "OPENROUTER_MODEL",
   "OPENROUTER_FREE_MODEL",
+  "OPENROUTER_FREE_EMBEDDING_MODEL",
   "OPENAI_API_KEY",
   "OPENAI_BASE_URL",
   "OPENAI_CHAT_MODEL",
@@ -250,5 +251,18 @@ describe("getEnv provider timeout and retry controls", () => {
 
     expect(env.providers.openrouter.model).toBe("openrouter/auto");
     expect(env.providers.openrouter.freeModel).toBeUndefined();
+  });
+
+  it("reads an explicit verification-only OpenRouter embedding model without changing the chat default", () => {
+    process.env.SUPABASE_URL = "https://demo.supabase.co";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
+    process.env.OPENROUTER_FREE_EMBEDDING_MODEL = "nvidia/llama-nemotron-embed-vl-1b-v2:free";
+    delete process.env.OPENROUTER_MODEL;
+    delete process.env.OPENROUTER_FREE_MODEL;
+
+    const env = getEnv();
+
+    expect(env.providers.openrouter.model).toBe("openrouter/auto");
+    expect(env.providers.openrouter.freeEmbeddingModel).toBe("nvidia/llama-nemotron-embed-vl-1b-v2:free");
   });
 });

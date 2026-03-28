@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   CreditBalance,
+  GatewayModel,
   SessionUserIdentity,
   TrafficAnalyticsSnapshot,
   UsageChannel,
@@ -21,7 +22,9 @@ import { OpenRouterProviderClient } from "../providers/openrouter-client";
 import { buildProviderOfferCatalog } from "../providers/provider-offers";
 import { OllamaProviderClient } from "../providers/ollama-client";
 import { ProviderRegistry } from "../providers/registry";
-import type { ProviderName, ProviderReadinessStatus } from "../providers/types";
+import type { ProviderStreamExecutionResult } from "../providers/registry";
+import type { ProviderChatMessage, ProviderName, ProviderReadinessStatus } from "../providers/types";
+import type { ResponsesBody } from "../schemas/responses";
 import type { PersistentApiKey, PersistentApiKeyEvent, PersistentPaymentIntent } from "../domain/types";
 import { bdtToCredits } from "../domain/credits-conversion";
 import { RedisRateLimiter } from "./redis-rate-limiter";
@@ -47,6 +50,8 @@ type ImageGenerationRequest = {
   n?: number;
   size?: string;
   responseFormat?: "url" | "b64_json";
+  quality?: string;
+  style?: string;
   user?: string;
 };
 
@@ -108,6 +113,10 @@ type GuestAttributionStore = {
     linkSource: string;
   }): Promise<void>;
 };
+
+type RuntimeAiCredits = Pick<PersistentCreditService, "consume" | "refund">;
+type RuntimeAiUsage = Pick<PersistentUsageService, "add">;
+type RuntimeAiLangfuse = Pick<LangfuseClient, "trace">;
 
 class PersistentCreditService {
   constructor(private readonly store: BillingStore) { }
@@ -564,16 +573,14 @@ export class PersistentUserService {
   }
 }
 
-
-
-class RuntimeAiService {
+export class RuntimeAiService {
   constructor(
     private readonly models: ModelService,
-    private readonly credits: PersistentCreditService,
-    private readonly usage: PersistentUsageService,
+    private readonly credits: RuntimeAiCredits,
+    private readonly usage: RuntimeAiUsage,
     private readonly guests: GuestAttributionStore,
     private readonly providerRegistry: ProviderRegistry,
-    private readonly langfuse: LangfuseClient,
+    private readonly langfuse: RuntimeAiLangfuse,
   ) { }
 
   private buildUsageContext(context: { channel: UsageChannel; apiKeyId?: string }) {
@@ -606,11 +613,12 @@ class RuntimeAiService {
 
   async chatCompletions(
     userId: string,
-    modelId: string | undefined,
-    messages: ChatMessage[],
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     usageContext: { channel: UsageChannel; apiKeyId?: string },
   ) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const modelId = body.model;
+    const messages: ChatMessage[] = (body.messages ?? []) as ChatMessage[];
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -622,6 +630,7 @@ class RuntimeAiService {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
+    const { model: _model, messages: _messages, stream: _stream, ...params } = body;
     const text = messages.map((msg) => msg.content).join(" ").trim();
     let providerResult;
     try {
@@ -631,14 +640,16 @@ class RuntimeAiService {
           role: this.normalizeRole(message.role),
           content: message.content,
         })),
+        Object.keys(params).length > 0 ? params : undefined,
       );
     } catch (error) {
       if (creditsCost > 0) {
         await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       }
+      const statusCode = (error as any)?.statusCode;
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
-        statusCode: 502 as const,
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
       };
     }
 
@@ -661,23 +672,56 @@ class RuntimeAiService {
       promptPreview: text.slice(0, 160),
     });
 
+    const raw = providerResult.rawResponse;
+
+    if (!raw) {
+      return {
+        statusCode: 200 as const,
+        body: {
+          id: `chatcmpl-${randomUUID().slice(0, 12)}`,
+          object: "chat.completion" as const,
+          created: Math.floor(Date.now() / 1000),
+          model: model.id,
+          choices: [{
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant" as const, content: providerResult.content, refusal: null },
+            logprobs: null,
+          }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        headers: {
+          "x-model-routed": model.id,
+          "x-provider-used": providerResult.providerUsed,
+          "x-provider-model": providerResult.providerModel,
+          "x-actual-credits": String(creditsCost),
+        },
+      };
+    }
+
     return {
       statusCode: 200 as const,
       body: {
-        id: `chatcmpl_${randomUUID().slice(0, 12)}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: model.id,
-        choices: [
-          {
-            index: 0,
-            finish_reason: "stop",
-            message: {
-              role: "assistant",
-              content: providerResult.content || `MVP response: ${text || "Your request was processed."}`,
-            },
+        id: raw.id ?? `chatcmpl-${randomUUID().slice(0, 12)}`,
+        object: "chat.completion" as const,
+        created: raw.created ?? Math.floor(Date.now() / 1000),
+        model: raw.model ?? model.id,
+        choices: (raw.choices ?? []).map((choice: any, i: number) => ({
+          index: choice.index ?? i,
+          finish_reason: choice.finish_reason ?? "stop",
+          message: {
+            role: "assistant" as const,
+            content: choice.message?.content ?? null,
+            refusal: choice.message?.refusal ?? null,
+            ...(choice.message?.tool_calls ? { tool_calls: choice.message.tool_calls } : {}),
           },
-        ],
+          logprobs: choice.logprobs ?? null,
+        })),
+        usage: {
+          prompt_tokens: raw.usage?.prompt_tokens ?? 0,
+          completion_tokens: raw.usage?.completion_tokens ?? 0,
+          total_tokens: raw.usage?.total_tokens ?? 0,
+        },
       },
       headers: {
         "x-model-routed": model.id,
@@ -688,9 +732,90 @@ class RuntimeAiService {
     };
   }
 
-  async responses(userId: string, input: string, usageContext: { channel: UsageChannel; apiKeyId?: string }) {
+  async chatCompletionsStream(
+    userId: string,
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
+    usageContext: { channel: UsageChannel; apiKeyId?: string },
+  ) {
     const resolvedUsageContext = this.buildUsageContext(usageContext);
-    const model = this.models.pickDefault("chat");
+    const modelId = body.model;
+    const messages: ChatMessage[] = (body.messages ?? []) as ChatMessage[];
+    const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: "unknown model", statusCode: 400 as const };
+    }
+    const creditsCost = this.models.creditsForRequest(model);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = creditsCost > 0 ? await this.credits.consume(userId, creditsCost, chargeReferenceId) : true;
+    if (!consumed) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+
+    const { model: _model, messages: _messages, stream: _stream, ...params } = body;
+
+    let streamResult: ProviderStreamExecutionResult;
+    try {
+      streamResult = await this.providerRegistry.chatStream(
+        model.id,
+        messages.map((message) => ({
+          role: this.normalizeRole(message.role),
+          content: message.content,
+        })),
+        Object.keys(params).length > 0 ? params : undefined,
+      );
+    } catch (error) {
+      if (creditsCost > 0) {
+        await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      }
+      const statusCode = (error as any)?.statusCode;
+      return {
+        error: error instanceof Error ? error.message : "provider unavailable",
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
+      };
+    }
+
+    // Record usage with pre-charged amount (fire-and-forget)
+    // Exact token counts from the final chunk are a future enhancement
+    void this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/chat/completions",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
+    });
+
+    const text = messages.map((msg) => msg.content).join(" ").trim();
+    void this.langfuse.trace({
+      userId,
+      model: model.id,
+      provider: streamResult.providerUsed,
+      endpoint: "/v1/chat/completions",
+      credits: creditsCost,
+      promptPreview: text.slice(0, 160),
+    });
+
+    return {
+      statusCode: 200 as const,
+      response: streamResult.response,
+      headers: {
+        "x-model-routed": model.id,
+        "x-provider-used": streamResult.providerUsed,
+        "x-provider-model": streamResult.providerModel,
+        "x-actual-credits": String(creditsCost),
+      },
+    };
+  }
+
+  async responses(userId: string, body: ResponsesBody, usageContext: { channel: UsageChannel; apiKeyId?: string }) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const model = body.model
+      ? this.models.findById(body.model)
+      : this.models.pickDefault("chat");
+    if (!model || model.capability !== "chat") {
+      return { error: `Unknown model: ${body.model}`, statusCode: 400 as const };
+    }
     const creditsCost = Math.max(4, Math.floor(this.models.creditsForRequest(model) * 0.75));
     const chargeReferenceId = `req_${randomUUID()}`;
     const consumed = await this.credits.consume(userId, creditsCost, chargeReferenceId);
@@ -698,9 +823,38 @@ class RuntimeAiService {
       return { error: "insufficient credits", statusCode: 402 as const };
     }
 
+    // Build chat messages from Responses API input
+    const messages: ProviderChatMessage[] = [];
+    if (body.instructions) {
+      messages.push({ role: "system", content: body.instructions });
+    }
+    if (typeof body.input === "string") {
+      messages.push({ role: "user", content: body.input });
+    } else if (Array.isArray(body.input)) {
+      for (const item of body.input) {
+        if (item.role && item.content) {
+          messages.push({
+            role: this.normalizeRole(item.role),
+            content: typeof item.content === "string" ? item.content : JSON.stringify(item.content),
+          });
+        }
+      }
+    }
+
+    // Forward optional params to chat
+    const params: Record<string, unknown> = {};
+    if (body.temperature !== undefined) params.temperature = body.temperature;
+    if (body.max_output_tokens !== undefined) params.max_completion_tokens = body.max_output_tokens;
+    if (body.tools !== undefined) params.tools = body.tools;
+    if (body.tool_choice !== undefined) params.tool_choice = body.tool_choice;
+
     let providerResult;
     try {
-      providerResult = await this.providerRegistry.chat(model.id, [{ role: "user", content: input }]);
+      providerResult = await this.providerRegistry.chat(
+        model.id,
+        messages,
+        Object.keys(params).length > 0 ? params : undefined,
+      );
     } catch (error) {
       await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
       return {
@@ -719,6 +873,30 @@ class RuntimeAiService {
       });
     });
 
+    const raw = providerResult.rawResponse;
+    const responseBody = {
+      id: `resp_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+      object: "response" as const,
+      created_at: Math.floor(Date.now() / 1000),
+      status: "completed" as const,
+      model: raw?.model ?? model.id,
+      output: [{
+        type: "message" as const,
+        id: `msg_${randomUUID().replace(/-/g, "").slice(0, 24)}`,
+        role: "assistant" as const,
+        status: "completed" as const,
+        content: [{
+          type: "output_text" as const,
+          text: raw?.choices?.[0]?.message?.content ?? providerResult.content ?? "",
+        }],
+      }],
+      usage: {
+        input_tokens: raw?.usage?.prompt_tokens ?? 0,
+        output_tokens: raw?.usage?.completion_tokens ?? 0,
+        total_tokens: raw?.usage?.total_tokens ?? 0,
+      },
+    };
+
     return {
       statusCode: 200 as const,
       headers: {
@@ -727,12 +905,7 @@ class RuntimeAiService {
         "x-provider-model": providerResult.providerModel,
         "x-actual-credits": String(creditsCost),
       },
-      body: {
-        id: `resp_${randomUUID().slice(0, 12)}`,
-        object: "response",
-        model: model.id,
-        output: [{ type: "text", text: providerResult.content || `MVP output: ${input || "No input provided."}` }],
-      },
+      body: responseBody,
     };
   }
 
@@ -760,6 +933,8 @@ class RuntimeAiService {
         n: request.n ?? 1,
         size: request.size,
         responseFormat: request.responseFormat ?? "url",
+        quality: request.quality,
+        style: request.style,
         user: request.user,
       });
     } catch {
@@ -795,17 +970,75 @@ class RuntimeAiService {
         data: providerResult.data.map((entry) => ({
           ...(entry.url ? { url: entry.url } : {}),
           ...(entry.b64Json ? { b64_json: entry.b64Json } : {}),
+          ...(entry.revisedPrompt ? { revised_prompt: entry.revisedPrompt } : {}),
         })),
+      },
+    };
+  }
+
+  async embeddings(
+    userId: string,
+    body: { model: string; input: string | string[]; encoding_format?: "float" | "base64"; dimensions?: number; user?: string },
+    usageContext: { channel: UsageChannel; apiKeyId?: string },
+  ) {
+    const resolvedUsageContext = this.buildUsageContext(usageContext);
+    const model = this.models.findById(body.model);
+    if (!model || model.capability !== "embedding") {
+      return { error: `Unknown embedding model: ${body.model}`, statusCode: 400 as const };
+    }
+    const creditsCost = this.models.creditsForRequest(model);
+    const chargeReferenceId = `req_${randomUUID()}`;
+    const consumed = creditsCost > 0 ? await this.credits.consume(userId, creditsCost, chargeReferenceId) : true;
+    if (!consumed) {
+      return { error: "insufficient credits", statusCode: 402 as const };
+    }
+
+    let providerResult;
+    try {
+      providerResult = await this.providerRegistry.embeddings(model.id, {
+        input: body.input,
+        encodingFormat: body.encoding_format,
+        dimensions: body.dimensions,
+        user: body.user,
+      });
+    } catch (error) {
+      if (creditsCost > 0) {
+        await this.credits.refund(userId, creditsCost, `refund_${chargeReferenceId}`);
+      }
+      const statusCode = (error as any)?.statusCode;
+      return {
+        error: error instanceof Error ? error.message : "provider unavailable",
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
+      };
+    }
+
+    void this.refundOnUsageFailure(userId, creditsCost, chargeReferenceId, async () => {
+      await this.usage.add({
+        userId,
+        endpoint: "/v1/embeddings",
+        model: model.id,
+        credits: creditsCost,
+        ...resolvedUsageContext,
+      });
+    });
+
+    return {
+      statusCode: providerResult.statusCode as 200,
+      body: providerResult.body,
+      headers: {
+        ...providerResult.headers,
+        "x-actual-credits": String(creditsCost),
       },
     };
   }
 
   async guestChatCompletions(
     guestId: string,
-    modelId: string | undefined,
-    messages: ChatMessage[],
+    body: { model?: string; messages?: Array<{ role: string; content: string }>; [key: string]: unknown },
     guestIp?: string,
   ) {
+    const modelId = body.model;
+    const messages: ChatMessage[] = (body.messages ?? []) as ChatMessage[];
     const model = modelId && modelId !== "auto" ? this.models.findById(modelId) : this.models.pickGuestDefault("chat");
     if (!model || model.capability !== "chat") {
       return { error: "unknown model", statusCode: 400 as const };
@@ -814,7 +1047,7 @@ class RuntimeAiService {
       return { error: "forbidden", statusCode: 403 as const };
     }
 
-    const text = messages.map((msg) => msg.content).join(" ").trim();
+    const { model: _model, messages: _messages, stream: _stream, ...params } = body;
 
     let providerResult;
     try {
@@ -824,11 +1057,13 @@ class RuntimeAiService {
           role: this.normalizeRole(message.role),
           content: message.content,
         })),
+        Object.keys(params).length > 0 ? params : undefined,
       );
     } catch (error) {
+      const statusCode = (error as any)?.statusCode;
       return {
         error: error instanceof Error ? error.message : "provider unavailable",
-        statusCode: 502 as const,
+        statusCode: (statusCode && statusCode >= 400 && statusCode < 600 ? statusCode : 502) as 502,
       };
     }
 
@@ -840,23 +1075,56 @@ class RuntimeAiService {
       ipAddress: guestIp,
     });
 
+    const raw = providerResult.rawResponse;
+
+    if (!raw) {
+      return {
+        statusCode: 200 as const,
+        body: {
+          id: `chatcmpl-${randomUUID().slice(0, 12)}`,
+          object: "chat.completion" as const,
+          created: Math.floor(Date.now() / 1000),
+          model: model.id,
+          choices: [{
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant" as const, content: providerResult.content, refusal: null },
+            logprobs: null,
+          }],
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        },
+        headers: {
+          "x-model-routed": model.id,
+          "x-provider-used": providerResult.providerUsed,
+          "x-provider-model": providerResult.providerModel,
+          "x-actual-credits": "0",
+        },
+      };
+    }
+
     return {
       statusCode: 200 as const,
       body: {
-        id: `chatcmpl_${randomUUID().slice(0, 12)}`,
-        object: "chat.completion",
-        created: Math.floor(Date.now() / 1000),
-        model: model.id,
-        choices: [
-          {
-            index: 0,
-            finish_reason: "stop",
-            message: {
-              role: "assistant",
-              content: providerResult.content || `MVP response: ${text || "Your request was processed."}`,
-            },
+        id: raw.id ?? `chatcmpl-${randomUUID().slice(0, 12)}`,
+        object: "chat.completion" as const,
+        created: raw.created ?? Math.floor(Date.now() / 1000),
+        model: raw.model ?? model.id,
+        choices: (raw.choices ?? []).map((choice: any, i: number) => ({
+          index: choice.index ?? i,
+          finish_reason: choice.finish_reason ?? "stop",
+          message: {
+            role: "assistant" as const,
+            content: choice.message?.content ?? null,
+            refusal: choice.message?.refusal ?? null,
+            ...(choice.message?.tool_calls ? { tool_calls: choice.message.tool_calls } : {}),
           },
-        ],
+          logprobs: choice.logprobs ?? null,
+        })),
+        usage: {
+          prompt_tokens: raw.usage?.prompt_tokens ?? 0,
+          completion_tokens: raw.usage?.completion_tokens ?? 0,
+          total_tokens: raw.usage?.total_tokens ?? 0,
+        },
       },
       headers: {
         "x-model-routed": model.id,
@@ -935,6 +1203,23 @@ function startProviderReadinessCapture(providerRegistry: ProviderRegistry): void
     });
 }
 
+function buildVerificationModels(freeEmbeddingModel?: string): GatewayModel[] {
+  if (!freeEmbeddingModel) {
+    return [];
+  }
+
+  return [{
+    id: freeEmbeddingModel,
+    object: "model",
+    created: 1744675200,
+    capability: "embedding",
+    costType: "variable",
+    pricing: {
+      inputTokensPer1m: 2,
+    },
+  }];
+}
+
 export function createRuntimeServices(): RuntimeServices {
   const env = getEnv();
   const supabase = createSupabaseAdminClient(env);
@@ -985,6 +1270,7 @@ export function createRuntimeServices(): RuntimeServices {
     apiKey: undefined,
     model: "openrouter/auto",
     freeModel: undefined,
+    freeEmbeddingModel: undefined,
     timeoutMs: 4000,
     maxRetries: 1,
   };
@@ -1008,7 +1294,11 @@ export function createRuntimeServices(): RuntimeServices {
   const enabledFreeModelIds = Object.entries(providerOffers.modelOffers)
     .filter(([, offers]) => offers.length > 0)
     .map(([modelId]) => modelId);
-  const models = new ModelService({ enabledFreeModelIds });
+  const verificationModels = buildVerificationModels(openrouterConfig.freeEmbeddingModel);
+  const models = new ModelService({
+    enabledFreeModelIds,
+    extraModels: verificationModels,
+  });
 
   const providerModelMap: Record<ProviderName, string> = {
     mock: "mock-chat",
@@ -1024,7 +1314,11 @@ export function createRuntimeServices(): RuntimeServices {
     ollama: [],
     groq: [env.providers.groq.model, env.providers.groq.freeModel].filter((value): value is string => Boolean(value)),
     openai: [openaiConfig.chatModel, openaiConfig.imageModel, openaiConfig.freeModel].filter((value): value is string => Boolean(value)),
-    openrouter: [openrouterConfig.model, openrouterConfig.freeModel].filter((value): value is string => Boolean(value)),
+    openrouter: [
+      openrouterConfig.model,
+      openrouterConfig.freeModel,
+      openrouterConfig.freeEmbeddingModel,
+    ].filter((value): value is string => Boolean(value)),
     gemini: [geminiConfig.model, geminiConfig.freeModel].filter((value): value is string => Boolean(value)),
     anthropic: [anthropicConfig.model, anthropicConfig.freeModel].filter((value): value is string => Boolean(value)),
   };
@@ -1071,6 +1365,7 @@ export function createRuntimeServices(): RuntimeServices {
     modelProviderMap: {
       "smart-reasoning": "groq",
       "image-basic": "openai",
+      ...Object.fromEntries(verificationModels.map((model) => [model.id, "openrouter" as const])),
     },
     providerModelMap,
     providerReadinessModels,

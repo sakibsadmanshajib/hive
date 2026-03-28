@@ -2,8 +2,10 @@ import { CircuitBreaker, type CircuitBreakerConfig, type CircuitState } from "./
 import { ProviderMetrics } from "./provider-metrics";
 import type {
   ProviderChatMessage,
+  ProviderChatResponse,
   ProviderClient,
   ProviderCostClass,
+  ProviderEmbeddingsRequest,
   ProviderImageRequest,
   ProviderMetricsResult,
   ProviderName,
@@ -33,6 +35,7 @@ export type ProviderExecutionResult = {
   content: string;
   providerUsed: ProviderName;
   providerModel: string;
+  rawResponse?: ProviderChatResponse["rawResponse"];
 };
 
 export type ProviderImageExecutionResult = {
@@ -40,7 +43,22 @@ export type ProviderImageExecutionResult = {
   data: Array<{
     url?: string;
     b64Json?: string;
+    revisedPrompt?: string;
   }>;
+  providerUsed: ProviderName;
+  providerModel: string;
+};
+
+export type ProviderStreamExecutionResult = {
+  response: Response;
+  providerUsed: ProviderName;
+  providerModel: string;
+};
+
+export type ProviderEmbeddingsExecutionResult = {
+  statusCode: number;
+  body: unknown;
+  headers: Record<string, string>;
   providerUsed: ProviderName;
   providerModel: string;
 };
@@ -61,6 +79,9 @@ export type ProviderStatusResult = {
 
 const ALL_PROVIDERS = ["ollama", "groq", "openai", "openrouter", "gemini", "anthropic", "mock"] as const;
 const METRICS_STATUS_CACHE_TTL_MS = 5000;
+const EMBEDDING_PROVIDER_MODEL_MAP: Record<string, string> = {
+  "text-embedding-3-small": "openai/text-embedding-3-small",
+};
 
 /**
  * ProviderRegistry manages multiple AI provider clients, handling model routing,
@@ -92,10 +113,10 @@ export class ProviderRegistry {
    * @param messages - The chat messages to process.
    * @throws Error if no provider succeeds or if all candidates are blocked by circuit breakers.
    */
-  async chat(modelId: string, messages: ProviderChatMessage[]): Promise<ProviderExecutionResult> {
+  async chat(modelId: string, messages: ProviderChatMessage[], params?: Record<string, unknown>): Promise<ProviderExecutionResult> {
     const offerIds = this.config.modelOfferMap?.[modelId];
     if (offerIds) {
-      return this.chatWithOffers(modelId, offerIds, messages);
+      return this.chatWithOffers(modelId, offerIds, messages, params);
     }
 
     const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
@@ -125,13 +146,14 @@ export class ProviderRegistry {
       const providerModel = this.config.providerModelMap[providerName] ?? modelId;
       const startedAt = Date.now();
       try {
-        const response = await client.chat({ model: providerModel, messages });
+        const response = await client.chat({ model: providerModel, messages, params });
         this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
         breaker?.recordSuccess();
         return {
           content: response.content,
           providerUsed: providerName,
           providerModel: response.providerModel ?? providerModel,
+          rawResponse: response.rawResponse,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -142,6 +164,50 @@ export class ProviderRegistry {
     }
 
     throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
+  }
+
+  async chatStream(
+    modelId: string,
+    messages: ProviderChatMessage[],
+    params?: Record<string, unknown>,
+  ): Promise<ProviderStreamExecutionResult> {
+    const offerIds = this.config.modelOfferMap?.[modelId];
+    let providerName: ProviderName;
+    let providerModel: string;
+
+    if (offerIds && offerIds.length > 0) {
+      const offerId = offerIds[0];
+      const offer = this.config.offerCatalog?.[offerId];
+      if (!offer) throw new Error(`${offerId}: offer not configured`);
+      providerName = offer.provider;
+      providerModel = offer.upstreamModel;
+    } else {
+      providerName = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
+      providerModel = this.config.providerModelMap[providerName] ?? modelId;
+    }
+
+    const client = this.clientsByName.get(providerName);
+    if (!client?.isEnabled() || !client.chatStream) {
+      throw new Error(`${providerName}: streaming not supported`);
+    }
+
+    const breaker = this.circuitBreakers.get(providerName);
+    if (breaker) {
+      breaker.evaluateState();
+      if (breaker.isOpen()) throw new Error(`${providerName}: circuit open`);
+    }
+
+    const startedAt = Date.now();
+    try {
+      const response = await client.chatStream({ model: providerModel, messages, params });
+      this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
+      breaker?.recordSuccess();
+      return { response, providerUsed: providerName, providerModel };
+    } catch (error) {
+      this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, true);
+      breaker?.recordFailure(error instanceof Error ? error.message : String(error));
+      throw error;
+    }
   }
 
   async imageGeneration(modelId: string, request: Omit<ProviderImageRequest, "model">): Promise<ProviderImageExecutionResult> {
@@ -185,6 +251,76 @@ export class ProviderRegistry {
           data: response.data,
           providerUsed: providerName,
           providerModel: response.providerModel ?? providerModel,
+        };
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, true);
+        breaker?.recordFailure(reason);
+        errors.push(`${providerName}: ${reason}`);
+      }
+    }
+
+    throw new Error(`no provider succeeded${errors.length > 0 ? ` (${errors.join(" | ")})` : ""}`);
+  }
+
+  async embeddings(modelId: string, request: Omit<ProviderEmbeddingsRequest, "model">): Promise<ProviderEmbeddingsExecutionResult> {
+    const primaryProvider = this.config.modelProviderMap[modelId] ?? this.config.defaultProvider;
+    const candidateProviders = this.buildCandidates(primaryProvider);
+    const errors: string[] = [];
+
+    for (const providerName of candidateProviders) {
+      const client = this.clientsByName.get(providerName);
+      const breaker = this.circuitBreakers.get(providerName);
+
+      if (!client || !client.isEnabled()) {
+        continue;
+      }
+
+      if (!client.embeddings) {
+        errors.push(`${providerName}: unsupported embeddings capability`);
+        continue;
+      }
+
+      if (breaker) {
+        breaker.evaluateState();
+        if (breaker.isOpen()) {
+          errors.push(`${providerName}: circuit open`);
+          continue;
+        }
+        if (breaker.isHalfOpen() && !breaker.tryAcquireProbe()) {
+          errors.push(`${providerName}: half-open probe in-flight`);
+          continue;
+        }
+      }
+
+      const providerModel = EMBEDDING_PROVIDER_MODEL_MAP[modelId] ?? modelId;
+      const startedAt = Date.now();
+      try {
+        const result = await client.embeddings({ ...request, model: providerModel });
+        this.metricsCollector.recordAttempt(providerName, Date.now() - startedAt, false);
+        breaker?.recordSuccess();
+        return {
+          statusCode: 200,
+          body: {
+            object: "list",
+            data: result.data.map((item, index) => ({
+              object: "embedding",
+              embedding: item.embedding,
+              index,
+            })),
+            model: modelId,
+            usage: {
+              prompt_tokens: result.usage?.promptTokens ?? 0,
+              total_tokens: result.usage?.totalTokens ?? 0,
+            },
+          },
+          headers: {
+            "x-model-routed": modelId,
+            "x-provider-used": providerName,
+            "x-provider-model": result.providerModel ?? providerModel,
+          },
+          providerUsed: providerName,
+          providerModel: result.providerModel ?? providerModel,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
@@ -282,6 +418,7 @@ export class ProviderRegistry {
     modelId: string,
     offerIds: string[],
     messages: ProviderChatMessage[],
+    params?: Record<string, unknown>,
   ): Promise<ProviderExecutionResult> {
     const errors: string[] = [];
     const allowedCostClasses = this.config.modelOfferPolicyMap?.[modelId]?.allowedCostClasses;
@@ -319,13 +456,14 @@ export class ProviderRegistry {
 
       const startedAt = Date.now();
       try {
-        const response = await client.chat({ model: offer.upstreamModel, messages });
+        const response = await client.chat({ model: offer.upstreamModel, messages, params });
         this.metricsCollector.recordAttempt(offer.provider, Date.now() - startedAt, false);
         breaker?.recordSuccess();
         return {
           content: response.content,
           providerUsed: offer.provider,
           providerModel: response.providerModel ?? offer.upstreamModel,
+          rawResponse: response.rawResponse,
         };
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
