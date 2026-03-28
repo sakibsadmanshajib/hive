@@ -1,8 +1,0 @@
-blank_issues_enabled: false
-contact_links:
-  - name: Support and usage questions
-    url: https://github.com/sakibsadmanshajib/hive/blob/main/SUPPORT.md
-    about: Use the support guide for troubleshooting, contributor questions, or operator help requests.
-  - name: Security vulnerability reporting
-    url: https://github.com/sakibsadmanshajib/hive/blob/main/SECURITY.md
-    about: Follow the security policy for vulnerabilities or sensitive disclosures instead of opening a public issue.
