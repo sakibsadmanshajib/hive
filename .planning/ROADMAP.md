@@ -37,9 +37,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans**: 3 plans
 
 Plans:
-- [ ] 01-01: Create the Docker-only developer stack for hot reload, code generation, tests, and local service orchestration.
-- [ ] 01-02: Build compatibility fixtures for SDKs, errors, and streaming semantics.
-- [ ] 01-03: Import the OpenAI contract, generate server types, define the launch endpoint inventory, and publish the support matrix and Swagger/OpenAPI docs.
+- [ ] 01-01-PLAN.md — Docker-only developer stack with Go edge-api, toolchain, and SDK test containers (Wave 1)
+- [ ] 01-02-PLAN.md — Import OpenAI contract, build support matrix, error envelope, unsupported middleware, compat headers, and Swagger docs (Wave 2)
+- [ ] 01-03-PLAN.md — SDK compatibility harness: JS, Python, and Java tests with golden fixtures (Wave 3)
 
 ### Phase 2: Identity & Account Foundation
 **Goal**: Establish authenticated accounts, tenant identity, and customer profile data required by billing and console flows.
