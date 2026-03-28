@@ -1,0 +1,6 @@
+FROM python:3.13-slim
+WORKDIR /tests
+COPY packages/sdk-tests/python/pyproject.toml ./
+RUN pip install --no-cache-dir -e ".[dev]"
+COPY packages/sdk-tests/python/ ./
+CMD ["pytest", "-v"]

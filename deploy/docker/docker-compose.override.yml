@@ -1,0 +1,11 @@
+services:
+  edge-api:
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/edge-api
+          target: /app/apps/edge-api
+          ignore:
+            - tmp/
+        - action: rebuild
+          path: ../../apps/edge-api/go.mod

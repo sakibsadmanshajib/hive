@@ -1,0 +1,10 @@
+FROM golang:1.24-alpine AS base
+RUN apk add --no-cache git
+RUN go install github.com/air-verse/air@v1.64.5
+WORKDIR /app
+COPY go.work go.work.sum* ./
+COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
+RUN cd apps/edge-api && go mod download
+COPY apps/edge-api/ ./apps/edge-api/
+EXPOSE 8080
+CMD ["air", "-c", "apps/edge-api/.air.toml"]

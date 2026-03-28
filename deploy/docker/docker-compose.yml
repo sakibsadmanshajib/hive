@@ -1,0 +1,65 @@
+services:
+  edge-api:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.edge-api
+    ports:
+      - "8080:8080"
+    volumes:
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  toolchain:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.toolchain
+    profiles:
+      - tools
+    volumes:
+      - ../../:/workspace
+      - gomodcache:/go/pkg/mod
+
+  sdk-tests-js:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.sdk-tests-js
+    profiles:
+      - test
+    depends_on:
+      edge-api:
+        condition: service_healthy
+    environment:
+      HIVE_BASE_URL: http://edge-api:8080/v1
+
+  sdk-tests-py:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.sdk-tests-py
+    profiles:
+      - test
+    depends_on:
+      edge-api:
+        condition: service_healthy
+    environment:
+      HIVE_BASE_URL: http://edge-api:8080/v1
+
+  sdk-tests-java:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.sdk-tests-java
+    profiles:
+      - test
+    depends_on:
+      edge-api:
+        condition: service_healthy
+    environment:
+      HIVE_BASE_URL: http://edge-api:8080/v1
+
+volumes:
+  gomodcache:
+  gobuildcache:
