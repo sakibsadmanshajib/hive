@@ -1,0 +1,30 @@
+# Environment
+.env
+
+# Go
+/apps/edge-api/tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Dependencies
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Generated
+/packages/openai-contract/generated/
+/apps/edge-api/internal/generated/

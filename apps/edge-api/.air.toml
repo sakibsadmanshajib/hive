@@ -1,0 +1,15 @@
+root = "/app/apps/edge-api"
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/main ./cmd/server"
+bin = "./tmp/main"
+include_ext = ["go", "toml"]
+exclude_dir = ["tmp", "vendor", "testdata"]
+delay = 1000
+
+[log]
+time = false
+
+[misc]
+clean_on_exit = true
