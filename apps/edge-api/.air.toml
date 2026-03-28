@@ -1,9 +1,9 @@
 root = "/app/apps/edge-api"
-tmp_dir = "tmp"
+tmp_dir = "/app/apps/edge-api/tmp"
 
 [build]
-cmd = "go build -o ./tmp/main ./cmd/server"
-bin = "./tmp/main"
+cmd = "cd /app && go build -o /app/apps/edge-api/tmp/main ./apps/edge-api/cmd/server"
+full_bin = "/app/apps/edge-api/tmp/main"
 include_ext = ["go", "toml"]
 exclude_dir = ["tmp", "vendor", "testdata"]
 delay = 1000
