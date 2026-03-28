@@ -17,17 +17,18 @@ The main risks are predictable: billing drift on streams/retries, provider leaka
 
 ### Recommended Stack
 
-The recommended stack is Go 1.26.1 for the public edge/control plane, PostgreSQL 18.3 as the financial and configuration source of truth, Redis 8.4 for hot-path counters and short-lived state, Supabase self-hosting for auth, and Next.js 16.1 + React 19.2 for the developer console. The key cost-saving move is to avoid re-implementing provider translation from scratch: LiteLLM 1.81.3-stable already supports OpenAI-shaped endpoints across many providers, including OpenRouter, and brings routing, budgets, rate limiting, and spend hooks.
+The recommended stack is Go 1.26.1 for the public edge/control plane, hosted Supabase for auth plus the primary managed Postgres database, Redis 8.4 for hot-path counters and short-lived state, and Next.js 16.1 + React 19.2 for the developer console. The local developer workflow should be Docker-only, including hot reload, code generation, builds, and tests. The key cost-saving move is to avoid re-implementing provider translation from scratch: LiteLLM 1.81.3-stable already supports OpenAI-shaped endpoints across many providers, including OpenRouter, and brings routing, budgets, rate limiting, and spend hooks.
 
 Use `ogen` 1.15.1 or `oapi-codegen` 2.5.1 against the OpenAI OpenAPI spec (currently version 2.3.0 in the fetched reference) to keep the public contract aligned with the source of truth. Keep Hive's internal prepaid ledger authoritative even if Stripe Billing Credits or OpenMeter are used for supporting flows, because both ecosystems are still evolving and should not own the entire business invariant set on day one.
 
 **Core technologies:**
 - **Go 1.26.1:** edge API, workers, control plane — best delivery/performance balance
 - **LiteLLM 1.81.3-stable:** provider adapter and routing — minimizes custom provider code
-- **PostgreSQL 18.3:** ledger, payments, catalog, keys, invoices — strongest transactional base
+- **Supabase hosted Postgres:** ledger, payments, catalog, keys, invoices — strongest low-ops transactional base for v1
 - **Redis 8.4:** limits, idempotency, reservations — best fit for hot-path enforcement
-- **Supabase self-hosting:** auth/session layer — fastest secure identity path
+- **Supabase hosted project (`yimgflllgdsbcibnaxqe`)**: auth/session layer and primary relational store — fastest low-ops identity and transactional foundation
 - **Next.js 16.1 / React 19.2:** developer console — current stable frontend foundation
+- **Docker Compose with containerized watchers:** local dev, hot reload, codegen, builds, and tests — no host Go/Node installs required
 
 ### Expected Features
 
@@ -54,7 +55,7 @@ Research confirms that the true table stakes are broader than inference itself. 
 
 ### Architecture Approach
 
-The recommended architecture is a modular platform with three clear scaling boundaries from day one: a Go edge API, an internal provider adapter plane, and background/control-plane workers. Do not explode into many tiny services immediately. Instead, split only where the scaling economics are obvious: request-serving traffic, payment/billing control plane, and web/admin traffic. Start with Postgres + Redis and defer ClickHouse until the reporting workload justifies it.
+The recommended architecture is a modular platform with three clear scaling boundaries from day one: a Go edge API, an internal provider adapter plane, and background/control-plane workers. Do not explode into many tiny services immediately. Instead, split only where the scaling economics are obvious: request-serving traffic, payment/billing control plane, and web/admin traffic. Start with Supabase managed Postgres + Redis and defer ClickHouse until the reporting workload justifies it.
 
 **Major components:**
 1. **Edge API** — owns public OpenAI compatibility, auth, rate limiting, streaming normalization
@@ -83,7 +84,7 @@ Based on research, suggested phase structure:
 
 ### Phase 2: Auth, Tenancy, and Ledger Foundation
 **Rationale:** Billing and key governance depend on identity and durable money-like state.
-**Delivers:** Supabase auth, account model, immutable Hive ledger, usage event model, canonical payment intent model
+**Delivers:** hosted Supabase auth, account model, immutable Hive ledger in Supabase Postgres, usage event model, canonical payment intent model
 **Addresses:** Credits, organizations, prepaid flows
 **Avoids:** Billing drift and reconciliation chaos
 
@@ -96,7 +97,7 @@ Based on research, suggested phase structure:
 ### Phase 4: Edge Gateway and Hot-Path Enforcement
 **Rationale:** The low-latency serving path should be correct before broad endpoint rollout.
 **Delivers:** Go edge server, auth/key checks, rate limiting, credit reservation, idempotency, streaming scaffolding
-**Uses:** Go, Redis, Postgres
+**Uses:** Go, Redis, Supabase Postgres
 **Implements:** Public API hot path
 
 ### Phase 5: Core Inference Surfaces
@@ -146,7 +147,7 @@ Phases likely needing deeper research during planning:
 
 Phases with standard patterns (skip research-phase):
 - **Phase 2:** auth/account/ledger foundation is standard, though correctness is critical
-- **Phase 4:** Go edge + Redis/Postgres hot-path enforcement follows established patterns
+- **Phase 4:** Go edge + Redis/Supabase Postgres hot-path enforcement follows established patterns
 
 ## Confidence Assessment
 

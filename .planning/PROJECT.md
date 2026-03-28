@@ -20,7 +20,7 @@ Developers can switch from OpenAI to Hive with only a base URL and API key chang
 - [ ] Internal provider abstraction that maps public model aliases to OpenRouter, Groq, and future providers without exposing provider identity to customers.
 - [ ] Prepaid billing ledger with Hive Credits, rate limits, model pricing, itemized usage, spend controls, and future subscription-ready credit mechanics.
 - [ ] Customer billing rails for Stripe, bKash, and SSLCommerz, including BDT top-ups anchored to USD/BDT FX plus a 3% conversion fee.
-- [ ] Developer web console with Supabase auth for billing, tax/business profile, invoices, spend alerts, usage analytics, API key lifecycle, and model catalog visibility.
+- [ ] Developer web console with hosted Supabase auth and Supabase-managed Postgres for billing, tax/business profile, invoices, spend alerts, usage analytics, API key lifecycle, and model catalog visibility.
 - [ ] Account and API-key controls for budgets, expiration, allowed models, per-key usage tracking, and account-tier rate limiting.
 - [ ] Privacy-first request handling that avoids storing API message bodies at rest while still capturing health, error, latency, and usage metrics.
 
@@ -39,7 +39,7 @@ The commercial model is prepaid Hive Credits. One USD maps to 100,000 Hive Credi
 
 The platform must keep provider identity internal. Public model IDs should be Hive-controlled aliases mapped to upstream providers and models. Upstream credentials are managed internally, not by end users. The system should log health, usage, errors, and operational metrics, but should not store prompt or completion bodies at rest for the API product. Reasoning or "thinking" behavior must work where upstream providers support it, and OpenAI-style reasoning-related request/response semantics should be preserved as much as possible.
 
-The launch scope includes a developer web app, not an end-user assistant product. Customers need Supabase-based authentication and a console for credit purchases, invoices, VAT/business details, spend alerts, API key administration, model catalog browsing, and usage investigation. First-party SDKs for JavaScript/TypeScript, Python, and Java are desirable, but the primary integration promise is that existing official OpenAI SDKs work unchanged except for base URL and credentials.
+The launch scope includes a developer web app, not an end-user assistant product. Customers need hosted Supabase-based authentication and a console for credit purchases, invoices, VAT/business details, spend alerts, API key administration, model catalog browsing, and usage investigation. The initial managed backend should use the hosted Supabase project at `https://yimgflllgdsbcibnaxqe.supabase.co` for auth and the primary transactional Postgres database, rather than introducing a separate standalone PostgreSQL service in v1. First-party SDKs for JavaScript/TypeScript, Python, and Java are desirable, but the primary integration promise is that existing official OpenAI SDKs work unchanged except for base URL and credentials.
 
 ## Constraints
 
@@ -49,7 +49,8 @@ The launch scope includes a developer web app, not an end-user assistant product
 - **Commercial model**: Launch with prepaid credits only, but structure the ledger and catalog for future subscription bundles that still resolve to credits.
 - **Payments**: Support Stripe, bKash, and SSLCommerz; BDT support must reflect XE-backed FX conversion plus the platform fee.
 - **Performance**: Keep the request-serving path lean and horizontally scalable; avoid unnecessary custom code when a proven OSS component covers the need.
-- **Auth**: Use Supabase for authentication and account identity.
+- **Auth & primary DB**: Use the hosted Supabase project for authentication, account identity, and the primary transactional Postgres database in v1.
+- **Developer workflow**: Local development, hot reload, code generation, builds, and tests must run inside Docker containers; contributors should not need host-installed Go, Node, or database tooling.
 - **Observability**: Capture health, rate-limit, billing, and provider metrics without violating the no-message-storage rule.
 
 ## Key Decisions
@@ -62,6 +63,8 @@ The launch scope includes a developer web app, not an end-user assistant product
 | Launch with prepaid credits and no subscriptions | Simplifies initial revenue mechanics while preserving room for credit-based subscriptions later | — Pending |
 | Exclude end-user chat, RAG projects, and code execution from launch | Keeps the first product focused on the developer API, billing, and control plane | — Pending |
 | Avoid storing API prompts/completions at rest | Privacy and operational simplicity matter more than transcript retention for the launch API | — Pending |
+| Use hosted Supabase as the auth and primary relational data platform in v1 | Keeps ops overhead low while still providing managed Postgres, auth, and storage primitives | — Pending |
+| Run the entire local developer workflow in Docker containers | Prevents host toolchain drift and keeps onboarding and builds reproducible | — Pending |
 
 ---
-*Last updated: 2026-03-28 after initialization*
+*Last updated: 2026-03-28 after roadmap approval*

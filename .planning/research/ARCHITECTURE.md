@@ -38,7 +38,7 @@
 ┌───────────────▼────────────────────────────┐  ┌───────────────▼──────────┐
 │               Data Plane Stores            │  │      Observability Plane  │
 ├────────────────────────────────────────────┤  ├───────────────────────────┤
-│ PostgreSQL │ Redis │ Object Storage        │  │ Prometheus │ Grafana      │
+│ Supabase Postgres │ Redis │ Object Storage  │  │ Prometheus │ Grafana      │
 │ (Optional ClickHouse for analytics later)  │  │ structured metadata logs  │
 └────────────────────────────────────────────┘  └───────────────────────────┘
 ```
@@ -48,11 +48,11 @@
 | Component | Responsibility | Typical Implementation |
 |-----------|----------------|------------------------|
 | Go API Edge | Own the public OpenAI-compatible contract and streaming behavior | Generated handlers from OpenAPI + thin custom business logic |
-| Control plane | Apply auth, model policy, pricing, credits, and key controls | Go services/modules backed by Postgres and Redis |
+| Control plane | Apply auth, model policy, pricing, credits, and key controls | Go services/modules backed by Supabase Postgres and Redis |
 | Provider adapter | Translate internal model alias requests into upstream provider calls | LiteLLM plus Hive-owned shims where strict compatibility requires them |
 | Payments service | Handle Stripe/bKash/SSLCommerz intents, callbacks, FX snapshots, and reconciliations | Background jobs + webhook endpoints + canonical payment model |
-| Usage pipeline | Normalize usage into durable, queryable billing facts | Outbox/event workers writing to Postgres, with optional analytics sink |
-| Web console | Customer-facing billing and developer management UI | Next.js app with Supabase auth |
+| Usage pipeline | Normalize usage into durable, queryable billing facts | Outbox/event workers writing to Supabase Postgres, with optional analytics sink |
+| Web console | Customer-facing billing and developer management UI | Next.js app with hosted Supabase auth |
 
 ## Recommended Project Structure
 
@@ -69,7 +69,7 @@ platform/
 │   ├── events/              # Usage/payment event schemas
 │   └── sdk-tests/           # Drop-in compatibility regression suites
 ├── deploy/
-│   ├── docker/              # Compose, dev images, LiteLLM config
+│   ├── docker/              # Compose, dev images, watch config, LiteLLM config
 │   └── k8s/                 # Future production manifests
 ├── docs/
 │   ├── architecture/        # Design docs and provider matrices
@@ -85,6 +85,7 @@ platform/
 - **`apps/control-plane/`:** separates slower administrative and billing workflows from latency-sensitive inference requests.
 - **`packages/openai-contract/`:** makes compatibility a first-class artifact instead of scattering schemas across handlers.
 - **`packages/sdk-tests/`:** keeps SDK compatibility verification in the repo, not in tribal knowledge.
+- **`deploy/docker/`:** keeps the whole engineering loop containerized so onboarding does not require local runtime installs.
 
 ## Architectural Patterns
 
@@ -149,7 +150,7 @@ Client
 ### State Management
 
 ```text
-PostgreSQL (authoritative state)
+Supabase Postgres (authoritative state)
     ↓
 Workers / APIs publish view models
     ↓
@@ -169,7 +170,7 @@ Next.js queries control-plane APIs / React Query cache
 
 | Scale | Architecture Adjustments |
 |-------|--------------------------|
-| 0-1k users | Run edge, control plane, workers, Postgres, Redis, LiteLLM in one region; no ClickHouse yet. |
+| 0-1k users | Run edge, control plane, workers, Supabase Postgres, Redis, and LiteLLM in one region; no ClickHouse yet. |
 | 1k-100k users | Split edge and worker deployments, add read replicas, isolate payment webhooks, and move analytics-heavy queries off the primary database. |
 | 100k+ users | Add ClickHouse or equivalent analytics store, region-local edge pods, dedicated event transport, and finer-grained service boundaries around billing and provider routing. |
 
@@ -221,7 +222,7 @@ Next.js queries control-plane APIs / React Query cache
 - Groq OpenAI compatibility docs
 - OpenRouter API and provider-routing docs
 - Stripe billing/tax docs
-- Supabase self-hosting docs
+- Supabase platform, database, and auth docs
 - XE Currency Data API help docs
 
 ---

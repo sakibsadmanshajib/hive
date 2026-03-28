@@ -90,51 +90,49 @@
 
 ## Traceability
 
-Roadmap mapping will be filled after `ROADMAP.md` is created.
-
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | TBD | Pending |
-| AUTH-02 | TBD | Pending |
-| AUTH-03 | TBD | Pending |
-| AUTH-04 | TBD | Pending |
-| COMP-01 | TBD | Pending |
-| COMP-02 | TBD | Pending |
-| COMP-03 | TBD | Pending |
-| API-01 | TBD | Pending |
-| API-02 | TBD | Pending |
-| API-03 | TBD | Pending |
-| API-04 | TBD | Pending |
-| API-05 | TBD | Pending |
-| API-06 | TBD | Pending |
-| API-07 | TBD | Pending |
-| API-08 | TBD | Pending |
-| ROUT-01 | TBD | Pending |
-| ROUT-02 | TBD | Pending |
-| ROUT-03 | TBD | Pending |
-| BILL-01 | TBD | Pending |
-| BILL-02 | TBD | Pending |
-| BILL-03 | TBD | Pending |
-| BILL-04 | TBD | Pending |
-| BILL-05 | TBD | Pending |
-| BILL-06 | TBD | Pending |
-| BILL-07 | TBD | Pending |
-| KEY-01 | TBD | Pending |
-| KEY-02 | TBD | Pending |
-| KEY-03 | TBD | Pending |
-| KEY-04 | TBD | Pending |
-| KEY-05 | TBD | Pending |
-| CONS-01 | TBD | Pending |
-| CONS-02 | TBD | Pending |
-| CONS-03 | TBD | Pending |
-| PRIV-01 | TBD | Pending |
-| OPS-01 | TBD | Pending |
+| AUTH-01 | Phase 2 | Pending |
+| AUTH-02 | Phase 2 | Pending |
+| AUTH-03 | Phase 2 | Pending |
+| AUTH-04 | Phase 2 | Pending |
+| COMP-01 | Phase 1 | Pending |
+| COMP-02 | Phase 1 | Pending |
+| COMP-03 | Phase 1 | Pending |
+| API-01 | Phase 6 | Pending |
+| API-02 | Phase 6 | Pending |
+| API-03 | Phase 6 | Pending |
+| API-04 | Phase 6 | Pending |
+| API-05 | Phase 7 | Pending |
+| API-06 | Phase 7 | Pending |
+| API-07 | Phase 7 | Pending |
+| API-08 | Phase 1 | Pending |
+| ROUT-01 | Phase 4 | Pending |
+| ROUT-02 | Phase 4 | Pending |
+| ROUT-03 | Phase 4 | Pending |
+| BILL-01 | Phase 3 | Pending |
+| BILL-02 | Phase 3 | Pending |
+| BILL-03 | Phase 8 | Pending |
+| BILL-04 | Phase 8 | Pending |
+| BILL-05 | Phase 9 | Pending |
+| BILL-06 | Phase 9 | Pending |
+| BILL-07 | Phase 8 | Pending |
+| KEY-01 | Phase 5 | Pending |
+| KEY-02 | Phase 5 | Pending |
+| KEY-03 | Phase 5 | Pending |
+| KEY-04 | Phase 5 | Pending |
+| KEY-05 | Phase 5 | Pending |
+| CONS-01 | Phase 9 | Pending |
+| CONS-02 | Phase 9 | Pending |
+| CONS-03 | Phase 9 | Pending |
+| PRIV-01 | Phase 3 | Pending |
+| OPS-01 | Phase 9 | Pending |
 
 **Coverage:**
 - v1 requirements: 35 total
-- Mapped to phases: 0
-- Unmapped: 35 ⚠️
+- Mapped to phases: 35
+- Unmapped: 0
 
 ---
 *Requirements defined: 2026-03-28*
-*Last updated: 2026-03-28 after requirement definition*
+*Last updated: 2026-03-28 after roadmap creation*
