@@ -32,6 +32,14 @@ describe("model service", () => {
     expect(() => service.pickGuestDefault("chat")).toThrowError(/No guest model/);
   });
 
+  it("resolves openrouter/free as a distinct public free model without changing openrouter/auto", () => {
+    const service = new ModelService({ enabledFreeModelIds: ["openrouter/free"] });
+
+    expect(service.findById("openrouter/free")?.id).toBe("openrouter/free");
+    expect(service.isGuestAccessible("openrouter/free")).toBe(true);
+    expect(service.findById("openrouter/auto")?.id).toBe("openrouter/auto");
+  });
+
   it("resolves the canonical public embeddings model id", () => {
     const service = new ModelService();
 

@@ -375,6 +375,265 @@ describe("RuntimeServices", () => {
         expect(services.models.list().map((model) => model.id)).toContain("guest-free");
     });
 
+    it("exposes openrouter/free when OpenRouter has an explicit free offer", async () => {
+        vi.resetModules();
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        vi.doMock("../../src/config/env", () => ({
+            getEnv: () => ({
+                nodeEnv: "test",
+                port: 8080,
+                postgresUrl: "postgres://test",
+                redisUrl: "redis://127.0.0.1:6379",
+                rateLimitPerMinute: 60,
+                adminStatusToken: "admin",
+                allowDemoPaymentConfirm: true,
+                allowDevApiKeyPrefix: false,
+                google: { clientId: "id", clientSecret: "secret", redirectUri: "callback" },
+                auth: {
+                    sessionTtlMinutes: 60,
+                    enforceTwoFactorSensitiveActions: false,
+                    twoFactorVerificationWindowMinutes: 10,
+                },
+                webhookSecrets: { bkash: "bk", sslcommerz: "ssl" },
+                bkash: { verifyEndpoint: "", bearerToken: "" },
+                sslcommerz: { validatorEndpoint: "", storeId: "", storePassword: "" },
+                supabase: {
+                    url: "https://demo.supabase.co",
+                    serviceRoleKey: "service-role-key",
+                    flags: {
+                        authEnabled: false,
+                        userRepoEnabled: false,
+                        apiKeysEnabled: false,
+                        billingStoreEnabled: true,
+                    },
+                },
+                paymentReconciliation: {
+                    enabled: false,
+                    intervalMs: 60000,
+                    lookbackHours: 24,
+                },
+                providers: {
+                    ollama: {
+                        baseUrl: "http://127.0.0.1:11434",
+                        model: "llama3.1:8b",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    groq: {
+                        baseUrl: "https://api.groq.com/openai/v1",
+                        model: "llama-3.1-8b-instant",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    openai: {
+                        baseUrl: "https://api.openai.com/v1",
+                        chatModel: "gpt-4o-mini",
+                        imageModel: "gpt-image-1",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    openrouter: {
+                        baseUrl: "https://openrouter.ai/api/v1",
+                        model: "openrouter/auto",
+                        freeModel: "openrouter/free-model",
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    gemini: {
+                        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+                        model: "gemini-3-flash-preview",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    anthropic: {
+                        baseUrl: "https://api.anthropic.com/v1",
+                        model: "claude-sonnet-4-20250514",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 100 },
+                },
+                langfuse: {
+                    enabled: false,
+                    baseUrl: "https://cloud.langfuse.com",
+                    publicKey: undefined,
+                    secretKey: undefined,
+                },
+            }),
+        }));
+
+        vi.doMock("../../src/runtime/supabase-client", () => ({
+            createSupabaseAdminClient: () => ({ from: () => ({}) }),
+        }));
+
+        vi.doMock("../../src/runtime/supabase-billing-store", () => ({
+            SupabaseBillingStore: class { },
+        }));
+
+        vi.doMock("../../src/runtime/supabase-api-key-store", () => ({
+            SupabaseApiKeyStore: class { },
+        }));
+
+        vi.doMock("../../src/runtime/supabase-user-store", () => ({
+            SupabaseUserStore: class { },
+        }));
+
+        vi.doMock("../../src/providers/registry", () => ({
+            ProviderRegistry: class {
+                captureStartupReadiness = vi.fn(async () => ({
+                    openrouter: { ready: true, detail: "startup model ready" },
+                    mock: { ready: true, detail: "startup model ready" },
+                }));
+                status = vi.fn(async () => ({ providers: [] }));
+                chat = vi.fn();
+                metrics = vi.fn(async () => ({ scrapedAt: new Date().toISOString(), providers: [] }));
+                metricsPrometheus = vi.fn(async () => ({ contentType: "text/plain", body: "" }));
+            },
+        }));
+
+        const { createRuntimeServices } = await import("../../src/runtime/services");
+
+        const services = createRuntimeServices();
+
+        expect(services.models.list().map((model) => model.id)).toContain("openrouter/free");
+        expect(services.models.list().map((model) => model.id)).toContain("openrouter/auto");
+    });
+
+    it("does not expose openrouter/free when OpenRouter has no free offer", async () => {
+        vi.resetModules();
+        vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        vi.doMock("../../src/config/env", () => ({
+            getEnv: () => ({
+                nodeEnv: "test",
+                port: 8080,
+                postgresUrl: "postgres://test",
+                redisUrl: "redis://127.0.0.1:6379",
+                rateLimitPerMinute: 60,
+                adminStatusToken: "admin",
+                allowDemoPaymentConfirm: true,
+                allowDevApiKeyPrefix: false,
+                google: { clientId: "id", clientSecret: "secret", redirectUri: "callback" },
+                auth: {
+                    sessionTtlMinutes: 60,
+                    enforceTwoFactorSensitiveActions: false,
+                    twoFactorVerificationWindowMinutes: 10,
+                },
+                webhookSecrets: { bkash: "bk", sslcommerz: "ssl" },
+                bkash: { verifyEndpoint: "", bearerToken: "" },
+                sslcommerz: { validatorEndpoint: "", storeId: "", storePassword: "" },
+                supabase: {
+                    url: "https://demo.supabase.co",
+                    serviceRoleKey: "service-role-key",
+                    flags: {
+                        authEnabled: false,
+                        userRepoEnabled: false,
+                        apiKeysEnabled: false,
+                        billingStoreEnabled: true,
+                    },
+                },
+                paymentReconciliation: {
+                    enabled: false,
+                    intervalMs: 60000,
+                    lookbackHours: 24,
+                },
+                providers: {
+                    ollama: {
+                        baseUrl: "http://127.0.0.1:11434",
+                        model: "llama3.1:8b",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    groq: {
+                        baseUrl: "https://api.groq.com/openai/v1",
+                        model: "llama-3.1-8b-instant",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    openai: {
+                        baseUrl: "https://api.openai.com/v1",
+                        chatModel: "gpt-4o-mini",
+                        imageModel: "gpt-image-1",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    openrouter: {
+                        baseUrl: "https://openrouter.ai/api/v1",
+                        model: "openrouter/auto",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    gemini: {
+                        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+                        model: "gemini-3-flash-preview",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    anthropic: {
+                        baseUrl: "https://api.anthropic.com/v1",
+                        model: "claude-sonnet-4-20250514",
+                        freeModel: undefined,
+                        timeoutMs: 50,
+                        maxRetries: 0,
+                    },
+                    circuitBreaker: { failureThreshold: 5, resetTimeoutMs: 100 },
+                },
+                langfuse: {
+                    enabled: false,
+                    baseUrl: "https://cloud.langfuse.com",
+                    publicKey: undefined,
+                    secretKey: undefined,
+                },
+            }),
+        }));
+
+        vi.doMock("../../src/runtime/supabase-client", () => ({
+            createSupabaseAdminClient: () => ({ from: () => ({}) }),
+        }));
+
+        vi.doMock("../../src/runtime/supabase-billing-store", () => ({
+            SupabaseBillingStore: class { },
+        }));
+
+        vi.doMock("../../src/runtime/supabase-api-key-store", () => ({
+            SupabaseApiKeyStore: class { },
+        }));
+
+        vi.doMock("../../src/runtime/supabase-user-store", () => ({
+            SupabaseUserStore: class { },
+        }));
+
+        vi.doMock("../../src/providers/registry", () => ({
+            ProviderRegistry: class {
+                captureStartupReadiness = vi.fn(async () => ({
+                    openrouter: { ready: true, detail: "startup model ready" },
+                    mock: { ready: true, detail: "startup model ready" },
+                }));
+                status = vi.fn(async () => ({ providers: [] }));
+                chat = vi.fn();
+                metrics = vi.fn(async () => ({ scrapedAt: new Date().toISOString(), providers: [] }));
+                metricsPrometheus = vi.fn(async () => ({ contentType: "text/plain", body: "" }));
+            },
+        }));
+
+        const { createRuntimeServices } = await import("../../src/runtime/services");
+
+        const services = createRuntimeServices();
+
+        expect(services.models.list().map((model) => model.id)).not.toContain("openrouter/free");
+    });
+
     it("exposes the verification-only OpenRouter embedding model when configured", async () => {
         vi.resetModules();
         vi.spyOn(console, "warn").mockImplementation(() => undefined);

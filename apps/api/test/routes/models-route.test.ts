@@ -277,6 +277,18 @@ describe("models SDK integration (FOUND-03, FOUND-04)", () => {
     }
   });
 
+  it("client.models.list() exposes openrouter/free when OpenRouter has a free offer", async () => {
+    const client = new OpenAI({ apiKey: "sk-test", baseURL: address + "/v1" });
+    const response = await client.models.list();
+    const modelIds = [];
+    for await (const model of response) {
+      modelIds.push(model.id);
+    }
+
+    expect(modelIds).toContain("openrouter/free");
+    expect(modelIds).toContain("openrouter/auto");
+  });
+
   it("client.models.retrieve() returns single model", async () => {
     const client = new OpenAI({ apiKey: "sk-test", baseURL: address + "/v1" });
     const response = await client.models.retrieve("mock-chat");
