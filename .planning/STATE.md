@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-29T06:25:00.000Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-03-29T06:35:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 11
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 02 (identity-account-foundation) — EXECUTING
-Plan: 3 of 7
+Plan: 4 of 7
 
 ## Performance Metrics
 
@@ -39,11 +39,11 @@ Plan: 3 of 7
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
-| 02-identity-account-foundation | 2/7 | 11min | 5.5min |
+| 02-identity-account-foundation | 3/7 | 19min | 6.3min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-02 (6min), 01-03 (5min), 01-04 (21min), 02-01 (3min), 02-02 (8min)
+- Last 5 plans: 01-03 (5min), 01-04 (21min), 02-01 (3min), 02-02 (8min), 02-03 (8min)
 - Trend: Stable/improving
 
 ## Accumulated Context
@@ -72,6 +72,9 @@ Recent decisions affecting current work:
 - [02-02]: HashToken (SHA-256 hex) is exported for test use — enables pre-computing known hashes in stubRepo tests without exposing private internals.
 - [02-02]: X-Hive-Account-ID fallback is silent — invalid or unauthorized account IDs fall back to default membership without erroring the request.
 - [02-02]: AcceptInvitation does not alter current-account on same request — switching workspace is an explicit later action.
+- [02-03]: Middleware uses named export `middleware` (not default export) per Next.js App Router convention.
+- [02-03]: Callback route uses an explicit allowlist for next= redirect targets (/console, /auth/reset-password) — simpler than regex and easier to audit.
+- [02-03]: apps/web-console/.gitignore negates root-level Python lib/ gitignore entry so Next.js lib/ source can be committed.
 
 ### Pending Todos
 
@@ -84,6 +87,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T06:25:00.000Z
-Stopped at: Completed 02-02-PLAN.md
+Last session: 2026-03-29T06:35:00.000Z
+Stopped at: Completed 02-03-PLAN.md
 Resume file: None

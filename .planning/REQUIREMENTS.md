@@ -9,7 +9,7 @@
 
 - [x] **AUTH-01**: Developer can sign up and sign in with email and password using Supabase-backed authentication.
 - [x] **AUTH-02**: Developer receives email verification and can reset password through an email-based recovery flow.
-- [ ] **AUTH-03**: Developer session persists across browser refresh in the billing and key-management console.
+- [x] **AUTH-03**: Developer session persists across browser refresh in the billing and key-management console.
 - [ ] **AUTH-04**: Account owner can maintain billing contact, legal entity, country, and VAT/business information used for invoicing and tax handling.
 
 ### Compatibility & Contract
@@ -94,7 +94,7 @@
 |-------------|-------|--------|
 | AUTH-01 | Phase 2 | Complete |
 | AUTH-02 | Phase 2 | Complete |
-| AUTH-03 | Phase 2 | Pending |
+| AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 2 | Pending |
 | COMP-01 | Phase 1 | Complete |
 | COMP-02 | Phase 1 | Complete |

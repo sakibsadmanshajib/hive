@@ -179,7 +179,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
-| 2. Identity & Account Foundation | 2/7 | In Progress|  |
+| 2. Identity & Account Foundation | 3/7 | In Progress|  |
 | 3. Credits Ledger & Usage Accounting | 0/3 | Not started | - |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |
