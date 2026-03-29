@@ -30,6 +30,7 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 	if cfg.ProfilesHandler != nil && cfg.AuthMiddleware != nil {
 		protectedProfiles := cfg.AuthMiddleware.Require(cfg.ProfilesHandler)
 		mux.Handle("/api/v1/accounts/current/profile", protectedProfiles)
+		mux.Handle("/api/v1/accounts/current/billing-profile", protectedProfiles)
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {

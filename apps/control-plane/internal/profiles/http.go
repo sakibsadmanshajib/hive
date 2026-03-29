@@ -28,6 +28,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetCurrentProfile(w, r)
 	case r.Method == http.MethodPut && r.URL.Path == "/api/v1/accounts/current/profile":
 		h.handleUpdateCurrentProfile(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/billing-profile":
+		h.handleGetCurrentBillingProfile(w, r)
+	case r.Method == http.MethodPut && r.URL.Path == "/api/v1/accounts/current/billing-profile":
+		h.handleUpdateCurrentBillingProfile(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -61,6 +65,42 @@ func (h *Handler) handleUpdateCurrentProfile(w http.ResponseWriter, r *http.Requ
 	}
 
 	profile, err := h.svc.UpdateAccountProfile(r.Context(), accountID, input)
+	if err != nil {
+		writeProfileError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (h *Handler) handleGetCurrentBillingProfile(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	profile, err := h.svc.GetBillingProfile(r.Context(), accountID)
+	if err != nil {
+		writeProfileError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, profile)
+}
+
+func (h *Handler) handleUpdateCurrentBillingProfile(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	var input UpdateBillingProfileInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	profile, err := h.svc.UpdateBillingProfile(r.Context(), accountID, input)
 	if err != nil {
 		writeProfileError(w, err)
 		return

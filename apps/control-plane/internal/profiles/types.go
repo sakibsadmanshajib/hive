@@ -23,6 +23,34 @@ type UpdateAccountProfileInput struct {
 	StateRegion string `json:"state_region"`
 }
 
+// BillingProfile is the current-account billing identity DTO returned by the API.
+type BillingProfile struct {
+	BillingContactName         string `json:"billing_contact_name"`
+	BillingContactEmail        string `json:"billing_contact_email"`
+	LegalEntityName            string `json:"legal_entity_name"`
+	LegalEntityType            string `json:"legal_entity_type"`
+	BusinessRegistrationNumber string `json:"business_registration_number"`
+	VATNumber                  string `json:"vat_number"`
+	TaxIDType                  string `json:"tax_id_type"`
+	TaxIDValue                 string `json:"tax_id_value"`
+	CountryCode                string `json:"country_code"`
+	StateRegion                string `json:"state_region"`
+}
+
+// UpdateBillingProfileInput is the PUT payload for the current-account billing profile API.
+type UpdateBillingProfileInput struct {
+	BillingContactName         string `json:"billing_contact_name"`
+	BillingContactEmail        string `json:"billing_contact_email"`
+	LegalEntityName            string `json:"legal_entity_name"`
+	LegalEntityType            string `json:"legal_entity_type"`
+	BusinessRegistrationNumber string `json:"business_registration_number"`
+	VATNumber                  string `json:"vat_number"`
+	TaxIDType                  string `json:"tax_id_type"`
+	TaxIDValue                 string `json:"tax_id_value"`
+	CountryCode                string `json:"country_code"`
+	StateRegion                string `json:"state_region"`
+}
+
 // ValidationError is returned when a profile update payload is invalid.
 type ValidationError struct {
 	Field   string
