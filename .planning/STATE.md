@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 02-06-PLAN.md
-last_updated: "2026-03-29T07:35:36.073Z"
+status: planning
+stopped_at: Completed 02-07-PLAN.md
+last_updated: "2026-03-29T08:00:00.000Z"
 progress:
   total_phases: 9
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -19,32 +19,32 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 02 — identity-account-foundation
+**Current focus:** Phase 03 — credits-ledger-usage-accounting
 
 ## Current Position
 
-Phase: 02 (identity-account-foundation) — EXECUTING
-Plan: 7 of 7
+Phase: 03 (credits-ledger-usage-accounting) — READY TO PLAN
+Plan: 0 of 3
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6
-- Average duration: 11.7min
-- Total execution time: 1.17 hours
+- Total plans completed: 11
+- Average duration: 12.1min
+- Total execution time: 2.22 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
-| 02-identity-account-foundation | 6/7 | 70min | 11.7min |
+| 02-identity-account-foundation | 7/7 | 93min | 13.3min |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-01 (3min), 02-02 (8min), 02-03 (8min), 02-05 (7min), 02-06 (29min)
-- Trend: Stable/improving
+- Last 5 plans: 02-03 (8min), 02-04 (15min), 02-05 (7min), 02-06 (29min), 02-07 (23min)
+- Trend: Stable with longer finish-phase work
 
 ## Accumulated Context
 
@@ -85,6 +85,9 @@ Recent decisions affecting current work:
 - [Phase 02]: The setup flow submits the existing login email as a hidden value so onboarding stays limited to the five visible core fields — Keeps initial setup minimal while satisfying the profile API contract.
 - [Phase 02]: Profile editing uses shared server-action form handling while email maintenance stays browser-side — Keeps control-plane profile writes server-side and uses Supabase client auth APIs only where they are required.
 - [Phase 02]: Dashboard setup guidance is a reminder card instead of a redirect gate — Preserves /console as the landing route after setup completion.
+- [Phase 02]: Billing-profile reads fall back to core-profile contact and location data — Lets optional billing settings render useful defaults before the first billing-specific save.
+- [Phase 02]: Billing settings redirect unverified users to /console/settings/profile instead of broadening the restricted-console allowlist — Keeps profile maintenance reachable without turning billing into a Phase 2 gate.
+- [Phase 02]: The web-console control-plane client now uses explicit JSON decoders instead of assertion-based parsing — Keeps the touched billing/profile surface aligned with the strict TypeScript policy.
 
 ### Pending Todos
 
@@ -97,6 +100,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T07:35:36.073Z
-Stopped at: Completed 02-06-PLAN.md
+Last session: 2026-03-29T08:00:00.000Z
+Stopped at: Completed 02-07-PLAN.md
 Resume file: None

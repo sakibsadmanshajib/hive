@@ -13,7 +13,7 @@ Hive launches as a developer-first AI gateway whose value depends on three thing
 Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Contract & Compatibility Harness** - Import the OpenAI contract, define launch coverage, and make compatibility regression-tested. (completed 2026-03-29)
-- [ ] **Phase 2: Identity & Account Foundation** - Stand up hosted Supabase auth, tenancy, sessions, customer account profile data, and the primary relational model.
+- [x] **Phase 2: Identity & Account Foundation** - Stand up hosted Supabase auth, tenancy, sessions, customer account profile data, and the primary relational model. (completed 2026-03-29)
 - [ ] **Phase 3: Credits Ledger & Usage Accounting** - Build immutable prepaid billing, reservations, and privacy-safe usage events.
 - [ ] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix.
 - [ ] **Phase 5: API Keys & Hot-Path Enforcement** - Add key lifecycle, per-key controls, budgets, rate limits, and hot-path authorization.
@@ -50,16 +50,16 @@ Plans:
   1. Developer can sign up, sign in, verify email, and reset password through hosted Supabase-backed flows.
   2. Developer console sessions survive refresh and normal browser revisits.
   3. Each account stores billing contact, legal entity, country, and VAT or business data in a durable profile.
-**Plans**: 6/7 plans executed
+**Plans**: 7/7 plans executed
 
 Plans:
-- [ ] 02-01: Create the control-plane module, Docker wiring, shared env contract, and initial identity schema.
-- [ ] 02-02: Implement viewer bootstrap, invitation APIs, invitation acceptance, and explicit current-account selection semantics.
-- [ ] 02-03: Create the web-console app, hosted Supabase auth routes, and SSR session middleware.
-- [ ] 02-04: Build the verification-aware console shell, members roster, invitation acceptance UX, and workspace switcher persistence.
-- [ ] 02-05: Add the current-account core profile API for minimal pre-billing identity data.
-- [ ] 02-06: Build the short setup flow plus profile settings UI for the core profile.
-- [ ] 02-07: Add optional durable billing-profile storage and billing settings without making billing completeness a Phase 2 gate.
+- [x] 02-01: Create the control-plane module, Docker wiring, shared env contract, and initial identity schema.
+- [x] 02-02: Implement viewer bootstrap, invitation APIs, invitation acceptance, and explicit current-account selection semantics.
+- [x] 02-03: Create the web-console app, hosted Supabase auth routes, and SSR session middleware.
+- [x] 02-04: Build the verification-aware console shell, members roster, invitation acceptance UX, and workspace switcher persistence.
+- [x] 02-05: Add the current-account core profile API for minimal pre-billing identity data.
+- [x] 02-06: Build the short setup flow plus profile settings UI for the core profile.
+- [x] 02-07: Add optional durable billing-profile storage and billing settings without making billing completeness a Phase 2 gate.
 
 ### Phase 3: Credits Ledger & Usage Accounting
 **Goal**: Make prepaid credits and request metering financially correct without storing prompts or responses at rest.
@@ -179,7 +179,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
-| 2. Identity & Account Foundation | 6/7 | In Progress |  |
+| 2. Identity & Account Foundation | 7/7 | Complete | 2026-03-29 |
 | 3. Credits Ledger & Usage Accounting | 0/3 | Not started | - |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |
