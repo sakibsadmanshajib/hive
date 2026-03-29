@@ -81,6 +81,20 @@ services:
       timeout: 3s
       retries: 3
 
+  web-console:
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.web-console
+    ports:
+      - "3000:3000"
+    depends_on:
+      - control-plane
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      CONTROL_PLANE_BASE_URL: http://control-plane:8081
+
 volumes:
   gomodcache:
   gobuildcache:

@@ -22,3 +22,14 @@ services:
             - tmp/
         - action: rebuild
           path: ../../apps/control-plane/go.mod
+  web-console:
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/web-console
+          target: /app/apps/web-console
+          ignore:
+            - node_modules/
+            - .next/
+        - action: rebuild
+          path: ../../apps/web-console/package.json
