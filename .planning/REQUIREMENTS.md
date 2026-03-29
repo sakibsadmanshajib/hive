@@ -14,8 +14,8 @@
 
 ### Compatibility & Contract
 
-- [ ] **COMP-01**: Developer can use the official OpenAI JavaScript/TypeScript, Python, and Java SDKs against Hive by changing only base URL and API key for supported endpoints.
-- [ ] **COMP-02**: Hive returns OpenAI-style HTTP status codes, error objects, and compatibility headers for both supported requests and explicit unsupported-feature responses.
+- [x] **COMP-01**: Developer can use the official OpenAI JavaScript/TypeScript, Python, and Java SDKs against Hive by changing only base URL and API key for supported endpoints.
+- [x] **COMP-02**: Hive returns OpenAI-style HTTP status codes, error objects, and compatibility headers for both supported requests and explicit unsupported-feature responses.
 - [ ] **COMP-03**: Developer can browse Swagger/OpenAPI documentation that matches the Hive public API contract and supported launch surface.
 
 ### Inference Surface
@@ -96,8 +96,8 @@
 | AUTH-02 | Phase 2 | Pending |
 | AUTH-03 | Phase 2 | Pending |
 | AUTH-04 | Phase 2 | Pending |
-| COMP-01 | Phase 1 | Pending |
-| COMP-02 | Phase 1 | Pending |
+| COMP-01 | Phase 1 | Complete |
+| COMP-02 | Phase 1 | Complete |
 | COMP-03 | Phase 1 | Pending |
 | API-01 | Phase 6 | Pending |
 | API-02 | Phase 6 | Pending |
