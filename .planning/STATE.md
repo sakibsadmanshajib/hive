@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-03-29T06:35:00.000Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-03-29T07:00:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 11
-  completed_plans: 7
+  completed_plans: 8
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 02 (identity-account-foundation) — EXECUTING
-Plan: 4 of 7
+Plan: 5 of 7
 
 ## Performance Metrics
 
@@ -39,7 +39,7 @@ Plan: 4 of 7
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
-| 02-identity-account-foundation | 3/7 | 19min | 6.3min |
+| 02-identity-account-foundation | 4/7 | 34min | 8.5min |
 
 **Recent Trend:**
 
@@ -75,6 +75,10 @@ Recent decisions affecting current work:
 - [02-03]: Middleware uses named export `middleware` (not default export) per Next.js App Router convention.
 - [02-03]: Callback route uses an explicit allowlist for next= redirect targets (/console, /auth/reset-password) — simpler than regex and easier to audit.
 - [02-03]: apps/web-console/.gitignore negates root-level Python lib/ gitignore entry so Next.js lib/ source can be committed.
+- [02-04]: WorkspaceSwitcher uses HTML form POST to /console/account-switch — works without JS and keeps cookie mutation in the route handler.
+- [02-04]: account-switch route validates account_id against viewer.memberships before persisting — prevents unauthorized workspace switching.
+- [02-04]: invitations/accept does not set hive_account_id — newly joined workspace appears in switcher only after explicit user selection.
+- [02-04]: VerificationBanner in console layout applies to all console routes without per-page logic.
 
 ### Pending Todos
 
@@ -87,6 +91,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T06:35:00.000Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-03-29T07:00:00.000Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None
