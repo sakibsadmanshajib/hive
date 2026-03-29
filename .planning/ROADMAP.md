@@ -12,7 +12,7 @@ Hive launches as a developer-first AI gateway whose value depends on three thing
 
 Decimal phases appear between their surrounding integers in numeric order.
 
-- [ ] **Phase 1: Contract & Compatibility Harness** - Import the OpenAI contract, define launch coverage, and make compatibility regression-tested.
+- [x] **Phase 1: Contract & Compatibility Harness** - Import the OpenAI contract, define launch coverage, and make compatibility regression-tested. (completed 2026-03-29)
 - [ ] **Phase 2: Identity & Account Foundation** - Stand up hosted Supabase auth, tenancy, sessions, customer account profile data, and the primary relational model.
 - [ ] **Phase 3: Credits Ledger & Usage Accounting** - Build immutable prepaid billing, reservations, and privacy-safe usage events.
 - [ ] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix.
@@ -34,7 +34,7 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Unsupported public endpoints return consistent OpenAI-style errors instead of ad hoc failures.
   4. Swagger/OpenAPI documentation is generated and published for the implemented Hive surface.
   5. Contributors can run hot reload, code generation, builds, and tests from Docker containers without host-installed Go or Node.
-**Plans**: 4 plans
+**Plans**: 4/4 plans complete
 
 Plans:
 - [ ] 01-01-PLAN.md — Docker-only developer stack with Go edge-api, toolchain, and SDK test containers (Wave 1)
