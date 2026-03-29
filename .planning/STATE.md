@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-03-29T06:08:00.000Z"
+status: executing
+stopped_at: Completed 02-02-PLAN.md
+last_updated: "2026-03-29T06:25:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 11
-  completed_plans: 5
+  completed_plans: 6
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 02 (identity-account-foundation) — EXECUTING
-Plan: 2 of 7
+Plan: 3 of 7
 
 ## Performance Metrics
 
@@ -39,11 +39,11 @@ Plan: 2 of 7
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
-| 02-identity-account-foundation | 1/7 | 3min | 3min |
+| 02-identity-account-foundation | 2/7 | 11min | 5.5min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (8min), 01-02 (6min), 01-03 (5min), 01-04 (21min), 02-01 (3min)
+- Last 5 plans: 01-02 (6min), 01-03 (5min), 01-04 (21min), 02-01 (3min), 02-02 (8min)
 - Trend: Stable/improving
 
 ## Accumulated Context
@@ -69,6 +69,9 @@ Recent decisions affecting current work:
 - [Phase 01]: The generator entrypoint is POSIX-sh compatible and the toolchain image includes py3-yaml — Ensures Docker verification uses the same generation path as local development instead of a host-only workflow.
 - [02-01]: DB connection failure at startup is non-fatal in control-plane — /health responds even without SUPABASE_DB_URL provisioned, enabling phased environment setup.
 - [02-01]: token_hash stored (not raw token) in account_invitations — Security best practice to prevent token exposure from DB reads.
+- [02-02]: HashToken (SHA-256 hex) is exported for test use — enables pre-computing known hashes in stubRepo tests without exposing private internals.
+- [02-02]: X-Hive-Account-ID fallback is silent — invalid or unauthorized account IDs fall back to default membership without erroring the request.
+- [02-02]: AcceptInvitation does not alter current-account on same request — switching workspace is an explicit later action.
 
 ### Pending Todos
 
@@ -81,6 +84,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T06:08:00.000Z
-Stopped at: Completed 02-01-PLAN.md
+Last session: 2026-03-29T06:25:00.000Z
+Stopped at: Completed 02-02-PLAN.md
 Resume file: None
