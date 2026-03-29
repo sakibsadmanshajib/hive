@@ -1,15 +1,17 @@
 ---
 phase: 1
 slug: contract-compatibility-harness
-status: draft
-nyquist_compliant: false
-wave_0_complete: false
+status: approved
+nyquist_compliant: true
+wave_0_complete: true
 created: 2026-03-28
+updated: 2026-03-29
+verified: 2026-03-29
 ---
 
 # Phase 1 — Validation Strategy
 
-> Per-phase validation contract for feedback sampling during execution.
+> Retroactive Nyquist audit completed after plans `01-01` through `01-04` and final phase re-verification.
 
 ---
 
@@ -17,23 +19,24 @@ created: 2026-03-28
 
 | Property | Value |
 |----------|-------|
-| **Framework (Go)** | `go test` with standard library |
-| **Framework (JS SDK)** | Vitest 3.x |
-| **Framework (Python SDK)** | pytest 8.x |
-| **Framework (Java SDK)** | JUnit 5 + Gradle |
-| **Config file** | None yet — Wave 0 installs |
-| **Quick run command** | `docker compose run --rm edge-api go test ./... -short` |
-| **Full suite command** | `docker compose run --rm sdk-tests-js npm test && docker compose run --rm sdk-tests-py pytest && docker compose run --rm sdk-tests-java ./gradlew test && docker compose run --rm edge-api go test ./...` |
-| **Estimated runtime** | ~120 seconds |
+| **Framework (Go runtime/contracts)** | `go test` via Docker toolchain |
+| **Framework (JS SDK)** | Vitest `3.2.4` |
+| **Framework (Python SDK)** | pytest `9.0.2` |
+| **Framework (Java SDK)** | JUnit 5 via Gradle `8.14.4` |
+| **Framework (Contract generator)** | `python3 -m unittest` |
+| **Config files** | `packages/sdk-tests/js/vitest.config.ts`, `packages/sdk-tests/python/pyproject.toml`, `packages/sdk-tests/java/build.gradle` |
+| **Quick run command** | `docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace/apps/edge-api && go test ./internal/errors/... ./internal/matrix/... ./internal/middleware/... ./docs/... ./cmd/server/... -count=1'` |
+| **Full suite command** | `docker compose -f deploy/docker/docker-compose.yml up -d edge-api && docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-js && docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-py && docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-java && docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace && packages/openai-contract/scripts/generate-matrix.sh' && docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace/apps/edge-api && go test ./internal/errors/... ./internal/matrix/... ./internal/middleware/... ./docs/... ./cmd/server/... -count=1' && docker compose -f deploy/docker/docker-compose.yml down` |
+| **Estimated runtime** | ~60 seconds |
 
 ---
 
 ## Sampling Rate
 
-- **After every task commit:** Run `docker compose run --rm edge-api go test ./... -short`
-- **After every plan wave:** Run full suite across all SDK languages + Go unit tests
-- **Before `/gsd:verify-work`:** Full suite must be green
-- **Max feedback latency:** 120 seconds
+- **After every task commit:** Run the quick Go contract/docs package suite in the toolchain container.
+- **After every plan wave:** Run the full SDK harness, generator sync, and Go contract/docs package suite.
+- **Before `$gsd-verify-work`:** Full suite must be green.
+- **Max feedback latency:** 120 seconds.
 
 ---
 
@@ -41,16 +44,16 @@ created: 2026-03-28
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 01-01-01 | 01 | 1 | API-08 | smoke | `docker compose up -d && docker compose ps --filter status=running` | ❌ W0 | ⬜ pending |
-| 01-01-02 | 01 | 1 | API-08 | smoke | `docker compose run --rm edge-api go test ./... -short` | ❌ W0 | ⬜ pending |
-| 01-02-01 | 02 | 2 | COMP-01 | integration | `docker compose run --rm sdk-tests-js npm test` | ❌ W0 | ⬜ pending |
-| 01-02-02 | 02 | 2 | COMP-01 | integration | `docker compose run --rm sdk-tests-py pytest` | ❌ W0 | ⬜ pending |
-| 01-02-03 | 02 | 2 | COMP-01 | integration | `docker compose run --rm sdk-tests-java ./gradlew test` | ❌ W0 | ⬜ pending |
-| 01-02-04 | 02 | 2 | COMP-02 | unit | `docker compose run --rm edge-api go test ./internal/errors/... -run TestOpenAIError` | ❌ W0 | ⬜ pending |
-| 01-02-05 | 02 | 2 | COMP-02 | integration | `docker compose run --rm sdk-tests-js npm test -- --grep "unsupported"` | ❌ W0 | ⬜ pending |
-| 01-02-06 | 02 | 2 | COMP-02 | integration | `docker compose run --rm sdk-tests-js npm test -- --grep "headers"` | ❌ W0 | ⬜ pending |
-| 01-03-01 | 03 | 2 | COMP-03 | smoke | `curl -sf http://localhost:8080/docs/ \| grep -q swagger-ui` | ❌ W0 | ⬜ pending |
-| 01-03-02 | 03 | 2 | API-08 | integration | `docker compose run --rm sdk-tests-js npm test -- --grep "unsupported"` | ❌ W0 | ⬜ pending |
+| 01-01-01 | 01 | 1 | API-08 | smoke | `cd /home/sakib/hive && test -f go.work && test -f apps/edge-api/go.mod && test -f apps/edge-api/cmd/server/main.go && test -f apps/edge-api/.air.toml && test -f .gitignore && echo PASS` | ✅ | ✅ green |
+| 01-01-02 | 01 | 1 | API-08 | smoke | `docker compose -f deploy/docker/docker-compose.yml config --quiet` | ✅ | ✅ green |
+| 01-01-03 | 01 | 1 | API-08 | integration | `docker compose -f deploy/docker/docker-compose.yml build edge-api && docker compose -f deploy/docker/docker-compose.yml up -d edge-api && curl -sf http://localhost:8080/health && curl -sf http://localhost:8080/v1/models && docker compose -f deploy/docker/docker-compose.yml down` | ✅ | ✅ green |
+| 01-02-01 | 02 | 2 | COMP-02, API-08 | unit | `cd /workspace/apps/edge-api && go test ./internal/errors/... ./internal/matrix/... -count=1` | ✅ | ✅ green |
+| 01-02-02 | 02 | 2 | COMP-02, COMP-03, API-08 | unit | `cd /workspace/apps/edge-api && go test ./internal/middleware/... -count=1 && go build ./cmd/server` | ✅ | ✅ green |
+| 01-03-01 | 03 | 3 | COMP-01, COMP-02 | integration | `docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-js` | ✅ | ✅ green |
+| 01-03-02 | 03 | 3 | COMP-01, COMP-02 | integration | `docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-py && docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-java` | ✅ | ✅ green |
+| 01-03-03 | 03 | 3 | COMP-01, COMP-02, COMP-03, API-08 | end-to-end | `docker compose -f deploy/docker/docker-compose.yml up -d edge-api && docker compose -f deploy/docker/docker-compose.yml run --rm sdk-tests-js && docker compose -f deploy/docker/docker-compose.yml run --rm sdk-tests-py && docker compose -f deploy/docker/docker-compose.yml run --rm sdk-tests-java && docker compose -f deploy/docker/docker-compose.yml run --rm edge-api go test ./... -v && curl -sf http://localhost:8080/docs/ | grep -q swagger-ui && docker compose -f deploy/docker/docker-compose.yml down` | ✅ | ✅ green |
+| 01-04-01 | 04 | 4 | COMP-03 | unit/integration | `python3 -m unittest packages.openai-contract.scripts.test_sync_hive_contract && docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace && packages/openai-contract/scripts/generate-matrix.sh'` | ✅ | ✅ green |
+| 01-04-02 | 04 | 4 | COMP-03 | unit | `docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace/apps/edge-api && go test ./docs/... ./cmd/server/... -count=1'` | ✅ | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -58,17 +61,7 @@ created: 2026-03-28
 
 ## Wave 0 Requirements
 
-- [ ] `deploy/docker/docker-compose.yml` — Docker Compose orchestration for all services
-- [ ] `deploy/docker/Dockerfile.edge-api` — Go dev image with air
-- [ ] `deploy/docker/Dockerfile.toolchain` — Codegen tools container
-- [ ] `deploy/docker/Dockerfile.sdk-tests-js` — Node + OpenAI SDK + Vitest
-- [ ] `deploy/docker/Dockerfile.sdk-tests-py` — Python + OpenAI SDK + pytest
-- [ ] `deploy/docker/Dockerfile.sdk-tests-java` — Java + OpenAI SDK + JUnit/Gradle
-- [ ] `apps/edge-api/go.mod` — Go module initialization
-- [ ] `packages/sdk-tests/js/package.json` — JS test project with vitest + openai SDK
-- [ ] `packages/sdk-tests/python/pyproject.toml` — Python test project with pytest + openai SDK
-- [ ] `packages/sdk-tests/java/build.gradle` — Java test project with JUnit + openai SDK
-- [ ] `packages/openai-contract/upstream/openapi.yaml` — Imported spec (pinned SHA)
+Existing infrastructure covers all phase requirements. No deferred Wave 0 validation scaffolding remains.
 
 ---
 
@@ -76,18 +69,37 @@ created: 2026-03-28
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Swagger UI renders correctly in browser | COMP-03 | Visual rendering quality | Open `http://localhost:8080/docs/` in browser, verify spec loads and endpoints are browsable |
-| Hot-reload works on file save | API-08 | Requires file-system event + container restart observation | Edit a Go file, save, verify container reloads within 5s via `docker compose logs -f edge-api` |
+| Hot-reload after editing a Go file in the running dev container | API-08 supporting developer workflow | File-watch timing depends on local Docker sync behavior and is not part of the launch-surface compatibility contract. Automated coverage already proves the container boots, rebuilds, and serves the contract surface. | Run `docker compose -f deploy/docker/docker-compose.yml up edge-api`, edit `apps/edge-api/cmd/server/main.go`, then confirm a rebuild in `docker compose logs -f edge-api`. |
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 120s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All phase requirements have automated verification.
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify.
+- [x] No Wave 0 dependencies remain.
+- [x] No watch-mode flags in quick or full validation commands.
+- [x] Feedback latency is within 120 seconds for the current suite.
+- [x] `nyquist_compliant: true` set in frontmatter.
 
-**Approval:** pending
+**Approval:** approved 2026-03-29
+
+---
+
+## Validation Audit 2026-03-29
+
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated | 0 |
+
+Evidence used for this audit:
+
+- `python3 -m unittest packages.openai-contract.scripts.test_sync_hive_contract` passed: 3 tests.
+- `docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-js` passed: 6 files, 11 tests.
+- `docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-py` passed: 9 tests.
+- `docker compose -f deploy/docker/docker-compose.yml run --rm -T sdk-tests-java` passed: Gradle `BUILD SUCCESSFUL`.
+- `docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace && packages/openai-contract/scripts/generate-matrix.sh'` exited `0`.
+- `docker compose -f deploy/docker/docker-compose.yml run --rm -T toolchain sh -lc 'cd /workspace/apps/edge-api && go test ./internal/errors/... ./internal/matrix/... ./internal/middleware/... ./docs/... ./cmd/server/... -count=1'` exited `0`.
+- `.planning/phases/01-contract-compatibility-harness/01-VERIFICATION.md` already recorded phase verification as passed with `7/7` must-haves on `2026-03-29`.
