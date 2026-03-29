@@ -78,4 +78,52 @@ test.describe("profile completion", () => {
       ).toBeVisible();
     });
   });
+
+  test.describe("billing settings save partial business profile", () => {
+    test.skip(!VERIFIED_EMAIL || !VERIFIED_PASSWORD, "E2E verified credentials not set");
+
+    test("billing settings save partial business profile", async ({ page }) => {
+      await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
+      await page.goto("/console/settings/billing");
+
+      await page.fill('input[name="legalEntityName"]', "Acme Labs LLC");
+      await page.selectOption('select[name="legalEntityType"]', "private_company");
+      await page.click('button[type="submit"]');
+
+      await page.waitForURL("**/console/settings/billing");
+      await expect(
+        page.getByRole("heading", { name: "Billing settings" })
+      ).toBeVisible();
+      await expect(page.locator('input[name="legalEntityName"]')).toHaveValue(
+        "Acme Labs LLC"
+      );
+      await expect(page.getByText("Optional until checkout or invoicing.")).toBeVisible();
+    });
+  });
+
+  test.describe("unverified billing settings redirect to profile", () => {
+    test.skip(!UNVERIFIED_EMAIL || !UNVERIFIED_PASSWORD, "E2E unverified credentials not set");
+
+    test("unverified billing settings redirect to profile", async ({ page }) => {
+      await signIn(page, UNVERIFIED_EMAIL, UNVERIFIED_PASSWORD);
+      await page.goto("/console/settings/billing");
+
+      await page.waitForURL("**/console/settings/profile");
+      await expect(
+        page.getByRole("heading", { name: "Profile settings" })
+      ).toBeVisible();
+    });
+  });
+
+  test.describe("dashboard does not introduce a billing reminder", () => {
+    test.skip(!VERIFIED_EMAIL || !VERIFIED_PASSWORD, "E2E verified credentials not set");
+
+    test("dashboard does not introduce a billing reminder", async ({ page }) => {
+      await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
+      await page.goto("/console");
+
+      await expect(page.getByRole("link", { name: "Complete billing" })).toHaveCount(0);
+      await expect(page.getByText("Optional until checkout or invoicing.")).toHaveCount(0);
+    });
+  });
 });
