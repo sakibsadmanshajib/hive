@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
@@ -35,7 +37,24 @@ func main() {
 		log.Println("database pool ready")
 	}
 
-	router := platformhttp.NewRouter()
+	// Build auth client and middleware.
+	authClient := auth.NewClient(cfg.SupabaseURL, cfg.SupabaseAnonKey)
+	authMiddleware := auth.NewMiddleware(authClient)
+
+	// Build accounts service and handler (requires DB; skip if pool unavailable).
+	var accountsHandler *accounts.Handler
+	if pool != nil {
+		repo := accounts.NewPgxRepository(pool)
+		svc := accounts.NewService(repo)
+		accountsHandler = accounts.NewHandler(svc)
+	} else {
+		log.Println("WARNING: accounts routes not available — database pool not ready")
+	}
+
+	router := platformhttp.NewRouter(platformhttp.RouterConfig{
+		AuthMiddleware:  authMiddleware,
+		AccountsHandler: accountsHandler,
+	})
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{

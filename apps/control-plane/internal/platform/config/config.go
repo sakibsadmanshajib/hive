@@ -8,9 +8,10 @@ import (
 
 // Config holds all environment-sourced configuration for the control-plane.
 type Config struct {
-	Port          int
-	SupabaseURL   string
-	SupabaseDBURL string
+	Port            int
+	SupabaseURL     string
+	SupabaseAnonKey string
+	SupabaseDBURL   string
 }
 
 // Load reads configuration from environment variables and returns a validated Config.
@@ -30,8 +31,9 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Port:          port,
-		SupabaseURL:   supabaseURL,
-		SupabaseDBURL: os.Getenv("SUPABASE_DB_URL"),
+		Port:            port,
+		SupabaseURL:     supabaseURL,
+		SupabaseAnonKey: os.Getenv("SUPABASE_ANON_KEY"),
+		SupabaseDBURL:   os.Getenv("SUPABASE_DB_URL"),
 	}, nil
 }

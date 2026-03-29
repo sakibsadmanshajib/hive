@@ -3,6 +3,9 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 )
 
 // healthResponse is the JSON body returned by the /health endpoint.
@@ -10,11 +13,22 @@ type healthResponse struct {
 	Status string `json:"status"`
 }
 
+// RouterConfig holds dependencies for building the HTTP router.
+type RouterConfig struct {
+	AuthMiddleware  *auth.Middleware
+	AccountsHandler *accounts.Handler
+}
+
 // NewRouter returns a configured http.ServeMux with all platform routes registered.
-func NewRouter() *http.ServeMux {
+func NewRouter(cfg RouterConfig) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", handleHealth)
+
+	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {
+		protected := cfg.AuthMiddleware.Require(cfg.AccountsHandler)
+		mux.Handle("/api/v1/", protected)
+	}
 
 	return mux
 }
