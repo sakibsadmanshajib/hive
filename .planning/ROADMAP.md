@@ -50,7 +50,7 @@ Plans:
   1. Developer can sign up, sign in, verify email, and reset password through hosted Supabase-backed flows.
   2. Developer console sessions survive refresh and normal browser revisits.
   3. Each account stores billing contact, legal entity, country, and VAT or business data in a durable profile.
-**Plans**: 7 plans
+**Plans**: 5/7 plans executed
 
 Plans:
 - [ ] 02-01: Create the control-plane module, Docker wiring, shared env contract, and initial identity schema.
@@ -179,7 +179,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
-| 2. Identity & Account Foundation | 4/7 | In Progress|  |
+| 2. Identity & Account Foundation | 5/7 | In Progress |  |
 | 3. Credits Ledger & Usage Accounting | 0/3 | Not started | - |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |

@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-03-29T07:00:00.000Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-03-29T07:08:22.086Z"
 progress:
   total_phases: 9
   completed_phases: 1
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 9
 ---
 
 # Project State
@@ -24,13 +24,13 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 02 (identity-account-foundation) — EXECUTING
-Plan: 5 of 7
+Plan: 6 of 7
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 4
+- Total plans completed: 5
 - Average duration: 10min
 - Total execution time: 0.67 hours
 
@@ -39,11 +39,11 @@ Plan: 5 of 7
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
-| 02-identity-account-foundation | 4/7 | 34min | 8.5min |
+| 02-identity-account-foundation | 5/7 | 41min | 8.2min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-03 (5min), 01-04 (21min), 02-01 (3min), 02-02 (8min), 02-03 (8min)
+- Last 5 plans: 01-04 (21min), 02-01 (3min), 02-02 (8min), 02-03 (8min), 02-05 (7min)
 - Trend: Stable/improving
 
 ## Accumulated Context
@@ -79,6 +79,9 @@ Recent decisions affecting current work:
 - [02-04]: account-switch route validates account_id against viewer.memberships before persisting — prevents unauthorized workspace switching.
 - [02-04]: invitations/accept does not set hive_account_id — newly joined workspace appears in switcher only after explicit user selection.
 - [02-04]: VerificationBanner in console layout applies to all console routes without per-page logic.
+- [Phase 02]: Core profile completion stays limited to owner name, login email, display name, account type, country, and state/province — Keeps billing and tax completeness out of Phase 2 onboarding gates.
+- [Phase 02]: Profile writes update public.accounts display_name and account_type alongside public.account_profiles — Keeps viewer and current-account profile data consistent after edits.
+- [Phase 02]: Profiles handler resolves the current account from the authenticated viewer context — Avoids trusting client-supplied account identifiers for profile reads and writes.
 
 ### Pending Todos
 
@@ -91,6 +94,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T07:00:00.000Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-03-29T07:08:22.070Z
+Stopped at: Completed 02-05-PLAN.md
 Resume file: None
