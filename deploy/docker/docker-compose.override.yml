@@ -7,5 +7,8 @@ services:
           target: /app/apps/edge-api
           ignore:
             - tmp/
+        - action: sync
+          path: ../../packages/openai-contract
+          target: /app/packages/openai-contract
         - action: rebuild
           path: ../../apps/edge-api/go.mod

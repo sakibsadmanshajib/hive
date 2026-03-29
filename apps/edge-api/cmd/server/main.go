@@ -17,15 +17,8 @@ func main() {
 		port = "8080"
 	}
 
-	matrixPath := os.Getenv("SUPPORT_MATRIX_PATH")
-	if matrixPath == "" {
-		matrixPath = "/app/packages/openai-contract/matrix/support-matrix.json"
-	}
-
-	specPath := os.Getenv("OPENAPI_SPEC_PATH")
-	if specPath == "" {
-		specPath = "/app/packages/openai-contract/upstream/openapi.yaml"
-	}
+	matrixPath := resolveMatrixPath()
+	specPath := resolveSpecPath()
 
 	// Load support matrix
 	m, err := matrix.LoadMatrix(matrixPath)
@@ -71,4 +64,22 @@ func handleModels(w http.ResponseWriter, r *http.Request) {
 		"object": "list",
 		"data":   []interface{}{},
 	})
+}
+
+func resolveMatrixPath() string {
+	matrixPath := os.Getenv("SUPPORT_MATRIX_PATH")
+	if matrixPath != "" {
+		return matrixPath
+	}
+
+	return "/app/packages/openai-contract/matrix/support-matrix.json"
+}
+
+func resolveSpecPath() string {
+	specPath := os.Getenv("OPENAPI_SPEC_PATH")
+	if specPath != "" {
+		return specPath
+	}
+
+	return "/app/packages/openai-contract/generated/hive-openapi.yaml"
 }
