@@ -12,3 +12,13 @@ services:
           target: /app/packages/openai-contract
         - action: rebuild
           path: ../../apps/edge-api/go.mod
+  control-plane:
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/control-plane
+          target: /app/apps/control-plane
+          ignore:
+            - tmp/
+        - action: rebuild
+          path: ../../apps/control-plane/go.mod
