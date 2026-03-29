@@ -61,20 +61,20 @@ requirements-completed: [COMP-01, COMP-02]
 
 # Metrics
 duration: 5min
-completed: 2026-03-29
+completed: 2026-03-28
 ---
 
 # Phase 01 Plan 03: SDK Compatibility Harness Summary
 
-**JS/Python/Java SDK test suites proving OpenAI SDK compatibility for models endpoint, unsupported endpoint errors, compat headers, and golden fixture regression**
+**JS/Python/Java SDK test suites proving OpenAI SDK compatibility for models endpoint, unsupported endpoint errors, compat headers, golden fixture regression, and full Docker verification**
 
 ## Performance
 
 - **Duration:** 5 min
 - **Started:** 2026-03-29T01:47:37Z
-- **Completed:** 2026-03-29T01:52:36Z
-- **Tasks:** 2/3 (Task 3 is human checkpoint, pending)
-- **Files modified:** 21
+- **Checkpoint approved:** 2026-03-28T22:38:50-04:00
+- **Tasks:** 3/3 complete
+- **Files modified:** 22
 
 ## Accomplishments
 - JS SDK tests: health, models listing, unsupported endpoint errors (planned + explicit), error envelope shape, compat headers, streaming error handling
@@ -82,6 +82,8 @@ completed: 2026-03-29
 - Java SDK tests: health, models listing, unsupported endpoint errors, error envelope shape, compat headers
 - Golden fixtures established for models-list, error-unsupported, and error-unknown response shapes
 - All error tests assert provider-blind messaging (no "provider", "upstream", or "openai" in error text)
+- End-to-end Docker verification completed for JS, Python, Java, Go, Swagger UI, support matrix, and compatibility headers
+- Toolchain container drift fixed so Docker-only verification remains reproducible
 
 ## Task Commits
 
@@ -89,9 +91,10 @@ Each task was committed atomically:
 
 1. **Task 1: Create JS SDK compatibility tests with golden fixtures** - `dc45aa0` (feat)
 2. **Task 2: Create Python and Java SDK compatibility tests** - `d9b97cc` (feat)
-3. **Task 3: Verify full SDK compatibility harness** - PENDING (human checkpoint)
+3. **Task 3: Verify full SDK compatibility harness** - Completed on `2026-03-28T22:38:50-04:00` after human approval
 
 ## Files Created/Modified
+- `deploy/docker/Dockerfile.toolchain` - Restored Docker toolchain installs with `GOTOOLCHAIN=auto` for Go 1.25-requiring codegen tools
 - `packages/sdk-tests/fixtures/golden/models-list.json` - Golden fixture for /v1/models response
 - `packages/sdk-tests/fixtures/golden/error-unsupported.json` - Golden fixture for planned endpoint error
 - `packages/sdk-tests/fixtures/golden/error-unknown.json` - Golden fixture for unknown endpoint error
@@ -117,26 +120,43 @@ Each task was committed atomically:
 - Java fine-tuning test uses raw java.net.http.HttpClient instead of OpenAI SDK to avoid coupling to SDK fine-tuning API surface that may change across versions
 - Python conftest uses httpx (bundled with openai SDK) for raw HTTP tests, avoiding an extra dependency
 - Golden fixtures capture minimal expected shapes rather than full response bodies to allow flexibility
+- Go verification for the Docker-only workflow runs through the `toolchain` container from `/workspace/apps/edge-api`
 
 ## Deviations from Plan
 
-None - plan executed exactly as written.
+### Auto-fixed Issues
+
+**1. [Rule 3 - Blocking] Toolchain image drift broke Docker-only verification**
+- **Found during:** Task 3 checkpoint verification
+- **Issue:** `github.com/ogen-go/ogen/cmd/ogen@v1.20.2` now requires Go 1.25, but `deploy/docker/Dockerfile.toolchain` still installed it on `golang:1.24-alpine` without `GOTOOLCHAIN=auto`
+- **Fix:** Added `GOTOOLCHAIN=auto` to the `ogen` and `oapi-codegen` install steps in `deploy/docker/Dockerfile.toolchain`
+- **Verification:** Rebuilt the toolchain image and ran `docker compose -f deploy/docker/docker-compose.yml run --rm toolchain 'cd /workspace/apps/edge-api && go test ./... -v'` successfully
+
+**2. [Rule 1 - Verification Path] Go tests were executed through the toolchain container**
+- **Found during:** Task 3 checkpoint verification
+- **Issue:** The original checkpoint command targeted the runtime `edge-api` container, but the working Go verification environment is the Docker `toolchain` container rooted at `/workspace/apps/edge-api`
+- **Fix:** Verified Go tests from the toolchain container while keeping the runtime checks on the running `edge-api` service
+- **Verification:** Swagger UI, response headers, and SDK harnesses were all validated against the running `edge-api` service after the toolchain image fix
+
+**Total deviations:** 2 auto-fixed (1 blocking, 1 verification-path correction)
+**Impact on plan:** Both fixes were required to close the pending human-verification checkpoint without changing planned scope.
 
 ## Issues Encountered
-- Docker is not available in the WSL2 environment, so the automated verification step (running tests against edge-api container) could not be executed. This verification is deferred to Task 3 (human checkpoint).
+None beyond the auto-fixed deviations above.
 
 ## User Setup Required
 None - no external service configuration required.
 
 ## Next Phase Readiness
-- SDK compatibility harness complete pending Docker verification in Task 3
-- Once Task 3 human checkpoint passes, Phase 01 is complete and ready for Phase 02 (auth layer)
+- SDK compatibility harness fully verified in Docker across JS, Python, Java, Go, Swagger UI, and support-matrix checks
+- Phase 01 remains blocked on the contract-docs verification gap recorded in `.planning/phases/01-contract-compatibility-harness/01-VERIFICATION.md`
+- Once the Swagger/OpenAPI docs serve a Hive-classified spec instead of the raw upstream spec, Phase 01 can be marked complete and Phase 02 can begin
 - Future endpoint implementations will add tests to these suites and update golden fixtures
 
 ## Self-Check: PASSED
 
-All 21 key files verified present. Both task commits (dc45aa0, d9b97cc) verified in git log.
+All 21 key files verified present. JS, Python, Java, and Go verification commands passed during checkpoint closure.
 
 ---
 *Phase: 01-contract-compatibility-harness*
-*Completed: 2026-03-29 (Tasks 1-2; Task 3 human checkpoint pending)*
+*Completed: 2026-03-28 (all tasks complete, including Task 3 human verification)*
