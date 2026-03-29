@@ -58,12 +58,21 @@ describe("lib/supabase/server.ts", () => {
 
   it("calls createServerClient with correct env vars", async () => {
     const { createServerClient } = await import("@supabase/ssr");
-    const cookieStore = {
-      getAll: vi.fn(() => []),
-      set: vi.fn(),
-    };
     const mod = await import("../lib/supabase/server");
-    mod.createClient(cookieStore as never);
+    let cookieStore: Parameters<typeof mod.createClient>[0];
+    cookieStore = {
+      [Symbol.iterator]: () =>
+        new Map<string, { name: string; value: string }>().entries(),
+      get size() {
+        return 0;
+      },
+      get: vi.fn(() => undefined),
+      getAll: vi.fn(() => []),
+      has: vi.fn(() => false),
+      set: vi.fn(() => cookieStore),
+      delete: vi.fn(() => cookieStore),
+    };
+    mod.createClient(cookieStore);
     expect(createServerClient).toHaveBeenCalledWith(
       SUPABASE_URL,
       SUPABASE_ANON_KEY,

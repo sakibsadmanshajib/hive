@@ -1,33 +1,7 @@
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
-import { getViewer } from "@/lib/control-plane/client";
+import { getMembers, getViewer } from "@/lib/control-plane/client";
 import { canInviteMembers } from "@/lib/viewer-gates";
-
-interface Member {
-  id: string;
-  email: string;
-  role: string;
-  joined_at: string;
-}
-
-async function fetchMembers(accessToken: string): Promise<Member[]> {
-  const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
-  if (!baseUrl) return [];
-
-  const response = await fetch(`${baseUrl}/api/v1/accounts/current/members`, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    cache: "no-store",
-  });
-
-  if (!response.ok) return [];
-
-  const data = (await response.json()) as unknown;
-  if (Array.isArray(data)) return data as Member[];
-  return [];
-}
 
 export default async function MembersPage() {
   const cookieStore = await cookies();
@@ -39,7 +13,7 @@ export default async function MembersPage() {
   const viewer = await getViewer();
   const canInvite = canInviteMembers(viewer);
 
-  const members = session ? await fetchMembers(session.access_token) : [];
+  const members = session ? await getMembers(session.access_token) : [];
 
   return (
     <div>
@@ -108,19 +82,17 @@ export default async function MembersPage() {
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ borderBottom: "2px solid #e5e7eb" }}>
-              <th style={{ textAlign: "left", padding: "0.5rem", fontWeight: 600 }}>Email</th>
+              <th style={{ textAlign: "left", padding: "0.5rem", fontWeight: 600 }}>User ID</th>
               <th style={{ textAlign: "left", padding: "0.5rem", fontWeight: 600 }}>Role</th>
-              <th style={{ textAlign: "left", padding: "0.5rem", fontWeight: 600 }}>Joined</th>
+              <th style={{ textAlign: "left", padding: "0.5rem", fontWeight: 600 }}>Status</th>
             </tr>
           </thead>
           <tbody>
             {members.map((member) => (
-              <tr key={member.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                <td style={{ padding: "0.5rem" }}>{member.email}</td>
+              <tr key={member.user_id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                <td style={{ padding: "0.5rem" }}>{member.user_id}</td>
                 <td style={{ padding: "0.5rem" }}>{member.role}</td>
-                <td style={{ padding: "0.5rem" }}>
-                  {new Date(member.joined_at).toLocaleDateString()}
-                </td>
+                <td style={{ padding: "0.5rem" }}>{member.status}</td>
               </tr>
             ))}
           </tbody>

@@ -96,8 +96,10 @@ describe("app/auth/callback/route.ts", () => {
     mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
 
     const mod = await import("../app/auth/callback/route");
-    const req = new NextRequest("http://localhost:3000/auth/callback?code=abc123");
-    await mod.GET(req as never);
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      "http://localhost:3000/auth/callback?code=abc123"
+    );
+    await mod.GET(req);
 
     expect(createServerClient).toHaveBeenCalled();
     expect(mockExchangeCodeForSession).toHaveBeenCalledWith("abc123");
@@ -108,8 +110,10 @@ describe("app/auth/callback/route.ts", () => {
     mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
 
     const mod = await import("../app/auth/callback/route");
-    const req = new NextRequest("http://localhost:3000/auth/callback?code=abc");
-    await mod.GET(req as never);
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      "http://localhost:3000/auth/callback?code=abc"
+    );
+    await mod.GET(req);
 
     expect(mockRedirect).toHaveBeenCalledWith(
       expect.objectContaining({ href: expect.stringContaining("/console") })
@@ -121,10 +125,10 @@ describe("app/auth/callback/route.ts", () => {
     mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
 
     const mod = await import("../app/auth/callback/route");
-    const req = new NextRequest(
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
       "http://localhost:3000/auth/callback?code=abc&next=/auth/reset-password"
     );
-    await mod.GET(req as never);
+    await mod.GET(req);
 
     expect(mockRedirect).toHaveBeenCalledWith(
       expect.objectContaining({ href: expect.stringContaining("/auth/reset-password") })
@@ -136,10 +140,10 @@ describe("app/auth/callback/route.ts", () => {
     mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
 
     const mod = await import("../app/auth/callback/route");
-    const req = new NextRequest(
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
       "http://localhost:3000/auth/callback?code=abc&next=/evil-redirect"
     );
-    await mod.GET(req as never);
+    await mod.GET(req);
 
     expect(mockRedirect).toHaveBeenCalledWith(
       expect.objectContaining({ href: expect.stringContaining("/console") })

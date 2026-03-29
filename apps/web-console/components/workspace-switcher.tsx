@@ -33,7 +33,7 @@ export function WorkspaceSwitcher({
             cursor: "pointer",
           }}
           onChange={(e) => {
-            (e.target.closest("form") as HTMLFormElement)?.submit();
+            e.currentTarget.form?.requestSubmit();
           }}
         >
           {memberships.map((m) => (

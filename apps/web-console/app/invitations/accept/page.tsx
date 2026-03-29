@@ -6,6 +6,19 @@ interface AcceptPageProps {
   searchParams: Promise<{ token?: string }>;
 }
 
+function readErrorMessage(text: string): string | null {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    const payload: { error?: string } = JSON.parse(text);
+    return typeof payload.error === "string" ? payload.error : null;
+  } catch {
+    return null;
+  }
+}
+
 export default async function AcceptInvitationPage({
   searchParams,
 }: AcceptPageProps) {
@@ -56,8 +69,10 @@ export default async function AcceptInvitationPage({
         // appears in the switcher until the user explicitly selects it.
         redirect("/console/members?joined=1");
       } else {
-        const data = (await response.json().catch(() => ({}))) as { error?: string };
-        errorMessage = data.error ?? `Failed to accept invitation (${response.status})`;
+        const responseText = await response.text().catch(() => "");
+        errorMessage =
+          readErrorMessage(responseText) ??
+          `Failed to accept invitation (${response.status})`;
       }
     } catch {
       errorMessage = "Failed to connect to the server. Please try again.";
