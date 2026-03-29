@@ -1,12 +1,16 @@
 import { describe, it, expect } from "vitest";
 import OpenAI from "openai";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 
 function loadGolden(name: string): unknown {
-  const filePath = resolve(__dirname, "../../../../fixtures/golden", name);
+  // In Docker container, fixtures are at /fixtures/golden/
+  // Locally, they are relative to the test file
+  const containerPath = resolve("/fixtures/golden", name);
+  const localPath = resolve(__dirname, "../../../../fixtures/golden", name);
+  const filePath = existsSync(containerPath) ? containerPath : localPath;
   return JSON.parse(readFileSync(filePath, "utf-8"));
 }
 

@@ -22,12 +22,14 @@ describe("Unsupported endpoint errors", () => {
       const notFound = err as OpenAI.NotFoundError;
       expect(notFound.status).toBe(404);
 
+      // The SDK parses the JSON body and stores the inner error object directly
+      // Response JSON: {"error":{"message":"...","type":"...","param":null,"code":"..."}}
+      // SDK unwraps to: notFound.error = {"message":"...","type":"...","param":null,"code":"..."}
       const body = notFound.error as Record<string, unknown> | undefined;
-      const inner = body?.error as Record<string, unknown> | undefined;
-      expect(inner?.type).toBe("unsupported_endpoint");
-      expect(inner?.code).toBe("endpoint_not_available");
+      expect(body?.type).toBe("unsupported_endpoint");
+      expect(body?.code).toBe("endpoint_not_available");
 
-      const message = inner?.message as string;
+      const message = body?.message as string;
       expect(message).toContain("planned but not yet available");
 
       // Provider-blind: no mention of provider, upstream, or OpenAI
@@ -51,9 +53,8 @@ describe("Unsupported endpoint errors", () => {
       expect(notFound.status).toBe(404);
 
       const body = notFound.error as Record<string, unknown> | undefined;
-      const inner = body?.error as Record<string, unknown> | undefined;
-      expect(inner?.type).toBe("unsupported_endpoint");
-      expect(inner?.code).toBe("endpoint_unsupported");
+      expect(body?.type).toBe("unsupported_endpoint");
+      expect(body?.code).toBe("endpoint_unsupported");
     }
   });
 });

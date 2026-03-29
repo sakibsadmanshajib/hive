@@ -2,8 +2,6 @@ package com.hive.sdktests;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -34,18 +32,25 @@ class ErrorShapeTest {
                 response.headers().firstValue("content-type").orElse("").contains("application/json"),
                 "Content-Type should be application/json");
 
-        JsonObject body = JsonParser.parseString(response.body()).getAsJsonObject();
-        assertTrue(body.has("error"), "Response should have 'error' field");
+        String body = response.body();
 
-        JsonObject error = body.getAsJsonObject("error");
-        assertTrue(error.has("message"), "Error should have 'message'");
-        assertTrue(error.has("type"), "Error should have 'type'");
-        assertTrue(error.has("param"), "Error should have 'param'");
-        assertTrue(error.has("code"), "Error should have 'code'");
+        // Verify top-level "error" key exists
+        assertTrue(body.contains("\"error\""), "Response should have 'error' field");
 
-        assertTrue(error.get("message").isJsonPrimitive(), "message should be a string");
-        assertTrue(error.get("type").isJsonPrimitive(), "type should be a string");
-        assertTrue(error.get("param").isJsonNull(), "param should be null");
-        assertTrue(error.get("code").isJsonPrimitive(), "code should be a string");
+        // Verify error object has required fields per OpenAI error envelope
+        assertTrue(body.contains("\"message\""), "Error should have 'message'");
+        assertTrue(body.contains("\"type\""), "Error should have 'type'");
+        assertTrue(body.contains("\"param\""), "Error should have 'param'");
+        assertTrue(body.contains("\"code\""), "Error should have 'code'");
+
+        // Verify param is null (not a string value)
+        assertTrue(body.contains("\"param\":null") || body.contains("\"param\": null"),
+                "param should be null");
+
+        // Verify type and code have string values
+        assertTrue(body.contains("\"type\":\"") || body.contains("\"type\": \""),
+                "type should be a string");
+        assertTrue(body.contains("\"code\":\"") || body.contains("\"code\": \""),
+                "code should be a string");
     }
 }

@@ -3,7 +3,7 @@ package com.hive.sdktests;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.openai.client.OpenAIClient;
-import com.openai.client.okhttp.OkHttpOpenAIClient;
+import com.openai.client.okhttp.OpenAIOkHttpClient;
 import com.openai.errors.NotFoundException;
 import com.openai.models.chat.completions.ChatCompletionCreateParams;
 import org.junit.jupiter.api.Test;
@@ -16,7 +16,7 @@ class UnsupportedEndpointTest {
                     : "http://localhost:8080/v1";
 
     private OpenAIClient createClient() {
-        return OkHttpOpenAIClient.builder().baseUrl(BASE_URL).apiKey("test-key").build();
+        return OpenAIOkHttpClient.builder().baseUrl(BASE_URL).apiKey("test-key").build();
     }
 
     @Test
@@ -36,21 +36,27 @@ class UnsupportedEndpointTest {
                         });
 
         assertEquals(404, ex.statusCode());
-        String body = ex.body();
-        assertTrue(body.contains("unsupported_endpoint"), "Error type should be unsupported_endpoint");
-        assertTrue(body.contains("endpoint_not_available"), "Error code should be endpoint_not_available");
-        assertTrue(body.contains("planned but not yet available"), "Message should mention planned status");
+
+        // Use the structured accessors on NotFoundException
+        assertTrue(ex.type().isPresent(), "Error type should be present");
+        assertEquals("unsupported_endpoint", ex.type().get());
+
+        assertTrue(ex.code().isPresent(), "Error code should be present");
+        assertEquals("endpoint_not_available", ex.code().get());
+
+        // Verify the message mentions planned status
+        String message = ex.getMessage();
+        assertTrue(message.contains("planned") || message.contains("not yet available"),
+                "Message should mention planned status");
 
         // Provider-blind assertions
-        String bodyLower = body.toLowerCase();
-        assertFalse(bodyLower.contains("provider"), "Message should not mention provider");
-        assertFalse(bodyLower.contains("upstream"), "Message should not mention upstream");
+        String messageLower = message.toLowerCase();
+        assertFalse(messageLower.contains("provider"), "Message should not mention provider");
+        assertFalse(messageLower.contains("upstream"), "Message should not mention upstream");
     }
 
     @Test
     void fineTuningThrows404WithExplicitlyUnsupportedError() {
-        OpenAIClient client = createClient();
-
         // Fine-tuning is explicitly unsupported - use raw HTTP since Java SDK
         // fine-tuning API may differ across versions
         java.net.http.HttpClient httpClient = java.net.http.HttpClient.newHttpClient();

@@ -6,5 +6,7 @@ COPY go.work go.work.sum* ./
 COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
 RUN cd apps/edge-api && go mod download
 COPY apps/edge-api/ ./apps/edge-api/
+COPY packages/openai-contract/matrix/support-matrix.json ./packages/openai-contract/matrix/support-matrix.json
+COPY packages/openai-contract/upstream/openapi.yaml ./packages/openai-contract/upstream/openapi.yaml
 EXPOSE 8080
 CMD ["air", "-c", "apps/edge-api/.air.toml"]
