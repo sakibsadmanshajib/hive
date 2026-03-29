@@ -34,12 +34,13 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. Unsupported public endpoints return consistent OpenAI-style errors instead of ad hoc failures.
   4. Swagger/OpenAPI documentation is generated and published for the implemented Hive surface.
   5. Contributors can run hot reload, code generation, builds, and tests from Docker containers without host-installed Go or Node.
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [ ] 01-01-PLAN.md — Docker-only developer stack with Go edge-api, toolchain, and SDK test containers (Wave 1)
 - [ ] 01-02-PLAN.md — Import OpenAI contract, build support matrix, error envelope, unsupported middleware, compat headers, and Swagger docs (Wave 2)
 - [ ] 01-03-PLAN.md — SDK compatibility harness: JS, Python, and Java tests with golden fixtures (Wave 3)
+- [ ] 01-04-PLAN.md — Close the `COMP-03` docs gap by generating a Hive-specific OpenAPI contract from the support matrix and serving it at `/docs` (Wave 4)
 
 ### Phase 2: Identity & Account Foundation
 **Goal**: Establish authenticated accounts, tenant identity, and customer profile data required by billing and console flows.
@@ -173,7 +174,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Contract & Compatibility Harness | 0/3 | Not started | - |
+| 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
 | 2. Identity & Account Foundation | 0/3 | Not started | - |
 | 3. Credits Ledger & Usage Accounting | 0/3 | Not started | - |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |

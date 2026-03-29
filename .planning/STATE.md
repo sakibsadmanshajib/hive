@@ -2,14 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: phase-complete
-stopped_at: Completed 01-03-PLAN.md (Tasks 1-2; Task 3 human checkpoint pending)
-last_updated: "2026-03-29T01:53:53.500Z"
+current_phase: 01
+current_phase_name: contract-compatibility-harness
+current_plan: 4
+status: verifying
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-03-29T03:44:13.331Z"
+last_activity: 2026-03-29
 progress:
   total_phases: 9
   completed_phases: 1
-  total_plans: 3
-  completed_plans: 3
+  total_plans: 7
+  completed_plans: 4
+  percent: 57
 ---
 
 # Project State
@@ -23,26 +28,33 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 01 (contract-compatibility-harness) — COMPLETE (Task 3 checkpoint pending)
-Plan: 3 of 3 (all plans executed)
+**Current Phase:** 01
+**Current Phase Name:** contract-compatibility-harness
+**Current Plan:** 4
+**Total Plans in Phase:** 4
+**Total Phases:** 9
+**Status:** Ready to verify
+**Progress:** 57%
+**Last Activity:** 2026-03-29
+**Last Activity Description:** Completed plan 01-04 and awaiting phase verification
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 3
-- Average duration: 6min
-- Total execution time: 0.32 hours
+- Total plans completed: 4
+- Average duration: 10min
+- Total execution time: 0.67 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| 01-contract-compatibility-harness | 3/3 | 19min | 6min |
+| 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (8min), 01-02 (6min), 01-03 (5min)
+- Last 5 plans: 01-01 (8min), 01-02 (6min), 01-03 (5min), 01-04 (21min)
 - Trend: Stable/improving
 
 ## Accumulated Context
@@ -63,6 +75,9 @@ Recent decisions affecting current work:
 - [01-01] SDK test services use Docker Compose profiles (test) so they only run on demand.
 - [01-03] Java fine-tuning test uses raw HTTP to avoid coupling to SDK fine-tuning API surface changes.
 - [01-03] Golden fixtures capture minimal expected shapes for regression, not full response bodies.
+- [Phase 01]: Published docs are generated from support-matrix.json plus the upstream spec — Keeps runtime support classification as the single source of truth for the served contract and markdown docs.
+- [Phase 01]: The generated contract drops top-level upstream x-oaiMeta — Prevents organization and admin documentation metadata from leaking back into Hive's published contract artifact.
+- [Phase 01]: The generator entrypoint is POSIX-sh compatible and the toolchain image includes py3-yaml — Ensures Docker verification uses the same generation path as local development instead of a host-only workflow.
 
 ### Pending Todos
 
@@ -75,6 +90,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T01:52:36Z
-Stopped at: Completed 01-03-PLAN.md (Tasks 1-2; Task 3 human checkpoint pending)
-Resume file: .planning/phases/01-contract-compatibility-harness/01-03-PLAN.md (Task 3 checkpoint)
+Last session: 2026-03-29T03:42:17.364Z
+Stopped at: Completed 01-04-PLAN.md
+Resume file: None
