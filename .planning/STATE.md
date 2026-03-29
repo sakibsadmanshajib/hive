@@ -2,19 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_phase: 02
-current_phase_name: identity account foundation
-current_plan: Not started
-status: planning
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-03-29T04:17:15.858Z"
-last_activity: 2026-03-29
+status: unknown
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-03-29T06:08:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 1
-  total_plans: 7
-  completed_plans: 4
-  percent: 57
+  total_plans: 11
+  completed_plans: 5
 ---
 
 # Project State
@@ -28,15 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-**Current Phase:** 02
-**Current Phase Name:** identity account foundation
-**Current Plan:** Not started
-**Total Plans in Phase:** 3
-**Total Phases:** 9
-**Status:** Ready to plan
-**Progress:** 57%
-**Last Activity:** 2026-03-29
-**Last Activity Description:** Phase 01 complete, transitioned to Phase 02
+Phase: 02 (identity-account-foundation) — EXECUTING
+Plan: 2 of 7
 
 ## Performance Metrics
 
@@ -51,10 +39,11 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
+| 02-identity-account-foundation | 1/7 | 3min | 3min |
 
 **Recent Trend:**
 
-- Last 5 plans: 01-01 (8min), 01-02 (6min), 01-03 (5min), 01-04 (21min)
+- Last 5 plans: 01-01 (8min), 01-02 (6min), 01-03 (5min), 01-04 (21min), 02-01 (3min)
 - Trend: Stable/improving
 
 ## Accumulated Context
@@ -78,6 +67,8 @@ Recent decisions affecting current work:
 - [Phase 01]: Published docs are generated from support-matrix.json plus the upstream spec — Keeps runtime support classification as the single source of truth for the served contract and markdown docs.
 - [Phase 01]: The generated contract drops top-level upstream x-oaiMeta — Prevents organization and admin documentation metadata from leaking back into Hive's published contract artifact.
 - [Phase 01]: The generator entrypoint is POSIX-sh compatible and the toolchain image includes py3-yaml — Ensures Docker verification uses the same generation path as local development instead of a host-only workflow.
+- [02-01]: DB connection failure at startup is non-fatal in control-plane — /health responds even without SUPABASE_DB_URL provisioned, enabling phased environment setup.
+- [02-01]: token_hash stored (not raw token) in account_invitations — Security best practice to prevent token exposure from DB reads.
 
 ### Pending Todos
 
@@ -90,6 +81,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T03:42:17.364Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-03-29T06:08:00.000Z
+Stopped at: Completed 02-01-PLAN.md
 Resume file: None

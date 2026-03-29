@@ -50,12 +50,16 @@ Plans:
   1. Developer can sign up, sign in, verify email, and reset password through hosted Supabase-backed flows.
   2. Developer console sessions survive refresh and normal browser revisits.
   3. Each account stores billing contact, legal entity, country, and VAT or business data in a durable profile.
-**Plans**: 3 plans
+**Plans**: 7 plans
 
 Plans:
-- [ ] 02-01: Model tenants, accounts, hosted Supabase authentication integration, and Supabase Postgres access patterns.
-- [ ] 02-02: Implement web session handling and the authenticated console shell.
-- [ ] 02-03: Add billing-contact, legal-entity, and tax-profile data capture.
+- [ ] 02-01: Create the control-plane module, Docker wiring, shared env contract, and initial identity schema.
+- [ ] 02-02: Implement viewer bootstrap, invitation APIs, invitation acceptance, and explicit current-account selection semantics.
+- [ ] 02-03: Create the web-console app, hosted Supabase auth routes, and SSR session middleware.
+- [ ] 02-04: Build the verification-aware console shell, members roster, invitation acceptance UX, and workspace switcher persistence.
+- [ ] 02-05: Add the current-account core profile API for minimal pre-billing identity data.
+- [ ] 02-06: Build the short setup flow plus profile settings UI for the core profile.
+- [ ] 02-07: Add optional durable billing-profile storage and billing settings without making billing completeness a Phase 2 gate.
 
 ### Phase 3: Credits Ledger & Usage Accounting
 **Goal**: Make prepaid credits and request metering financially correct without storing prompts or responses at rest.
@@ -175,7 +179,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
-| 2. Identity & Account Foundation | 0/3 | Not started | - |
+| 2. Identity & Account Foundation | 1/7 | In Progress|  |
 | 3. Credits Ledger & Usage Accounting | 0/3 | Not started | - |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |
