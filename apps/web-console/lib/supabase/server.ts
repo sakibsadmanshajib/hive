@@ -1,4 +1,4 @@
-import { createServerClient } from "@supabase/ssr";
+import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import type { ReadonlyRequestCookies } from "next/dist/server/web/spec-extension/adapters/request-cookies";
 
 export function createClient(cookieStore: ReadonlyRequestCookies) {
@@ -10,10 +10,16 @@ export function createClient(cookieStore: ReadonlyRequestCookies) {
         getAll() {
           return cookieStore.getAll();
         },
-        setAll(cookiesToSet) {
+        setAll(
+          cookiesToSet: Array<{
+            name: string;
+            value: string;
+            options: CookieOptions;
+          }>
+        ) {
           try {
             cookiesToSet.forEach(({ name, value, options }) =>
-              (cookieStore as unknown as { set: (n: string, v: string, o: unknown) => void }).set(name, value, options)
+              cookieStore.set(name, value, options)
             );
           } catch {
             // setAll called from a Server Component — cookies can only be set
