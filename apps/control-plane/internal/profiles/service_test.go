@@ -13,6 +13,7 @@ import (
 type stubRepo struct {
 	accountsMap  map[uuid.UUID]*accounts.Account
 	profiles     map[uuid.UUID]AccountProfile
+	billing      map[uuid.UUID]BillingProfile
 	memberships  []accounts.Membership
 	invitations  map[string]*accounts.Invitation
 	acceptCalled bool
@@ -22,6 +23,7 @@ func newStubRepo() *stubRepo {
 	return &stubRepo{
 		accountsMap: make(map[uuid.UUID]*accounts.Account),
 		profiles:    make(map[uuid.UUID]AccountProfile),
+		billing:     make(map[uuid.UUID]BillingProfile),
 		invitations: make(map[string]*accounts.Invitation),
 	}
 }
@@ -61,6 +63,42 @@ func (s *stubRepo) UpdateAccountProfile(_ context.Context, accountID uuid.UUID, 
 		StateRegion:          input.StateRegion,
 		ProfileSetupComplete: profileSetupComplete,
 	}
+	return nil
+}
+
+func (s *stubRepo) GetBillingProfile(_ context.Context, accountID uuid.UUID) (BillingProfile, error) {
+	_, ok := s.accountsMap[accountID]
+	if !ok {
+		return BillingProfile{}, ErrNotFound
+	}
+
+	profile, ok := s.billing[accountID]
+	if !ok {
+		return BillingProfile{}, ErrNotFound
+	}
+
+	return profile, nil
+}
+
+func (s *stubRepo) UpsertBillingProfile(_ context.Context, accountID uuid.UUID, input UpdateBillingProfileInput) error {
+	_, ok := s.accountsMap[accountID]
+	if !ok {
+		return ErrNotFound
+	}
+
+	s.billing[accountID] = BillingProfile{
+		BillingContactName:       input.BillingContactName,
+		BillingContactEmail:      input.BillingContactEmail,
+		LegalEntityName:          input.LegalEntityName,
+		LegalEntityType:          input.LegalEntityType,
+		BusinessRegistrationNumber: input.BusinessRegistrationNumber,
+		VATNumber:                input.VATNumber,
+		TaxIDType:                input.TaxIDType,
+		TaxIDValue:               input.TaxIDValue,
+		CountryCode:              input.CountryCode,
+		StateRegion:              input.StateRegion,
+	}
+
 	return nil
 }
 
@@ -288,5 +326,137 @@ func TestUpdateAccountProfileRejectsInvalidAccountType(t *testing.T) {
 	}
 	if repo.accountsMap[accountID].AccountType != "personal" {
 		t.Fatalf("expected account_type to remain unchanged, got %q", repo.accountsMap[accountID].AccountType)
+	}
+}
+
+func TestUpdateBillingProfilePersistsBillingIdentity(t *testing.T) {
+	repo := newStubRepo()
+	accountID := uuid.New()
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "acme-labs",
+		DisplayName: "Acme Labs",
+		AccountType: "business",
+	}
+	repo.profiles[accountID] = AccountProfile{
+		OwnerName:            "Alice Smith",
+		LoginEmail:           "alice@example.com",
+		DisplayName:          "Acme Labs",
+		AccountType:          "business",
+		CountryCode:          "US",
+		StateRegion:          "CA",
+		ProfileSetupComplete: true,
+	}
+
+	svc := NewService(repo)
+	input := UpdateBillingProfileInput{
+		BillingContactName:         "Alice Finance",
+		BillingContactEmail:        "billing@acme.dev",
+		LegalEntityName:            "Acme Labs LLC",
+		LegalEntityType:            "private_company",
+		BusinessRegistrationNumber: "BRN-12345",
+		VATNumber:                  "US-999999",
+		TaxIDType:                  "ein",
+		TaxIDValue:                 "12-3456789",
+		CountryCode:                "US",
+		StateRegion:                "CA",
+	}
+
+	updated, err := svc.UpdateBillingProfile(context.Background(), accountID, input)
+	if err != nil {
+		t.Fatalf("UpdateBillingProfile error: %v", err)
+	}
+
+	if updated.BillingContactEmail != input.BillingContactEmail {
+		t.Fatalf("expected billing_contact_email %q, got %q", input.BillingContactEmail, updated.BillingContactEmail)
+	}
+	if updated.LegalEntityType != input.LegalEntityType {
+		t.Fatalf("expected legal_entity_type %q, got %q", input.LegalEntityType, updated.LegalEntityType)
+	}
+	if updated.VATNumber != input.VATNumber {
+		t.Fatalf("expected vat_number %q, got %q", input.VATNumber, updated.VATNumber)
+	}
+
+	stored := repo.billing[accountID]
+	if stored.LegalEntityName != input.LegalEntityName {
+		t.Fatalf("expected stored legal_entity_name %q, got %q", input.LegalEntityName, stored.LegalEntityName)
+	}
+	if stored.TaxIDValue != input.TaxIDValue {
+		t.Fatalf("expected stored tax_id_value %q, got %q", input.TaxIDValue, stored.TaxIDValue)
+	}
+}
+
+func TestPartialBusinessBillingProfile(t *testing.T) {
+	repo := newStubRepo()
+	accountID := uuid.New()
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "acme-labs",
+		DisplayName: "Acme Labs",
+		AccountType: "business",
+	}
+	repo.profiles[accountID] = AccountProfile{
+		OwnerName:            "Alice Smith",
+		LoginEmail:           "alice@example.com",
+		DisplayName:          "Acme Labs",
+		AccountType:          "business",
+		CountryCode:          "US",
+		StateRegion:          "CA",
+		ProfileSetupComplete: true,
+	}
+
+	svc := NewService(repo)
+	updated, err := svc.UpdateBillingProfile(context.Background(), accountID, UpdateBillingProfileInput{
+		LegalEntityName: "Acme Labs LLC",
+		LegalEntityType: "private_company",
+	})
+	if err != nil {
+		t.Fatalf("UpdateBillingProfile error: %v", err)
+	}
+
+	if updated.LegalEntityName != "Acme Labs LLC" {
+		t.Fatalf("expected legal_entity_name %q, got %q", "Acme Labs LLC", updated.LegalEntityName)
+	}
+	if updated.BillingContactName != "" {
+		t.Fatalf("expected billing_contact_name to remain empty, got %q", updated.BillingContactName)
+	}
+	if updated.VATNumber != "" {
+		t.Fatalf("expected vat_number to remain empty, got %q", updated.VATNumber)
+	}
+}
+
+func TestPersonalBillingProfileDefaultsLegalEntityType(t *testing.T) {
+	repo := newStubRepo()
+	accountID := uuid.New()
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "alice-workspace",
+		DisplayName: "Alice Workspace",
+		AccountType: "personal",
+	}
+	repo.profiles[accountID] = AccountProfile{
+		OwnerName:            "Alice Smith",
+		LoginEmail:           "alice@example.com",
+		DisplayName:          "Alice Workspace",
+		AccountType:          "personal",
+		CountryCode:          "CA",
+		StateRegion:          "ON",
+		ProfileSetupComplete: true,
+	}
+
+	svc := NewService(repo)
+	updated, err := svc.UpdateBillingProfile(context.Background(), accountID, UpdateBillingProfileInput{
+		BillingContactName:  "Alice Smith",
+		BillingContactEmail: "alice@example.com",
+	})
+	if err != nil {
+		t.Fatalf("UpdateBillingProfile error: %v", err)
+	}
+
+	if updated.LegalEntityType != "individual" {
+		t.Fatalf("expected legal_entity_type %q, got %q", "individual", updated.LegalEntityType)
+	}
+	if repo.billing[accountID].LegalEntityType != "individual" {
+		t.Fatalf("expected stored legal_entity_type %q, got %q", "individual", repo.billing[accountID].LegalEntityType)
 	}
 }
