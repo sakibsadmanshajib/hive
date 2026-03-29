@@ -1,24 +1,37 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
-# generate-matrix.sh
-#
-# Regenerates support-matrix.json from the overlay classifications.
-# Currently the matrix is hand-authored from the spec and overlay.
-# This script serves as a reminder and placeholder for future automation.
-#
-# To regenerate, run the Python script used during initial creation
-# or manually update packages/openai-contract/matrix/support-matrix.json
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+MATRIX_PATH="$REPO_ROOT/packages/openai-contract/matrix/support-matrix.json"
+UPSTREAM_SPEC_PATH="$REPO_ROOT/packages/openai-contract/upstream/openapi.yaml"
+GENERATED_SPEC_PATH="$REPO_ROOT/packages/openai-contract/generated/hive-openapi.yaml"
+MARKDOWN_PATH="$REPO_ROOT/docs/support-matrix.md"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MATRIX_PATH="$SCRIPT_DIR/../matrix/support-matrix.json"
-
-if [ -f "$MATRIX_PATH" ]; then
-    ENDPOINT_COUNT=$(python3 -c "import json; print(len(json.load(open('$MATRIX_PATH'))['endpoints']))")
-    echo "Current matrix: $MATRIX_PATH ($ENDPOINT_COUNT endpoints)"
-    echo "To regenerate, update the overlay and re-run the generation script."
-else
-    echo "ERROR: Matrix file not found at $MATRIX_PATH"
-    echo "Run import-spec.sh first, then create the matrix."
-    exit 1
+if [ ! -f "$MATRIX_PATH" ]; then
+	echo "ERROR: Matrix file not found at $MATRIX_PATH"
+	exit 1
 fi
+
+if [ ! -f "$UPSTREAM_SPEC_PATH" ]; then
+	echo "ERROR: Upstream OpenAPI spec not found at $UPSTREAM_SPEC_PATH"
+	exit 1
+fi
+
+python3 "$SCRIPT_DIR/sync_hive_contract.py"
+
+if grep -q "https://api.openai.com/v1" "$GENERATED_SPEC_PATH"; then
+	echo "ERROR: Generated spec still contains the upstream OpenAI server URL"
+	exit 1
+fi
+
+if ! grep -q "x-hive-status:" "$GENERATED_SPEC_PATH"; then
+	echo "ERROR: Generated spec is missing x-hive-status annotations"
+	exit 1
+fi
+
+PUBLIC_OPERATIONS="$(grep -c "x-hive-status:" "$GENERATED_SPEC_PATH")"
+
+echo "Generated $PUBLIC_OPERATIONS public operations"
+echo "Wrote $GENERATED_SPEC_PATH"
+echo "Wrote $MARKDOWN_PATH"
