@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-03-30T17:56:13.000Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-03-30T19:36:46.000Z"
 progress:
   total_phases: 9
-  completed_phases: 2
+  completed_phases: 3
   total_plans: 14
-  completed_plans: 13
+  completed_plans: 14
 ---
 
 # Project State
@@ -19,20 +19,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 03 — credits-ledger-usage-accounting
+**Current focus:** Phase 04 — model-catalog-provider-routing
 
 ## Current Position
 
-Phase: 03 (credits-ledger-usage-accounting) — IN PROGRESS
-Plan: 2 of 3 completed
+Phase: 04 (model-catalog-provider-routing) — READY TO START
+Plan: 0 of 3 completed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 13
-- Average duration: 11.3min
-- Total execution time: 2.45 hours
+- Total plans completed: 14
+- Average duration: 15.7min
+- Total execution time: 3.67 hours
 
 **By Phase:**
 
@@ -40,12 +40,12 @@ Plan: 2 of 3 completed
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
-| 03-credits-ledger-usage-accounting | 2/3 | 14min | 7min |
+| 03-credits-ledger-usage-accounting | 3/3 | 87min | 29min |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-05 (7min), 02-06 (29min), 02-07 (23min), 03-01 (9min), 03-02 (5min)
-- Trend: Stable with quick Phase 3 infrastructure work after the longer Phase 2 finish work
+- Last 5 plans: 02-06 (29min), 02-07 (23min), 03-01 (9min), 03-02 (5min), 03-03 (73min)
+- Trend: Slower on the reservation-integration plan after two quick Phase 3 foundation steps
 
 ## Accumulated Context
 
@@ -95,6 +95,9 @@ Recent decisions affecting current work:
 - [03-02]: Request accounting keeps both `request_id` and `attempt_number` — retries and interrupted executions stay reconcilable without inventing a second wallet model.
 - [03-02]: Usage-event metadata is recursively redacted before persistence — prompt, message, input, response, completion, content, and output_text keys never reach durable storage.
 - [03-02]: Current-account usage responses omit `provider_request_id` and `internal_metadata` — customer-visible APIs stay provider-blind even when internal records retain diagnostics.
+- [03-03]: Reservation lifecycle state is stored durably in Postgres while immutable ledger entries remain the financial source of truth.
+- [03-03]: Ambiguous interruptions default to customer-favoring release plus reconciliation instead of assuming full reserve consumption.
+- [03-03]: Current-account reservation mutations reuse the control-plane account resolver and reject invalid reservation IDs at the HTTP boundary.
 
 ### Pending Todos
 
@@ -107,6 +110,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T17:56:13.000Z
-Stopped at: Completed 03-02-PLAN.md
+Last session: 2026-03-30T19:36:46.000Z
+Stopped at: Completed 03-03-PLAN.md
 Resume file: None

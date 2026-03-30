@@ -14,7 +14,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 
 - [x] **Phase 1: Contract & Compatibility Harness** - Import the OpenAI contract, define launch coverage, and make compatibility regression-tested. (completed 2026-03-29)
 - [x] **Phase 2: Identity & Account Foundation** - Stand up hosted Supabase auth, tenancy, sessions, customer account profile data, and the primary relational model. (completed 2026-03-29)
-- [ ] **Phase 3: Credits Ledger & Usage Accounting** - Build immutable prepaid billing, reservations, and privacy-safe usage events.
+- [x] **Phase 3: Credits Ledger & Usage Accounting** - Build immutable prepaid billing, reservations, and privacy-safe usage events. (completed 2026-03-30)
 - [ ] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix.
 - [ ] **Phase 5: API Keys & Hot-Path Enforcement** - Add key lifecycle, per-key controls, budgets, rate limits, and hot-path authorization.
 - [ ] **Phase 6: Core Text & Embeddings API** - Deliver the most-used OpenAI-compatible inference endpoints with streaming and reasoning support.
@@ -69,12 +69,12 @@ Plans:
   1. Every credit purchase, reservation, charge, refund, and adjustment is represented in an immutable ledger stored in Supabase Postgres.
   2. Request execution reserves credits before dispatch and finalizes or refunds usage correctly for success, failure, retry, cancellation, and interrupted streams.
   3. Usage and billing events can be reconstructed without persisting prompt or response bodies.
-**Plans**: 2/3 plans complete
+**Plans**: 3/3 plans complete
 
 Plans:
 - [x] 03-01: Implement the Hive Credit ledger, idempotency model, and balance calculations.
 - [x] 03-02: Add privacy-safe usage events and request accounting primitives.
-- [ ] 03-03: Build reservation, finalization, and refund paths for streaming and retry scenarios.
+- [x] 03-03: Build reservation, finalization, and refund paths for streaming and retry scenarios.
 
 ### Phase 4: Model Catalog & Provider Routing
 **Goal**: Expose Hive-owned model aliases while keeping provider selection internal, policy-driven, and cost-aware.
@@ -180,7 +180,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
 | 2. Identity & Account Foundation | 7/7 | Complete | 2026-03-29 |
-| 3. Credits Ledger & Usage Accounting | 2/3 | In Progress | - |
+| 3. Credits Ledger & Usage Accounting | 3/3 | Complete | 2026-03-30 |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |
 | 6. Core Text & Embeddings API | 0/3 | Not started | - |

@@ -37,8 +37,8 @@
 
 ### Billing & Payments
 
-- [ ] **BILL-01**: Customer has a prepaid Hive Credit balance backed by an immutable ledger of purchases, reservations, charges, refunds, and adjustments.
-- [ ] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
+- [x] **BILL-01**: Customer has a prepaid Hive Credit balance backed by an immutable ledger of purchases, reservations, charges, refunds, and adjustments.
+- [x] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
 - [ ] **BILL-03**: Customer can buy credits in increments of 1,000 Hive Credits through Stripe, bKash, and SSLCommerz.
 - [ ] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 3% conversion fee used for every BDT transaction.
 - [ ] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
@@ -61,7 +61,7 @@
 
 ### Privacy & Operations
 
-- [ ] **PRIV-01**: Customer can use the API without Hive storing prompt or response bodies at rest by default.
+- [x] **PRIV-01**: Customer can use the API without Hive storing prompt or response bodies at rest by default.
 - [ ] **OPS-01**: Hive operators can monitor health, latency, upstream failures, payment workflows, rate-limit events, and billing events without transcript storage.
 
 ## v2 Requirements
@@ -110,8 +110,8 @@
 | ROUT-01 | Phase 4 | Pending |
 | ROUT-02 | Phase 4 | Pending |
 | ROUT-03 | Phase 4 | Pending |
-| BILL-01 | Phase 3 | Pending |
-| BILL-02 | Phase 3 | Pending |
+| BILL-01 | Phase 3 | Complete |
+| BILL-02 | Phase 3 | Complete |
 | BILL-03 | Phase 8 | Pending |
 | BILL-04 | Phase 8 | Pending |
 | BILL-05 | Phase 9 | Pending |
@@ -125,7 +125,7 @@
 | CONS-01 | Phase 9 | Pending |
 | CONS-02 | Phase 9 | Pending |
 | CONS-03 | Phase 9 | Pending |
-| PRIV-01 | Phase 3 | Pending |
+| PRIV-01 | Phase 3 | Complete |
 | OPS-01 | Phase 9 | Pending |
 
 **Coverage:**
@@ -135,4 +135,4 @@
 
 ---
 *Requirements defined: 2026-03-28*
-*Last updated: 2026-03-28 after roadmap creation*
+*Last updated: 2026-03-30 after Phase 3 completion*
