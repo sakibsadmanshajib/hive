@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: planning
-stopped_at: Completed 02-07-PLAN.md
-last_updated: "2026-03-29T08:00:00.000Z"
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-03-30T17:41:56.000Z"
 progress:
   total_phases: 9
   completed_phases: 2
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 14
+  completed_plans: 12
 ---
 
 # Project State
@@ -23,16 +23,16 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 03 (credits-ledger-usage-accounting) — READY TO PLAN
-Plan: 0 of 3
+Phase: 03 (credits-ledger-usage-accounting) — IN PROGRESS
+Plan: 1 of 3 completed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 11
-- Average duration: 12.1min
-- Total execution time: 2.22 hours
+- Total plans completed: 12
+- Average duration: 11.8min
+- Total execution time: 2.37 hours
 
 **By Phase:**
 
@@ -40,11 +40,12 @@ Plan: 0 of 3
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
+| 03-credits-ledger-usage-accounting | 1/3 | 9min | 9min |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-03 (8min), 02-04 (15min), 02-05 (7min), 02-06 (29min), 02-07 (23min)
-- Trend: Stable with longer finish-phase work
+- Last 5 plans: 02-04 (15min), 02-05 (7min), 02-06 (29min), 02-07 (23min), 03-01 (9min)
+- Trend: Stable with shorter ledger-foundation setup after the longer Phase 2 finish work
 
 ## Accumulated Context
 
@@ -88,6 +89,9 @@ Recent decisions affecting current work:
 - [Phase 02]: Billing-profile reads fall back to core-profile contact and location data — Lets optional billing settings render useful defaults before the first billing-specific save.
 - [Phase 02]: Billing settings redirect unverified users to /console/settings/profile instead of broadening the restricted-console allowlist — Keeps profile maintenance reachable without turning billing into a Phase 2 gate.
 - [Phase 02]: The web-console control-plane client now uses explicit JSON decoders instead of assertion-based parsing — Keeps the touched billing/profile surface aligned with the strict TypeScript policy.
+- [03-01]: Reservation holds are negative deltas and releases are positive deltas — keeps reserved-credit math derivable from immutable ledger entries without a mutable balance counter.
+- [03-01]: Credit mutation idempotency is anchored in Postgres `credit_idempotency_keys` — Redis is runtime plumbing for later hot-path helpers, not the source of financial truth.
+- [03-01]: Ledger balance and history routes resolve current account via `accounts.Service` — avoids trusting client-supplied account IDs on credit read APIs.
 
 ### Pending Todos
 
@@ -100,6 +104,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-29T08:00:00.000Z
-Stopped at: Completed 02-07-PLAN.md
+Last session: 2026-03-30T17:41:56.000Z
+Stopped at: Completed 03-01-PLAN.md
 Resume file: None
