@@ -12,6 +12,7 @@ type Config struct {
 	SupabaseURL     string
 	SupabaseAnonKey string
 	SupabaseDBURL   string
+	RedisURL        string
 }
 
 // Load reads configuration from environment variables and returns a validated Config.
@@ -35,5 +36,6 @@ func Load() (*Config, error) {
 		SupabaseURL:     supabaseURL,
 		SupabaseAnonKey: os.Getenv("SUPABASE_ANON_KEY"),
 		SupabaseDBURL:   os.Getenv("SUPABASE_DB_URL"),
+		RedisURL:        os.Getenv("REDIS_URL"),
 	}, nil
 }
