@@ -100,6 +100,21 @@ func (s *Service) RecordEvent(ctx context.Context, input RecordEventInput) (Usag
 	return event, nil
 }
 
+func (s *Service) UpdateAttemptStatus(ctx context.Context, attemptID uuid.UUID, status AttemptStatus, completedAt *time.Time) error {
+	if attemptID == uuid.Nil {
+		return &ValidationError{Field: "request_attempt_id", Message: "request_attempt_id is required"}
+	}
+	if !isValidAttemptStatus(status) {
+		return &ValidationError{Field: "status", Message: "status is invalid"}
+	}
+
+	if err := s.repo.UpdateAttemptStatus(ctx, attemptID, string(status), completedAt); err != nil {
+		return fmt.Errorf("usage: update attempt status: %w", err)
+	}
+
+	return nil
+}
+
 func (s *Service) ListAttempts(ctx context.Context, accountID uuid.UUID, requestID string, limit int) ([]RequestAttempt, error) {
 	if limit <= 0 {
 		limit = 20
@@ -139,5 +154,14 @@ func redactValue(value any) any {
 		return result
 	default:
 		return value
+	}
+}
+
+func isValidAttemptStatus(status AttemptStatus) bool {
+	switch status {
+	case AttemptStatusAccepted, AttemptStatusDispatching, AttemptStatusStreaming, AttemptStatusCompleted, AttemptStatusFailed, AttemptStatusCancelled, AttemptStatusInterrupted:
+		return true
+	default:
+		return false
 	}
 }
