@@ -1,0 +1,111 @@
+package usage
+
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+type AttemptStatus string
+
+const (
+	AttemptStatusAccepted    AttemptStatus = "accepted"
+	AttemptStatusDispatching AttemptStatus = "dispatching"
+	AttemptStatusStreaming   AttemptStatus = "streaming"
+	AttemptStatusCompleted   AttemptStatus = "completed"
+	AttemptStatusFailed      AttemptStatus = "failed"
+	AttemptStatusCancelled   AttemptStatus = "cancelled"
+	AttemptStatusInterrupted AttemptStatus = "interrupted"
+)
+
+type UsageEventType string
+
+const (
+	UsageEventAccepted           UsageEventType = "accepted"
+	UsageEventReservationCreated UsageEventType = "reservation_created"
+	UsageEventStreamUpdate       UsageEventType = "stream_update"
+	UsageEventCompleted          UsageEventType = "completed"
+	UsageEventReleased           UsageEventType = "released"
+	UsageEventRefunded           UsageEventType = "refunded"
+	UsageEventError              UsageEventType = "error"
+	UsageEventReconciled         UsageEventType = "reconciled"
+)
+
+type RequestAttempt struct {
+	ID               uuid.UUID      `json:"id"`
+	AccountID        uuid.UUID      `json:"account_id,omitempty"`
+	RequestID        string         `json:"request_id"`
+	AttemptNumber    int            `json:"attempt_number"`
+	Endpoint         string         `json:"endpoint"`
+	ModelAlias       string         `json:"model_alias"`
+	Status           AttemptStatus  `json:"status"`
+	UserID           *uuid.UUID     `json:"user_id,omitempty"`
+	TeamID           *uuid.UUID     `json:"team_id,omitempty"`
+	ServiceAccountID *uuid.UUID     `json:"service_account_id,omitempty"`
+	APIKeyID         *uuid.UUID     `json:"api_key_id,omitempty"`
+	CustomerTags     map[string]any `json:"customer_tags"`
+	StartedAt        time.Time      `json:"started_at"`
+	CompletedAt      *time.Time     `json:"completed_at,omitempty"`
+}
+
+type UsageEvent struct {
+	ID                uuid.UUID      `json:"id"`
+	AccountID         uuid.UUID      `json:"account_id,omitempty"`
+	RequestAttemptID  uuid.UUID      `json:"request_attempt_id"`
+	RequestID         string         `json:"request_id"`
+	EventType         UsageEventType `json:"event_type"`
+	Endpoint          string         `json:"endpoint"`
+	ModelAlias        string         `json:"model_alias"`
+	Status            string         `json:"status"`
+	InputTokens       int64          `json:"input_tokens"`
+	OutputTokens      int64          `json:"output_tokens"`
+	CacheReadTokens   int64          `json:"cache_read_tokens"`
+	CacheWriteTokens  int64          `json:"cache_write_tokens"`
+	HiveCreditDelta   int64          `json:"hive_credit_delta"`
+	ProviderRequestID string         `json:"provider_request_id,omitempty"`
+	InternalMetadata  map[string]any `json:"internal_metadata,omitempty"`
+	CustomerTags      map[string]any `json:"customer_tags"`
+	ErrorCode         string         `json:"error_code,omitempty"`
+	ErrorType         string         `json:"error_type,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+}
+
+type StartAttemptInput struct {
+	AccountID        uuid.UUID
+	RequestID        string
+	AttemptNumber    int
+	Endpoint         string
+	ModelAlias       string
+	Status           AttemptStatus
+	UserID           *uuid.UUID
+	TeamID           *uuid.UUID
+	ServiceAccountID *uuid.UUID
+	APIKeyID         *uuid.UUID
+	CustomerTags     map[string]any
+}
+
+type RecordEventInput struct {
+	AccountID         uuid.UUID
+	RequestAttemptID  uuid.UUID
+	RequestID         string
+	EventType         UsageEventType
+	Endpoint          string
+	ModelAlias        string
+	Status            string
+	InputTokens       int64
+	OutputTokens      int64
+	CacheReadTokens   int64
+	CacheWriteTokens  int64
+	HiveCreditDelta   int64
+	ProviderRequestID string
+	InternalMetadata  map[string]any
+	CustomerTags      map[string]any
+	ErrorCode         string
+	ErrorType         string
+}
+
+type ListEventsFilter struct {
+	AccountID uuid.UUID
+	RequestID string
+	Limit     int
+}
