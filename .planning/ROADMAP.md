@@ -69,11 +69,11 @@ Plans:
   1. Every credit purchase, reservation, charge, refund, and adjustment is represented in an immutable ledger stored in Supabase Postgres.
   2. Request execution reserves credits before dispatch and finalizes or refunds usage correctly for success, failure, retry, cancellation, and interrupted streams.
   3. Usage and billing events can be reconstructed without persisting prompt or response bodies.
-**Plans**: 1/3 plans complete
+**Plans**: 2/3 plans complete
 
 Plans:
 - [x] 03-01: Implement the Hive Credit ledger, idempotency model, and balance calculations.
-- [ ] 03-02: Add privacy-safe usage events and request accounting primitives.
+- [x] 03-02: Add privacy-safe usage events and request accounting primitives.
 - [ ] 03-03: Build reservation, finalization, and refund paths for streaming and retry scenarios.
 
 ### Phase 4: Model Catalog & Provider Routing
@@ -180,7 +180,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 |-------|----------------|--------|-----------|
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
 | 2. Identity & Account Foundation | 7/7 | Complete | 2026-03-29 |
-| 3. Credits Ledger & Usage Accounting | 1/3 | In Progress | - |
+| 3. Credits Ledger & Usage Accounting | 2/3 | In Progress | - |
 | 4. Model Catalog & Provider Routing | 0/3 | Not started | - |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |
 | 6. Core Text & Embeddings API | 0/3 | Not started | - |

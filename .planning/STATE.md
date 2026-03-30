@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: planning
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-03-30T17:41:56.000Z"
+status: executing
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-03-30T17:56:13.000Z"
 progress:
   total_phases: 9
   completed_phases: 2
   total_plans: 14
-  completed_plans: 12
+  completed_plans: 13
 ---
 
 # Project State
@@ -24,15 +24,15 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 03 (credits-ledger-usage-accounting) — IN PROGRESS
-Plan: 1 of 3 completed
+Plan: 2 of 3 completed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 12
-- Average duration: 11.8min
-- Total execution time: 2.37 hours
+- Total plans completed: 13
+- Average duration: 11.3min
+- Total execution time: 2.45 hours
 
 **By Phase:**
 
@@ -40,12 +40,12 @@ Plan: 1 of 3 completed
 |-------|-------|-------|----------|
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
-| 03-credits-ledger-usage-accounting | 1/3 | 9min | 9min |
+| 03-credits-ledger-usage-accounting | 2/3 | 14min | 7min |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-04 (15min), 02-05 (7min), 02-06 (29min), 02-07 (23min), 03-01 (9min)
-- Trend: Stable with shorter ledger-foundation setup after the longer Phase 2 finish work
+- Last 5 plans: 02-05 (7min), 02-06 (29min), 02-07 (23min), 03-01 (9min), 03-02 (5min)
+- Trend: Stable with quick Phase 3 infrastructure work after the longer Phase 2 finish work
 
 ## Accumulated Context
 
@@ -92,6 +92,9 @@ Recent decisions affecting current work:
 - [03-01]: Reservation holds are negative deltas and releases are positive deltas — keeps reserved-credit math derivable from immutable ledger entries without a mutable balance counter.
 - [03-01]: Credit mutation idempotency is anchored in Postgres `credit_idempotency_keys` — Redis is runtime plumbing for later hot-path helpers, not the source of financial truth.
 - [03-01]: Ledger balance and history routes resolve current account via `accounts.Service` — avoids trusting client-supplied account IDs on credit read APIs.
+- [03-02]: Request accounting keeps both `request_id` and `attempt_number` — retries and interrupted executions stay reconcilable without inventing a second wallet model.
+- [03-02]: Usage-event metadata is recursively redacted before persistence — prompt, message, input, response, completion, content, and output_text keys never reach durable storage.
+- [03-02]: Current-account usage responses omit `provider_request_id` and `internal_metadata` — customer-visible APIs stay provider-blind even when internal records retain diagnostics.
 
 ### Pending Todos
 
@@ -104,6 +107,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T17:41:56.000Z
-Stopped at: Completed 03-01-PLAN.md
+Last session: 2026-03-30T17:56:13.000Z
+Stopped at: Completed 03-02-PLAN.md
 Resume file: None
