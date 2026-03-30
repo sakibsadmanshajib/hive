@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
@@ -20,6 +21,7 @@ type healthResponse struct {
 type RouterConfig struct {
 	AuthMiddleware  *auth.Middleware
 	AccountsHandler *accounts.Handler
+	AccountingHandler *accounting.Handler
 	LedgerHandler   *ledger.Handler
 	ProfilesHandler *profiles.Handler
 	UsageHandler    *usage.Handler
@@ -47,6 +49,14 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		protectedUsage := cfg.AuthMiddleware.Require(cfg.UsageHandler)
 		mux.Handle("/api/v1/accounts/current/request-attempts", protectedUsage)
 		mux.Handle("/api/v1/accounts/current/usage-events", protectedUsage)
+	}
+
+	if cfg.AccountingHandler != nil && cfg.AuthMiddleware != nil {
+		protectedAccounting := cfg.AuthMiddleware.Require(cfg.AccountingHandler)
+		mux.Handle("/api/v1/accounts/current/credits/reservations", protectedAccounting)
+		mux.Handle("/api/v1/accounts/current/credits/reservations/expand", protectedAccounting)
+		mux.Handle("/api/v1/accounts/current/credits/reservations/finalize", protectedAccounting)
+		mux.Handle("/api/v1/accounts/current/credits/reservations/release", protectedAccounting)
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {

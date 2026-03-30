@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
@@ -47,6 +48,7 @@ func main() {
 
 	// Build accounts service and handler (requires DB; skip if pool unavailable).
 	var accountsHandler *accounts.Handler
+	var accountingHandler *accounting.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
 	var usageHandler *usage.Handler
@@ -77,6 +79,10 @@ func main() {
 		usageRepo := usage.NewPgxRepository(pool)
 		usageSvc := usage.NewService(usageRepo)
 		usageHandler = usage.NewHandler(usageSvc, accountsSvc)
+
+		accountingRepo := accounting.NewPgxRepository(pool)
+		accountingSvc := accounting.NewService(accountingRepo, ledgerSvc, usageSvc)
+		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -84,6 +90,7 @@ func main() {
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:  authMiddleware,
 		AccountsHandler: accountsHandler,
+		AccountingHandler: accountingHandler,
 		LedgerHandler:   ledgerHandler,
 		ProfilesHandler: profilesHandler,
 		UsageHandler:    usageHandler,
