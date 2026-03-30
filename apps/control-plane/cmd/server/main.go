@@ -18,6 +18,7 @@ import (
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 )
 
 func main() {
@@ -48,6 +49,7 @@ func main() {
 	var accountsHandler *accounts.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
+	var usageHandler *usage.Handler
 	if pool != nil {
 		if cfg.RedisURL != "" {
 			redisClient := platformredis.NewClient(cfg.RedisURL)
@@ -71,6 +73,10 @@ func main() {
 		profilesRepo := profiles.NewPgxRepository(pool)
 		profilesSvc := profiles.NewService(profilesRepo)
 		profilesHandler = profiles.NewHandler(profilesSvc, accountsSvc)
+
+		usageRepo := usage.NewPgxRepository(pool)
+		usageSvc := usage.NewService(usageRepo)
+		usageHandler = usage.NewHandler(usageSvc, accountsSvc)
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -80,6 +86,7 @@ func main() {
 		AccountsHandler: accountsHandler,
 		LedgerHandler:   ledgerHandler,
 		ProfilesHandler: profilesHandler,
+		UsageHandler:    usageHandler,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.Port)

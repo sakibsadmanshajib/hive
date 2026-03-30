@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -108,4 +109,17 @@ type ListEventsFilter struct {
 	AccountID uuid.UUID
 	RequestID string
 	Limit     int
+}
+
+type ValidationError struct {
+	Field   string
+	Message string
+}
+
+func (e *ValidationError) Error() string {
+	return e.Message
+}
+
+func AsValidationError(err error, target **ValidationError) bool {
+	return errors.As(err, target)
 }

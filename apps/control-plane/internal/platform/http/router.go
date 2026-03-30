@@ -8,6 +8,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 )
 
 // healthResponse is the JSON body returned by the /health endpoint.
@@ -21,6 +22,7 @@ type RouterConfig struct {
 	AccountsHandler *accounts.Handler
 	LedgerHandler   *ledger.Handler
 	ProfilesHandler *profiles.Handler
+	UsageHandler    *usage.Handler
 }
 
 // NewRouter returns a configured http.ServeMux with all platform routes registered.
@@ -39,6 +41,12 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		protectedLedger := cfg.AuthMiddleware.Require(cfg.LedgerHandler)
 		mux.Handle("/api/v1/accounts/current/credits/balance", protectedLedger)
 		mux.Handle("/api/v1/accounts/current/credits/ledger", protectedLedger)
+	}
+
+	if cfg.UsageHandler != nil && cfg.AuthMiddleware != nil {
+		protectedUsage := cfg.AuthMiddleware.Require(cfg.UsageHandler)
+		mux.Handle("/api/v1/accounts/current/request-attempts", protectedUsage)
+		mux.Handle("/api/v1/accounts/current/usage-events", protectedUsage)
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {
