@@ -6,6 +6,7 @@ import (
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 )
 
@@ -18,6 +19,7 @@ type healthResponse struct {
 type RouterConfig struct {
 	AuthMiddleware  *auth.Middleware
 	AccountsHandler *accounts.Handler
+	LedgerHandler   *ledger.Handler
 	ProfilesHandler *profiles.Handler
 }
 
@@ -31,6 +33,12 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		protectedProfiles := cfg.AuthMiddleware.Require(cfg.ProfilesHandler)
 		mux.Handle("/api/v1/accounts/current/profile", protectedProfiles)
 		mux.Handle("/api/v1/accounts/current/billing-profile", protectedProfiles)
+	}
+
+	if cfg.LedgerHandler != nil && cfg.AuthMiddleware != nil {
+		protectedLedger := cfg.AuthMiddleware.Require(cfg.LedgerHandler)
+		mux.Handle("/api/v1/accounts/current/credits/balance", protectedLedger)
+		mux.Handle("/api/v1/accounts/current/credits/ledger", protectedLedger)
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {

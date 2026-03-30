@@ -12,9 +12,11 @@ import (
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
+	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 )
 
@@ -44,11 +46,27 @@ func main() {
 
 	// Build accounts service and handler (requires DB; skip if pool unavailable).
 	var accountsHandler *accounts.Handler
+	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
 	if pool != nil {
+		if cfg.RedisURL != "" {
+			redisClient := platformredis.NewClient(cfg.RedisURL)
+			if err := platformredis.Ping(ctx, redisClient); err != nil {
+				log.Printf("WARNING: redis not available at startup: %v", err)
+				_ = redisClient.Close()
+			} else {
+				defer redisClient.Close()
+				log.Println("redis client ready")
+			}
+		}
+
 		accountsRepo := accounts.NewPgxRepository(pool)
 		accountsSvc := accounts.NewService(accountsRepo)
 		accountsHandler = accounts.NewHandler(accountsSvc)
+
+		ledgerRepo := ledger.NewPgxRepository(pool)
+		ledgerSvc := ledger.NewService(ledgerRepo)
+		ledgerHandler = ledger.NewHandler(ledgerSvc, accountsSvc)
 
 		profilesRepo := profiles.NewPgxRepository(pool)
 		profilesSvc := profiles.NewService(profilesRepo)
@@ -60,6 +78,7 @@ func main() {
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:  authMiddleware,
 		AccountsHandler: accountsHandler,
+		LedgerHandler:   ledgerHandler,
 		ProfilesHandler: profilesHandler,
 	})
 
