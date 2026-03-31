@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 04-01-PLAN.md
-last_updated: "2026-03-31T07:30:50.000Z"
+stopped_at: Completed 04-02-PLAN.md
+last_updated: "2026-03-31T07:56:25.000Z"
 progress:
   total_phases: 9
   completed_phases: 3
   total_plans: 17
-  completed_plans: 15
+  completed_plans: 16
 ---
 
 # Project State
@@ -24,15 +24,15 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 04 (model-catalog-provider-routing) — IN PROGRESS
-Plan: 1 of 3 completed
+Plan: 2 of 3 completed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 15
-- Average duration: 16.7min
-- Total execution time: 4.17 hours
+- Total plans completed: 16
+- Average duration: 16.6min
+- Total execution time: 4.43 hours
 
 **By Phase:**
 
@@ -41,12 +41,12 @@ Plan: 1 of 3 completed
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
 | 03-credits-ledger-usage-accounting | 3/3 | 87min | 29min |
-| 04-model-catalog-provider-routing | 1/3 | 30min | 30min |
+| 04-model-catalog-provider-routing | 2/3 | 46min | 23min |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-07 (23min), 03-01 (9min), 03-02 (5min), 03-03 (73min), 04-01 (30min)
-- Trend: Integration-heavy control-plane and SDK-alignment plans remain slower than the earlier foundation slices
+- Last 5 plans: 03-01 (9min), 03-02 (5min), 03-03 (73min), 04-01 (30min), 04-02 (16min)
+- Trend: Phase 4 remains integration-heavy, but the second routing slice completed faster once the catalog foundation was in place
 
 ## Accumulated Context
 
@@ -101,6 +101,8 @@ Recent decisions affecting current work:
 - [03-03]: Current-account reservation mutations reuse the control-plane account resolver and reject invalid reservation IDs at the HTTP boundary.
 - [04-01]: The control-plane snapshot drives both `/v1/models` and `/catalog/models` so Hive's public model surfaces cannot drift.
 - [04-01]: Edge catalog fetch failures return the provider-blind `catalog_unavailable` OpenAI error instead of leaking snapshot or provider detail.
+- [04-02]: Alias capability, allowlist, and fallback checks run inside Hive before LiteLLM receives a route handle.
+- [04-02]: LiteLLM model groups are keyed by private route handles rather than public alias IDs.
 
 ### Pending Todos
 
@@ -113,6 +115,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T07:30:50.000Z
-Stopped at: Completed 04-01-PLAN.md
+Last session: 2026-03-31T07:56:25.000Z
+Stopped at: Completed 04-02-PLAN.md
 Resume file: None
