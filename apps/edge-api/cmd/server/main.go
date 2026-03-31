@@ -7,6 +7,8 @@ import (
 	"os"
 
 	"github.com/hivegpt/hive/apps/edge-api/docs"
+	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
 )
@@ -27,6 +29,8 @@ func main() {
 	}
 	log.Printf("Loaded support matrix: %d endpoints", len(m.Endpoints))
 
+	catalogClient := catalog.NewClient(resolveControlPlaneBaseURL())
+
 	// Create the main mux
 	mux := http.NewServeMux()
 
@@ -38,7 +42,8 @@ func main() {
 	mux.Handle("/docs/", swaggerHandler)
 
 	// API routes
-	mux.HandleFunc("/v1/models", handleModels)
+	mux.Handle("/v1/models", handleModels(catalogClient))
+	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
 	// Apply middleware: CompatHeaders (outermost) -> UnsupportedEndpoint (inner)
 	var handler http.Handler = mux
@@ -57,13 +62,42 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func handleModels(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"object": "list",
-		"data":   []interface{}{},
+func handleModels(client *catalog.Client) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		snapshot, err := client.FetchSnapshot(r.Context())
+		if err != nil {
+			writeCatalogUnavailable(w)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"object": "list",
+			"data":   snapshot.Models,
+		})
 	})
+}
+
+func handleCatalogModels(client *catalog.Client) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		snapshot, err := client.FetchSnapshot(r.Context())
+		if err != nil {
+			writeCatalogUnavailable(w)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, snapshot.Catalog)
+	})
+}
+
+func writeCatalogUnavailable(w http.ResponseWriter) {
+	code := "catalog_unavailable"
+	apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "The Hive model catalog is temporarily unavailable.", &code)
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func resolveMatrixPath() string {
@@ -82,4 +116,13 @@ func resolveSpecPath() string {
 	}
 
 	return "/app/packages/openai-contract/generated/hive-openapi.yaml"
+}
+
+func resolveControlPlaneBaseURL() string {
+	baseURL := os.Getenv("EDGE_CONTROL_PLANE_BASE_URL")
+	if baseURL != "" {
+		return baseURL
+	}
+
+	return "http://control-plane:8081"
 }

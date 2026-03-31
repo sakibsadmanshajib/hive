@@ -5,9 +5,14 @@ services:
       dockerfile: deploy/docker/Dockerfile.edge-api
     ports:
       - "8080:8080"
+    depends_on:
+      control-plane:
+        condition: service_healthy
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
+    environment:
+      EDGE_CONTROL_PLANE_BASE_URL: ${EDGE_CONTROL_PLANE_BASE_URL:-http://control-plane:8081}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 5s
