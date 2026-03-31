@@ -20,6 +20,7 @@ import (
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 )
 
@@ -53,6 +54,7 @@ func main() {
 	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
+	var routingHandler *routing.Handler
 	var usageHandler *usage.Handler
 	if pool != nil {
 		if cfg.RedisURL != "" {
@@ -73,6 +75,10 @@ func main() {
 		catalogRepo := catalog.NewPgxRepository(pool)
 		catalogSvc := catalog.NewService(catalogRepo)
 		catalogHandler = catalog.NewHandler(catalogSvc)
+
+		routingRepo := routing.NewPgxRepository(pool)
+		routingSvc := routing.NewService(routingRepo)
+		routingHandler = routing.NewHandler(routingSvc)
 
 		ledgerRepo := ledger.NewPgxRepository(pool)
 		ledgerSvc := ledger.NewService(ledgerRepo)
@@ -100,6 +106,7 @@ func main() {
 		CatalogHandler:    catalogHandler,
 		LedgerHandler:     ledgerHandler,
 		ProfilesHandler:   profilesHandler,
+		RoutingHandler:    routingHandler,
 		UsageHandler:      usageHandler,
 	})
 

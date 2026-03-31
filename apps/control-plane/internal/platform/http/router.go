@@ -10,6 +10,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 )
 
@@ -26,6 +27,7 @@ type RouterConfig struct {
 	CatalogHandler    *catalog.Handler
 	LedgerHandler     *ledger.Handler
 	ProfilesHandler   *profiles.Handler
+	RoutingHandler    *routing.Handler
 	UsageHandler      *usage.Handler
 }
 
@@ -37,6 +39,10 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 
 	if cfg.CatalogHandler != nil {
 		mux.Handle("/internal/catalog/snapshot", cfg.CatalogHandler)
+	}
+
+	if cfg.RoutingHandler != nil {
+		mux.Handle("/internal/routing/select", cfg.RoutingHandler)
 	}
 
 	if cfg.ProfilesHandler != nil && cfg.AuthMiddleware != nil {

@@ -1,0 +1,17 @@
+model_list:
+  - model_name: route-openrouter-default
+    litellm_params:
+      model: os.environ/OPENROUTER_DEFAULT_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: route-openrouter-auto
+    litellm_params:
+      model: os.environ/OPENROUTER_AUTO_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: route-openrouter-fast-fallback
+    litellm_params:
+      model: os.environ/OPENROUTER_FAST_FALLBACK_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: route-groq-fast
+    litellm_params:
+      model: os.environ/GROQ_FAST_MODEL
+      api_key: os.environ/GROQ_API_KEY
