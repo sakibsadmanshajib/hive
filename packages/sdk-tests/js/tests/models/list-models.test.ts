@@ -34,4 +34,13 @@ describe("List Models", () => {
 
     expect(body).toEqual(golden);
   });
+
+  it("returns the seeded Hive aliases without provider leaks", async () => {
+    const res = await fetch(`${BASE_URL}/models`);
+    const body = await res.json();
+    const ids = body.data.map((model: { id: string }) => model.id);
+
+    expect(ids).toEqual(expect.arrayContaining(["hive-default", "hive-fast", "hive-auto"]));
+    expect(JSON.stringify(body)).not.toMatch(/openrouter|groq/i);
+  });
 });
