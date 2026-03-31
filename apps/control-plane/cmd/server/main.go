@@ -10,9 +10,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
@@ -49,6 +50,7 @@ func main() {
 	// Build accounts service and handler (requires DB; skip if pool unavailable).
 	var accountsHandler *accounts.Handler
 	var accountingHandler *accounting.Handler
+	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
 	var usageHandler *usage.Handler
@@ -67,6 +69,10 @@ func main() {
 		accountsRepo := accounts.NewPgxRepository(pool)
 		accountsSvc := accounts.NewService(accountsRepo)
 		accountsHandler = accounts.NewHandler(accountsSvc)
+
+		catalogRepo := catalog.NewPgxRepository(pool)
+		catalogSvc := catalog.NewService(catalogRepo)
+		catalogHandler = catalog.NewHandler(catalogSvc)
 
 		ledgerRepo := ledger.NewPgxRepository(pool)
 		ledgerSvc := ledger.NewService(ledgerRepo)
@@ -88,12 +94,13 @@ func main() {
 	}
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:  authMiddleware,
-		AccountsHandler: accountsHandler,
+		AuthMiddleware:    authMiddleware,
+		AccountsHandler:   accountsHandler,
 		AccountingHandler: accountingHandler,
-		LedgerHandler:   ledgerHandler,
-		ProfilesHandler: profilesHandler,
-		UsageHandler:    usageHandler,
+		CatalogHandler:    catalogHandler,
+		LedgerHandler:     ledgerHandler,
+		ProfilesHandler:   profilesHandler,
+		UsageHandler:      usageHandler,
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.Port)

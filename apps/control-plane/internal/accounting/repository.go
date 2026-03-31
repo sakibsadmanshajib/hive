@@ -30,8 +30,8 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 
 func (r *pgxRepository) CreateReservation(ctx context.Context, reservation Reservation, reason string) (Reservation, error) {
 	metadata, err := json.Marshal(map[string]any{
-		"policy_mode":   reservation.PolicyMode,
-		"request_id":    reservation.RequestID,
+		"policy_mode":    reservation.PolicyMode,
+		"request_id":     reservation.RequestID,
 		"attempt_number": reservation.AttemptNumber,
 	})
 	if err != nil {
@@ -110,8 +110,7 @@ func (r *pgxRepository) ExpandReservation(ctx context.Context, accountID, reserv
 		RETURNING id, account_id, request_attempt_id, reservation_key, policy_mode, status, reserved_credits, consumed_credits, released_credits, terminal_usage_confirmed, created_at, updated_at
 	`, accountID, reservationID, additionalCredits)
 
-	reservation, err := scanReservationCore(row)
-	if err != nil {
+	if _, err := scanReservationCore(row); err != nil {
 		return Reservation{}, err
 	}
 
@@ -132,8 +131,8 @@ func (r *pgxRepository) ExpandReservation(ctx context.Context, accountID, reserv
 
 func (r *pgxRepository) FinalizeReservation(ctx context.Context, accountID, reservationID uuid.UUID, consumedCredits, releasedCredits int64, terminalUsageConfirmed bool, status ReservationStatus, reason string) (Reservation, error) {
 	metadata, err := json.Marshal(map[string]any{
-		"consumed_credits":          consumedCredits,
-		"released_credits":          releasedCredits,
+		"consumed_credits":         consumedCredits,
+		"released_credits":         releasedCredits,
 		"terminal_usage_confirmed": terminalUsageConfirmed,
 	})
 	if err != nil {
@@ -157,8 +156,7 @@ func (r *pgxRepository) FinalizeReservation(ctx context.Context, accountID, rese
 		RETURNING id, account_id, request_attempt_id, reservation_key, policy_mode, status, reserved_credits, consumed_credits, released_credits, terminal_usage_confirmed, created_at, updated_at
 	`, accountID, reservationID, consumedCredits, releasedCredits, terminalUsageConfirmed, string(status))
 
-	reservation, err := scanReservationCore(row)
-	if err != nil {
+	if _, err := scanReservationCore(row); err != nil {
 		return Reservation{}, err
 	}
 
@@ -198,8 +196,7 @@ func (r *pgxRepository) ReleaseReservation(ctx context.Context, accountID, reser
 		RETURNING id, account_id, request_attempt_id, reservation_key, policy_mode, status, reserved_credits, consumed_credits, released_credits, terminal_usage_confirmed, created_at, updated_at
 	`, accountID, reservationID, releasedCredits)
 
-	reservation, err := scanReservationCore(row)
-	if err != nil {
+	if _, err := scanReservationCore(row); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			existing, lookupErr := r.getReservationTx(ctx, tx, accountID, reservationID)
 			if lookupErr != nil {

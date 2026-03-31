@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
@@ -19,12 +20,13 @@ type healthResponse struct {
 
 // RouterConfig holds dependencies for building the HTTP router.
 type RouterConfig struct {
-	AuthMiddleware  *auth.Middleware
-	AccountsHandler *accounts.Handler
+	AuthMiddleware    *auth.Middleware
+	AccountsHandler   *accounts.Handler
 	AccountingHandler *accounting.Handler
-	LedgerHandler   *ledger.Handler
-	ProfilesHandler *profiles.Handler
-	UsageHandler    *usage.Handler
+	CatalogHandler    *catalog.Handler
+	LedgerHandler     *ledger.Handler
+	ProfilesHandler   *profiles.Handler
+	UsageHandler      *usage.Handler
 }
 
 // NewRouter returns a configured http.ServeMux with all platform routes registered.
@@ -32,6 +34,10 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", handleHealth)
+
+	if cfg.CatalogHandler != nil {
+		mux.Handle("/internal/catalog/snapshot", cfg.CatalogHandler)
+	}
 
 	if cfg.ProfilesHandler != nil && cfg.AuthMiddleware != nil {
 		protectedProfiles := cfg.AuthMiddleware.Require(cfg.ProfilesHandler)
