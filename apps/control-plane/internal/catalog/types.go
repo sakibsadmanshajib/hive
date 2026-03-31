@@ -18,6 +18,32 @@ type ModelAlias struct {
 	UpdatedAt              time.Time
 }
 
+type RouteSnapshot struct {
+	RouteID                 string
+	AliasID                 string
+	Provider                string
+	ProviderModel           string
+	LiteLLMModelName        string
+	PriceClass              string
+	HealthState             string
+	Priority                int
+	SupportsResponses       bool
+	SupportsChatCompletions bool
+	SupportsCompletions     bool
+	SupportsEmbeddings      bool
+	SupportsStreaming       bool
+	SupportsReasoning       bool
+	SupportsCacheRead       bool
+	SupportsCacheWrite      bool
+}
+
+type AliasPolicySnapshot struct {
+	AliasID                 string
+	PolicyMode              string
+	AllowPriceClassWidening bool
+	FallbackOrder           []string
+}
+
 type PublicModel struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
@@ -42,6 +68,8 @@ type PublicCatalogModel struct {
 }
 
 type CatalogSnapshot struct {
-	Models  []PublicModel        `json:"models"`
-	Catalog []PublicCatalogModel `json:"catalog"`
+	Models        []PublicModel         `json:"models"`
+	Catalog       []PublicCatalogModel  `json:"catalog"`
+	Routes        []RouteSnapshot       `json:"-"`
+	AliasPolicies []AliasPolicySnapshot `json:"-"`
 }

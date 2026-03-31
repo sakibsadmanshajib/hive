@@ -70,7 +70,21 @@ func (r *pgxRepository) GetSnapshot(ctx context.Context) (CatalogSnapshot, error
 		return CatalogSnapshot{}, err
 	}
 
-	return buildCatalogSnapshot(aliases), nil
+	routes, err := r.listRouteSnapshots(ctx)
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+
+	policies, err := r.listAliasPolicies(ctx)
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+
+	snapshot := buildCatalogSnapshot(aliases)
+	snapshot.Routes = routes
+	snapshot.AliasPolicies = policies
+
+	return snapshot, nil
 }
 
 type aliasScanner interface {
@@ -110,4 +124,136 @@ func scanModelAlias(scanner aliasScanner) (ModelAlias, error) {
 	}
 
 	return alias, nil
+}
+
+func (r *pgxRepository) listRouteSnapshots(ctx context.Context) ([]RouteSnapshot, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			r.route_id,
+			r.alias_id,
+			r.provider,
+			r.provider_model,
+			r.litellm_model_name,
+			r.price_class,
+			r.health_state,
+			r.priority,
+			c.supports_responses,
+			c.supports_chat_completions,
+			c.supports_completions,
+			c.supports_embeddings,
+			c.supports_streaming,
+			c.supports_reasoning,
+			c.supports_cache_read,
+			c.supports_cache_write
+		FROM public.provider_routes r
+		JOIN public.provider_capabilities c ON c.route_id = r.route_id
+		ORDER BY r.alias_id ASC, r.priority ASC, r.route_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list route snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	var routes []RouteSnapshot
+	for rows.Next() {
+		route, err := scanRouteSnapshot(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		routes = append(routes, route)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: iterate route snapshots: %w", err)
+	}
+
+	return routes, nil
+}
+
+func (r *pgxRepository) listAliasPolicies(ctx context.Context) ([]AliasPolicySnapshot, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			alias_id,
+			policy_mode,
+			allow_price_class_widening,
+			fallback_order
+		FROM public.alias_route_policies
+		ORDER BY alias_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list alias policies: %w", err)
+	}
+	defer rows.Close()
+
+	var policies []AliasPolicySnapshot
+	for rows.Next() {
+		policy, err := scanAliasPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+
+		policies = append(policies, policy)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: iterate alias policies: %w", err)
+	}
+
+	return policies, nil
+}
+
+func scanRouteSnapshot(scanner aliasScanner) (RouteSnapshot, error) {
+	var route RouteSnapshot
+	if err := scanner.Scan(
+		&route.RouteID,
+		&route.AliasID,
+		&route.Provider,
+		&route.ProviderModel,
+		&route.LiteLLMModelName,
+		&route.PriceClass,
+		&route.HealthState,
+		&route.Priority,
+		&route.SupportsResponses,
+		&route.SupportsChatCompletions,
+		&route.SupportsCompletions,
+		&route.SupportsEmbeddings,
+		&route.SupportsStreaming,
+		&route.SupportsReasoning,
+		&route.SupportsCacheRead,
+		&route.SupportsCacheWrite,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return RouteSnapshot{}, fmt.Errorf("catalog: route snapshot not found")
+		}
+		return RouteSnapshot{}, fmt.Errorf("catalog: scan route snapshot: %w", err)
+	}
+
+	return route, nil
+}
+
+func scanAliasPolicy(scanner aliasScanner) (AliasPolicySnapshot, error) {
+	var policy AliasPolicySnapshot
+	var fallbackOrder []byte
+
+	if err := scanner.Scan(
+		&policy.AliasID,
+		&policy.PolicyMode,
+		&policy.AllowPriceClassWidening,
+		&fallbackOrder,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return AliasPolicySnapshot{}, fmt.Errorf("catalog: alias policy not found")
+		}
+		return AliasPolicySnapshot{}, fmt.Errorf("catalog: scan alias policy: %w", err)
+	}
+
+	policy.FallbackOrder = []string{}
+	if len(fallbackOrder) > 0 {
+		if err := json.Unmarshal(fallbackOrder, &policy.FallbackOrder); err != nil {
+			return AliasPolicySnapshot{}, fmt.Errorf("catalog: decode fallback order: %w", err)
+		}
+	}
+
+	return policy, nil
 }
