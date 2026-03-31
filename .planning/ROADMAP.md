@@ -15,7 +15,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 1: Contract & Compatibility Harness** - Import the OpenAI contract, define launch coverage, and make compatibility regression-tested. (completed 2026-03-29)
 - [x] **Phase 2: Identity & Account Foundation** - Stand up hosted Supabase auth, tenancy, sessions, customer account profile data, and the primary relational model. (completed 2026-03-29)
 - [x] **Phase 3: Credits Ledger & Usage Accounting** - Build immutable prepaid billing, reservations, and privacy-safe usage events. (completed 2026-03-30)
-- [ ] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix.
+- [x] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix. (completed 2026-03-31)
 - [ ] **Phase 5: API Keys & Hot-Path Enforcement** - Add key lifecycle, per-key controls, budgets, rate limits, and hot-path authorization.
 - [ ] **Phase 6: Core Text & Embeddings API** - Deliver the most-used OpenAI-compatible inference endpoints with streaming and reasoning support.
 - [ ] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows.
@@ -84,12 +84,12 @@ Plans:
   1. Public model catalog lists Hive aliases, pricing, and capability metadata without provider leakage.
   2. Routing uses an internal capability matrix, fallback policy, and allowlist checks before selecting an upstream provider.
   3. Cache-related token categories are captured in usage accounting when an upstream provider supports them.
-**Plans**: 2/3 plans executed
+**Plans**: 3/3 plans complete
 
 Plans:
 - [x] 04-01: Create the Hive model catalog, alias schema, and pricing metadata.
 - [x] 04-02: Build provider capability matrices and routing policies over LiteLLM-backed adapters.
-- [ ] 04-03: Add cache-aware usage attribution and sanitized provider error translation.
+- [x] 04-03: Add cache-aware usage attribution and sanitized provider error translation.
 
 ### Phase 5: API Keys & Hot-Path Enforcement
 **Goal**: Give customers safe multi-key management while keeping authorization, budgets, and rate limits cheap on the hot path.
@@ -181,7 +181,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 1. Contract & Compatibility Harness | 4/4 | Complete | 2026-03-29 |
 | 2. Identity & Account Foundation | 7/7 | Complete | 2026-03-29 |
 | 3. Credits Ledger & Usage Accounting | 3/3 | Complete | 2026-03-30 |
-| 4. Model Catalog & Provider Routing | 2/3 | In Progress | - |
+| 4. Model Catalog & Provider Routing | 3/3 | Complete | 2026-03-31 |
 | 5. API Keys & Hot-Path Enforcement | 0/3 | Not started | - |
 | 6. Core Text & Embeddings API | 0/3 | Not started | - |
 | 7. Media, File, and Async API Surface | 0/3 | Not started | - |

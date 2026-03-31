@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Completed 04-02-PLAN.md
-last_updated: "2026-03-31T07:56:25.000Z"
+status: ready_to_plan
+stopped_at: Completed Phase 04 verification
+last_updated: "2026-03-31T08:12:14.000Z"
 progress:
   total_phases: 9
-  completed_phases: 3
+  completed_phases: 4
   total_plans: 17
-  completed_plans: 16
+  completed_plans: 17
 ---
 
 # Project State
@@ -19,20 +19,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 04 — model-catalog-provider-routing
+**Current focus:** Phase 05 — api-keys-hot-path-enforcement
 
 ## Current Position
 
-Phase: 04 (model-catalog-provider-routing) — IN PROGRESS
-Plan: 2 of 3 completed
+Phase: 05 (api-keys-hot-path-enforcement) — READY TO PLAN
+Plan: Not started
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 16
-- Average duration: 16.6min
-- Total execution time: 4.43 hours
+- Total plans completed: 17
+- Average duration: 15.9min
+- Total execution time: 4.52 hours
 
 **By Phase:**
 
@@ -41,12 +41,12 @@ Plan: 2 of 3 completed
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
 | 03-credits-ledger-usage-accounting | 3/3 | 87min | 29min |
-| 04-model-catalog-provider-routing | 2/3 | 46min | 23min |
+| 04-model-catalog-provider-routing | 3/3 | 51min | 17min |
 
 **Recent Trend:**
 
-- Last 5 plans: 03-01 (9min), 03-02 (5min), 03-03 (73min), 04-01 (30min), 04-02 (16min)
-- Trend: Phase 4 remains integration-heavy, but the second routing slice completed faster once the catalog foundation was in place
+- Last 5 plans: 03-02 (5min), 03-03 (73min), 04-01 (30min), 04-02 (16min), 04-03 (5min)
+- Trend: Phase 4 closed with a short hardening slice once the catalog and routing foundations were in place
 
 ## Accumulated Context
 
@@ -103,6 +103,8 @@ Recent decisions affecting current work:
 - [04-01]: Edge catalog fetch failures return the provider-blind `catalog_unavailable` OpenAI error instead of leaking snapshot or provider detail.
 - [04-02]: Alias capability, allowlist, and fallback checks run inside Hive before LiteLLM receives a route handle.
 - [04-02]: LiteLLM model groups are keyed by private route handles rather than public alias IDs.
+- [04-03]: Cache-aware provider billing is normalized into the existing `cache_read_tokens` and `cache_write_tokens` fields, and zero-value cache fields stay omitted from customer responses.
+- [04-03]: Edge upstream errors mirror the provider-blind sanitization rules locally so customer-visible failures never depend on control-plane routing packages.
 
 ### Pending Todos
 
@@ -115,6 +117,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-31T07:56:25.000Z
-Stopped at: Completed 04-02-PLAN.md
+Last session: 2026-03-31T08:12:14.000Z
+Stopped at: Phase 04 complete; Phase 05 ready to plan
 Resume file: None
