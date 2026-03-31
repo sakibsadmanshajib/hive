@@ -6,6 +6,7 @@ import (
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
@@ -24,6 +25,7 @@ type RouterConfig struct {
 	AuthMiddleware    *auth.Middleware
 	AccountsHandler   *accounts.Handler
 	AccountingHandler *accounting.Handler
+	APIKeysHandler    *apikeys.Handler
 	CatalogHandler    *catalog.Handler
 	LedgerHandler     *ledger.Handler
 	ProfilesHandler   *profiles.Handler
@@ -69,6 +71,12 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		mux.Handle("/api/v1/accounts/current/credits/reservations/expand", protectedAccounting)
 		mux.Handle("/api/v1/accounts/current/credits/reservations/finalize", protectedAccounting)
 		mux.Handle("/api/v1/accounts/current/credits/reservations/release", protectedAccounting)
+	}
+
+	if cfg.APIKeysHandler != nil && cfg.AuthMiddleware != nil {
+		protectedAPIKeys := cfg.AuthMiddleware.Require(cfg.APIKeysHandler)
+		mux.Handle("/api/v1/accounts/current/api-keys", protectedAPIKeys)
+		mux.Handle("/api/v1/accounts/current/api-keys/", protectedAPIKeys)
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {

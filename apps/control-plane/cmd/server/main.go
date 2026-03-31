@@ -12,6 +12,7 @@ import (
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
@@ -51,6 +52,7 @@ func main() {
 	// Build accounts service and handler (requires DB; skip if pool unavailable).
 	var accountsHandler *accounts.Handler
 	var accountingHandler *accounting.Handler
+	var apikeysHandler *apikeys.Handler
 	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
@@ -95,6 +97,10 @@ func main() {
 		accountingRepo := accounting.NewPgxRepository(pool)
 		accountingSvc := accounting.NewService(accountingRepo, ledgerSvc, usageSvc)
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
+
+		apikeysRepo := apikeys.NewPgxRepository(pool)
+		apikeysSvc := apikeys.NewService(apikeysRepo)
+		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc)
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -103,6 +109,7 @@ func main() {
 		AuthMiddleware:    authMiddleware,
 		AccountsHandler:   accountsHandler,
 		AccountingHandler: accountingHandler,
+		APIKeysHandler:    apikeysHandler,
 		CatalogHandler:    catalogHandler,
 		LedgerHandler:     ledgerHandler,
 		ProfilesHandler:   profilesHandler,
