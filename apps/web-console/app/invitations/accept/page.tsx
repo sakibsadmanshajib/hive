@@ -48,6 +48,7 @@ export default async function AcceptInvitationPage({
   const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
 
   let errorMessage: string | null = null;
+  let accepted = false;
 
   if (baseUrl) {
     try {
@@ -65,9 +66,7 @@ export default async function AcceptInvitationPage({
       );
 
       if (response.ok) {
-        // Redirect without changing hive_account_id — the newly joined workspace
-        // appears in the switcher until the user explicitly selects it.
-        redirect("/console/members?joined=1");
+        accepted = true;
       } else {
         const responseText = await response.text().catch(() => "");
         errorMessage =
@@ -79,6 +78,12 @@ export default async function AcceptInvitationPage({
     }
   } else {
     errorMessage = "Server configuration error. Please contact support.";
+  }
+
+  if (accepted) {
+    // Redirect without changing hive_account_id — the newly joined workspace
+    // appears in the switcher until the user explicitly selects it.
+    redirect("/console/members?joined=1");
   }
 
   return (

@@ -1,3 +1,5 @@
+"use client";
+
 import type { ViewerMembership, ViewerAccount } from "@/lib/control-plane/client";
 
 interface WorkspaceSwitcherProps {
