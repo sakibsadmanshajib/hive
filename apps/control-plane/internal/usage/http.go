@@ -74,22 +74,27 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]map[string]any, 0, len(events))
 	for _, event := range events {
-		response = append(response, map[string]any{
-			"request_id":         event.RequestID,
-			"event_type":         event.EventType,
-			"endpoint":           event.Endpoint,
-			"model_alias":        event.ModelAlias,
-			"status":             event.Status,
-			"input_tokens":       event.InputTokens,
-			"output_tokens":      event.OutputTokens,
-			"cache_read_tokens":  event.CacheReadTokens,
-			"cache_write_tokens": event.CacheWriteTokens,
-			"hive_credit_delta":  event.HiveCreditDelta,
-			"customer_tags":      event.CustomerTags,
-			"error_code":         event.ErrorCode,
-			"error_type":         event.ErrorType,
-			"created_at":         event.CreatedAt,
-		})
+		item := map[string]any{
+			"request_id":        event.RequestID,
+			"event_type":        event.EventType,
+			"endpoint":          event.Endpoint,
+			"model_alias":       event.ModelAlias,
+			"status":            event.Status,
+			"input_tokens":      event.InputTokens,
+			"output_tokens":     event.OutputTokens,
+			"hive_credit_delta": event.HiveCreditDelta,
+			"customer_tags":     event.CustomerTags,
+			"error_code":        event.ErrorCode,
+			"error_type":        event.ErrorType,
+			"created_at":        event.CreatedAt,
+		}
+		if event.CacheReadTokens > 0 {
+			item["cache_read_tokens"] = event.CacheReadTokens
+		}
+		if event.CacheWriteTokens > 0 {
+			item["cache_write_tokens"] = event.CacheWriteTokens
+		}
+		response = append(response, item)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"events": response})
