@@ -31,7 +31,7 @@
 
 ### Model Catalog & Routing
 
-- [ ] **ROUT-01**: Developer can list Hive-owned public model aliases, capabilities, and prices without seeing upstream provider identities.
+- [x] **ROUT-01**: Developer can list Hive-owned public model aliases, capabilities, and prices without seeing upstream provider identities.
 - [ ] **ROUT-02**: Requests route only to internally approved providers and models that satisfy the alias capability matrix, fallback policy, and account or key allowlists.
 - [ ] **ROUT-03**: When an upstream provider supports cache-aware billing semantics, Hive tracks and itemizes the related token categories without exposing the provider name.
 
@@ -107,7 +107,7 @@
 | API-06 | Phase 7 | Pending |
 | API-07 | Phase 7 | Pending |
 | API-08 | Phase 1 | Complete |
-| ROUT-01 | Phase 4 | Pending |
+| ROUT-01 | Phase 4 | Complete |
 | ROUT-02 | Phase 4 | Pending |
 | ROUT-03 | Phase 4 | Pending |
 | BILL-01 | Phase 3 | Complete |

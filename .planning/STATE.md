@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-03-30T19:36:46.000Z"
+stopped_at: Completed 04-01-PLAN.md
+last_updated: "2026-03-31T07:30:50.000Z"
 progress:
   total_phases: 9
   completed_phases: 3
-  total_plans: 14
-  completed_plans: 14
+  total_plans: 17
+  completed_plans: 15
 ---
 
 # Project State
@@ -23,16 +23,16 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 04 (model-catalog-provider-routing) — READY TO START
-Plan: 0 of 3 completed
+Phase: 04 (model-catalog-provider-routing) — IN PROGRESS
+Plan: 1 of 3 completed
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 14
-- Average duration: 15.7min
-- Total execution time: 3.67 hours
+- Total plans completed: 15
+- Average duration: 16.7min
+- Total execution time: 4.17 hours
 
 **By Phase:**
 
@@ -41,11 +41,12 @@ Plan: 0 of 3 completed
 | 01-contract-compatibility-harness | 4/4 | 40min | 10min |
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
 | 03-credits-ledger-usage-accounting | 3/3 | 87min | 29min |
+| 04-model-catalog-provider-routing | 1/3 | 30min | 30min |
 
 **Recent Trend:**
 
-- Last 5 plans: 02-06 (29min), 02-07 (23min), 03-01 (9min), 03-02 (5min), 03-03 (73min)
-- Trend: Slower on the reservation-integration plan after two quick Phase 3 foundation steps
+- Last 5 plans: 02-07 (23min), 03-01 (9min), 03-02 (5min), 03-03 (73min), 04-01 (30min)
+- Trend: Integration-heavy control-plane and SDK-alignment plans remain slower than the earlier foundation slices
 
 ## Accumulated Context
 
@@ -98,6 +99,8 @@ Recent decisions affecting current work:
 - [03-03]: Reservation lifecycle state is stored durably in Postgres while immutable ledger entries remain the financial source of truth.
 - [03-03]: Ambiguous interruptions default to customer-favoring release plus reconciliation instead of assuming full reserve consumption.
 - [03-03]: Current-account reservation mutations reuse the control-plane account resolver and reject invalid reservation IDs at the HTTP boundary.
+- [04-01]: The control-plane snapshot drives both `/v1/models` and `/catalog/models` so Hive's public model surfaces cannot drift.
+- [04-01]: Edge catalog fetch failures return the provider-blind `catalog_unavailable` OpenAI error instead of leaking snapshot or provider detail.
 
 ### Pending Todos
 
@@ -110,6 +113,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-30T19:36:46.000Z
-Stopped at: Completed 03-03-PLAN.md
+Last session: 2026-03-31T07:30:50.000Z
+Stopped at: Completed 04-01-PLAN.md
 Resume file: None
