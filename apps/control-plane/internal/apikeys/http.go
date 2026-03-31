@@ -34,6 +34,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListKeys(w, r)
 	case r.Method == http.MethodPost && path == base:
 		h.handleCreateKey(w, r)
+	case r.Method == http.MethodPost && strings.HasSuffix(path, "/policy"):
+		h.handleUpdatePolicy(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/rotate"):
 		h.handleRotateKey(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/disable"):
@@ -42,6 +44,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleEnableKey(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/revoke"):
 		h.handleRevokeKey(w, r)
+	case r.Method == http.MethodPost && path == "/internal/apikeys/resolve":
+		h.handleInternalResolve(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -253,6 +257,89 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, keyListItem(key))
 }
 
+func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r)
+	if !ok {
+		return
+	}
+
+	keyID, ok := extractKeyID(w, r)
+	if !ok {
+		return
+	}
+
+	var body struct {
+		ExpiresAt         *string  `json:"expires_at"`
+		AllowAllModels    *bool    `json:"allow_all_models"`
+		AllowedGroupNames []string `json:"allowed_group_names"`
+		AllowedAliases    []string `json:"allowed_aliases"`
+		DeniedAliases     []string `json:"denied_aliases"`
+		BudgetKind        *string  `json:"budget_kind"`
+		BudgetLimitCredits *int64  `json:"budget_limit_credits"`
+		BudgetAnchorAt    *string  `json:"budget_anchor_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	input := UpdatePolicyInput{
+		AllowAllModels:    body.AllowAllModels,
+		AllowedGroupNames: body.AllowedGroupNames,
+		AllowedAliases:    body.AllowedAliases,
+		DeniedAliases:     body.DeniedAliases,
+		BudgetKind:        body.BudgetKind,
+		BudgetLimitCredits: body.BudgetLimitCredits,
+	}
+
+	if body.ExpiresAt != nil {
+		t, err := time.Parse(time.RFC3339, *body.ExpiresAt)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "expires_at must be RFC3339"})
+			return
+		}
+		input.ExpiresAt = &t
+	}
+	if body.BudgetAnchorAt != nil {
+		t, err := time.Parse(time.RFC3339, *body.BudgetAnchorAt)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "budget_anchor_at must be RFC3339"})
+			return
+		}
+		input.BudgetAnchorAt = &t
+	}
+
+	policy, err := h.svc.UpdatePolicy(r.Context(), vc.CurrentAccount.ID, vc.User.ID, keyID, input)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"api_key_id":      policy.APIKeyID.String(),
+		"allow_all_models": policy.AllowAllModels,
+		"budget_kind":     policy.BudgetKind,
+		"policy_version":  policy.PolicyVersion,
+	})
+}
+
+func (h *Handler) handleInternalResolve(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TokenHash string `json:"token_hash"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.TokenHash == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "token_hash is required"})
+		return
+	}
+
+	snapshot, err := h.svc.ResolveSnapshot(r.Context(), body.TokenHash)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, snapshot)
+}
 // --- helpers ---
 
 func parseAccountHeader(r *http.Request) uuid.UUID {

@@ -85,3 +85,59 @@ var ErrDisabled = errors.New("apikeys: key is not disabled")
 
 // ErrNotActive is returned when an operation requires an active key.
 var ErrNotActive = errors.New("apikeys: key is not active")
+
+// KeyPolicy holds the durable per-key policy configuration.
+type KeyPolicy struct {
+	APIKeyID          uuid.UUID
+	AllowAllModels    bool
+	AllowedGroupNames []string
+	AllowedAliases    []string
+	DeniedAliases     []string
+	BudgetKind        string
+	BudgetLimitCredits *int64
+	BudgetAnchorAt    *time.Time
+	PolicyVersion     int64
+	UpdatedAt         time.Time
+}
+
+// BudgetPolicy encapsulates budget-related policy data.
+type BudgetPolicy struct {
+	Kind         string
+	LimitCredits *int64
+	AnchorAt     *time.Time
+}
+
+// AuthSnapshot is the control-plane-owned, Redis-projected authorization
+// snapshot consumed by the edge for hot-path enforcement.
+type AuthSnapshot struct {
+	KeyID                uuid.UUID  `json:"key_id"`
+	AccountID            uuid.UUID  `json:"account_id"`
+	Status               KeyStatus  `json:"status"`
+	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
+	AllowAllModels       bool       `json:"allow_all_models"`
+	AllowedAliases       []string   `json:"allowed_aliases"`
+	BudgetKind           string     `json:"budget_kind"`
+	BudgetLimitCredits   *int64     `json:"budget_limit_credits,omitempty"`
+	BudgetConsumedCredits int64     `json:"budget_consumed_credits"`
+	BudgetReservedCredits int64     `json:"budget_reserved_credits"`
+	BudgetAnchorAt       *time.Time `json:"budget_anchor_at,omitempty"`
+	PolicyVersion        int64      `json:"policy_version"`
+}
+
+// UpdatePolicyInput is the user-supplied input for per-key policy updates.
+type UpdatePolicyInput struct {
+	ExpiresAt          *time.Time
+	AllowAllModels     *bool
+	AllowedGroupNames  []string
+	AllowedAliases     []string
+	DeniedAliases      []string
+	BudgetKind         *string
+	BudgetLimitCredits *int64
+	BudgetAnchorAt     *time.Time
+}
+
+// ResolveSnapshotResult wraps the auth snapshot returned by the resolve action.
+type ResolveSnapshotResult struct {
+	Snapshot AuthSnapshot
+}
+

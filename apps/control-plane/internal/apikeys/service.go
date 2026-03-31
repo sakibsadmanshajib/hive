@@ -70,6 +70,9 @@ func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUI
 		ActorUserID: actorUserID,
 	})
 
+	// Create default policy row for the new key.
+	_ = s.repo.CreateDefaultPolicy(ctx, created.ID)
+
 	return CreateKeyResult{
 		Key:    created,
 		Secret: rawSecret,
@@ -211,11 +214,90 @@ func (s *Service) RotateKey(ctx context.Context, accountID, actorUserID, keyID u
 		Metadata:    map[string]interface{}{"replacement_key_id": created.ID.String()},
 	})
 
+	// Create default policy for the new key.
+	_ = s.repo.CreateDefaultPolicy(ctx, created.ID)
+
 	return RotateKeyResult{
 		OldKey: old,
 		NewKey: created,
 		Secret: rawSecret,
 	}, nil
+}
+
+// UpdatePolicy updates the per-key policy configuration.
+func (s *Service) UpdatePolicy(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, input UpdatePolicyInput) (KeyPolicy, error) {
+	policy, err := s.repo.UpsertPolicy(ctx, accountID, keyID, input)
+	if err != nil {
+		return KeyPolicy{}, fmt.Errorf("apikeys: update policy: %w", err)
+	}
+	return policy, nil
+}
+
+// ResolveSnapshot builds an AuthSnapshot from the key and policy data.
+// This is called by the internal resolver endpoint for edge hot-path enforcement.
+func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSnapshot, error) {
+	key, policy, err := s.repo.GetPolicyByTokenHash(ctx, tokenHash)
+	if err != nil {
+		return AuthSnapshot{}, fmt.Errorf("apikeys: resolve snapshot: %w", err)
+	}
+
+	key = applyExpiry(key, time.Now())
+
+	// Build allowed aliases from group members + explicit allowed - denied.
+	var allowedAliases []string
+	if policy.AllowAllModels {
+		// All models mode — edge will not filter by alias.
+		allowedAliases = []string{"*"}
+	} else {
+		// Resolve group members.
+		if len(policy.AllowedGroupNames) > 0 {
+			groupAliases, err := s.repo.ListGroupMembers(ctx, policy.AllowedGroupNames)
+			if err != nil {
+				return AuthSnapshot{}, fmt.Errorf("apikeys: resolve group members: %w", err)
+			}
+			allowedAliases = append(allowedAliases, groupAliases...)
+		}
+		// Add explicit allowed aliases.
+		allowedAliases = append(allowedAliases, policy.AllowedAliases...)
+		// Remove denied aliases.
+		if len(policy.DeniedAliases) > 0 {
+			denied := make(map[string]bool, len(policy.DeniedAliases))
+			for _, d := range policy.DeniedAliases {
+				denied[d] = true
+			}
+			var filtered []string
+			for _, a := range allowedAliases {
+				if !denied[a] {
+					filtered = append(filtered, a)
+				}
+			}
+			allowedAliases = filtered
+		}
+		// Deduplicate.
+		allowedAliases = dedup(allowedAliases)
+	}
+
+	return AuthSnapshot{
+		KeyID:                 key.ID,
+		AccountID:             key.AccountID,
+		Status:                key.Status,
+		ExpiresAt:             key.ExpiresAt,
+		AllowAllModels:        policy.AllowAllModels,
+		AllowedAliases:        allowedAliases,
+		BudgetKind:            policy.BudgetKind,
+		BudgetLimitCredits:    policy.BudgetLimitCredits,
+		BudgetConsumedCredits: 0, // populated in Plan 05-03
+		BudgetReservedCredits: 0, // populated in Plan 05-03
+		BudgetAnchorAt:        policy.BudgetAnchorAt,
+		PolicyVersion:         policy.PolicyVersion,
+	}, nil
+}
+
+// RefreshSnapshot is a placeholder for Plan 05-03 where the snapshot
+// will be written/refreshed in Redis after policy or budget changes.
+func (s *Service) RefreshSnapshot(ctx context.Context, keyID uuid.UUID) error {
+	// No-op until Plan 05-02 Task 2 adds Redis projection.
+	return nil
 }
 
 // --- helpers ---
@@ -253,3 +335,17 @@ func applyExpiry(k APIKey, now time.Time) APIKey {
 	}
 	return k
 }
+
+// dedup returns unique strings from the input slice preserving order.
+func dedup(input []string) []string {
+	seen := make(map[string]bool, len(input))
+	var result []string
+	for _, s := range input {
+		if !seen[s] {
+			seen[s] = true
+			result = append(result, s)
+		}
+	}
+	return result
+}
+

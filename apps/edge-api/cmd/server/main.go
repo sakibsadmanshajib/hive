@@ -7,8 +7,9 @@ import (
 	"os"
 
 	"github.com/hivegpt/hive/apps/edge-api/docs"
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
+	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
 )
@@ -31,6 +32,13 @@ func main() {
 
 	catalogClient := catalog.NewClient(resolveControlPlaneBaseURL())
 
+	// Initialize authz
+	authzClient, err := authz.NewClient(resolveControlPlaneBaseURL(), resolveRedisURL())
+	if err != nil {
+		log.Fatalf("failed to initialize authz client: %v", err)
+	}
+	authorizer := authz.NewAuthorizer(authzClient)
+
 	// Create the main mux
 	mux := http.NewServeMux()
 
@@ -42,7 +50,7 @@ func main() {
 	mux.Handle("/docs/", swaggerHandler)
 
 	// API routes
-	mux.Handle("/v1/models", handleModels(catalogClient))
+	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
 	// Apply middleware: CompatHeaders (outermost) -> UnsupportedEndpoint (inner)
@@ -62,8 +70,13 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func handleModels(client *catalog.Client) http.Handler {
+func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Valid API key required to list models, even if not binding to a specific alias.
+		if _, ok := authorizeAliasRequest(w, r, authorizer, ""); !ok {
+			return
+		}
+
 		snapshot, err := client.FetchSnapshot(r.Context())
 		if err != nil {
 			writeCatalogUnavailable(w)
@@ -125,4 +138,31 @@ func resolveControlPlaneBaseURL() string {
 	}
 
 	return "http://control-plane:8081"
+}
+
+func resolveRedisURL() string {
+	url := os.Getenv("REDIS_URL")
+	if url != "" {
+		return url
+	}
+	return "redis://redis:6379/0"
+}
+
+// authorizeAliasRequest performs hot-path authorization.
+// It writes the OpenAI-compatible error response itself if unauthorized.
+// Returns the snapshot and a boolean indicating whether authorized.
+func authorizeAliasRequest(w http.ResponseWriter, r *http.Request, authorizer *authz.Authorizer, aliasID string) (authz.AuthSnapshot, bool) {
+	authHeader := r.Header.Get("Authorization")
+	snapshot, authErr := authorizer.Authorize(r.Context(), authHeader, aliasID)
+	if authErr != nil {
+		status := http.StatusUnauthorized
+		if authErr.Type == "insufficient_quota" {
+			status = http.StatusTooManyRequests
+		} else if authErr.Code != nil && *authErr.Code == "model_not_found" {
+			status = http.StatusNotFound
+		}
+		apierrors.WriteError(w, status, authErr.Type, authErr.Message, authErr.Code)
+		return snapshot, false
+	}
+	return snapshot, true
 }

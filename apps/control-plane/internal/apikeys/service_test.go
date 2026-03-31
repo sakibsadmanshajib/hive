@@ -10,12 +10,16 @@ import (
 
 // stubRepo is a test double that satisfies the Repository interface.
 type stubRepo struct {
-	keys   map[uuid.UUID]APIKey
-	events []KeyEvent
+	keys     map[uuid.UUID]APIKey
+	policies map[uuid.UUID]KeyPolicy
+	events   []KeyEvent
 }
 
 func newStubRepo() *stubRepo {
-	return &stubRepo{keys: make(map[uuid.UUID]APIKey)}
+	return &stubRepo{
+		keys:     make(map[uuid.UUID]APIKey),
+		policies: make(map[uuid.UUID]KeyPolicy),
+	}
 }
 
 func (r *stubRepo) CreateKey(_ context.Context, key APIKey) (APIKey, error) {
@@ -77,6 +81,111 @@ func (r *stubRepo) CreateReplacementKey(_ context.Context, oldKeyID uuid.UUID, n
 	r.keys[oldKeyID] = old
 
 	return old, newKey, nil
+}
+
+func (r *stubRepo) UpsertPolicy(_ context.Context, _, keyID uuid.UUID, input UpdatePolicyInput) (KeyPolicy, error) {
+	p := KeyPolicy{
+		APIKeyID:      keyID,
+		BudgetKind:    "none",
+		PolicyVersion: 1,
+	}
+	if input.AllowAllModels != nil {
+		p.AllowAllModels = *input.AllowAllModels
+	}
+	if input.AllowedGroupNames != nil {
+		p.AllowedGroupNames = input.AllowedGroupNames
+	}
+	if input.AllowedAliases != nil {
+		p.AllowedAliases = input.AllowedAliases
+	}
+	if input.DeniedAliases != nil {
+		p.DeniedAliases = input.DeniedAliases
+	}
+	if input.BudgetKind != nil {
+		p.BudgetKind = *input.BudgetKind
+	}
+	p.BudgetLimitCredits = input.BudgetLimitCredits
+	p.BudgetAnchorAt = input.BudgetAnchorAt
+	if pol, exists := r.policies[keyID]; exists {
+		p.PolicyVersion = pol.PolicyVersion + 1
+	}
+	r.policies[keyID] = p
+	return p, nil
+}
+
+func (r *stubRepo) GetPolicy(_ context.Context, _, keyID uuid.UUID) (KeyPolicy, error) {
+	p, ok := r.policies[keyID]
+	if !ok {
+		return KeyPolicy{}, ErrNotFound
+	}
+	return p, nil
+}
+
+func (r *stubRepo) ListGroupMembers(_ context.Context, groupNames []string) ([]string, error) {
+	// For stubs, return hardcoded defaults matching the seed data.
+	groups := map[string][]string{
+		"default": {"hive-default", "hive-fast"},
+		"premium": {"hive-auto"},
+		"oss":     {},
+		"closed":  {"hive-default", "hive-fast", "hive-auto"},
+	}
+	seen := make(map[string]bool)
+	var result []string
+	for _, g := range groupNames {
+		for _, a := range groups[g] {
+			if !seen[a] {
+				seen[a] = true
+				result = append(result, a)
+			}
+		}
+	}
+	return result, nil
+}
+
+func (r *stubRepo) GetByTokenHash(_ context.Context, tokenHash string) (APIKey, error) {
+	for _, k := range r.keys {
+		if k.TokenHash == tokenHash {
+			return k, nil
+		}
+	}
+	return APIKey{}, ErrNotFound
+}
+
+func (r *stubRepo) GetPolicyByTokenHash(_ context.Context, tokenHash string) (APIKey, KeyPolicy, error) {
+	var key APIKey
+	found := false
+	for _, k := range r.keys {
+		if k.TokenHash == tokenHash {
+			key = k
+			found = true
+			break
+		}
+	}
+	if !found {
+		return APIKey{}, KeyPolicy{}, ErrNotFound
+	}
+	p, ok := r.policies[key.ID]
+	if !ok {
+		p = KeyPolicy{
+			APIKeyID:          key.ID,
+			AllowedGroupNames: []string{"default"},
+			BudgetKind:        "none",
+			PolicyVersion:     1,
+		}
+	}
+	return key, p, nil
+}
+
+func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error {
+	if _, exists := r.policies[keyID]; !exists {
+		r.policies[keyID] = KeyPolicy{
+			APIKeyID:          keyID,
+			AllowedGroupNames: []string{"default"},
+			BudgetKind:        "none",
+			PolicyVersion:     1,
+		}
+	}
+	return nil
 }
 
 // --- tests ---

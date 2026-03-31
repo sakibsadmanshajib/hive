@@ -77,6 +77,8 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		protectedAPIKeys := cfg.AuthMiddleware.Require(cfg.APIKeysHandler)
 		mux.Handle("/api/v1/accounts/current/api-keys", protectedAPIKeys)
 		mux.Handle("/api/v1/accounts/current/api-keys/", protectedAPIKeys)
+		// Internal service-to-service route — no auth middleware.
+		mux.Handle("/internal/apikeys/resolve", cfg.APIKeysHandler)
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {
