@@ -19,6 +19,7 @@ type Handler struct {
 type createReservationRequest struct {
 	RequestID        string         `json:"request_id"`
 	AttemptNumber    int            `json:"attempt_number"`
+	APIKeyID         string         `json:"api_key_id"`
 	Endpoint         string         `json:"endpoint"`
 	ModelAlias       string         `json:"model_alias"`
 	EstimatedCredits int64          `json:"estimated_credits"`
@@ -74,10 +75,17 @@ func (h *Handler) handleCreateReservation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	apiKeyID, err := parseOptionalUUIDPointerField(req.APIKeyID, "api_key_id")
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
 	reservation, err := h.svc.CreateReservation(r.Context(), CreateReservationInput{
 		AccountID:        accountID,
 		RequestID:        req.RequestID,
 		AttemptNumber:    req.AttemptNumber,
+		APIKeyID:         apiKeyID,
 		Endpoint:         req.Endpoint,
 		ModelAlias:       req.ModelAlias,
 		EstimatedCredits: req.EstimatedCredits,
@@ -225,6 +233,18 @@ func parseOptionalUUIDField(value string) (uuid.UUID, error) {
 		return uuid.Nil, nil
 	}
 	return parseUUIDField(value, "reservation_id")
+}
+
+func parseOptionalUUIDPointerField(value, field string) (*uuid.UUID, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	parsed, err := parseUUIDField(value, field)
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func parseUUIDField(value, field string) (uuid.UUID, error) {

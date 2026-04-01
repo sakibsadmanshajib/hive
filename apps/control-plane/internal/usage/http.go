@@ -94,6 +94,9 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 		if event.CacheWriteTokens > 0 {
 			item["cache_write_tokens"] = event.CacheWriteTokens
 		}
+		if event.APIKeyID != nil {
+			item["api_key_id"] = event.APIKeyID.String()
+		}
 		response = append(response, item)
 	}
 

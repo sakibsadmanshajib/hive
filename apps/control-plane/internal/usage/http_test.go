@@ -276,6 +276,46 @@ func TestListEventsIncludesCacheFieldsWhenPresent(t *testing.T) {
 	}
 }
 
+func TestListEventsIncludesAPIKeyIDWhenPresent(t *testing.T) {
+	repo := newStubRepo()
+	viewer, accountID := seedUsageHTTPAccount(repo)
+	apiKeyID := uuid.New()
+	repo.events[accountID] = []UsageEvent{{
+		ID:               uuid.New(),
+		AccountID:        accountID,
+		RequestAttemptID: uuid.New(),
+		APIKeyID:         &apiKeyID,
+		RequestID:        "req_attributed",
+		EventType:        UsageEventCompleted,
+		Endpoint:         "/v1/responses",
+		ModelAlias:       "hive-fast",
+		Status:           "completed",
+		HiveCreditDelta:  -3,
+		CreatedAt:        time.Now().UTC(),
+	}}
+
+	handler := newHTTPHandler(repo)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var response map[string][]map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
+		t.Fatalf("invalid response JSON: %v", err)
+	}
+
+	got := response["events"][0]["api_key_id"]
+	if got != apiKeyID.String() {
+		t.Fatalf("expected api_key_id %s, got %#v", apiKeyID, got)
+	}
+}
+
 func seedUsageHTTPAccount(repo *stubRepo) (auth.Viewer, uuid.UUID) {
 	userID := uuid.New()
 	accountID := uuid.New()

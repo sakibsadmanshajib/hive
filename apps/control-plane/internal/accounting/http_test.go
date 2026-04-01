@@ -16,9 +16,9 @@ import (
 )
 
 type accountsRepoStub struct {
-	accountsMap  map[uuid.UUID]*accounts.Account
-	memberships  []accounts.Membership
-	invitations  map[string]*accounts.Invitation
+	accountsMap map[uuid.UUID]*accounts.Account
+	memberships []accounts.Membership
+	invitations map[string]*accounts.Invitation
 }
 
 func newAccountsRepoStub() *accountsRepoStub {
@@ -105,6 +105,57 @@ func newHTTPHandler(accountRepo *accountsRepoStub, accountingRepo *repoStub, led
 	accountsSvc := accounts.NewService(accountRepo)
 	accountingSvc := NewService(accountingRepo, ledgerSvc, usageSvc)
 	return NewHandler(accountingSvc, accountsSvc)
+}
+
+func TestCreateReservationPropagatesAPIKeyID(t *testing.T) {
+	accountRepo := newAccountsRepoStub()
+	accountingRepo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledgerBalance(500)}
+	usageSvc := &usageStub{}
+
+	userID := uuid.New()
+	accountID := uuid.New()
+	apiKeyID := uuid.New()
+	accountRepo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "workspace-one",
+		DisplayName: "Workspace One",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	accountRepo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "owner", Status: "active"},
+	}
+
+	handler := newHTTPHandler(accountRepo, accountingRepo, ledgerSvc, usageSvc)
+	viewer := auth.Viewer{UserID: userID, Email: "owner@example.com", EmailVerified: true}
+
+	body, err := json.Marshal(map[string]any{
+		"request_id":        "req_http_api_key",
+		"attempt_number":    1,
+		"api_key_id":        apiKeyID.String(),
+		"endpoint":          "/v1/responses",
+		"model_alias":       "hive-fast",
+		"estimated_credits": 120,
+		"policy_mode":       string(PolicyModeStrict),
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/credits/reservations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if len(usageSvc.startCalls) != 1 || usageSvc.startCalls[0].APIKeyID == nil || *usageSvc.startCalls[0].APIKeyID != apiKeyID {
+		t.Fatalf("expected API key propagation to start attempt, got %#v", usageSvc.startCalls)
+	}
 }
 
 func TestCreateReservationUsesCurrentAccount(t *testing.T) {
@@ -245,7 +296,7 @@ func TestExpandReservationRejectsInvalidUUID(t *testing.T) {
 	_, handler, viewer := newFinalizeHandler(t)
 
 	body, err := json.Marshal(map[string]any{
-		"reservation_id":    "not-a-uuid",
+		"reservation_id":     "not-a-uuid",
 		"additional_credits": 50,
 	})
 	if err != nil {

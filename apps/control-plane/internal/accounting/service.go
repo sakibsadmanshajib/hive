@@ -23,16 +23,28 @@ type usageService interface {
 	StartAttempt(ctx context.Context, input usage.StartAttemptInput) (usage.RequestAttempt, error)
 	UpdateAttemptStatus(ctx context.Context, attemptID uuid.UUID, status usage.AttemptStatus, completedAt *time.Time) error
 	RecordEvent(ctx context.Context, input usage.RecordEventInput) (usage.UsageEvent, error)
+	ListAttempts(ctx context.Context, accountID uuid.UUID, requestID string, limit int) ([]usage.RequestAttempt, error)
+}
+
+type apiKeyService interface {
+	ApplyReservationDelta(ctx context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error
+	RecordUsageFinalization(ctx context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error
+	MarkLastUsed(ctx context.Context, apiKeyID uuid.UUID, at time.Time) error
 }
 
 type Service struct {
 	repo      Repository
 	ledgerSvc ledgerService
 	usageSvc  usageService
+	apiKeySvc apiKeyService
 }
 
-func NewService(repo Repository, ledgerSvc ledgerService, usageSvc usageService) *Service {
-	return &Service{repo: repo, ledgerSvc: ledgerSvc, usageSvc: usageSvc}
+func NewService(repo Repository, ledgerSvc ledgerService, usageSvc usageService, apiKeySvcs ...apiKeyService) *Service {
+	var apiKeySvc apiKeyService
+	if len(apiKeySvcs) > 0 {
+		apiKeySvc = apiKeySvcs[0]
+	}
+	return &Service{repo: repo, ledgerSvc: ledgerSvc, usageSvc: usageSvc, apiKeySvc: apiKeySvc}
 }
 
 func (s *Service) CreateReservation(ctx context.Context, input CreateReservationInput) (Reservation, error) {
@@ -60,6 +72,7 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 		AccountID:     input.AccountID,
 		RequestID:     input.RequestID,
 		AttemptNumber: input.AttemptNumber,
+		APIKeyID:      input.APIKeyID,
 		Endpoint:      input.Endpoint,
 		ModelAlias:    input.ModelAlias,
 		Status:        usage.AttemptStatusAccepted,
@@ -98,6 +111,7 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 	if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{
 		AccountID:        input.AccountID,
 		RequestAttemptID: attempt.ID,
+		APIKeyID:         input.APIKeyID,
 		RequestID:        input.RequestID,
 		EventType:        usage.UsageEventReservationCreated,
 		Endpoint:         input.Endpoint,
@@ -105,13 +119,19 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 		Status:           string(attempt.Status),
 		CustomerTags:     input.CustomerTags,
 		InternalMetadata: map[string]any{
-			"reservation_id":   reservation.ID.String(),
-			"reservation_key":  reservation.ReservationKey,
+			"reservation_id":    reservation.ID.String(),
+			"reservation_key":   reservation.ReservationKey,
 			"estimated_credits": input.EstimatedCredits,
-			"policy_mode":      input.PolicyMode,
+			"policy_mode":       input.PolicyMode,
 		},
 	}); err != nil {
 		return Reservation{}, fmt.Errorf("accounting: record reservation event: %w", err)
+	}
+
+	if input.APIKeyID != nil && s.apiKeySvc != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *input.APIKeyID, "lifetime", input.EstimatedCredits, 0, time.Now()); err != nil {
+			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
+		}
 	}
 
 	return reservation, nil
@@ -149,12 +169,20 @@ func (s *Service) ExpandReservation(ctx context.Context, input ExpandReservation
 	}
 
 	if _, err := s.ledgerSvc.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("expand-%d", input.AdditionalCredits)), input.AdditionalCredits, map[string]any{
-		"endpoint":            reservation.Endpoint,
-		"model_alias":         reservation.ModelAlias,
-		"additional_credits":  input.AdditionalCredits,
-		"policy_mode":         reservation.PolicyMode,
+		"endpoint":           reservation.Endpoint,
+		"model_alias":        reservation.ModelAlias,
+		"additional_credits": input.AdditionalCredits,
+		"policy_mode":        reservation.PolicyMode,
 	}); err != nil {
 		return Reservation{}, fmt.Errorf("accounting: reserve expanded credits: %w", err)
+	}
+
+	if attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID); err != nil {
+		return Reservation{}, err
+	} else if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, "lifetime", input.AdditionalCredits, 0, time.Now()); err != nil {
+			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
+		}
 	}
 
 	return reservation, nil
@@ -187,9 +215,9 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 
 	if input.ActualCredits > 0 {
 		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", input.ActualCredits)), input.ActualCredits, map[string]any{
-			"endpoint":            reservation.Endpoint,
-			"model_alias":         reservation.ModelAlias,
-			"terminal_confirmed":  input.TerminalUsageConfirmed,
+			"endpoint":           reservation.Endpoint,
+			"model_alias":        reservation.ModelAlias,
+			"terminal_confirmed": input.TerminalUsageConfirmed,
 		}); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: charge usage: %w", err)
 		}
@@ -197,9 +225,9 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 
 	if releaseCredits > 0 {
 		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("release-%d", releaseCredits)), releaseCredits, map[string]any{
-			"endpoint":            reservation.Endpoint,
-			"model_alias":         reservation.ModelAlias,
-			"terminal_confirmed":  input.TerminalUsageConfirmed,
+			"endpoint":           reservation.Endpoint,
+			"model_alias":        reservation.ModelAlias,
+			"terminal_confirmed": input.TerminalUsageConfirmed,
 		}); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: release reserved credits: %w", err)
 		}
@@ -207,7 +235,7 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 
 	nextStatus := ReservationStatusFinalized
 	reason := "finalized"
-	eventType := usage.UsageEventReleased
+	eventType := usage.UsageEventCompleted
 	if !input.TerminalUsageConfirmed {
 		nextStatus = ReservationStatusNeedsReconciliation
 		reason = "needs_reconciliation"
@@ -229,24 +257,45 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 		return Reservation{}, fmt.Errorf("accounting: update attempt status: %w", err)
 	}
 
-	if releaseCredits > 0 || !input.TerminalUsageConfirmed {
-		if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{
-			AccountID:        reservation.AccountID,
-			RequestAttemptID: reservation.RequestAttemptID,
-			RequestID:        reservation.RequestID,
-			EventType:        eventType,
-			Endpoint:         reservation.Endpoint,
-			ModelAlias:       reservation.ModelAlias,
-			Status:           string(status),
-			HiveCreditDelta:  -input.ActualCredits,
-			CustomerTags:     reservation.CustomerTags,
-			InternalMetadata: map[string]any{
-				"reservation_id":             reservation.ID.String(),
-				"released_credits":           releaseCredits,
-				"terminal_usage_confirmed":   input.TerminalUsageConfirmed,
-			},
-		}); err != nil {
-			return Reservation{}, fmt.Errorf("accounting: record finalize event: %w", err)
+	attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID)
+	if err != nil {
+		return Reservation{}, err
+	}
+	var apiKeyID *uuid.UUID
+	if attempt != nil {
+		apiKeyID = attempt.APIKeyID
+	}
+
+	if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{
+		AccountID:        reservation.AccountID,
+		RequestAttemptID: reservation.RequestAttemptID,
+		APIKeyID:         apiKeyID,
+		RequestID:        reservation.RequestID,
+		EventType:        eventType,
+		Endpoint:         reservation.Endpoint,
+		ModelAlias:       reservation.ModelAlias,
+		Status:           string(status),
+		HiveCreditDelta:  -input.ActualCredits,
+		CustomerTags:     reservation.CustomerTags,
+		InternalMetadata: map[string]any{
+			"reservation_id":           reservation.ID.String(),
+			"released_credits":         releaseCredits,
+			"terminal_usage_confirmed": input.TerminalUsageConfirmed,
+		},
+	}); err != nil {
+		return Reservation{}, fmt.Errorf("accounting: record finalize event: %w", err)
+	}
+
+	if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
+		at := time.Now().UTC()
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, "lifetime", -releaseCredits, input.ActualCredits, at); err != nil {
+			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
+		}
+		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, 0, 0, 0, 0, input.ActualCredits, at); err != nil {
+			return Reservation{}, fmt.Errorf("accounting: record usage finalization: %w", err)
+		}
+		if err := s.apiKeySvc.MarkLastUsed(ctx, *attempt.APIKeyID, at); err != nil {
+			return Reservation{}, fmt.Errorf("accounting: mark last used: %w", err)
 		}
 	}
 
@@ -313,7 +362,33 @@ func (s *Service) ReleaseReservation(ctx context.Context, input ReleaseReservati
 		return Reservation{}, fmt.Errorf("accounting: record release event: %w", err)
 	}
 
+	if releaseCredits > 0 && s.apiKeySvc != nil {
+		attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID)
+		if err != nil {
+			return Reservation{}, err
+		}
+		if attempt != nil && attempt.APIKeyID != nil {
+			if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, "lifetime", -releaseCredits, 0, time.Now()); err != nil {
+				return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
+			}
+		}
+	}
+
 	return reservation, nil
+}
+
+func (s *Service) findAttempt(ctx context.Context, accountID uuid.UUID, requestID string, attemptID uuid.UUID) (*usage.RequestAttempt, error) {
+	attempts, err := s.usageSvc.ListAttempts(ctx, accountID, requestID, 50)
+	if err != nil {
+		return nil, fmt.Errorf("accounting: list attempts: %w", err)
+	}
+	for _, attempt := range attempts {
+		if attempt.ID == attemptID {
+			matched := attempt
+			return &matched, nil
+		}
+	}
+	return nil, nil
 }
 
 func validateCreateReservation(input CreateReservationInput) error {
