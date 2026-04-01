@@ -100,14 +100,15 @@ Plans:
   2. Keys support nickname, expiration, model allowlist, and per-key budget controls.
   3. Requests are rejected quickly when keys are revoked, expired, over budget, or over rate limit.
   4. Spend and usage are attributable per key and per model.
-**Plans**: 1/5 plans complete
+**Plans**: 1/6 plans complete
 
 Plans:
-- [ ] 05-01: Implement API key issuance, hashing, rotation, and revocation flows.
-- [ ] 05-02: Add per-key budgets, expirations, allowlists, and hot-path policy checks.
-- [ ] 05-03: Implement per-key usage attribution and Redis-backed rate limiting and quotas.
+- [ ] 05-01: Implement API key issuance, hashing, rotation, revocation, and customer-visible key summaries.
+- [ ] 05-02: Add durable key policy storage, policy updates, and control-plane snapshot/detail projection.
+- [ ] 05-03: Add edge snapshot resolution, alias enforcement, and projected-cost budget admission.
 - [x] 05-04: Close the two diagnosed Phase 05 UAT gaps around snapshot invalidation and end-to-end API-key attribution.
-- [ ] 05-05: Close the remaining KEY-05 verification gap by projecting active budget and rate-policy state into the auth snapshot and by adding the missing edge limiter and quota artifacts.
+- [ ] 05-05: Add per-key usage rollups, live budget-window projection, and separate account/key rate-policy sources.
+- [ ] 05-06: Implement Redis Lua rate limiting and 429 header handling from projected account/key policies.
 
 ### Phase 6: Core Text & Embeddings API
 **Goal**: Deliver the main OpenAI-compatible inference endpoints used by agents and developer workflows.
@@ -184,7 +185,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 2. Identity & Account Foundation | 7/7 | Complete | 2026-03-29 |
 | 3. Credits Ledger & Usage Accounting | 3/3 | Complete | 2026-03-30 |
 | 4. Model Catalog & Provider Routing | 3/3 | Complete | 2026-03-31 |
-| 5. API Keys & Hot-Path Enforcement | 1/4 | In Progress | - |
+| 5. API Keys & Hot-Path Enforcement | 1/6 | In Progress | - |
 | 6. Core Text & Embeddings API | 0/3 | Not started | - |
 | 7. Media, File, and Async API Surface | 0/3 | Not started | - |
 | 8. Payments, FX, and Compliance Checkout | 0/3 | Not started | - |
