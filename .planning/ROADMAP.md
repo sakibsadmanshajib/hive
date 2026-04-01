@@ -100,13 +100,14 @@ Plans:
   2. Keys support nickname, expiration, model allowlist, and per-key budget controls.
   3. Requests are rejected quickly when keys are revoked, expired, over budget, or over rate limit.
   4. Spend and usage are attributable per key and per model.
-**Plans**: 1/4 plans complete
+**Plans**: 1/5 plans complete
 
 Plans:
 - [ ] 05-01: Implement API key issuance, hashing, rotation, and revocation flows.
 - [ ] 05-02: Add per-key budgets, expirations, allowlists, and hot-path policy checks.
 - [ ] 05-03: Implement per-key usage attribution and Redis-backed rate limiting and quotas.
 - [x] 05-04: Close the two diagnosed Phase 05 UAT gaps around snapshot invalidation and end-to-end API-key attribution.
+- [ ] 05-05: Close the remaining KEY-05 verification gap by projecting active budget and rate-policy state into the auth snapshot and by adding the missing edge limiter and quota artifacts.
 
 ### Phase 6: Core Text & Embeddings API
 **Goal**: Deliver the main OpenAI-compatible inference endpoints used by agents and developer workflows.
