@@ -2,6 +2,7 @@ package apikeys
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -20,6 +21,25 @@ func newStubRepo() *stubRepo {
 		keys:     make(map[uuid.UUID]APIKey),
 		policies: make(map[uuid.UUID]KeyPolicy),
 	}
+}
+
+type snapshotCacheSpy struct {
+	invalidated []string
+	errByHash   map[string]error
+}
+
+func newSnapshotCacheSpy() *snapshotCacheSpy {
+	return &snapshotCacheSpy{
+		errByHash: make(map[string]error),
+	}
+}
+
+func (s *snapshotCacheSpy) InvalidateSnapshot(_ context.Context, tokenHash string) error {
+	s.invalidated = append(s.invalidated, tokenHash)
+	if err, ok := s.errByHash[tokenHash]; ok {
+		return err
+	}
+	return nil
 }
 
 func (r *stubRepo) CreateKey(_ context.Context, key APIKey) (APIKey, error) {
@@ -185,6 +205,21 @@ func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error
 			PolicyVersion:     1,
 		}
 	}
+	return nil
+}
+
+func (r *stubRepo) ApplyReservationDelta(_ context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error {
+	return nil
+}
+
+func (r *stubRepo) RecordUsageFinalization(_ context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error {
+	return nil
+}
+
+func (r *stubRepo) MarkLastUsed(_ context.Context, apiKeyID uuid.UUID, usedAt time.Time) error {
+	key := r.keys[apiKeyID]
+	key.LastUsedAt = &usedAt
+	r.keys[apiKeyID] = key
 	return nil
 }
 
@@ -369,5 +404,117 @@ func TestRevokeKeyIsTerminal(t *testing.T) {
 	_, err = svc.EnableKey(context.Background(), accountID, actorID, result.Key.ID)
 	if err != ErrRevoked {
 		t.Fatalf("expected ErrRevoked on enable-after-revoke, got %v", err)
+	}
+}
+
+func TestRevokeKeyInvalidatesCachedSnapshot(t *testing.T) {
+	repo := newStubRepo()
+	cache := newSnapshotCacheSpy()
+	svc := NewService(repo, cache)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "to-revoke",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	_, err = svc.RevokeKey(context.Background(), accountID, actorID, result.Key.ID)
+	if err != nil {
+		t.Fatalf("RevokeKey: %v", err)
+	}
+
+	if len(cache.invalidated) != 1 || cache.invalidated[0] != result.Key.TokenHash {
+		t.Fatalf("expected revoke to invalidate %q, got %#v", result.Key.TokenHash, cache.invalidated)
+	}
+}
+
+func TestRevokeKeyReturnsErrorWhenSnapshotInvalidationFails(t *testing.T) {
+	repo := newStubRepo()
+	cache := newSnapshotCacheSpy()
+	svc := NewService(repo, cache)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "to-revoke",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	cache.errByHash[result.Key.TokenHash] = errors.New("redis unavailable")
+
+	_, err = svc.RevokeKey(context.Background(), accountID, actorID, result.Key.ID)
+	if err == nil {
+		t.Fatal("expected invalidate failure to be returned")
+	}
+
+	stored := repo.keys[result.Key.ID]
+	if stored.Status != KeyStatusRevoked {
+		t.Fatalf("expected durable revoke despite invalidate failure, got %s", stored.Status)
+	}
+}
+
+func TestRotateKeyInvalidatesOldAndNewSnapshots(t *testing.T) {
+	repo := newStubRepo()
+	cache := newSnapshotCacheSpy()
+	svc := NewService(repo, cache)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "rotate-me",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	rotated, err := svc.RotateKey(context.Background(), accountID, actorID, result.Key.ID, "rotated", nil)
+	if err != nil {
+		t.Fatalf("RotateKey: %v", err)
+	}
+
+	if len(cache.invalidated) != 2 {
+		t.Fatalf("expected old and new snapshots invalidated, got %#v", cache.invalidated)
+	}
+	if cache.invalidated[0] != rotated.OldKey.TokenHash {
+		t.Fatalf("expected first invalidated hash %q, got %q", rotated.OldKey.TokenHash, cache.invalidated[0])
+	}
+	if cache.invalidated[1] != rotated.NewKey.TokenHash {
+		t.Fatalf("expected second invalidated hash %q, got %q", rotated.NewKey.TokenHash, cache.invalidated[1])
+	}
+}
+
+func TestUpdatePolicyInvalidatesCachedSnapshot(t *testing.T) {
+	repo := newStubRepo()
+	cache := newSnapshotCacheSpy()
+	svc := NewService(repo, cache)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "policy-key",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	allowAll := true
+	_, err = svc.UpdatePolicy(context.Background(), accountID, actorID, result.Key.ID, UpdatePolicyInput{
+		AllowAllModels: &allowAll,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	if len(cache.invalidated) != 1 || cache.invalidated[0] != result.Key.TokenHash {
+		t.Fatalf("expected policy update to invalidate %q, got %#v", result.Key.TokenHash, cache.invalidated)
 	}
 }

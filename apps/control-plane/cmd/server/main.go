@@ -23,6 +23,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -58,12 +59,14 @@ func main() {
 	var profilesHandler *profiles.Handler
 	var routingHandler *routing.Handler
 	var usageHandler *usage.Handler
+	var redisClient *goredis.Client
 	if pool != nil {
 		if cfg.RedisURL != "" {
-			redisClient := platformredis.NewClient(cfg.RedisURL)
+			redisClient = platformredis.NewClient(cfg.RedisURL)
 			if err := platformredis.Ping(ctx, redisClient); err != nil {
 				log.Printf("WARNING: redis not available at startup: %v", err)
 				_ = redisClient.Close()
+				redisClient = nil
 			} else {
 				defer redisClient.Close()
 				log.Println("redis client ready")
@@ -94,13 +97,13 @@ func main() {
 		usageSvc := usage.NewService(usageRepo)
 		usageHandler = usage.NewHandler(usageSvc, accountsSvc)
 
-		accountingRepo := accounting.NewPgxRepository(pool)
-		accountingSvc := accounting.NewService(accountingRepo, ledgerSvc, usageSvc)
-		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
-
 		apikeysRepo := apikeys.NewPgxRepository(pool)
-		apikeysSvc := apikeys.NewService(apikeysRepo)
+		apikeysSvc := apikeys.NewService(apikeysRepo, apikeys.NewRedisSnapshotCache(redisClient))
 		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc)
+
+		accountingRepo := accounting.NewPgxRepository(pool)
+		accountingSvc := accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc)
+		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}

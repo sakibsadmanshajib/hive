@@ -11,16 +11,46 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
+
+// SnapshotCache invalidates cached auth snapshots for API keys.
+type SnapshotCache interface {
+	InvalidateSnapshot(ctx context.Context, tokenHash string) error
+}
+
+type redisSnapshotCache struct {
+	client *redis.Client
+}
+
+// NewRedisSnapshotCache adapts a Redis client into a snapshot cache invalidator.
+func NewRedisSnapshotCache(client *redis.Client) SnapshotCache {
+	if client == nil {
+		return nil
+	}
+	return &redisSnapshotCache{client: client}
+}
+
+func (c *redisSnapshotCache) InvalidateSnapshot(ctx context.Context, tokenHash string) error {
+	if c == nil || c.client == nil || tokenHash == "" {
+		return nil
+	}
+	return c.client.Del(ctx, snapshotRedisKey(tokenHash)).Err()
+}
 
 // Service encapsulates all API-key lifecycle business logic.
 type Service struct {
-	repo Repository
+	repo  Repository
+	cache SnapshotCache
 }
 
 // NewService returns a new Service.
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+func NewService(repo Repository, caches ...SnapshotCache) *Service {
+	var cache SnapshotCache
+	if len(caches) > 0 {
+		cache = caches[0]
+	}
+	return &Service{repo: repo, cache: cache}
 }
 
 // ListKeys returns all keys for the account. Keys whose stored status is
@@ -108,6 +138,10 @@ func (s *Service) DisableKey(ctx context.Context, accountID, actorUserID, keyID 
 		ActorUserID: actorUserID,
 	})
 
+	if err := s.invalidateSnapshot(ctx, updated.TokenHash); err != nil {
+		return APIKey{}, err
+	}
+
 	return updated, nil
 }
 
@@ -138,6 +172,10 @@ func (s *Service) EnableKey(ctx context.Context, accountID, actorUserID, keyID u
 		ActorUserID: actorUserID,
 	})
 
+	if err := s.invalidateSnapshot(ctx, updated.TokenHash); err != nil {
+		return APIKey{}, err
+	}
+
 	return updated, nil
 }
 
@@ -166,6 +204,10 @@ func (s *Service) RevokeKey(ctx context.Context, accountID, actorUserID, keyID u
 		EventType:   "revoked",
 		ActorUserID: actorUserID,
 	})
+
+	if err := s.invalidateSnapshot(ctx, updated.TokenHash); err != nil {
+		return APIKey{}, err
+	}
 
 	return updated, nil
 }
@@ -217,6 +259,10 @@ func (s *Service) RotateKey(ctx context.Context, accountID, actorUserID, keyID u
 	// Create default policy for the new key.
 	_ = s.repo.CreateDefaultPolicy(ctx, created.ID)
 
+	if err := s.invalidateSnapshots(ctx, old.TokenHash, created.TokenHash); err != nil {
+		return RotateKeyResult{}, err
+	}
+
 	return RotateKeyResult{
 		OldKey: old,
 		NewKey: created,
@@ -229,6 +275,13 @@ func (s *Service) UpdatePolicy(ctx context.Context, accountID, actorUserID, keyI
 	policy, err := s.repo.UpsertPolicy(ctx, accountID, keyID, input)
 	if err != nil {
 		return KeyPolicy{}, fmt.Errorf("apikeys: update policy: %w", err)
+	}
+	key, err := s.repo.GetKey(ctx, accountID, keyID)
+	if err != nil {
+		return KeyPolicy{}, fmt.Errorf("apikeys: update policy lookup: %w", err)
+	}
+	if err := s.invalidateSnapshot(ctx, key.TokenHash); err != nil {
+		return KeyPolicy{}, err
 	}
 	return policy, nil
 }
@@ -293,11 +346,33 @@ func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSn
 	}, nil
 }
 
-// RefreshSnapshot is a placeholder for Plan 05-03 where the snapshot
-// will be written/refreshed in Redis after policy or budget changes.
 func (s *Service) RefreshSnapshot(ctx context.Context, keyID uuid.UUID) error {
-	// No-op until Plan 05-02 Task 2 adds Redis projection.
-	return nil
+	lookup, ok := s.repo.(interface {
+		GetKeyByID(ctx context.Context, keyID uuid.UUID) (APIKey, error)
+	})
+	if !ok {
+		return fmt.Errorf("apikeys: refresh snapshot requires repository key lookup for %s", keyID)
+	}
+	key, err := lookup.GetKeyByID(ctx, keyID)
+	if err != nil {
+		return fmt.Errorf("apikeys: refresh snapshot: %w", err)
+	}
+	return s.invalidateSnapshot(ctx, key.TokenHash)
+}
+
+// ApplyReservationDelta updates the key's budget window tracking reserved and consumed credits.
+func (s *Service) ApplyReservationDelta(ctx context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error {
+	return s.repo.ApplyReservationDelta(ctx, apiKeyID, budgetKind, reservedDelta, consumedDelta, at)
+}
+
+// RecordUsageFinalization records final tokens and consumes credits in the usage rollups.
+func (s *Service) RecordUsageFinalization(ctx context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error {
+	return s.repo.RecordUsageFinalization(ctx, apiKeyID, modelAlias, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits, at)
+}
+
+// MarkLastUsed updates the key's last_used_at timestamp.
+func (s *Service) MarkLastUsed(ctx context.Context, apiKeyID uuid.UUID, usedAt time.Time) error {
+	return s.repo.MarkLastUsed(ctx, apiKeyID, usedAt)
 }
 
 // --- helpers ---
@@ -349,3 +424,33 @@ func dedup(input []string) []string {
 	return result
 }
 
+func (s *Service) invalidateSnapshots(ctx context.Context, tokenHashes ...string) error {
+	seen := make(map[string]struct{}, len(tokenHashes))
+	for _, tokenHash := range tokenHashes {
+		if tokenHash == "" {
+			continue
+		}
+		if _, ok := seen[tokenHash]; ok {
+			continue
+		}
+		seen[tokenHash] = struct{}{}
+		if err := s.invalidateSnapshot(ctx, tokenHash); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) invalidateSnapshot(ctx context.Context, tokenHash string) error {
+	if s.cache == nil || tokenHash == "" {
+		return nil
+	}
+	if err := s.cache.InvalidateSnapshot(ctx, tokenHash); err != nil {
+		return fmt.Errorf("apikeys: invalidate snapshot: %w", err)
+	}
+	return nil
+}
+
+func snapshotRedisKey(tokenHash string) string {
+	return "auth:key:{" + tokenHash + "}"
+}
