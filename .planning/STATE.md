@@ -2,14 +2,19 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_plan
-stopped_at: Phase 05 verification found remaining gaps
-last_updated: "2026-04-01T21:47:30.000Z"
+current_phase: 05
+current_phase_name: api-keys-hot-path-enforcement
+current_plan: 2
+status: executing
+stopped_at: Completed 05-01-PLAN.md
+last_updated: "2026-04-02T00:16:22.325Z"
+last_activity: 2026-04-02
 progress:
   total_phases: 9
   completed_phases: 4
-  total_plans: 21
-  completed_plans: 18
+  total_plans: 23
+  completed_plans: 19
+  percent: 83
 ---
 
 # Project State
@@ -23,10 +28,24 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 05 (api-keys-hot-path-enforcement) — READY TO PLAN
-Plan: Gap closure planning needed
+**Current Phase:** 05
+**Current Phase Name:** api-keys-hot-path-enforcement
+**Current Plan:** 2
+**Total Phases:** 9
+**Total Plans in Phase:** 6
+**Status:** Ready to execute
+**Progress:** [████████░░] 83%
+**Last Activity:** 2026-04-02
+
+Phase: 05 (api-keys-hot-path-enforcement) — READY TO EXECUTE
+Plan: 02 (05-02-PLAN.md)
 
 ## Performance Metrics
+
+| Execution | Duration | Scope | Files |
+|-----------|----------|-------|-------|
+| Phase 05 P04 | 73min | 2 tasks | 8 files |
+| Phase 05 P01 | 10min | 2 tasks | 9 files |
 
 **Velocity:**
 
@@ -42,12 +61,12 @@ Plan: Gap closure planning needed
 | 02-identity-account-foundation | 7/7 | 93min | 13.3min |
 | 03-credits-ledger-usage-accounting | 3/3 | 87min | 29min |
 | 04-model-catalog-provider-routing | 3/3 | 51min | 17min |
-| 05-api-keys-hot-path-enforcement | 1/4 | 73min | 73min |
+| 05-api-keys-hot-path-enforcement | 2/6 | 83min | 41.5min |
 
 **Recent Trend:**
 
-- Last 5 plans: 03-03 (73min), 04-01 (30min), 04-02 (16min), 04-03 (5min), 05-04 (73min)
-- Trend: Phase 5's first recorded execution was a focused hardening slice that fixed the diagnosed UAT regressions but left deeper hot-path quota wiring to close
+- Last 5 plans: 04-01 (30min), 04-02 (16min), 04-03 (5min), 05-04 (73min), 05-01 (10min)
+- Trend: Phase 5 now has both the prior hot-path hardening slice and the API-key lifecycle foundation in place, leaving policy, projection, and limiter follow-up plans.
 
 ## Accumulated Context
 
@@ -106,6 +125,8 @@ Recent decisions affecting current work:
 - [04-02]: LiteLLM model groups are keyed by private route handles rather than public alias IDs.
 - [04-03]: Cache-aware provider billing is normalized into the existing `cache_read_tokens` and `cache_write_tokens` fields, and zero-value cache fields stay omitted from customer responses.
 - [04-03]: Edge upstream errors mirror the provider-blind sanitization rules locally so customer-visible failures never depend on control-plane routing packages.
+- [Phase 05]: API-key mutations remain gated by accounts.Service.EnsureViewerContext and CanManageAPIKeys instead of trusting client ownership claims.
+- [Phase 05]: API-key list, detail, create, and rotate responses share a customer-safe serializer that applies expiry projection and never re-emits secrets after issuance.
 
 ### Pending Todos
 
@@ -118,6 +139,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-01T21:47:30.000Z
-Stopped at: Phase 05 verification found remaining gaps
+Last session: 2026-04-02T00:16:22.323Z
+Stopped at: Completed 05-01-PLAN.md
 Resume file: None
