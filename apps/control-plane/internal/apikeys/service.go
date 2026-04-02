@@ -77,6 +77,37 @@ func (s *Service) GetKey(ctx context.Context, accountID, keyID uuid.UUID) (APIKe
 	return applyExpiry(key, time.Now()), nil
 }
 
+// ListKeyViews returns customer-visible key rows with policy-backed summaries.
+func (s *Service) ListKeyViews(ctx context.Context, accountID uuid.UUID) ([]KeyView, error) {
+	keys, err := s.ListKeys(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	views := make([]KeyView, 0, len(keys))
+	for _, key := range keys {
+		policy, err := s.policyForKey(ctx, accountID, key.ID)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, buildKeyView(key, policy))
+	}
+	return views, nil
+}
+
+// GetKeyView returns a single customer-visible key row with policy summaries.
+func (s *Service) GetKeyView(ctx context.Context, accountID, keyID uuid.UUID) (KeyView, error) {
+	key, err := s.GetKey(ctx, accountID, keyID)
+	if err != nil {
+		return KeyView{}, err
+	}
+	policy, err := s.policyForKey(ctx, accountID, keyID)
+	if err != nil {
+		return KeyView{}, err
+	}
+	return buildKeyView(key, policy), nil
+}
+
 // CreateKey issues a new API key. The raw secret is returned once and
 // must not be logged, persisted, or included in list responses.
 func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {
@@ -309,8 +340,10 @@ func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSn
 	// Build allowed aliases from group members + explicit allowed - denied.
 	var allowedAliases []string
 	if policy.AllowAllModels {
-		// All models mode — edge will not filter by alias.
-		allowedAliases = []string{"*"}
+		allowedAliases, err = s.repo.ListAllAliases(ctx)
+		if err != nil {
+			return AuthSnapshot{}, fmt.Errorf("apikeys: list all aliases: %w", err)
+		}
 	} else {
 		// Resolve group members.
 		if len(policy.AllowedGroupNames) > 0 {
@@ -340,6 +373,19 @@ func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSn
 		allowedAliases = dedup(allowedAliases)
 	}
 
+	budgetWindow, err := s.repo.GetBudgetWindow(ctx, key.ID, policy.BudgetKind, time.Now().UTC())
+	if err != nil {
+		return AuthSnapshot{}, fmt.Errorf("apikeys: get budget window: %w", err)
+	}
+	accountRatePolicy, err := s.repo.GetAccountRatePolicy(ctx, key.AccountID)
+	if err != nil {
+		return AuthSnapshot{}, fmt.Errorf("apikeys: get account rate policy: %w", err)
+	}
+	keyRatePolicy, err := s.repo.GetKeyRatePolicy(ctx, key.ID)
+	if err != nil {
+		return AuthSnapshot{}, fmt.Errorf("apikeys: get key rate policy: %w", err)
+	}
+
 	return AuthSnapshot{
 		KeyID:                 key.ID,
 		AccountID:             key.AccountID,
@@ -349,21 +395,17 @@ func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSn
 		AllowedAliases:        allowedAliases,
 		BudgetKind:            policy.BudgetKind,
 		BudgetLimitCredits:    policy.BudgetLimitCredits,
-		BudgetConsumedCredits: 0, // populated in Plan 05-03
-		BudgetReservedCredits: 0, // populated in Plan 05-03
+		BudgetConsumedCredits: budgetWindow.ConsumedCredits,
+		BudgetReservedCredits: budgetWindow.ReservedCredits,
 		BudgetAnchorAt:        policy.BudgetAnchorAt,
+		AccountRatePolicy:     &accountRatePolicy,
+		KeyRatePolicy:         &keyRatePolicy,
 		PolicyVersion:         policy.PolicyVersion,
 	}, nil
 }
 
 func (s *Service) RefreshSnapshot(ctx context.Context, keyID uuid.UUID) error {
-	lookup, ok := s.repo.(interface {
-		GetKeyByID(ctx context.Context, keyID uuid.UUID) (APIKey, error)
-	})
-	if !ok {
-		return fmt.Errorf("apikeys: refresh snapshot requires repository key lookup for %s", keyID)
-	}
-	key, err := lookup.GetKeyByID(ctx, keyID)
+	key, err := s.repo.GetKeyByID(ctx, keyID)
 	if err != nil {
 		return fmt.Errorf("apikeys: refresh snapshot: %w", err)
 	}
@@ -371,13 +413,30 @@ func (s *Service) RefreshSnapshot(ctx context.Context, keyID uuid.UUID) error {
 }
 
 // ApplyReservationDelta updates the key's budget window tracking reserved and consumed credits.
-func (s *Service) ApplyReservationDelta(ctx context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error {
-	return s.repo.ApplyReservationDelta(ctx, apiKeyID, budgetKind, reservedDelta, consumedDelta, at)
+func (s *Service) ApplyReservationDelta(ctx context.Context, apiKeyID uuid.UUID, reservedDelta int64, consumedDelta int64, at time.Time) error {
+	key, err := s.repo.GetKeyByID(ctx, apiKeyID)
+	if err != nil {
+		return fmt.Errorf("apikeys: load key for reservation delta: %w", err)
+	}
+	policy, err := s.policyForKey(ctx, key.AccountID, apiKeyID)
+	if err != nil {
+		return err
+	}
+	if policy.BudgetKind == "" || policy.BudgetKind == "none" {
+		return nil
+	}
+	if err := s.repo.ApplyReservationDelta(ctx, apiKeyID, policy.BudgetKind, reservedDelta, consumedDelta, at); err != nil {
+		return err
+	}
+	return s.invalidateSnapshot(ctx, key.TokenHash)
 }
 
 // RecordUsageFinalization records final tokens and consumes credits in the usage rollups.
 func (s *Service) RecordUsageFinalization(ctx context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error {
-	return s.repo.RecordUsageFinalization(ctx, apiKeyID, modelAlias, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits, at)
+	if err := s.repo.RecordUsageFinalization(ctx, apiKeyID, modelAlias, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits, at); err != nil {
+		return err
+	}
+	return s.RefreshSnapshot(ctx, apiKeyID)
 }
 
 // MarkLastUsed updates the key's last_used_at timestamp.
@@ -386,6 +445,112 @@ func (s *Service) MarkLastUsed(ctx context.Context, apiKeyID uuid.UUID, usedAt t
 }
 
 // --- helpers ---
+
+func (s *Service) policyForKey(ctx context.Context, accountID, keyID uuid.UUID) (KeyPolicy, error) {
+	policy, err := s.repo.GetPolicy(ctx, accountID, keyID)
+	if err == ErrNotFound {
+		return defaultPolicy(keyID), nil
+	}
+	if err != nil {
+		return KeyPolicy{}, fmt.Errorf("apikeys: get policy: %w", err)
+	}
+	return policy, nil
+}
+
+func defaultPolicy(keyID uuid.UUID) KeyPolicy {
+	return KeyPolicy{
+		APIKeyID:          keyID,
+		AllowedGroupNames: []string{"default"},
+		BudgetKind:        "none",
+		PolicyVersion:     1,
+	}
+}
+
+func buildKeyView(key APIKey, policy KeyPolicy) KeyView {
+	key = applyExpiry(key, time.Now())
+
+	return KeyView{
+		ID:                key.ID,
+		Nickname:          key.Nickname,
+		Status:            key.Status,
+		RedactedSuffix:    key.RedactedSuffix,
+		CreatedAt:         key.CreatedAt,
+		UpdatedAt:         key.UpdatedAt,
+		ExpiresAt:         key.ExpiresAt,
+		LastUsedAt:        key.LastUsedAt,
+		ExpirationSummary: expirationSummary(key),
+		BudgetSummary:     budgetSummary(policy),
+		AllowlistSummary:  allowlistSummary(policy),
+	}
+}
+
+func expirationSummary(key APIKey) ExpirationSummary {
+	if key.ExpiresAt == nil {
+		return ExpirationSummary{Kind: "never", Label: "Never expires"}
+	}
+	if key.Status == KeyStatusExpired {
+		return ExpirationSummary{Kind: "expired", Label: "Expired"}
+	}
+	return ExpirationSummary{
+		Kind:  "scheduled",
+		Label: "Expires " + key.ExpiresAt.Format(time.RFC3339),
+	}
+}
+
+func budgetSummary(policy KeyPolicy) BudgetSummary {
+	switch policy.BudgetKind {
+	case "", "none":
+		return BudgetSummary{Kind: "none", Label: "No budget cap"}
+	case "lifetime":
+		if policy.BudgetLimitCredits == nil {
+			return BudgetSummary{Kind: "lifetime", Label: "Lifetime budget cap"}
+		}
+		return BudgetSummary{
+			Kind:  "lifetime",
+			Label: fmt.Sprintf("Lifetime budget cap: %d credits", *policy.BudgetLimitCredits),
+		}
+	case "monthly":
+		if policy.BudgetLimitCredits == nil {
+			return BudgetSummary{Kind: "monthly", Label: "Monthly budget cap"}
+		}
+		return BudgetSummary{
+			Kind:  "monthly",
+			Label: fmt.Sprintf("Monthly budget cap: %d credits", *policy.BudgetLimitCredits),
+		}
+	default:
+		return BudgetSummary{Kind: policy.BudgetKind, Label: policy.BudgetKind}
+	}
+}
+
+func allowlistSummary(policy KeyPolicy) AllowlistSummary {
+	if policy.AllowAllModels {
+		return AllowlistSummary{
+			Mode:  "all",
+			Label: "All models",
+		}
+	}
+	if len(policy.AllowedGroupNames) == 1 &&
+		policy.AllowedGroupNames[0] == "default" &&
+		len(policy.AllowedAliases) == 0 &&
+		len(policy.DeniedAliases) == 0 {
+		return AllowlistSummary{
+			Mode:       "groups",
+			GroupNames: []string{"default"},
+			Label:      "Default launch-safe models",
+		}
+	}
+	if len(policy.AllowedAliases) > 0 && len(policy.AllowedGroupNames) == 0 {
+		return AllowlistSummary{
+			Mode:  "aliases",
+			Label: "Explicit model allowlist",
+		}
+	}
+	return AllowlistSummary{
+		Mode:       "groups",
+		GroupNames: append([]string(nil), policy.AllowedGroupNames...),
+		Label:      "Custom model allowlist",
+	}
+}
 
 // generateSecret produces a cryptographically random hk_-prefixed API secret.
 // Returns the raw secret, its SHA-256 hex hash, and the last 6 characters.

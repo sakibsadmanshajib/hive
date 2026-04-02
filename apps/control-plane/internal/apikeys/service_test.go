@@ -11,15 +11,21 @@ import (
 
 // stubRepo is a test double that satisfies the Repository interface.
 type stubRepo struct {
-	keys     map[uuid.UUID]APIKey
-	policies map[uuid.UUID]KeyPolicy
-	events   []KeyEvent
+	keys              map[uuid.UUID]APIKey
+	policies          map[uuid.UUID]KeyPolicy
+	budgetWindows     map[string]BudgetWindow
+	accountRatePolicy map[uuid.UUID]RatePolicy
+	keyRatePolicy     map[uuid.UUID]RatePolicy
+	events            []KeyEvent
 }
 
 func newStubRepo() *stubRepo {
 	return &stubRepo{
-		keys:     make(map[uuid.UUID]APIKey),
-		policies: make(map[uuid.UUID]KeyPolicy),
+		keys:              make(map[uuid.UUID]APIKey),
+		policies:          make(map[uuid.UUID]KeyPolicy),
+		budgetWindows:     make(map[string]BudgetWindow),
+		accountRatePolicy: make(map[uuid.UUID]RatePolicy),
+		keyRatePolicy:     make(map[uuid.UUID]RatePolicy),
 	}
 }
 
@@ -48,6 +54,14 @@ func (r *stubRepo) CreateKey(_ context.Context, key APIKey) (APIKey, error) {
 	key.UpdatedAt = now
 	r.keys[key.ID] = key
 	return key, nil
+}
+
+func (r *stubRepo) GetKeyByID(_ context.Context, keyID uuid.UUID) (APIKey, error) {
+	k, ok := r.keys[keyID]
+	if !ok {
+		return APIKey{}, ErrNotFound
+	}
+	return k, nil
 }
 
 func (r *stubRepo) GetKey(_ context.Context, accountID, keyID uuid.UUID) (APIKey, error) {
@@ -141,6 +155,18 @@ func (r *stubRepo) GetPolicy(_ context.Context, _, keyID uuid.UUID) (KeyPolicy, 
 	return p, nil
 }
 
+func (r *stubRepo) ListPolicies(_ context.Context, accountID uuid.UUID) ([]KeyPolicy, error) {
+	var policies []KeyPolicy
+	for keyID, policy := range r.policies {
+		key, ok := r.keys[keyID]
+		if !ok || key.AccountID != accountID {
+			continue
+		}
+		policies = append(policies, policy)
+	}
+	return policies, nil
+}
+
 func (r *stubRepo) ListGroupMembers(_ context.Context, groupNames []string) ([]string, error) {
 	// For stubs, return hardcoded defaults matching the seed data.
 	groups := map[string][]string{
@@ -160,6 +186,10 @@ func (r *stubRepo) ListGroupMembers(_ context.Context, groupNames []string) ([]s
 		}
 	}
 	return result, nil
+}
+
+func (r *stubRepo) ListAllAliases(_ context.Context) ([]string, error) {
+	return []string{"hive-default", "hive-fast", "hive-auto"}, nil
 }
 
 func (r *stubRepo) GetByTokenHash(_ context.Context, tokenHash string) (APIKey, error) {
@@ -196,6 +226,36 @@ func (r *stubRepo) GetPolicyByTokenHash(_ context.Context, tokenHash string) (AP
 	return key, p, nil
 }
 
+func (r *stubRepo) GetBudgetWindow(_ context.Context, apiKeyID uuid.UUID, budgetKind string, at time.Time) (BudgetWindow, error) {
+	windowStart := time.Time{}
+	if budgetKind == "monthly" {
+		windowStart = time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	window, ok := r.budgetWindows[budgetWindowKey(apiKeyID, budgetKind, windowStart)]
+	if !ok {
+		return BudgetWindow{
+			APIKeyID:    apiKeyID,
+			WindowKind:  budgetKind,
+			WindowStart: windowStart,
+		}, nil
+	}
+	return window, nil
+}
+
+func (r *stubRepo) GetKeyRatePolicy(_ context.Context, apiKeyID uuid.UUID) (RatePolicy, error) {
+	if policy, ok := r.keyRatePolicy[apiKeyID]; ok {
+		return policy, nil
+	}
+	return defaultRatePolicy(), nil
+}
+
+func (r *stubRepo) GetAccountRatePolicy(_ context.Context, accountID uuid.UUID) (RatePolicy, error) {
+	if policy, ok := r.accountRatePolicy[accountID]; ok {
+		return policy, nil
+	}
+	return defaultRatePolicy(), nil
+}
+
 func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error {
 	if _, exists := r.policies[keyID]; !exists {
 		r.policies[keyID] = KeyPolicy{
@@ -209,6 +269,19 @@ func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error
 }
 
 func (r *stubRepo) ApplyReservationDelta(_ context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error {
+	windowStart := time.Time{}
+	if budgetKind == "monthly" {
+		windowStart = time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	key := budgetWindowKey(apiKeyID, budgetKind, windowStart)
+	window := r.budgetWindows[key]
+	window.APIKeyID = apiKeyID
+	window.WindowKind = budgetKind
+	window.WindowStart = windowStart
+	window.ReservedCredits += reservedDelta
+	window.ConsumedCredits += consumedDelta
+	window.UpdatedAt = at
+	r.budgetWindows[key] = window
 	return nil
 }
 
@@ -221,6 +294,10 @@ func (r *stubRepo) MarkLastUsed(_ context.Context, apiKeyID uuid.UUID, usedAt ti
 	key.LastUsedAt = &usedAt
 	r.keys[apiKeyID] = key
 	return nil
+}
+
+func budgetWindowKey(apiKeyID uuid.UUID, budgetKind string, windowStart time.Time) string {
+	return apiKeyID.String() + "|" + budgetKind + "|" + windowStart.Format(time.RFC3339)
 }
 
 // --- tests ---
@@ -516,5 +593,356 @@ func TestUpdatePolicyInvalidatesCachedSnapshot(t *testing.T) {
 
 	if len(cache.invalidated) != 1 || cache.invalidated[0] != result.Key.TokenHash {
 		t.Fatalf("expected policy update to invalidate %q, got %#v", result.Key.TokenHash, cache.invalidated)
+	}
+}
+
+func TestCreateKeyCreatesDefaultPolicyRow(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "default-policy",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	policy, ok := repo.policies[result.Key.ID]
+	if !ok {
+		t.Fatal("expected default policy row to be created")
+	}
+	if policy.AllowAllModels {
+		t.Fatal("default policy must not allow all models")
+	}
+	if len(policy.AllowedGroupNames) != 1 || policy.AllowedGroupNames[0] != "default" {
+		t.Fatalf("expected default group policy, got %#v", policy.AllowedGroupNames)
+	}
+	if policy.BudgetKind != "none" {
+		t.Fatalf("expected no budget cap by default, got %q", policy.BudgetKind)
+	}
+}
+
+func TestUpdatePolicyResolvesGroupMembersAndOverrides(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "policy-overrides",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	budgetKind := "monthly"
+	_, err = svc.UpdatePolicy(context.Background(), accountID, actorID, result.Key.ID, UpdatePolicyInput{
+		AllowedGroupNames: []string{"default", "premium"},
+		AllowedAliases:    []string{"hive-oss"},
+		DeniedAliases:     []string{"hive-fast"},
+		BudgetKind:        &budgetKind,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+
+	expected := []string{"hive-default", "hive-auto", "hive-oss"}
+	if len(snapshot.AllowedAliases) != len(expected) {
+		t.Fatalf("expected %d aliases, got %#v", len(expected), snapshot.AllowedAliases)
+	}
+	for i := range expected {
+		if snapshot.AllowedAliases[i] != expected[i] {
+			t.Fatalf("expected aliases %v, got %v", expected, snapshot.AllowedAliases)
+		}
+	}
+}
+
+func TestResolveSnapshotReturnsAllModelsWhenAllowAllModelsIsSet(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "all-models",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	allowAll := true
+	_, err = svc.UpdatePolicy(context.Background(), accountID, actorID, result.Key.ID, UpdatePolicyInput{
+		AllowAllModels: &allowAll,
+	})
+	if err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+
+	expected := []string{"hive-default", "hive-fast", "hive-auto"}
+	if len(snapshot.AllowedAliases) != len(expected) {
+		t.Fatalf("expected all aliases %v, got %v", expected, snapshot.AllowedAliases)
+	}
+	for i := range expected {
+		if snapshot.AllowedAliases[i] != expected[i] {
+			t.Fatalf("expected aliases %v, got %v", expected, snapshot.AllowedAliases)
+		}
+	}
+}
+
+func TestResolveSnapshotReturnsExpiredWhenExpiresAtHasPassed(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+	expiresAt := time.Now().Add(-5 * time.Minute)
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname:  "expired-snapshot",
+		ExpiresAt: &expiresAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+
+	if snapshot.Status != KeyStatusExpired {
+		t.Fatalf("expected expired snapshot status, got %s", snapshot.Status)
+	}
+}
+
+func TestListKeyViewsExposeDefaultSummaries(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	_, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "launch-safe",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	views, err := svc.ListKeyViews(context.Background(), accountID)
+	if err != nil {
+		t.Fatalf("ListKeyViews: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("expected 1 view, got %d", len(views))
+	}
+
+	view := views[0]
+	if view.ExpirationSummary.Kind != "never" || view.ExpirationSummary.Label != "Never expires" {
+		t.Fatalf("unexpected expiration summary: %#v", view.ExpirationSummary)
+	}
+	if view.BudgetSummary.Kind != "none" || view.BudgetSummary.Label != "No budget cap" {
+		t.Fatalf("unexpected budget summary: %#v", view.BudgetSummary)
+	}
+	if view.AllowlistSummary.Mode != "groups" || view.AllowlistSummary.Label != "Default launch-safe models" {
+		t.Fatalf("unexpected allowlist summary: %#v", view.AllowlistSummary)
+	}
+	if len(view.AllowlistSummary.GroupNames) != 1 || view.AllowlistSummary.GroupNames[0] != "default" {
+		t.Fatalf("unexpected allowlist groups: %#v", view.AllowlistSummary.GroupNames)
+	}
+}
+
+func TestResolveSnapshotIncludesLiveBudgetWindow(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+	limit := int64(1000)
+	budgetKind := "monthly"
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "budgeted",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	repo.policies[result.Key.ID] = KeyPolicy{
+		APIKeyID:           result.Key.ID,
+		AllowedGroupNames:  []string{"default"},
+		BudgetKind:         budgetKind,
+		BudgetLimitCredits: &limit,
+		PolicyVersion:      2,
+	}
+	windowStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	repo.budgetWindows[budgetWindowKey(result.Key.ID, budgetKind, windowStart)] = BudgetWindow{
+		APIKeyID:        result.Key.ID,
+		WindowKind:      budgetKind,
+		WindowStart:     windowStart,
+		ConsumedCredits: 420,
+		ReservedCredits: 80,
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.BudgetConsumedCredits != 420 {
+		t.Fatalf("expected consumed credits 420, got %d", snapshot.BudgetConsumedCredits)
+	}
+	if snapshot.BudgetReservedCredits != 80 {
+		t.Fatalf("expected reserved credits 80, got %d", snapshot.BudgetReservedCredits)
+	}
+}
+
+func TestResolveSnapshotReturnsSeparateAccountAndKeyRatePolicies(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "rate-policies",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	repo.accountRatePolicy[accountID] = RatePolicy{
+		RateLimitRPM:          300,
+		RateLimitTPM:          400000,
+		RollingFiveHourLimit:  5000,
+		WeeklyLimit:           10000,
+		FreeTokenWeightTenths: 2,
+	}
+	repo.keyRatePolicy[result.Key.ID] = RatePolicy{
+		RateLimitRPM:          30,
+		RateLimitTPM:          90000,
+		RollingFiveHourLimit:  700,
+		WeeklyLimit:           1300,
+		FreeTokenWeightTenths: 5,
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.AccountRatePolicy == nil || snapshot.KeyRatePolicy == nil {
+		t.Fatalf("expected separate account and key rate policies, got %#v %#v", snapshot.AccountRatePolicy, snapshot.KeyRatePolicy)
+	}
+	if snapshot.AccountRatePolicy.RateLimitRPM != 300 {
+		t.Fatalf("expected account rpm 300, got %d", snapshot.AccountRatePolicy.RateLimitRPM)
+	}
+	if snapshot.KeyRatePolicy.RateLimitRPM != 30 {
+		t.Fatalf("expected key rpm 30, got %d", snapshot.KeyRatePolicy.RateLimitRPM)
+	}
+	if snapshot.AccountRatePolicy.RateLimitRPM == snapshot.KeyRatePolicy.RateLimitRPM {
+		t.Fatal("expected account and key rate policies to remain distinct")
+	}
+}
+
+func TestApplyReservationDeltaUsesConfiguredMonthlyWindow(t *testing.T) {
+	repo := newStubRepo()
+	cache := newSnapshotCacheSpy()
+	svc := NewService(repo, cache)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+	limit := int64(500)
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "budget-window",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	repo.policies[result.Key.ID] = KeyPolicy{
+		APIKeyID:           result.Key.ID,
+		AllowedGroupNames:  []string{"default"},
+		BudgetKind:         "monthly",
+		BudgetLimitCredits: &limit,
+		PolicyVersion:      2,
+	}
+
+	at := time.Date(2026, time.April, 15, 13, 30, 0, 0, time.UTC)
+	if err := svc.ApplyReservationDelta(context.Background(), result.Key.ID, 75, 25, at); err != nil {
+		t.Fatalf("ApplyReservationDelta: %v", err)
+	}
+
+	windowStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	window, ok := repo.budgetWindows[budgetWindowKey(result.Key.ID, "monthly", windowStart)]
+	if !ok {
+		t.Fatal("expected monthly budget window to be updated")
+	}
+	if window.ReservedCredits != 75 {
+		t.Fatalf("expected reserved credits 75, got %d", window.ReservedCredits)
+	}
+	if window.ConsumedCredits != 25 {
+		t.Fatalf("expected consumed credits 25, got %d", window.ConsumedCredits)
+	}
+	if len(cache.invalidated) != 1 || cache.invalidated[0] != result.Key.TokenHash {
+		t.Fatalf("expected snapshot invalidation for %q, got %#v", result.Key.TokenHash, cache.invalidated)
+	}
+}
+
+func TestBudgetAffectingDeltaInvalidatesSnapshot(t *testing.T) {
+	repo := newStubRepo()
+	cache := newSnapshotCacheSpy()
+	svc := NewService(repo, cache)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+	limit := int64(500)
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "invalidate-budget",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	repo.policies[result.Key.ID] = KeyPolicy{
+		APIKeyID:           result.Key.ID,
+		AllowedGroupNames:  []string{"default"},
+		BudgetKind:         "monthly",
+		BudgetLimitCredits: &limit,
+		PolicyVersion:      2,
+	}
+	cache.errByHash[result.Key.TokenHash] = errors.New("redis unavailable")
+
+	at := time.Date(2026, time.April, 15, 9, 0, 0, 0, time.UTC)
+	err = svc.ApplyReservationDelta(context.Background(), result.Key.ID, 40, 10, at)
+	if err == nil {
+		t.Fatal("expected snapshot invalidation failure to be returned")
+	}
+
+	windowStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	window, ok := repo.budgetWindows[budgetWindowKey(result.Key.ID, "monthly", windowStart)]
+	if !ok {
+		t.Fatal("expected durable budget window update before invalidation failure")
+	}
+	if window.ReservedCredits != 40 || window.ConsumedCredits != 10 {
+		t.Fatalf("expected durable window update, got %+v", window)
+	}
+	if len(cache.invalidated) != 1 || cache.invalidated[0] != result.Key.TokenHash {
+		t.Fatalf("expected invalidation attempt for %q, got %#v", result.Key.TokenHash, cache.invalidated)
 	}
 }

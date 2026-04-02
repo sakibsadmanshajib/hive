@@ -64,13 +64,13 @@ func (h *Handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	key, err := h.svc.GetKey(r.Context(), vc.CurrentAccount.ID, keyID)
+	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, keyID)
 	if err != nil {
 		handleKeyError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyListItem(key))
+	writeJSON(w, http.StatusOK, keyViewItem(view))
 }
 
 // resolveViewerContext extracts the authenticated viewer and resolves the
@@ -118,15 +118,15 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keys, err := h.svc.ListKeys(r.Context(), vc.CurrentAccount.ID)
+	views, err := h.svc.ListKeyViews(r.Context(), vc.CurrentAccount.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	items := make([]map[string]interface{}, 0, len(keys))
-	for _, k := range keys {
-		items = append(items, keyListItem(k))
+	items := make([]map[string]interface{}, 0, len(views))
+	for _, view := range views {
+		items = append(items, keyViewItem(view))
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"items": items})
 }
@@ -166,7 +166,13 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := keyListItem(result.Key)
+	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, result.Key.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	resp := keyViewItem(view)
 	resp["secret"] = result.Secret
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -211,7 +217,13 @@ func (h *Handler) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	newKeyResp := keyListItem(result.NewKey)
+	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, result.NewKey.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	newKeyResp := keyViewItem(view)
 	newKeyResp["secret"] = result.Secret
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"old_key_id": result.OldKey.ID.String(),
@@ -236,7 +248,13 @@ func (h *Handler) handleDisableKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyListItem(key))
+	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, key.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, keyViewItem(view))
 }
 
 func (h *Handler) handleEnableKey(w http.ResponseWriter, r *http.Request) {
@@ -256,7 +274,13 @@ func (h *Handler) handleEnableKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyListItem(key))
+	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, key.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, keyViewItem(view))
 }
 
 func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
@@ -276,7 +300,13 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, keyListItem(key))
+	view, err := h.svc.GetKeyView(r.Context(), vc.CurrentAccount.ID, key.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, keyViewItem(view))
 }
 
 func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
@@ -415,27 +445,28 @@ func handleKeyError(w http.ResponseWriter, err error) {
 	}
 }
 
-func keyListItem(k APIKey) map[string]interface{} {
-	k = applyExpiry(k, time.Now())
-
+func keyViewItem(view KeyView) map[string]interface{} {
 	item := map[string]interface{}{
-		"id":                 k.ID.String(),
-		"nickname":           k.Nickname,
-		"status":             string(k.Status),
-		"redacted_suffix":    k.RedactedSuffix,
-		"created_at":         k.CreatedAt.Format(time.RFC3339),
-		"updated_at":         k.UpdatedAt.Format(time.RFC3339),
-		"expires_at":         formatTimestamp(k.ExpiresAt),
-		"last_used_at":       formatTimestamp(k.LastUsedAt),
-		"expiration_summary": expirationSummary(k),
+		"id":              view.ID.String(),
+		"nickname":        view.Nickname,
+		"status":          string(view.Status),
+		"redacted_suffix": view.RedactedSuffix,
+		"created_at":      view.CreatedAt.Format(time.RFC3339),
+		"updated_at":      view.UpdatedAt.Format(time.RFC3339),
+		"expires_at":      formatTimestamp(view.ExpiresAt),
+		"last_used_at":    formatTimestamp(view.LastUsedAt),
+		"expiration_summary": map[string]interface{}{
+			"kind":  view.ExpirationSummary.Kind,
+			"label": view.ExpirationSummary.Label,
+		},
 		"budget_summary": map[string]interface{}{
-			"kind":  "none",
-			"label": "No budget cap",
+			"kind":  view.BudgetSummary.Kind,
+			"label": view.BudgetSummary.Label,
 		},
 		"allowlist_summary": map[string]interface{}{
-			"mode":        "groups",
-			"group_names": []string{"default"},
-			"label":       "Default launch-safe models",
+			"mode":        view.AllowlistSummary.Mode,
+			"group_names": view.AllowlistSummary.GroupNames,
+			"label":       view.AllowlistSummary.Label,
 		},
 	}
 	return item
@@ -447,27 +478,6 @@ func formatTimestamp(t *time.Time) interface{} {
 		return nil
 	}
 	return t.Format(time.RFC3339)
-}
-
-func expirationSummary(k APIKey) map[string]interface{} {
-	if k.ExpiresAt == nil {
-		return map[string]interface{}{
-			"kind":  "never",
-			"label": "Never expires",
-		}
-	}
-
-	if k.Status == KeyStatusExpired {
-		return map[string]interface{}{
-			"kind":  "expired",
-			"label": "Expired",
-		}
-	}
-
-	return map[string]interface{}{
-		"kind":  "scheduled",
-		"label": "Expires " + k.ExpiresAt.Format(time.RFC3339),
-	}
 }
 
 // keyIDFromPath extracts a UUID from the second-to-last path segment.

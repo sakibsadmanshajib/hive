@@ -88,16 +88,16 @@ var ErrNotActive = errors.New("apikeys: key is not active")
 
 // KeyPolicy holds the durable per-key policy configuration.
 type KeyPolicy struct {
-	APIKeyID          uuid.UUID
-	AllowAllModels    bool
-	AllowedGroupNames []string
-	AllowedAliases    []string
-	DeniedAliases     []string
-	BudgetKind        string
+	APIKeyID           uuid.UUID
+	AllowAllModels     bool
+	AllowedGroupNames  []string
+	AllowedAliases     []string
+	DeniedAliases      []string
+	BudgetKind         string
 	BudgetLimitCredits *int64
-	BudgetAnchorAt    *time.Time
-	PolicyVersion     int64
-	UpdatedAt         time.Time
+	BudgetAnchorAt     *time.Time
+	PolicyVersion      int64
+	UpdatedAt          time.Time
 }
 
 // BudgetPolicy encapsulates budget-related policy data.
@@ -107,21 +107,66 @@ type BudgetPolicy struct {
 	AnchorAt     *time.Time
 }
 
+// RatePolicy is the projected edge-facing rate-limit configuration for one scope.
+type RatePolicy struct {
+	RateLimitRPM          int   `json:"rate_limit_rpm"`
+	RateLimitTPM          int   `json:"rate_limit_tpm"`
+	RollingFiveHourLimit  int64 `json:"rolling_five_hour_limit"`
+	WeeklyLimit           int64 `json:"weekly_limit"`
+	FreeTokenWeightTenths int   `json:"free_token_weight_tenths"`
+}
+
+// ExpirationSummary is the customer-visible expiration projection for a key.
+type ExpirationSummary struct {
+	Kind  string
+	Label string
+}
+
+// BudgetSummary is the customer-visible budget projection for a key.
+type BudgetSummary struct {
+	Kind  string
+	Label string
+}
+
+// AllowlistSummary is the customer-visible model access projection for a key.
+type AllowlistSummary struct {
+	Mode       string
+	GroupNames []string
+	Label      string
+}
+
+// KeyView is the customer-visible representation of an API key plus summaries.
+type KeyView struct {
+	ID                uuid.UUID
+	Nickname          string
+	Status            KeyStatus
+	RedactedSuffix    string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+	ExpiresAt         *time.Time
+	LastUsedAt        *time.Time
+	ExpirationSummary ExpirationSummary
+	BudgetSummary     BudgetSummary
+	AllowlistSummary  AllowlistSummary
+}
+
 // AuthSnapshot is the control-plane-owned, Redis-projected authorization
 // snapshot consumed by the edge for hot-path enforcement.
 type AuthSnapshot struct {
-	KeyID                uuid.UUID  `json:"key_id"`
-	AccountID            uuid.UUID  `json:"account_id"`
-	Status               KeyStatus  `json:"status"`
-	ExpiresAt            *time.Time `json:"expires_at,omitempty"`
-	AllowAllModels       bool       `json:"allow_all_models"`
-	AllowedAliases       []string   `json:"allowed_aliases"`
-	BudgetKind           string     `json:"budget_kind"`
-	BudgetLimitCredits   *int64     `json:"budget_limit_credits,omitempty"`
-	BudgetConsumedCredits int64     `json:"budget_consumed_credits"`
-	BudgetReservedCredits int64     `json:"budget_reserved_credits"`
-	BudgetAnchorAt       *time.Time `json:"budget_anchor_at,omitempty"`
-	PolicyVersion        int64      `json:"policy_version"`
+	KeyID                 uuid.UUID   `json:"key_id"`
+	AccountID             uuid.UUID   `json:"account_id"`
+	Status                KeyStatus   `json:"status"`
+	ExpiresAt             *time.Time  `json:"expires_at,omitempty"`
+	AllowAllModels        bool        `json:"allow_all_models"`
+	AllowedAliases        []string    `json:"allowed_aliases"`
+	BudgetKind            string      `json:"budget_kind"`
+	BudgetLimitCredits    *int64      `json:"budget_limit_credits,omitempty"`
+	BudgetConsumedCredits int64       `json:"budget_consumed_credits"`
+	BudgetReservedCredits int64       `json:"budget_reserved_credits"`
+	BudgetAnchorAt        *time.Time  `json:"budget_anchor_at,omitempty"`
+	AccountRatePolicy     *RatePolicy `json:"account_rate_policy,omitempty"`
+	KeyRatePolicy         *RatePolicy `json:"key_rate_policy,omitempty"`
+	PolicyVersion         int64       `json:"policy_version"`
 }
 
 // UpdatePolicyInput is the user-supplied input for per-key policy updates.
@@ -141,3 +186,28 @@ type ResolveSnapshotResult struct {
 	Snapshot AuthSnapshot
 }
 
+// UsageRollupWindow tracks per-key usage aggregations over time windows.
+type UsageRollupWindow struct {
+	APIKeyID         uuid.UUID
+	ModelAlias       string
+	WindowKind       string // 'lifetime' or 'monthly'
+	WindowStart      time.Time
+	RequestCount     int64
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	ConsumedCredits  int64
+	LastSeenAt       time.Time
+}
+
+// BudgetWindow tracks per-key financial states (consumed/reserved credits) over time windows.
+type BudgetWindow struct {
+	APIKeyID        uuid.UUID
+	WindowKind      string // 'lifetime' or 'monthly'
+	WindowStart     time.Time
+	WindowEnd       *time.Time
+	ConsumedCredits int64
+	ReservedCredits int64
+	UpdatedAt       time.Time
+}

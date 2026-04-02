@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
@@ -260,5 +261,59 @@ func TestAPIKeyRoutesRequireVerifiedOwner(t *testing.T) {
 	body := decodeBody(t, rr)
 	if body["code"] != "api_key_management_forbidden" {
 		t.Fatalf("expected code api_key_management_forbidden, got %s", body["code"])
+	}
+}
+
+func TestInternalResolveRouteIncludesSeparateRatePolicyFields(t *testing.T) {
+	h, repo := newTestHandler(ownerVC())
+	base := "/api/v1/accounts/current/api-keys"
+
+	create := doRequest(t, h, http.MethodPost, base, map[string]string{"nickname": "resolver"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", create.Code, create.Body.String())
+	}
+	createBody := decodeBody(t, create)
+	keyID, err := uuid.Parse(createBody["id"].(string))
+	if err != nil {
+		t.Fatalf("parse key id: %v", err)
+	}
+	key := repo.keys[keyID]
+
+	limit := int64(900)
+	repo.policies[keyID] = KeyPolicy{
+		APIKeyID:           keyID,
+		AllowedGroupNames:  []string{"default"},
+		BudgetKind:         "monthly",
+		BudgetLimitCredits: &limit,
+		PolicyVersion:      2,
+	}
+	windowStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	repo.budgetWindows[budgetWindowKey(keyID, "monthly", windowStart)] = BudgetWindow{
+		APIKeyID:        keyID,
+		WindowKind:      "monthly",
+		WindowStart:     windowStart,
+		ConsumedCredits: 111,
+		ReservedCredits: 22,
+	}
+	repo.accountRatePolicy[key.AccountID] = RatePolicy{RateLimitRPM: 120, RateLimitTPM: 240000, FreeTokenWeightTenths: 1}
+	repo.keyRatePolicy[keyID] = RatePolicy{RateLimitRPM: 12, RateLimitTPM: 24000, FreeTokenWeightTenths: 3}
+
+	rr := doRequest(t, h, http.MethodPost, "/internal/apikeys/resolve", map[string]string{"token_hash": key.TokenHash})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("resolve: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	body := decodeBody(t, rr)
+	if body["budget_consumed_credits"].(float64) != 111 {
+		t.Fatalf("expected consumed credits 111, got %#v", body["budget_consumed_credits"])
+	}
+	if body["budget_reserved_credits"].(float64) != 22 {
+		t.Fatalf("expected reserved credits 22, got %#v", body["budget_reserved_credits"])
+	}
+	if _, ok := body["account_rate_policy"].(map[string]interface{}); !ok {
+		t.Fatalf("expected account_rate_policy map, got %#v", body["account_rate_policy"])
+	}
+	if _, ok := body["key_rate_policy"].(map[string]interface{}); !ok {
+		t.Fatalf("expected key_rate_policy map, got %#v", body["key_rate_policy"])
 	}
 }
