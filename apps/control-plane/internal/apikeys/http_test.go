@@ -191,6 +191,47 @@ func TestGetKeyReturnsSummariesWithoutSecret(t *testing.T) {
 	}
 }
 
+func TestPolicyRouteUpdatesSummaries(t *testing.T) {
+	h, _ := newTestHandler(ownerVC())
+	base := "/api/v1/accounts/current/api-keys"
+
+	create := doRequest(t, h, http.MethodPost, base, map[string]string{"nickname": "policy-target"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", create.Code, create.Body.String())
+	}
+	createBody := decodeBody(t, create)
+	keyID := createBody["id"].(string)
+
+	update := doRequest(t, h, http.MethodPost, base+"/"+keyID+"/policy", map[string]interface{}{
+		"allow_all_models":     true,
+		"budget_kind":          "monthly",
+		"budget_limit_credits": 900,
+	})
+	if update.Code != http.StatusOK {
+		t.Fatalf("policy update: expected 200, got %d: %s", update.Code, update.Body.String())
+	}
+	updateBody := decodeBody(t, update)
+	if updateBody["policy_version"].(float64) != 2 {
+		t.Fatalf("expected policy version 2, got %#v", updateBody["policy_version"])
+	}
+
+	detail := doRequest(t, h, http.MethodGet, base+"/"+keyID, nil)
+	if detail.Code != http.StatusOK {
+		t.Fatalf("detail: expected 200, got %d: %s", detail.Code, detail.Body.String())
+	}
+	body := decodeBody(t, detail)
+
+	budgetSummary := body["budget_summary"].(map[string]interface{})
+	if budgetSummary["kind"] != "monthly" || budgetSummary["label"] != "Monthly budget cap: 900 credits" {
+		t.Fatalf("unexpected budget summary after policy update: %#v", budgetSummary)
+	}
+
+	allowlistSummary := body["allowlist_summary"].(map[string]interface{})
+	if allowlistSummary["mode"] != "all" || allowlistSummary["label"] != "All models" {
+		t.Fatalf("unexpected allowlist summary after policy update: %#v", allowlistSummary)
+	}
+}
+
 func TestRotateKeyRevokesOnlyTarget(t *testing.T) {
 	h, _ := newTestHandler(ownerVC())
 	base := "/api/v1/accounts/current/api-keys"

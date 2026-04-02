@@ -50,7 +50,7 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 		)
 	}
 
-	check := CheckAccess(snapshot, aliasID)
+	check := CheckAccess(snapshot, aliasID, estimatedCredits)
 	if !check.Allowed {
 		switch check.DenyCode {
 		case "invalid_api_key":

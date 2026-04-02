@@ -94,7 +94,7 @@ type CheckResult struct {
 
 // CheckAccess validates a request against the auth snapshot.
 // Returns a CheckResult indicating whether the request is allowed.
-func CheckAccess(snapshot AuthSnapshot, requestedAlias string) CheckResult {
+func CheckAccess(snapshot AuthSnapshot, requestedAlias string, estimatedCredits int64) CheckResult {
 	// 1. Key must be active.
 	if snapshot.Status != "active" {
 		return CheckResult{
@@ -136,8 +136,8 @@ func CheckAccess(snapshot AuthSnapshot, requestedAlias string) CheckResult {
 
 	// 4. Check budget (if applicable).
 	if snapshot.BudgetKind != "none" && snapshot.BudgetLimitCredits != nil {
-		used := snapshot.BudgetConsumedCredits + snapshot.BudgetReservedCredits
-		if used >= *snapshot.BudgetLimitCredits {
+		used := snapshot.BudgetConsumedCredits + snapshot.BudgetReservedCredits + estimatedCredits
+		if used > *snapshot.BudgetLimitCredits {
 			return CheckResult{
 				Allowed:  false,
 				DenyCode: "budget_exceeded",

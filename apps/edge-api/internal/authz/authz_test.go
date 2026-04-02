@@ -15,7 +15,7 @@ func TestCheckAccessActiveKey(t *testing.T) {
 		BudgetKind: "none",
 	}
 
-	r := CheckAccess(s, "hive-default")
+	r := CheckAccess(s, "hive-default", 0)
 	if !r.Allowed {
 		t.Fatalf("expected allowed, got denied: %s", r.DenyMsg)
 	}
@@ -28,7 +28,7 @@ func TestCheckAccessRevokedKey(t *testing.T) {
 		BudgetKind: "none",
 	}
 
-	r := CheckAccess(s, "hive-default")
+	r := CheckAccess(s, "hive-default", 0)
 	if r.Allowed {
 		t.Fatal("expected denied for revoked key")
 	}
@@ -46,7 +46,7 @@ func TestCheckAccessExpiredKey(t *testing.T) {
 		BudgetKind: "none",
 	}
 
-	r := CheckAccess(s, "hive-default")
+	r := CheckAccess(s, "hive-default", 0)
 	if r.Allowed {
 		t.Fatal("expected denied for expired key")
 	}
@@ -55,7 +55,7 @@ func TestCheckAccessExpiredKey(t *testing.T) {
 	}
 }
 
-func TestCheckAccessModelDenied(t *testing.T) {
+func TestCheckAccessRejectsDisallowedAliasWithoutRemap(t *testing.T) {
 	s := AuthSnapshot{
 		KeyID:          "key-1",
 		Status:         "active",
@@ -63,7 +63,7 @@ func TestCheckAccessModelDenied(t *testing.T) {
 		BudgetKind:     "none",
 	}
 
-	r := CheckAccess(s, "hive-auto")
+	r := CheckAccess(s, "hive-auto", 0)
 	if r.Allowed {
 		t.Fatal("expected denied for disallowed model")
 	}
@@ -80,13 +80,13 @@ func TestCheckAccessAllModelsWildcard(t *testing.T) {
 		BudgetKind:     "none",
 	}
 
-	r := CheckAccess(s, "any-model")
+	r := CheckAccess(s, "any-model", 0)
 	if !r.Allowed {
 		t.Fatalf("expected allowed with all-models, got denied: %s", r.DenyMsg)
 	}
 }
 
-func TestCheckAccessBudgetExceeded(t *testing.T) {
+func TestCheckAccessRejectsProjectedBudgetOverrun(t *testing.T) {
 	limit := int64(1000)
 	s := AuthSnapshot{
 		KeyID:                "key-1",
@@ -94,13 +94,13 @@ func TestCheckAccessBudgetExceeded(t *testing.T) {
 		AllowAllModels:       true,
 		BudgetKind:           "monthly",
 		BudgetLimitCredits:   &limit,
-		BudgetConsumedCredits: 900,
-		BudgetReservedCredits: 200,
+		BudgetConsumedCredits: 850,
+		BudgetReservedCredits: 100,
 	}
 
-	r := CheckAccess(s, "hive-default")
+	r := CheckAccess(s, "hive-default", 100)
 	if r.Allowed {
-		t.Fatal("expected denied for exceeded budget")
+		t.Fatal("expected denied for projected budget overrun")
 	}
 	if r.DenyCode != "budget_exceeded" {
 		t.Fatalf("expected budget_exceeded code, got %s", r.DenyCode)
@@ -119,7 +119,7 @@ func TestCheckAccessBudgetWithinLimit(t *testing.T) {
 		BudgetReservedCredits: 100,
 	}
 
-	r := CheckAccess(s, "hive-default")
+	r := CheckAccess(s, "hive-default", 200)
 	if !r.Allowed {
 		t.Fatalf("expected allowed within budget, got denied: %s", r.DenyMsg)
 	}
@@ -132,7 +132,7 @@ func TestCheckAccessDenyReasonFormat(t *testing.T) {
 		BudgetKind: "none",
 	}
 
-	r := CheckAccess(s, "")
+	r := CheckAccess(s, "", 0)
 	if r.Allowed {
 		t.Fatal("expected denied for disabled key")
 	}
