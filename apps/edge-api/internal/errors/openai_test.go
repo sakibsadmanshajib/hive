@@ -13,17 +13,17 @@ func ptrStr(s string) *string {
 
 func TestWriteError(t *testing.T) {
 	tests := []struct {
-		name           string
-		httpStatus     int
-		errType        string
-		message        string
-		code           *string
-		wantStatus     int
-		wantType       string
-		wantMessage    string
-		wantCodeNil    bool
-		wantCodeVal    string
-		wantParamNil   bool
+		name         string
+		httpStatus   int
+		errType      string
+		message      string
+		code         *string
+		wantStatus   int
+		wantType     string
+		wantMessage  string
+		wantCodeNil  bool
+		wantCodeVal  string
+		wantParamNil bool
 	}{
 		{
 			name:         "404 unsupported_endpoint with nil code",
@@ -150,5 +150,26 @@ func TestNewError(t *testing.T) {
 	}
 	if err.Error.Param != nil {
 		t.Errorf("param = %v, want nil", *err.Error.Param)
+	}
+}
+
+func TestPermanentFailuresOmitRetryHeaders(t *testing.T) {
+	w := httptest.NewRecorder()
+	code := ptrStr("invalid_api_key")
+
+	WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Incorrect API key provided.", code)
+
+	for _, header := range []string{
+		"x-ratelimit-limit-requests",
+		"x-ratelimit-remaining-requests",
+		"x-ratelimit-reset-requests",
+		"x-ratelimit-limit-tokens",
+		"x-ratelimit-remaining-tokens",
+		"x-ratelimit-reset-tokens",
+		"retry-after",
+	} {
+		if got := w.Header().Get(header); got != "" {
+			t.Fatalf("expected %s to be omitted, got %q", header, got)
+		}
 	}
 }

@@ -37,7 +37,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize authz client: %v", err)
 	}
-	authorizer := authz.NewAuthorizer(authzClient)
+	limiter, err := authz.NewLimiter(resolveRedisURL())
+	if err != nil {
+		log.Fatalf("failed to initialize authz limiter: %v", err)
+	}
+	authorizer := authz.NewAuthorizer(authzClient, limiter)
 
 	// Create the main mux
 	mux := http.NewServeMux()
@@ -73,7 +77,7 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Valid API key required to list models, even if not binding to a specific alias.
-		if _, ok := authorizeAliasRequest(w, r, authorizer, ""); !ok {
+		if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
 			return
 		}
 
@@ -151,17 +155,21 @@ func resolveRedisURL() string {
 // authorizeAliasRequest performs hot-path authorization.
 // It writes the OpenAI-compatible error response itself if unauthorized.
 // Returns the snapshot and a boolean indicating whether authorized.
-func authorizeAliasRequest(w http.ResponseWriter, r *http.Request, authorizer *authz.Authorizer, aliasID string) (authz.AuthSnapshot, bool) {
+func authorizeAliasRequest(w http.ResponseWriter, r *http.Request, authorizer *authz.Authorizer, aliasID string, estimatedCredits, billableTokens, freeTokens int64) (authz.AuthSnapshot, bool) {
 	authHeader := r.Header.Get("Authorization")
-	snapshot, authErr := authorizer.Authorize(r.Context(), authHeader, aliasID)
+	snapshot, headers, authErr := authorizer.Authorize(r.Context(), authHeader, aliasID, estimatedCredits, billableTokens, freeTokens)
 	if authErr != nil {
 		status := http.StatusUnauthorized
-		if authErr.Type == "insufficient_quota" {
+		if authErr.Error.Type == "insufficient_quota" {
 			status = http.StatusTooManyRequests
-		} else if authErr.Code != nil && *authErr.Code == "model_not_found" {
+		} else if authErr.Error.Code != nil && *authErr.Error.Code == "model_not_found" {
 			status = http.StatusNotFound
 		}
-		apierrors.WriteError(w, status, authErr.Type, authErr.Message, authErr.Code)
+		if authErr.Error.Code != nil && *authErr.Error.Code == "rate_limit_exceeded" {
+			apierrors.WriteRateLimitError(w, authErr.Error.Message, authErr.Error.Code, headers)
+			return snapshot, false
+		}
+		apierrors.WriteError(w, status, authErr.Error.Type, authErr.Error.Message, authErr.Error.Code)
 		return snapshot, false
 	}
 	return snapshot, true

@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	edgecatalog "github.com/hivegpt/hive/apps/edge-api/internal/catalog"
 )
 
@@ -39,11 +41,23 @@ func TestHandleModelsReturnsSeededHiveAliases(t *testing.T) {
 		],
 		"catalog": []
 	}`))
+	authorizer := newTestAuthorizer(t, http.StatusOK, `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default","hive-fast","hive-auto"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"policy_version":1
+	}`)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client).ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -101,14 +115,97 @@ func TestHandleModelsDoesNotLeakProviderNames(t *testing.T) {
 			}
 		]
 	}`))
+	authorizer := newTestAuthorizer(t, http.StatusOK, `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"policy_version":1
+	}`)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client).ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if strings.Contains(strings.ToLower(rr.Body.String()), "openrouter") || strings.Contains(strings.ToLower(rr.Body.String()), "groq") {
 		t.Fatalf("expected provider-blind response, got %s", rr.Body.String())
+	}
+}
+
+func TestModelsRouteRequiresValidAPIKey(t *testing.T) {
+	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{"models":[],"catalog":[]}`))
+	authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_invalid")
+	rr := httptest.NewRecorder()
+
+	handleModels(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "invalid_api_key") {
+		t.Fatalf("expected invalid_api_key error, got %s", rr.Body.String())
+	}
+}
+
+func TestModelsRouteUsesLimiter(t *testing.T) {
+	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{"models":[],"catalog":[]}`))
+	var sawInputs struct {
+		estimatedCredits int64
+		billableTokens   int64
+		freeTokens       int64
+	}
+	authorizer := newTestAuthorizerWithLimiter(t, http.StatusOK, `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default","hive-fast","hive-auto"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"account_rate_policy":{"rate_limit_rpm":120,"rate_limit_tpm":240000,"rolling_five_hour_limit":0,"weekly_limit":0,"free_token_weight_tenths":1},
+		"key_rate_policy":{"rate_limit_rpm":12,"rate_limit_tpm":24000,"rolling_five_hour_limit":0,"weekly_limit":0,"free_token_weight_tenths":1},
+		"policy_version":1
+	}`, func(_ context.Context, snapshot authz.AuthSnapshot, aliasID string, estimatedCredits, billableTokens, freeTokens int64) (authz.LimitResult, error) {
+		sawInputs.estimatedCredits = estimatedCredits
+		sawInputs.billableTokens = billableTokens
+		sawInputs.freeTokens = freeTokens
+		return authz.LimitResult{
+			Allowed:             false,
+			Reason:              "request_limit_exceeded",
+			RequestLimit:        12,
+			RequestRemaining:    0,
+			RequestResetSeconds: 21,
+		}, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_rate_limited")
+	rr := httptest.NewRecorder()
+
+	handleModels(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if rr.Header().Get("retry-after") != "21" {
+		t.Fatalf("expected retry-after header, got %#v", rr.Header())
+	}
+	if sawInputs != (struct {
+		estimatedCredits int64
+		billableTokens   int64
+		freeTokens       int64
+	}{0, 0, 0}) {
+		t.Fatalf("expected /v1/models to call limiter with zero-cost inputs, got %+v", sawInputs)
 	}
 }
 
@@ -125,4 +222,35 @@ func newCatalogSnapshotServer(t *testing.T, body string) string {
 	t.Cleanup(server.Close)
 
 	return server.URL
+}
+
+func newTestAuthorizer(t *testing.T, status int, body string) *authz.Authorizer {
+	return newTestAuthorizerWithLimiter(t, status, body, func(_ context.Context, snapshot authz.AuthSnapshot, aliasID string, estimatedCredits, billableTokens, freeTokens int64) (authz.LimitResult, error) {
+		return authz.LimitResult{Allowed: true}, nil
+	})
+}
+
+func newTestAuthorizerWithLimiter(t *testing.T, status int, body string, check func(context.Context, authz.AuthSnapshot, string, int64, int64, int64) (authz.LimitResult, error)) *authz.Authorizer {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/internal/apikeys/resolve" {
+			t.Fatalf("expected auth resolve path, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := authz.NewClient(server.URL, "redis://127.0.0.1:6379/0")
+	if err != nil {
+		t.Fatalf("new authz client: %v", err)
+	}
+
+	limiter := &authz.Limiter{
+		CheckOverride: check,
+	}
+
+	return authz.NewAuthorizer(client, limiter)
 }

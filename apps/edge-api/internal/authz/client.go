@@ -1,7 +1,6 @@
 package authz
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -32,6 +31,9 @@ type Client struct {
 	redis      *redis.Client
 	httpClient *http.Client
 	baseURL    string
+
+	// ResolveOverride is a test hook for bypassing Redis/control-plane I/O.
+	ResolveOverride func(ctx context.Context, rawToken string) (AuthSnapshot, error)
 }
 
 // NewClient returns a new Client.
@@ -51,6 +53,9 @@ func NewClient(baseURL string, redisURL string) (*Client, error) {
 // Resolve returns the AuthSnapshot for the given raw Bearer token segment.
 // It checks Redis first, then falls back to the control plane.
 func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, error) {
+	if c != nil && c.ResolveOverride != nil {
+		return c.ResolveOverride(ctx, rawToken)
+	}
 	if rawToken == "" {
 		return AuthSnapshot{}, errors.New("authz: empty token")
 	}

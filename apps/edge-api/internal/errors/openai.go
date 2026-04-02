@@ -3,6 +3,7 @@ package errors
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // OpenAIError is the top-level error envelope returned by OpenAI-compatible APIs.
@@ -36,4 +37,15 @@ func WriteError(w http.ResponseWriter, httpStatus int, errType string, message s
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(httpStatus)
 	json.NewEncoder(w).Encode(NewError(errType, message, code))
+}
+
+// WriteRateLimitError writes a 429 OpenAI-style error with retry metadata headers.
+func WriteRateLimitError(w http.ResponseWriter, message string, code *string, headers map[string]string) {
+	for key, value := range headers {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		w.Header().Set(key, value)
+	}
+	WriteError(w, http.StatusTooManyRequests, "rate_limit_error", message, code)
 }

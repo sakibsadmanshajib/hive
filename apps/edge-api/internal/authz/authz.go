@@ -13,18 +13,29 @@ import (
 // AuthSnapshot is the edge-side representation of the control-plane-projected
 // authorization data. Matches the control-plane's AuthSnapshot JSON schema.
 type AuthSnapshot struct {
-	KeyID                string   `json:"key_id"`
-	AccountID            string   `json:"account_id"`
-	Status               string   `json:"status"`
-	ExpiresAt            *string  `json:"expires_at,omitempty"`
-	AllowAllModels       bool     `json:"allow_all_models"`
-	AllowedAliases       []string `json:"allowed_aliases"`
-	BudgetKind           string   `json:"budget_kind"`
-	BudgetLimitCredits   *int64   `json:"budget_limit_credits,omitempty"`
-	BudgetConsumedCredits int64   `json:"budget_consumed_credits"`
-	BudgetReservedCredits int64   `json:"budget_reserved_credits"`
-	BudgetAnchorAt       *string  `json:"budget_anchor_at,omitempty"`
-	PolicyVersion        int64    `json:"policy_version"`
+	KeyID                 string      `json:"key_id"`
+	AccountID             string      `json:"account_id"`
+	Status                string      `json:"status"`
+	ExpiresAt             *string     `json:"expires_at,omitempty"`
+	AllowAllModels        bool        `json:"allow_all_models"`
+	AllowedAliases        []string    `json:"allowed_aliases"`
+	BudgetKind            string      `json:"budget_kind"`
+	BudgetLimitCredits    *int64      `json:"budget_limit_credits,omitempty"`
+	BudgetConsumedCredits int64       `json:"budget_consumed_credits"`
+	BudgetReservedCredits int64       `json:"budget_reserved_credits"`
+	BudgetAnchorAt        *string     `json:"budget_anchor_at,omitempty"`
+	AccountRatePolicy     *RatePolicy `json:"account_rate_policy,omitempty"`
+	KeyRatePolicy         *RatePolicy `json:"key_rate_policy,omitempty"`
+	PolicyVersion         int64       `json:"policy_version"`
+}
+
+// RatePolicy is the edge-side rate-limit projection for one scope.
+type RatePolicy struct {
+	RateLimitRPM          int   `json:"rate_limit_rpm"`
+	RateLimitTPM          int   `json:"rate_limit_tpm"`
+	RollingFiveHourLimit  int64 `json:"rolling_five_hour_limit"`
+	WeeklyLimit           int64 `json:"weekly_limit"`
+	FreeTokenWeightTenths int   `json:"free_token_weight_tenths"`
 }
 
 // Resolver fetches AuthSnapshots from the control plane.
@@ -75,10 +86,10 @@ func (r *Resolver) Resolve(ctx context.Context, tokenHash string) (AuthSnapshot,
 
 // CheckResult holds the outcome of an authorization check.
 type CheckResult struct {
-	Allowed   bool
-	DenyCode  string
-	DenyMsg   string
-	Snapshot  AuthSnapshot
+	Allowed  bool
+	DenyCode string
+	DenyMsg  string
+	Snapshot AuthSnapshot
 }
 
 // CheckAccess validates a request against the auth snapshot.
