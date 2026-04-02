@@ -53,6 +53,7 @@ type UsageEvent struct {
 	ID                uuid.UUID      `json:"id"`
 	AccountID         uuid.UUID      `json:"account_id,omitempty"`
 	RequestAttemptID  uuid.UUID      `json:"request_attempt_id"`
+	APIKeyID          *uuid.UUID     `json:"api_key_id,omitempty"`
 	RequestID         string         `json:"request_id"`
 	EventType         UsageEventType `json:"event_type"`
 	Endpoint          string         `json:"endpoint"`
@@ -88,6 +89,7 @@ type StartAttemptInput struct {
 type RecordEventInput struct {
 	AccountID         uuid.UUID
 	RequestAttemptID  uuid.UUID
+	APIKeyID          *uuid.UUID
 	RequestID         string
 	EventType         UsageEventType
 	Endpoint          string

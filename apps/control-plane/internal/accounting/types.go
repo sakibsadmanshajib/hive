@@ -49,6 +49,7 @@ type CreateReservationInput struct {
 	AccountID        uuid.UUID
 	RequestID        string
 	AttemptNumber    int
+	APIKeyID         *uuid.UUID
 	Endpoint         string
 	ModelAlias       string
 	EstimatedCredits int64

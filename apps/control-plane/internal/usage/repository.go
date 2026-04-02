@@ -74,10 +74,10 @@ func (r *pgxRepository) RecordEvent(ctx context.Context, input RecordEventInput)
 
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.usage_events
-			(account_id, request_attempt_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15::jsonb, $16, $17)
-		RETURNING id, account_id, request_attempt_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
-	`, input.AccountID, input.RequestAttemptID, input.RequestID, string(input.EventType), input.Endpoint, input.ModelAlias, input.Status, input.InputTokens, input.OutputTokens, input.CacheReadTokens, input.CacheWriteTokens, input.HiveCreditDelta, nullableString(input.ProviderRequestID), internalMetadata, customerTags, nullableString(input.ErrorCode), nullableString(input.ErrorType))
+			(account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb, $16::jsonb, $17, $18)
+		RETURNING id, account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
+	`, input.AccountID, input.RequestAttemptID, input.APIKeyID, input.RequestID, string(input.EventType), input.Endpoint, input.ModelAlias, input.Status, input.InputTokens, input.OutputTokens, input.CacheReadTokens, input.CacheWriteTokens, input.HiveCreditDelta, nullableString(input.ProviderRequestID), internalMetadata, customerTags, nullableString(input.ErrorCode), nullableString(input.ErrorType))
 
 	event, err := scanUsageEvent(row)
 	if err != nil {
@@ -137,7 +137,7 @@ func (r *pgxRepository) ListEvents(ctx context.Context, filter ListEventsFilter)
 	}
 
 	query := `
-		SELECT id, account_id, request_attempt_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
+		SELECT id, account_id, request_attempt_id, api_key_id, request_id, event_type, endpoint, model_alias, status, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, hive_credit_delta, provider_request_id, internal_metadata, customer_tags, error_code, error_type, created_at
 		FROM public.usage_events
 		WHERE account_id = $1
 	`
@@ -224,6 +224,7 @@ func scanUsageEvent(scanner rowScanner) (UsageEvent, error) {
 		&event.ID,
 		&event.AccountID,
 		&event.RequestAttemptID,
+		&event.APIKeyID,
 		&event.RequestID,
 		&event.EventType,
 		&event.Endpoint,

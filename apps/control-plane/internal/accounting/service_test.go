@@ -163,6 +163,7 @@ type apiKeyUsageCall struct {
 }
 
 type apiKeyStub struct {
+	budgetKindByKey   map[uuid.UUID]string
 	deltaCalls        []apiKeyDeltaCall
 	finalizationCalls []apiKeyUsageCall
 	lastUsedCalls     []struct {
@@ -171,7 +172,11 @@ type apiKeyStub struct {
 	}
 }
 
-func (a *apiKeyStub) ApplyReservationDelta(_ context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error {
+func (a *apiKeyStub) ApplyReservationDelta(_ context.Context, apiKeyID uuid.UUID, reservedDelta int64, consumedDelta int64, at time.Time) error {
+	budgetKind := a.budgetKindByKey[apiKeyID]
+	if budgetKind == "" {
+		budgetKind = "lifetime"
+	}
 	a.deltaCalls = append(a.deltaCalls, apiKeyDeltaCall{
 		apiKeyID:      apiKeyID,
 		budgetKind:    budgetKind,
@@ -542,4 +547,173 @@ func TestFinalizeReservationRecordsCompletedEventAndUpdatesAPIKeyUsage(t *testin
 	if len(apiKeySvc.lastUsedCalls) != 1 || apiKeySvc.lastUsedCalls[0].apiKeyID != apiKeyID {
 		t.Fatalf("expected last_used_at update for API key %s, got %#v", apiKeyID, apiKeySvc.lastUsedCalls)
 	}
+}
+
+func TestFinalizeReservationUpdatesBudgetWindowAndUsageRollup(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledger.BalanceSummary{AvailableCredits: 500}}
+	usageSvc := &usageStub{}
+	apiKeyID := uuid.New()
+	apiKeySvc := &apiKeyStub{
+		budgetKindByKey: map[uuid.UUID]string{apiKeyID: "lifetime"},
+	}
+	svc := NewService(repo, ledgerSvc, usageSvc, apiKeySvc)
+
+	accountID := uuid.New()
+	reservation, err := svc.CreateReservation(context.Background(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        "req_budget_rollup",
+		AttemptNumber:    1,
+		APIKeyID:         &apiKeyID,
+		Endpoint:         "/v1/responses",
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 100,
+		PolicyMode:       PolicyModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("CreateReservation returned error: %v", err)
+	}
+
+	_, err = svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservation.ID,
+		ActualCredits:          70,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+	})
+	if err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	if len(apiKeySvc.deltaCalls) != 2 {
+		t.Fatalf("expected 2 budget window updates, got %#v", apiKeySvc.deltaCalls)
+	}
+	if apiKeySvc.deltaCalls[0].reservedDelta != 100 || apiKeySvc.deltaCalls[0].consumedDelta != 0 {
+		t.Fatalf("expected reservation create to add 100 reserved credits, got %#v", apiKeySvc.deltaCalls[0])
+	}
+	if apiKeySvc.deltaCalls[1].reservedDelta != -100 || apiKeySvc.deltaCalls[1].consumedDelta != 70 {
+		t.Fatalf("expected finalize to clear open reserve and add consumed credits, got %#v", apiKeySvc.deltaCalls[1])
+	}
+	if len(apiKeySvc.finalizationCalls) != 1 {
+		t.Fatalf("expected one usage rollup update, got %#v", apiKeySvc.finalizationCalls)
+	}
+	if apiKeySvc.finalizationCalls[0].modelAlias != "hive-fast" || apiKeySvc.finalizationCalls[0].consumedCredits != 70 {
+		t.Fatalf("expected finalization rollup to record model and consumed credits, got %#v", apiKeySvc.finalizationCalls[0])
+	}
+}
+
+func TestBudgetProjectionCountsOpenReservations(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledger.BalanceSummary{AvailableCredits: 500}}
+	usageSvc := &usageStub{}
+	apiKeyID := uuid.New()
+	apiKeySvc := &apiKeyStub{
+		budgetKindByKey: map[uuid.UUID]string{apiKeyID: "lifetime"},
+	}
+	svc := NewService(repo, ledgerSvc, usageSvc, apiKeySvc)
+
+	accountID := uuid.New()
+	reservation, err := svc.CreateReservation(context.Background(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        "req_projection",
+		AttemptNumber:    1,
+		APIKeyID:         &apiKeyID,
+		Endpoint:         "/v1/responses",
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 80,
+		PolicyMode:       PolicyModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("CreateReservation returned error: %v", err)
+	}
+
+	if _, err := svc.ExpandReservation(context.Background(), ExpandReservationInput{
+		AccountID:         accountID,
+		ReservationID:     reservation.ID,
+		AdditionalCredits: 20,
+	}); err != nil {
+		t.Fatalf("ExpandReservation returned error: %v", err)
+	}
+
+	projected := projectedBudgetWindow(apiKeySvc.deltaCalls, apiKeyID, "lifetime")
+	if projected.reserved != 100 || projected.consumed != 0 {
+		t.Fatalf("expected open reservations to project 100 reserved credits, got %#v", projected)
+	}
+
+	if _, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservation.ID,
+		ActualCredits:          100,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+	}); err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	projected = projectedBudgetWindow(apiKeySvc.deltaCalls, apiKeyID, "lifetime")
+	if projected.reserved != 0 || projected.consumed != 100 {
+		t.Fatalf("expected finalized reservation to leave no open reserve and 100 consumed credits, got %#v", projected)
+	}
+}
+
+func TestFinalizeReservationUsesConfiguredBudgetWindowKind(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledger.BalanceSummary{AvailableCredits: 500}}
+	usageSvc := &usageStub{}
+	apiKeyID := uuid.New()
+	apiKeySvc := &apiKeyStub{
+		budgetKindByKey: map[uuid.UUID]string{apiKeyID: "monthly"},
+	}
+	svc := NewService(repo, ledgerSvc, usageSvc, apiKeySvc)
+
+	accountID := uuid.New()
+	reservation, err := svc.CreateReservation(context.Background(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        "req_monthly_window",
+		AttemptNumber:    1,
+		APIKeyID:         &apiKeyID,
+		Endpoint:         "/v1/responses",
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 55,
+		PolicyMode:       PolicyModeStrict,
+	})
+	if err != nil {
+		t.Fatalf("CreateReservation returned error: %v", err)
+	}
+
+	if _, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservation.ID,
+		ActualCredits:          55,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+	}); err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	if len(apiKeySvc.deltaCalls) != 2 {
+		t.Fatalf("expected 2 budget window updates, got %#v", apiKeySvc.deltaCalls)
+	}
+	for _, call := range apiKeySvc.deltaCalls {
+		if call.budgetKind != "monthly" {
+			t.Fatalf("expected budget updates to resolve monthly window, got %#v", apiKeySvc.deltaCalls)
+		}
+	}
+}
+
+type budgetProjection struct {
+	reserved int64
+	consumed int64
+}
+
+func projectedBudgetWindow(calls []apiKeyDeltaCall, apiKeyID uuid.UUID, budgetKind string) budgetProjection {
+	var projection budgetProjection
+	for _, call := range calls {
+		if call.apiKeyID != apiKeyID || call.budgetKind != budgetKind {
+			continue
+		}
+		projection.reserved += call.reservedDelta
+		projection.consumed += call.consumedDelta
+	}
+	return projection
 }

@@ -27,7 +27,7 @@ type usageService interface {
 }
 
 type apiKeyService interface {
-	ApplyReservationDelta(ctx context.Context, apiKeyID uuid.UUID, budgetKind string, reservedDelta int64, consumedDelta int64, at time.Time) error
+	ApplyReservationDelta(ctx context.Context, apiKeyID uuid.UUID, reservedDelta int64, consumedDelta int64, at time.Time) error
 	RecordUsageFinalization(ctx context.Context, apiKeyID uuid.UUID, modelAlias string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, consumedCredits int64, at time.Time) error
 	MarkLastUsed(ctx context.Context, apiKeyID uuid.UUID, at time.Time) error
 }
@@ -129,7 +129,7 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 	}
 
 	if input.APIKeyID != nil && s.apiKeySvc != nil {
-		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *input.APIKeyID, "lifetime", input.EstimatedCredits, 0, time.Now()); err != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *input.APIKeyID, input.EstimatedCredits, 0, time.Now().UTC()); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
 	}
@@ -180,7 +180,7 @@ func (s *Service) ExpandReservation(ctx context.Context, input ExpandReservation
 	if attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID); err != nil {
 		return Reservation{}, err
 	} else if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
-		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, "lifetime", input.AdditionalCredits, 0, time.Now()); err != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, input.AdditionalCredits, 0, time.Now().UTC()); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
 	}
@@ -212,6 +212,7 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 	}
 
 	releaseCredits := releasableCredits(reservation, input.ActualCredits)
+	heldCredits := remainingHeldCredits(reservation)
 
 	if input.ActualCredits > 0 {
 		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", input.ActualCredits)), input.ActualCredits, map[string]any{
@@ -288,7 +289,7 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 
 	if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
 		at := time.Now().UTC()
-		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, "lifetime", -releaseCredits, input.ActualCredits, at); err != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, -heldCredits, input.ActualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
 		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, 0, 0, 0, 0, input.ActualCredits, at); err != nil {
@@ -344,9 +345,19 @@ func (s *Service) ReleaseReservation(ctx context.Context, input ReleaseReservati
 		return Reservation{}, fmt.Errorf("accounting: update attempt status: %w", err)
 	}
 
+	attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID)
+	if err != nil {
+		return Reservation{}, err
+	}
+	var apiKeyID *uuid.UUID
+	if attempt != nil {
+		apiKeyID = attempt.APIKeyID
+	}
+
 	if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{
 		AccountID:        reservation.AccountID,
 		RequestAttemptID: reservation.RequestAttemptID,
+		APIKeyID:         apiKeyID,
 		RequestID:        reservation.RequestID,
 		EventType:        usage.UsageEventReleased,
 		Endpoint:         reservation.Endpoint,
@@ -362,15 +373,9 @@ func (s *Service) ReleaseReservation(ctx context.Context, input ReleaseReservati
 		return Reservation{}, fmt.Errorf("accounting: record release event: %w", err)
 	}
 
-	if releaseCredits > 0 && s.apiKeySvc != nil {
-		attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID)
-		if err != nil {
-			return Reservation{}, err
-		}
-		if attempt != nil && attempt.APIKeyID != nil {
-			if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, "lifetime", -releaseCredits, 0, time.Now()); err != nil {
-				return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
-			}
+	if releaseCredits > 0 && s.apiKeySvc != nil && attempt != nil && attempt.APIKeyID != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, -releaseCredits, 0, now); err != nil {
+			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
 	}
 
