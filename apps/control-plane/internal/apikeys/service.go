@@ -67,6 +67,16 @@ func (s *Service) ListKeys(ctx context.Context, accountID uuid.UUID) ([]APIKey, 
 	return keys, nil
 }
 
+// GetKey returns a single key for the account and exposes expired keys without
+// mutating the stored durable status.
+func (s *Service) GetKey(ctx context.Context, accountID, keyID uuid.UUID) (APIKey, error) {
+	key, err := s.repo.GetKey(ctx, accountID, keyID)
+	if err != nil {
+		return APIKey{}, fmt.Errorf("apikeys: get: %w", err)
+	}
+	return applyExpiry(key, time.Now()), nil
+}
+
 // CreateKey issues a new API key. The raw secret is returned once and
 // must not be logged, persisted, or included in list responses.
 func (s *Service) CreateKey(ctx context.Context, accountID, actorUserID uuid.UUID, input CreateKeyInput) (CreateKeyResult, error) {

@@ -102,6 +102,94 @@ func TestListKeysNeverReturnsSecret(t *testing.T) {
 	}
 }
 
+func TestListKeysReturnsCustomerVisibleSummaries(t *testing.T) {
+	h, _ := newTestHandler(ownerVC())
+	base := "/api/v1/accounts/current/api-keys"
+
+	doRequest(t, h, http.MethodPost, base, map[string]string{"nickname": "launch-key"})
+
+	rr := doRequest(t, h, http.MethodGet, base, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("list: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	body := decodeBody(t, rr)
+	items := body["items"].([]interface{})
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+
+	item := items[0].(map[string]interface{})
+	if _, ok := item["created_at"].(string); !ok {
+		t.Fatal("created_at must be a string timestamp")
+	}
+	if _, ok := item["updated_at"].(string); !ok {
+		t.Fatal("updated_at must be a string timestamp")
+	}
+	if _, ok := item["expires_at"]; !ok {
+		t.Fatal("expires_at must be present even when null")
+	}
+	if _, ok := item["last_used_at"]; !ok {
+		t.Fatal("last_used_at must be present even when null")
+	}
+
+	expirationSummary := item["expiration_summary"].(map[string]interface{})
+	if expirationSummary["kind"] != "never" || expirationSummary["label"] != "Never expires" {
+		t.Fatalf("unexpected expiration summary: %#v", expirationSummary)
+	}
+
+	budgetSummary := item["budget_summary"].(map[string]interface{})
+	if budgetSummary["kind"] != "none" || budgetSummary["label"] != "No budget cap" {
+		t.Fatalf("unexpected budget summary: %#v", budgetSummary)
+	}
+
+	allowlistSummary := item["allowlist_summary"].(map[string]interface{})
+	if allowlistSummary["mode"] != "groups" || allowlistSummary["label"] != "Default launch-safe models" {
+		t.Fatalf("unexpected allowlist summary: %#v", allowlistSummary)
+	}
+	groupNames := allowlistSummary["group_names"].([]interface{})
+	if len(groupNames) != 1 || groupNames[0] != "default" {
+		t.Fatalf("unexpected allowlist group names: %#v", groupNames)
+	}
+}
+
+func TestGetKeyReturnsSummariesWithoutSecret(t *testing.T) {
+	h, _ := newTestHandler(ownerVC())
+	base := "/api/v1/accounts/current/api-keys"
+
+	create := doRequest(t, h, http.MethodPost, base, map[string]string{"nickname": "inspect-me"})
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create: expected 201, got %d: %s", create.Code, create.Body.String())
+	}
+	createBody := decodeBody(t, create)
+	keyID := createBody["id"].(string)
+
+	rr := doRequest(t, h, http.MethodGet, base+"/"+keyID, nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get key: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	body := decodeBody(t, rr)
+	if _, hasSecret := body["secret"]; hasSecret {
+		t.Fatal("detail response must not include secret")
+	}
+
+	expirationSummary := body["expiration_summary"].(map[string]interface{})
+	if expirationSummary["kind"] != "never" || expirationSummary["label"] != "Never expires" {
+		t.Fatalf("unexpected expiration summary: %#v", expirationSummary)
+	}
+
+	budgetSummary := body["budget_summary"].(map[string]interface{})
+	if budgetSummary["kind"] != "none" || budgetSummary["label"] != "No budget cap" {
+		t.Fatalf("unexpected budget summary: %#v", budgetSummary)
+	}
+
+	allowlistSummary := body["allowlist_summary"].(map[string]interface{})
+	if allowlistSummary["mode"] != "groups" || allowlistSummary["label"] != "Default launch-safe models" {
+		t.Fatalf("unexpected allowlist summary: %#v", allowlistSummary)
+	}
+}
+
 func TestRotateKeyRevokesOnlyTarget(t *testing.T) {
 	h, _ := newTestHandler(ownerVC())
 	base := "/api/v1/accounts/current/api-keys"

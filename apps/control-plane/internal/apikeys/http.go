@@ -32,6 +32,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && path == base:
 		h.handleListKeys(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, base+"/"):
+		h.handleGetKey(w, r)
 	case r.Method == http.MethodPost && path == base:
 		h.handleCreateKey(w, r)
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/policy"):
@@ -49,6 +51,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
+}
+
+func (h *Handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r)
+	if !ok {
+		return
+	}
+
+	keyID, ok := extractKeyID(w, r)
+	if !ok {
+		return
+	}
+
+	key, err := h.svc.GetKey(r.Context(), vc.CurrentAccount.ID, keyID)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, keyListItem(key))
 }
 
 // resolveViewerContext extracts the authenticated viewer and resolves the
@@ -269,14 +291,14 @@ func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		ExpiresAt         *string  `json:"expires_at"`
-		AllowAllModels    *bool    `json:"allow_all_models"`
-		AllowedGroupNames []string `json:"allowed_group_names"`
-		AllowedAliases    []string `json:"allowed_aliases"`
-		DeniedAliases     []string `json:"denied_aliases"`
-		BudgetKind        *string  `json:"budget_kind"`
-		BudgetLimitCredits *int64  `json:"budget_limit_credits"`
-		BudgetAnchorAt    *string  `json:"budget_anchor_at"`
+		ExpiresAt          *string  `json:"expires_at"`
+		AllowAllModels     *bool    `json:"allow_all_models"`
+		AllowedGroupNames  []string `json:"allowed_group_names"`
+		AllowedAliases     []string `json:"allowed_aliases"`
+		DeniedAliases      []string `json:"denied_aliases"`
+		BudgetKind         *string  `json:"budget_kind"`
+		BudgetLimitCredits *int64   `json:"budget_limit_credits"`
+		BudgetAnchorAt     *string  `json:"budget_anchor_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -284,11 +306,11 @@ func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input := UpdatePolicyInput{
-		AllowAllModels:    body.AllowAllModels,
-		AllowedGroupNames: body.AllowedGroupNames,
-		AllowedAliases:    body.AllowedAliases,
-		DeniedAliases:     body.DeniedAliases,
-		BudgetKind:        body.BudgetKind,
+		AllowAllModels:     body.AllowAllModels,
+		AllowedGroupNames:  body.AllowedGroupNames,
+		AllowedAliases:     body.AllowedAliases,
+		DeniedAliases:      body.DeniedAliases,
+		BudgetKind:         body.BudgetKind,
 		BudgetLimitCredits: body.BudgetLimitCredits,
 	}
 
@@ -316,10 +338,10 @@ func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"api_key_id":      policy.APIKeyID.String(),
+		"api_key_id":       policy.APIKeyID.String(),
 		"allow_all_models": policy.AllowAllModels,
-		"budget_kind":     policy.BudgetKind,
-		"policy_version":  policy.PolicyVersion,
+		"budget_kind":      policy.BudgetKind,
+		"policy_version":   policy.PolicyVersion,
 	})
 }
 
@@ -340,6 +362,7 @@ func (h *Handler) handleInternalResolve(w http.ResponseWriter, r *http.Request) 
 
 	writeJSON(w, http.StatusOK, snapshot)
 }
+
 // --- helpers ---
 
 func parseAccountHeader(r *http.Request) uuid.UUID {
@@ -393,19 +416,27 @@ func handleKeyError(w http.ResponseWriter, err error) {
 }
 
 func keyListItem(k APIKey) map[string]interface{} {
+	k = applyExpiry(k, time.Now())
+
 	item := map[string]interface{}{
-		"id":              k.ID.String(),
-		"nickname":        k.Nickname,
-		"status":          string(k.Status),
-		"redacted_suffix": k.RedactedSuffix,
-		"created_at":      k.CreatedAt.Format(time.RFC3339),
-		"updated_at":      k.UpdatedAt.Format(time.RFC3339),
-	}
-	if k.ExpiresAt != nil {
-		item["expires_at"] = k.ExpiresAt.Format(time.RFC3339)
-	}
-	if k.LastUsedAt != nil {
-		item["last_used_at"] = k.LastUsedAt.Format(time.RFC3339)
+		"id":                 k.ID.String(),
+		"nickname":           k.Nickname,
+		"status":             string(k.Status),
+		"redacted_suffix":    k.RedactedSuffix,
+		"created_at":         k.CreatedAt.Format(time.RFC3339),
+		"updated_at":         k.UpdatedAt.Format(time.RFC3339),
+		"expires_at":         formatTimestamp(k.ExpiresAt),
+		"last_used_at":       formatTimestamp(k.LastUsedAt),
+		"expiration_summary": expirationSummary(k),
+		"budget_summary": map[string]interface{}{
+			"kind":  "none",
+			"label": "No budget cap",
+		},
+		"allowlist_summary": map[string]interface{}{
+			"mode":        "groups",
+			"group_names": []string{"default"},
+			"label":       "Default launch-safe models",
+		},
 	}
 	return item
 }
@@ -416,6 +447,27 @@ func formatTimestamp(t *time.Time) interface{} {
 		return nil
 	}
 	return t.Format(time.RFC3339)
+}
+
+func expirationSummary(k APIKey) map[string]interface{} {
+	if k.ExpiresAt == nil {
+		return map[string]interface{}{
+			"kind":  "never",
+			"label": "Never expires",
+		}
+	}
+
+	if k.Status == KeyStatusExpired {
+		return map[string]interface{}{
+			"kind":  "expired",
+			"label": "Expired",
+		}
+	}
+
+	return map[string]interface{}{
+		"kind":  "scheduled",
+		"label": "Expires " + k.ExpiresAt.Format(time.RFC3339),
+	}
 }
 
 // keyIDFromPath extracts a UUID from the second-to-last path segment.
