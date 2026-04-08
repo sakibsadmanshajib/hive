@@ -122,9 +122,11 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 06-01: Implement `responses`, `chat/completions`, and `completions` on the public edge.
-- [ ] 06-02: Normalize SSE streaming, reasoning fields, and usage accounting across providers.
-- [ ] 06-03: Implement `embeddings` and verify compatibility with official SDK flows.
+- [ ] 06-01-PLAN.md — Inference types, internal accounting/usage endpoints, LiteLLM client, orchestrator, and non-streaming chat/completions + completions handlers (Wave 1)
+- [ ] 06-02-PLAN.md — SSE streaming relay, Responses API event translation, and reasoning field normalization (Wave 2)
+- [ ] 06-03-PLAN.md — Embeddings endpoint and SDK integration tests for all Phase 6 endpoints (Wave 2)
+
+
 
 ### Phase 7: Media, File, and Async API Surface
 **Goal**: Extend compatibility to the file and media workflows needed by real OpenAI-integrated applications.
