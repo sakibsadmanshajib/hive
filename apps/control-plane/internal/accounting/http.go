@@ -58,6 +58,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleFinalizeReservation(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/accounts/current/credits/reservations/release":
 		h.handleReleaseReservation(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/internal/accounting/reservations":
+		h.handleInternalCreateReservation(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/internal/accounting/reservations/finalize":
+		h.handleInternalFinalizeReservation(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/internal/accounting/reservations/release":
+		h.handleInternalReleaseReservation(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -173,6 +179,136 @@ func (h *Handler) handleReleaseReservation(w http.ResponseWriter, r *http.Reques
 	var req releaseReservationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	reservationID, err := parseOptionalUUIDField(req.ReservationID)
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	reservation, err := h.svc.ReleaseReservation(r.Context(), ReleaseReservationInput{
+		AccountID:     accountID,
+		ReservationID: reservationID,
+		Reason:        req.Reason,
+	})
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, reservation)
+}
+
+type internalCreateReservationRequest struct {
+	AccountID        string         `json:"account_id"`
+	RequestID        string         `json:"request_id"`
+	AttemptNumber    int            `json:"attempt_number"`
+	APIKeyID         string         `json:"api_key_id"`
+	Endpoint         string         `json:"endpoint"`
+	ModelAlias       string         `json:"model_alias"`
+	EstimatedCredits int64          `json:"estimated_credits"`
+	PolicyMode       PolicyMode     `json:"policy_mode"`
+	CustomerTags     map[string]any `json:"customer_tags"`
+}
+
+type internalFinalizeReservationRequest struct {
+	AccountID              string `json:"account_id"`
+	ReservationID          string `json:"reservation_id"`
+	ActualCredits          int64  `json:"actual_credits"`
+	TerminalUsageConfirmed bool   `json:"terminal_usage_confirmed"`
+	Status                 string `json:"status"`
+}
+
+type internalReleaseReservationRequest struct {
+	AccountID     string `json:"account_id"`
+	ReservationID string `json:"reservation_id"`
+	Reason        string `json:"reason"`
+}
+
+func (h *Handler) handleInternalCreateReservation(w http.ResponseWriter, r *http.Request) {
+	var req internalCreateReservationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	accountID, err := parseUUIDField(req.AccountID, "account_id")
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	apiKeyID, err := parseOptionalUUIDPointerField(req.APIKeyID, "api_key_id")
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	reservation, err := h.svc.CreateReservation(r.Context(), CreateReservationInput{
+		AccountID:        accountID,
+		RequestID:        req.RequestID,
+		AttemptNumber:    req.AttemptNumber,
+		APIKeyID:         apiKeyID,
+		Endpoint:         req.Endpoint,
+		ModelAlias:       req.ModelAlias,
+		EstimatedCredits: req.EstimatedCredits,
+		PolicyMode:       req.PolicyMode,
+		CustomerTags:     req.CustomerTags,
+	})
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, reservation)
+}
+
+func (h *Handler) handleInternalFinalizeReservation(w http.ResponseWriter, r *http.Request) {
+	var req internalFinalizeReservationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	accountID, err := parseUUIDField(req.AccountID, "account_id")
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	reservationID, err := parseOptionalUUIDField(req.ReservationID)
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	reservation, err := h.svc.FinalizeReservation(r.Context(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          req.ActualCredits,
+		TerminalUsageConfirmed: req.TerminalUsageConfirmed,
+		Status:                 req.Status,
+	})
+	if err != nil {
+		writeAccountingError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, reservation)
+}
+
+func (h *Handler) handleInternalReleaseReservation(w http.ResponseWriter, r *http.Request) {
+	var req internalReleaseReservationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+
+	accountID, err := parseUUIDField(req.AccountID, "account_id")
+	if err != nil {
+		writeAccountingError(w, err)
 		return
 	}
 

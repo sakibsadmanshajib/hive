@@ -47,6 +47,17 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		mux.Handle("/internal/routing/select", cfg.RoutingHandler)
 	}
 
+	if cfg.AccountingHandler != nil {
+		mux.Handle("/internal/accounting/reservations", cfg.AccountingHandler)
+		mux.Handle("/internal/accounting/reservations/finalize", cfg.AccountingHandler)
+		mux.Handle("/internal/accounting/reservations/release", cfg.AccountingHandler)
+	}
+
+	if cfg.UsageHandler != nil {
+		mux.Handle("/internal/usage/attempts", cfg.UsageHandler)
+		mux.Handle("/internal/usage/events", cfg.UsageHandler)
+	}
+
 	if cfg.ProfilesHandler != nil && cfg.AuthMiddleware != nil {
 		protectedProfiles := cfg.AuthMiddleware.Require(cfg.ProfilesHandler)
 		mux.Handle("/api/v1/accounts/current/profile", protectedProfiles)
