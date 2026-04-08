@@ -119,13 +119,13 @@ Plans:
   2. Streaming responses follow expected OpenAI SSE chunk structure and completion behavior.
   3. `embeddings` works with compatible request and response objects.
   4. Reasoning or thinking-related parameters and outputs are translated consistently when supported upstream.
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
-- [ ] 06-01-PLAN.md — Inference types, internal accounting/usage endpoints, LiteLLM client, orchestrator, and non-streaming chat/completions + completions handlers (Wave 1)
-- [ ] 06-02-PLAN.md — SSE streaming relay, Responses API event translation, and reasoning field normalization (Wave 2)
-- [ ] 06-03-PLAN.md — Embeddings endpoint and SDK integration tests for all Phase 6 endpoints (Wave 2)
-
+- [ ] 06-01-PLAN.md — Internal control-plane accounting/usage endpoints for edge-to-control-plane service calls (Wave 1)
+- [ ] 06-02-PLAN.md — Inference types, LiteLLM client, orchestrator, and non-streaming chat/completions + completions handlers (Wave 1)
+- [ ] 06-03-PLAN.md — SSE streaming relay, Responses API event translation, and reasoning field normalization (Wave 2)
+- [ ] 06-04-PLAN.md — Embeddings endpoint and SDK integration tests for all Phase 6 endpoints (Wave 2)
 
 
 ### Phase 7: Media, File, and Async API Surface
