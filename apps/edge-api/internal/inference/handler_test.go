@@ -87,14 +87,15 @@ func TestHandler_ResponsesPlaceholder(t *testing.T) {
 	}
 }
 
-func TestHandler_EmbeddingsPlaceholder(t *testing.T) {
+func TestHandler_Embeddings_MissingModel(t *testing.T) {
 	h := NewHandler(&Orchestrator{})
-	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", nil)
+	body := `{"input":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", w.Code)
 	}
 }
 

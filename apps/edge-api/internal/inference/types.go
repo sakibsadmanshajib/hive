@@ -145,3 +145,114 @@ type CompletionTokensDetails struct {
 type PromptTokensDetails struct {
 	CachedTokens int64 `json:"cached_tokens"`
 }
+
+// --- Embeddings ---
+
+// EmbeddingsRequest is the OpenAI-compatible embeddings request.
+type EmbeddingsRequest struct {
+	Model          string          `json:"model"`
+	Input          json.RawMessage `json:"input"`
+	EncodingFormat *string         `json:"encoding_format,omitempty"`
+	Dimensions     *int            `json:"dimensions,omitempty"`
+	User           *string         `json:"user,omitempty"`
+}
+
+// EmbeddingsResponse is the OpenAI-compatible embeddings response.
+type EmbeddingsResponse struct {
+	Object string           `json:"object"`
+	Data   []EmbeddingObject `json:"data"`
+	Model  string           `json:"model"`
+	Usage  *EmbeddingsUsage `json:"usage"`
+}
+
+// EmbeddingObject is a single embedding in the response.
+type EmbeddingObject struct {
+	Object    string          `json:"object"`
+	Embedding json.RawMessage `json:"embedding"`
+	Index     int             `json:"index"`
+}
+
+// EmbeddingsUsage is the usage object for embeddings responses.
+type EmbeddingsUsage struct {
+	PromptTokens int64 `json:"prompt_tokens"`
+	TotalTokens  int64 `json:"total_tokens"`
+}
+
+// --- Responses API ---
+
+// ResponsesRequest is the OpenAI Responses API request.
+type ResponsesRequest struct {
+	Model              string          `json:"model"`
+	Input              json.RawMessage `json:"input"`
+	Stream             bool            `json:"stream,omitempty"`
+	Instructions       *string         `json:"instructions,omitempty"`
+	Text               json.RawMessage `json:"text,omitempty"`
+	Tools              json.RawMessage `json:"tools,omitempty"`
+	ToolChoice         json.RawMessage `json:"tool_choice,omitempty"`
+	Temperature        *float64        `json:"temperature,omitempty"`
+	TopP               *float64        `json:"top_p,omitempty"`
+	MaxOutputTokens    *int            `json:"max_output_tokens,omitempty"`
+	Reasoning          json.RawMessage `json:"reasoning,omitempty"`
+	Store              *bool           `json:"store,omitempty"`
+	User               *string         `json:"user,omitempty"`
+	PreviousResponseID *string         `json:"previous_response_id,omitempty"`
+	Metadata           json.RawMessage `json:"metadata,omitempty"`
+	Truncation         *string         `json:"truncation,omitempty"`
+}
+
+// ResponseObject is the OpenAI Responses API response object.
+type ResponseObject struct {
+	ID                string              `json:"id"`
+	Object            string              `json:"object"`
+	CreatedAt         int64               `json:"created_at"`
+	Model             string              `json:"model"`
+	Status            string              `json:"status"`
+	Output            []ResponseOutputItem `json:"output"`
+	Usage             *ResponsesUsage     `json:"usage,omitempty"`
+	Text              json.RawMessage     `json:"text,omitempty"`
+	Reasoning         json.RawMessage     `json:"reasoning"`
+	Metadata          json.RawMessage     `json:"metadata"`
+	Temperature       *float64            `json:"temperature,omitempty"`
+	TopP              *float64            `json:"top_p,omitempty"`
+	MaxOutputTokens   *int                `json:"max_output_tokens"`
+	Truncation        *string             `json:"truncation,omitempty"`
+	ToolChoice        json.RawMessage     `json:"tool_choice,omitempty"`
+	Tools             json.RawMessage     `json:"tools"`
+	IncompleteDetails json.RawMessage     `json:"incomplete_details"`
+	Error             json.RawMessage     `json:"error"`
+}
+
+// ResponseOutputItem is a single output item in a Responses API response.
+type ResponseOutputItem struct {
+	Type    string                `json:"type"`
+	ID      string                `json:"id"`
+	Status  string                `json:"status"`
+	Role    string                `json:"role"`
+	Content []ResponseContentPart `json:"content"`
+}
+
+// ResponseContentPart is a content part in a Responses API output item.
+type ResponseContentPart struct {
+	Type        string            `json:"type"`
+	Text        string            `json:"text"`
+	Annotations []json.RawMessage `json:"annotations"`
+}
+
+// ResponsesUsage is the usage object for the Responses API (field names differ from chat/completions).
+type ResponsesUsage struct {
+	InputTokens         int64                `json:"input_tokens"`
+	OutputTokens        int64                `json:"output_tokens"`
+	TotalTokens         int64                `json:"total_tokens"`
+	OutputTokensDetails *OutputTokensDetails `json:"output_tokens_details,omitempty"`
+	InputTokensDetails  *InputTokensDetails  `json:"input_tokens_details,omitempty"`
+}
+
+// OutputTokensDetails is the breakdown of output tokens for the Responses API.
+type OutputTokensDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens"`
+}
+
+// InputTokensDetails is the breakdown of input tokens for the Responses API.
+type InputTokensDetails struct {
+	CachedTokens int64 `json:"cached_tokens"`
+}

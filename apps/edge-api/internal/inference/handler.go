@@ -31,7 +31,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/responses":
 		apierrors.WriteError(w, http.StatusNotImplemented, "api_error", "The responses endpoint is not yet available.", nil)
 	case "/v1/embeddings":
-		apierrors.WriteError(w, http.StatusNotImplemented, "api_error", "The embeddings endpoint is not yet available.", nil)
+		handleEmbeddings(h.orchestrator, w, r)
 	default:
 		apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error", "Unknown endpoint", nil)
 	}
