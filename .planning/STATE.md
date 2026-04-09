@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 7 context gathered
-last_updated: "2026-04-09T09:14:27.061Z"
+stopped_at: Completed 07-01-PLAN.md
+last_updated: "2026-04-09T23:56:09.594Z"
 progress:
   total_phases: 9
   completed_phases: 6
-  total_plans: 27
-  completed_plans: 27
+  total_plans: 30
+  completed_plans: 28
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 06 — core-text-embeddings-api
+**Current focus:** Phase 07 — media-file-and-async-api-surface
 
 ## Current Position
 
-Phase: 06 (core-text-embeddings-api) — COMPLETE
-Plan: 4 of 4 (complete)
+Phase: 07 (media-file-and-async-api-surface) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -55,6 +55,8 @@ Plan: 4 of 4 (complete)
 
 - Last 5 plans: 04-01 (30min), 04-02 (16min), 04-03 (5min), 05-04 (73min), 05-01 (10min)
 - Trend: Phase 5 now has both the prior hot-path hardening slice and the API-key lifecycle foundation in place, leaving policy, projection, and limiter follow-up plans.
+
+| Phase 07 P01 | 9min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -119,6 +121,8 @@ Recent decisions affecting current work:
 - [06-03]: Responses API streaming ends with event: response.completed — no data: [DONE] sentinel — matching OpenAI Responses SDK expectations.
 - [06-04]: dimensions gating uses model name heuristic (contains 'embedding-3') rather than capability flag — pragmatic Phase 6 approach; future phase can add SupportsDimensions to routing types.
 - [06-04]: EmbeddingObject.Embedding stays json.RawMessage to handle both float arrays and base64 encoding_format without type assertions.
+- [Phase 07-01]: minio.Core used instead of *minio.Client for multipart upload access — NewMultipartUpload/PutObjectPart/CompleteMultipartUpload/AbortMultipartUpload are private on Client but public on Core
+- [Phase 07-01]: minio-go pinned to v7.0.91 (latest compatible with Go 1.24 — v7.0.100+ requires Go 1.25)
 
 ### Pending Todos
 
@@ -131,6 +135,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T09:14:27.058Z
-Stopped at: Phase 7 context gathered
-Resume file: .planning/phases/07-media-file-and-async-api-surface/07-CONTEXT.md
+Last session: 2026-04-09T23:56:09.591Z
+Stopped at: Completed 07-01-PLAN.md
+Resume file: None
