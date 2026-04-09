@@ -17,7 +17,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 3: Credits Ledger & Usage Accounting** - Build immutable prepaid billing, reservations, and privacy-safe usage events. (completed 2026-03-30)
 - [x] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix. (completed 2026-03-31)
 - [ ] **Phase 5: API Keys & Hot-Path Enforcement** - Add key lifecycle, per-key controls, budgets, rate limits, and hot-path authorization.
-- [ ] **Phase 6: Core Text & Embeddings API** - Deliver the most-used OpenAI-compatible inference endpoints with streaming and reasoning support.
+- [x] **Phase 6: Core Text & Embeddings API** - Deliver the most-used OpenAI-compatible inference endpoints with streaming and reasoning support. (completed 2026-04-09)
 - [ ] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows.
 - [ ] **Phase 8: Payments, FX, and Compliance Checkout** - Add Stripe, bKash, SSLCommerz, FX snapshots, and tax-aware checkout.
 - [ ] **Phase 9: Developer Console & Operational Hardening** - Finish user-facing billing and usage UX plus production observability and alerts.
@@ -119,13 +119,13 @@ Plans:
   2. Streaming responses follow expected OpenAI SSE chunk structure and completion behavior.
   3. `embeddings` works with compatible request and response objects.
   4. Reasoning or thinking-related parameters and outputs are translated consistently when supported upstream.
-**Plans**: 4 plans
+**Plans**: 4/4 plans complete
 
 Plans:
-- [ ] 06-01-PLAN.md — Internal control-plane accounting/usage endpoints for edge-to-control-plane service calls (Wave 1)
-- [ ] 06-02-PLAN.md — Inference types, LiteLLM client, orchestrator, and non-streaming chat/completions + completions handlers (Wave 1)
-- [ ] 06-03-PLAN.md — SSE streaming relay, Responses API event translation, and reasoning field normalization (Wave 2)
-- [ ] 06-04-PLAN.md — Embeddings endpoint and SDK integration tests for all Phase 6 endpoints (Wave 2)
+- [x] 06-01-PLAN.md — Internal control-plane accounting/usage endpoints for edge-to-control-plane service calls (Wave 1)
+- [x] 06-02-PLAN.md — Inference types, LiteLLM client, orchestrator, and non-streaming chat/completions + completions handlers (Wave 1)
+- [x] 06-03-PLAN.md — SSE streaming relay, Responses API event translation, and reasoning field normalization (Wave 2)
+- [x] 06-04-PLAN.md — Embeddings endpoint and SDK integration tests for all Phase 6 endpoints (Wave 2)
 
 
 ### Phase 7: Media, File, and Async API Surface

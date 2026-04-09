@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 6 context gathered
-last_updated: "2026-04-09T05:53:00.138Z"
+status: phase_complete
+stopped_at: Completed 06-04-PLAN.md
+last_updated: "2026-04-09T06:10:00.000Z"
 progress:
   total_phases: 9
-  completed_phases: 5
+  completed_phases: 6
   total_plans: 27
-  completed_plans: 25
+  completed_plans: 26
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 06 (core-text-embeddings-api) — EXECUTING
-Plan: 4 of 4
+Phase: 06 (core-text-embeddings-api) — COMPLETE
+Plan: 4 of 4 (complete)
 
 ## Performance Metrics
 
@@ -33,6 +33,7 @@ Plan: 4 of 4
 | Phase 05 P04 | 73min | 2 tasks | 8 files |
 | Phase 05 P01 | 10min | 2 tasks | 9 files |
 | Phase 06 P03 | 10min | 2 tasks | 12 files |
+| Phase 06 P04 | 12min | 2 tasks | 17 files |
 
 **Velocity:**
 
@@ -116,6 +117,8 @@ Recent decisions affecting current work:
 - [Phase 05]: API-key list, detail, create, and rotate responses share a customer-safe serializer that applies expiry projection and never re-emits secrets after issuance.
 - [06-03]: SelectRouteResult has no SupportsReasoning field; reasoning capability gating uses NeedReasoning bool as proxy for route capability.
 - [06-03]: Responses API streaming ends with event: response.completed — no data: [DONE] sentinel — matching OpenAI Responses SDK expectations.
+- [06-04]: dimensions gating uses model name heuristic (contains 'embedding-3') rather than capability flag — pragmatic Phase 6 approach; future phase can add SupportsDimensions to routing types.
+- [06-04]: EmbeddingObject.Embedding stays json.RawMessage to handle both float arrays and base64 encoding_format without type assertions.
 
 ### Pending Todos
 
@@ -128,6 +131,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T06:04:46Z
-Stopped at: Completed 06-03-PLAN.md
-Resume file: .planning/phases/06-core-text-embeddings-api/06-CONTEXT.md
+Last session: 2026-04-09T06:10:00Z
+Stopped at: Completed 06-04-PLAN.md (Phase 06 complete)
+Resume file: .planning/ROADMAP.md
