@@ -19,7 +19,7 @@ describe("Unsupported endpoint errors", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(OpenAI.NotFoundError);
 
-      const notFound = err as OpenAI.NotFoundError;
+      const notFound = err as InstanceType<typeof OpenAI.NotFoundError>;
       expect(notFound.status).toBe(404);
 
       // The SDK parses the JSON body and stores the inner error object directly
@@ -49,7 +49,7 @@ describe("Unsupported endpoint errors", () => {
     } catch (err) {
       expect(err).toBeInstanceOf(OpenAI.NotFoundError);
 
-      const notFound = err as OpenAI.NotFoundError;
+      const notFound = err as InstanceType<typeof OpenAI.NotFoundError>;
       expect(notFound.status).toBe(404);
 
       const body = notFound.error as Record<string, unknown> | undefined;
