@@ -140,9 +140,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 07-01: Implement object-storage-backed `files`, `uploads`, and `batches` flows.
-- [ ] 07-02: Implement image-generation and image-processing adapter routes.
-- [ ] 07-03: Implement speech, transcription, and translation adapter routes.
+- [ ] 07-01-PLAN.md — Storage infrastructure (MinIO, S3 client), file/upload/batch Postgres schemas, control-plane filestore service, and routing capability flag extensions (Wave 1)
+- [ ] 07-02-PLAN.md — Image generation/edits and audio speech/transcription/translation endpoint handlers with LiteLLM dispatch (Wave 2)
+- [ ] 07-03-PLAN.md — Files API, Uploads API, Batches API edge handlers, and Asynq batch polling worker (Wave 2)
 
 ### Phase 8: Payments, FX, and Compliance Checkout
 **Goal**: Let customers buy credits safely across global and Bangladesh-local rails with reproducible FX and tax math.
@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Credits Ledger & Usage Accounting | 3/3 | Complete | 2026-03-30 |
 | 4. Model Catalog & Provider Routing | 3/3 | Complete | 2026-03-31 |
 | 5. API Keys & Hot-Path Enforcement | 2/6 | In Progress | - |
-| 6. Core Text & Embeddings API | 3/4 | In Progress|  |
+| 6. Core Text & Embeddings API | 4/4 | Complete | 2026-04-09 |
 | 7. Media, File, and Async API Surface | 0/3 | Not started | - |
 | 8. Payments, FX, and Compliance Checkout | 0/3 | Not started | - |
 | 9. Developer Console & Operational Hardening | 0/3 | Not started | - |
