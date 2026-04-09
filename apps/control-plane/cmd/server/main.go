@@ -15,6 +15,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
+	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
@@ -119,6 +120,18 @@ func main() {
 		RoutingHandler:    routingHandler,
 		UsageHandler:      usageHandler,
 	})
+
+	// Wire filestore internal endpoints if the database pool is available.
+	if pool != nil {
+		filestoreRepo, err := filestore.NewRepository(pool)
+		if err != nil {
+			log.Printf("WARNING: filestore schema setup failed: %v", err)
+		} else {
+			filestoreSvc := filestore.NewService(filestoreRepo)
+			filestore.RegisterRoutes(router, filestoreSvc)
+			log.Println("filestore routes registered")
+		}
+	}
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{

@@ -1,0 +1,413 @@
+package filestore
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// ErrNotFound is returned when a requested record does not exist.
+var ErrNotFound = errors.New("filestore: record not found")
+
+// Repository handles all Postgres CRUD operations for files, uploads, upload_parts, and batches.
+type Repository struct {
+	pool *pgxpool.Pool
+}
+
+// NewRepository creates a new Repository and auto-creates the required tables.
+func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
+	r := &Repository{pool: pool}
+	if err := r.ensureSchema(context.Background()); err != nil {
+		return nil, fmt.Errorf("filestore: ensure schema: %w", err)
+	}
+	return r, nil
+}
+
+func (r *Repository) ensureSchema(ctx context.Context) error {
+	statements := []string{
+		`CREATE TABLE IF NOT EXISTS files (
+			id           TEXT PRIMARY KEY,
+			account_id   TEXT NOT NULL,
+			purpose      TEXT NOT NULL,
+			filename     TEXT NOT NULL,
+			bytes        BIGINT NOT NULL,
+			status       TEXT NOT NULL DEFAULT 'uploaded',
+			storage_path TEXT NOT NULL,
+			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at   TIMESTAMPTZ
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_files_account_id ON files(account_id)`,
+		`CREATE TABLE IF NOT EXISTS uploads (
+			id            TEXT PRIMARY KEY,
+			account_id    TEXT NOT NULL,
+			filename      TEXT NOT NULL,
+			bytes         BIGINT NOT NULL,
+			mime_type     TEXT NOT NULL,
+			purpose       TEXT NOT NULL,
+			status        TEXT NOT NULL DEFAULT 'pending',
+			s3_upload_id  TEXT,
+			storage_path  TEXT NOT NULL,
+			created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			expires_at    TIMESTAMPTZ NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_uploads_account_id ON uploads(account_id)`,
+		`CREATE TABLE IF NOT EXISTS upload_parts (
+			id         TEXT PRIMARY KEY,
+			upload_id  TEXT NOT NULL REFERENCES uploads(id),
+			part_num   INT NOT NULL,
+			etag       TEXT NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`,
+		`CREATE TABLE IF NOT EXISTS batches (
+			id                       TEXT PRIMARY KEY,
+			account_id               TEXT NOT NULL,
+			input_file_id            TEXT NOT NULL REFERENCES files(id),
+			output_file_id           TEXT REFERENCES files(id),
+			error_file_id            TEXT REFERENCES files(id),
+			endpoint                 TEXT NOT NULL,
+			completion_window        TEXT NOT NULL DEFAULT '24h',
+			status                   TEXT NOT NULL DEFAULT 'validating',
+			provider                 TEXT NOT NULL DEFAULT '',
+			upstream_batch_id        TEXT,
+			reservation_id           TEXT,
+			request_counts_total     INT NOT NULL DEFAULT 0,
+			request_counts_completed INT NOT NULL DEFAULT 0,
+			request_counts_failed    INT NOT NULL DEFAULT 0,
+			created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+			in_progress_at           TIMESTAMPTZ,
+			completed_at             TIMESTAMPTZ,
+			failed_at                TIMESTAMPTZ,
+			cancelled_at             TIMESTAMPTZ,
+			expires_at               TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_batches_account_id ON batches(account_id)`,
+	}
+
+	for _, stmt := range statements {
+		if _, err := r.pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("exec schema statement: %w", err)
+		}
+	}
+	return nil
+}
+
+// --- File methods ---
+
+// CreateFile inserts a new file record.
+func (r *Repository) CreateFile(ctx context.Context, f File) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO files (id, account_id, purpose, filename, bytes, status, storage_path, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, f.ID, f.AccountID, f.Purpose, f.Filename, f.Bytes, f.Status, f.StoragePath, f.CreatedAt, f.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("filestore: create file: %w", err)
+	}
+	return nil
+}
+
+// GetFile retrieves a file by ID and account ID.
+func (r *Repository) GetFile(ctx context.Context, id, accountID string) (*File, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, account_id, purpose, filename, bytes, status, storage_path, created_at, expires_at
+		FROM files
+		WHERE id = $1 AND account_id = $2
+	`, id, accountID)
+
+	f, err := scanFile(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("filestore: get file: %w", err)
+	}
+	return &f, nil
+}
+
+// ListFiles retrieves all files for an account, optionally filtered by purpose.
+func (r *Repository) ListFiles(ctx context.Context, accountID string, purpose *string) ([]File, error) {
+	var rows pgx.Rows
+	var err error
+
+	if purpose != nil {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, purpose, filename, bytes, status, storage_path, created_at, expires_at
+			FROM files
+			WHERE account_id = $1 AND purpose = $2
+			ORDER BY created_at DESC
+		`, accountID, *purpose)
+	} else {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, purpose, filename, bytes, status, storage_path, created_at, expires_at
+			FROM files
+			WHERE account_id = $1
+			ORDER BY created_at DESC
+		`, accountID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("filestore: list files: %w", err)
+	}
+	defer rows.Close()
+
+	var files []File
+	for rows.Next() {
+		f, err := scanFile(rows)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("filestore: iterate files: %w", err)
+	}
+	return files, nil
+}
+
+// DeleteFile removes a file by ID and account ID.
+func (r *Repository) DeleteFile(ctx context.Context, id, accountID string) error {
+	result, err := r.pool.Exec(ctx, `
+		DELETE FROM files WHERE id = $1 AND account_id = $2
+	`, id, accountID)
+	if err != nil {
+		return fmt.Errorf("filestore: delete file: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// --- Upload methods ---
+
+// CreateUpload inserts a new upload record.
+func (r *Repository) CreateUpload(ctx context.Context, u Upload) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO uploads (id, account_id, filename, bytes, mime_type, purpose, status, s3_upload_id, storage_path, created_at, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, u.ID, u.AccountID, u.Filename, u.Bytes, u.MimeType, u.Purpose, u.Status, u.S3UploadID, u.StoragePath, u.CreatedAt, u.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("filestore: create upload: %w", err)
+	}
+	return nil
+}
+
+// GetUpload retrieves an upload by ID and account ID.
+func (r *Repository) GetUpload(ctx context.Context, id, accountID string) (*Upload, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, account_id, filename, bytes, mime_type, purpose, status, s3_upload_id, storage_path, created_at, expires_at
+		FROM uploads
+		WHERE id = $1 AND account_id = $2
+	`, id, accountID)
+
+	u, err := scanUpload(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("filestore: get upload: %w", err)
+	}
+	return &u, nil
+}
+
+// UpdateUploadStatus transitions an upload's status and optionally links the completed file.
+func (r *Repository) UpdateUploadStatus(ctx context.Context, id, status string, fileID *string) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE uploads SET status = $1 WHERE id = $2
+	`, status, id)
+	if err != nil {
+		return fmt.Errorf("filestore: update upload status: %w", err)
+	}
+	return nil
+}
+
+// CreateUploadPart inserts a new upload part record.
+func (r *Repository) CreateUploadPart(ctx context.Context, p UploadPart) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO upload_parts (id, upload_id, part_num, etag, created_at)
+		VALUES ($1, $2, $3, $4, $5)
+	`, p.ID, p.UploadID, p.PartNum, p.ETag, p.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("filestore: create upload part: %w", err)
+	}
+	return nil
+}
+
+// ListUploadParts retrieves all parts for a given upload, ordered by part number.
+func (r *Repository) ListUploadParts(ctx context.Context, uploadID string) ([]UploadPart, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, upload_id, part_num, etag, created_at
+		FROM upload_parts
+		WHERE upload_id = $1
+		ORDER BY part_num ASC
+	`, uploadID)
+	if err != nil {
+		return nil, fmt.Errorf("filestore: list upload parts: %w", err)
+	}
+	defer rows.Close()
+
+	var parts []UploadPart
+	for rows.Next() {
+		var p UploadPart
+		if err := rows.Scan(&p.ID, &p.UploadID, &p.PartNum, &p.ETag, &p.CreatedAt); err != nil {
+			return nil, fmt.Errorf("filestore: scan upload part: %w", err)
+		}
+		parts = append(parts, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("filestore: iterate upload parts: %w", err)
+	}
+	return parts, nil
+}
+
+// --- Batch methods ---
+
+// CreateBatch inserts a new batch record.
+func (r *Repository) CreateBatch(ctx context.Context, b Batch) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO batches (
+			id, account_id, input_file_id, output_file_id, error_file_id,
+			endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+			request_counts_total, request_counts_completed, request_counts_failed,
+			created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
+		) VALUES (
+			$1, $2, $3, $4, $5,
+			$6, $7, $8, $9, $10, $11,
+			$12, $13, $14,
+			$15, $16, $17, $18, $19, $20
+		)
+	`, b.ID, b.AccountID, b.InputFileID, b.OutputFileID, b.ErrorFileID,
+		b.Endpoint, b.CompletionWindow, b.Status, b.Provider, b.UpstreamBatchID, b.ReservationID,
+		b.RequestCountsTotal, b.RequestCountsCompleted, b.RequestCountsFailed,
+		b.CreatedAt, b.InProgressAt, b.CompletedAt, b.FailedAt, b.CancelledAt, b.ExpiresAt)
+	if err != nil {
+		return fmt.Errorf("filestore: create batch: %w", err)
+	}
+	return nil
+}
+
+// GetBatch retrieves a batch by ID and account ID.
+func (r *Repository) GetBatch(ctx context.Context, id, accountID string) (*Batch, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, account_id, input_file_id, output_file_id, error_file_id,
+		       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+		       request_counts_total, request_counts_completed, request_counts_failed,
+		       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
+		FROM batches
+		WHERE id = $1 AND account_id = $2
+	`, id, accountID)
+
+	b, err := scanBatch(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("filestore: get batch: %w", err)
+	}
+	return &b, nil
+}
+
+// ListBatches retrieves batches for an account with cursor-based pagination.
+func (r *Repository) ListBatches(ctx context.Context, accountID string, limit int, after *string) ([]Batch, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var rows pgx.Rows
+	var err error
+
+	if after != nil {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, input_file_id, output_file_id, error_file_id,
+			       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+			       request_counts_total, request_counts_completed, request_counts_failed,
+			       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
+			FROM batches
+			WHERE account_id = $1 AND created_at < (SELECT created_at FROM batches WHERE id = $2)
+			ORDER BY created_at DESC
+			LIMIT $3
+		`, accountID, *after, limit)
+	} else {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, input_file_id, output_file_id, error_file_id,
+			       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+			       request_counts_total, request_counts_completed, request_counts_failed,
+			       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
+			FROM batches
+			WHERE account_id = $1
+			ORDER BY created_at DESC
+			LIMIT $2
+		`, accountID, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("filestore: list batches: %w", err)
+	}
+	defer rows.Close()
+
+	var batches []Batch
+	for rows.Next() {
+		b, err := scanBatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		batches = append(batches, b)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("filestore: iterate batches: %w", err)
+	}
+	return batches, nil
+}
+
+// UpdateBatchStatus updates a batch's status and any additional fields provided.
+func (r *Repository) UpdateBatchStatus(ctx context.Context, id, status string, updates map[string]interface{}) error {
+	_, err := r.pool.Exec(ctx, `
+		UPDATE batches SET status = $1 WHERE id = $2
+	`, status, id)
+	if err != nil {
+		return fmt.Errorf("filestore: update batch status: %w", err)
+	}
+	return nil
+}
+
+// --- Scanners ---
+
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanFile(s rowScanner) (File, error) {
+	var f File
+	if err := s.Scan(
+		&f.ID, &f.AccountID, &f.Purpose, &f.Filename,
+		&f.Bytes, &f.Status, &f.StoragePath, &f.CreatedAt, &f.ExpiresAt,
+	); err != nil {
+		return File{}, err
+	}
+	return f, nil
+}
+
+func scanUpload(s rowScanner) (Upload, error) {
+	var u Upload
+	if err := s.Scan(
+		&u.ID, &u.AccountID, &u.Filename, &u.Bytes, &u.MimeType,
+		&u.Purpose, &u.Status, &u.S3UploadID, &u.StoragePath,
+		&u.CreatedAt, &u.ExpiresAt,
+	); err != nil {
+		return Upload{}, err
+	}
+	return u, nil
+}
+
+func scanBatch(s rowScanner) (Batch, error) {
+	var b Batch
+	if err := s.Scan(
+		&b.ID, &b.AccountID, &b.InputFileID, &b.OutputFileID, &b.ErrorFileID,
+		&b.Endpoint, &b.CompletionWindow, &b.Status, &b.Provider, &b.UpstreamBatchID, &b.ReservationID,
+		&b.RequestCountsTotal, &b.RequestCountsCompleted, &b.RequestCountsFailed,
+		&b.CreatedAt, &b.InProgressAt, &b.CompletedAt, &b.FailedAt, &b.CancelledAt, &b.ExpiresAt,
+	); err != nil {
+		return Batch{}, err
+	}
+	return b, nil
+}
