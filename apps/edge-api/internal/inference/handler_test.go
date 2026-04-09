@@ -76,14 +76,17 @@ func TestHandler_ChatCompletions_InvalidBody(t *testing.T) {
 	}
 }
 
-func TestHandler_ResponsesPlaceholder(t *testing.T) {
+func TestHandler_Responses_MissingModel(t *testing.T) {
+	// The responses endpoint is now live. A request missing the model field
+	// returns 400 (not the old 501 placeholder).
 	h := NewHandler(&Orchestrator{})
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	body := `{"input":"hello"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", w.Code)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 (endpoint live, missing model), got %d", w.Code)
 	}
 }
 
@@ -99,15 +102,18 @@ func TestHandler_Embeddings_MissingModel(t *testing.T) {
 	}
 }
 
-func TestHandler_ChatCompletions_StreamNotImplemented(t *testing.T) {
+func TestHandler_ChatCompletions_StreamLive(t *testing.T) {
+	// Streaming is now implemented. A streaming request with no auth header
+	// returns 401 (not the old 501 placeholder).
 	h := NewHandler(&Orchestrator{})
 	body := `{"model":"gpt-4","messages":[{"role":"user","content":"hi"}],"stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusNotImplemented {
-		t.Fatalf("expected 501, got %d", w.Code)
+	// 401 means the request reached the auth layer — streaming is live.
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (streaming live, no auth), got %d", w.Code)
 	}
 }
 

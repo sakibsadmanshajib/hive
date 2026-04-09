@@ -29,7 +29,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/completions":
 		handleCompletions(h.orchestrator, w, r)
 	case "/v1/responses":
-		apierrors.WriteError(w, http.StatusNotImplemented, "api_error", "The responses endpoint is not yet available.", nil)
+		handleResponses(h.orchestrator, w, r)
 	case "/v1/embeddings":
 		handleEmbeddings(h.orchestrator, w, r)
 	default:
