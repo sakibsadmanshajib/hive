@@ -20,7 +20,31 @@ type pgxRepository struct {
 }
 
 func NewPgxRepository(pool *pgxpool.Pool) Repository {
-	return &pgxRepository{pool: pool}
+	r := &pgxRepository{pool: pool}
+	if err := r.ensureCapabilityColumns(context.Background()); err != nil {
+		// Non-fatal: columns may already exist or table may not yet be seeded.
+		// Log at the caller level if needed; schema migrations are best-effort here.
+		_ = err
+	}
+	return r
+}
+
+// ensureCapabilityColumns adds the Phase 7 capability columns to route_capabilities
+// if they do not already exist. Uses IF NOT EXISTS so this is safe to run repeatedly.
+func (r *pgxRepository) ensureCapabilityColumns(ctx context.Context) error {
+	alterStatements := []string{
+		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_image_generation BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_image_edit BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_tts BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_stt BOOLEAN NOT NULL DEFAULT false`,
+		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_batch BOOLEAN NOT NULL DEFAULT false`,
+	}
+	for _, stmt := range alterStatements {
+		if _, err := r.pool.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("routing: alter route_capabilities: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *pgxRepository) LoadAliasPolicy(ctx context.Context, aliasID string) (catalog.AliasPolicySnapshot, error) {
@@ -76,7 +100,12 @@ func (r *pgxRepository) ListRouteCandidates(ctx context.Context, aliasID string)
 			c.supports_streaming,
 			c.supports_reasoning,
 			c.supports_cache_read,
-			c.supports_cache_write
+			c.supports_cache_write,
+			c.supports_image_generation,
+			c.supports_image_edit,
+			c.supports_tts,
+			c.supports_stt,
+			c.supports_batch
 		FROM public.provider_routes r
 		JOIN public.provider_capabilities c ON c.route_id = r.route_id
 		WHERE r.alias_id = $1
@@ -127,6 +156,11 @@ func scanRouteCandidate(scanner rowScanner) (RouteCandidate, error) {
 		&candidate.SupportsReasoning,
 		&candidate.SupportsCacheRead,
 		&candidate.SupportsCacheWrite,
+		&candidate.SupportsImageGeneration,
+		&candidate.SupportsImageEdit,
+		&candidate.SupportsTTS,
+		&candidate.SupportsSTT,
+		&candidate.SupportsBatch,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return RouteCandidate{}, fmt.Errorf("routing: route candidate not found")

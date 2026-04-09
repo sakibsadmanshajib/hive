@@ -105,6 +105,21 @@ func matchesRequestedCapabilities(candidate RouteCandidate, input SelectionInput
 	if input.NeedCacheWrite && !candidate.SupportsCacheWrite {
 		return false
 	}
+	if input.NeedImageGeneration && !candidate.SupportsImageGeneration {
+		return false
+	}
+	if input.NeedImageEdit && !candidate.SupportsImageEdit {
+		return false
+	}
+	if input.NeedTTS && !candidate.SupportsTTS {
+		return false
+	}
+	if input.NeedSTT && !candidate.SupportsSTT {
+		return false
+	}
+	if input.NeedBatch && !candidate.SupportsBatch {
+		return false
+	}
 
 	return true
 }

@@ -24,6 +24,11 @@ type selectRouteRequest struct {
 	NeedReasoning       bool     `json:"need_reasoning"`
 	NeedCacheRead       bool     `json:"need_cache_read"`
 	NeedCacheWrite      bool     `json:"need_cache_write"`
+	NeedImageGeneration bool     `json:"need_image_generation"`
+	NeedImageEdit       bool     `json:"need_image_edit"`
+	NeedTTS             bool     `json:"need_tts"`
+	NeedSTT             bool     `json:"need_stt"`
+	NeedBatch           bool     `json:"need_batch"`
 	AllowedAliases      []string `json:"allowed_aliases"`
 	AllowedProviders    []string `json:"allowed_providers"`
 }
@@ -59,6 +64,11 @@ func (h *Handler) handleSelectRoute(w http.ResponseWriter, r *http.Request) {
 		NeedReasoning:       request.NeedReasoning,
 		NeedCacheRead:       request.NeedCacheRead,
 		NeedCacheWrite:      request.NeedCacheWrite,
+		NeedImageGeneration: request.NeedImageGeneration,
+		NeedImageEdit:       request.NeedImageEdit,
+		NeedTTS:             request.NeedTTS,
+		NeedSTT:             request.NeedSTT,
+		NeedBatch:           request.NeedBatch,
 		AllowedAliases:      request.AllowedAliases,
 		AllowedProviders:    request.AllowedProviders,
 	})

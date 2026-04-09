@@ -9,6 +9,11 @@ type SelectionInput struct {
 	NeedReasoning       bool
 	NeedCacheRead       bool
 	NeedCacheWrite      bool
+	NeedImageGeneration bool
+	NeedImageEdit       bool
+	NeedTTS             bool
+	NeedSTT             bool
+	NeedBatch           bool
 	AllowedAliases      []string
 	AllowedProviders    []string
 }
@@ -30,6 +35,11 @@ type RouteCandidate struct {
 	SupportsReasoning       bool
 	SupportsCacheRead       bool
 	SupportsCacheWrite      bool
+	SupportsImageGeneration bool
+	SupportsImageEdit       bool
+	SupportsTTS             bool
+	SupportsSTT             bool
+	SupportsBatch           bool
 }
 
 type SelectionResult struct {
