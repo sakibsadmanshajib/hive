@@ -12,7 +12,7 @@ Developers can switch from OpenAI to Hive with only a base URL and API key chang
 
 ### Validated
 
-(None yet — ship to validate)
+- [x] OpenAI-compatible text inference endpoints (chat/completions, completions, responses, embeddings) with streaming, usage metering, and capability-gated error handling. Validated in Phase 06: core-text-embeddings-api.
 
 ### Active
 
@@ -67,4 +67,4 @@ The launch scope includes a developer web app, not an end-user assistant product
 | Run the entire local developer workflow in Docker containers | Prevents host toolchain drift and keeps onboarding and builds reproducible | — Pending |
 
 ---
-*Last updated: 2026-03-28 after roadmap approval*
+*Last updated: 2026-04-09 after Phase 06 completion — text inference and embeddings API surface shipped*
