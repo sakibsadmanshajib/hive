@@ -29,16 +29,16 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	if req.Stream {
-		code := "not_implemented"
-		writeError(w, http.StatusNotImplemented, "api_error", "Streaming is not yet available.", &code)
-		return
-	}
-
 	needFlags := NeedFlags{
 		NeedChatCompletions: true,
 		NeedStreaming:        req.Stream,
 		NeedReasoning:        req.ReasoningEffort != nil,
+	}
+
+	if req.Stream {
+		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		o.executeStreaming(r.Context(), w, r, EndpointChatCompletions, body, req.Model, req.Model, needFlags, 10000, includeUsage, req.ReasoningEffort, o.litellm.ChatCompletion)
+		return
 	}
 
 	o.executeSync(r.Context(), w, r, EndpointChatCompletions, body, req.Model, needFlags, 10000,

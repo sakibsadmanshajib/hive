@@ -2,7 +2,6 @@ package inference
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -74,7 +73,6 @@ func (o *Orchestrator) executeSync(
 	route, err := o.routing.SelectRoute(ctx, SelectRouteInput{
 		AliasID:             model,
 		NeedChatCompletions: needFlags.NeedChatCompletions,
-		NeedCompletions:     needFlags.NeedCompletions,
 		NeedResponses:       needFlags.NeedResponses,
 		NeedEmbeddings:      needFlags.NeedEmbeddings,
 		NeedStreaming:        needFlags.NeedStreaming,

@@ -29,15 +29,16 @@ func handleCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if req.Stream {
-		code := "not_implemented"
-		writeError(w, http.StatusNotImplemented, "api_error", "Streaming is not yet available.", &code)
-		return
-	}
-
 	// LiteLLM routes legacy completions through chat/completions-capable routes.
 	needFlags := NeedFlags{
 		NeedChatCompletions: true,
+		NeedStreaming:        req.Stream,
+	}
+
+	if req.Stream {
+		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		o.executeStreaming(r.Context(), w, r, EndpointCompletions, body, req.Model, req.Model, needFlags, 10000, includeUsage, nil, o.litellm.Completion)
+		return
 	}
 
 	o.executeSync(r.Context(), w, r, EndpointCompletions, body, req.Model, needFlags, 10000,
