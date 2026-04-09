@@ -10,6 +10,7 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
 )
@@ -52,6 +53,18 @@ func main() {
 	// Swagger docs (no unsupported middleware)
 	swaggerHandler := docs.SwaggerHandler(specPath)
 	mux.Handle("/docs/", swaggerHandler)
+
+	// Inference routes
+	routingClient := inference.NewRoutingClient(resolveControlPlaneBaseURL())
+	accountingClient := inference.NewAccountingClient(resolveControlPlaneBaseURL())
+	litellmClient := inference.NewLiteLLMClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
+	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient)
+	inferenceHandler := inference.NewHandler(orchestrator)
+
+	mux.Handle("/v1/chat/completions", inferenceHandler)
+	mux.Handle("/v1/completions", inferenceHandler)
+	mux.Handle("/v1/responses", inferenceHandler)
+	mux.Handle("/v1/embeddings", inferenceHandler)
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
@@ -150,6 +163,20 @@ func resolveRedisURL() string {
 		return url
 	}
 	return "redis://redis:6379/0"
+}
+
+func resolveLiteLLMBaseURL() string {
+	if u := os.Getenv("LITELLM_BASE_URL"); u != "" {
+		return u
+	}
+	return "http://litellm:4000"
+}
+
+func resolveLiteLLMMasterKey() string {
+	if k := os.Getenv("LITELLM_MASTER_KEY"); k != "" {
+		return k
+	}
+	return "litellm-dev-key"
 }
 
 // authorizeAliasRequest performs hot-path authorization.
