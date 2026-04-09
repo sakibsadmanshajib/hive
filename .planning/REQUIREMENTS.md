@@ -20,10 +20,10 @@
 
 ### Inference Surface
 
-- [ ] **API-01**: Developer can call `responses`, `chat/completions`, and `completions` with OpenAI-compatible request and response shapes.
-- [ ] **API-02**: Developer can stream supported text-generation endpoints with OpenAI-compatible SSE event ordering, chunk formats, and terminal events.
+- [x] **API-01**: Developer can call `responses`, `chat/completions`, and `completions` with OpenAI-compatible request and response shapes.
+- [x] **API-02**: Developer can stream supported text-generation endpoints with OpenAI-compatible SSE event ordering, chunk formats, and terminal events.
 - [ ] **API-03**: Developer can call `embeddings` with OpenAI-compatible request and response behavior.
-- [ ] **API-04**: Developer can use reasoning or thinking-related request parameters, and Hive returns translated reasoning outputs and usage details when upstream support exists.
+- [x] **API-04**: Developer can use reasoning or thinking-related request parameters, and Hive returns translated reasoning outputs and usage details when upstream support exists.
 - [ ] **API-05**: Developer can call image-generation and image-processing endpoints with OpenAI-compatible behavior for supported operations.
 - [ ] **API-06**: Developer can call speech, transcription, and translation endpoints with OpenAI-compatible behavior for supported operations.
 - [ ] **API-07**: Developer can use `files`, `uploads`, and `batches` flows required by official SDK integrations.
@@ -99,10 +99,10 @@
 | COMP-01 | Phase 1 | Complete |
 | COMP-02 | Phase 1 | Complete |
 | COMP-03 | Phase 1 | Complete |
-| API-01 | Phase 6 | Pending |
-| API-02 | Phase 6 | Pending |
+| API-01 | Phase 6 | Complete |
+| API-02 | Phase 6 | Complete |
 | API-03 | Phase 6 | Pending |
-| API-04 | Phase 6 | Pending |
+| API-04 | Phase 6 | Complete |
 | API-05 | Phase 7 | Pending |
 | API-06 | Phase 7 | Pending |
 | API-07 | Phase 7 | Pending |

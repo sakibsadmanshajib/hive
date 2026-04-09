@@ -188,7 +188,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 3. Credits Ledger & Usage Accounting | 3/3 | Complete | 2026-03-30 |
 | 4. Model Catalog & Provider Routing | 3/3 | Complete | 2026-03-31 |
 | 5. API Keys & Hot-Path Enforcement | 2/6 | In Progress | - |
-| 6. Core Text & Embeddings API | 0/3 | Not started | - |
+| 6. Core Text & Embeddings API | 3/4 | In Progress|  |
 | 7. Media, File, and Async API Surface | 0/3 | Not started | - |
 | 8. Payments, FX, and Compliance Checkout | 0/3 | Not started | - |
 | 9. Developer Console & Operational Hardening | 0/3 | Not started | - |

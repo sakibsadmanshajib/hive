@@ -4,12 +4,12 @@ milestone: v1.0
 milestone_name: milestone
 status: unknown
 stopped_at: Phase 6 context gathered
-last_updated: "2026-04-08T05:38:37.366Z"
+last_updated: "2026-04-09T05:53:00.138Z"
 progress:
   total_phases: 9
   completed_phases: 5
   total_plans: 27
-  completed_plans: 23
+  completed_plans: 25
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 06 (core-text-embeddings-api) — EXECUTING
-Plan: 1 of 4
+Plan: 4 of 4
 
 ## Performance Metrics
 
@@ -32,6 +32,7 @@ Plan: 1 of 4
 |-----------|----------|-------|-------|
 | Phase 05 P04 | 73min | 2 tasks | 8 files |
 | Phase 05 P01 | 10min | 2 tasks | 9 files |
+| Phase 06 P03 | 10min | 2 tasks | 12 files |
 
 **Velocity:**
 
@@ -113,6 +114,8 @@ Recent decisions affecting current work:
 - [04-03]: Edge upstream errors mirror the provider-blind sanitization rules locally so customer-visible failures never depend on control-plane routing packages.
 - [Phase 05]: API-key mutations remain gated by accounts.Service.EnsureViewerContext and CanManageAPIKeys instead of trusting client ownership claims.
 - [Phase 05]: API-key list, detail, create, and rotate responses share a customer-safe serializer that applies expiry projection and never re-emits secrets after issuance.
+- [06-03]: SelectRouteResult has no SupportsReasoning field; reasoning capability gating uses NeedReasoning bool as proxy for route capability.
+- [06-03]: Responses API streaming ends with event: response.completed — no data: [DONE] sentinel — matching OpenAI Responses SDK expectations.
 
 ### Pending Todos
 
@@ -125,6 +128,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-02T08:01:39.040Z
-Stopped at: Phase 6 context gathered
+Last session: 2026-04-09T06:04:46Z
+Stopped at: Completed 06-03-PLAN.md
 Resume file: .planning/phases/06-core-text-embeddings-api/06-CONTEXT.md
