@@ -157,9 +157,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 08-01: Build a canonical payment-intent and payment-rail abstraction.
-- [ ] 08-02: Integrate Stripe, bKash, and SSLCommerz with idempotent webhook reconciliation.
-- [ ] 08-03: Implement FX snapshots, surcharge logic, and tax evidence capture.
+- [ ] 08-01-PLAN.md — Payment types, DB migrations, PaymentRail interface, FX service, tax calculation, repository, and intent service (Wave 1)
+- [ ] 08-02-PLAN.md — Stripe, bKash, and SSLCommerz rail implementations with webhook signature verification (Wave 2)
+- [ ] 08-03-PLAN.md — HTTP handler, router registration, and main.go wiring for checkout and webhook endpoints (Wave 2)
 
 ### Phase 9: Developer Console & Operational Hardening
 **Goal**: Ship the customer-facing control plane and the operator-facing telemetry needed for launch.
