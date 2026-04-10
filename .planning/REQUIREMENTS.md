@@ -40,7 +40,7 @@
 - [x] **BILL-01**: Customer has a prepaid Hive Credit balance backed by an immutable ledger of purchases, reservations, charges, refunds, and adjustments.
 - [x] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
 - [ ] **BILL-03**: Customer can buy credits in increments of 1,000 Hive Credits through Stripe, bKash, and SSLCommerz.
-- [ ] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 3% conversion fee used for every BDT transaction.
+- [ ] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 5% conversion fee used for every BDT transaction.
 - [ ] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
 - [ ] **BILL-06**: Customer can set account-level budgets and spend-threshold notifications in Hive Credits.
 - [ ] **BILL-07**: Hive captures and applies country, business, tax, and payment-method surcharge data needed for compliant checkout and invoicing flows.

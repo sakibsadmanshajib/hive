@@ -19,7 +19,7 @@ created: 2026-04-10
 |----------|-------|
 | **Framework** | go test |
 | **Config file** | none — existing Go test infrastructure |
-| **Quick run command** | `docker compose run --rm hive go test ./internal/payments/... -count=1 -short` |
+| **Quick run command** | `docker compose run --rm hive go test ./apps/control-plane/internal/payments/... -count=1 -short` |
 | **Full suite command** | `docker compose run --rm hive go test ./... -count=1` |
 | **Estimated runtime** | ~30 seconds |
 
@@ -27,7 +27,7 @@ created: 2026-04-10
 
 ## Sampling Rate
 
-- **After every task commit:** Run `docker compose run --rm hive go test ./internal/payments/... -count=1 -short`
+- **After every task commit:** Run `docker compose run --rm hive go test ./apps/control-plane/internal/payments/... -count=1 -short`
 - **After every plan wave:** Run `docker compose run --rm hive go test ./... -count=1`
 - **Before `/gsd:verify-work`:** Full suite must be green
 - **Max feedback latency:** 30 seconds
@@ -36,16 +36,14 @@ created: 2026-04-10
 
 ## Per-Task Verification Map
 
-| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
-|---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 08-01-01 | 01 | 1 | BILL-03 | unit | `go test ./internal/payments/... -run TestPaymentIntent` | ❌ W0 | ⬜ pending |
-| 08-01-02 | 01 | 1 | BILL-03 | unit | `go test ./internal/payments/... -run TestPaymentRail` | ❌ W0 | ⬜ pending |
-| 08-02-01 | 02 | 2 | BILL-03 | integration | `go test ./internal/payments/... -run TestStripeWebhook` | ❌ W0 | ⬜ pending |
-| 08-02-02 | 02 | 2 | BILL-03 | integration | `go test ./internal/payments/... -run TestBkashFlow` | ❌ W0 | ⬜ pending |
-| 08-02-03 | 02 | 2 | BILL-03 | integration | `go test ./internal/payments/... -run TestSSLCommerz` | ❌ W0 | ⬜ pending |
-| 08-03-01 | 03 | 2 | BILL-04 | unit | `go test ./internal/payments/... -run TestFXSnapshot` | ❌ W0 | ⬜ pending |
-| 08-03-02 | 03 | 2 | BILL-07 | unit | `go test ./internal/payments/... -run TestSurchargeCalc` | ❌ W0 | ⬜ pending |
-| 08-03-03 | 03 | 2 | BILL-07 | unit | `go test ./internal/payments/... -run TestTaxEvidence` | ❌ W0 | ⬜ pending |
+| Task ID | Plan | Wave | Requirement | Test Type | Automated Command | Test Functions | Status |
+|---------|------|------|-------------|-----------|-------------------|----------------|--------|
+| 08-01-01 | 01 | 1 | BILL-03, BILL-04, BILL-07 | unit | `go test ./apps/control-plane/internal/payments/... -run "TestFetch\|TestCreate\|TestCalculateTax\|TestApplyTax" -count=1` | TestFetchUSDToBDT_*, TestCreateSnapshot_*, TestCalculateTax_*, TestApplyTax_* | ⬜ pending |
+| 08-01-02 | 01 | 1 | BILL-03 | unit | `go test ./apps/control-plane/internal/payments/... -run "TestInitiate\|TestHandle\|TestConfirm\|TestPost" -count=1` | TestInitiateCheckout_*, TestHandleProviderEvent_*, TestConfirmPendingBDPayments_*, TestPostPurchaseGrant_* | ⬜ pending |
+| 08-02-01 | 02 | 2 | BILL-03 | unit | `go test ./apps/control-plane/internal/payments/stripe/... -count=1` | TestStripeProcessEvent_*, TestStripeRailName | ⬜ pending |
+| 08-02-02 | 02 | 2 | BILL-03 | unit | `go test ./apps/control-plane/internal/payments/bkash/... ./apps/control-plane/internal/payments/sslcommerz/... -count=1` | TestBkashInitiate_*, TestBkashProcessEvent_*, TestSSLCommerzInitiate_*, TestSSLCommerzProcessEvent_* | ⬜ pending |
+| 08-03-01 | 03 | 3 | BILL-03, BILL-04, BILL-07 | unit+integration | `go test ./apps/control-plane/internal/payments/... -run "TestGet\|TestInitiate\|TestWebhook\|TestRouterIntegration" -count=1` | TestGetRails_*, TestInitiateCheckout_*, TestWebhook_*, TestRouterIntegration_* | ⬜ pending |
+| 08-03-02 | 03 | 3 | BILL-03 | build | `go build ./apps/control-plane/...` | N/A (build verification) | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -53,11 +51,15 @@ created: 2026-04-10
 
 ## Wave 0 Requirements
 
-- [ ] `internal/payments/payments_test.go` — stubs for payment intent and rail tests (BILL-03)
-- [ ] `internal/payments/fx_test.go` — stubs for FX snapshot and surcharge tests (BILL-04, BILL-07)
-- [ ] `internal/payments/webhook_test.go` — stubs for webhook idempotency tests (BILL-03)
+- [ ] `apps/control-plane/internal/payments/fx_test.go` — FX service tests (BILL-04)
+- [ ] `apps/control-plane/internal/payments/tax_test.go` — Tax calculation tests (BILL-07)
+- [ ] `apps/control-plane/internal/payments/service_test.go` — Service lifecycle tests (BILL-03)
+- [ ] `apps/control-plane/internal/payments/stripe/rail_test.go` — Stripe rail tests (BILL-03)
+- [ ] `apps/control-plane/internal/payments/bkash/rail_test.go` — bKash rail tests (BILL-03)
+- [ ] `apps/control-plane/internal/payments/sslcommerz/rail_test.go` — SSLCommerz rail tests (BILL-03)
+- [ ] `apps/control-plane/internal/payments/http_test.go` — HTTP handler + router integration tests (BILL-03, BILL-07)
 
-*Existing Go test infrastructure covers framework needs. Wave 0 creates test file stubs only.*
+*Existing Go test infrastructure covers framework needs. Wave 0 creates test file stubs via TDD in each plan task.*
 
 ---
 
