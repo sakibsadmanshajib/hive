@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-04-10T02:00:00Z"
+status: executing
+stopped_at: Completed 07-04-PLAN.md
+last_updated: "2026-04-10T08:30:00.000Z"
 progress:
   total_phases: 9
-  completed_phases: 7
-  total_plans: 30
-  completed_plans: 30
+  completed_phases: 6
+  total_plans: 31
+  completed_plans: 31
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 07 (media-file-and-async-api-surface) — COMPLETE
-Plan: 3 of 3 (all complete)
+Phase: 07 (media-file-and-async-api-surface) — EXECUTING
+Plan: 4 of 4 (COMPLETE)
 
 ## Performance Metrics
 
@@ -59,6 +59,7 @@ Plan: 3 of 3 (all complete)
 | Phase 07 P01 | 9min | 3 tasks | 8 files |
 | Phase 07 P02 | 22min | 2 tasks | 9 files |
 | Phase 07 P03 | 45min | 2 tasks | 17 files |
+| Phase 07 P04 | 35min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -132,6 +133,9 @@ Recent decisions affecting current work:
 - [07-03]: Batches package uses adapter layer (accounting, authz, file, storage) to decouple handler from direct service imports — enables clean unit testing
 - [07-03]: Asynq selected for batch worker task queue — consistent with control-plane async patterns; simple Redis-backed queue fits polling use case
 - [07-03]: All file/upload/batch operations validate account ownership via AuthSnapshot.AccountID before any data access — no cross-account leakage
+- [07-04]: handleMultipartAudio gains accountingEndpoint parameter separate from litellmPath — transcription and translation share the same handler but need different endpoint strings for reservation records
+- [07-04]: Model rewriting in multipart goroutine uses captured litellmModel local variable — avoids closure-over-loop-variable hazard
+- [07-04]: Test doubles (mock Authorizer/RoutingInterface/AccountingInterface) added in _test packages — existing test assertions preserved, only wiring changed to match new NewHandler signatures
 
 ### Pending Todos
 
@@ -144,6 +148,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T02:00:00Z
-Stopped at: Completed 07-03-PLAN.md
+Last session: 2026-04-10T08:30:00Z
+Stopped at: Completed 07-04-PLAN.md
 Resume file: None

@@ -18,7 +18,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 4: Model Catalog & Provider Routing** - Create Hive aliases, pricing catalog, routing policy, and provider capability matrix. (completed 2026-03-31)
 - [ ] **Phase 5: API Keys & Hot-Path Enforcement** - Add key lifecycle, per-key controls, budgets, rate limits, and hot-path authorization.
 - [x] **Phase 6: Core Text & Embeddings API** - Deliver the most-used OpenAI-compatible inference endpoints with streaming and reasoning support. (completed 2026-04-09)
-- [ ] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows.
+- [x] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows. (completed 2026-04-10)
 - [ ] **Phase 8: Payments, FX, and Compliance Checkout** - Add Stripe, bKash, SSLCommerz, FX snapshots, and tax-aware checkout.
 - [ ] **Phase 9: Developer Console & Operational Hardening** - Finish user-facing billing and usage UX plus production observability and alerts.
 
@@ -190,6 +190,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 4. Model Catalog & Provider Routing | 3/3 | Complete | 2026-03-31 |
 | 5. API Keys & Hot-Path Enforcement | 2/6 | In Progress | - |
 | 6. Core Text & Embeddings API | 4/4 | Complete | 2026-04-09 |
-| 7. Media, File, and Async API Surface | 3/4 | In Progress |  |
+| 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 0/3 | Not started | - |
 | 9. Developer Console & Operational Hardening | 0/3 | Not started | - |
