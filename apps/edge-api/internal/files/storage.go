@@ -11,6 +11,9 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+// Ensure StorageClient satisfies StorageBackend at compile time.
+var _ StorageBackend = (*StorageClient)(nil)
+
 // StorageClient wraps minio.Core with convenience methods for file storage operations.
 // minio.Core embeds *minio.Client and additionally exposes low-level multipart methods.
 type StorageClient struct {
@@ -79,18 +82,22 @@ func (s *StorageClient) InitMultipartUpload(ctx context.Context, bucket, key str
 	return uploadID, nil
 }
 
-// UploadPart uploads a single part of a multipart upload.
-func (s *StorageClient) UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, reader io.Reader, size int64) (minio.ObjectPart, error) {
+// UploadPart uploads a single part of a multipart upload and returns the ETag.
+func (s *StorageClient) UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, reader io.Reader, size int64) (string, error) {
 	part, err := s.core.PutObjectPart(ctx, bucket, key, uploadID, partNum, reader, size, minio.PutObjectPartOptions{})
 	if err != nil {
-		return minio.ObjectPart{}, fmt.Errorf("storage: upload part %d for %s/%s: %w", partNum, bucket, key, err)
+		return "", fmt.Errorf("storage: upload part %d for %s/%s: %w", partNum, bucket, key, err)
 	}
-	return part, nil
+	return part.ETag, nil
 }
 
 // CompleteMultipartUpload finalizes a multipart upload by assembling all parts.
-func (s *StorageClient) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []minio.CompletePart) error {
-	_, err := s.core.CompleteMultipartUpload(ctx, bucket, key, uploadID, parts, minio.PutObjectOptions{})
+func (s *StorageClient) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []CompletePart) error {
+	minioParts := make([]minio.CompletePart, len(parts))
+	for i, p := range parts {
+		minioParts[i] = minio.CompletePart{PartNumber: p.PartNumber, ETag: p.ETag}
+	}
+	_, err := s.core.CompleteMultipartUpload(ctx, bucket, key, uploadID, minioParts, minio.PutObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("storage: complete multipart upload %s/%s: %w", bucket, key, err)
 	}

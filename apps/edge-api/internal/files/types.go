@@ -1,27 +1,35 @@
 package files
 
+import "errors"
+
+// ErrNotFound is returned when a file or upload resource does not exist for the given account.
+var ErrNotFound = errors.New("not found")
+
 // FileObject is the OpenAI-compatible representation of an uploaded file.
 type FileObject struct {
-	ID        string `json:"id"`
-	Object    string `json:"object"`    // always "file"
-	Bytes     int64  `json:"bytes"`
-	CreatedAt int64  `json:"created_at"`
-	Filename  string `json:"filename"`
-	Purpose   string `json:"purpose"`
-	Status    string `json:"status"`
+	ID          string `json:"id"`
+	Object      string `json:"object"`    // always "file"
+	Bytes       int64  `json:"bytes"`
+	CreatedAt   int64  `json:"created_at"`
+	Filename    string `json:"filename"`
+	Purpose     string `json:"purpose"`
+	Status      string `json:"status"`
+	StoragePath string `json:"-"` // internal; not serialized to clients
 }
 
 // UploadObject is the OpenAI-compatible representation of a multipart upload.
 type UploadObject struct {
-	ID        string      `json:"id"`
-	Object    string      `json:"object"`    // always "upload"
-	Bytes     int64       `json:"bytes"`
-	CreatedAt int64       `json:"created_at"`
-	Filename  string      `json:"filename"`
-	Purpose   string      `json:"purpose"`
-	Status    string      `json:"status"`
-	ExpiresAt int64       `json:"expires_at"`
-	File      *FileObject `json:"file,omitempty"`
+	ID          string      `json:"id"`
+	Object      string      `json:"object"`    // always "upload"
+	Bytes       int64       `json:"bytes"`
+	CreatedAt   int64       `json:"created_at"`
+	Filename    string      `json:"filename"`
+	Purpose     string      `json:"purpose"`
+	Status      string      `json:"status"`
+	ExpiresAt   int64       `json:"expires_at"`
+	File        *FileObject `json:"file,omitempty"`
+	S3UploadID  *string     `json:"-"` // internal; not serialized to clients
+	StoragePath string      `json:"-"` // internal; not serialized to clients
 }
 
 // UploadPartObject is the OpenAI-compatible representation of an upload part.
@@ -43,6 +51,12 @@ type DeletedFileResponse struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"` // always "file"
 	Deleted bool   `json:"deleted"`
+}
+
+// CompletePart holds the part number and ETag needed to finalize a multipart upload.
+type CompletePart struct {
+	PartNumber int
+	ETag       string
 }
 
 // ValidPurposes lists the accepted values for file purpose.

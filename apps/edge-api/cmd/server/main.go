@@ -1,15 +1,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/hivegpt/hive/apps/edge-api/docs"
+	"github.com/hivegpt/hive/apps/edge-api/internal/audio"
 	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/hivegpt/hive/apps/edge-api/internal/files"
+	"github.com/hivegpt/hive/apps/edge-api/internal/images"
 	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
@@ -65,6 +71,52 @@ func main() {
 	mux.Handle("/v1/completions", inferenceHandler)
 	mux.Handle("/v1/responses", inferenceHandler)
 	mux.Handle("/v1/embeddings", inferenceHandler)
+
+	// Image and audio routes
+	storageClient, err := files.NewStorageClient(
+		os.Getenv("S3_ENDPOINT"),
+		os.Getenv("S3_ACCESS_KEY"),
+		os.Getenv("S3_SECRET_KEY"),
+		os.Getenv("S3_USE_SSL") == "true",
+	)
+	if err != nil {
+		log.Fatalf("failed to initialize storage client: %v", err)
+	}
+	imageBucket := os.Getenv("S3_BUCKET_IMAGES")
+	if imageBucket == "" {
+		imageBucket = "hive-images"
+	}
+
+	imagesHandler := images.NewHandler(
+		resolveLiteLLMBaseURL(),
+		resolveLiteLLMMasterKey(),
+		&storageAdapter{client: storageClient},
+		imageBucket,
+	)
+	mux.Handle("/v1/images/generations", imagesHandler)
+	mux.Handle("/v1/images/edits", imagesHandler)
+	mux.Handle("/v1/images/variations", imagesHandler)
+
+	audioHandler := audio.NewHandler(
+		resolveLiteLLMBaseURL(),
+		resolveLiteLLMMasterKey(),
+	)
+	mux.Handle("/v1/audio/speech", audioHandler)
+	mux.Handle("/v1/audio/transcriptions", audioHandler)
+	mux.Handle("/v1/audio/translations", audioHandler)
+
+	// Files and Uploads API routes
+	filesBucket := os.Getenv("S3_BUCKET_FILES")
+	if filesBucket == "" {
+		filesBucket = "hive-files"
+	}
+	filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
+	filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
+	filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, filesBucket)
+	mux.Handle("/v1/files", filesHandler)
+	mux.Handle("/v1/files/", filesHandler)
+	mux.Handle("/v1/uploads", filesHandler)
+	mux.Handle("/v1/uploads/", filesHandler)
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
@@ -177,6 +229,23 @@ func resolveLiteLLMMasterKey() string {
 		return k
 	}
 	return "litellm-dev-key"
+}
+
+// storageAdapter adapts *files.StorageClient (returns *url.URL) to images.StorageInterface (returns string).
+type storageAdapter struct {
+	client *files.StorageClient
+}
+
+func (a *storageAdapter) Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) error {
+	return a.client.Upload(ctx, bucket, key, reader, size, contentType)
+}
+
+func (a *storageAdapter) PresignedURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
+	u, err := a.client.PresignedURL(ctx, bucket, key, ttl)
+	if err != nil {
+		return "", err
+	}
+	return u.String(), nil
 }
 
 // authorizeAliasRequest performs hot-path authorization.
