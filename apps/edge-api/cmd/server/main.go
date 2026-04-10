@@ -88,7 +88,13 @@ func main() {
 		imageBucket = "hive-images"
 	}
 
+	imagesAuthorizer := images.NewAuthorizerAdapter(authorizer)
+	imagesRouting := images.NewRoutingAdapter(routingClient)
+	imagesAccounting := images.NewAccountingAdapter(accountingClient)
 	imagesHandler := images.NewHandler(
+		imagesAuthorizer,
+		imagesRouting,
+		imagesAccounting,
 		resolveLiteLLMBaseURL(),
 		resolveLiteLLMMasterKey(),
 		&storageAdapter{client: storageClient},
@@ -98,7 +104,13 @@ func main() {
 	mux.Handle("/v1/images/edits", imagesHandler)
 	mux.Handle("/v1/images/variations", imagesHandler)
 
+	audioAuthorizer := audio.NewAuthorizerAdapter(authorizer)
+	audioRouting := audio.NewRoutingAdapter(routingClient)
+	audioAccounting := audio.NewAccountingAdapter(accountingClient)
 	audioHandler := audio.NewHandler(
+		audioAuthorizer,
+		audioRouting,
+		audioAccounting,
 		resolveLiteLLMBaseURL(),
 		resolveLiteLLMMasterKey(),
 	)
