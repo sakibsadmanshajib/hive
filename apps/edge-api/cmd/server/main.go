@@ -12,6 +12,7 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/docs"
 	"github.com/hivegpt/hive/apps/edge-api/internal/audio"
 	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
+	"github.com/hivegpt/hive/apps/edge-api/internal/batches"
 	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
 	"github.com/hivegpt/hive/apps/edge-api/internal/files"
@@ -117,6 +118,16 @@ func main() {
 	mux.Handle("/v1/files/", filesHandler)
 	mux.Handle("/v1/uploads", filesHandler)
 	mux.Handle("/v1/uploads/", filesHandler)
+
+	// Batches API routes
+	batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
+	batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
+	batchesFileClient := batches.NewFilestoreAdapter(filestoreClient)
+	batchesStorage := batches.NewStorageAdapter(storageClient)
+	batchesAccounting := batches.NewAccountingAdapter(accountingClient)
+	batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, batchesStorage, batchesAccounting, filesBucket)
+	mux.Handle("/v1/batches", batchesHandler)
+	mux.Handle("/v1/batches/", batchesHandler)
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))

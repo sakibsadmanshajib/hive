@@ -10,10 +10,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
@@ -130,6 +132,41 @@ func main() {
 			filestoreSvc := filestore.NewService(filestoreRepo)
 			filestore.RegisterRoutes(router, filestoreSvc)
 			log.Println("filestore routes registered")
+
+			// Start Asynq batch polling worker if Redis is available.
+			if cfg.RedisURL != "" {
+				redisOpt, parseErr := asynq.ParseRedisURI(cfg.RedisURL)
+				if parseErr != nil {
+					log.Printf("WARNING: could not parse Redis URL for asynq worker: %v", parseErr)
+				} else {
+					batchWorker := batchstore.NewBatchWorker(
+						filestoreSvc,
+						resolveLiteLLMBaseURL(),
+						resolveLiteLLMMasterKey(),
+						nil, // StorageUploader: nil until S3 client is wired into control-plane
+						resolveBucketFiles(),
+					)
+					asynqMux := asynq.NewServeMux()
+					asynqMux.HandleFunc(batchstore.TypeBatchPoll, batchWorker.HandleBatchPoll)
+
+					asynqSrv := asynq.NewServer(
+						redisOpt,
+						asynq.Config{
+							Concurrency: 5,
+							Queues:      map[string]int{"batch": 1, "default": 1},
+							RetryDelayFunc: func(_ int, _ error, _ *asynq.Task) time.Duration {
+								return 30 * time.Second
+							},
+						},
+					)
+					go func() {
+						if err := asynqSrv.Run(asynqMux); err != nil {
+							log.Printf("batch worker stopped: %v", err)
+						}
+					}()
+					log.Println("batch worker started")
+				}
+			}
 		}
 	}
 
@@ -162,4 +199,25 @@ func main() {
 		log.Fatalf("server shutdown error: %v", err)
 	}
 	log.Println("control-plane stopped")
+}
+
+func resolveLiteLLMBaseURL() string {
+	if u := os.Getenv("LITELLM_BASE_URL"); u != "" {
+		return u
+	}
+	return "http://litellm:4000"
+}
+
+func resolveLiteLLMMasterKey() string {
+	if k := os.Getenv("LITELLM_MASTER_KEY"); k != "" {
+		return k
+	}
+	return "litellm-dev-key"
+}
+
+func resolveBucketFiles() string {
+	if b := os.Getenv("S3_BUCKET_FILES"); b != "" {
+		return b
+	}
+	return "hive-files"
 }
