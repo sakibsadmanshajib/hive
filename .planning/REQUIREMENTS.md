@@ -24,8 +24,8 @@
 - [x] **API-02**: Developer can stream supported text-generation endpoints with OpenAI-compatible SSE event ordering, chunk formats, and terminal events.
 - [x] **API-03**: Developer can call `embeddings` with OpenAI-compatible request and response behavior.
 - [x] **API-04**: Developer can use reasoning or thinking-related request parameters, and Hive returns translated reasoning outputs and usage details when upstream support exists.
-- [ ] **API-05**: Developer can call image-generation and image-processing endpoints with OpenAI-compatible behavior for supported operations.
-- [ ] **API-06**: Developer can call speech, transcription, and translation endpoints with OpenAI-compatible behavior for supported operations.
+- [x] **API-05**: Developer can call image-generation and image-processing endpoints with OpenAI-compatible behavior for supported operations.
+- [x] **API-06**: Developer can call speech, transcription, and translation endpoints with OpenAI-compatible behavior for supported operations.
 - [x] **API-07**: Developer can use `files`, `uploads`, and `batches` flows required by official SDK integrations.
 - [x] **API-08**: Public non-org/admin endpoints outside the initial launch subset are explicitly classified and return OpenAI-style unsupported responses until implemented.
 
@@ -103,8 +103,8 @@
 | API-02 | Phase 6 | Complete |
 | API-03 | Phase 6 | Complete |
 | API-04 | Phase 6 | Complete |
-| API-05 | Phase 7 | Pending |
-| API-06 | Phase 7 | Pending |
+| API-05 | Phase 7 | Complete |
+| API-06 | Phase 7 | Complete |
 | API-07 | Phase 7 | Complete |
 | API-08 | Phase 1 | Complete |
 | ROUT-01 | Phase 4 | Complete |

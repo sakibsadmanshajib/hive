@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-04-09T23:56:09.594Z"
+stopped_at: Completed 07-02-PLAN.md
+last_updated: "2026-04-10T00:20:00Z"
 progress:
   total_phases: 9
   completed_phases: 6
   total_plans: 30
-  completed_plans: 28
+  completed_plans: 29
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 07 (media-file-and-async-api-surface) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -57,6 +57,7 @@ Plan: 2 of 3
 - Trend: Phase 5 now has both the prior hot-path hardening slice and the API-key lifecycle foundation in place, leaving policy, projection, and limiter follow-up plans.
 
 | Phase 07 P01 | 9min | 3 tasks | 8 files |
+| Phase 07 P02 | 22min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,9 @@ Recent decisions affecting current work:
 - [06-04]: EmbeddingObject.Embedding stays json.RawMessage to handle both float arrays and base64 encoding_format without type assertions.
 - [Phase 07-01]: minio.Core used instead of *minio.Client for multipart upload access — NewMultipartUpload/PutObjectPart/CompleteMultipartUpload/AbortMultipartUpload are private on Client but public on Core
 - [Phase 07-01]: minio-go pinned to v7.0.91 (latest compatible with Go 1.24 — v7.0.100+ requires Go 1.25)
+- [07-02]: images.StorageInterface returns (string, error) for PresignedURL — avoids *url.URL dependency in the images package; storageAdapter in main.go bridges the real files.StorageClient
+- [07-02]: Audio Handler has no storage field by design — enforces that audio is never stored; no storage parameter means no accidental storage calls possible
+- [07-02]: NeedImageGeneration/NeedTTS/NeedSTT as package constants — documents routing capability intent without requiring a full orchestrator in unit tests
 
 ### Pending Todos
 
@@ -135,6 +139,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-09T23:56:09.591Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-04-10T00:20:00Z
+Stopped at: Completed 07-02-PLAN.md
 Resume file: None
