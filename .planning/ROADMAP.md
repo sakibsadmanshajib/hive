@@ -191,5 +191,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 5. API Keys & Hot-Path Enforcement | 2/6 | In Progress | - |
 | 6. Core Text & Embeddings API | 4/4 | Complete | 2026-04-09 |
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
-| 8. Payments, FX, and Compliance Checkout | 1/3 | In Progress|  |
+| 8. Payments, FX, and Compliance Checkout | 2/3 | In Progress|  |
 | 9. Developer Console & Operational Hardening | 0/3 | Not started | - |

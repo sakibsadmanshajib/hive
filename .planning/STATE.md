@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-04-10T23:36:59.278Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-04-10T23:51:49.094Z"
 progress:
   total_phases: 9
   completed_phases: 7
   total_plans: 34
-  completed_plans: 32
+  completed_plans: 33
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 08 (payments-fx-and-compliance-checkout) — EXECUTING
-Plan: 2 of 3
+Plan: 3 of 3
 
 ## Performance Metrics
 
@@ -61,6 +61,7 @@ Plan: 2 of 3
 | Phase 07 P03 | 45min | 2 tasks | 17 files |
 | Phase 07 P04 | 35min | 2 tasks | 11 files |
 | Phase 08-payments-fx-and-compliance-checkout P01 | 35 | 2 tasks | 11 files |
+| Phase 08 P02 | 45 | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -140,6 +141,9 @@ Recent decisions affecting current work:
 - [Phase 08]: [08-01]: FXService uses FXCache interface (not *redis.Client directly) — enables in-memory test doubles without real Redis in unit tests
 - [Phase 08]: [08-01]: BD rails (bkash/sslcommerz) transition to confirming on payment.succeeded; Stripe transitions directly to completed — BD payment clearing requires 3-minute confirming delay before ledger grant
 - [Phase 08]: [08-01]: PostPurchaseGrant idempotency key is payment:purchase:{intentID} — deterministic key prevents double-crediting across retries
+- [Phase 08]: [08-02]: Stripe uses ConstructEventWithOptions with IgnoreAPIVersionMismatch: true — stripe-go v84 validates event API version by default; test events built locally lack the SDK-matching api_version field
+- [Phase 08]: [08-02]: bKash always grants fresh token per request — tokens are never cached to avoid 401s on concurrent requests with short-lived access tokens
+- [Phase 08]: [08-02]: SSLCommerz ProcessEvent returns sessionkey as ProviderIntentID (not tran_id) — ensures GetPaymentIntentByProviderID lookup matches what Initiate stored
 
 ### Pending Todos
 
@@ -152,6 +156,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T23:36:59.276Z
-Stopped at: Completed 08-01-PLAN.md
+Last session: 2026-04-10T23:51:49.054Z
+Stopped at: Completed 08-02-PLAN.md
 Resume file: None
