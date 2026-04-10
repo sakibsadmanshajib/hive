@@ -24,6 +24,59 @@ const (
 	NeedImageEdit = true
 )
 
+// Authorizer validates incoming API keys and returns account context.
+type Authorizer interface {
+	AuthorizeRequest(r *http.Request) (AuthResult, error)
+}
+
+// AuthResult carries the authorized account and API key identifiers.
+type AuthResult struct {
+	AccountID string
+	APIKeyID  string
+}
+
+// RoutingInterface selects a provider route for a given model alias.
+type RoutingInterface interface {
+	SelectRoute(ctx context.Context, input RouteInput) (RouteResult, error)
+}
+
+// RouteInput specifies the alias and capability requirements for route selection.
+type RouteInput struct {
+	AliasID             string
+	NeedImageGeneration bool
+	NeedImageEdit       bool
+}
+
+// RouteResult contains the selected route details.
+type RouteResult struct {
+	AliasID          string
+	LiteLLMModelName string
+}
+
+// AccountingInterface manages credit reservations for image requests.
+type AccountingInterface interface {
+	CreateReservation(ctx context.Context, input ReservationInput) (string, error)
+	FinalizeReservation(ctx context.Context, input FinalizeInput) error
+	ReleaseReservation(ctx context.Context, accountID, reservationID, reason string) error
+}
+
+// ReservationInput holds the parameters for creating a credit reservation.
+type ReservationInput struct {
+	AccountID        string
+	APIKeyID         string
+	RequestID        string
+	Endpoint         string
+	ModelAlias       string
+	EstimatedCredits int64
+}
+
+// FinalizeInput holds the parameters for finalizing a credit reservation.
+type FinalizeInput struct {
+	AccountID     string
+	ReservationID string
+	ActualCredits int64
+}
+
 // StorageInterface abstracts S3-compatible storage for testability.
 type StorageInterface interface {
 	Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) error
@@ -32,6 +85,9 @@ type StorageInterface interface {
 
 // Handler routes image requests to generation, edits, or variations endpoints.
 type Handler struct {
+	authorizer     Authorizer
+	routing        RoutingInterface
+	accounting     AccountingInterface
 	litellmBaseURL string
 	masterKey      string
 	httpClient     *http.Client
@@ -41,18 +97,36 @@ type Handler struct {
 
 // NewHandler creates a new image Handler.
 func NewHandler(
+	authorizer Authorizer,
+	routing RoutingInterface,
+	accounting AccountingInterface,
 	litellmBaseURL string,
 	masterKey string,
 	storage StorageInterface,
 	bucket string,
 ) *Handler {
 	return &Handler{
+		authorizer:     authorizer,
+		routing:        routing,
+		accounting:     accounting,
 		litellmBaseURL: strings.TrimRight(litellmBaseURL, "/"),
 		masterKey:      masterKey,
 		httpClient:     &http.Client{Timeout: 120 * time.Second},
 		storage:        storage,
 		bucket:         bucket,
 	}
+}
+
+// authorize validates the request API key and writes a 401 on failure.
+// Returns (result, true) on success or (zero, false) on failure (response already written).
+func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) (AuthResult, bool) {
+	result, err := h.authorizer.AuthorizeRequest(r)
+	if err != nil {
+		code := "invalid_api_key"
+		apierrors.WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Invalid API key.", &code)
+		return AuthResult{}, false
+	}
+	return result, true
 }
 
 // ServeHTTP dispatches image requests by URL path.
@@ -80,6 +154,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Authorize before reading body.
+	auth, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
 	if err != nil {
 		code := "invalid_request"
@@ -95,6 +175,50 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Select route based on model alias and capability.
+	route, err := h.routing.SelectRoute(ctx, RouteInput{
+		AliasID:             req.Model,
+		NeedImageGeneration: true,
+	})
+	if err != nil {
+		code := "model_not_found"
+		apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error", "The requested model is not available for image generation.", &code)
+		return
+	}
+
+	// Reserve credits before dispatch.
+	requestID := uuid.New().String()
+	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
+		AccountID:        auth.AccountID,
+		APIKeyID:         auth.APIKeyID,
+		RequestID:        requestID,
+		Endpoint:         "/v1/images/generations",
+		ModelAlias:       route.AliasID,
+		EstimatedCredits: 5000,
+	})
+	if err != nil {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+
+	// Rewrite the model field to the LiteLLM model name.
+	var bodyMap map[string]any
+	if err := json.Unmarshal(body, &bodyMap); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "invalid_request"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body.", &code)
+		return
+	}
+	bodyMap["model"] = route.LiteLLMModelName
+	rewrittenBody, err := json.Marshal(bodyMap)
+	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "internal_error"
+		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to serialize request.", &code)
+		return
+	}
+
 	// Determine response_format (default is "url").
 	responseFormat := "url"
 	if req.ResponseFormat != nil && *req.ResponseFormat == "b64_json" {
@@ -102,8 +226,9 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dispatch to LiteLLM.
-	upstreamResp, err := h.dispatchJSON(ctx, "/images/generations", body)
+	upstreamResp, err := h.dispatchJSON(ctx, "/images/generations", rewrittenBody)
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		apierrors.WriteProviderBlindUpstreamError(w, req.Model, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -111,12 +236,14 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 
 	if upstreamResp.StatusCode < 200 || upstreamResp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(upstreamResp.Body, 4096))
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		apierrors.WriteProviderBlindUpstreamError(w, req.Model, upstreamResp.StatusCode, string(upstreamBody))
 		return
 	}
 
 	respBody, err := io.ReadAll(io.LimitReader(upstreamResp.Body, 10*1024*1024))
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response.", &code)
 		return
@@ -124,10 +251,18 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 
 	var imageResp ImageResponse
 	if err := json.Unmarshal(respBody, &imageResp); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to parse upstream response.", &code)
 		return
 	}
+
+	// Finalize reservation on success.
+	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
+		AccountID:     auth.AccountID,
+		ReservationID: reservationID,
+		ActualCredits: 5000,
+	})
 
 	// Normalize: for URL mode, upload each image to S3 and replace with presigned URL.
 	if responseFormat == "url" {
@@ -160,6 +295,12 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Authorize before parsing multipart form.
+	auth, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+
 	// Parse multipart form (32MB limit).
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		code := "invalid_request"
@@ -173,6 +314,39 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 		responseFormat = "b64_json"
 	}
 
+	// Extract model alias from form.
+	modelAlias := r.FormValue("model")
+
+	// Select route based on model alias and capability.
+	route, err := h.routing.SelectRoute(ctx, RouteInput{
+		AliasID:       modelAlias,
+		NeedImageEdit: true,
+	})
+	if err != nil {
+		code := "model_not_found"
+		apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error", "The requested model is not available for image edits.", &code)
+		return
+	}
+
+	// Reserve credits before dispatch.
+	requestID := uuid.New().String()
+	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
+		AccountID:        auth.AccountID,
+		APIKeyID:         auth.APIKeyID,
+		RequestID:        requestID,
+		Endpoint:         "/v1/images/edits",
+		ModelAlias:       route.AliasID,
+		EstimatedCredits: 5000,
+	})
+	if err != nil {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+
+	// Capture the LiteLLM model name for use inside the goroutine.
+	litellmModel := route.LiteLLMModelName
+
 	// Rebuild multipart body for LiteLLM using io.Pipe for streaming.
 	pr, pw := io.Pipe()
 	mw := multipart.NewWriter(pw)
@@ -181,10 +355,14 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 		defer pw.Close()
 		defer mw.Close()
 
-		// Copy all text form fields.
+		// Copy all text form fields, rewriting the model field.
 		for key, values := range r.MultipartForm.Value {
 			for _, val := range values {
-				if err := mw.WriteField(key, val); err != nil {
+				writeVal := val
+				if key == "model" {
+					writeVal = litellmModel
+				}
+				if err := mw.WriteField(key, writeVal); err != nil {
 					pw.CloseWithError(fmt.Errorf("write field %s: %w", key, err))
 					return
 				}
@@ -217,17 +395,19 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 
 	// Build request to LiteLLM.
 	upstreamURL := h.litellmBaseURL + "/images/edits"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, pr)
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, pr)
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
 		return
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer "+h.masterKey)
+	upstreamReq.Header.Set("Content-Type", mw.FormDataContentType())
+	upstreamReq.Header.Set("Authorization", "Bearer "+h.masterKey)
 
-	upstreamResp, err := h.httpClient.Do(req)
+	upstreamResp, err := h.httpClient.Do(upstreamReq)
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		apierrors.WriteProviderBlindUpstreamError(w, "", http.StatusBadGateway, err.Error())
 		return
 	}
@@ -235,12 +415,14 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 
 	if upstreamResp.StatusCode < 200 || upstreamResp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(upstreamResp.Body, 4096))
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		apierrors.WriteProviderBlindUpstreamError(w, "", upstreamResp.StatusCode, string(upstreamBody))
 		return
 	}
 
 	respBody, err := io.ReadAll(io.LimitReader(upstreamResp.Body, 10*1024*1024))
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response.", &code)
 		return
@@ -248,10 +430,18 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 
 	var imageResp ImageResponse
 	if err := json.Unmarshal(respBody, &imageResp); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to parse upstream response.", &code)
 		return
 	}
+
+	// Finalize reservation on success.
+	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
+		AccountID:     auth.AccountID,
+		ReservationID: reservationID,
+		ActualCredits: 5000,
+	})
 
 	// Normalize: for URL mode, upload each image to S3 and replace with presigned URL.
 	if responseFormat == "url" {

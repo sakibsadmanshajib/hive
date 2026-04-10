@@ -19,19 +19,19 @@ import (
 
 // mockLiteLLM is a test server that simulates LiteLLM responses.
 type mockLiteLLMServer struct {
-	server        *httptest.Server
-	lastPath      string
-	lastBody      []byte
-	lastCT        string
-	responseBody  []byte
-	responseCode  int
+	server         *httptest.Server
+	lastPath       string
+	lastBody       []byte
+	lastCT         string
+	responseBody   []byte
+	responseCode   int
 	responseCtType string
 }
 
 func newMockLiteLLM(body []byte, code int, ct string) *mockLiteLLMServer {
 	m := &mockLiteLLMServer{
-		responseBody:  body,
-		responseCode:  code,
+		responseBody:   body,
+		responseCode:   code,
 		responseCtType: ct,
 	}
 	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,14 +68,56 @@ func (ms *mockStorage) PresignedURL(_ context.Context, _, _ string, _ time.Durat
 	return ms.presignURL, nil
 }
 
+// mockAuthorizer is a stub that always grants authorization.
+type mockAuthorizer struct {
+	accountID string
+	apiKeyID  string
+}
+
+func (a *mockAuthorizer) AuthorizeRequest(_ *http.Request) (images.AuthResult, error) {
+	return images.AuthResult{AccountID: a.accountID, APIKeyID: a.apiKeyID}, nil
+}
+
+// mockRouting is a stub that echoes the alias as the LiteLLM model name.
+type mockRouting struct {
+	litellmModel string
+}
+
+func (r *mockRouting) SelectRoute(_ context.Context, input images.RouteInput) (images.RouteResult, error) {
+	litellm := r.litellmModel
+	if litellm == "" {
+		litellm = input.AliasID
+	}
+	return images.RouteResult{AliasID: input.AliasID, LiteLLMModelName: litellm}, nil
+}
+
+// mockAccounting is a stub that tracks reservation calls.
+type mockAccounting struct {
+	reservationID  string
+	finalizeCalled bool
+	releaseCalled  bool
+}
+
+func (a *mockAccounting) CreateReservation(_ context.Context, _ images.ReservationInput) (string, error) {
+	return a.reservationID, nil
+}
+
+func (a *mockAccounting) FinalizeReservation(_ context.Context, _ images.FinalizeInput) error {
+	a.finalizeCalled = true
+	return nil
+}
+
+func (a *mockAccounting) ReleaseReservation(_ context.Context, _, _, _ string) error {
+	a.releaseCalled = true
+	return nil
+}
+
 // buildHandler creates a Handler wired to the given mock LiteLLM URL and storage.
 func buildHandler(litellmBaseURL string, storage images.StorageInterface) *images.Handler {
-	return images.NewHandler(
-		litellmBaseURL,
-		"test-key",
-		storage,
-		"hive-images",
-	)
+	auth := &mockAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockRouting{}
+	accounting := &mockAccounting{reservationID: "res-test"}
+	return images.NewHandler(auth, routing, accounting, litellmBaseURL, "test-key", storage, "hive-images")
 }
 
 // --- Tests ---

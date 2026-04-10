@@ -2,6 +2,7 @@ package audio
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/google/uuid"
 )
 
 // Capability flags used when this handler calls the routing layer.
@@ -22,20 +24,96 @@ const (
 	NeedSTT = true
 )
 
+// Authorizer validates incoming API keys and returns account context.
+type Authorizer interface {
+	AuthorizeRequest(r *http.Request) (AuthResult, error)
+}
+
+// AuthResult carries the authorized account and API key identifiers.
+type AuthResult struct {
+	AccountID string
+	APIKeyID  string
+}
+
+// RoutingInterface selects a provider route for a given model alias.
+type RoutingInterface interface {
+	SelectRoute(ctx context.Context, input RouteInput) (RouteResult, error)
+}
+
+// RouteInput specifies the alias and capability requirements for route selection.
+type RouteInput struct {
+	AliasID string
+	NeedTTS bool
+	NeedSTT bool
+}
+
+// RouteResult contains the selected route details.
+type RouteResult struct {
+	AliasID          string
+	LiteLLMModelName string
+}
+
+// AccountingInterface manages credit reservations for audio requests.
+type AccountingInterface interface {
+	CreateReservation(ctx context.Context, input ReservationInput) (string, error)
+	FinalizeReservation(ctx context.Context, input FinalizeInput) error
+	ReleaseReservation(ctx context.Context, accountID, reservationID, reason string) error
+}
+
+// ReservationInput holds the parameters for creating a credit reservation.
+type ReservationInput struct {
+	AccountID        string
+	APIKeyID         string
+	RequestID        string
+	Endpoint         string
+	ModelAlias       string
+	EstimatedCredits int64
+}
+
+// FinalizeInput holds the parameters for finalizing a credit reservation.
+type FinalizeInput struct {
+	AccountID     string
+	ReservationID string
+	ActualCredits int64
+}
+
 // Handler routes audio requests to speech, transcription, and translation endpoints.
 type Handler struct {
+	authorizer     Authorizer
+	routing        RoutingInterface
+	accounting     AccountingInterface
 	litellmBaseURL string
 	masterKey      string
 	httpClient     *http.Client
 }
 
 // NewHandler creates a new audio Handler.
-func NewHandler(litellmBaseURL, masterKey string) *Handler {
+func NewHandler(
+	authorizer Authorizer,
+	routing RoutingInterface,
+	accounting AccountingInterface,
+	litellmBaseURL, masterKey string,
+) *Handler {
 	return &Handler{
+		authorizer:     authorizer,
+		routing:        routing,
+		accounting:     accounting,
 		litellmBaseURL: strings.TrimRight(litellmBaseURL, "/"),
 		masterKey:      masterKey,
 		httpClient:     &http.Client{Timeout: 120 * time.Second},
 	}
+}
+
+// authorize validates the request API key and writes a 401 on failure.
+// Returns (result, true) on success or (zero, false) on failure (response already written).
+func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) (AuthResult, bool) {
+	result, err := h.authorizer.AuthorizeRequest(r)
+	if err != nil {
+		code := "invalid_api_key"
+		apierrors.WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Invalid API key.", &code)
+		return AuthResult{}, false
+	}
+	return result, true
 }
 
 // ServeHTTP dispatches audio requests by URL path.
@@ -62,6 +140,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Authorize before reading body.
+	auth, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1*1024*1024))
 	if err != nil {
 		code := "invalid_request"
@@ -69,9 +153,62 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dispatch to LiteLLM.
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.litellmBaseURL+"/audio/speech", bytes.NewReader(body))
+	// Parse the request to extract the model alias.
+	var speechReq SpeechRequest
+	if err := json.Unmarshal(body, &speechReq); err != nil {
+		code := "invalid_request"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body.", &code)
+		return
+	}
+
+	// Select route based on model alias and TTS capability.
+	route, err := h.routing.SelectRoute(ctx, RouteInput{
+		AliasID: speechReq.Model,
+		NeedTTS: true,
+	})
 	if err != nil {
+		code := "model_not_found"
+		apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error", "The requested model is not available for audio speech.", &code)
+		return
+	}
+
+	// Reserve credits before dispatch.
+	requestID := uuid.New().String()
+	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
+		AccountID:        auth.AccountID,
+		APIKeyID:         auth.APIKeyID,
+		RequestID:        requestID,
+		Endpoint:         "/v1/audio/speech",
+		ModelAlias:       route.AliasID,
+		EstimatedCredits: 1000,
+	})
+	if err != nil {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+
+	// Rewrite the model field to the LiteLLM model name.
+	var bodyMap map[string]any
+	if err := json.Unmarshal(body, &bodyMap); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "invalid_request"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body.", &code)
+		return
+	}
+	bodyMap["model"] = route.LiteLLMModelName
+	rewrittenBody, err := json.Marshal(bodyMap)
+	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "internal_error"
+		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to serialize request.", &code)
+		return
+	}
+
+	// Dispatch to LiteLLM.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.litellmBaseURL+"/audio/speech", bytes.NewReader(rewrittenBody))
+	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
 		return
@@ -81,6 +218,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Upstream audio request failed.", &code)
 		return
@@ -89,10 +227,18 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, resp.StatusCode, "api_error", string(upstreamBody), &code)
 		return
 	}
+
+	// Finalize reservation on success.
+	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
+		AccountID:     auth.AccountID,
+		ReservationID: reservationID,
+		ActualCredits: 1000,
+	})
 
 	// Binary relay: copy Content-Type exactly from upstream, pipe body directly.
 	ct := resp.Header.Get("Content-Type")
@@ -109,19 +255,27 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 // handleTranscription processes POST /v1/audio/transcriptions.
 // Audio files are forwarded in-flight via multipart — never written to disk or storage.
 func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
-	h.handleMultipartAudio(w, r, "/audio/transcriptions")
+	h.handleMultipartAudio(w, r, "/audio/transcriptions", "/v1/audio/transcriptions")
 }
 
 // handleTranslation processes POST /v1/audio/translations.
 // Audio files are forwarded in-flight via multipart — never written to disk or storage.
 func (h *Handler) handleTranslation(w http.ResponseWriter, r *http.Request) {
-	h.handleMultipartAudio(w, r, "/audio/translations")
+	h.handleMultipartAudio(w, r, "/audio/translations", "/v1/audio/translations")
 }
 
 // handleMultipartAudio is shared logic for transcription and translation:
 // rebuild multipart from the incoming request and forward to LiteLLM at the given path.
-func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, litellmPath string) {
+// litellmPath is the path segment appended to the LiteLLM base URL.
+// accountingEndpoint is the full endpoint path used for credit reservation records.
+func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, litellmPath, accountingEndpoint string) {
 	ctx := r.Context()
+
+	// Authorize before parsing multipart form.
+	auth, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
 
 	// Parse multipart form (25MB for audio files).
 	if err := r.ParseMultipartForm(25 << 20); err != nil {
@@ -129,6 +283,39 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to parse multipart form.", &code)
 		return
 	}
+
+	// Extract model alias from form.
+	modelAlias := r.FormValue("model")
+
+	// Select route based on model alias and STT capability.
+	route, err := h.routing.SelectRoute(ctx, RouteInput{
+		AliasID: modelAlias,
+		NeedSTT: true,
+	})
+	if err != nil {
+		code := "model_not_found"
+		apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error", "The requested model is not available for audio transcription.", &code)
+		return
+	}
+
+	// Reserve credits before dispatch.
+	requestID := uuid.New().String()
+	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
+		AccountID:        auth.AccountID,
+		APIKeyID:         auth.APIKeyID,
+		RequestID:        requestID,
+		Endpoint:         accountingEndpoint,
+		ModelAlias:       route.AliasID,
+		EstimatedCredits: 500,
+	})
+	if err != nil {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+
+	// Capture the LiteLLM model name for use inside the goroutine.
+	litellmModel := route.LiteLLMModelName
 
 	// Rebuild multipart body via io.Pipe for streaming (no disk writes).
 	pr, pw := io.Pipe()
@@ -138,10 +325,14 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		defer pw.Close()
 		defer mw.Close()
 
-		// Copy all text form fields.
+		// Copy all text form fields, rewriting the model field.
 		for key, values := range r.MultipartForm.Value {
 			for _, val := range values {
-				if err := mw.WriteField(key, val); err != nil {
+				writeVal := val
+				if key == "model" {
+					writeVal = litellmModel
+				}
+				if err := mw.WriteField(key, writeVal); err != nil {
 					pw.CloseWithError(fmt.Errorf("write field %s: %w", key, err))
 					return
 				}
@@ -176,6 +367,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	upstreamURL := h.litellmBaseURL + litellmPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, pr)
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
 		return
@@ -185,6 +377,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Upstream audio request failed.", &code)
 		return
@@ -193,6 +386,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, resp.StatusCode, "api_error", string(upstreamBody), &code)
 		return
@@ -201,10 +395,18 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	// Read response and extract duration for metering (non-fatal if missing).
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response.", &code)
 		return
 	}
+
+	// Finalize reservation on success.
+	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
+		AccountID:     auth.AccountID,
+		ReservationID: reservationID,
+		ActualCredits: 500,
+	})
 
 	// Extract duration for metering (best-effort).
 	var durResp struct {

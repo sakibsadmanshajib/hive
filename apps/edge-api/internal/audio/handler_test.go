@@ -2,6 +2,7 @@ package audio_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"mime/multipart"
@@ -16,19 +17,19 @@ import (
 // --- Test doubles ---
 
 type mockLiteLLMAudio struct {
-	server        *httptest.Server
-	lastPath      string
-	lastBody      []byte
-	lastCT        string
-	responseBody  []byte
-	responseCode  int
+	server         *httptest.Server
+	lastPath       string
+	lastBody       []byte
+	lastCT         string
+	responseBody   []byte
+	responseCode   int
 	responseCtType string
 }
 
 func newMockLiteLLMAudio(body []byte, code int, ct string) *mockLiteLLMAudio {
 	m := &mockLiteLLMAudio{
-		responseBody:  body,
-		responseCode:  code,
+		responseBody:   body,
+		responseCode:   code,
 		responseCtType: ct,
 	}
 	m.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -44,8 +45,55 @@ func newMockLiteLLMAudio(body []byte, code int, ct string) *mockLiteLLMAudio {
 
 func (m *mockLiteLLMAudio) Close() { m.server.Close() }
 
+// mockAudioAuthorizer is a stub that always grants authorization.
+type mockAudioAuthorizer struct {
+	accountID string
+	apiKeyID  string
+}
+
+func (a *mockAudioAuthorizer) AuthorizeRequest(_ *http.Request) (audio.AuthResult, error) {
+	return audio.AuthResult{AccountID: a.accountID, APIKeyID: a.apiKeyID}, nil
+}
+
+// mockAudioRouting is a stub that echoes the alias as the LiteLLM model name.
+type mockAudioRouting struct {
+	litellmModel string
+}
+
+func (r *mockAudioRouting) SelectRoute(_ context.Context, input audio.RouteInput) (audio.RouteResult, error) {
+	litellm := r.litellmModel
+	if litellm == "" {
+		litellm = input.AliasID
+	}
+	return audio.RouteResult{AliasID: input.AliasID, LiteLLMModelName: litellm}, nil
+}
+
+// mockAudioAccounting is a stub that tracks reservation calls.
+type mockAudioAccounting struct {
+	reservationID  string
+	finalizeCalled bool
+	releaseCalled  bool
+}
+
+func (a *mockAudioAccounting) CreateReservation(_ context.Context, _ audio.ReservationInput) (string, error) {
+	return a.reservationID, nil
+}
+
+func (a *mockAudioAccounting) FinalizeReservation(_ context.Context, _ audio.FinalizeInput) error {
+	a.finalizeCalled = true
+	return nil
+}
+
+func (a *mockAudioAccounting) ReleaseReservation(_ context.Context, _, _, _ string) error {
+	a.releaseCalled = true
+	return nil
+}
+
 func buildAudioHandler(litellmBaseURL string) *audio.Handler {
-	return audio.NewHandler(litellmBaseURL, "test-key")
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	accounting := &mockAudioAccounting{reservationID: "res-test"}
+	return audio.NewHandler(auth, routing, accounting, litellmBaseURL, "test-key")
 }
 
 // --- Tests ---
@@ -188,8 +236,7 @@ func TestTranslationForward(t *testing.T) {
 }
 
 func TestAudioModelAliasRewrite(t *testing.T) {
-	// Verify that the outgoing request to LiteLLM can be controlled by litellmModel
-	// (in our case the handler passes model through directly since no routing layer in unit test)
+	// Verify that the outgoing request to LiteLLM uses the LiteLLM model name from routing.
 	respBody := `{"text":"test transcription"}`
 	mock := newMockLiteLLMAudio([]byte(respBody), 200, "application/json")
 	defer mock.Close()
@@ -214,7 +261,8 @@ func TestAudioModelAliasRewrite(t *testing.T) {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// The outgoing body must contain the model field (forwarded in multipart)
+	// The outgoing body must contain the model field (forwarded in multipart).
+	// The mock routing stub echoes the alias as litellm model, so "whisper-1" passes through.
 	outgoingBody := string(mock.lastBody)
 	if !strings.Contains(outgoingBody, "whisper-1") {
 		t.Errorf("expected model 'whisper-1' in outgoing multipart, body: %s", outgoingBody)
@@ -222,9 +270,8 @@ func TestAudioModelAliasRewrite(t *testing.T) {
 }
 
 func TestAudioNoStorageInTranscription(t *testing.T) {
-	// Audio handler must NOT call any storage - no storage field on Handler
-	// This test verifies the handler struct by checking it doesn't error
-	// when there's no storage configured (audio.NewHandler has no storage param)
+	// Audio handler must NOT call any storage - no storage field on Handler.
+	// This test verifies the handler works correctly without storage configured.
 	respBody := `{"text":"no storage please"}`
 	mock := newMockLiteLLMAudio([]byte(respBody), 200, "application/json")
 	defer mock.Close()
@@ -245,7 +292,7 @@ func TestAudioNoStorageInTranscription(t *testing.T) {
 
 	h.ServeHTTP(w, req)
 
-	// If it reaches here without panicking on nil storage, the test passes
+	// If it reaches here without panicking on nil storage, the test passes.
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
