@@ -137,12 +137,13 @@ Plans:
   2. Image-generation and image-processing endpoints work with the supported OpenAI-compatible operations.
   3. Speech, transcription, and translation endpoints work with contract-consistent responses and error handling.
   4. Unsupported media or file cases return explicit OpenAI-style errors.
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
 - [x] 07-01-PLAN.md — Storage infrastructure (MinIO, S3 client), file/upload/batch Postgres schemas, control-plane filestore service, and routing capability flag extensions (Wave 1)
 - [x] 07-02-PLAN.md — Image generation/edits and audio speech/transcription/translation endpoint handlers with LiteLLM dispatch (Wave 2)
 - [x] 07-03-PLAN.md — Files API, Uploads API, Batches API edge handlers, and Asynq batch polling worker (Wave 2)
+- [ ] 07-04-PLAN.md — Gap closure: Add auth, routing, and accounting to images and audio handlers (Wave 1)
 
 ### Phase 8: Payments, FX, and Compliance Checkout
 **Goal**: Let customers buy credits safely across global and Bangladesh-local rails with reproducible FX and tax math.
@@ -179,7 +180,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -189,6 +190,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Model Catalog & Provider Routing | 3/3 | Complete | 2026-03-31 |
 | 5. API Keys & Hot-Path Enforcement | 2/6 | In Progress | - |
 | 6. Core Text & Embeddings API | 4/4 | Complete | 2026-04-09 |
-| 7. Media, File, and Async API Surface | 2/3 | In Progress|  |
+| 7. Media, File, and Async API Surface | 3/4 | In Progress |  |
 | 8. Payments, FX, and Compliance Checkout | 0/3 | Not started | - |
 | 9. Developer Console & Operational Hardening | 0/3 | Not started | - |
