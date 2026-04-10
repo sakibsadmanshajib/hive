@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 8 context gathered
-last_updated: "2026-04-10T09:06:46.034Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-04-10T23:36:59.278Z"
 progress:
   total_phases: 9
   completed_phases: 7
-  total_plans: 31
-  completed_plans: 31
+  total_plans: 34
+  completed_plans: 32
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 07 — media-file-and-async-api-surface
+**Current focus:** Phase 08 — payments-fx-and-compliance-checkout
 
 ## Current Position
 
-Phase: 07 (media-file-and-async-api-surface) — EXECUTING
-Plan: 4 of 4 (COMPLETE)
+Phase: 08 (payments-fx-and-compliance-checkout) — EXECUTING
+Plan: 2 of 3
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Plan: 4 of 4 (COMPLETE)
 | Phase 07 P02 | 22min | 2 tasks | 9 files |
 | Phase 07 P03 | 45min | 2 tasks | 17 files |
 | Phase 07 P04 | 35min | 2 tasks | 11 files |
+| Phase 08-payments-fx-and-compliance-checkout P01 | 35 | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -136,6 +137,9 @@ Recent decisions affecting current work:
 - [07-04]: handleMultipartAudio gains accountingEndpoint parameter separate from litellmPath — transcription and translation share the same handler but need different endpoint strings for reservation records
 - [07-04]: Model rewriting in multipart goroutine uses captured litellmModel local variable — avoids closure-over-loop-variable hazard
 - [07-04]: Test doubles (mock Authorizer/RoutingInterface/AccountingInterface) added in _test packages — existing test assertions preserved, only wiring changed to match new NewHandler signatures
+- [Phase 08]: [08-01]: FXService uses FXCache interface (not *redis.Client directly) — enables in-memory test doubles without real Redis in unit tests
+- [Phase 08]: [08-01]: BD rails (bkash/sslcommerz) transition to confirming on payment.succeeded; Stripe transitions directly to completed — BD payment clearing requires 3-minute confirming delay before ledger grant
+- [Phase 08]: [08-01]: PostPurchaseGrant idempotency key is payment:purchase:{intentID} — deterministic key prevents double-crediting across retries
 
 ### Pending Todos
 
@@ -148,6 +152,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T09:06:46.030Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-payments-fx-and-compliance-checkout/08-CONTEXT.md
+Last session: 2026-04-10T23:36:59.276Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None
