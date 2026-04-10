@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-04-10T00:20:00Z"
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-04-10T02:00:00Z"
 progress:
   total_phases: 9
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 30
-  completed_plans: 29
+  completed_plans: 30
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 
 ## Current Position
 
-Phase: 07 (media-file-and-async-api-surface) — EXECUTING
-Plan: 3 of 3
+Phase: 07 (media-file-and-async-api-surface) — COMPLETE
+Plan: 3 of 3 (all complete)
 
 ## Performance Metrics
 
@@ -58,6 +58,7 @@ Plan: 3 of 3
 
 | Phase 07 P01 | 9min | 3 tasks | 8 files |
 | Phase 07 P02 | 22min | 2 tasks | 9 files |
+| Phase 07 P03 | 45min | 2 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,10 @@ Recent decisions affecting current work:
 - [07-02]: images.StorageInterface returns (string, error) for PresignedURL — avoids *url.URL dependency in the images package; storageAdapter in main.go bridges the real files.StorageClient
 - [07-02]: Audio Handler has no storage field by design — enforces that audio is never stored; no storage parameter means no accidental storage calls possible
 - [07-02]: NeedImageGeneration/NeedTTS/NeedSTT as package constants — documents routing capability intent without requiring a full orchestrator in unit tests
+- [07-03]: FilestoreClient and BatchstoreClient use plain http.Client with 10s timeout — no shared transport needed at this scale
+- [07-03]: Batches package uses adapter layer (accounting, authz, file, storage) to decouple handler from direct service imports — enables clean unit testing
+- [07-03]: Asynq selected for batch worker task queue — consistent with control-plane async patterns; simple Redis-backed queue fits polling use case
+- [07-03]: All file/upload/batch operations validate account ownership via AuthSnapshot.AccountID before any data access — no cross-account leakage
 
 ### Pending Todos
 
@@ -139,6 +144,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T00:20:00Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-04-10T02:00:00Z
+Stopped at: Completed 07-03-PLAN.md
 Resume file: None

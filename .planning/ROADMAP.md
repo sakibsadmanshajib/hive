@@ -140,9 +140,9 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 07-01-PLAN.md — Storage infrastructure (MinIO, S3 client), file/upload/batch Postgres schemas, control-plane filestore service, and routing capability flag extensions (Wave 1)
-- [ ] 07-02-PLAN.md — Image generation/edits and audio speech/transcription/translation endpoint handlers with LiteLLM dispatch (Wave 2)
-- [ ] 07-03-PLAN.md — Files API, Uploads API, Batches API edge handlers, and Asynq batch polling worker (Wave 2)
+- [x] 07-01-PLAN.md — Storage infrastructure (MinIO, S3 client), file/upload/batch Postgres schemas, control-plane filestore service, and routing capability flag extensions (Wave 1)
+- [x] 07-02-PLAN.md — Image generation/edits and audio speech/transcription/translation endpoint handlers with LiteLLM dispatch (Wave 2)
+- [x] 07-03-PLAN.md — Files API, Uploads API, Batches API edge handlers, and Asynq batch polling worker (Wave 2)
 
 ### Phase 8: Payments, FX, and Compliance Checkout
 **Goal**: Let customers buy credits safely across global and Bangladesh-local rails with reproducible FX and tax math.
