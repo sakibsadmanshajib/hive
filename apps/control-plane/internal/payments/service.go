@@ -347,6 +347,59 @@ func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) e
 }
 
 // ---------------------------------------------------------------------------
+// GetCheckoutOptions
+// ---------------------------------------------------------------------------
+
+// CheckoutOptions holds available rails and predefined tiers for a checkout session.
+type CheckoutOptions struct {
+	Rails           []RailOption `json:"rails"`
+	PredefinedTiers []int64      `json:"predefined_tiers"`
+}
+
+// RailOption describes a single payment rail with its credit limits.
+type RailOption struct {
+	Rail       Rail  `json:"rail"`
+	MinCredits int64 `json:"min_credits"`
+	MaxCredits int64 `json:"max_credits"`
+}
+
+// GetCheckoutOptions returns available payment rails and predefined tiers for the account.
+func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (*CheckoutOptions, error) {
+	accountProfile, err := s.profiles.GetAccountProfile(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("payments: get account profile: %w", err)
+	}
+
+	available := AvailableRails(accountProfile.CountryCode)
+	railOptions := make([]RailOption, 0, len(available))
+	for _, rail := range available {
+		maxCredits := maxCreditsForRail(rail)
+		railOptions = append(railOptions, RailOption{
+			Rail:       rail,
+			MinCredits: MinPurchaseCredits,
+			MaxCredits: maxCredits,
+		})
+	}
+
+	return &CheckoutOptions{
+		Rails:           railOptions,
+		PredefinedTiers: PredefinedTiers,
+	}, nil
+}
+
+// maxCreditsForRail returns the maximum purchasable credits for a given rail.
+func maxCreditsForRail(r Rail) int64 {
+	switch r {
+	case RailBkash:
+		return MaxPurchaseCreditsBkash
+	case RailSSLCommerz:
+		return MaxPurchaseCreditsSSLCommerz
+	default:
+		return MaxPurchaseCreditsStripe
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

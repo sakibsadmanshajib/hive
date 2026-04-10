@@ -10,6 +10,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
+	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
@@ -28,6 +29,7 @@ type RouterConfig struct {
 	APIKeysHandler    *apikeys.Handler
 	CatalogHandler    *catalog.Handler
 	LedgerHandler     *ledger.Handler
+	PaymentsHandler   *payments.Handler
 	ProfilesHandler   *profiles.Handler
 	RoutingHandler    *routing.Handler
 	UsageHandler      *usage.Handler
@@ -95,6 +97,24 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {
 		protected := cfg.AuthMiddleware.Require(cfg.AccountsHandler)
 		mux.Handle("/api/v1/", protected)
+	}
+
+	// Authenticated checkout routes — payment provider requires logged-in user.
+	if cfg.PaymentsHandler != nil && cfg.AuthMiddleware != nil {
+		protectedPayments := cfg.AuthMiddleware.Require(cfg.PaymentsHandler)
+		mux.Handle("/api/v1/accounts/current/checkout/rails", protectedPayments)
+		mux.Handle("/api/v1/accounts/current/checkout/initiate", protectedPayments)
+	}
+
+	// Unauthenticated webhook routes — payment providers send server-to-server callbacks
+	// without Hive auth tokens. Signature verification happens inside each rail's ProcessEvent.
+	if cfg.PaymentsHandler != nil {
+		mux.Handle("/webhooks/stripe", cfg.PaymentsHandler)
+		mux.Handle("/webhooks/bkash/callback", cfg.PaymentsHandler)
+		mux.Handle("/webhooks/sslcommerz/ipn", cfg.PaymentsHandler)
+		mux.Handle("/webhooks/sslcommerz/success", cfg.PaymentsHandler)
+		mux.Handle("/webhooks/sslcommerz/fail", cfg.PaymentsHandler)
+		mux.Handle("/webhooks/sslcommerz/cancel", cfg.PaymentsHandler)
 	}
 
 	return mux
