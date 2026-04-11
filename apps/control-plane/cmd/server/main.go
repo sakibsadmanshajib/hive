@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
@@ -19,6 +20,10 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
+	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
+	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
+	sslcommerzRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/sslcommerz"
+	stripeRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/stripe"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
@@ -29,10 +34,50 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
+// accountsResolverAdapter adapts accounts.Service to the payments.AccountResolver interface.
+// It extracts the viewer from context (set by auth middleware) and resolves the current account.
+type accountsResolverAdapter struct {
+	svc *accounts.Service
+}
+
+func (a *accountsResolverAdapter) EnsureViewerContext(ctx context.Context) (uuid.UUID, error) {
+	viewer, ok := auth.ViewerFromContext(ctx)
+	if !ok {
+		return uuid.Nil, fmt.Errorf("payments: no authenticated viewer in context")
+	}
+	viewerCtx, err := a.svc.EnsureViewerContext(ctx, viewer, uuid.Nil)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return viewerCtx.CurrentAccount.ID, nil
+}
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+
+	// Payment provider credentials (all optional — missing vars skip that rail).
+	stripeSecretKey := os.Getenv("STRIPE_SECRET_KEY")
+	stripeWebhookSecret := os.Getenv("STRIPE_WEBHOOK_SECRET")
+	bkashAppKey := os.Getenv("BKASH_APP_KEY")
+	bkashAppSecret := os.Getenv("BKASH_APP_SECRET")
+	bkashUsername := os.Getenv("BKASH_USERNAME")
+	bkashPassword := os.Getenv("BKASH_PASSWORD")
+	bkashBaseURL := os.Getenv("BKASH_BASE_URL")
+	sslcommerzStoreID := os.Getenv("SSLCOMMERZ_STORE_ID")
+	sslcommerzStorePasswd := os.Getenv("SSLCOMMERZ_STORE_PASSWD")
+	sslcommerzBaseURL := os.Getenv("SSLCOMMERZ_BASE_URL")
+	xeAccountID := os.Getenv("XE_ACCOUNT_ID")
+	xeAPIKey := os.Getenv("XE_API_KEY")
+
+	// Apply default sandbox base URLs when not explicitly configured.
+	if bkashBaseURL == "" {
+		bkashBaseURL = "https://tokenized.sandbox.bka.sh/v1.2.0-beta"
+	}
+	if sslcommerzBaseURL == "" {
+		sslcommerzBaseURL = "https://sandbox.sslcommerz.com"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -63,6 +108,10 @@ func main() {
 	var routingHandler *routing.Handler
 	var usageHandler *usage.Handler
 	var redisClient *goredis.Client
+	// Hoisted so the payments wiring block below can reference them.
+	var accountsSvc *accounts.Service
+	var ledgerSvc *ledger.Service
+	var profilesSvc *profiles.Service
 	if pool != nil {
 		if cfg.RedisURL != "" {
 			redisClient = platformredis.NewClient(cfg.RedisURL)
@@ -77,7 +126,7 @@ func main() {
 		}
 
 		accountsRepo := accounts.NewPgxRepository(pool)
-		accountsSvc := accounts.NewService(accountsRepo)
+		accountsSvc = accounts.NewService(accountsRepo)
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
 		catalogRepo := catalog.NewPgxRepository(pool)
@@ -89,11 +138,11 @@ func main() {
 		routingHandler = routing.NewHandler(routingSvc)
 
 		ledgerRepo := ledger.NewPgxRepository(pool)
-		ledgerSvc := ledger.NewService(ledgerRepo)
+		ledgerSvc = ledger.NewService(ledgerRepo)
 		ledgerHandler = ledger.NewHandler(ledgerSvc, accountsSvc)
 
 		profilesRepo := profiles.NewPgxRepository(pool)
-		profilesSvc := profiles.NewService(profilesRepo)
+		profilesSvc = profiles.NewService(profilesRepo)
 		profilesHandler = profiles.NewHandler(profilesSvc, accountsSvc)
 
 		usageRepo := usage.NewPgxRepository(pool)
@@ -111,6 +160,59 @@ func main() {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
 
+	// Payments service wiring (requires DB pool; handler is nil when pool unavailable).
+	var paymentsHandler *payments.Handler
+	if pool != nil {
+		paymentHTTPClient := &http.Client{Timeout: 30 * time.Second}
+
+		// FX service — wraps XE API with Redis cache.
+		fxSvc := payments.NewFXService(paymentHTTPClient, xeAccountID, xeAPIKey, redisClient)
+
+		// Rails — conditionally registered based on env var presence.
+		rails := make(map[payments.Rail]payments.PaymentRail)
+		if stripeSecretKey != "" {
+			rails[payments.RailStripe] = stripeRail.NewRail(stripeSecretKey, stripeWebhookSecret)
+		}
+		if bkashAppKey != "" {
+			rails[payments.RailBkash] = bkashRail.NewRail(paymentHTTPClient, bkashBaseURL, bkashAppKey, bkashAppSecret, bkashUsername, bkashPassword)
+		}
+		if sslcommerzStoreID != "" {
+			rails[payments.RailSSLCommerz] = sslcommerzRail.NewRail(paymentHTTPClient, sslcommerzBaseURL, sslcommerzStoreID, sslcommerzStorePasswd)
+		}
+
+		log.Printf("payments: %d rail(s) active: %v", len(rails), func() []string {
+			names := make([]string, 0, len(rails))
+			for r := range rails {
+				names = append(names, string(r))
+			}
+			return names
+		}())
+
+		paymentsRepo := payments.NewPgxRepository(pool)
+		paymentsSvc := payments.NewService(paymentsRepo, ledgerSvc, profilesSvc, fxSvc, rails)
+		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
+
+		// Background goroutine: confirm pending BD payments every 60 seconds.
+		// BD rails require a 3-minute confirming delay before ledger grant.
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					confirmed, err := paymentsSvc.ConfirmPendingBDPayments(context.Background())
+					if err != nil {
+						log.Printf("payments: error confirming BD payments: %v", err)
+					} else if confirmed > 0 {
+						log.Printf("payments: confirmed %d pending BD payment(s)", confirmed)
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:    authMiddleware,
 		AccountsHandler:   accountsHandler,
@@ -118,6 +220,7 @@ func main() {
 		APIKeysHandler:    apikeysHandler,
 		CatalogHandler:    catalogHandler,
 		LedgerHandler:     ledgerHandler,
+		PaymentsHandler:   paymentsHandler,
 		ProfilesHandler:   profilesHandler,
 		RoutingHandler:    routingHandler,
 		UsageHandler:      usageHandler,

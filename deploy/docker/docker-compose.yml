@@ -114,6 +114,19 @@ services:
       S3_USE_SSL: "false"
       S3_BUCKET_FILES: hive-files
       S3_BUCKET_IMAGES: hive-images
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      BKASH_APP_KEY: ${BKASH_APP_KEY:-}
+      BKASH_APP_SECRET: ${BKASH_APP_SECRET:-}
+      BKASH_USERNAME: ${BKASH_USERNAME:-}
+      BKASH_PASSWORD: ${BKASH_PASSWORD:-}
+      BKASH_BASE_URL: ${BKASH_BASE_URL:-}
+      SSLCOMMERZ_STORE_ID: ${SSLCOMMERZ_STORE_ID:-}
+      SSLCOMMERZ_STORE_PASSWD: ${SSLCOMMERZ_STORE_PASSWD:-}
+      SSLCOMMERZ_BASE_URL: ${SSLCOMMERZ_BASE_URL:-}
+      XE_ACCOUNT_ID: ${XE_ACCOUNT_ID:-}
+      XE_API_KEY: ${XE_API_KEY:-}
+      CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL:-http://localhost:8081}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 5s
