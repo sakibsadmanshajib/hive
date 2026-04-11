@@ -113,6 +113,38 @@ type ListEventsFilter struct {
 	Limit     int
 }
 
+// UsageSummaryRow holds aggregated usage data grouped by a dimension.
+type UsageSummaryRow struct {
+	GroupKey          string `json:"group_key"`
+	TotalInputTokens  int64  `json:"total_input_tokens"`
+	TotalOutputTokens int64  `json:"total_output_tokens"`
+	TotalCreditsSpent int64  `json:"total_credits_spent"`
+	RequestCount      int64  `json:"request_count"`
+}
+
+// SpendSummaryRow holds aggregated spend data grouped by a dimension.
+type SpendSummaryRow struct {
+	GroupKey    string `json:"group_key"`
+	TotalCredits int64  `json:"total_credits"`
+	EntryCount  int64  `json:"entry_count"`
+}
+
+// ErrorSummaryRow holds aggregated error rate data grouped by a dimension.
+type ErrorSummaryRow struct {
+	GroupKey      string  `json:"group_key"`
+	ErrorCount    int64   `json:"error_count"`
+	TotalRequests int64   `json:"total_requests"`
+	ErrorRate     float64 `json:"error_rate"`
+}
+
+// AnalyticsFilter specifies the time window and grouping dimension for analytics queries.
+type AnalyticsFilter struct {
+	AccountID uuid.UUID
+	GroupBy   string // "model", "api_key", "endpoint"
+	From      time.Time
+	To        time.Time
+}
+
 type ValidationError struct {
 	Field   string
 	Message string

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
@@ -26,6 +27,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetBalance(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/credits/ledger":
 		h.handleListEntries(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/invoices":
+		h.handleListInvoices(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/accounts/current/invoices/"):
+		h.handleGetInvoice(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 	}
@@ -62,13 +67,86 @@ func (h *Handler) handleListEntries(w http.ResponseWriter, r *http.Request) {
 		limit = parsed
 	}
 
-	entries, err := h.svc.ListEntries(r.Context(), accountID, limit)
+	filter := ListEntriesFilter{
+		AccountID: accountID,
+		Limit:     limit,
+	}
+
+	// Parse optional cursor (UUID of last seen entry).
+	if rawCursor := r.URL.Query().Get("cursor"); rawCursor != "" {
+		cursorID, err := uuid.Parse(rawCursor)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "cursor must be a valid UUID"})
+			return
+		}
+		filter.Cursor = &cursorID
+	}
+
+	// Parse optional entry_type filter.
+	if rawType := r.URL.Query().Get("type"); rawType != "" {
+		et := EntryType(rawType)
+		filter.EntryType = &et
+	}
+
+	entries, err := h.svc.ListEntriesWithCursor(r.Context(), filter)
 	if err != nil {
 		writeLedgerError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	var nextCursor *uuid.UUID
+	if len(entries) == limit {
+		last := entries[len(entries)-1].ID
+		nextCursor = &last
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries":     entries,
+		"next_cursor": nextCursor,
+	})
+}
+
+func (h *Handler) handleListInvoices(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	invoices, err := h.svc.ListInvoices(r.Context(), accountID)
+	if err != nil {
+		writeLedgerError(w, err)
+		return
+	}
+
+	if invoices == nil {
+		invoices = []InvoiceRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"invoices": invoices})
+}
+
+func (h *Handler) handleGetInvoice(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	// Extract invoice ID from path: /api/v1/accounts/current/invoices/{id}
+	prefix := "/api/v1/accounts/current/invoices/"
+	rawID := strings.TrimPrefix(r.URL.Path, prefix)
+	rawID = strings.TrimSuffix(rawID, "/")
+	invoiceID, err := uuid.Parse(rawID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid invoice ID"})
+		return
+	}
+
+	invoice, err := h.svc.GetInvoice(r.Context(), accountID, invoiceID)
+	if err != nil {
+		writeLedgerError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, invoice)
 }
 
 func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {

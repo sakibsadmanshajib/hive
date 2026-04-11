@@ -16,6 +16,9 @@ type Repository interface {
 	PostEntry(ctx context.Context, accountID uuid.UUID, input PostEntryInput) (LedgerEntry, error)
 	GetBalance(ctx context.Context, accountID uuid.UUID) (BalanceSummary, error)
 	ListEntries(ctx context.Context, accountID uuid.UUID, limit int) ([]LedgerEntry, error)
+	ListEntriesWithCursor(ctx context.Context, filter ListEntriesFilter) ([]LedgerEntry, error)
+	ListInvoices(ctx context.Context, accountID uuid.UUID) ([]InvoiceRow, error)
+	GetInvoice(ctx context.Context, accountID uuid.UUID, invoiceID uuid.UUID) (*InvoiceRow, error)
 }
 
 type pgxRepository struct {
@@ -142,6 +145,135 @@ func (r *pgxRepository) ListEntries(ctx context.Context, accountID uuid.UUID, li
 	}
 
 	return entries, nil
+}
+
+func (r *pgxRepository) ListEntriesWithCursor(ctx context.Context, filter ListEntriesFilter) ([]LedgerEntry, error) {
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	var rows pgx.Rows
+	var err error
+
+	if filter.EntryType != nil && filter.Cursor != nil {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
+			FROM public.credit_ledger_entries
+			WHERE account_id = $1 AND id < $2 AND entry_type = $3
+			ORDER BY id DESC LIMIT $4
+		`, filter.AccountID, filter.Cursor, string(*filter.EntryType), limit)
+	} else if filter.EntryType != nil {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
+			FROM public.credit_ledger_entries
+			WHERE account_id = $1 AND entry_type = $2
+			ORDER BY id DESC LIMIT $3
+		`, filter.AccountID, string(*filter.EntryType), limit)
+	} else if filter.Cursor != nil {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
+			FROM public.credit_ledger_entries
+			WHERE account_id = $1 AND id < $2
+			ORDER BY id DESC LIMIT $3
+		`, filter.AccountID, filter.Cursor, limit)
+	} else {
+		rows, err = r.pool.Query(ctx, `
+			SELECT id, account_id, entry_type, credits_delta, idempotency_key, request_id, attempt_id, reservation_id, metadata, created_at
+			FROM public.credit_ledger_entries
+			WHERE account_id = $1
+			ORDER BY id DESC LIMIT $2
+		`, filter.AccountID, limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ledger: list entries with cursor: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []LedgerEntry
+	for rows.Next() {
+		entry, err := scanLedgerEntry(rows)
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ledger: iterate entries: %w", err)
+	}
+	return entries, nil
+}
+
+func (r *pgxRepository) ListInvoices(ctx context.Context, accountID uuid.UUID) ([]InvoiceRow, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, account_id, payment_intent_id, invoice_number, status, credits, amount_usd, amount_local, local_currency, tax_treatment, rail, line_items, created_at
+		FROM public.payment_invoices
+		WHERE account_id = $1
+		ORDER BY created_at DESC
+	`, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("ledger: list invoices: %w", err)
+	}
+	defer rows.Close()
+
+	var invoices []InvoiceRow
+	for rows.Next() {
+		inv, err := scanInvoiceRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		invoices = append(invoices, inv)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("ledger: iterate invoices: %w", err)
+	}
+	return invoices, nil
+}
+
+func (r *pgxRepository) GetInvoice(ctx context.Context, accountID uuid.UUID, invoiceID uuid.UUID) (*InvoiceRow, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, account_id, payment_intent_id, invoice_number, status, credits, amount_usd, amount_local, local_currency, tax_treatment, rail, line_items, created_at
+		FROM public.payment_invoices
+		WHERE account_id = $1 AND id = $2
+	`, accountID, invoiceID)
+
+	inv, err := scanInvoiceRow(row)
+	if err != nil {
+		return nil, err
+	}
+	return &inv, nil
+}
+
+func scanInvoiceRow(scanner entryScanner) (InvoiceRow, error) {
+	var inv InvoiceRow
+	var lineItemsBytes []byte
+	if err := scanner.Scan(
+		&inv.ID,
+		&inv.AccountID,
+		&inv.PaymentIntentID,
+		&inv.InvoiceNumber,
+		&inv.Status,
+		&inv.Credits,
+		&inv.AmountUSD,
+		&inv.AmountLocal,
+		&inv.LocalCurrency,
+		&inv.TaxTreatment,
+		&inv.Rail,
+		&lineItemsBytes,
+		&inv.CreatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return InvoiceRow{}, ErrNotFound
+		}
+		return InvoiceRow{}, fmt.Errorf("ledger: scan invoice: %w", err)
+	}
+	inv.LineItems = []map[string]any{}
+	if len(lineItemsBytes) > 0 {
+		if err := json.Unmarshal(lineItemsBytes, &inv.LineItems); err != nil {
+			return InvoiceRow{}, fmt.Errorf("ledger: decode line items: %w", err)
+		}
+	}
+	return inv, nil
 }
 
 func (r *pgxRepository) lookupExistingEntry(ctx context.Context, tx pgx.Tx, accountID uuid.UUID, entryType EntryType, idempotencyKey string) (LedgerEntry, error) {

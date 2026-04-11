@@ -61,3 +61,28 @@ func AsValidationError(err error, target **ValidationError) bool {
 }
 
 var ErrNotFound = errors.New("ledger: not found")
+
+// InvoiceRow represents a payment invoice record.
+type InvoiceRow struct {
+	ID              uuid.UUID      `json:"id"`
+	AccountID       uuid.UUID      `json:"account_id"`
+	PaymentIntentID uuid.UUID      `json:"payment_intent_id"`
+	InvoiceNumber   string         `json:"invoice_number"`
+	Status          string         `json:"status"`
+	Credits         int64          `json:"credits"`
+	AmountUSD       int64          `json:"amount_usd"`
+	AmountLocal     int64          `json:"amount_local"`
+	LocalCurrency   string         `json:"local_currency"`
+	TaxTreatment    string         `json:"tax_treatment"`
+	Rail            string         `json:"rail"`
+	LineItems       []map[string]any `json:"line_items"`
+	CreatedAt       time.Time      `json:"created_at"`
+}
+
+// ListEntriesFilter supports cursor-based pagination for ledger entry listing.
+type ListEntriesFilter struct {
+	AccountID uuid.UUID
+	Cursor    *uuid.UUID
+	Limit     int
+	EntryType *EntryType
+}

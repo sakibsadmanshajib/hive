@@ -143,6 +143,40 @@ func (s *Service) ListEvents(ctx context.Context, filter ListEventsFilter) ([]Us
 	return events, nil
 }
 
+func (s *Service) GetUsageSummary(ctx context.Context, filter AnalyticsFilter) ([]UsageSummaryRow, error) {
+	if err := validateAnalyticsFilter(filter); err != nil {
+		return nil, err
+	}
+	return s.repo.GetUsageSummary(ctx, filter)
+}
+
+func (s *Service) GetSpendSummary(ctx context.Context, filter AnalyticsFilter) ([]SpendSummaryRow, error) {
+	if err := validateAnalyticsFilter(filter); err != nil {
+		return nil, err
+	}
+	return s.repo.GetSpendSummary(ctx, filter)
+}
+
+func (s *Service) GetErrorSummary(ctx context.Context, filter AnalyticsFilter) ([]ErrorSummaryRow, error) {
+	if err := validateAnalyticsFilter(filter); err != nil {
+		return nil, err
+	}
+	return s.repo.GetErrorSummary(ctx, filter)
+}
+
+func validateAnalyticsFilter(filter AnalyticsFilter) error {
+	switch filter.GroupBy {
+	case "model", "api_key", "endpoint", "":
+		// empty defaults to "model" at query level
+	default:
+		return &ValidationError{Field: "group_by", Message: "group_by must be one of: model, api_key, endpoint"}
+	}
+	if !filter.From.IsZero() && !filter.To.IsZero() && !filter.From.Before(filter.To) {
+		return &ValidationError{Field: "from", Message: "from must be before to"}
+	}
+	return nil
+}
+
 func redactValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:

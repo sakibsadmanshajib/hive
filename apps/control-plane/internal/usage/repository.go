@@ -18,6 +18,9 @@ type Repository interface {
 	RecordEvent(ctx context.Context, input RecordEventInput) (UsageEvent, error)
 	ListAttempts(ctx context.Context, accountID uuid.UUID, requestID string, limit int) ([]RequestAttempt, error)
 	ListEvents(ctx context.Context, filter ListEventsFilter) ([]UsageEvent, error)
+	GetUsageSummary(ctx context.Context, filter AnalyticsFilter) ([]UsageSummaryRow, error)
+	GetSpendSummary(ctx context.Context, filter AnalyticsFilter) ([]SpendSummaryRow, error)
+	GetErrorSummary(ctx context.Context, filter AnalyticsFilter) ([]ErrorSummaryRow, error)
 }
 
 type pgxRepository struct {
@@ -172,6 +175,181 @@ func (r *pgxRepository) ListEvents(ctx context.Context, filter ListEventsFilter)
 	}
 
 	return events, nil
+}
+
+func (r *pgxRepository) GetUsageSummary(ctx context.Context, filter AnalyticsFilter) ([]UsageSummaryRow, error) {
+	var query string
+	switch filter.GroupBy {
+	case "api_key":
+		query = `
+			SELECT api_key_id::text AS group_key,
+			       SUM(input_tokens) AS total_input_tokens,
+			       SUM(output_tokens) AS total_output_tokens,
+			       SUM(CASE WHEN hive_credit_delta < 0 THEN ABS(hive_credit_delta) ELSE 0 END) AS total_credits_spent,
+			       COUNT(*) AS request_count
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY api_key_id::text
+			ORDER BY total_credits_spent DESC
+		`
+	case "endpoint":
+		query = `
+			SELECT endpoint AS group_key,
+			       SUM(input_tokens) AS total_input_tokens,
+			       SUM(output_tokens) AS total_output_tokens,
+			       SUM(CASE WHEN hive_credit_delta < 0 THEN ABS(hive_credit_delta) ELSE 0 END) AS total_credits_spent,
+			       COUNT(*) AS request_count
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY endpoint
+			ORDER BY total_credits_spent DESC
+		`
+	default: // "model"
+		query = `
+			SELECT model_alias AS group_key,
+			       SUM(input_tokens) AS total_input_tokens,
+			       SUM(output_tokens) AS total_output_tokens,
+			       SUM(CASE WHEN hive_credit_delta < 0 THEN ABS(hive_credit_delta) ELSE 0 END) AS total_credits_spent,
+			       COUNT(*) AS request_count
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY model_alias
+			ORDER BY total_credits_spent DESC
+		`
+	}
+
+	rows, err := r.pool.Query(ctx, query, filter.AccountID, filter.From, filter.To)
+	if err != nil {
+		return nil, fmt.Errorf("usage: get usage summary: %w", err)
+	}
+	defer rows.Close()
+
+	var results []UsageSummaryRow
+	for rows.Next() {
+		var row UsageSummaryRow
+		if err := rows.Scan(&row.GroupKey, &row.TotalInputTokens, &row.TotalOutputTokens, &row.TotalCreditsSpent, &row.RequestCount); err != nil {
+			return nil, fmt.Errorf("usage: scan usage summary row: %w", err)
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("usage: iterate usage summary: %w", err)
+	}
+	return results, nil
+}
+
+func (r *pgxRepository) GetSpendSummary(ctx context.Context, filter AnalyticsFilter) ([]SpendSummaryRow, error) {
+	// Spend summary is derived from usage_events (hive_credit_delta < 0) grouped by dimension.
+	var query string
+	switch filter.GroupBy {
+	case "api_key":
+		query = `
+			SELECT api_key_id::text AS group_key,
+			       SUM(ABS(hive_credit_delta)) AS total_credits,
+			       COUNT(*) AS entry_count
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3 AND hive_credit_delta < 0
+			GROUP BY api_key_id::text
+			ORDER BY total_credits DESC
+		`
+	case "endpoint":
+		query = `
+			SELECT endpoint AS group_key,
+			       SUM(ABS(hive_credit_delta)) AS total_credits,
+			       COUNT(*) AS entry_count
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3 AND hive_credit_delta < 0
+			GROUP BY endpoint
+			ORDER BY total_credits DESC
+		`
+	default: // "model"
+		query = `
+			SELECT model_alias AS group_key,
+			       SUM(ABS(hive_credit_delta)) AS total_credits,
+			       COUNT(*) AS entry_count
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3 AND hive_credit_delta < 0
+			GROUP BY model_alias
+			ORDER BY total_credits DESC
+		`
+	}
+
+	rows, err := r.pool.Query(ctx, query, filter.AccountID, filter.From, filter.To)
+	if err != nil {
+		return nil, fmt.Errorf("usage: get spend summary: %w", err)
+	}
+	defer rows.Close()
+
+	var results []SpendSummaryRow
+	for rows.Next() {
+		var row SpendSummaryRow
+		if err := rows.Scan(&row.GroupKey, &row.TotalCredits, &row.EntryCount); err != nil {
+			return nil, fmt.Errorf("usage: scan spend summary row: %w", err)
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("usage: iterate spend summary: %w", err)
+	}
+	return results, nil
+}
+
+func (r *pgxRepository) GetErrorSummary(ctx context.Context, filter AnalyticsFilter) ([]ErrorSummaryRow, error) {
+	var query string
+	switch filter.GroupBy {
+	case "api_key":
+		query = `
+			SELECT api_key_id::text AS group_key,
+			       COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != '') AS error_count,
+			       COUNT(*) AS total_requests,
+			       ROUND(COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != '')::numeric / NULLIF(COUNT(*), 0), 4) AS error_rate
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY api_key_id::text
+			ORDER BY error_count DESC
+		`
+	case "endpoint":
+		query = `
+			SELECT endpoint AS group_key,
+			       COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != '') AS error_count,
+			       COUNT(*) AS total_requests,
+			       ROUND(COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != '')::numeric / NULLIF(COUNT(*), 0), 4) AS error_rate
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY endpoint
+			ORDER BY error_count DESC
+		`
+	default: // "model"
+		query = `
+			SELECT model_alias AS group_key,
+			       COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != '') AS error_count,
+			       COUNT(*) AS total_requests,
+			       ROUND(COUNT(*) FILTER (WHERE error_code IS NOT NULL AND error_code != '')::numeric / NULLIF(COUNT(*), 0), 4) AS error_rate
+			FROM public.usage_events
+			WHERE account_id = $1 AND created_at >= $2 AND created_at < $3
+			GROUP BY model_alias
+			ORDER BY error_count DESC
+		`
+	}
+
+	rows, err := r.pool.Query(ctx, query, filter.AccountID, filter.From, filter.To)
+	if err != nil {
+		return nil, fmt.Errorf("usage: get error summary: %w", err)
+	}
+	defer rows.Close()
+
+	var results []ErrorSummaryRow
+	for rows.Next() {
+		var row ErrorSummaryRow
+		if err := rows.Scan(&row.GroupKey, &row.ErrorCount, &row.TotalRequests, &row.ErrorRate); err != nil {
+			return nil, fmt.Errorf("usage: scan error summary row: %w", err)
+		}
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("usage: iterate error summary: %w", err)
+	}
+	return results, nil
 }
 
 type rowScanner interface {

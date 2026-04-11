@@ -27,6 +27,21 @@ func (s *Service) ListEntries(ctx context.Context, accountID uuid.UUID, limit in
 	return s.repo.ListEntries(ctx, accountID, limit)
 }
 
+func (s *Service) ListEntriesWithCursor(ctx context.Context, filter ListEntriesFilter) ([]LedgerEntry, error) {
+	if filter.Limit <= 0 {
+		filter.Limit = 20
+	}
+	return s.repo.ListEntriesWithCursor(ctx, filter)
+}
+
+func (s *Service) ListInvoices(ctx context.Context, accountID uuid.UUID) ([]InvoiceRow, error) {
+	return s.repo.ListInvoices(ctx, accountID)
+}
+
+func (s *Service) GetInvoice(ctx context.Context, accountID uuid.UUID, invoiceID uuid.UUID) (*InvoiceRow, error) {
+	return s.repo.GetInvoice(ctx, accountID, invoiceID)
+}
+
 func (s *Service) GrantCredits(ctx context.Context, accountID uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (LedgerEntry, error) {
 	idempotencyKey = strings.TrimSpace(idempotencyKey)
 	if idempotencyKey == "" {

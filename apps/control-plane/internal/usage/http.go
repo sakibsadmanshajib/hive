@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
@@ -27,6 +28,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListAttempts(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/usage-events":
 		h.handleListEvents(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/analytics/usage":
+		h.handleAnalyticsUsage(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/analytics/spend":
+		h.handleAnalyticsSpend(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/analytics/errors":
+		h.handleAnalyticsErrors(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/usage/attempts":
 		h.handleInternalStartAttempt(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/internal/usage/events":
@@ -106,6 +113,130 @@ func (h *Handler) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{"events": response})
+}
+
+func (h *Handler) handleAnalyticsUsage(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	filter, ok := parseAnalyticsFilter(w, r, accountID)
+	if !ok {
+		return
+	}
+
+	rows, err := h.svc.GetUsageSummary(r.Context(), filter)
+	if err != nil {
+		writeUsageError(w, err)
+		return
+	}
+
+	if rows == nil {
+		rows = []UsageSummaryRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"usage": rows})
+}
+
+func (h *Handler) handleAnalyticsSpend(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	filter, ok := parseAnalyticsFilter(w, r, accountID)
+	if !ok {
+		return
+	}
+
+	rows, err := h.svc.GetSpendSummary(r.Context(), filter)
+	if err != nil {
+		writeUsageError(w, err)
+		return
+	}
+
+	if rows == nil {
+		rows = []SpendSummaryRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"spend": rows})
+}
+
+func (h *Handler) handleAnalyticsErrors(w http.ResponseWriter, r *http.Request) {
+	accountID, ok := h.resolveCurrentAccountID(w, r)
+	if !ok {
+		return
+	}
+
+	filter, ok := parseAnalyticsFilter(w, r, accountID)
+	if !ok {
+		return
+	}
+
+	rows, err := h.svc.GetErrorSummary(r.Context(), filter)
+	if err != nil {
+		writeUsageError(w, err)
+		return
+	}
+
+	if rows == nil {
+		rows = []ErrorSummaryRow{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"errors": rows})
+}
+
+// parseAnalyticsFilter reads group_by and window/from/to query params.
+// window values: 24h, 7d, 30d, 90d. Default: 7d.
+// If from and to are provided directly (ISO8601), they take precedence.
+func parseAnalyticsFilter(w http.ResponseWriter, r *http.Request, accountID uuid.UUID) (AnalyticsFilter, bool) {
+	q := r.URL.Query()
+	now := time.Now().UTC()
+
+	var from, to time.Time
+
+	if rawFrom := q.Get("from"); rawFrom != "" {
+		parsed, err := time.Parse(time.RFC3339, rawFrom)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "from must be ISO8601 (RFC3339)"})
+			return AnalyticsFilter{}, false
+		}
+		from = parsed
+	}
+	if rawTo := q.Get("to"); rawTo != "" {
+		parsed, err := time.Parse(time.RFC3339, rawTo)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "to must be ISO8601 (RFC3339)"})
+			return AnalyticsFilter{}, false
+		}
+		to = parsed
+	}
+
+	// If from/to not provided, use window param (default 7d).
+	if from.IsZero() || to.IsZero() {
+		window := q.Get("window")
+		switch window {
+		case "24h":
+			from = now.Add(-24 * time.Hour)
+		case "30d":
+			from = now.AddDate(0, 0, -30)
+		case "90d":
+			from = now.AddDate(0, 0, -90)
+		default: // "7d" or empty
+			from = now.AddDate(0, 0, -7)
+		}
+		to = now
+	}
+
+	groupBy := strings.TrimSpace(q.Get("group_by"))
+	if groupBy == "" {
+		groupBy = "model"
+	}
+
+	return AnalyticsFilter{
+		AccountID: accountID,
+		GroupBy:   groupBy,
+		From:      from,
+		To:        to,
+	}, true
 }
 
 type internalStartAttemptRequest struct {
