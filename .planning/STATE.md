@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Completed 09-02-PLAN.md"
-last_updated: "2026-04-11T02:46:00.000Z"
+stopped_at: "Completed 09-03-PLAN.md"
+last_updated: "2026-04-11T06:52:29.000Z"
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 38
-  completed_plans: 36
+  completed_plans: 37
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 09 (developer-console-operational-hardening) — EXECUTING
-Plan: 2 of 4 (completed)
+Plan: 3 of 4 (completed)
 
 ## Performance Metrics
 
@@ -34,6 +34,7 @@ Plan: 2 of 4 (completed)
 | Phase 05 P01 | 10min | 2 tasks | 9 files |
 | Phase 06 P03 | 10min | 2 tasks | 12 files |
 | Phase 06 P04 | 12min | 2 tasks | 17 files |
+| Phase 09 P03 | 20min | 1 task | 14 files |
 
 **Velocity:**
 
@@ -157,6 +158,10 @@ Recent decisions affecting current work:
 - [09-02]: BillingOverview Buy Credits uses anchor link not inline modal — overview tab is a server component; checkout modal client state handled on client re-render
 - [09-02]: LedgerCsvExport extracted to separate use client file — keeps LedgerTable a pure server component while enabling browser Blob/URL CSV download
 
+- [09-03]: AnalyticsControls extracted to separate use-client file — keeps analytics page a pure server component while enabling client-side tab/window navigation via useRouter
+- [09-03]: /api/budget route handler bridges client BudgetAlertForm/Banner to server-only client.ts functions — avoids exposing CONTROL_PLANE_BASE_URL or session tokens to browser
+- [09-03]: Promise.allSettled for balance/budget in console layout — prevents layout render failure if either fetch errors; falls back to zero balance and null threshold
+
 ### Pending Todos
 
 None yet.
@@ -168,6 +173,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-11T02:46:00Z
-Stopped at: Completed 09-02-PLAN.md
-Resume file: .planning/phases/09-developer-console-operational-hardening/09-02-SUMMARY.md
+Last session: 2026-04-11T06:52:29Z
+Stopped at: Completed 09-03-PLAN.md
+Resume file: .planning/phases/09-developer-console-operational-hardening/09-03-SUMMARY.md
