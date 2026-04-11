@@ -52,6 +52,7 @@ Exceptions:
 - Alert/card max-width: 36rem (used for notification banners)
 - Card border-radius: 0.75rem (12px) — established pattern for all cards/sections
 - Ledger table rows: no extra padding beyond sm (8px) vertical padding per cell
+- Nav brand label: `font-size: 1.125rem` / `font-weight: 700` — structural exception matching existing `nav-shell.tsx`; do not change, not part of the declared type scale
 
 ---
 
@@ -59,18 +60,20 @@ Exceptions:
 
 Derived from existing inline style values. Browser base font-size is 16px.
 
+Declared type scale: 4 sizes, 2 weights.
+
 | Role | Size | px Equivalent | Weight | Line Height | Usage |
 |------|------|---------------|--------|-------------|-------|
 | Body | 1rem | 16px | 400 (normal) | 1.5 | Paragraph text, table cells, form descriptions |
-| Label | 0.875rem | 14px | 600 (semibold) | 1.4 | Form field labels, table column headers, nav links |
+| Label | 0.875rem | 14px | 700 (bold) | 1.4 | Form field labels, table column headers, nav links, active nav links |
 | Heading | 1.25rem | 20px | 700 (bold) | 1.2 | `<h2>` section titles (`<h2 style={{ margin: 0 }}>`) |
 | Display | 1.5rem | 24px | 700 (bold) | 1.2 | `<h1>` page titles (`<h1 style={{ margin: 0 }}>`) |
 
 Notes:
-- Nav brand label: `1.125rem` / weight 700 — matches existing `nav-shell.tsx`. Do not change.
 - All headings use `margin: 0` per existing pattern.
 - No additional type sizes beyond these four.
 - Monospace for API key display: `font-family: monospace` — applied only to key secret display cells, nowhere else.
+- Nav brand label (`1.125rem` / weight 700) is a structural exception inherited from `nav-shell.tsx` — documented under Spacing Scale exceptions, not part of this type scale.
 
 ---
 
@@ -123,6 +126,8 @@ Destructive (#dc2626) reserved for:
 | Loading state | "Loading..." (inline, no spinner library) |
 
 ### Billing Page (`/console/billing`)
+
+Primary focal point: the balance figure and "Buy Credits" CTA — rendered at Display size (1.5rem) and in accent color (#1d4ed8) respectively, anchoring the billing page and drawing the eye before any other element.
 
 | Element | Copy |
 |---------|------|
@@ -238,7 +243,7 @@ Destructive (#dc2626) reserved for:
 | Save CTA | "Save alert" |
 | Banner: threshold approaching | "Your balance is approaching your alert threshold of {N} Hive Credits." |
 | Banner: threshold crossed | "Your balance has dropped below your alert threshold of {N} Hive Credits." |
-| Banner dismiss | "Dismiss" |
+| Banner dismiss | "Dismiss alert" |
 
 ### Destructive Actions Summary
 
@@ -268,7 +273,7 @@ Analytics        ← new
 Model Catalog    ← new
 ```
 
-Style: identical to existing nav links — `padding: "0.5rem"`, `textDecoration: "none"`, `color: "inherit"`. Active link: `color: "#1d4ed8"` and `fontWeight: 600`.
+Style: identical to existing nav links — `padding: "0.5rem"`, `textDecoration: "none"`, `color: "inherit"`. Active link: `color: "#1d4ed8"` and `fontWeight: 700`.
 
 ### Page Layout
 
@@ -292,7 +297,7 @@ gap: "1rem"
 Four tabs (Overview, Usage, Spend, Errors) rendered as a horizontal tab bar:
 - Tab bar: `display: "flex"`, `borderBottom: "1px solid #e5e7eb"`, `gap: "0"`, `marginBottom: "1.5rem"`
 - Tab item (inactive): `padding: "0.5rem 1rem"`, `color: "#6b7280"`, `borderBottom: "2px solid transparent"`
-- Tab item (active): `padding: "0.5rem 1rem"`, `color: "#1d4ed8"`, `borderBottom: "2px solid #1d4ed8"`, `fontWeight: 600`
+- Tab item (active): `padding: "0.5rem 1rem"`, `color: "#1d4ed8"`, `borderBottom: "2px solid #1d4ed8"`, `fontWeight: 700`
 - Tab interaction: plain anchor links with URL hash or query param (`?tab=usage`)
 
 ### Table Pattern (ledger, API keys, catalog)
@@ -301,7 +306,7 @@ Four tabs (Overview, Usage, Spend, Errors) rendered as a horizontal tab bar:
 width: "100%"
 borderCollapse: "collapse"
 
-th: padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 600, fontSize: "0.875rem",
+th: padding: "0.5rem 0.75rem", textAlign: "left", fontWeight: 700, fontSize: "0.875rem",
     borderBottom: "1px solid #e5e7eb", color: "#4b5563"
 
 td: padding: "0.5rem 0.75rem", borderBottom: "1px solid #f3f4f6", fontSize: "1rem"
@@ -378,7 +383,7 @@ All interactive elements must implement these states (inline style changes only 
 
 | State | Visual Treatment |
 |-------|-----------------|
-| Default button (primary) | `background: "#1d4ed8"`, `color: "#ffffff"`, `padding: "0.5rem 1rem"`, `borderRadius: "0.375rem"`, `border: "none"`, `fontWeight: 600, cursor: "pointer"` |
+| Default button (primary) | `background: "#1d4ed8"`, `color: "#ffffff"`, `padding: "0.5rem 1rem"`, `borderRadius: "0.375rem"`, `border: "none"`, `fontWeight: 700, cursor: "pointer"` |
 | Hover button (primary) | `background: "#1e40af"` (slightly darker) — applied via `onMouseEnter`/`onMouseLeave` state |
 | Disabled button | `background: "#9ca3af"`, `cursor: "not-allowed"`, `opacity: 0.7` |
 | Destructive button | `background: "#dc2626"`, `color: "#ffffff"` — same sizing as primary |
