@@ -11,6 +11,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
@@ -46,6 +47,9 @@ type RouterConfig struct {
 	// When non-nil, the /metrics endpoint is registered on the mux.
 	PrometheusRegistry *prometheus.Registry
 
+	// BudgetsHandler handles budget threshold CRUD and alert dismissal endpoints.
+	BudgetsHandler *budgets.Handler
+
 	// Mux is an optional pre-created *http.ServeMux. When provided, routes are
 	// registered on it (enabling callers to add routes after NewRouter returns).
 	// When nil, a new ServeMux is created internally.
@@ -74,6 +78,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	if cfg.CatalogHandler != nil {
 		mux.Handle("/internal/catalog/snapshot", cfg.CatalogHandler)
+		// Public catalog endpoint — unauthenticated; customer-safe model list.
+		mux.Handle("/api/v1/catalog/models", cfg.CatalogHandler)
 	}
 
 	if cfg.RoutingHandler != nil {
@@ -101,12 +107,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		protectedLedger := cfg.AuthMiddleware.Require(cfg.LedgerHandler)
 		mux.Handle("/api/v1/accounts/current/credits/balance", protectedLedger)
 		mux.Handle("/api/v1/accounts/current/credits/ledger", protectedLedger)
+		mux.Handle("/api/v1/accounts/current/invoices", protectedLedger)
+		mux.Handle("/api/v1/accounts/current/invoices/", protectedLedger)
 	}
 
 	if cfg.UsageHandler != nil && cfg.AuthMiddleware != nil {
 		protectedUsage := cfg.AuthMiddleware.Require(cfg.UsageHandler)
 		mux.Handle("/api/v1/accounts/current/request-attempts", protectedUsage)
 		mux.Handle("/api/v1/accounts/current/usage-events", protectedUsage)
+		mux.Handle("/api/v1/accounts/current/analytics/usage", protectedUsage)
+		mux.Handle("/api/v1/accounts/current/analytics/spend", protectedUsage)
+		mux.Handle("/api/v1/accounts/current/analytics/errors", protectedUsage)
+	}
+
+	if cfg.BudgetsHandler != nil && cfg.AuthMiddleware != nil {
+		protectedBudgets := cfg.AuthMiddleware.Require(cfg.BudgetsHandler)
+		mux.Handle("/api/v1/accounts/current/budget", protectedBudgets)
+		mux.Handle("/api/v1/accounts/current/budget/dismiss", protectedBudgets)
 	}
 
 	if cfg.AccountingHandler != nil && cfg.AuthMiddleware != nil {

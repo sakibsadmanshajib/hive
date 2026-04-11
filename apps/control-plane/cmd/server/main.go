@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +18,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore"
+	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
@@ -103,6 +105,7 @@ func main() {
 	var accountsHandler *accounts.Handler
 	var accountingHandler *accounting.Handler
 	var apikeysHandler *apikeys.Handler
+	var budgetsHandler *budgets.Handler
 	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
@@ -157,6 +160,11 @@ func main() {
 		accountingRepo := accounting.NewPgxRepository(pool)
 		accountingSvc := accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc)
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
+
+		budgetsRepo := budgets.NewPgxRepository(pool)
+		emailNotifier := budgets.NewLogNotifier(slog.Default())
+		budgetsSvc := budgets.NewService(budgetsRepo, emailNotifier)
+		budgetsHandler = budgets.NewHandler(budgetsSvc, accountsSvc)
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -227,6 +235,7 @@ func main() {
 		AccountsHandler:    accountsHandler,
 		AccountingHandler:  accountingHandler,
 		APIKeysHandler:     apikeysHandler,
+		BudgetsHandler:     budgetsHandler,
 		CatalogHandler:     catalogHandler,
 		LedgerHandler:      ledgerHandler,
 		PaymentsHandler:    paymentsHandler,
