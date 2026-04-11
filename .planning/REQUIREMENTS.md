@@ -62,7 +62,7 @@
 ### Privacy & Operations
 
 - [x] **PRIV-01**: Customer can use the API without Hive storing prompt or response bodies at rest by default.
-- [ ] **OPS-01**: Hive operators can monitor health, latency, upstream failures, payment workflows, rate-limit events, and billing events without transcript storage.
+- [x] **OPS-01**: Hive operators can monitor health, latency, upstream failures, payment workflows, rate-limit events, and billing events without transcript storage.
 
 ## v2 Requirements
 
@@ -126,7 +126,7 @@
 | CONS-02 | Phase 9 | Pending |
 | CONS-03 | Phase 9 | Pending |
 | PRIV-01 | Phase 3 | Complete |
-| OPS-01 | Phase 9 | Pending |
+| OPS-01 | Phase 9 | Complete |
 
 **Coverage:**
 - v1 requirements: 35 total

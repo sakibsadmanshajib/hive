@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 9 context gathered
-last_updated: "2026-04-11T02:45:29.391Z"
+stopped_at: Phase 9 UI-SPEC approved
+last_updated: "2026-04-11T04:35:25.150Z"
 progress:
   total_phases: 9
   completed_phases: 8
-  total_plans: 34
+  total_plans: 38
   completed_plans: 34
 ---
 
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 08 — payments-fx-and-compliance-checkout
+**Current focus:** Phase 09 — developer-console-operational-hardening
 
 ## Current Position
 
-Phase: 08 (payments-fx-and-compliance-checkout) — EXECUTING
-Plan: 3 of 3
+Phase: 09 (developer-console-operational-hardening) — EXECUTING
+Plan: 4 of 4 (checkpoint: awaiting human-verify for Task 3)
 
 ## Performance Metrics
 
@@ -148,6 +148,11 @@ Recent decisions affecting current work:
 - [Phase 08]: PaymentService and AccountResolver interfaces defined in http.go — accept-interfaces pattern enables stub-based testing without importing full service
 - [Phase 08]: accountsResolverAdapter bridges 3-arg accounts.Service.EnsureViewerContext to narrow 1-arg payments.AccountResolver interface — isolates payments from accounts internals
 
+- [09-04]: ExternalMux pattern: RouterConfig.Mux field lets main.go pre-create *http.ServeMux so filestore.RegisterRoutes works after NewRouter returns http.Handler
+- [09-04]: NewRouter returns http.Handler (not *http.ServeMux) — Plan 01 Wave 2 depends on this changed signature
+- [09-04]: Custom prometheus.Registry per service (not DefaultRegistry) — excludes Go runtime noise from /metrics output
+- [09-04]: UUID normalization via regexp.MustCompile in normalizeEndpoint — ensures raw UUIDs never appear as Prometheus label values
+
 ### Pending Todos
 
 None yet.
@@ -159,6 +164,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-11T02:45:29.387Z
-Stopped at: Phase 9 context gathered
-Resume file: .planning/phases/09-developer-console-operational-hardening/09-CONTEXT.md
+Last session: 2026-04-11T04:44:32Z
+Stopped at: Phase 09 Plan 04 checkpoint:human-verify (Task 3 — verify monitoring stack)
+Resume file: .planning/phases/09-developer-console-operational-hardening/09-04-SUMMARY.md
