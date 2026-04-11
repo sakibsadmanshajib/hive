@@ -45,3 +45,16 @@ The public accounting entrypoint has no way to carry API-key identity into the a
 - Accept and validate `api_key_id` in the public accounting request path, or ensure the edge/internal caller injects it before the accounting flow begins.
 - Always emit a completed usage event on successful finalize, not only on release/reconciliation branches.
 - Surface `api_key_id` in usage-event responses and verify `MarkLastUsed` updates the key on attributed settlement.
+
+## Resolution
+
+**Status:** resolved (2026-04-09)
+**Fixed by:** Prior Phase 05/06 implementation sessions
+
+All three gaps were addressed in the codebase before this debug session was revisited:
+
+1. `api_key_id` is accepted in `createReservationRequest` and wired into `CreateReservationInput` (accounting/http.go)
+2. `FinalizeReservation` emits `UsageEventCompleted` on the normal charge path and calls `apiKeySvc.MarkLastUsed` (accounting/service.go)
+3. `handleListEvents` includes `api_key_id` in the response when present (usage/http.go)
+
+**Verification:** Requires live Docker stack to run integration tests.
