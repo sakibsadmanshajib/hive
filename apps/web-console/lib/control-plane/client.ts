@@ -1220,6 +1220,276 @@ export async function getCatalogModels(): Promise<CatalogModel[]> {
   return models;
 }
 
+export interface UsageSummaryRow {
+  group_key: string;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_credits_spent: number;
+  request_count: number;
+}
+
+export interface SpendSummaryRow {
+  group_key: string;
+  total_credits: number;
+  entry_count: number;
+}
+
+export interface ErrorSummaryRow {
+  group_key: string;
+  error_count: number;
+  total_requests: number;
+  error_rate: number;
+}
+
+export interface BudgetThreshold {
+  id: string;
+  threshold_credits: number;
+  alert_dismissed: boolean;
+  last_notified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function decodeUsageSummaryRow(value: JsonValue): UsageSummaryRow | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const groupKey = readStringField(value, "group_key");
+  if (!groupKey) {
+    return null;
+  }
+  return {
+    group_key: groupKey,
+    total_input_tokens: readNumberField(value, "total_input_tokens") ?? 0,
+    total_output_tokens: readNumberField(value, "total_output_tokens") ?? 0,
+    total_credits_spent: readNumberField(value, "total_credits_spent") ?? 0,
+    request_count: readNumberField(value, "request_count") ?? 0,
+  };
+}
+
+function decodeSpendSummaryRow(value: JsonValue): SpendSummaryRow | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const groupKey = readStringField(value, "group_key");
+  if (!groupKey) {
+    return null;
+  }
+  return {
+    group_key: groupKey,
+    total_credits: readNumberField(value, "total_credits") ?? 0,
+    entry_count: readNumberField(value, "entry_count") ?? 0,
+  };
+}
+
+function decodeErrorSummaryRow(value: JsonValue): ErrorSummaryRow | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const groupKey = readStringField(value, "group_key");
+  if (!groupKey) {
+    return null;
+  }
+  return {
+    group_key: groupKey,
+    error_count: readNumberField(value, "error_count") ?? 0,
+    total_requests: readNumberField(value, "total_requests") ?? 0,
+    error_rate: readNumberField(value, "error_rate") ?? 0,
+  };
+}
+
+function decodeBudgetThreshold(value: JsonValue): BudgetThreshold | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const id = readStringField(value, "id");
+  const thresholdCredits = readNumberField(value, "threshold_credits");
+  const alertDismissed = readBooleanField(value, "alert_dismissed");
+  const createdAt = readStringField(value, "created_at");
+  const updatedAt = readStringField(value, "updated_at");
+
+  if (!id || thresholdCredits === null || alertDismissed === null || !createdAt || !updatedAt) {
+    return null;
+  }
+
+  return {
+    id,
+    threshold_credits: thresholdCredits,
+    alert_dismissed: alertDismissed,
+    last_notified_at: readStringField(value, "last_notified_at"),
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+export async function getAnalyticsUsage(params: {
+  group_by: string;
+  window?: string;
+  from?: string;
+  to?: string;
+}): Promise<UsageSummaryRow[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const qs = new URLSearchParams({ group_by: params.group_by });
+  if (params.window) qs.set("window", params.window);
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/analytics/usage?${qs.toString()}`,
+    { headers, cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch usage analytics"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse usage analytics response");
+  }
+
+  const rawData = readArrayField(payload, "data") ?? [];
+  const rows: UsageSummaryRow[] = [];
+  for (const item of rawData) {
+    const decoded = decodeUsageSummaryRow(item);
+    if (decoded) rows.push(decoded);
+  }
+  return rows;
+}
+
+export async function getAnalyticsSpend(params: {
+  group_by: string;
+  window?: string;
+  from?: string;
+  to?: string;
+}): Promise<SpendSummaryRow[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const qs = new URLSearchParams({ group_by: params.group_by });
+  if (params.window) qs.set("window", params.window);
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/analytics/spend?${qs.toString()}`,
+    { headers, cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch spend analytics"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse spend analytics response");
+  }
+
+  const rawData = readArrayField(payload, "data") ?? [];
+  const rows: SpendSummaryRow[] = [];
+  for (const item of rawData) {
+    const decoded = decodeSpendSummaryRow(item);
+    if (decoded) rows.push(decoded);
+  }
+  return rows;
+}
+
+export async function getAnalyticsErrors(params: {
+  group_by: string;
+  window?: string;
+  from?: string;
+  to?: string;
+}): Promise<ErrorSummaryRow[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const qs = new URLSearchParams({ group_by: params.group_by });
+  if (params.window) qs.set("window", params.window);
+  if (params.from) qs.set("from", params.from);
+  if (params.to) qs.set("to", params.to);
+
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/analytics/errors?${qs.toString()}`,
+    { headers, cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch error analytics"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse error analytics response");
+  }
+
+  const rawData = readArrayField(payload, "data") ?? [];
+  const rows: ErrorSummaryRow[] = [];
+  for (const item of rawData) {
+    const decoded = decodeErrorSummaryRow(item);
+    if (decoded) rows.push(decoded);
+  }
+  return rows;
+}
+
+export async function getBudgetThreshold(): Promise<BudgetThreshold | null> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/budget`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch budget threshold"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse budget threshold response");
+  }
+
+  const thresholdValue = payload["threshold"];
+  if (thresholdValue === null || thresholdValue === undefined) {
+    return null;
+  }
+
+  return decodeBudgetThreshold(thresholdValue);
+}
+
+export async function upsertBudgetThreshold(thresholdCredits: number): Promise<BudgetThreshold> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/budget`, {
+    method: "PUT",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify({ threshold_credits: thresholdCredits }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to upsert budget threshold"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse budget threshold response");
+  }
+
+  const thresholdValue = payload["threshold"];
+  const decoded = decodeBudgetThreshold(thresholdValue ?? payload);
+  if (!decoded) {
+    throw new Error("Failed to parse budget threshold response");
+  }
+  return decoded;
+}
+
+export async function dismissBudgetAlert(): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/budget/dismiss`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to dismiss budget alert"));
+  }
+}
+
 export async function getMembers(accessToken: string): Promise<AccountMember[]> {
   const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
   if (!baseUrl) {

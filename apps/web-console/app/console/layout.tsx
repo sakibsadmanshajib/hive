@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { getViewer } from "@/lib/control-plane/client";
+import { getViewer, getBalance, getBudgetThreshold } from "@/lib/control-plane/client";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
 import { VerificationBanner } from "@/components/verification-banner";
+import { BudgetAlertBanner } from "@/components/billing/budget-alert-banner";
 
 interface ConsoleLayoutProps {
   children: ReactNode;
@@ -11,9 +12,20 @@ export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
   const viewer = await getViewer();
   const isUnverified = viewer.user.email_verified === false;
 
+  const [balanceSummary, budgetThreshold] = await Promise.allSettled([
+    getBalance(),
+    getBudgetThreshold(),
+  ]);
+
+  const currentBalance =
+    balanceSummary.status === "fulfilled" ? balanceSummary.value.available_credits : 0;
+  const threshold =
+    budgetThreshold.status === "fulfilled" ? budgetThreshold.value : null;
+
   return (
     <div>
       <VerificationBanner show={isUnverified} />
+      <BudgetAlertBanner threshold={threshold} currentBalance={currentBalance} />
       <div style={{ display: "flex", minHeight: "100vh" }}>
         <nav
           style={{

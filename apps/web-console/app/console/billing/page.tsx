@@ -3,10 +3,12 @@ import {
   getLedgerEntries,
   getInvoices,
   getAccountProfile,
+  getBudgetThreshold,
 } from "@/lib/control-plane/client";
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { LedgerTable } from "@/components/billing/ledger-table";
 import { InvoiceList } from "@/components/billing/invoice-list";
+import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
 
 interface BillingPageProps {
   searchParams: Promise<{ tab?: string; cursor?: string; type?: string }>;
@@ -24,9 +26,10 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const cursor = params.cursor ?? null;
   const typeFilter = params.type ?? null;
 
-  const [balance, profile] = await Promise.all([
+  const [balance, profile, budgetThreshold] = await Promise.all([
     getBalance(),
     getAccountProfile(),
+    getBudgetThreshold().catch(() => null),
   ]);
 
   const tabs: { id: TabName; label: string }[] = [
@@ -71,11 +74,14 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
 
       {/* Tab content */}
       {activeTab === "overview" && (
-        <BillingOverview
-          balance={balance}
-          recentEntries={[]}
-          accountCountryCode={profile.country_code}
-        />
+        <>
+          <BillingOverview
+            balance={balance}
+            recentEntries={[]}
+            accountCountryCode={profile.country_code}
+          />
+          <BudgetAlertForm currentThreshold={budgetThreshold} />
+        </>
       )}
 
       {activeTab === "ledger" && (
