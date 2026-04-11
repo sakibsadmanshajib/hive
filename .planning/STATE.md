@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: "Phase 09 Plan 04 checkpoint:human-verify (Task 3 — verify monitoring stack)"
-last_updated: "2026-04-11T06:37:17.014Z"
+stopped_at: "Completed 09-02-PLAN.md"
+last_updated: "2026-04-11T02:46:00.000Z"
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 38
-  completed_plans: 35
+  completed_plans: 36
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 09 (developer-console-operational-hardening) — EXECUTING
-Plan: 1 of 4
+Plan: 2 of 4 (completed)
 
 ## Performance Metrics
 
@@ -153,6 +153,10 @@ Recent decisions affecting current work:
 - [09-04]: Custom prometheus.Registry per service (not DefaultRegistry) — excludes Go runtime noise from /metrics output
 - [09-04]: UUID normalization via regexp.MustCompile in normalizeEndpoint — ensures raw UUIDs never appear as Prometheus label values
 
+- [09-02]: renderToBuffer typed via React.ComponentProps<typeof Document> — avoids importing ReactPDF namespace from CommonJS export = module while satisfying renderToBuffer's DocumentProps constraint
+- [09-02]: BillingOverview Buy Credits uses anchor link not inline modal — overview tab is a server component; checkout modal client state handled on client re-render
+- [09-02]: LedgerCsvExport extracted to separate use client file — keeps LedgerTable a pure server component while enabling browser Blob/URL CSV download
+
 ### Pending Todos
 
 None yet.
@@ -164,6 +168,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-11T04:44:32Z
-Stopped at: Phase 09 Plan 04 checkpoint:human-verify (Task 3 — verify monitoring stack)
-Resume file: .planning/phases/09-developer-console-operational-hardening/09-04-SUMMARY.md
+Last session: 2026-04-11T02:46:00Z
+Stopped at: Completed 09-02-PLAN.md
+Resume file: .planning/phases/09-developer-console-operational-hardening/09-02-SUMMARY.md

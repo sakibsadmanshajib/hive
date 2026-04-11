@@ -41,7 +41,7 @@
 - [x] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
 - [x] **BILL-03**: Customer can buy credits in increments of 1,000 Hive Credits through Stripe, bKash, and SSLCommerz.
 - [x] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 5% conversion fee used for every BDT transaction.
-- [ ] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
+- [x] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
 - [ ] **BILL-06**: Customer can set account-level budgets and spend-threshold notifications in Hive Credits.
 - [x] **BILL-07**: Hive captures and applies country, business, tax, and payment-method surcharge data needed for compliant checkout and invoicing flows.
 
@@ -55,8 +55,8 @@
 
 ### Developer Console
 
-- [ ] **CONS-01**: Customer can manage balance, top-ups, ledger entries, invoices, and tax profile from a web console.
-- [ ] **CONS-02**: Customer can manage API keys, model allowlists, model catalog visibility, and pricing visibility from a web console.
+- [x] **CONS-01**: Customer can manage balance, top-ups, ledger entries, invoices, and tax profile from a web console.
+- [x] **CONS-02**: Customer can manage API keys, model allowlists, model catalog visibility, and pricing visibility from a web console.
 - [ ] **CONS-03**: Customer can inspect privacy-safe usage analytics, error history, and spend trends by account, key, model, and time window from a web console.
 
 ### Privacy & Operations
@@ -114,7 +114,7 @@
 | BILL-02 | Phase 3 | Complete |
 | BILL-03 | Phase 8 | Complete |
 | BILL-04 | Phase 8 | Complete |
-| BILL-05 | Phase 9 | Pending |
+| BILL-05 | Phase 9 | Complete |
 | BILL-06 | Phase 9 | Pending |
 | BILL-07 | Phase 8 | Complete |
 | KEY-01 | Phase 5 | Complete |
@@ -122,8 +122,8 @@
 | KEY-03 | Phase 5 | Complete |
 | KEY-04 | Phase 5 | Pending |
 | KEY-05 | Phase 5 | Pending |
-| CONS-01 | Phase 9 | Pending |
-| CONS-02 | Phase 9 | Pending |
+| CONS-01 | Phase 9 | Complete |
+| CONS-02 | Phase 9 | Complete |
 | CONS-03 | Phase 9 | Pending |
 | PRIV-01 | Phase 3 | Complete |
 | OPS-01 | Phase 9 | Complete |
