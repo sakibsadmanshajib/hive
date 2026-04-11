@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
@@ -11,6 +14,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
+	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
@@ -33,13 +37,40 @@ type RouterConfig struct {
 	ProfilesHandler   *profiles.Handler
 	RoutingHandler    *routing.Handler
 	UsageHandler      *usage.Handler
+
+	// MetricsRegistry provides Prometheus counters/histograms for HTTP instrumentation.
+	// When non-nil, all requests are counted and timed via InstrumentHandler middleware.
+	MetricsRegistry *metrics.Registry
+
+	// PrometheusRegistry is the custom prometheus.Registry used to serve /metrics.
+	// When non-nil, the /metrics endpoint is registered on the mux.
+	PrometheusRegistry *prometheus.Registry
+
+	// Mux is an optional pre-created *http.ServeMux. When provided, routes are
+	// registered on it (enabling callers to add routes after NewRouter returns).
+	// When nil, a new ServeMux is created internally.
+	Mux *http.ServeMux
 }
 
-// NewRouter returns a configured http.ServeMux with all platform routes registered.
-func NewRouter(cfg RouterConfig) *http.ServeMux {
-	mux := http.NewServeMux()
+// NewRouter returns a configured http.Handler with all platform routes registered.
+// If MetricsRegistry is set, all requests are wrapped with Prometheus instrumentation.
+// If PrometheusRegistry is set, a /metrics endpoint is registered on the mux.
+//
+// IMPORTANT: The return type is http.Handler (not *http.ServeMux) so that the
+// instrumentation wrapper can be applied transparently. Plan 01 (Wave 2) depends
+// on this signature.
+func NewRouter(cfg RouterConfig) http.Handler {
+	mux := cfg.Mux
+	if mux == nil {
+		mux = http.NewServeMux()
+	}
 
 	mux.HandleFunc("/health", handleHealth)
+
+	// Register /metrics endpoint using the custom prometheus registry (not DefaultRegistry).
+	if cfg.PrometheusRegistry != nil {
+		mux.Handle("/metrics", promhttp.HandlerFor(cfg.PrometheusRegistry, promhttp.HandlerOpts{}))
+	}
 
 	if cfg.CatalogHandler != nil {
 		mux.Handle("/internal/catalog/snapshot", cfg.CatalogHandler)
@@ -117,6 +148,11 @@ func NewRouter(cfg RouterConfig) *http.ServeMux {
 		mux.Handle("/webhooks/sslcommerz/cancel", cfg.PaymentsHandler)
 	}
 
+	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.
+	// /metrics itself is excluded from recording to avoid self-referential noise.
+	if cfg.MetricsRegistry != nil {
+		return metrics.InstrumentHandler(cfg.MetricsRegistry, mux)
+	}
 	return mux
 }
 

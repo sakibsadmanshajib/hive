@@ -20,6 +20,7 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
+	"github.com/hivegpt/hive/apps/edge-api/internal/proxy"
 )
 
 func main() {
@@ -51,11 +52,17 @@ func main() {
 	}
 	authorizer := authz.NewAuthorizer(authzClient, limiter)
 
+	// Initialize Prometheus metrics registry for edge-api.
+	edgeMetrics, promRegistry := proxy.NewEdgeMetrics()
+
 	// Create the main mux
 	mux := http.NewServeMux()
 
 	// Infrastructure routes (no unsupported middleware)
 	mux.HandleFunc("/health", handleHealth)
+
+	// Prometheus metrics endpoint — served from the custom registry (not DefaultRegistry).
+	mux.Handle("/metrics", proxy.MetricsHandler(promRegistry))
 
 	// Swagger docs (no unsupported middleware)
 	swaggerHandler := docs.SwaggerHandler(specPath)
@@ -145,9 +152,10 @@ func main() {
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
-	// Apply middleware: CompatHeaders (outermost) -> UnsupportedEndpoint (inner)
+	// Apply middleware: CompatHeaders (outermost) -> Metrics -> UnsupportedEndpoint (inner)
 	var handler http.Handler = mux
 	handler = middleware.UnsupportedEndpointMiddleware(m)(handler)
+	handler = proxy.InstrumentHandler(edgeMetrics, handler)
 	handler = middleware.CompatHeaders()(handler)
 
 	log.Printf("edge-api listening on :%s", port)

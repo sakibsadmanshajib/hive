@@ -27,6 +27,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
+	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
@@ -213,17 +214,28 @@ func main() {
 		}()
 	}
 
+	// Build Prometheus metrics registry before the router so /metrics and
+	// instrumentation middleware are wired in together.
+	metricsRegistry, promRegistry := metrics.NewRegistry()
+
+	// Create the mux upfront so filestore.RegisterRoutes (which requires *http.ServeMux)
+	// can register routes on it before the instrumentation wrapper is applied.
+	routerMux := http.NewServeMux()
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:    authMiddleware,
-		AccountsHandler:   accountsHandler,
-		AccountingHandler: accountingHandler,
-		APIKeysHandler:    apikeysHandler,
-		CatalogHandler:    catalogHandler,
-		LedgerHandler:     ledgerHandler,
-		PaymentsHandler:   paymentsHandler,
-		ProfilesHandler:   profilesHandler,
-		RoutingHandler:    routingHandler,
-		UsageHandler:      usageHandler,
+		AuthMiddleware:     authMiddleware,
+		AccountsHandler:    accountsHandler,
+		AccountingHandler:  accountingHandler,
+		APIKeysHandler:     apikeysHandler,
+		CatalogHandler:     catalogHandler,
+		LedgerHandler:      ledgerHandler,
+		PaymentsHandler:    paymentsHandler,
+		ProfilesHandler:    profilesHandler,
+		RoutingHandler:     routingHandler,
+		UsageHandler:       usageHandler,
+		MetricsRegistry:    metricsRegistry,
+		PrometheusRegistry: promRegistry,
+		Mux:                routerMux,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
@@ -233,7 +245,7 @@ func main() {
 			log.Printf("WARNING: filestore schema setup failed: %v", err)
 		} else {
 			filestoreSvc := filestore.NewService(filestoreRepo)
-			filestore.RegisterRoutes(router, filestoreSvc)
+			filestore.RegisterRoutes(routerMux, filestoreSvc)
 			log.Println("filestore routes registered")
 
 			// Start Asynq batch polling worker if Redis is available.
