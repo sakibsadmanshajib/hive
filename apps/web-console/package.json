@@ -10,11 +10,12 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@react-pdf/renderer": "^4.4.1",
+    "@supabase/ssr": "^0.6.1",
+    "@supabase/supabase-js": "^2.48.1",
     "next": "15.1.0",
     "react": "19.0.0",
-    "react-dom": "19.0.0",
-    "@supabase/ssr": "^0.6.1",
-    "@supabase/supabase-js": "^2.48.1"
+    "react-dom": "19.0.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.51.1",

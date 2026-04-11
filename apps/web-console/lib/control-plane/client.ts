@@ -554,6 +554,672 @@ export async function updateBillingProfile(
   return profile;
 }
 
+export interface BalanceSummary {
+  posted_credits: number;
+  reserved_credits: number;
+  available_credits: number;
+}
+
+export interface LedgerEntry {
+  id: string;
+  entry_type: string;
+  credits_delta: number;
+  idempotency_key: string;
+  request_id: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface LedgerPage {
+  entries: LedgerEntry[];
+  next_cursor: string | null;
+}
+
+export interface Invoice {
+  id: string;
+  invoice_number: string;
+  status: string;
+  credits: number;
+  amount_usd: number;
+  amount_local: number;
+  local_currency: string;
+  tax_treatment: string;
+  rail: string;
+  line_items: Array<Record<string, unknown>>;
+  created_at: string;
+}
+
+export interface CheckoutRail {
+  rail: string;
+  currency: string;
+  label: string;
+  enabled: boolean;
+}
+
+export interface CheckoutOptions {
+  rails: CheckoutRail[];
+  credit_increment: number;
+  min_credits: number;
+  max_credits: number;
+  price_per_credit_usd: number;
+}
+
+export interface CheckoutInitiateResponse {
+  payment_intent_id: string;
+  redirect_url: string;
+  rail: string;
+  credits: number;
+  amount_local: number;
+  local_currency: string;
+}
+
+export interface ApiKey {
+  id: string;
+  nickname: string;
+  status: string;
+  redacted_suffix: string;
+  created_at: string;
+  updated_at: string;
+  expires_at: string | null;
+  last_used_at: string | null;
+  expiration_summary: { kind: string; label: string };
+  budget_summary: { kind: string; label: string };
+  allowlist_summary: { mode: string; group_names: string[]; label: string };
+  secret?: string;
+}
+
+export interface CatalogModel {
+  id: string;
+  display_name: string;
+  summary: string;
+  capability_badges: string[];
+  pricing: {
+    input_price_credits: number;
+    output_price_credits: number;
+    cache_read_price_credits: number | null;
+    cache_write_price_credits: number | null;
+  };
+  lifecycle: string;
+}
+
+function readNumberField(source: JsonObject, key: string): number | null {
+  const value = source[key];
+  return typeof value === "number" ? value : null;
+}
+
+function decodeLedgerEntry(value: JsonValue): LedgerEntry | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const id = readStringField(value, "id");
+  const entryType = readStringField(value, "entry_type");
+  const creditsDelta = readNumberField(value, "credits_delta");
+  const idempotencyKey = readStringField(value, "idempotency_key") ?? "";
+  const requestId = readStringField(value, "request_id") ?? "";
+  const createdAt = readStringField(value, "created_at");
+
+  if (!id || !entryType || creditsDelta === null || !createdAt) {
+    return null;
+  }
+
+  const rawMetadata = readObjectField(value, "metadata");
+  const metadata: Record<string, unknown> = {};
+  if (rawMetadata) {
+    for (const [k, v] of Object.entries(rawMetadata)) {
+      metadata[k] = v;
+    }
+  }
+
+  return {
+    id,
+    entry_type: entryType,
+    credits_delta: creditsDelta,
+    idempotency_key: idempotencyKey,
+    request_id: requestId,
+    metadata,
+    created_at: createdAt,
+  };
+}
+
+function decodeInvoice(value: JsonValue): Invoice | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const id = readStringField(value, "id");
+  const invoiceNumber = readStringField(value, "invoice_number") ?? "";
+  const status = readStringField(value, "status") ?? "";
+  const credits = readNumberField(value, "credits") ?? 0;
+  const amountUsd = readNumberField(value, "amount_usd") ?? 0;
+  const amountLocal = readNumberField(value, "amount_local") ?? 0;
+  const localCurrency = readStringField(value, "local_currency") ?? "USD";
+  const taxTreatment = readStringField(value, "tax_treatment") ?? "";
+  const rail = readStringField(value, "rail") ?? "";
+  const createdAt = readStringField(value, "created_at");
+
+  if (!id || !createdAt) {
+    return null;
+  }
+
+  const rawLineItems = readArrayField(value, "line_items");
+  const lineItems: Array<Record<string, unknown>> = [];
+  if (rawLineItems) {
+    for (const item of rawLineItems) {
+      if (isJsonObject(item)) {
+        const entry: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(item)) {
+          entry[k] = v;
+        }
+        lineItems.push(entry);
+      }
+    }
+  }
+
+  return {
+    id,
+    invoice_number: invoiceNumber,
+    status,
+    credits,
+    amount_usd: amountUsd,
+    amount_local: amountLocal,
+    local_currency: localCurrency,
+    tax_treatment: taxTreatment,
+    rail,
+    line_items: lineItems,
+    created_at: createdAt,
+  };
+}
+
+function decodeCheckoutRail(value: JsonValue): CheckoutRail | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const rail = readStringField(value, "rail");
+  const currency = readStringField(value, "currency");
+  const label = readStringField(value, "label");
+  const enabled = readBooleanField(value, "enabled");
+
+  if (!rail || !currency || !label || enabled === null) {
+    return null;
+  }
+
+  return { rail, currency, label, enabled };
+}
+
+function decodeApiKey(value: JsonValue): ApiKey | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const id = readStringField(value, "id");
+  const nickname = readStringField(value, "nickname") ?? "";
+  const status = readStringField(value, "status") ?? "";
+  const redactedSuffix = readStringField(value, "redacted_suffix") ?? "";
+  const createdAt = readStringField(value, "created_at") ?? "";
+  const updatedAt = readStringField(value, "updated_at") ?? "";
+  const expiresAt = readStringField(value, "expires_at");
+  const lastUsedAt = readStringField(value, "last_used_at");
+  const secret = readStringField(value, "secret");
+
+  if (!id) {
+    return null;
+  }
+
+  const rawExpiration = readObjectField(value, "expiration_summary");
+  const expirationSummary = rawExpiration
+    ? {
+        kind: readStringField(rawExpiration, "kind") ?? "",
+        label: readStringField(rawExpiration, "label") ?? "",
+      }
+    : { kind: "", label: "" };
+
+  const rawBudget = readObjectField(value, "budget_summary");
+  const budgetSummary = rawBudget
+    ? {
+        kind: readStringField(rawBudget, "kind") ?? "",
+        label: readStringField(rawBudget, "label") ?? "",
+      }
+    : { kind: "", label: "" };
+
+  const rawAllowlist = readObjectField(value, "allowlist_summary");
+  const rawGroupNames = rawAllowlist ? readArrayField(rawAllowlist, "group_names") : null;
+  const groupNames: string[] = [];
+  if (rawGroupNames) {
+    for (const gn of rawGroupNames) {
+      if (typeof gn === "string") {
+        groupNames.push(gn);
+      }
+    }
+  }
+  const allowlistSummary = rawAllowlist
+    ? {
+        mode: readStringField(rawAllowlist, "mode") ?? "",
+        group_names: groupNames,
+        label: readStringField(rawAllowlist, "label") ?? "",
+      }
+    : { mode: "", group_names: [], label: "" };
+
+  const key: ApiKey = {
+    id,
+    nickname,
+    status,
+    redacted_suffix: redactedSuffix,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    expires_at: expiresAt,
+    last_used_at: lastUsedAt,
+    expiration_summary: expirationSummary,
+    budget_summary: budgetSummary,
+    allowlist_summary: allowlistSummary,
+  };
+
+  if (secret !== null) {
+    key.secret = secret;
+  }
+
+  return key;
+}
+
+function decodeCatalogModel(value: JsonValue): CatalogModel | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+
+  const id = readStringField(value, "id");
+  const displayName = readStringField(value, "display_name") ?? "";
+  const summary = readStringField(value, "summary") ?? "";
+  const lifecycle = readStringField(value, "lifecycle") ?? "active";
+
+  if (!id) {
+    return null;
+  }
+
+  const rawBadges = readArrayField(value, "capability_badges");
+  const capabilityBadges: string[] = [];
+  if (rawBadges) {
+    for (const badge of rawBadges) {
+      if (typeof badge === "string") {
+        capabilityBadges.push(badge);
+      }
+    }
+  }
+
+  const rawPricing = readObjectField(value, "pricing");
+  const inputPrice = rawPricing ? readNumberField(rawPricing, "input_price_credits") ?? 0 : 0;
+  const outputPrice = rawPricing ? readNumberField(rawPricing, "output_price_credits") ?? 0 : 0;
+  const cacheReadPrice = rawPricing ? readNumberField(rawPricing, "cache_read_price_credits") : null;
+  const cacheWritePrice = rawPricing ? readNumberField(rawPricing, "cache_write_price_credits") : null;
+
+  return {
+    id,
+    display_name: displayName,
+    summary,
+    capability_badges: capabilityBadges,
+    pricing: {
+      input_price_credits: inputPrice,
+      output_price_credits: outputPrice,
+      cache_read_price_credits: cacheReadPrice,
+      cache_write_price_credits: cacheWritePrice,
+    },
+    lifecycle,
+  };
+}
+
+export async function getBalance(): Promise<BalanceSummary> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/credits/balance`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch balance"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse balance response");
+  }
+
+  const postedCredits = readNumberField(payload, "posted_credits") ?? 0;
+  const reservedCredits = readNumberField(payload, "reserved_credits") ?? 0;
+  const availableCredits = readNumberField(payload, "available_credits") ?? 0;
+
+  return {
+    posted_credits: postedCredits,
+    reserved_credits: reservedCredits,
+    available_credits: availableCredits,
+  };
+}
+
+export async function getLedgerEntries(params: {
+  limit?: number;
+  cursor?: string;
+  type?: string;
+}): Promise<LedgerPage> {
+  const { baseUrl, headers } = await getRequestContext();
+
+  const searchParams = new URLSearchParams();
+  if (params.limit !== undefined) {
+    searchParams.set("limit", String(params.limit));
+  }
+  if (params.cursor) {
+    searchParams.set("cursor", params.cursor);
+  }
+  if (params.type) {
+    searchParams.set("type", params.type);
+  }
+
+  const qs = searchParams.toString();
+  const url = `${baseUrl}/api/v1/accounts/current/credits/ledger${qs ? `?${qs}` : ""}`;
+
+  const response = await fetch(url, { headers, cache: "no-store" });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch ledger entries"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse ledger response");
+  }
+
+  const rawEntries = readArrayField(payload, "entries") ?? [];
+  const entries: LedgerEntry[] = [];
+  for (const entry of rawEntries) {
+    const decoded = decodeLedgerEntry(entry);
+    if (decoded) {
+      entries.push(decoded);
+    }
+  }
+
+  const nextCursor = readStringField(payload, "next_cursor");
+
+  return {
+    entries,
+    next_cursor: nextCursor,
+  };
+}
+
+export async function getInvoices(): Promise<Invoice[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/invoices`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch invoices"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse invoices response");
+  }
+
+  const rawInvoices = readArrayField(payload, "invoices") ?? [];
+  const invoices: Invoice[] = [];
+  for (const item of rawInvoices) {
+    const decoded = decodeInvoice(item);
+    if (decoded) {
+      invoices.push(decoded);
+    }
+  }
+
+  return invoices;
+}
+
+export async function getInvoice(id: string): Promise<Invoice> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/invoices/${id}`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch invoice"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse invoice response");
+  }
+
+  const invoice = decodeInvoice(payload);
+  if (!invoice) {
+    throw new Error("Failed to parse invoice response");
+  }
+
+  return invoice;
+}
+
+export async function getCheckoutRails(): Promise<CheckoutOptions> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/checkout/rails`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch checkout rails"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse checkout rails response");
+  }
+
+  const rawRails = readArrayField(payload, "rails") ?? [];
+  const rails: CheckoutRail[] = [];
+  for (const item of rawRails) {
+    const decoded = decodeCheckoutRail(item);
+    if (decoded) {
+      rails.push(decoded);
+    }
+  }
+
+  const creditIncrement = readNumberField(payload, "credit_increment") ?? 1000;
+  const minCredits = readNumberField(payload, "min_credits") ?? 1000;
+  const maxCredits = readNumberField(payload, "max_credits") ?? 100000;
+  const pricePerCreditUsd = readNumberField(payload, "price_per_credit_usd") ?? 0.01;
+
+  return {
+    rails,
+    credit_increment: creditIncrement,
+    min_credits: minCredits,
+    max_credits: maxCredits,
+    price_per_credit_usd: pricePerCreditUsd,
+  };
+}
+
+export async function initiateCheckout(
+  rail: string,
+  credits: number,
+  idempotencyKey: string
+): Promise<CheckoutInitiateResponse> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/checkout/initiate`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify({ rail, credits, idempotency_key: idempotencyKey }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to initiate checkout"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse checkout response");
+  }
+
+  const paymentIntentId = readStringField(payload, "payment_intent_id") ?? "";
+  const redirectUrl = readStringField(payload, "redirect_url") ?? "";
+  const responsRail = readStringField(payload, "rail") ?? rail;
+  const responseCredits = readNumberField(payload, "credits") ?? credits;
+  const amountLocal = readNumberField(payload, "amount_local") ?? 0;
+  const localCurrency = readStringField(payload, "local_currency") ?? "USD";
+
+  return {
+    payment_intent_id: paymentIntentId,
+    redirect_url: redirectUrl,
+    rail: responsRail,
+    credits: responseCredits,
+    amount_local: amountLocal,
+    local_currency: localCurrency,
+  };
+}
+
+export async function getApiKeys(): Promise<ApiKey[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch API keys"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse API keys response");
+  }
+
+  const rawItems = readArrayField(payload, "items") ?? [];
+  const keys: ApiKey[] = [];
+  for (const item of rawItems) {
+    const decoded = decodeApiKey(item);
+    if (decoded) {
+      keys.push(decoded);
+    }
+  }
+
+  return keys;
+}
+
+export async function createApiKey(nickname: string, expiresAt?: string): Promise<ApiKey> {
+  const { baseUrl, headers } = await getRequestContext();
+  const body: { nickname: string; expires_at?: string } = { nickname };
+  if (expiresAt) {
+    body.expires_at = expiresAt;
+  }
+
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to create API key"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse API key response");
+  }
+
+  const key = decodeApiKey(payload);
+  if (!key) {
+    throw new Error("Failed to parse API key response");
+  }
+
+  return key;
+}
+
+export async function revokeApiKey(keyId: string): Promise<ApiKey> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${keyId}/revoke`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to revoke API key"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse API key response");
+  }
+
+  const key = decodeApiKey(payload);
+  if (!key) {
+    throw new Error("Failed to parse API key response");
+  }
+
+  return key;
+}
+
+export async function rotateApiKey(
+  keyId: string,
+  nickname: string,
+  expiresAt?: string
+): Promise<ApiKey> {
+  const { baseUrl, headers } = await getRequestContext();
+  const body: { nickname: string; expires_at?: string } = { nickname };
+  if (expiresAt) {
+    body.expires_at = expiresAt;
+  }
+
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${keyId}/rotate`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to rotate API key"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse API key response");
+  }
+
+  const key = decodeApiKey(payload);
+  if (!key) {
+    throw new Error("Failed to parse API key response");
+  }
+
+  return key;
+}
+
+export async function getCatalogModels(): Promise<CatalogModel[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/catalog/models`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to fetch catalog models"));
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse catalog models response");
+  }
+
+  const rawModels = readArrayField(payload, "models") ?? [];
+  const models: CatalogModel[] = [];
+  for (const item of rawModels) {
+    const decoded = decodeCatalogModel(item);
+    if (decoded) {
+      models.push(decoded);
+    }
+  }
+
+  return models;
+}
+
 export async function getMembers(accessToken: string): Promise<AccountMember[]> {
   const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
   if (!baseUrl) {

@@ -35,6 +35,18 @@ export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
             <a href="/console/members" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
               Members
             </a>
+            <a href="/console/billing" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+              Billing
+            </a>
+            <a href="/console/api-keys" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+              API Keys
+            </a>
+            <a href="/console/analytics" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+              Analytics
+            </a>
+            <a href="/console/catalog" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+              Model Catalog
+            </a>
           </div>
         </nav>
         <main style={{ flex: 1, padding: "2rem" }}>{children}</main>
