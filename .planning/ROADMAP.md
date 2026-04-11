@@ -126,8 +126,6 @@ Plans:
 - [x] 06-02-PLAN.md — Inference types, LiteLLM client, orchestrator, and non-streaming chat/completions + completions handlers (Wave 1)
 - [x] 06-03-PLAN.md — SSE streaming relay, Responses API event translation, and reasoning field normalization (Wave 2)
 - [x] 06-04-PLAN.md — Embeddings endpoint and SDK integration tests for all Phase 6 endpoints (Wave 2)
-
-
 ### Phase 7: Media, File, and Async API Surface
 **Goal**: Extend compatibility to the file and media workflows needed by real OpenAI-integrated applications.
 **Depends on**: Phase 6
@@ -170,14 +168,13 @@ Plans:
   2. Customers can browse model catalog and pricing and inspect privacy-safe usage, spend, and error trends by account, key, model, and time window.
   3. Customers can configure spend thresholds and receive budget-related notifications.
   4. Operators can monitor health, latency, upstream, billing, payment, and rate-limit signals needed to run the platform.
-**Plans**: 4 plans
+**Plans**: 4 plans (4 waves)
 
 Plans:
-- [ ] 09-01-PLAN.md — Control-plane backend: analytics aggregation endpoints, invoice/budget migrations, cursor pagination, public catalog (Wave 1)
-- [ ] 09-02-PLAN.md — Console billing, invoices, checkout modal, API key management, and model catalog pages (Wave 2)
-- [ ] 09-03-PLAN.md — Console analytics tabs with Recharts, time-window filtering, budget alert form and banner (Wave 2)
 - [ ] 09-04-PLAN.md — Prometheus instrumentation, Grafana dashboards, Alertmanager, and Docker Compose monitoring profile (Wave 1)
-
+- [ ] 09-01-PLAN.md — Control-plane backend: analytics aggregation endpoints, invoice/budget migrations with email notification, cursor pagination, public catalog (Wave 2)
+- [ ] 09-02-PLAN.md — Console billing, invoices, checkout modal with BDT compliance test, API key management, and model catalog pages (Wave 3)
+- [ ] 09-03-PLAN.md — Console analytics tabs with Recharts, time-window filtering, budget alert form and banner (Wave 4)
 ## Progress
 
 **Execution Order:**
