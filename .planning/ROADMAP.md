@@ -170,12 +170,13 @@ Plans:
   2. Customers can browse model catalog and pricing and inspect privacy-safe usage, spend, and error trends by account, key, model, and time window.
   3. Customers can configure spend thresholds and receive budget-related notifications.
   4. Operators can monitor health, latency, upstream, billing, payment, and rate-limit signals needed to run the platform.
-**Plans**: 3 plans
+**Plans**: 4 plans
 
 Plans:
-- [ ] 09-01: Build console flows for billing, invoices, profile, and API key management.
-- [ ] 09-02: Build model catalog, usage analytics, error inspection, and spend-alert UX.
-- [ ] 09-03: Add operational dashboards, alerting, and launch-readiness hardening.
+- [ ] 09-01-PLAN.md — Control-plane backend: analytics aggregation endpoints, invoice/budget migrations, cursor pagination, public catalog (Wave 1)
+- [ ] 09-02-PLAN.md — Console billing, invoices, checkout modal, API key management, and model catalog pages (Wave 2)
+- [ ] 09-03-PLAN.md — Console analytics tabs with Recharts, time-window filtering, budget alert form and banner (Wave 2)
+- [ ] 09-04-PLAN.md — Prometheus instrumentation, Grafana dashboards, Alertmanager, and Docker Compose monitoring profile (Wave 1)
 
 ## Progress
 
@@ -192,4 +193,4 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 6. Core Text & Embeddings API | 4/4 | Complete | 2026-04-09 |
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 3/3 | Complete   | 2026-04-11 |
-| 9. Developer Console & Operational Hardening | 0/3 | Not started | - |
+| 9. Developer Console & Operational Hardening | 0/4 | Not started | - |
