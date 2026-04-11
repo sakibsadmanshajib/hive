@@ -201,10 +201,6 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=30d'
-    depends_on:
-      control-plane:
-        condition: service_healthy
-
   grafana:
     image: grafana/grafana:latest
     profiles:
