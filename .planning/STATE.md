@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-04-10T23:51:49.094Z"
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-04-11T00:03:28.480Z"
 progress:
   total_phases: 9
-  completed_phases: 7
+  completed_phases: 8
   total_plans: 34
-  completed_plans: 33
+  completed_plans: 34
 ---
 
 # Project State
@@ -62,6 +62,7 @@ Plan: 3 of 3
 | Phase 07 P04 | 35min | 2 tasks | 11 files |
 | Phase 08-payments-fx-and-compliance-checkout P01 | 35 | 2 tasks | 11 files |
 | Phase 08 P02 | 45 | 2 tasks | 8 files |
+| Phase 08 P03 | 9 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -144,6 +145,8 @@ Recent decisions affecting current work:
 - [Phase 08]: [08-02]: Stripe uses ConstructEventWithOptions with IgnoreAPIVersionMismatch: true — stripe-go v84 validates event API version by default; test events built locally lack the SDK-matching api_version field
 - [Phase 08]: [08-02]: bKash always grants fresh token per request — tokens are never cached to avoid 401s on concurrent requests with short-lived access tokens
 - [Phase 08]: [08-02]: SSLCommerz ProcessEvent returns sessionkey as ProviderIntentID (not tran_id) — ensures GetPaymentIntentByProviderID lookup matches what Initiate stored
+- [Phase 08]: PaymentService and AccountResolver interfaces defined in http.go — accept-interfaces pattern enables stub-based testing without importing full service
+- [Phase 08]: accountsResolverAdapter bridges 3-arg accounts.Service.EnsureViewerContext to narrow 1-arg payments.AccountResolver interface — isolates payments from accounts internals
 
 ### Pending Todos
 
@@ -156,6 +159,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-10T23:51:49.054Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-04-11T00:03:28.477Z
+Stopped at: Completed 08-03-PLAN.md
 Resume file: None
