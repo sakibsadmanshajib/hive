@@ -14,13 +14,13 @@ Developers can switch from OpenAI to Hive with only a base URL and API key chang
 
 - [x] OpenAI-compatible text inference endpoints (chat/completions, completions, responses, embeddings) with streaming, usage metering, and capability-gated error handling. Validated in Phase 06: core-text-embeddings-api.
 - [x] OpenAI-compatible media endpoints (images generation/edits, audio speech/transcription/translation), file management (files, uploads), and async processing (batches) with full authorization, routing, and accounting integration. Validated in Phase 07: media-file-and-async-api-surface.
+- [x] Customer billing rails for Stripe, bKash, and SSLCommerz, including BDT top-ups anchored to USD/BDT FX plus a 3% conversion fee. Multi-rail checkout with FX snapshots, BD VAT 15% tax calculation, and payment intent state machine. Validated in Phase 08: payments-fx-and-compliance-checkout.
 
 ### Active
 
 - [ ] Full public OpenAI API mirror except org/admin management endpoints, with drop-in behavior for official SDKs and streaming/error semantics.
 - [ ] Internal provider abstraction that maps public model aliases to OpenRouter, Groq, and future providers without exposing provider identity to customers.
 - [ ] Prepaid billing ledger with Hive Credits, rate limits, model pricing, itemized usage, spend controls, and future subscription-ready credit mechanics.
-- [ ] Customer billing rails for Stripe, bKash, and SSLCommerz, including BDT top-ups anchored to USD/BDT FX plus a 3% conversion fee.
 - [ ] Developer web console with hosted Supabase auth and Supabase-managed Postgres for billing, tax/business profile, invoices, spend alerts, usage analytics, API key lifecycle, and model catalog visibility.
 - [ ] Account and API-key controls for budgets, expiration, allowed models, per-key usage tracking, and account-tier rate limiting.
 - [ ] Privacy-first request handling that avoids storing API message bodies at rest while still capturing health, error, latency, and usage metrics.
@@ -68,4 +68,4 @@ The launch scope includes a developer web app, not an end-user assistant product
 | Run the entire local developer workflow in Docker containers | Prevents host toolchain drift and keeps onboarding and builds reproducible | — Pending |
 
 ---
-*Last updated: 2026-04-10 after Phase 07 completion — media, file, and async API surface shipped*
+*Last updated: 2026-04-11 after Phase 08 completion — payments, FX, and compliance checkout shipped*
