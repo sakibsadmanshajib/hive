@@ -165,7 +165,7 @@ Primary focal point: the balance figure and "Buy Credits" CTA — rendered at Di
 | Price display (USD accounts) | "{USD price}" — e.g. "$10.00" |
 | Price display (BDT accounts) | "{BDT price}" — e.g. "৳1,200.00" — NO USD equivalent, NO exchange rate, NO "conversion" language |
 | Proceed CTA | "Continue to payment" |
-| Cancel | "Cancel" |
+| Dismiss CTA | "Keep balance" |
 | Error: initiation failure | "Unable to start checkout. Please try again." |
 
 **REGULATORY NOTE:** For accounts with `countryCode === 'BD'`, the checkout modal MUST display only the final BDT price. No USD equivalent, no FX rate, no "converted from", no "includes conversion fee" text. This is a legal requirement (source: CONTEXT.md locked decision). Violation is a compliance breach, not a UX issue.
@@ -183,8 +183,8 @@ Primary focal point: the balance figure and "Buy Credits" CTA — rendered at Di
 | Revoke confirmation title | "Revoke this key?" |
 | Revoke confirmation body | "Revoking this key immediately blocks all requests using it. This cannot be undone." |
 | Revoke confirmation CTA | "Revoke key" |
-| Revoke cancel | "Cancel" |
-| Rotate CTA | "Rotate" |
+| Revoke dismiss CTA | "Keep key" |
+| Rotate CTA | "Rotate key" |
 | Error: create failure | "Failed to create key. Please try again." |
 | Error: revoke failure | "Failed to revoke key. Please try again." |
 | Status: active | "Active" |
@@ -192,6 +192,8 @@ Primary focal point: the balance figure and "Buy Credits" CTA — rendered at Di
 | Status: expired | "Expired" |
 
 ### Analytics Page (`/console/analytics`)
+
+Primary focal point: the chart visualization under the active tab — anchored by its full-width placement spanning the `maxWidth: "72rem"` content area and its accent-colored or chart-palette data lines/bars. All other elements (tab bar, filter controls, detail table) are visually subordinate to the chart. The chart renders immediately below the tab bar with no intervening whitespace beyond the declared `marginBottom: "1.5rem"` from the tab pattern.
 
 | Element | Copy |
 |---------|------|
@@ -249,7 +251,7 @@ Primary focal point: the balance figure and "Buy Credits" CTA — rendered at Di
 
 | Action | Trigger | Confirmation Approach |
 |--------|---------|----------------------|
-| Revoke API key | "Revoke" button on key row | Inline confirmation panel (not a browser confirm()) — shows key nickname, warning copy, "Revoke key" (destructive) + "Cancel" buttons |
+| Revoke API key | "Revoke" button on key row | Inline confirmation panel (not a browser confirm()) — shows key nickname, warning copy, "Revoke key" (destructive) + "Keep key" buttons |
 
 No other destructive actions in Phase 9. API key rotation is non-destructive (old key stays active until explicitly revoked).
 
@@ -326,7 +328,7 @@ backgroundColor: "#ffffff", borderRadius: "0.75rem", padding: "1.5rem",
 width: "100%", maxWidth: "32rem", display: "grid", gap: "1rem"
 ```
 
-Modal is a `"use client"` component. Opened by "Buy Credits" button in billing overview. Closed by "Cancel" or clicking the overlay.
+Modal is a `"use client"` component. Opened by "Buy Credits" button in billing overview. Closed by "Keep balance" button or clicking the overlay.
 
 ### Chart Container Pattern (analytics)
 
