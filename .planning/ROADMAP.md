@@ -175,6 +175,48 @@ Plans:
 - [ ] 09-01-PLAN.md — Control-plane backend: analytics aggregation endpoints, invoice/budget migrations with email notification, cursor pagination, public catalog (Wave 2)
 - [ ] 09-02-PLAN.md — Console billing, invoices, checkout modal with BDT compliance test, API key management, and model catalog pages (Wave 3)
 - [ ] 09-03-PLAN.md — Console analytics tabs with Recharts, time-window filtering, budget alert form and banner (Wave 4)
+### Phase 10: Routing & Storage Critical Fixes
+**Goal:** Fix the three infrastructure bugs that break all inference and media endpoints, and fully remove MinIO from the codebase.
+**Depends on**: Phases 4, 7
+**Requirements**: [ROUT-02, API-05, API-06, API-07]
+**Gap Closure:** Closes integration gaps #1 (ensureCapabilityColumns wrong table), #2 (minio-go S3 incompatibility), #3 (StorageUploader nil). Fixes all 3 broken E2E flows. Purges all MinIO references.
+**Success Criteria** (what must be TRUE):
+  1. `provider_capabilities` table has all 5 media capability columns via proper SQL migration.
+  2. File/image/audio/batch endpoints use Supabase Storage REST API — no minio-go dependency.
+  3. Batch worker has a wired StorageUploader for output file upload.
+  4. Zero references to MinIO remain in application code, Docker config, or documentation.
+  5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
+
+Plans: 0 plans
+
+### Phase 11: Compliance, Verification & Artifact Cleanup
+**Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
+**Depends on**: Phases 2, 3, 5, 8
+**Requirements**: [AUTH-01, AUTH-02, AUTH-03, AUTH-04, BILL-01, BILL-02, PRIV-01, BILL-04]
+**Gap Closure:** Closes integration gaps #4 (amount_usd exposed) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Updates KEY-02/KEY-04 checkboxes and Phase 5 progress.
+**Success Criteria** (what must be TRUE):
+  1. BD checkout responses never include `amount_usd` or any field exposing FX rates.
+  2. ViewerAccount.slug is populated from control-plane viewer endpoint.
+  3. 02-VERIFICATION.md exists and formally verifies AUTH-01 through AUTH-04.
+  4. 03-VERIFICATION.md exists and formally verifies BILL-01, BILL-02, and PRIV-01.
+  5. REQUIREMENTS.md checkboxes for KEY-02 and KEY-04 are checked. Phase 5 ROADMAP progress is accurate.
+
+Plans: 0 plans
+
+### Phase 12: KEY-05 Hot-Path Rate Limiting
+**Goal:** Complete the last unsatisfied requirement — account-tier and per-key rate limits enforced on the hot path.
+**Depends on**: Phase 5
+**Requirements**: [KEY-05]
+**Gap Closure:** Closes the only explicitly unsatisfied requirement. Re-verifies current implementation state, fills remaining gaps.
+**Success Criteria** (what must be TRUE):
+  1. Edge proxy enforces account-tier rate limits before dispatch.
+  2. Edge proxy enforces per-key rate limits before dispatch.
+  3. Rate-limited requests receive 429 with Retry-After header.
+  4. Rate limit configuration flows from control-plane snapshot to edge enforcement.
+  5. Phase 5 VERIFICATION.md marks KEY-05 as SATISFIED.
+
+Plans: 0 plans
+
 ## Progress
 
 **Execution Order:**
@@ -191,3 +233,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 3/3 | Complete   | 2026-04-11 |
 | 9. Developer Console & Operational Hardening | 4/4 | Complete   | 2026-04-11 |
+| 10. Routing & Storage Critical Fixes | 0/0 | Pending | - |
+| 11. Compliance, Verification & Artifact Cleanup | 0/0 | Pending | - |
+| 12. KEY-05 Hot-Path Rate Limiting | 0/0 | Pending | - |

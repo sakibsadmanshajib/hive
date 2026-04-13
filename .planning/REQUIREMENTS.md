@@ -7,10 +7,10 @@
 
 ### Authentication & Accounts
 
-- [x] **AUTH-01**: Developer can sign up and sign in with email and password using Supabase-backed authentication.
-- [x] **AUTH-02**: Developer receives email verification and can reset password through an email-based recovery flow.
-- [x] **AUTH-03**: Developer session persists across browser refresh in the billing and key-management console.
-- [x] **AUTH-04**: Account owner can maintain billing contact, legal entity, country, and VAT/business information used for invoicing and tax handling.
+- [ ] **AUTH-01**: Developer can sign up and sign in with email and password using Supabase-backed authentication.
+- [ ] **AUTH-02**: Developer receives email verification and can reset password through an email-based recovery flow.
+- [ ] **AUTH-03**: Developer session persists across browser refresh in the billing and key-management console.
+- [ ] **AUTH-04**: Account owner can maintain billing contact, legal entity, country, and VAT/business information used for invoicing and tax handling.
 
 ### Compatibility & Contract
 
@@ -24,23 +24,23 @@
 - [x] **API-02**: Developer can stream supported text-generation endpoints with OpenAI-compatible SSE event ordering, chunk formats, and terminal events.
 - [x] **API-03**: Developer can call `embeddings` with OpenAI-compatible request and response behavior.
 - [x] **API-04**: Developer can use reasoning or thinking-related request parameters, and Hive returns translated reasoning outputs and usage details when upstream support exists.
-- [x] **API-05**: Developer can call image-generation and image-processing endpoints with OpenAI-compatible behavior for supported operations.
-- [x] **API-06**: Developer can call speech, transcription, and translation endpoints with OpenAI-compatible behavior for supported operations.
-- [x] **API-07**: Developer can use `files`, `uploads`, and `batches` flows required by official SDK integrations.
+- [ ] **API-05**: Developer can call image-generation and image-processing endpoints with OpenAI-compatible behavior for supported operations.
+- [ ] **API-06**: Developer can call speech, transcription, and translation endpoints with OpenAI-compatible behavior for supported operations.
+- [ ] **API-07**: Developer can use `files`, `uploads`, and `batches` flows required by official SDK integrations.
 - [x] **API-08**: Public non-org/admin endpoints outside the initial launch subset are explicitly classified and return OpenAI-style unsupported responses until implemented.
 
 ### Model Catalog & Routing
 
 - [x] **ROUT-01**: Developer can list Hive-owned public model aliases, capabilities, and prices without seeing upstream provider identities.
-- [x] **ROUT-02**: Requests route only to internally approved providers and models that satisfy the alias capability matrix, fallback policy, and account or key allowlists.
+- [ ] **ROUT-02**: Requests route only to internally approved providers and models that satisfy the alias capability matrix, fallback policy, and account or key allowlists.
 - [x] **ROUT-03**: When an upstream provider supports cache-aware billing semantics, Hive tracks and itemizes the related token categories without exposing the provider name.
 
 ### Billing & Payments
 
-- [x] **BILL-01**: Customer has a prepaid Hive Credit balance backed by an immutable ledger of purchases, reservations, charges, refunds, and adjustments.
-- [x] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
+- [ ] **BILL-01**: Customer has a prepaid Hive Credit balance backed by an immutable ledger of purchases, reservations, charges, refunds, and adjustments.
+- [ ] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
 - [x] **BILL-03**: Customer can buy credits in increments of 1,000 Hive Credits through Stripe, bKash, and SSLCommerz.
-- [x] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 5% conversion fee used for every BDT transaction.
+- [ ] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 5% conversion fee used for every BDT transaction.
 - [x] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
 - [x] **BILL-06**: Customer can set account-level budgets and spend-threshold notifications in Hive Credits.
 - [x] **BILL-07**: Hive captures and applies country, business, tax, and payment-method surcharge data needed for compliant checkout and invoicing flows.
@@ -61,7 +61,7 @@
 
 ### Privacy & Operations
 
-- [x] **PRIV-01**: Customer can use the API without Hive storing prompt or response bodies at rest by default.
+- [ ] **PRIV-01**: Customer can use the API without Hive storing prompt or response bodies at rest by default.
 - [x] **OPS-01**: Hive operators can monitor health, latency, upstream failures, payment workflows, rate-limit events, and billing events without transcript storage.
 
 ## v2 Requirements
@@ -92,10 +92,10 @@
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| AUTH-01 | Phase 2 | Complete |
-| AUTH-02 | Phase 2 | Complete |
-| AUTH-03 | Phase 2 | Complete |
-| AUTH-04 | Phase 2 | Complete |
+| AUTH-01 | Phase 11 | Pending |
+| AUTH-02 | Phase 11 | Pending |
+| AUTH-03 | Phase 11 | Pending |
+| AUTH-04 | Phase 11 | Pending |
 | COMP-01 | Phase 1 | Complete |
 | COMP-02 | Phase 1 | Complete |
 | COMP-03 | Phase 1 | Complete |
@@ -103,17 +103,17 @@
 | API-02 | Phase 6 | Complete |
 | API-03 | Phase 6 | Complete |
 | API-04 | Phase 6 | Complete |
-| API-05 | Phase 7 | Complete |
-| API-06 | Phase 7 | Complete |
-| API-07 | Phase 7 | Complete |
+| API-05 | Phase 10 | Pending |
+| API-06 | Phase 10 | Pending |
+| API-07 | Phase 10 | Pending |
 | API-08 | Phase 1 | Complete |
 | ROUT-01 | Phase 4 | Complete |
-| ROUT-02 | Phase 4 | Complete |
+| ROUT-02 | Phase 10 | Pending |
 | ROUT-03 | Phase 4 | Complete |
-| BILL-01 | Phase 3 | Complete |
-| BILL-02 | Phase 3 | Complete |
+| BILL-01 | Phase 11 | Pending |
+| BILL-02 | Phase 11 | Pending |
 | BILL-03 | Phase 8 | Complete |
-| BILL-04 | Phase 8 | Complete |
+| BILL-04 | Phase 11 | Pending |
 | BILL-05 | Phase 9 | Complete |
 | BILL-06 | Phase 9 | Complete |
 | BILL-07 | Phase 8 | Complete |
@@ -121,11 +121,11 @@
 | KEY-02 | Phase 5 | Pending |
 | KEY-03 | Phase 5 | Complete |
 | KEY-04 | Phase 5 | Pending |
-| KEY-05 | Phase 5 | Pending |
+| KEY-05 | Phase 12 | Pending |
 | CONS-01 | Phase 9 | Complete |
 | CONS-02 | Phase 9 | Complete |
 | CONS-03 | Phase 9 | Complete |
-| PRIV-01 | Phase 3 | Complete |
+| PRIV-01 | Phase 11 | Pending |
 | OPS-01 | Phase 9 | Complete |
 
 **Coverage:**
@@ -135,4 +135,4 @@
 
 ---
 *Requirements defined: 2026-03-28*
-*Last updated: 2026-03-31 after Phase 4 completion*
+*Last updated: 2026-04-12 after gap closure phases 10-12 created*
