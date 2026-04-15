@@ -40,49 +40,49 @@
     {
       "method": "POST",
       "path": "/v1/audio/speech",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Text-to-speech"
     },
     {
       "method": "POST",
       "path": "/v1/audio/transcriptions",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Speech-to-text"
     },
     {
       "method": "POST",
       "path": "/v1/audio/translations",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Audio translation to English"
     },
     {
       "method": "GET",
       "path": "/v1/batches",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 7,
       "notes": "List batches"
     },
     {
       "method": "POST",
       "path": "/v1/batches",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 7,
       "notes": "Create batch"
     },
     {
       "method": "GET",
       "path": "/v1/batches/{batch_id}",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 7,
       "notes": "Retrieve batch"
     },
     {
       "method": "POST",
       "path": "/v1/batches/{batch_id}/cancel",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 7,
       "notes": "Cancel batch"
     },
@@ -96,7 +96,7 @@
     {
       "method": "POST",
       "path": "/v1/chat/completions",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Chat completion inference"
     },
@@ -131,14 +131,14 @@
     {
       "method": "POST",
       "path": "/v1/completions",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Legacy completion inference"
     },
     {
       "method": "POST",
       "path": "/v1/embeddings",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Text embeddings"
     },
@@ -229,35 +229,35 @@
     {
       "method": "GET",
       "path": "/v1/files",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "List files"
     },
     {
       "method": "POST",
       "path": "/v1/files",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Upload a file"
     },
     {
       "method": "GET",
       "path": "/v1/files/{file_id}",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Retrieve file metadata"
     },
     {
       "method": "DELETE",
       "path": "/v1/files/{file_id}",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Delete a file"
     },
     {
       "method": "GET",
       "path": "/v1/files/{file_id}/content",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Download file content"
     },
@@ -327,14 +327,14 @@
     {
       "method": "POST",
       "path": "/v1/images/edits",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Image editing"
     },
     {
       "method": "POST",
       "path": "/v1/images/generations",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Image generation"
     },
@@ -747,7 +747,7 @@
     {
       "method": "POST",
       "path": "/v1/responses",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 6,
       "notes": "Responses API inference"
     },
@@ -901,28 +901,28 @@
     {
       "method": "POST",
       "path": "/v1/uploads",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Create upload"
     },
     {
       "method": "POST",
       "path": "/v1/uploads/{upload_id}/cancel",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Cancel upload"
     },
     {
       "method": "POST",
       "path": "/v1/uploads/{upload_id}/complete",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Complete upload"
     },
     {
       "method": "POST",
       "path": "/v1/uploads/{upload_id}/parts",
-      "status": "planned_for_launch",
+      "status": "supported_now",
       "phase": 5,
       "notes": "Add upload part"
     },

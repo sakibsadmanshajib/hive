@@ -80,7 +80,7 @@ func main() {
 	mux.Handle("/v1/responses", inferenceHandler)
 	mux.Handle("/v1/embeddings", inferenceHandler)
 
-	// Image and audio routes
+	// Image, audio, file, and batch routes (require S3 storage)
 	storageClient, err := files.NewStorageClient(
 		os.Getenv("S3_ENDPOINT"),
 		os.Getenv("S3_ACCESS_KEY"),
@@ -88,65 +88,66 @@ func main() {
 		os.Getenv("S3_USE_SSL") == "true",
 	)
 	if err != nil {
-		log.Fatalf("failed to initialize storage client: %v", err)
+		log.Printf("WARNING: S3 storage unavailable (%v) — file, image, audio, and batch endpoints disabled", err)
+	} else {
+		imageBucket := os.Getenv("S3_BUCKET_IMAGES")
+		if imageBucket == "" {
+			imageBucket = "hive-images"
+		}
+
+		imagesAuthorizer := images.NewAuthorizerAdapter(authorizer)
+		imagesRouting := images.NewRoutingAdapter(routingClient)
+		imagesAccounting := images.NewAccountingAdapter(accountingClient)
+		imagesHandler := images.NewHandler(
+			imagesAuthorizer,
+			imagesRouting,
+			imagesAccounting,
+			resolveLiteLLMBaseURL(),
+			resolveLiteLLMMasterKey(),
+			&storageAdapter{client: storageClient},
+			imageBucket,
+		)
+		mux.Handle("/v1/images/generations", imagesHandler)
+		mux.Handle("/v1/images/edits", imagesHandler)
+		mux.Handle("/v1/images/variations", imagesHandler)
+
+		audioAuthorizer := audio.NewAuthorizerAdapter(authorizer)
+		audioRouting := audio.NewRoutingAdapter(routingClient)
+		audioAccounting := audio.NewAccountingAdapter(accountingClient)
+		audioHandler := audio.NewHandler(
+			audioAuthorizer,
+			audioRouting,
+			audioAccounting,
+			resolveLiteLLMBaseURL(),
+			resolveLiteLLMMasterKey(),
+		)
+		mux.Handle("/v1/audio/speech", audioHandler)
+		mux.Handle("/v1/audio/transcriptions", audioHandler)
+		mux.Handle("/v1/audio/translations", audioHandler)
+
+		filesBucket := os.Getenv("S3_BUCKET_FILES")
+		if filesBucket == "" {
+			filesBucket = "hive-files"
+		}
+		filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
+		filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
+		filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, filesBucket)
+		mux.Handle("/v1/files", filesHandler)
+		mux.Handle("/v1/files/", filesHandler)
+		mux.Handle("/v1/uploads", filesHandler)
+		mux.Handle("/v1/uploads/", filesHandler)
+
+		batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
+		batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
+		batchesFileClient := batches.NewFilestoreAdapter(filestoreClient)
+		batchesStorage := batches.NewStorageAdapter(storageClient)
+		batchesAccounting := batches.NewAccountingAdapter(accountingClient)
+		batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, batchesStorage, batchesAccounting, filesBucket)
+		mux.Handle("/v1/batches", batchesHandler)
+		mux.Handle("/v1/batches/", batchesHandler)
+
+		log.Printf("S3 storage enabled: images=%s, files=%s", imageBucket, filesBucket)
 	}
-	imageBucket := os.Getenv("S3_BUCKET_IMAGES")
-	if imageBucket == "" {
-		imageBucket = "hive-images"
-	}
-
-	imagesAuthorizer := images.NewAuthorizerAdapter(authorizer)
-	imagesRouting := images.NewRoutingAdapter(routingClient)
-	imagesAccounting := images.NewAccountingAdapter(accountingClient)
-	imagesHandler := images.NewHandler(
-		imagesAuthorizer,
-		imagesRouting,
-		imagesAccounting,
-		resolveLiteLLMBaseURL(),
-		resolveLiteLLMMasterKey(),
-		&storageAdapter{client: storageClient},
-		imageBucket,
-	)
-	mux.Handle("/v1/images/generations", imagesHandler)
-	mux.Handle("/v1/images/edits", imagesHandler)
-	mux.Handle("/v1/images/variations", imagesHandler)
-
-	audioAuthorizer := audio.NewAuthorizerAdapter(authorizer)
-	audioRouting := audio.NewRoutingAdapter(routingClient)
-	audioAccounting := audio.NewAccountingAdapter(accountingClient)
-	audioHandler := audio.NewHandler(
-		audioAuthorizer,
-		audioRouting,
-		audioAccounting,
-		resolveLiteLLMBaseURL(),
-		resolveLiteLLMMasterKey(),
-	)
-	mux.Handle("/v1/audio/speech", audioHandler)
-	mux.Handle("/v1/audio/transcriptions", audioHandler)
-	mux.Handle("/v1/audio/translations", audioHandler)
-
-	// Files and Uploads API routes
-	filesBucket := os.Getenv("S3_BUCKET_FILES")
-	if filesBucket == "" {
-		filesBucket = "hive-files"
-	}
-	filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
-	filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
-	filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, filesBucket)
-	mux.Handle("/v1/files", filesHandler)
-	mux.Handle("/v1/files/", filesHandler)
-	mux.Handle("/v1/uploads", filesHandler)
-	mux.Handle("/v1/uploads/", filesHandler)
-
-	// Batches API routes
-	batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
-	batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
-	batchesFileClient := batches.NewFilestoreAdapter(filestoreClient)
-	batchesStorage := batches.NewStorageAdapter(storageClient)
-	batchesAccounting := batches.NewAccountingAdapter(accountingClient)
-	batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, batchesStorage, batchesAccounting, filesBucket)
-	mux.Handle("/v1/batches", batchesHandler)
-	mux.Handle("/v1/batches/", batchesHandler)
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
