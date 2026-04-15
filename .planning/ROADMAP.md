@@ -176,18 +176,27 @@ Plans:
 - [ ] 09-02-PLAN.md — Console billing, invoices, checkout modal with BDT compliance test, API key management, and model catalog pages (Wave 3)
 - [ ] 09-03-PLAN.md — Console analytics tabs with Recharts, time-window filtering, budget alert form and banner (Wave 4)
 ### Phase 10: Routing & Storage Critical Fixes
-**Goal:** Fix the three infrastructure bugs that break all inference and media endpoints, and fully remove MinIO from the codebase.
+**Goal:** Fix the three infrastructure bugs that break all inference and media endpoints, and fully remove the legacy local object-storage implementation from the codebase.
 **Depends on**: Phases 4, 7
 **Requirements**: [ROUT-02, API-05, API-06, API-07]
-**Gap Closure:** Closes integration gaps #1 (ensureCapabilityColumns wrong table), #2 (minio-go S3 incompatibility), #3 (StorageUploader nil). Fixes all 3 broken E2E flows. Purges all MinIO references.
+**Gap Closure:** Closes integration gaps #1 (ensureCapabilityColumns wrong table), #2 (legacy S3 client incompatibility), #3 (StorageUploader nil). Fixes all 3 broken E2E flows. Purges all legacy object-storage references.
 **Success Criteria** (what must be TRUE):
   1. `provider_capabilities` table has all 5 media capability columns via proper SQL migration.
-  2. File/image/audio/batch endpoints use Supabase Storage REST API — no minio-go dependency.
+  2. File/image/audio/batch endpoints use Supabase Storage REST API — no legacy object-store client dependency.
   3. Batch worker has a wired StorageUploader for output file upload.
-  4. Zero references to MinIO remain in application code, Docker config, or documentation.
+  4. Zero references to the legacy local object-storage implementation remain in application code, Docker config, or documentation.
   5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
 
-Plans: 0 plans
+**Plans:** 7 plans
+
+Plans:
+- [ ] 10-01-PLAN.md — Wave 0 red validation for shared storage, edge storage config, and live smoke probes
+- [ ] 10-02-PLAN.md — Wave 0 red validation for routing schema, filestore internal contracts, and batch output persistence
+- [ ] 10-03-PLAN.md — Supabase migrations for provider media columns and filestore tables; remove runtime DDL
+- [ ] 10-04-PLAN.md — Shared path-style S3-over-HTTP storage package using SigV4 signing
+- [ ] 10-05-PLAN.md — Edge media/file/batch route wiring with required shared storage config
+- [ ] 10-06-PLAN.md — Control-plane filestore response fields, batch status persistence, and StorageUploader wiring
+- [ ] 10-07-PLAN.md — Env documentation, repository-wide legacy storage reference purge, and final verification gate
 
 ### Phase 11: Compliance, Verification & Artifact Cleanup
 **Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
@@ -233,6 +242,6 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 3/3 | Complete   | 2026-04-11 |
 | 9. Developer Console & Operational Hardening | 4/4 | Complete   | 2026-04-11 |
-| 10. Routing & Storage Critical Fixes | 0/0 | Pending | - |
+| 10. Routing & Storage Critical Fixes | 0/7 | Pending | - |
 | 11. Compliance, Verification & Artifact Cleanup | 0/0 | Pending | - |
 | 12. KEY-05 Hot-Path Rate Limiting | 0/0 | Pending | - |
