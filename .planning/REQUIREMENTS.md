@@ -39,30 +39,30 @@
 
 - [ ] **BILL-01**: Customer has a prepaid Hive Credit balance backed by an immutable ledger of purchases, reservations, charges, refunds, and adjustments.
 - [ ] **BILL-02**: Hive reserves credits before execution and finalizes or refunds usage accurately after success, failure, cancellation, retry, or interrupted stream completion.
-- [x] **BILL-03**: Customer can buy credits in increments of 1,000 Hive Credits through Stripe, bKash, and SSLCommerz.
+- [ ] **BILL-03**: Customer can buy credits in increments of 1,000 Hive Credits through Stripe, bKash, and SSLCommerz.
 - [ ] **BILL-04**: Hive prices credits at 100,000 Hive Credits per 1 USD and persists the exact FX snapshot plus 5% conversion fee used for every BDT transaction.
-- [x] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
-- [x] **BILL-06**: Customer can set account-level budgets and spend-threshold notifications in Hive Credits.
-- [x] **BILL-07**: Hive captures and applies country, business, tax, and payment-method surcharge data needed for compliant checkout and invoicing flows.
+- [ ] **BILL-05**: Customer can view invoices, receipts, and itemized spend by model, API key, and time window.
+- [ ] **BILL-06**: Customer can set account-level budgets and spend-threshold notifications in Hive Credits.
+- [ ] **BILL-07**: Hive captures and applies country, business, tax, and payment-method surcharge data needed for compliant checkout and invoicing flows.
 
 ### API Keys & Limits
 
-- [x] **KEY-01**: Account owner can create multiple API keys under one account and sees each raw secret only once at creation time.
+- [ ] **KEY-01**: Account owner can create multiple API keys under one account and sees each raw secret only once at creation time.
 - [ ] **KEY-02**: Account owner can set per-key nickname, expiration date, allowed models, and Hive Credit budget.
-- [x] **KEY-03**: Account owner can revoke or rotate one API key without affecting other keys on the account.
+- [ ] **KEY-03**: Account owner can revoke or rotate one API key without affecting other keys on the account.
 - [ ] **KEY-04**: Hive tracks usage and spend per API key and per model.
 - [ ] **KEY-05**: Hive enforces account-tier and per-key rate limits and quotas on the hot path.
 
 ### Developer Console
 
-- [x] **CONS-01**: Customer can manage balance, top-ups, ledger entries, invoices, and tax profile from a web console.
-- [x] **CONS-02**: Customer can manage API keys, model allowlists, model catalog visibility, and pricing visibility from a web console.
-- [x] **CONS-03**: Customer can inspect privacy-safe usage analytics, error history, and spend trends by account, key, model, and time window from a web console.
+- [ ] **CONS-01**: Customer can manage balance, top-ups, ledger entries, invoices, and tax profile from a web console.
+- [ ] **CONS-02**: Customer can manage API keys, model allowlists, model catalog visibility, and pricing visibility from a web console.
+- [ ] **CONS-03**: Customer can inspect privacy-safe usage analytics, error history, and spend trends by account, key, model, and time window from a web console.
 
 ### Privacy & Operations
 
 - [ ] **PRIV-01**: Customer can use the API without Hive storing prompt or response bodies at rest by default.
-- [x] **OPS-01**: Hive operators can monitor health, latency, upstream failures, payment workflows, rate-limit events, and billing events without transcript storage.
+- [ ] **OPS-01**: Hive operators can monitor health, latency, upstream failures, payment workflows, rate-limit events, and billing events without transcript storage.
 
 ## v2 Requirements
 
@@ -112,21 +112,21 @@
 | ROUT-03 | Phase 4 | Complete |
 | BILL-01 | Phase 11 | Pending |
 | BILL-02 | Phase 11 | Pending |
-| BILL-03 | Phase 8 | Complete |
+| BILL-03 | Phase 13 | Pending |
 | BILL-04 | Phase 11 | Pending |
-| BILL-05 | Phase 9 | Complete |
-| BILL-06 | Phase 9 | Complete |
-| BILL-07 | Phase 8 | Complete |
-| KEY-01 | Phase 5 | Complete |
-| KEY-02 | Phase 5 | Pending |
-| KEY-03 | Phase 5 | Complete |
-| KEY-04 | Phase 5 | Pending |
+| BILL-05 | Phase 14 | Pending |
+| BILL-06 | Phase 14 | Pending |
+| BILL-07 | Phase 13 | Pending |
+| KEY-01 | Phase 13 | Pending |
+| KEY-02 | Phase 12 | Pending |
+| KEY-03 | Phase 13 | Pending |
+| KEY-04 | Phase 10 | Pending |
 | KEY-05 | Phase 12 | Pending |
-| CONS-01 | Phase 9 | Complete |
-| CONS-02 | Phase 9 | Complete |
-| CONS-03 | Phase 9 | Complete |
+| CONS-01 | Phase 13 | Pending |
+| CONS-02 | Phase 13 | Pending |
+| CONS-03 | Phase 11 | Pending |
 | PRIV-01 | Phase 11 | Pending |
-| OPS-01 | Phase 9 | Complete |
+| OPS-01 | Phase 11 | Pending |
 
 **Coverage:**
 - v1 requirements: 35 total
@@ -135,4 +135,4 @@
 
 ---
 *Requirements defined: 2026-03-28*
-*Last updated: 2026-04-12 after gap closure phases 10-12 created*
+*Last updated: 2026-04-15 after gap closure phases 13-14 created and stale Complete statuses reset per milestone audit*

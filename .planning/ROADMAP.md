@@ -21,6 +21,11 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows. (completed 2026-04-10)
 - [x] **Phase 8: Payments, FX, and Compliance Checkout** - Add Stripe, bKash, SSLCommerz, FX snapshots, and tax-aware checkout. (completed 2026-04-11)
 - [x] **Phase 9: Developer Console & Operational Hardening** - Finish user-facing billing and usage UX plus production observability and alerts. (completed 2026-04-11)
+- [ ] **Phase 10: Routing & Storage Critical Fixes** - Fix capability schema drift, Supabase S3 storage wiring, batch lifecycle, and batch attribution.
+- [ ] **Phase 11: Compliance, Verification & Artifact Cleanup** - Remove amount_usd from BD checkout, verify orphaned Phase 2-3 requirements, and live-verify analytics and monitoring.
+- [ ] **Phase 12: KEY-05 Hot-Path Rate Limiting** - Enforce account-tier and per-key rate limits on the hot path; fix media/batch auth policy bypass.
+- [ ] **Phase 13: Console Integration Fixes** - Add web-console proxy routes for checkout and API key mutations; wire Buy Credits modal and rotate page.
+- [ ] **Phase 14: Payments, Invoicing & Budget Integration** - Create invoice rows on payment success; wire budget threshold checks into spend/grant paths.
 
 ## Phase Details
 
@@ -178,14 +183,15 @@ Plans:
 ### Phase 10: Routing & Storage Critical Fixes
 **Goal:** Fix the three infrastructure bugs that break all inference and media endpoints, and fully remove the legacy local object-storage implementation from the codebase.
 **Depends on**: Phases 4, 7
-**Requirements**: [ROUT-02, API-05, API-06, API-07]
-**Gap Closure:** Closes integration gaps #1 (ensureCapabilityColumns wrong table), #2 (legacy S3 client incompatibility), #3 (StorageUploader nil). Fixes all 3 broken E2E flows. Purges all legacy object-storage references.
+**Requirements**: [ROUT-02, API-05, API-06, API-07, KEY-04]
+**Gap Closure:** Closes integration gaps #1 (ensureCapabilityColumns wrong table), #2 (legacy S3 client incompatibility), #3 (StorageUploader nil). Fixes all 3 broken E2E flows. Purges all legacy object-storage references. Wires batch final settlement and per-key attribution.
 **Success Criteria** (what must be TRUE):
   1. `provider_capabilities` table has all 5 media capability columns via proper SQL migration.
   2. File/image/audio/batch endpoints use Supabase Storage REST API — no legacy object-store client dependency.
   3. Batch worker has a wired StorageUploader for output file upload.
   4. Zero references to the legacy local object-storage implementation remain in application code, Docker config, or documentation.
   5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
+  6. Batch final settlement correctly attributes spend and usage per API key and model.
 
 **Plans:** 8 plans
 
@@ -202,28 +208,59 @@ Plans:
 ### Phase 11: Compliance, Verification & Artifact Cleanup
 **Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
 **Depends on**: Phases 2, 3, 5, 8
-**Requirements**: [AUTH-01, AUTH-02, AUTH-03, AUTH-04, BILL-01, BILL-02, PRIV-01, BILL-04]
-**Gap Closure:** Closes integration gaps #4 (amount_usd exposed) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Updates KEY-02/KEY-04 checkboxes and Phase 5 progress.
+**Requirements**: [AUTH-01, AUTH-02, AUTH-03, AUTH-04, BILL-01, BILL-02, PRIV-01, BILL-04, CONS-03, OPS-01]
+**Gap Closure:** Closes integration gaps #4 (amount_usd exposed) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Live-verifies analytics and monitoring. Updates stale planning artifacts.
 **Success Criteria** (what must be TRUE):
   1. BD checkout responses never include `amount_usd` or any field exposing FX rates.
   2. ViewerAccount.slug is populated from control-plane viewer endpoint.
   3. 02-VERIFICATION.md exists and formally verifies AUTH-01 through AUTH-04.
   4. 03-VERIFICATION.md exists and formally verifies BILL-01, BILL-02, and PRIV-01.
   5. REQUIREMENTS.md checkboxes for KEY-02 and KEY-04 are checked. Phase 5 ROADMAP progress is accurate.
+  6. Live analytics charts render correct data; batch completeness is verified end-to-end.
+  7. Prometheus, Grafana, and Alertmanager are verified live against the running stack.
 
 Plans: 0 plans
 
 ### Phase 12: KEY-05 Hot-Path Rate Limiting
 **Goal:** Complete the last unsatisfied requirement — account-tier and per-key rate limits enforced on the hot path.
 **Depends on**: Phase 5
-**Requirements**: [KEY-05]
-**Gap Closure:** Closes the only explicitly unsatisfied requirement. Re-verifies current implementation state, fills remaining gaps.
+**Requirements**: [KEY-05, KEY-02]
+**Gap Closure:** Closes KEY-05 (rate limiting) and KEY-02 (media/batch auth policy bypass). Re-verifies current implementation state and fills remaining hot-path gaps.
 **Success Criteria** (what must be TRUE):
   1. Edge proxy enforces account-tier rate limits before dispatch.
   2. Edge proxy enforces per-key rate limits before dispatch.
   3. Rate-limited requests receive 429 with Retry-After header.
   4. Rate limit configuration flows from control-plane snapshot to edge enforcement.
   5. Phase 5 VERIFICATION.md marks KEY-05 as SATISFIED.
+  6. Image, audio, and batch auth adapters pass a non-empty model and correct estimated credits to the policy engine — allowlist, budget, and quota scoring apply.
+
+Plans: 0 plans
+
+### Phase 13: Console Integration Fixes
+**Goal:** Add the missing web-console proxy routes and UI fixes that make checkout, API key management, and billing pages fully functional from the browser.
+**Depends on**: Phases 8, 9
+**Requirements**: [BILL-03, BILL-07, CONS-01, CONS-02, KEY-01, KEY-03]
+**Gap Closure:** Closes integration gaps #5 (console checkout not reachable) and #6 (console API key mutations broken).
+**Success Criteria** (what must be TRUE):
+  1. Buy Credits CTA opens a rendered checkout modal; modal submits to a working web-console proxy route.
+  2. Checkout applies tax/rail data and posts to control-plane payment intent endpoint.
+  3. API key create and revoke fetch correct web-console proxy routes and receive control-plane responses.
+  4. API key rotate page exists and completes rotation end-to-end.
+  5. Billing and key-management console pages pass a full browser E2E walkthrough.
+
+Plans: 0 plans
+
+### Phase 14: Payments, Invoicing & Budget Integration
+**Goal:** Wire the two missing backend accounting integrations: invoice row creation on payment success and budget threshold enforcement on spend/grant paths.
+**Depends on**: Phases 8, 9, 13
+**Requirements**: [BILL-05, BILL-06]
+**Gap Closure:** Closes integration gaps #7 (invoice not created after payment) and #8 (budget threshold not enforced).
+**Success Criteria** (what must be TRUE):
+  1. Payment webhook success handler inserts a `payment_invoices` row; invoice appears in console list and PDF download.
+  2. Credit spend paths call budget threshold check; threshold breach triggers notifier.
+  3. Credit grant paths call budget threshold check after top-up.
+  4. Notifier sends an actual notification (email or webhook) — not log-only.
+  5. Budget threshold alert banner appears in console when threshold is breached.
 
 Plans: 0 plans
 
@@ -246,3 +283,5 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 10. Routing & Storage Critical Fixes | 0/8 | Pending | - |
 | 11. Compliance, Verification & Artifact Cleanup | 0/0 | Pending | - |
 | 12. KEY-05 Hot-Path Rate Limiting | 0/0 | Pending | - |
+| 13. Console Integration Fixes | 0/0 | Pending | - |
+| 14. Payments, Invoicing & Budget Integration | 0/0 | Pending | - |
