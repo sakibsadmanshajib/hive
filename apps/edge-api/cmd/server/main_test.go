@@ -209,6 +209,92 @@ func TestModelsRouteUsesLimiter(t *testing.T) {
 	}
 }
 
+func TestLoadStorageConfigRequiresAllS3EnvVars(t *testing.T) {
+	required := []string{
+		"S3_ENDPOINT",
+		"S3_ACCESS_KEY",
+		"S3_SECRET_KEY",
+		"S3_REGION",
+		"S3_BUCKET_FILES",
+		"S3_BUCKET_IMAGES",
+	}
+
+	for _, missing := range required {
+		t.Run(missing, func(t *testing.T) {
+			setValidStorageEnv(t)
+			t.Setenv(missing, "")
+
+			_, err := loadStorageConfigFromEnv()
+			if err == nil || !strings.Contains(err.Error(), missing+" is required") {
+				t.Fatalf("loadStorageConfigFromEnv() error = %v, want containing %q", err, missing+" is required")
+			}
+		})
+	}
+}
+
+func TestLoadStorageConfigAcceptsSupabasePathEndpoint(t *testing.T) {
+	setValidStorageEnv(t)
+
+	cfg, err := loadStorageConfigFromEnv()
+	if err != nil {
+		t.Fatalf("loadStorageConfigFromEnv() returned error: %v", err)
+	}
+	if cfg.Endpoint != "https://project.supabase.co/storage/v1/s3" {
+		t.Fatalf("Endpoint = %q, want Supabase S3 path endpoint", cfg.Endpoint)
+	}
+	if cfg.Region != "us-east-1" {
+		t.Fatalf("Region = %q, want us-east-1", cfg.Region)
+	}
+	if cfg.FilesBucket != "hive-files" {
+		t.Fatalf("FilesBucket = %q, want hive-files", cfg.FilesBucket)
+	}
+	if cfg.ImagesBucket != "hive-images" {
+		t.Fatalf("ImagesBucket = %q, want hive-images", cfg.ImagesBucket)
+	}
+}
+
+func TestRegisterMediaFileBatchRoutesRegistersAllPublicPaths(t *testing.T) {
+	mux := http.NewServeMux()
+	registerMediaFileBatchRoutes(
+		mux,
+		testRouteHandler("images"),
+		testRouteHandler("audio"),
+		testRouteHandler("files"),
+		testRouteHandler("batches"),
+	)
+
+	tests := []struct {
+		path        string
+		wantHeader  string
+		wantPattern string
+	}{
+		{path: "/v1/images/generations", wantHeader: "images", wantPattern: "/v1/images/generations"},
+		{path: "/v1/audio/speech", wantHeader: "audio", wantPattern: "/v1/audio/speech"},
+		{path: "/v1/files", wantHeader: "files", wantPattern: "/v1/files"},
+		{path: "/v1/uploads", wantHeader: "files", wantPattern: "/v1/uploads"},
+		{path: "/v1/batches", wantHeader: "batches", wantPattern: "/v1/batches"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			handler, pattern := mux.Handler(req)
+			if pattern != tt.wantPattern {
+				t.Fatalf("ServeMux pattern for %s = %q, want %q", tt.path, pattern, tt.wantPattern)
+			}
+
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+			if rr.Code != http.StatusNoContent {
+				t.Fatalf("%s returned status %d, want 204", tt.path, rr.Code)
+			}
+			if got := rr.Header().Get("X-Test-Handler"); got != tt.wantHeader {
+				t.Fatalf("%s matched handler %q, want %q", tt.path, got, tt.wantHeader)
+			}
+		})
+	}
+}
+
 func newCatalogSnapshotServer(t *testing.T, body string) string {
 	t.Helper()
 
@@ -253,4 +339,21 @@ func newTestAuthorizerWithLimiter(t *testing.T, status int, body string, check f
 	}
 
 	return authz.NewAuthorizer(client, limiter)
+}
+
+func setValidStorageEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("S3_ENDPOINT", "https://project.supabase.co/storage/v1/s3")
+	t.Setenv("S3_ACCESS_KEY", "test-access")
+	t.Setenv("S3_SECRET_KEY", "test-secret")
+	t.Setenv("S3_REGION", "us-east-1")
+	t.Setenv("S3_BUCKET_FILES", "hive-files")
+	t.Setenv("S3_BUCKET_IMAGES", "hive-images")
+}
+
+func testRouteHandler(name string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Test-Handler", name)
+		w.WriteHeader(http.StatusNoContent)
+	})
 }
