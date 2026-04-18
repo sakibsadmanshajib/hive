@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 10 context gathered
-last_updated: "2026-04-13T02:16:55.821Z"
+stopped_at: Completed 10-02-PLAN.md
+last_updated: "2026-04-18T22:29:15.304Z"
 progress:
-  total_phases: 12
+  total_phases: 14
   completed_phases: 9
-  total_plans: 38
-  completed_plans: 38
+  total_plans: 46
+  completed_plans: 40
 ---
 
 # Project State
@@ -19,12 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 09 — developer-console-operational-hardening
+**Current focus:** Phase 10 — routing-storage-critical-fixes
 
 ## Current Position
 
-Phase: 09 (developer-console-operational-hardening) — EXECUTING
-Plan: 3 of 4 (completed)
+Phase: 10 (routing-storage-critical-fixes) — EXECUTING
+Plan: 2 of 8 (completed)
 
 ## Performance Metrics
 
@@ -64,6 +64,8 @@ Plan: 3 of 4 (completed)
 | Phase 08-payments-fx-and-compliance-checkout P01 | 35 | 2 tasks | 11 files |
 | Phase 08 P02 | 45 | 2 tasks | 8 files |
 | Phase 08 P03 | 9 | 2 tasks | 6 files |
+| Phase 10-routing-storage-critical-fixes P01 | 9 | 3 tasks | 6 files |
+| Phase 10-routing-storage-critical-fixes P02 | 8 | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -161,6 +163,11 @@ Recent decisions affecting current work:
 - [09-03]: AnalyticsControls extracted to separate use-client file — keeps analytics page a pure server component while enabling client-side tab/window navigation via useRouter
 - [09-03]: /api/budget route handler bridges client BudgetAlertForm/Banner to server-only client.ts functions — avoids exposing CONTROL_PLANE_BASE_URL or session tokens to browser
 - [09-03]: Promise.allSettled for balance/budget in console layout — prevents layout render failure if either fetch errors; falls back to zero balance and null threshold
+- [Phase 10-routing-storage-critical-fixes]: Wave 0 storage tests validate constructor env errors but leave S3 methods stubbed with storage implementation pending.
+- [Phase 10-routing-storage-critical-fixes]: Edge route registration tests target a small helper signature that registers prebuilt handlers onto an http.ServeMux.
+- [Phase 10-routing-storage-critical-fixes]: Smoke probes capture HTTP status and body files before checking response content.
+- [Phase 10]: Wave 0 stayed red-only: production routing, filestore, and batch worker code was not changed.
+- [Phase 10]: Verification used corrected Docker toolchain invocation because the documented sh -lc form is swallowed by the toolchain entrypoint.
 
 ### Pending Todos
 
@@ -173,6 +180,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-13T02:16:55.818Z
-Stopped at: Phase 10 context gathered
-Resume file: .planning/phases/10-routing-storage-critical-fixes/10-CONTEXT.md
+Last session: 2026-04-18T22:29:15.295Z
+Stopped at: Completed 10-02-PLAN.md
+Resume file: None
