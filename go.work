@@ -5,3 +5,5 @@ toolchain go1.24.13
 use ./apps/edge-api
 
 use ./apps/control-plane
+
+use ./packages/storage
