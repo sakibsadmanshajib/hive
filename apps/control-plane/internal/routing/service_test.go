@@ -39,10 +39,10 @@ func (s *stubRepository) ListRouteCandidates(_ context.Context, _ string) ([]Rou
 func TestSelectRouteHonorsCapabilityMatrix(t *testing.T) {
 	repo := &stubRepository{
 		policy: catalog.AliasPolicySnapshot{
-			AliasID:                  "hive-fast",
-			PolicyMode:               "latency",
-			AllowPriceClassWidening:  false,
-			FallbackOrder:            []string{"route-groq-fast", "route-openrouter-fast-fallback"},
+			AliasID:                 "hive-fast",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+			FallbackOrder:           []string{"route-groq-fast", "route-openrouter-fast-fallback"},
 		},
 		candidates: []RouteCandidate{
 			{
@@ -103,11 +103,11 @@ func TestSelectRouteHonorsCapabilityMatrix(t *testing.T) {
 	svc := NewService(repo)
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
-		AliasID:              "hive-fast",
-		NeedResponses:        true,
-		NeedChatCompletions:  true,
-		NeedStreaming:        true,
-		AllowedProviders:     []string{"groq", "openrouter"},
+		AliasID:             "hive-fast",
+		NeedResponses:       true,
+		NeedChatCompletions: true,
+		NeedStreaming:       true,
+		AllowedProviders:    []string{"groq", "openrouter"},
 	})
 	if err != nil {
 		t.Fatalf("SelectRoute returned error: %v", err)
@@ -154,9 +154,9 @@ func TestSelectRouteRejectsDisallowedAlias(t *testing.T) {
 	svc := NewService(repo)
 
 	_, err := svc.SelectRoute(context.Background(), SelectionInput{
-		AliasID:         "hive-fast",
-		AllowedAliases:  []string{"hive-default"},
-		NeedResponses:   true,
+		AliasID:        "hive-fast",
+		AllowedAliases: []string{"hive-default"},
+		NeedResponses:  true,
 	})
 	if err == nil {
 		t.Fatal("expected alias allowlist rejection")
@@ -283,6 +283,80 @@ func TestSelectRouteAllowsExplicitPriceClassWidening(t *testing.T) {
 	wantFallbacks := []string{"route-openrouter-auto-premium"}
 	if !reflect.DeepEqual(result.FallbackRouteIDs, wantFallbacks) {
 		t.Fatalf("expected widened fallback routes %v, got %v", wantFallbacks, result.FallbackRouteIDs)
+	}
+}
+
+func TestSelectRouteSucceedsForSeededMediaAndBatchCapabilities(t *testing.T) {
+	repo := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-auto",
+			PolicyMode:              "weighted",
+			AllowPriceClassWidening: true,
+			FallbackOrder:           []string{"route-openrouter-auto"},
+		},
+		candidates: []RouteCandidate{
+			{
+				RouteID:                 "route-openrouter-auto",
+				AliasID:                 "hive-auto",
+				Provider:                "openrouter",
+				LiteLLMModelName:        "route-openrouter-auto",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsImageGeneration: true,
+				SupportsImageEdit:       true,
+				SupportsTTS:             true,
+				SupportsSTT:             true,
+				SupportsBatch:           true,
+			},
+		},
+	}
+
+	svc := NewService(repo)
+
+	tests := []struct {
+		name  string
+		input SelectionInput
+	}{
+		{
+			name: "image generation",
+			input: SelectionInput{
+				AliasID:             "hive-auto",
+				NeedImageGeneration: true,
+			},
+		},
+		{
+			name: "tts",
+			input: SelectionInput{
+				AliasID: "hive-auto",
+				NeedTTS: true,
+			},
+		},
+		{
+			name: "stt",
+			input: SelectionInput{
+				AliasID: "hive-auto",
+				NeedSTT: true,
+			},
+		},
+		{
+			name: "batch",
+			input: SelectionInput{
+				AliasID:   "hive-auto",
+				NeedBatch: true,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := svc.SelectRoute(context.Background(), tt.input)
+			if err != nil {
+				t.Fatalf("SelectRoute returned error: %v", err)
+			}
+			if result.RouteID != "route-openrouter-auto" {
+				t.Fatalf("expected route-openrouter-auto, got %q", result.RouteID)
+			}
+		})
 	}
 }
 
