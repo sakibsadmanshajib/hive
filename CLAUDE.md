@@ -42,10 +42,12 @@ Everything runs through Docker. No host-installed Go or Node required.
 cp .env.example .env
 # Fill in: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL
 # Fill in: NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY
+# Fill in: S3_ENDPOINT, S3_ACCESS_KEY, S3_SECRET_KEY, S3_REGION, S3_BUCKET_FILES, S3_BUCKET_IMAGES
 # Fill in at least one LLM provider: OPENROUTER_API_KEY or GROQ_API_KEY
 ```
 
 See `.env.example` for all variables with inline comments. Payment rail keys (Stripe, bKash, SSLCommerz) are optional — services start without them.
+Supabase Storage is the only object storage backend. Enable S3 protocol in Supabase Storage, pre-create the `hive-files` and `hive-images` buckets, and provide all S3 variables before starting `edge-api` or `control-plane`.
 
 ### 2. Run
 
@@ -112,7 +114,7 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 - **No hardcoded secrets**: Environment variables only. Never commit `.env`.
 - **Provider-blind errors**: Sanitize at both control-plane and edge boundaries. Provider names never leak to customers.
 - **math/big for FX**: All financial calculations use `math/big` to prevent float64 corruption.
-- **No MinIO**: Use Supabase Storage for all file/object storage. Zero MinIO references in codebase.
+- **Storage backend**: Supabase Storage is the only object storage backend. `edge-api` and `control-plane` fail fast unless the required S3 env vars are present, and `hive-files` plus `hive-images` must exist before startup.
 
 ## Regulatory Rules
 
@@ -123,7 +125,7 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 See `.planning/UAT-REPORT.md` for full runtime UAT results. Key blockers:
 
 1. **`ensureCapabilityColumns` targets wrong table** — `apps/control-plane/internal/routing/repository.go` targets `route_capabilities` instead of `provider_capabilities`. Blocks all inference routing.
-2. **File storage not wired** — Edge-api degrades gracefully (file/media endpoints disabled). Phase 10 replaces minio-go with Supabase Storage REST API.
+2. **File storage wiring under final verification** — Phase 10 now wires file and media endpoints to Supabase Storage. Final live smoke verification is tracked in Phase 10 Plan 10-08.
 3. **`amount_usd` exposed in BD checkout** — `apps/control-plane/internal/payments/http.go:105-115`. Regulatory risk.
 
 ## Project State

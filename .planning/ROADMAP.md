@@ -193,7 +193,7 @@ Plans:
   5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
   6. Batch final settlement correctly attributes spend and usage per API key and model.
 
-**Plans:** 6/8 plans executed
+**Plans:** 8 plans (6/8 executed)
 
 Plans:
 - [ ] 10-01-PLAN.md — Wave 0 red validation for shared storage, edge storage config, and status-aware live smoke probes
