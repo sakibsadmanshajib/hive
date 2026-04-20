@@ -193,7 +193,7 @@ Plans:
   5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
   6. Batch final settlement correctly attributes spend and usage per API key and model.
 
-**Plans:** 8/8 plans complete
+**Plans:** 8/10 plans complete; 2 gap-closure plans planned
 **Verification:** gaps_found — see `.planning/phases/10-routing-storage-critical-fixes/10-VERIFICATION.md`
 
 Plans:
@@ -205,6 +205,8 @@ Plans:
 - [x] 10-06-PLAN.md — Control-plane filestore response fields, batch status persistence, and StorageUploader wiring
 - [x] 10-07-PLAN.md — Env documentation and repository-wide legacy storage reference purge
 - [x] 10-08-PLAN.md — Final route/media checks, full suite, live smoke, and purge verification
+- [ ] 10-09-PLAN.md — Gap closure: accepted accounting policy modes and batch model alias reservation propagation
+- [ ] 10-10-PLAN.md — Gap closure: batch attribution persistence, terminal reservation settlement, KEY-04, and live smoke gate
 
 ### Phase 11: Compliance, Verification & Artifact Cleanup
 **Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
