@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 10-03-PLAN.md
-last_updated: "2026-04-20T03:36:28.094Z"
+stopped_at: Completed 10-04-PLAN.md
+last_updated: "2026-04-20T03:41:12.973Z"
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 46
-  completed_plans: 41
+  completed_plans: 42
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 10 (routing-storage-critical-fixes) — EXECUTING
-Plan: 3 of 8 (completed)
+Plan: 4 of 8 (completed)
 
 ## Performance Metrics
 
@@ -67,6 +67,7 @@ Plan: 3 of 8 (completed)
 | Phase 10-routing-storage-critical-fixes P01 | 9 | 3 tasks | 6 files |
 | Phase 10-routing-storage-critical-fixes P02 | 8 | 3 tasks | 5 files |
 | Phase 10-routing-storage-critical-fixes P03 | 5 | 2 tasks | 6 files |
+| Phase 10-routing-storage-critical-fixes P04 | 11 | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -172,6 +173,9 @@ Recent decisions affecting current work:
 - [Phase 10]: Routing and filestore constructors now trust Supabase migrations instead of mutating schema at runtime.
 - [Phase 10]: route-openrouter-auto is explicitly backfilled for media and batch capability filters so the existing hive-auto route remains eligible.
 - [Phase 10]: Filestore migration contract coverage was split from runtime-DDL source coverage so Task 1 can validate migrations before Task 2 removes constructors.
+- [Phase 10-routing-storage-critical-fixes]: Presigned URLs set X-Amz-Expires explicitly before calling v4.Signer.PresignHTTP because aws-sdk-go-v2 v1.41.5 does not expose a signer Expires option.
+- [Phase 10-routing-storage-critical-fixes]: UploadPart returns the ETag header exactly as received, including quotes, and CompleteMultipartUpload forwards that value into the XML payload.
+- [Phase 10-routing-storage-critical-fixes]: Verification uses the Docker toolchain with --entrypoint /bin/sh and /usr/local/go/bin/go so the tests actually execute under this compose entrypoint.
 
 ### Pending Todos
 
@@ -184,6 +188,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-20T03:36:28.084Z
-Stopped at: Completed 10-03-PLAN.md
+Last session: 2026-04-20T03:41:12.967Z
+Stopped at: Completed 10-04-PLAN.md
 Resume file: None
