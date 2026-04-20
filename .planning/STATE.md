@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 10-02-PLAN.md
-last_updated: "2026-04-18T22:29:15.304Z"
+stopped_at: Completed 10-03-PLAN.md
+last_updated: "2026-04-20T03:36:28.094Z"
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 46
-  completed_plans: 40
+  completed_plans: 41
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 10 (routing-storage-critical-fixes) — EXECUTING
-Plan: 2 of 8 (completed)
+Plan: 3 of 8 (completed)
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Plan: 2 of 8 (completed)
 | Phase 08 P03 | 9 | 2 tasks | 6 files |
 | Phase 10-routing-storage-critical-fixes P01 | 9 | 3 tasks | 6 files |
 | Phase 10-routing-storage-critical-fixes P02 | 8 | 3 tasks | 5 files |
+| Phase 10-routing-storage-critical-fixes P03 | 5 | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -168,6 +169,9 @@ Recent decisions affecting current work:
 - [Phase 10-routing-storage-critical-fixes]: Smoke probes capture HTTP status and body files before checking response content.
 - [Phase 10]: Wave 0 stayed red-only: production routing, filestore, and batch worker code was not changed.
 - [Phase 10]: Verification used corrected Docker toolchain invocation because the documented sh -lc form is swallowed by the toolchain entrypoint.
+- [Phase 10]: Routing and filestore constructors now trust Supabase migrations instead of mutating schema at runtime.
+- [Phase 10]: route-openrouter-auto is explicitly backfilled for media and batch capability filters so the existing hive-auto route remains eligible.
+- [Phase 10]: Filestore migration contract coverage was split from runtime-DDL source coverage so Task 1 can validate migrations before Task 2 removes constructors.
 
 ### Pending Todos
 
@@ -180,6 +184,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-18T22:29:15.295Z
-Stopped at: Completed 10-02-PLAN.md
+Last session: 2026-04-20T03:36:28.084Z
+Stopped at: Completed 10-03-PLAN.md
 Resume file: None
