@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows. (completed 2026-04-10)
 - [x] **Phase 8: Payments, FX, and Compliance Checkout** - Add Stripe, bKash, SSLCommerz, FX snapshots, and tax-aware checkout. (completed 2026-04-11)
 - [x] **Phase 9: Developer Console & Operational Hardening** - Finish user-facing billing and usage UX plus production observability and alerts. (completed 2026-04-11)
-- [ ] **Phase 10: Routing & Storage Critical Fixes** - Fix capability schema drift, Supabase S3 storage wiring, batch lifecycle, and batch attribution.
+- [x] **Phase 10: Routing & Storage Critical Fixes** - Fix capability schema drift, Supabase S3 storage wiring, batch lifecycle, and batch attribution. (completed 2026-04-20)
 - [ ] **Phase 11: Compliance, Verification & Artifact Cleanup** - Remove amount_usd from BD checkout, verify orphaned Phase 2-3 requirements, and live-verify analytics and monitoring.
 - [ ] **Phase 12: KEY-05 Hot-Path Rate Limiting** - Enforce account-tier and per-key rate limits on the hot path; fix media/batch auth policy bypass.
 - [ ] **Phase 13: Console Integration Fixes** - Add web-console proxy routes for checkout and API key mutations; wire Buy Credits modal and rotate page.
@@ -193,17 +193,17 @@ Plans:
   5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
   6. Batch final settlement correctly attributes spend and usage per API key and model.
 
-**Plans:** 7/8 plans executed
+**Plans:** 8/8 plans complete
 
 Plans:
-- [ ] 10-01-PLAN.md — Wave 0 red validation for shared storage, edge storage config, and status-aware live smoke probes
-- [ ] 10-02-PLAN.md — Wave 0 red validation for routing schema, media/batch route eligibility, filestore internal contracts, and batch output persistence
-- [ ] 10-03-PLAN.md — Supabase migrations and backfill for provider media columns, plus filestore tables; remove runtime DDL
-- [ ] 10-04-PLAN.md — Shared path-style S3-over-HTTP storage package using SigV4 signing
-- [ ] 10-05-PLAN.md — Edge media/file/batch route wiring with required shared storage config
-- [ ] 10-06-PLAN.md — Control-plane filestore response fields, batch status persistence, and StorageUploader wiring
-- [ ] 10-07-PLAN.md — Env documentation and repository-wide legacy storage reference purge
-- [ ] 10-08-PLAN.md — Final route/media checks, full suite, live smoke, and purge verification
+- [x] 10-01-PLAN.md — Wave 0 red validation for shared storage, edge storage config, and status-aware live smoke probes
+- [x] 10-02-PLAN.md — Wave 0 red validation for routing schema, media/batch route eligibility, filestore internal contracts, and batch output persistence
+- [x] 10-03-PLAN.md — Supabase migrations and backfill for provider media columns, plus filestore tables; remove runtime DDL
+- [x] 10-04-PLAN.md — Shared path-style S3-over-HTTP storage package using SigV4 signing
+- [x] 10-05-PLAN.md — Edge media/file/batch route wiring with required shared storage config
+- [x] 10-06-PLAN.md — Control-plane filestore response fields, batch status persistence, and StorageUploader wiring
+- [x] 10-07-PLAN.md — Env documentation and repository-wide legacy storage reference purge
+- [x] 10-08-PLAN.md — Final route/media checks, full suite, live smoke, and purge verification
 
 ### Phase 11: Compliance, Verification & Artifact Cleanup
 **Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
@@ -280,7 +280,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 3/3 | Complete   | 2026-04-11 |
 | 9. Developer Console & Operational Hardening | 4/4 | Complete   | 2026-04-11 |
-| 10. Routing & Storage Critical Fixes | 7/8 | In Progress|  |
+| 10. Routing & Storage Critical Fixes | 8/8 | Complete   | 2026-04-20 |
 | 11. Compliance, Verification & Artifact Cleanup | 0/0 | Pending | - |
 | 12. KEY-05 Hot-Path Rate Limiting | 0/0 | Pending | - |
 | 13. Console Integration Fixes | 0/0 | Pending | - |
