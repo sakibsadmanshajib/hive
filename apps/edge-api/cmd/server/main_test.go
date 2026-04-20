@@ -9,6 +9,8 @@ import (
 
 	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	edgecatalog "github.com/hivegpt/hive/apps/edge-api/internal/catalog"
+	"github.com/hivegpt/hive/apps/edge-api/internal/files"
+	"github.com/hivegpt/hive/packages/storage"
 )
 
 func TestResolveSpecPathDefaultsToGeneratedHiveContract(t *testing.T) {
@@ -250,6 +252,15 @@ func TestLoadStorageConfigAcceptsSupabasePathEndpoint(t *testing.T) {
 	}
 	if cfg.ImagesBucket != "hive-images" {
 		t.Fatalf("ImagesBucket = %q, want hive-images", cfg.ImagesBucket)
+	}
+}
+
+func TestSharedStorageClientSatisfiesFilesStorageBackend(t *testing.T) {
+	var _ files.StorageBackend = (*storage.S3Client)(nil)
+	var sharedParts []storage.CompletePart
+	var fileParts []files.CompletePart = sharedParts
+	if len(fileParts) != 0 {
+		t.Fatalf("expected empty part slice")
 	}
 }
 
