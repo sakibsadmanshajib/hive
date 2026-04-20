@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/hivegpt/hive/apps/edge-api/docs"
@@ -21,7 +23,17 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
 	"github.com/hivegpt/hive/apps/edge-api/internal/proxy"
+	"github.com/hivegpt/hive/packages/storage"
 )
+
+type storageConfig struct {
+	Endpoint     string
+	AccessKey    string
+	SecretKey    string
+	Region       string
+	FilesBucket  string
+	ImagesBucket string
+}
 
 func main() {
 	port := os.Getenv("PORT")
@@ -80,74 +92,61 @@ func main() {
 	mux.Handle("/v1/responses", inferenceHandler)
 	mux.Handle("/v1/embeddings", inferenceHandler)
 
-	// Image, audio, file, and batch routes (require S3 storage)
-	storageClient, err := files.NewStorageClient(
-		os.Getenv("S3_ENDPOINT"),
-		os.Getenv("S3_ACCESS_KEY"),
-		os.Getenv("S3_SECRET_KEY"),
-		os.Getenv("S3_USE_SSL") == "true",
-	)
+	storageCfg, err := loadStorageConfigFromEnv()
 	if err != nil {
-		log.Printf("WARNING: S3 storage unavailable (%v) — file, image, audio, and batch endpoints disabled", err)
-	} else {
-		imageBucket := os.Getenv("S3_BUCKET_IMAGES")
-		if imageBucket == "" {
-			imageBucket = "hive-images"
-		}
-
-		imagesAuthorizer := images.NewAuthorizerAdapter(authorizer)
-		imagesRouting := images.NewRoutingAdapter(routingClient)
-		imagesAccounting := images.NewAccountingAdapter(accountingClient)
-		imagesHandler := images.NewHandler(
-			imagesAuthorizer,
-			imagesRouting,
-			imagesAccounting,
-			resolveLiteLLMBaseURL(),
-			resolveLiteLLMMasterKey(),
-			&storageAdapter{client: storageClient},
-			imageBucket,
-		)
-		mux.Handle("/v1/images/generations", imagesHandler)
-		mux.Handle("/v1/images/edits", imagesHandler)
-		mux.Handle("/v1/images/variations", imagesHandler)
-
-		audioAuthorizer := audio.NewAuthorizerAdapter(authorizer)
-		audioRouting := audio.NewRoutingAdapter(routingClient)
-		audioAccounting := audio.NewAccountingAdapter(accountingClient)
-		audioHandler := audio.NewHandler(
-			audioAuthorizer,
-			audioRouting,
-			audioAccounting,
-			resolveLiteLLMBaseURL(),
-			resolveLiteLLMMasterKey(),
-		)
-		mux.Handle("/v1/audio/speech", audioHandler)
-		mux.Handle("/v1/audio/transcriptions", audioHandler)
-		mux.Handle("/v1/audio/translations", audioHandler)
-
-		filesBucket := os.Getenv("S3_BUCKET_FILES")
-		if filesBucket == "" {
-			filesBucket = "hive-files"
-		}
-		filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
-		filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
-		filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, filesBucket)
-		mux.Handle("/v1/files", filesHandler)
-		mux.Handle("/v1/files/", filesHandler)
-		mux.Handle("/v1/uploads", filesHandler)
-		mux.Handle("/v1/uploads/", filesHandler)
-
-		batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
-		batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
-		batchesFileClient := batches.NewFilestoreAdapter(filestoreClient)
-		batchesStorage := batches.NewStorageAdapter(storageClient)
-		batchesAccounting := batches.NewAccountingAdapter(accountingClient)
-		batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, batchesStorage, batchesAccounting, filesBucket)
-		mux.Handle("/v1/batches", batchesHandler)
-		mux.Handle("/v1/batches/", batchesHandler)
-
-		log.Printf("S3 storage enabled: images=%s, files=%s", imageBucket, filesBucket)
+		log.Fatalf("storage unavailable: %v", err)
 	}
+	storageClient, err := storage.NewS3Client(storage.Config{
+		Endpoint:  storageCfg.Endpoint,
+		AccessKey: storageCfg.AccessKey,
+		SecretKey: storageCfg.SecretKey,
+		Region:    storageCfg.Region,
+	})
+	if err != nil {
+		log.Fatalf("storage unavailable: %v", err)
+	}
+
+	// Image, audio, file, and batch routes require storage and are registered after config succeeds.
+	imageStorage := &storageAdapter{client: storageClient}
+	imagesAuthorizer := images.NewAuthorizerAdapter(authorizer)
+	imagesRouting := images.NewRoutingAdapter(routingClient)
+	imagesAccounting := images.NewAccountingAdapter(accountingClient)
+	imagesHandler := images.NewHandler(
+		imagesAuthorizer,
+		imagesRouting,
+		imagesAccounting,
+		resolveLiteLLMBaseURL(),
+		resolveLiteLLMMasterKey(),
+		imageStorage,
+		storageCfg.ImagesBucket,
+	)
+
+	audioAuthorizer := audio.NewAuthorizerAdapter(authorizer)
+	audioRouting := audio.NewRoutingAdapter(routingClient)
+	audioAccounting := audio.NewAccountingAdapter(accountingClient)
+	audioHandler := audio.NewHandler(
+		audioAuthorizer,
+		audioRouting,
+		audioAccounting,
+		resolveLiteLLMBaseURL(),
+		resolveLiteLLMMasterKey(),
+	)
+
+	filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
+	filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
+	fileStorage := &storageAdapter{client: storageClient}
+	filesHandler := files.NewHandler(filesAuthorizer, fileStorage, filestoreClient, storageCfg.FilesBucket)
+
+	batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
+	batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
+	batchesFileClient := batches.NewFilestoreAdapter(filestoreClient)
+	batchesStorage := &batchStorageAdapter{client: storageClient}
+	batchesAccounting := batches.NewAccountingAdapter(accountingClient)
+	batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, batchesStorage, batchesAccounting, storageCfg.FilesBucket)
+
+	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler)
+
+	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
@@ -169,6 +168,65 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func loadStorageConfigFromEnv() (storageConfig, error) {
+	endpoint, err := requireStorageEnv("S3_ENDPOINT")
+	if err != nil {
+		return storageConfig{}, err
+	}
+	accessKey, err := requireStorageEnv("S3_ACCESS_KEY")
+	if err != nil {
+		return storageConfig{}, err
+	}
+	secretKey, err := requireStorageEnv("S3_SECRET_KEY")
+	if err != nil {
+		return storageConfig{}, err
+	}
+	region, err := requireStorageEnv("S3_REGION")
+	if err != nil {
+		return storageConfig{}, err
+	}
+	filesBucket, err := requireStorageEnv("S3_BUCKET_FILES")
+	if err != nil {
+		return storageConfig{}, err
+	}
+	imagesBucket, err := requireStorageEnv("S3_BUCKET_IMAGES")
+	if err != nil {
+		return storageConfig{}, err
+	}
+
+	return storageConfig{
+		Endpoint:     endpoint,
+		AccessKey:    accessKey,
+		SecretKey:    secretKey,
+		Region:       region,
+		FilesBucket:  filesBucket,
+		ImagesBucket: imagesBucket,
+	}, nil
+}
+
+func requireStorageEnv(name string) (string, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return "", fmt.Errorf("%s is required", name)
+	}
+	return value, nil
+}
+
+func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandler, filesHandler, batchesHandler http.Handler) {
+	mux.Handle("/v1/images/generations", imagesHandler)
+	mux.Handle("/v1/images/edits", imagesHandler)
+	mux.Handle("/v1/images/variations", imagesHandler)
+	mux.Handle("/v1/audio/speech", audioHandler)
+	mux.Handle("/v1/audio/transcriptions", audioHandler)
+	mux.Handle("/v1/audio/translations", audioHandler)
+	mux.Handle("/v1/files", filesHandler)
+	mux.Handle("/v1/files/", filesHandler)
+	mux.Handle("/v1/uploads", filesHandler)
+	mux.Handle("/v1/uploads/", filesHandler)
+	mux.Handle("/v1/batches", batchesHandler)
+	mux.Handle("/v1/batches/", batchesHandler)
 }
 
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
@@ -263,21 +321,56 @@ func resolveLiteLLMMasterKey() string {
 	return "litellm-dev-key"
 }
 
-// storageAdapter adapts *files.StorageClient (returns *url.URL) to images.StorageInterface (returns string).
+// storageAdapter temporarily bridges the shared storage client to the files package part type.
 type storageAdapter struct {
-	client *files.StorageClient
+	client *storage.S3Client
 }
 
 func (a *storageAdapter) Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) error {
 	return a.client.Upload(ctx, bucket, key, reader, size, contentType)
 }
 
+func (a *storageAdapter) Download(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	return a.client.Download(ctx, bucket, key)
+}
+
+func (a *storageAdapter) Delete(ctx context.Context, bucket, key string) error {
+	return a.client.Delete(ctx, bucket, key)
+}
+
 func (a *storageAdapter) PresignedURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
-	u, err := a.client.PresignedURL(ctx, bucket, key, ttl)
-	if err != nil {
-		return "", err
+	return a.client.PresignedURL(ctx, bucket, key, ttl)
+}
+
+func (a *storageAdapter) InitMultipartUpload(ctx context.Context, bucket, key, contentType string) (string, error) {
+	return a.client.InitMultipartUpload(ctx, bucket, key, contentType)
+}
+
+func (a *storageAdapter) UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, reader io.Reader, size int64) (string, error) {
+	return a.client.UploadPart(ctx, bucket, key, uploadID, partNum, reader, size)
+}
+
+func (a *storageAdapter) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []files.CompletePart) error {
+	sharedParts := make([]storage.CompletePart, len(parts))
+	for i, part := range parts {
+		sharedParts[i] = storage.CompletePart{
+			PartNumber: part.PartNumber,
+			ETag:       part.ETag,
+		}
 	}
-	return u.String(), nil
+	return a.client.CompleteMultipartUpload(ctx, bucket, key, uploadID, sharedParts)
+}
+
+func (a *storageAdapter) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
+	return a.client.AbortMultipartUpload(ctx, bucket, key, uploadID)
+}
+
+type batchStorageAdapter struct {
+	client *storage.S3Client
+}
+
+func (a *batchStorageAdapter) Download(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
+	return a.client.Download(ctx, bucket, key)
 }
 
 // authorizeAliasRequest performs hot-path authorization.
