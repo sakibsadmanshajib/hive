@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 10-04-PLAN.md
-last_updated: "2026-04-20T03:41:12.973Z"
+stopped_at: Completed 10-06-PLAN.md
+last_updated: "2026-04-20T03:59:13.009Z"
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 46
-  completed_plans: 42
+  completed_plans: 43
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 Phase: 10 (routing-storage-critical-fixes) — EXECUTING
-Plan: 4 of 8 (completed)
+Plan: 5 of 8 (10-05 next incomplete; 10-06 completed)
 
 ## Performance Metrics
 
@@ -68,6 +68,7 @@ Plan: 4 of 8 (completed)
 | Phase 10-routing-storage-critical-fixes P02 | 8 | 3 tasks | 5 files |
 | Phase 10-routing-storage-critical-fixes P03 | 5 | 2 tasks | 6 files |
 | Phase 10-routing-storage-critical-fixes P04 | 11 | 2 tasks | 7 files |
+| Phase 10-routing-storage-critical-fixes P06 | 12 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -176,6 +177,9 @@ Recent decisions affecting current work:
 - [Phase 10-routing-storage-critical-fixes]: Presigned URLs set X-Amz-Expires explicitly before calling v4.Signer.PresignHTTP because aws-sdk-go-v2 v1.41.5 does not expose a signer Expires option.
 - [Phase 10-routing-storage-critical-fixes]: UploadPart returns the ETag header exactly as received, including quotes, and CompleteMultipartUpload forwards that value into the XML payload.
 - [Phase 10-routing-storage-critical-fixes]: Verification uses the Docker toolchain with --entrypoint /bin/sh and /usr/local/go/bin/go so the tests actually execute under this compose entrypoint.
+- [Phase 10-routing-storage-critical-fixes]: Internal control-plane responses now expose storage metadata for edge-api clients while public edge response types keep those values out of customer JSON.
+- [Phase 10-routing-storage-critical-fixes]: UpdateBatchStatus rejects unsupported update fields instead of ignoring them, so no caller-supplied key can enter generated SQL.
+- [Phase 10-routing-storage-critical-fixes]: Control-plane records a local replace for packages/storage because Docker go mod tidy otherwise attempts to fetch the private workspace module from GitHub.
 
 ### Pending Todos
 
@@ -188,6 +192,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-20T03:41:12.967Z
-Stopped at: Completed 10-04-PLAN.md
+Last session: 2026-04-20T03:59:13.005Z
+Stopped at: Completed 10-06-PLAN.md
 Resume file: None
