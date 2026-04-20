@@ -132,6 +132,18 @@ func (s *stubRepo) ListEvents(_ context.Context, filter ListEventsFilter) ([]Usa
 	return append([]UsageEvent(nil), events...), nil
 }
 
+func (s *stubRepo) GetUsageSummary(_ context.Context, _ AnalyticsFilter) ([]UsageSummaryRow, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) GetSpendSummary(_ context.Context, _ AnalyticsFilter) ([]SpendSummaryRow, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) GetErrorSummary(_ context.Context, _ AnalyticsFilter) ([]ErrorSummaryRow, error) {
+	return nil, nil
+}
+
 func (s *stubRepo) ListMembershipsByUserID(_ context.Context, userID uuid.UUID) ([]accounts.Membership, error) {
 	var memberships []accounts.Membership
 	for _, membership := range s.memberships {

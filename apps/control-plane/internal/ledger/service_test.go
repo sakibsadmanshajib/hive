@@ -99,6 +99,28 @@ func (s *stubRepo) ListEntries(_ context.Context, accountID uuid.UUID, limit int
 	return append([]LedgerEntry(nil), entries[:limit]...), nil
 }
 
+func (s *stubRepo) ListEntriesWithCursor(_ context.Context, filter ListEntriesFilter) ([]LedgerEntry, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	s.lastListLimit = filter.Limit
+
+	entries := s.entries[filter.AccountID]
+	if filter.Limit <= 0 || len(entries) <= filter.Limit {
+		return append([]LedgerEntry(nil), entries...), nil
+	}
+
+	return append([]LedgerEntry(nil), entries[:filter.Limit]...), nil
+}
+
+func (s *stubRepo) ListInvoices(_ context.Context, _ uuid.UUID) ([]InvoiceRow, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) GetInvoice(_ context.Context, _ uuid.UUID, _ uuid.UUID) (*InvoiceRow, error) {
+	return nil, ErrNotFound
+}
+
 func (s *stubRepo) ListMembershipsByUserID(_ context.Context, userID uuid.UUID) ([]accounts.Membership, error) {
 	var memberships []accounts.Membership
 	for _, membership := range s.memberships {
