@@ -100,6 +100,24 @@ func TestS3ClientUploadUsesEndpointPath(t *testing.T) {
 	}
 }
 
+func TestS3ClientUploadEscapesBucketAndKeySegments(t *testing.T) {
+	ctx := context.Background()
+	const wantRequestURI = "/storage/v1/s3/hive%20files/acct%20one/file%20%231.jsonl"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.EscapedPath(); got != wantRequestURI {
+			t.Errorf("escaped path = %q, want %q", got, wantRequestURI)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server.URL+"/storage/v1/s3/")
+	err := client.Upload(ctx, "hive files", "acct one/file #1.jsonl", strings.NewReader("body"), int64(len("body")), "text/plain")
+	if err != nil {
+		t.Fatalf("Upload returned error: %v", err)
+	}
+}
+
 func TestS3ClientDownloadAndDeleteUseEndpointPath(t *testing.T) {
 	ctx := context.Background()
 	const wantPath = "/storage/v1/s3/hive-files/acct/file.jsonl"
