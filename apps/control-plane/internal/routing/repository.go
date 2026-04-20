@@ -20,31 +20,7 @@ type pgxRepository struct {
 }
 
 func NewPgxRepository(pool *pgxpool.Pool) Repository {
-	r := &pgxRepository{pool: pool}
-	if err := r.ensureCapabilityColumns(context.Background()); err != nil {
-		// Non-fatal: columns may already exist or table may not yet be seeded.
-		// Log at the caller level if needed; schema migrations are best-effort here.
-		_ = err
-	}
-	return r
-}
-
-// ensureCapabilityColumns adds the Phase 7 capability columns to route_capabilities
-// if they do not already exist. Uses IF NOT EXISTS so this is safe to run repeatedly.
-func (r *pgxRepository) ensureCapabilityColumns(ctx context.Context) error {
-	alterStatements := []string{
-		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_image_generation BOOLEAN NOT NULL DEFAULT false`,
-		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_image_edit BOOLEAN NOT NULL DEFAULT false`,
-		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_tts BOOLEAN NOT NULL DEFAULT false`,
-		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_stt BOOLEAN NOT NULL DEFAULT false`,
-		`ALTER TABLE route_capabilities ADD COLUMN IF NOT EXISTS supports_batch BOOLEAN NOT NULL DEFAULT false`,
-	}
-	for _, stmt := range alterStatements {
-		if _, err := r.pool.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("routing: alter route_capabilities: %w", err)
-		}
-	}
-	return nil
+	return &pgxRepository{pool: pool}
 }
 
 func (r *pgxRepository) LoadAliasPolicy(ctx context.Context, aliasID string) (catalog.AliasPolicySnapshot, error) {

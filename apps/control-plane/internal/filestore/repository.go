@@ -17,81 +17,9 @@ type Repository struct {
 	pool *pgxpool.Pool
 }
 
-// NewRepository creates a new Repository and auto-creates the required tables.
+// NewRepository creates a repository over migration-managed filestore tables.
 func NewRepository(pool *pgxpool.Pool) (*Repository, error) {
-	r := &Repository{pool: pool}
-	if err := r.ensureSchema(context.Background()); err != nil {
-		return nil, fmt.Errorf("filestore: ensure schema: %w", err)
-	}
-	return r, nil
-}
-
-func (r *Repository) ensureSchema(ctx context.Context) error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS files (
-			id           TEXT PRIMARY KEY,
-			account_id   TEXT NOT NULL,
-			purpose      TEXT NOT NULL,
-			filename     TEXT NOT NULL,
-			bytes        BIGINT NOT NULL,
-			status       TEXT NOT NULL DEFAULT 'uploaded',
-			storage_path TEXT NOT NULL,
-			created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			expires_at   TIMESTAMPTZ
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_files_account_id ON files(account_id)`,
-		`CREATE TABLE IF NOT EXISTS uploads (
-			id            TEXT PRIMARY KEY,
-			account_id    TEXT NOT NULL,
-			filename      TEXT NOT NULL,
-			bytes         BIGINT NOT NULL,
-			mime_type     TEXT NOT NULL,
-			purpose       TEXT NOT NULL,
-			status        TEXT NOT NULL DEFAULT 'pending',
-			s3_upload_id  TEXT,
-			storage_path  TEXT NOT NULL,
-			created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			expires_at    TIMESTAMPTZ NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_uploads_account_id ON uploads(account_id)`,
-		`CREATE TABLE IF NOT EXISTS upload_parts (
-			id         TEXT PRIMARY KEY,
-			upload_id  TEXT NOT NULL REFERENCES uploads(id),
-			part_num   INT NOT NULL,
-			etag       TEXT NOT NULL,
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS batches (
-			id                       TEXT PRIMARY KEY,
-			account_id               TEXT NOT NULL,
-			input_file_id            TEXT NOT NULL REFERENCES files(id),
-			output_file_id           TEXT REFERENCES files(id),
-			error_file_id            TEXT REFERENCES files(id),
-			endpoint                 TEXT NOT NULL,
-			completion_window        TEXT NOT NULL DEFAULT '24h',
-			status                   TEXT NOT NULL DEFAULT 'validating',
-			provider                 TEXT NOT NULL DEFAULT '',
-			upstream_batch_id        TEXT,
-			reservation_id           TEXT,
-			request_counts_total     INT NOT NULL DEFAULT 0,
-			request_counts_completed INT NOT NULL DEFAULT 0,
-			request_counts_failed    INT NOT NULL DEFAULT 0,
-			created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			in_progress_at           TIMESTAMPTZ,
-			completed_at             TIMESTAMPTZ,
-			failed_at                TIMESTAMPTZ,
-			cancelled_at             TIMESTAMPTZ,
-			expires_at               TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '24 hours')
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_batches_account_id ON batches(account_id)`,
-	}
-
-	for _, stmt := range statements {
-		if _, err := r.pool.Exec(ctx, stmt); err != nil {
-			return fmt.Errorf("exec schema statement: %w", err)
-		}
-	}
-	return nil
+	return &Repository{pool: pool}, nil
 }
 
 // --- File methods ---
