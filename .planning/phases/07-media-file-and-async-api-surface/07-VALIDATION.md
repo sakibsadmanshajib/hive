@@ -62,7 +62,7 @@ created: 2026-04-09
 
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
-| Supabase Storage S3 upload/download | API-05 | Requires live S3-compatible endpoint | Verify via MinIO console in docker-compose dev environment |
+| Supabase Storage S3 upload/download | API-05 | Requires live S3-compatible endpoint | Verify via legacy local object-store emulator console in docker-compose dev environment |
 | Binary audio stream playback | API-07 | Audio quality requires human verification | Curl TTS endpoint, play resulting audio file |
 
 ---

@@ -9,7 +9,7 @@
 
 ### Phase Boundary
 
-Fix the three infrastructure bugs that break all inference and media endpoints, replace the minio-go storage client with a portable S3-compatible thin client backed by Supabase Storage, wire the batch worker's StorageUploader, convert filestore auto-schema to proper Supabase migrations, and fully purge every MinIO reference from the codebase. This phase does not add new endpoints, change routing logic, or expand the API surface — it makes existing code work correctly.
+Fix the three infrastructure bugs that break all inference and media endpoints, replace the legacy S3-compatible client storage client with a portable S3-compatible thin client backed by Supabase Storage, wire the batch worker's StorageUploader, convert filestore auto-schema to proper Supabase migrations, and fully purge every legacy local object-store emulator reference from the codebase. This phase does not add new endpoints, change routing logic, or expand the API surface — it makes existing code work correctly.
 
 ### Locked Decisions
 
@@ -17,7 +17,7 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 - Custom thin S3 client (~150 lines) wrapping net/http with S3v4 request signing
 - Use a standalone S3v4 signing library — not from-scratch HMAC, not full AWS SDK
 - Path-style URLs: `endpoint/bucket/key` format (Supabase S3 endpoint supports this)
-- Zero minio-go dependency — full purge from go.mod, go.sum, all imports, all code, all comments, all docs
+- Zero legacy S3-compatible client dependency — full purge from go.mod, go.sum, all imports, all code, all comments, all docs
 
 #### Storage Package Architecture
 - New shared Go module at `packages/storage/` in the go.work workspace
@@ -48,9 +48,9 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 - All schema management through Supabase migrations only — no runtime DDL
 
 #### Dependency Purge
-- Full minio-go removal: go.mod, go.sum, all import paths, all code references
+- Full legacy S3-compatible client removal: go.mod, go.sum, all import paths, all code references
 - Run `go mod tidy` after removal to clean transitive dependencies
-- Zero references to MinIO in application code, Docker config, documentation, comments, or variable names
+- Zero references to legacy local object-store emulator in application code, Docker config, documentation, comments, or variable names
 
 #### Environment Documentation
 - Add all S3/storage vars to `.env.example` with Supabase Storage S3 example values:
@@ -259,7 +259,7 @@ alter table public.provider_capabilities
 |------|------|---------|-----------------|------------|
 | Routing schema | `apps/control-plane/internal/routing/repository.go` | `NewPgxRepository` calls `ensureCapabilityColumns`, and that function alters `route_capabilities`; `ListRouteCandidates` joins `public.provider_capabilities` and selects the five media columns. | Delete `ensureCapabilityColumns` and add a migration against `public.provider_capabilities`. | HIGH |
 | Routing migration | `supabase/migrations/20260331_02_routing_policy.sql` | `provider_capabilities` exists with text/cache/reasoning flags only. | Add media capability columns with `boolean not null default false`; decide whether seed data needs updates for media aliases. | HIGH |
-| Edge storage | `apps/edge-api/internal/files/storage.go` | `minio-go` imports and `minio.Core` implementation provide the exact method surface to preserve. | Replace the file or move implementation to `packages/storage`; then update edge handlers/adapters. | HIGH |
+| Edge storage | `apps/edge-api/internal/files/storage.go` | `legacy S3-compatible client` imports and `old storage client core` implementation provide the exact method surface to preserve. | Replace the file or move implementation to `packages/storage`; then update edge handlers/adapters. | HIGH |
 | Edge startup | `apps/edge-api/cmd/server/main.go` | Storage init failure only logs a warning and disables file/image/audio/batch routes. | Replace with fail-fast config/client initialization; ensure audio route registration is not accidentally tied to object storage unless storage is already required. | HIGH |
 | Control-plane startup | `apps/control-plane/cmd/server/main.go` | Batch worker is created with `StorageUploader: nil`; control-plane lacks storage env wiring in Docker Compose. | Initialize shared storage client in control-plane and pass it to `batchstore.NewBatchWorker`; add Docker env vars. | HIGH |
 | Filestore schema | `apps/control-plane/internal/filestore/repository.go` | `NewRepository` calls `ensureSchema`, creating `files`, `uploads`, `upload_parts`, and `batches` at runtime. | Move DDL to migration and simplify constructor. | HIGH |
@@ -269,7 +269,7 @@ alter table public.provider_capabilities
 | Internal batch response | `apps/control-plane/internal/filestore/http.go` | `batchToResponse` omits `output_file_id`, `error_file_id`, and status timestamps. | API-07 batch output response will not expose produced files unless added. | HIGH |
 | Docker config | `deploy/docker/docker-compose.yml` | Edge has S3 env vars; control-plane does not. No service for the old local emulator remains. | Add storage env to control-plane; keep no emulator service. | HIGH |
 | Workspace | `go.work` | Only edge-api and control-plane are in workspace. | Add `use ./packages/storage`. | HIGH |
-| Dependency purge | `apps/edge-api/go.mod`, `apps/edge-api/go.sum` | `github.com/minio/minio-go/v7` and transitive entries remain. | Remove imports and run module tidy in edge-api. | HIGH |
+| Dependency purge | `apps/edge-api/go.mod`, `apps/edge-api/go.sum` | `old object-storage dependency` and transitive entries remain. | Remove imports and run module tidy in edge-api. | HIGH |
 
 ## Don't Hand-Roll
 
@@ -347,13 +347,13 @@ alter table public.provider_capabilities
 
 ### Pitfall 7: Zero-Reference Purge Conflicts With Historical Planning Docs
 
-**What goes wrong:** Final `rg -i "minio"` still finds references in `.planning`, `CLAUDE.md`, or this research/context material.
+**What goes wrong:** Final `rg -i "legacy local object-store emulator"` still finds references in `.planning`, `CLAUDE.md`, or this research/context material.
 
 **Why it happens:** User constraints require copying the original context, which itself contains the forbidden term. The phase success criterion says documentation too, with no historical-doc exemption.
 
 **How to avoid:** Planner must either include a final doc-scrub task for historical planning docs or explicitly ask the user to exempt immutable GSD history. Given the stated constraint, plan the scrub.
 
-**Warning signs:** Application code is clean, but root-level `rg -i "minio"` still returns planning or docs hits.
+**Warning signs:** Application code is clean, but root-level `rg -i "legacy local object-store emulator"` still returns planning or docs hits.
 
 ## Code Examples
 
@@ -449,7 +449,7 @@ batchWorker := batchstore.NewBatchWorker(
 | Old Approach | Current Approach | When Changed | Impact |
 |--------------|------------------|--------------|--------|
 | Runtime repository DDL | Supabase migrations only | Phase 10 decision after 2026-04-13 UAT failure | Avoids hidden schema drift and wrong-table mutations. |
-| `minio-go` client | Thin S3-over-HTTP client with official SigV4 signer | Phase 10 decision after Supabase endpoint path incompatibility | Supports Supabase endpoint paths and preserves provider portability. |
+| `legacy S3-compatible client` client | Thin S3-over-HTTP client with official SigV4 signer | Phase 10 decision after Supabase endpoint path incompatibility | Supports Supabase endpoint paths and preserves provider portability. |
 | Optional storage degradation | Startup-required storage config | Phase 10 decision | Missing credentials produce a clear startup failure instead of disabled routes. |
 | Edge-only storage implementation | Shared `packages/storage` module | Phase 10 decision | Allows batch worker and edge handlers to use the same storage implementation. |
 | Batch worker nil uploader | Real `StorageUploader` wired in control-plane | Phase 10 decision | Enables output/error file upload for completed upstream batches. |
@@ -457,7 +457,7 @@ batchWorker := batchstore.NewBatchWorker(
 **Deprecated/outdated:**
 - Runtime `ensureCapabilityColumns`: wrong table and no longer acceptable.
 - Runtime `ensureSchema`: should be removed after filestore migration lands.
-- `minio-go` dependency and all old local-emulator docs/config: explicitly out of phase after purge.
+- `legacy S3-compatible client` dependency and all old local-emulator docs/config: explicitly out of phase after purge.
 - Edge startup route gating on storage init: conflicts with fail-fast requirement.
 
 ## Open Questions
@@ -473,7 +473,7 @@ batchWorker := batchstore.NewBatchWorker(
    - Recommendation: Keep routing logic unchanged, but add only the minimal seed updates required for existing media aliases if E2E would otherwise fail with "no route" rather than provider error.
 
 3. **Does "zero references" include historical GSD docs?**
-   - What we know: The user said documentation and no resource references, and root `rg -i "minio"` currently returns many `.planning` hits.
+   - What we know: The user said documentation and no resource references, and root `rg -i "legacy local object-store emulator"` currently returns many `.planning` hits.
    - What's unclear: Whether immutable historical phase summaries may be exempt.
    - Recommendation: Plan a final repository-wide doc scrub or ask the user for a narrow exemption before final verification. This research file temporarily contains the term because user constraints must be copied verbatim.
 

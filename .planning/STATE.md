@@ -134,8 +134,8 @@ Recent decisions affecting current work:
 - [06-03]: Responses API streaming ends with event: response.completed — no data: [DONE] sentinel — matching OpenAI Responses SDK expectations.
 - [06-04]: dimensions gating uses model name heuristic (contains 'embedding-3') rather than capability flag — pragmatic Phase 6 approach; future phase can add SupportsDimensions to routing types.
 - [06-04]: EmbeddingObject.Embedding stays json.RawMessage to handle both float arrays and base64 encoding_format without type assertions.
-- [Phase 07-01]: minio.Core used instead of *minio.Client for multipart upload access — NewMultipartUpload/PutObjectPart/CompleteMultipartUpload/AbortMultipartUpload are private on Client but public on Core
-- [Phase 07-01]: minio-go pinned to v7.0.91 (latest compatible with Go 1.24 — v7.0.100+ requires Go 1.25)
+- [Phase 07-01]: old storage client core used instead of *old storage client for multipart upload access — NewMultipartUpload/PutObjectPart/CompleteMultipartUpload/AbortMultipartUpload are private on Client but public on Core
+- [Phase 07-01]: legacy S3-compatible client pinned to v7.0.91 (latest compatible with Go 1.24 — v7.0.100+ requires Go 1.25)
 - [07-02]: images.StorageInterface returns (string, error) for PresignedURL — avoids *url.URL dependency in the images package; storageAdapter in main.go bridges the real files.StorageClient
 - [07-02]: Audio Handler has no storage field by design — enforces that audio is never stored; no storage parameter means no accidental storage calls possible
 - [07-02]: NeedImageGeneration/NeedTTS/NeedSTT as package constants — documents routing capability intent without requiring a full orchestrator in unit tests

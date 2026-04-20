@@ -14,8 +14,8 @@ re_verification:
   regressions: []
 human_verification:
   - test: "POST /v1/images/generations with response_format=url — load returned URL in browser"
-    expected: "Image loads from MinIO (not provider URL); URL expires after 1 hour"
-    why_human: "Requires live MinIO + LiteLLM environment; URL reachability cannot be verified statically"
+    expected: "Image loads from legacy local object-store emulator (not provider URL); URL expires after 1 hour"
+    why_human: "Requires live legacy local object-store emulator + LiteLLM environment; URL reachability cannot be verified statically"
   - test: "POST /v1/audio/speech with valid request — inspect Content-Type header and play audio"
     expected: "Content-Type matches upstream provider (e.g., audio/mpeg); audio is valid and plays"
     why_human: "Requires live LiteLLM with TTS provider; binary fidelity cannot be verified statically"
@@ -45,7 +45,7 @@ Plan 04 (`07-04-PLAN.md`) was created to close those gaps. This re-verification 
 
 | #  | Truth | Status | Evidence |
 |----|-------|--------|----------|
-| 1  | MinIO runs in Docker Compose with health check and bucket init | VERIFIED | No regression — docker-compose.yml minio/minio-init services unchanged |
+| 1  | legacy local object-store emulator runs in Docker Compose with health check and bucket init | VERIFIED | No regression — docker-compose.yml legacy local object-store emulator-init services unchanged |
 | 2  | File metadata persists in Postgres (files, uploads, upload_parts tables) | VERIFIED | No regression — filestore/repository.go unchanged |
 | 3  | Batch metadata table exists with state machine columns | VERIFIED | No regression — filestore/repository.go unchanged |
 | 4  | Routing selection filters by image/audio/batch capability flags | VERIFIED | No regression — routing/service.go capability checks unchanged |
@@ -120,8 +120,8 @@ None. The three previously-identified blockers (missing auth/routing/accounting 
 #### 1. Image URL Mode — S3 Presigned URL Validity
 
 **Test:** POST `/v1/images/generations` with `response_format=url` and a working provider. Attempt to load the returned URL in a browser.
-**Expected:** Image loads from MinIO (not provider URL); URL expires after 1 hour.
-**Why human:** Requires live MinIO + LiteLLM environment; URL reachability cannot be verified statically.
+**Expected:** Image loads from legacy local object-store emulator (not provider URL); URL expires after 1 hour.
+**Why human:** Requires live legacy local object-store emulator + LiteLLM environment; URL reachability cannot be verified statically.
 
 #### 2. Audio Binary Content-Type Passthrough
 

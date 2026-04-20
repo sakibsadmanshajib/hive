@@ -6,7 +6,7 @@
 <domain>
 ## Phase Boundary
 
-Fix the three infrastructure bugs that break all inference and media endpoints, replace the minio-go storage client with a portable S3-compatible thin client backed by Supabase Storage, wire the batch worker's StorageUploader, convert filestore auto-schema to proper Supabase migrations, and fully purge every MinIO reference from the codebase. This phase does not add new endpoints, change routing logic, or expand the API surface — it makes existing code work correctly.
+Fix the three infrastructure bugs that break all inference and media endpoints, replace the legacy S3-compatible client storage client with a portable S3-compatible thin client backed by Supabase Storage, wire the batch worker's StorageUploader, convert filestore auto-schema to proper Supabase migrations, and fully purge every legacy local object-store emulator reference from the codebase. This phase does not add new endpoints, change routing logic, or expand the API surface — it makes existing code work correctly.
 
 </domain>
 
@@ -17,7 +17,7 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 - Custom thin S3 client (~150 lines) wrapping net/http with S3v4 request signing
 - Use a standalone S3v4 signing library — not from-scratch HMAC, not full AWS SDK
 - Path-style URLs: `endpoint/bucket/key` format (Supabase S3 endpoint supports this)
-- Zero minio-go dependency — full purge from go.mod, go.sum, all imports, all code, all comments, all docs
+- Zero legacy S3-compatible client dependency — full purge from go.mod, go.sum, all imports, all code, all comments, all docs
 
 ### Storage Package Architecture
 - New shared Go module at `packages/storage/` in the go.work workspace
@@ -48,9 +48,9 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 - All schema management through Supabase migrations only — no runtime DDL
 
 ### Dependency Purge
-- Full minio-go removal: go.mod, go.sum, all import paths, all code references
+- Full legacy S3-compatible client removal: go.mod, go.sum, all import paths, all code references
 - Run `go mod tidy` after removal to clean transitive dependencies
-- Zero references to MinIO in application code, Docker config, documentation, comments, or variable names
+- Zero references to legacy local object-store emulator in application code, Docker config, documentation, comments, or variable names
 
 ### Environment Documentation
 - Add all S3/storage vars to `.env.example` with Supabase Storage S3 example values:
@@ -87,7 +87,7 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 
 ### Existing Code to Modify
 - `apps/control-plane/internal/routing/repository.go` — Contains ensureCapabilityColumns (wrong table), ListRouteCandidates (queries missing columns)
-- `apps/edge-api/internal/files/storage.go` — Current minio-go StorageClient to be replaced
+- `apps/edge-api/internal/files/storage.go` — Current legacy S3-compatible client StorageClient to be replaced
 - `apps/control-plane/cmd/server/main.go:270` — Batch worker receives nil StorageUploader
 - `apps/control-plane/internal/filestore/repository.go` — Contains ensureSchema to be converted to migration
 - `apps/control-plane/internal/batchstore/worker.go` — StorageUploader interface definition
@@ -121,7 +121,7 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 - `apps/edge-api/cmd/server/main.go` — Wires StorageClient into file/image/batch handlers; must switch to packages/storage
 - `apps/control-plane/cmd/server/main.go` — Wires nil StorageUploader into batch worker; must switch to packages/storage
 - `go.work` — Must add `use ./packages/storage`
-- `deploy/docker/docker-compose.yml` — May have MinIO service references to remove
+- `deploy/docker/docker-compose.yml` — May have legacy local object-store emulator service references to remove
 - `.env.example` — Needs S3/storage credential documentation
 
 </code_context>
@@ -129,7 +129,7 @@ Fix the three infrastructure bugs that break all inference and media endpoints, 
 <specifics>
 ## Specific Ideas
 
-- "It is crucial that there is no mention or any code, any resource or anything related to minio in our codebase" — absolute zero-tolerance for MinIO references
+- "It is crucial that there is no mention or any code, any resource or anything related to legacy local object-store emulator in our codebase" — absolute zero-tolerance for legacy local object-store emulator references
 - "Make it compatible so we can easily move to S3 if we want to. Maybe use an adapter or something" — the Storage interface + S3Client adapter pattern enables provider portability
 - The Storage interface should be clean enough that adding AWS S3, Cloudflare R2, or GCS is just a new adapter file implementing the same interface
 

@@ -42,7 +42,7 @@ Extend OpenAI compatibility to file storage, batch processing, image generation/
 - Duration-based metering: TTS metered per character, transcription/translation metered per second of audio — fits existing per-model pricing catalog from Phase 4
 
 ### Claude's Discretion
-- MinIO configuration for local Docker dev parity with Supabase Storage
+- legacy local object-store emulator configuration for local Docker dev parity with Supabase Storage
 - Exact Redis queue data structures and worker concurrency settings
 - Batch JSONL validation rules and error reporting granularity
 - Image edit mask handling and format normalization
@@ -103,7 +103,7 @@ Extend OpenAI compatibility to file storage, batch processing, image generation/
 ### Integration Points
 - `apps/edge-api/cmd/server/main.go` — Register new handlers for /v1/files, /v1/uploads, /v1/batches, /v1/images, /v1/audio
 - `apps/control-plane/internal/platform/db/pool.go` — Postgres pool for new file metadata and batch state tables
-- `deploy/docker-compose.yml` — Add MinIO service for local dev file storage
+- `deploy/docker-compose.yml` — Add legacy local object-store emulator service for local dev file storage
 - `packages/openai-contract/matrix/support-matrix.json` — Update support status for implemented endpoints
 
 </code_context>

@@ -1,7 +1,7 @@
 # Phase 7: Media, File, and Async API Surface - Research
 
 **Researched:** 2026-04-09
-**Domain:** File storage (Supabase/MinIO/S3), Redis-backed batch processing, LiteLLM image/audio proxy, OpenAI-compatible multipart flows
+**Domain:** File storage (Supabase/legacy local object-store emulator/S3), Redis-backed batch processing, LiteLLM image/audio proxy, OpenAI-compatible multipart flows
 **Confidence:** HIGH (architecture) / MEDIUM (LiteLLM batch internals)
 
 <user_constraints>
@@ -31,7 +31,7 @@
 - Duration-based metering: TTS metered per character, transcription/translation metered per second of audio
 
 ### Claude's Discretion
-- MinIO configuration for local Docker dev parity with Supabase Storage
+- legacy local object-store emulator configuration for local Docker dev parity with Supabase Storage
 - Exact Redis queue data structures and worker concurrency settings
 - Batch JSONL validation rules and error reporting granularity
 - Image edit mask handling and format normalization
@@ -51,18 +51,18 @@
 |----|-------------|-----------------|
 | API-05 | Developer can call image-generation and image-processing endpoints with OpenAI-compatible behavior for supported operations. | LiteLLM supports `/images/generations` and `/images/edits` with multipart form forwarding; model alias catalog extension pattern established; signed URL generation for Supabase Storage documented. |
 | API-06 | Developer can call speech, transcription, and translation endpoints with OpenAI-compatible behavior for supported operations. | LiteLLM supports `/audio/speech`, `/audio/transcriptions`, `/audio/translations`; binary streaming relay pattern maps directly to `stream.go` adaptation; multipart form forward pattern for STT/translation. |
-| API-07 | Developer can use `files`, `uploads`, and `batches` flows required by official SDK integrations. | OpenAI Files API (single upload), Uploads API (multipart chunked), and Batches API fully specced; minio-go v7 for S3-compatible storage client; Asynq for Redis-backed batch worker; Postgres tables needed for file metadata and batch state. |
+| API-07 | Developer can use `files`, `uploads`, and `batches` flows required by official SDK integrations. | OpenAI Files API (single upload), Uploads API (multipart chunked), and Batches API fully specced; legacy S3-compatible client v7 for S3-compatible storage client; Asynq for Redis-backed batch worker; Postgres tables needed for file metadata and batch state. |
 </phase_requirements>
 
 ---
 
 ## Summary
 
-Phase 7 extends the Hive API surface with three groups of endpoints that real OpenAI SDK integrations rely on: (1) Files and Uploads API for blob storage with Postgres metadata, (2) Batches API for async bulk processing through upstream provider batch endpoints, and (3) Image and Audio API routes that proxy through LiteLLM. The existing orchestrator, accounting, error handling, and routing patterns from Phases 4–6 are all directly reusable; the primary new infrastructure is a file storage client (minio-go v7 works against both local MinIO and Supabase Storage), a Postgres schema for file/batch metadata, and a Redis-backed background worker for batch polling.
+Phase 7 extends the Hive API surface with three groups of endpoints that real OpenAI SDK integrations rely on: (1) Files and Uploads API for blob storage with Postgres metadata, (2) Batches API for async bulk processing through upstream provider batch endpoints, and (3) Image and Audio API routes that proxy through LiteLLM. The existing orchestrator, accounting, error handling, and routing patterns from Phases 4–6 are all directly reusable; the primary new infrastructure is a file storage client (legacy S3-compatible client v7 works against both local legacy local object-store emulator and Supabase Storage), a Postgres schema for file/batch metadata, and a Redis-backed background worker for batch polling.
 
 LiteLLM already exposes `/images/generations`, `/images/edits`, `/audio/speech`, `/audio/transcriptions`, and `/audio/translations` on the same base URL the edge-api already targets. Image and audio endpoints differ from text inference in that images may involve multipart form data (edits) rather than JSON, and audio TTS returns binary bytes rather than JSON — both require handler-level adaptations but no new external dependencies. For batch processing, LiteLLM supports forwarding to OpenAI, Azure, Vertex, and Bedrock batch APIs; Hive's batch worker will be a separate Go goroutine pool (or lightweight Asynq worker) that polls upstream status and writes back to Postgres.
 
-**Primary recommendation:** Use minio-go v7 as the unified S3 client (works against both MinIO in Docker and Supabase Storage in production). Use Asynq over raw Redis list polling for the batch worker — it gives retry, observability, and concurrency controls with minimal added complexity. Forward image and audio requests to LiteLLM using the same HTTP dispatch pattern as inference, adapted for multipart and binary bodies.
+**Primary recommendation:** Use legacy S3-compatible client v7 as the unified S3 client (works against both legacy local object-store emulator in Docker and Supabase Storage in production). Use Asynq over raw Redis list polling for the batch worker — it gives retry, observability, and concurrency controls with minimal added complexity. Forward image and audio requests to LiteLLM using the same HTTP dispatch pattern as inference, adapted for multipart and binary bodies.
 
 ---
 
@@ -71,7 +71,7 @@ LiteLLM already exposes `/images/generations`, `/images/edits`, `/audio/speech`,
 ### Core
 | Library | Version | Purpose | Why Standard |
 |---------|---------|---------|--------------|
-| minio-go/v7 | v7.0.x (latest ~7.0.91) | S3-compatible storage client for file upload/download/presigned URLs | Works against both MinIO (local dev) and Supabase Storage (production); one client, two environments |
+| legacy S3-compatible client/v7 | v7.0.x (latest ~7.0.91) | S3-compatible storage client for file upload/download/presigned URLs | Works against both legacy local object-store emulator (local dev) and Supabase Storage (production); one client, two environments |
 | github.com/hibiken/asynq | v0.24.x | Redis-backed distributed task queue for batch worker | Production-ready Go library; built on go-redis already in stack; retry, priorities, scheduling, web UI; well-maintained 2025 |
 | jackc/pgx/v5 | v5.7.2 (already in control-plane) | Postgres driver for file metadata and batch state tables | Already in control-plane go.mod |
 | google/uuid | v1.6.0 (already in control-plane) | File ID, upload ID, batch ID generation | Already in stack |
@@ -87,13 +87,13 @@ LiteLLM already exposes `/images/generations`, `/images/edits`, `/audio/speech`,
 ### Alternatives Considered
 | Instead of | Could Use | Tradeoff |
 |------------|-----------|----------|
-| minio-go/v7 | aws/aws-sdk-go-v2/s3 | AWS SDK works but heavier; minio-go is simpler and designed for S3-compatible services |
+| legacy S3-compatible client/v7 | aws/aws-sdk-go-v2/s3 | AWS SDK works but heavier; legacy S3-compatible client is simpler and designed for S3-compatible services |
 | Asynq | Raw Redis LPUSH/BRPOP polling | Raw Redis is sufficient but requires building retry, dead-letter, and observability from scratch |
 | Asynq | Machinery | Machinery is broker-agnostic but heavier; Asynq is simpler for Redis-only use case |
 
 **Installation (control-plane / new batch-worker service):**
 ```bash
-go get github.com/minio/minio-go/v7@latest
+go get old object-storage dependency@latest
 go get github.com/hibiken/asynq@latest
 ```
 
@@ -108,7 +108,7 @@ New packages in `apps/edge-api/internal/`:
 internal/
 ├── files/           # Files API and Uploads API handlers + storage client
 │   ├── handler.go   # HTTP handlers: POST/GET /v1/files, /v1/uploads/*
-│   ├── storage.go   # S3/Supabase Storage client wrapper (minio-go)
+│   ├── storage.go   # S3/Supabase Storage client wrapper (legacy S3-compatible client)
 │   ├── types.go     # FileObject, UploadObject, FilePart OpenAI types
 │   └── handler_test.go
 ├── batches/         # Batches API handlers (HTTP surface only)
@@ -149,20 +149,20 @@ apps/control-plane/cmd/batch-worker/
 
 ### Pattern 1: File Storage Handler — Authorize then Stream to S3
 
-**What:** The Files API single-upload (POST /v1/files) reads multipart form data from the client, streams it directly to Supabase Storage (via minio-go), and writes metadata to Postgres via the control-plane internal API.
+**What:** The Files API single-upload (POST /v1/files) reads multipart form data from the client, streams it directly to Supabase Storage (via legacy S3-compatible client), and writes metadata to Postgres via the control-plane internal API.
 
 **When to use:** All single-request file uploads (512 MB max).
 
 ```go
-// Source: established inference handler pattern + minio-go docs
+// Source: established inference handler pattern + legacy S3-compatible client docs
 func handleFileUpload(w http.ResponseWriter, r *http.Request, storage *files.StorageClient, accounting *files.AccountingClient) {
     // 1. Authorize (reuse authorizer pattern from inference)
     // 2. Parse multipart: r.ParseMultipartForm(512 << 20)
     file, header, err := r.FormFile("file")
     purpose := r.FormValue("purpose")
     // 3. Validate purpose ("batch", "assistants", "vision", "fine-tune")
-    // 4. Upload to Supabase Storage via minio-go
-    _, err = storage.PutObject(ctx, bucketName, objectKey, file, header.Size, minio.PutObjectOptions{
+    // 4. Upload to Supabase Storage via legacy S3-compatible client
+    _, err = storage.PutObject(ctx, bucketName, objectKey, file, header.Size, old storage client PutObjectOptions{
         ContentType: header.Header.Get("Content-Type"),
     })
     // 5. Write metadata to Postgres via control-plane internal API
@@ -177,7 +177,7 @@ func handleFileUpload(w http.ResponseWriter, r *http.Request, storage *files.Sto
 **When to use:** Files larger than practical for single-request upload; required for SDK compatibility.
 
 ```go
-// S3 multipart upload lifecycle via minio-go
+// S3 multipart upload lifecycle via legacy S3-compatible client
 // Create: storage.NewMultipartUpload(ctx, bucket, key, opts)  → uploadID
 // AddPart: storage.PutObjectPart(ctx, bucket, key, uploadID, partNum, reader, size, opts) → PartInfo
 // Complete: storage.CompleteMultipartUpload(ctx, bucket, key, uploadID, parts, opts) → UploadInfo
@@ -317,9 +317,9 @@ type RouteCandidate struct {
 
 | Problem | Don't Build | Use Instead | Why |
 |---------|-------------|-------------|-----|
-| S3 multipart upload lifecycle | Custom HTTP S3 client | minio-go v7 | Handles part tracking, retry, ETag assembly, presigned URLs — hundreds of edge cases |
+| S3 multipart upload lifecycle | Custom HTTP S3 client | legacy S3-compatible client v7 | Handles part tracking, retry, ETag assembly, presigned URLs — hundreds of edge cases |
 | Redis task queue with retry | LPUSH/BRPOP polling loop | Asynq | Dead-letter queue, exponential backoff, scheduling, priorities — already solved |
-| Presigned URL generation | HMAC-SHA256 signing code | minio-go `PresignedGetObject` | Signature V4 is complex; minio-go handles it correctly for both MinIO and Supabase |
+| Presigned URL generation | HMAC-SHA256 signing code | legacy S3-compatible client `PresignedGetObject` | Signature V4 is complex; legacy S3-compatible client handles it correctly for both legacy local object-store emulator and Supabase |
 | JSONL line parsing | Custom byte-scanner | `bufio.Scanner` line-by-line | Standard library; no dep needed |
 | Multipart form data assembly | Raw boundary string building | `mime/multipart.NewWriter` | Boundary encoding, content-disposition headers, part interleaving — stdlib handles it |
 
@@ -330,15 +330,15 @@ type RouteCandidate struct {
 ## Common Pitfalls
 
 ### Pitfall 1: Supabase Storage S3 Endpoint vs. REST API
-**What goes wrong:** Supabase Storage has two access modes — its native REST API (used by Supabase JS SDK) and an S3-compatible endpoint. minio-go targets the S3 endpoint. The S3 endpoint URL is `https://<project>.supabase.co/storage/v1/s3`, NOT `/storage/v1/object`.
+**What goes wrong:** Supabase Storage has two access modes — its native REST API (used by Supabase JS SDK) and an S3-compatible endpoint. legacy S3-compatible client targets the S3 endpoint. The S3 endpoint URL is `https://<project>.supabase.co/storage/v1/s3`, NOT `/storage/v1/object`.
 **Why it happens:** The Supabase docs prominently show the REST/JS API; the S3 endpoint is documented separately.
-**How to avoid:** Configure minio-go with `endpoint = <project>.supabase.co/storage/v1/s3` and use the project's S3 access key + secret (generated in Supabase dashboard). For local MinIO, use `minio:9000`.
+**How to avoid:** Configure legacy S3-compatible client with `endpoint = <project>.supabase.co/storage/v1/s3` and use the project's S3 access key + secret (generated in Supabase dashboard). For local legacy local object-store emulator, use `legacy-object-store:9000`.
 **Warning signs:** 403s or 404s on PutObject that don't occur with the Supabase REST API.
 
-### Pitfall 2: MinIO in Docker Requires Bucket Creation on First Start
-**What goes wrong:** MinIO starts empty — buckets don't exist. File upload calls fail with NoSuchBucket.
-**Why it happens:** Unlike Supabase Storage where buckets are pre-created in the dashboard, local MinIO requires explicit bucket creation.
-**How to avoid:** Add a startup script or use MinIO's `MINIO_VOLUMES` + a bucket init container in docker-compose. Alternatively create the bucket on first use with `storage.MakeBucket(ctx, name, opts)` if it doesn't exist.
+### Pitfall 2: legacy local object-store emulator in Docker Requires Bucket Creation on First Start
+**What goes wrong:** legacy local object-store emulator starts empty — buckets don't exist. File upload calls fail with NoSuchBucket.
+**Why it happens:** Unlike Supabase Storage where buckets are pre-created in the dashboard, local legacy local object-store emulator requires explicit bucket creation.
+**How to avoid:** Add a startup script or use legacy local object-store emulator's `OLD_STORAGE_VOLUMES` + a bucket init container in docker-compose. Alternatively create the bucket on first use with `storage.MakeBucket(ctx, name, opts)` if it doesn't exist.
 
 ### Pitfall 3: LiteLLM Image Edits Require Multipart (Not JSON)
 **What goes wrong:** Image edits (`/images/edits`) must be forwarded as `multipart/form-data`, not JSON. Sending JSON fails with 422.
@@ -393,7 +393,7 @@ CREATE TABLE uploads (
     mime_type       TEXT NOT NULL,
     purpose         TEXT NOT NULL,
     status          TEXT NOT NULL DEFAULT 'pending',  -- 'pending' | 'completed' | 'cancelled'
-    s3_upload_id    TEXT,               -- MinIO/S3 multipart upload ID
+    s3_upload_id    TEXT,               -- legacy local object-store emulator/S3 multipart upload ID
     storage_path    TEXT NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at      TIMESTAMPTZ NOT NULL -- short TTL, e.g. 1 hour for pending uploads
@@ -429,24 +429,24 @@ CREATE TABLE batches (
 );
 ```
 
-### minio-go Storage Client Pattern
+### legacy S3-compatible client Storage Client Pattern
 
 ```go
-// Source: minio-go v7 docs
+// Source: legacy S3-compatible client v7 docs
 import (
-    "github.com/minio/minio-go/v7"
-    "github.com/minio/minio-go/v7/pkg/credentials"
+    "old object-storage dependency"
+    "old object-storage dependency credentials package"
 )
 
-func NewStorageClient(endpoint, accessKey, secretKey string, useSSL bool) (*minio.Client, error) {
-    return minio.New(endpoint, &minio.Options{
+func NewStorageClient(endpoint, accessKey, secretKey string, useSSL bool) (*old storage client, error) {
+    return old storage client constructor(endpoint, &old storage client Options{
         Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
         Secure: useSSL,
     })
 }
 
 // Single upload
-_, err = client.PutObject(ctx, bucket, objectKey, reader, size, minio.PutObjectOptions{
+_, err = client.PutObject(ctx, bucket, objectKey, reader, size, old storage client PutObjectOptions{
     ContentType: contentType,
 })
 
@@ -454,9 +454,9 @@ _, err = client.PutObject(ctx, bucket, objectKey, reader, size, minio.PutObjectO
 url, err := client.PresignedGetObject(ctx, bucket, objectKey, time.Hour, nil)
 
 // Multipart upload lifecycle
-uploadID, err := client.NewMultipartUpload(ctx, bucket, key, minio.PutObjectOptions{})
-part, err := client.PutObjectPart(ctx, bucket, key, uploadID, partNum, reader, size, minio.PutObjectPartOptions{})
-_, err = client.CompleteMultipartUpload(ctx, bucket, key, uploadID, completeParts, minio.PutObjectOptions{})
+uploadID, err := client.NewMultipartUpload(ctx, bucket, key, old storage client PutObjectOptions{})
+part, err := client.PutObjectPart(ctx, bucket, key, uploadID, partNum, reader, size, old storage client PutObjectPartOptions{})
+_, err = client.CompleteMultipartUpload(ctx, bucket, key, uploadID, completeParts, old storage client PutObjectOptions{})
 ```
 
 ### Asynq Batch Worker Pattern
@@ -539,9 +539,9 @@ mux.Handle("/v1/audio/translations", audioHandler)
    - Recommendation: Test against LiteLLM's `/v1/batches` endpoint directly in the local dev environment before finalizing the normalization layer. Plan for provider-blind sanitization on batch retrieval responses.
 
 2. **Supabase Storage S3 endpoint availability in local dev**
-   - What we know: Supabase Storage (hosted) exposes an S3-compatible endpoint. MinIO is the local equivalent.
+   - What we know: Supabase Storage (hosted) exposes an S3-compatible endpoint. legacy local object-store emulator is the local equivalent.
    - What's unclear: Whether `SUPABASE_STORAGE_S3_ENDPOINT`, `SUPABASE_STORAGE_S3_ACCESS_KEY`, and `SUPABASE_STORAGE_S3_SECRET_KEY` env vars are the correct names to use, or whether Supabase uses different naming.
-   - Recommendation: Verify env var names from Supabase dashboard before wiring them into docker-compose. Use a storage interface so the minio-go client can be swapped easily.
+   - Recommendation: Verify env var names from Supabase dashboard before wiring them into docker-compose. Use a storage interface so the legacy S3-compatible client client can be swapped easily.
 
 3. **Audio duration metering source of truth**
    - What we know: TTS is metered per character (character count from the input `text` field). Transcription/translation is metered per second of audio.
@@ -589,7 +589,7 @@ mux.Handle("/v1/audio/translations", audioHandler)
 - [ ] `apps/edge-api/internal/batches/handler_test.go` — covers API-07 batch submit/retrieve
 - [ ] `apps/control-plane/internal/filestore/repository_test.go` — covers file metadata CRUD
 - [ ] `apps/control-plane/internal/batchstore/repository_test.go` — covers batch state machine
-- [ ] Docker MinIO service in docker-compose for local dev storage
+- [ ] Docker legacy local object-store emulator service in docker-compose for local dev storage
 
 ---
 
@@ -599,13 +599,13 @@ mux.Handle("/v1/audio/translations", audioHandler)
 - Codebase: `apps/edge-api/internal/inference/` — All handler, orchestrator, streaming, litellm, accounting, routing patterns
 - Codebase: `apps/control-plane/internal/routing/types.go` — Capability flag extension pattern
 - Codebase: `apps/control-plane/go.mod` — pgx/v5, go-redis/v9, google/uuid already in stack
-- Codebase: `deploy/docker/docker-compose.yml` — Redis already in stack; MinIO not yet added
+- Codebase: `deploy/docker/docker-compose.yml` — Redis already in stack; legacy local object-store emulator not yet added
 
 ### Secondary (MEDIUM confidence)
 - LiteLLM docs (via WebSearch): `/images/generations`, `/images/edits`, `/audio/speech`, `/audio/transcriptions`, `/audio/translations`, `/batches` — all confirmed supported on LiteLLM proxy
 - OpenAI API Reference (via WebSearch): Uploads API three-step lifecycle (create/addPart/complete), batch JSONL format, file purpose expiry rules
 - Supabase Storage S3 compatibility (via WebSearch): S3 endpoint path, presigned URL support, PutObject for single upload, multipart for large files
-- minio-go v7 docs (via WebSearch): `PutObject`, `NewMultipartUpload`, `PutObjectPart`, `CompleteMultipartUpload`, `PresignedGetObject` — confirmed API shape
+- legacy S3-compatible client v7 docs (via WebSearch): `PutObject`, `NewMultipartUpload`, `PutObjectPart`, `CompleteMultipartUpload`, `PresignedGetObject` — confirmed API shape
 
 ### Tertiary (LOW confidence)
 - Asynq v0.24 (WebSearch): Confirmed production-ready Redis task queue for Go; exact config options need validation against current pkg docs
@@ -616,7 +616,7 @@ mux.Handle("/v1/audio/translations", audioHandler)
 ## Metadata
 
 **Confidence breakdown:**
-- Standard stack: HIGH — minio-go and asynq are the established Go choices; all other dependencies already in the monorepo
+- Standard stack: HIGH — legacy S3-compatible client and asynq are the established Go choices; all other dependencies already in the monorepo
 - Architecture: HIGH — all patterns are direct extensions of existing inference handler conventions
 - LiteLLM endpoint support: MEDIUM — confirmed by search/docs but exact request shapes for multipart forwarding should be tested in dev
 - Batch worker internals: MEDIUM — Asynq API verified by docs; exact retry/concurrency tuning is Claude's discretion

@@ -2,12 +2,12 @@
 phase: 07-media-file-and-async-api-surface
 plan: "03"
 subsystem: api
-tags: [files-api, uploads-api, batches-api, asynq, minio, go, multipart, async-worker]
+tags: [files-api, uploads-api, batches-api, asynq, legacy local object-store emulator, go, multipart, async-worker]
 
 # Dependency graph
 requires:
   - phase: 07-01
-    provides: MinIO storage client, filestore/batchstore control-plane services, internal HTTP endpoints
+    provides: legacy local object-store emulator storage client, filestore/batchstore control-plane services, internal HTTP endpoints
   - phase: 07-02
     provides: edge-api handler patterns, authz snapshot, OpenAI error helpers
 provides:
@@ -26,7 +26,7 @@ tech-stack:
   patterns:
     - Adapter pattern isolating batches package from direct service dependencies
     - Internal HTTP client pattern (FilestoreClient, BatchstoreClient) for edge-to-control-plane communication
-    - S3 multipart upload lifecycle (init → add parts → complete/abort) via minio StorageClient
+    - S3 multipart upload lifecycle (init → add parts → complete/abort) via legacy local object-store emulator StorageClient
     - Account ownership enforcement at every Files/Uploads/Batches operation boundary
 
 key-files:
@@ -133,7 +133,7 @@ None - plan executed exactly as written.
 
 ## User Setup Required
 
-None - no external service configuration required beyond what was set up in Phase 07-01 (MinIO credentials, Redis for Asynq).
+None - no external service configuration required beyond what was set up in Phase 07-01 (legacy local object-store emulator credentials, Redis for Asynq).
 
 ## Next Phase Readiness
 

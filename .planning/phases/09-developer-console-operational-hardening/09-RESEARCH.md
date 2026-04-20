@@ -625,7 +625,7 @@ Dashboard panels needed (by category from CONTEXT.md):
 
 1. **Invoice storage: where do we store PDF invoices?**
    - What we know: Payments handler creates PaymentIntents. Each successful payment should trigger invoice creation.
-   - What's unclear: Is the PDF pre-generated and stored in MinIO, or generated on-demand at download time? MinIO is already available in docker-compose.
+   - What's unclear: Is the PDF pre-generated and stored in legacy local object-store emulator, or generated on-demand at download time? legacy local object-store emulator is already available in docker-compose.
    - Recommendation: Generate on-demand at download time (no storage needed, no stale PDFs). Store invoice metadata (intent ID, amount, date, line items) in a `payment_invoices` Postgres table. PDF is assembled from that row at download time.
 
 2. **Budget notification delivery: email via Supabase Auth or SMTP?**

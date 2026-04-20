@@ -3,7 +3,7 @@
 **Date:** 2026-04-13
 **Tester:** Automated (Claude Code agents)
 **Stack:** edge-api + control-plane + web-console + redis + litellm + prometheus + grafana + alertmanager
-**S3 Storage:** Gracefully degraded (Supabase Storage S3 endpoint format incompatible with minio-go path restriction)
+**S3 Storage:** Gracefully degraded (Supabase Storage S3 endpoint format incompatible with legacy S3-compatible client path restriction)
 **Inference Model:** hive-default (openrouter/free — zero cost)
 **Test Account:** uat.test.hive@gmail.com (auto-confirmed via Supabase MCP)
 
@@ -102,9 +102,9 @@ Scanned all 24 responses for forbidden strings: `openrouter`, `groq`, `litellm`,
 - **Impact:** No inference possible. The core product feature is broken.
 - **Fix:** Change table name to `provider_capabilities`, or add a proper SQL migration for the 5 columns.
 
-### 2. Supabase Storage S3 Endpoint Incompatible with minio-go
+### 2. Supabase Storage S3 Endpoint Incompatible with legacy S3-compatible client
 - **Symptom:** `Endpoint url cannot have fully qualified paths`
-- **Root cause:** `minio.New()` accepts only `host:port`, but Supabase S3 endpoint includes path `/storage/v1/s3`
+- **Root cause:** `old storage client constructor()` accepts only `host:port`, but Supabase S3 endpoint includes path `/storage/v1/s3`
 - **Impact:** File, image, audio, and batch endpoints disabled (gracefully degraded after fix)
 - **Fix applied:** Made storage init non-fatal in edge-api `main.go`. Permanent fix needed: either use a reverse proxy, or switch to Supabase Storage REST API instead of S3 protocol.
 
@@ -117,7 +117,7 @@ Scanned all 24 responses for forbidden strings: `openrouter`, `groq`, `litellm`,
 ## Mistakes Discovered & Fixed During UAT
 
 ### Mistake 1: Fatal S3 Init Killed the Server
-- **What happened:** Removing MinIO caused `log.Fatalf` on S3 client init failure, killing edge-api entirely
+- **What happened:** Removing legacy local object-store emulator caused `log.Fatalf` on S3 client init failure, killing edge-api entirely
 - **Fix:** Changed to `log.Printf` warning + conditional route registration. Server starts without S3; file/media endpoints disabled gracefully.
 - **File:** `apps/edge-api/cmd/server/main.go`
 - **Lesson:** Infrastructure dependencies should degrade gracefully, not crash the server.
@@ -133,7 +133,7 @@ Scanned all 24 responses for forbidden strings: `openrouter`, `groq`, `litellm`,
 - **Lesson:** API field names in plans should be verified against actual handler code.
 
 ### Mistake 4: Supabase S3 Endpoint Format
-- **What happened:** Set `S3_ENDPOINT=host/storage/v1/s3` but minio-go rejects paths in endpoint
+- **What happened:** Set `S3_ENDPOINT=host/storage/v1/s3` but legacy S3-compatible client rejects paths in endpoint
 - **Fix:** Made S3 optional (graceful degradation). Permanent fix needed.
 - **Lesson:** Test infrastructure changes against real clients before assuming drop-in compatibility.
 
