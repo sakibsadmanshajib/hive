@@ -2,8 +2,13 @@ package filestore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -289,13 +294,116 @@ func (r *Repository) ListBatches(ctx context.Context, accountID string, limit in
 
 // UpdateBatchStatus updates a batch's status and any additional fields provided.
 func (r *Repository) UpdateBatchStatus(ctx context.Context, id, status string, updates map[string]interface{}) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE batches SET status = $1 WHERE id = $2
-	`, status, id)
+	assignments := []string{"status = $1"}
+	args := []interface{}{status}
+
+	keys := make([]string, 0, len(updates))
+	for key := range updates {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		spec, ok := allowedBatchStatusUpdateFields[key]
+		if !ok {
+			return fmt.Errorf("filestore: unsupported batch update field %q", key)
+		}
+
+		value, err := normalizeBatchUpdateValue(key, updates[key], spec.kind)
+		if err != nil {
+			return err
+		}
+
+		args = append(args, value)
+		assignments = append(assignments, fmt.Sprintf("%s = $%d", spec.column, len(args)))
+	}
+
+	args = append(args, id)
+	query := fmt.Sprintf("UPDATE batches SET %s WHERE id = $%d", strings.Join(assignments, ", "), len(args))
+	_, err := r.pool.Exec(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("filestore: update batch status: %w", err)
 	}
 	return nil
+}
+
+type batchUpdateKind int
+
+const (
+	batchUpdateString batchUpdateKind = iota
+	batchUpdateInteger
+	batchUpdateTimestamp
+)
+
+type batchStatusUpdateField struct {
+	column string
+	kind   batchUpdateKind
+}
+
+var allowedBatchStatusUpdateFields = map[string]batchStatusUpdateField{
+	"upstream_batch_id":        {column: "upstream_batch_id", kind: batchUpdateString},
+	"reservation_id":           {column: "reservation_id", kind: batchUpdateString},
+	"output_file_id":           {column: "output_file_id", kind: batchUpdateString},
+	"error_file_id":            {column: "error_file_id", kind: batchUpdateString},
+	"request_counts_total":     {column: "request_counts_total", kind: batchUpdateInteger},
+	"request_counts_completed": {column: "request_counts_completed", kind: batchUpdateInteger},
+	"request_counts_failed":    {column: "request_counts_failed", kind: batchUpdateInteger},
+	"in_progress_at":           {column: "in_progress_at", kind: batchUpdateTimestamp},
+	"completed_at":             {column: "completed_at", kind: batchUpdateTimestamp},
+	"failed_at":                {column: "failed_at", kind: batchUpdateTimestamp},
+	"cancelled_at":             {column: "cancelled_at", kind: batchUpdateTimestamp},
+}
+
+func normalizeBatchUpdateValue(field string, value interface{}, kind batchUpdateKind) (interface{}, error) {
+	switch kind {
+	case batchUpdateString:
+		if value == nil {
+			return nil, nil
+		}
+		if text, ok := value.(string); ok {
+			return text, nil
+		}
+		return nil, fmt.Errorf("filestore: invalid batch string field %s: %T", field, value)
+	case batchUpdateInteger:
+		value, err := batchUpdateInt64(value)
+		if err != nil {
+			return nil, fmt.Errorf("filestore: invalid batch integer field %s: %w", field, err)
+		}
+		return value, nil
+	case batchUpdateTimestamp:
+		seconds, err := batchUpdateInt64(value)
+		if err != nil {
+			return nil, fmt.Errorf("filestore: invalid batch timestamp field %s: %w", field, err)
+		}
+		return time.Unix(seconds, 0).UTC(), nil
+	default:
+		return nil, fmt.Errorf("filestore: unsupported batch update field %s", field)
+	}
+}
+
+func batchUpdateInt64(value interface{}) (int64, error) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), nil
+	case int64:
+		return v, nil
+	case float64:
+		if math.Trunc(v) != v {
+			return 0, fmt.Errorf("non-integer number %v", v)
+		}
+		return int64(v), nil
+	case json.Number:
+		if n, err := v.Int64(); err == nil {
+			return n, nil
+		}
+		f, err := v.Float64()
+		if err != nil || math.Trunc(f) != f {
+			return 0, fmt.Errorf("invalid number %q", v.String())
+		}
+		return int64(f), nil
+	default:
+		return 0, fmt.Errorf("unsupported type %T", value)
+	}
 }
 
 // --- Scanners ---

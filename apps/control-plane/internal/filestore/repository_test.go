@@ -1,10 +1,12 @@
 package filestore
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFilestoreSchemaLivesInSupabaseMigration(t *testing.T) {
@@ -51,6 +53,34 @@ func TestUpdateBatchStatusPersistsAllowedFields(t *testing.T) {
 		if !strings.Contains(body, field) {
 			t.Fatalf("UpdateBatchStatus must persist allowed field %s", field)
 		}
+	}
+}
+
+func TestNormalizeBatchUpdateValueConvertsTimestampAndIntegerFields(t *testing.T) {
+	timestamp, err := normalizeBatchUpdateValue("completed_at", json.Number("1700000200"), batchUpdateTimestamp)
+	if err != nil {
+		t.Fatalf("normalize timestamp: %v", err)
+	}
+	if got, want := timestamp, time.Unix(1700000200, 0).UTC(); got != want {
+		t.Fatalf("expected timestamp %v, got %v", want, got)
+	}
+
+	count, err := normalizeBatchUpdateValue("request_counts_completed", float64(2), batchUpdateInteger)
+	if err != nil {
+		t.Fatalf("normalize integer: %v", err)
+	}
+	if got, want := count, int64(2); got != want {
+		t.Fatalf("expected integer %v, got %v", want, got)
+	}
+}
+
+func TestNormalizeBatchUpdateValueRejectsInvalidTypes(t *testing.T) {
+	if _, err := normalizeBatchUpdateValue("completed_at", "not-unix", batchUpdateTimestamp); err == nil || !strings.Contains(err.Error(), "invalid batch timestamp field") {
+		t.Fatalf("expected invalid timestamp error, got %v", err)
+	}
+
+	if _, err := normalizeBatchUpdateValue("request_counts_failed", "one", batchUpdateInteger); err == nil || !strings.Contains(err.Error(), "invalid batch integer field") {
+		t.Fatalf("expected invalid integer error, got %v", err)
 	}
 }
 
