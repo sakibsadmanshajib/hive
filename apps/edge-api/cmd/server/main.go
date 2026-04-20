@@ -1,15 +1,12 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/hivegpt/hive/apps/edge-api/docs"
 	"github.com/hivegpt/hive/apps/edge-api/internal/audio"
@@ -106,8 +103,6 @@ func main() {
 		log.Fatalf("storage unavailable: %v", err)
 	}
 
-	// Image, audio, file, and batch routes require storage and are registered after config succeeds.
-	imageStorage := &storageAdapter{client: storageClient}
 	imagesAuthorizer := images.NewAuthorizerAdapter(authorizer)
 	imagesRouting := images.NewRoutingAdapter(routingClient)
 	imagesAccounting := images.NewAccountingAdapter(accountingClient)
@@ -117,7 +112,7 @@ func main() {
 		imagesAccounting,
 		resolveLiteLLMBaseURL(),
 		resolveLiteLLMMasterKey(),
-		imageStorage,
+		storageClient,
 		storageCfg.ImagesBucket,
 	)
 
@@ -134,15 +129,13 @@ func main() {
 
 	filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
 	filesAuthorizer := files.NewAuthorizerAdapter(authorizer)
-	fileStorage := &storageAdapter{client: storageClient}
-	filesHandler := files.NewHandler(filesAuthorizer, fileStorage, filestoreClient, storageCfg.FilesBucket)
+	filesHandler := files.NewHandler(filesAuthorizer, storageClient, filestoreClient, storageCfg.FilesBucket)
 
 	batchClient := batches.NewBatchClient(resolveControlPlaneBaseURL())
 	batchesAuthorizer := batches.NewAuthorizerAdapter(authorizer)
 	batchesFileClient := batches.NewFilestoreAdapter(filestoreClient)
-	batchesStorage := &batchStorageAdapter{client: storageClient}
 	batchesAccounting := batches.NewAccountingAdapter(accountingClient)
-	batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, batchesStorage, batchesAccounting, storageCfg.FilesBucket)
+	batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, storageClient, batchesAccounting, storageCfg.FilesBucket)
 
 	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler)
 
@@ -319,58 +312,6 @@ func resolveLiteLLMMasterKey() string {
 		return k
 	}
 	return "litellm-dev-key"
-}
-
-// storageAdapter temporarily bridges the shared storage client to the files package part type.
-type storageAdapter struct {
-	client *storage.S3Client
-}
-
-func (a *storageAdapter) Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) error {
-	return a.client.Upload(ctx, bucket, key, reader, size, contentType)
-}
-
-func (a *storageAdapter) Download(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	return a.client.Download(ctx, bucket, key)
-}
-
-func (a *storageAdapter) Delete(ctx context.Context, bucket, key string) error {
-	return a.client.Delete(ctx, bucket, key)
-}
-
-func (a *storageAdapter) PresignedURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
-	return a.client.PresignedURL(ctx, bucket, key, ttl)
-}
-
-func (a *storageAdapter) InitMultipartUpload(ctx context.Context, bucket, key, contentType string) (string, error) {
-	return a.client.InitMultipartUpload(ctx, bucket, key, contentType)
-}
-
-func (a *storageAdapter) UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, reader io.Reader, size int64) (string, error) {
-	return a.client.UploadPart(ctx, bucket, key, uploadID, partNum, reader, size)
-}
-
-func (a *storageAdapter) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []files.CompletePart) error {
-	sharedParts := make([]storage.CompletePart, len(parts))
-	for i, part := range parts {
-		sharedParts[i] = storage.CompletePart{
-			PartNumber: part.PartNumber,
-			ETag:       part.ETag,
-		}
-	}
-	return a.client.CompleteMultipartUpload(ctx, bucket, key, uploadID, sharedParts)
-}
-
-func (a *storageAdapter) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
-	return a.client.AbortMultipartUpload(ctx, bucket, key, uploadID)
-}
-
-type batchStorageAdapter struct {
-	client *storage.S3Client
-}
-
-func (a *batchStorageAdapter) Download(ctx context.Context, bucket, key string) (io.ReadCloser, error) {
-	return a.client.Download(ctx, bucket, key)
 }
 
 // authorizeAliasRequest performs hot-path authorization.

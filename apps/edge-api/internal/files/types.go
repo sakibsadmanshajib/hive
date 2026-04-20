@@ -1,6 +1,10 @@
 package files
 
-import "errors"
+import (
+	"errors"
+
+	sharedstorage "github.com/hivegpt/hive/packages/storage"
+)
 
 // ErrNotFound is returned when a file or upload resource does not exist for the given account.
 var ErrNotFound = errors.New("not found")
@@ -8,7 +12,7 @@ var ErrNotFound = errors.New("not found")
 // FileObject is the OpenAI-compatible representation of an uploaded file.
 type FileObject struct {
 	ID          string `json:"id"`
-	Object      string `json:"object"`    // always "file"
+	Object      string `json:"object"` // always "file"
 	Bytes       int64  `json:"bytes"`
 	CreatedAt   int64  `json:"created_at"`
 	Filename    string `json:"filename"`
@@ -20,7 +24,7 @@ type FileObject struct {
 // UploadObject is the OpenAI-compatible representation of a multipart upload.
 type UploadObject struct {
 	ID          string      `json:"id"`
-	Object      string      `json:"object"`    // always "upload"
+	Object      string      `json:"object"` // always "upload"
 	Bytes       int64       `json:"bytes"`
 	CreatedAt   int64       `json:"created_at"`
 	Filename    string      `json:"filename"`
@@ -35,7 +39,7 @@ type UploadObject struct {
 // UploadPartObject is the OpenAI-compatible representation of an upload part.
 type UploadPartObject struct {
 	ID        string `json:"id"`
-	Object    string `json:"object"`    // always "upload.part"
+	Object    string `json:"object"` // always "upload.part"
 	CreatedAt int64  `json:"created_at"`
 	UploadID  string `json:"upload_id"`
 }
@@ -54,10 +58,7 @@ type DeletedFileResponse struct {
 }
 
 // CompletePart holds the part number and ETag needed to finalize a multipart upload.
-type CompletePart struct {
-	PartNumber int
-	ETag       string
-}
+type CompletePart = sharedstorage.CompletePart
 
 // ValidPurposes lists the accepted values for file purpose.
 var ValidPurposes = map[string]bool{
