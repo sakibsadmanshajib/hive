@@ -21,7 +21,7 @@ Decimal phases appear between their surrounding integers in numeric order.
 - [x] **Phase 7: Media, File, and Async API Surface** - Expand to files, uploads, batches, images, and audio workflows. (completed 2026-04-10)
 - [x] **Phase 8: Payments, FX, and Compliance Checkout** - Add Stripe, bKash, SSLCommerz, FX snapshots, and tax-aware checkout. (completed 2026-04-11)
 - [x] **Phase 9: Developer Console & Operational Hardening** - Finish user-facing billing and usage UX plus production observability and alerts. (completed 2026-04-11)
-- [x] **Phase 10: Routing & Storage Critical Fixes** - Fix capability schema drift, Supabase S3 storage wiring, batch lifecycle, and batch attribution. (completed 2026-04-20)
+- [ ] **Phase 10: Routing & Storage Critical Fixes** - Fix capability schema drift, Supabase S3 storage wiring, batch lifecycle, and batch attribution. (verification gaps found 2026-04-20)
 - [ ] **Phase 11: Compliance, Verification & Artifact Cleanup** - Remove amount_usd from BD checkout, verify orphaned Phase 2-3 requirements, and live-verify analytics and monitoring.
 - [ ] **Phase 12: KEY-05 Hot-Path Rate Limiting** - Enforce account-tier and per-key rate limits on the hot path; fix media/batch auth policy bypass.
 - [ ] **Phase 13: Console Integration Fixes** - Add web-console proxy routes for checkout and API key mutations; wire Buy Credits modal and rotate page.
@@ -194,6 +194,7 @@ Plans:
   6. Batch final settlement correctly attributes spend and usage per API key and model.
 
 **Plans:** 8/8 plans complete
+**Verification:** gaps_found — see `.planning/phases/10-routing-storage-critical-fixes/10-VERIFICATION.md`
 
 Plans:
 - [x] 10-01-PLAN.md — Wave 0 red validation for shared storage, edge storage config, and status-aware live smoke probes
@@ -280,7 +281,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 3/3 | Complete   | 2026-04-11 |
 | 9. Developer Console & Operational Hardening | 4/4 | Complete   | 2026-04-11 |
-| 10. Routing & Storage Critical Fixes | 8/8 | Complete   | 2026-04-20 |
+| 10. Routing & Storage Critical Fixes | 8/8 | Gaps Found | - |
 | 11. Compliance, Verification & Artifact Cleanup | 0/0 | Pending | - |
 | 12. KEY-05 Hot-Path Rate Limiting | 0/0 | Pending | - |
 | 13. Console Integration Fixes | 0/0 | Pending | - |
