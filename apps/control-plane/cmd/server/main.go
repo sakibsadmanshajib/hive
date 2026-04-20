@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
+	"github.com/hivegpt/hive/packages/storage"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -59,6 +61,15 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
+	}
+
+	storageCfg, err := loadStorageConfigFromEnv()
+	if err != nil {
+		log.Fatalf("storage unavailable: %v", err)
+	}
+	storageClient, err := storage.NewS3Client(storageCfg.Client)
+	if err != nil {
+		log.Fatalf("storage unavailable: %v", err)
 	}
 
 	// Payment provider credentials (all optional — missing vars skip that rail).
@@ -267,8 +278,8 @@ func main() {
 						filestoreSvc,
 						resolveLiteLLMBaseURL(),
 						resolveLiteLLMMasterKey(),
-						nil, // StorageUploader: nil until S3 client is wired into control-plane
-						resolveBucketFiles(),
+						storageClient,
+						storageCfg.FilesBucket,
 					)
 					asynqMux := asynq.NewServeMux()
 					asynqMux.HandleFunc(batchstore.TypeBatchPoll, batchWorker.HandleBatchPoll)
@@ -339,9 +350,41 @@ func resolveLiteLLMMasterKey() string {
 	return "litellm-dev-key"
 }
 
-func resolveBucketFiles() string {
-	if b := os.Getenv("S3_BUCKET_FILES"); b != "" {
-		return b
+type storageRuntimeConfig struct {
+	Client      storage.Config
+	FilesBucket string
+}
+
+func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {
+	cfg := storageRuntimeConfig{
+		Client: storage.Config{
+			Endpoint:  strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
+			AccessKey: strings.TrimSpace(os.Getenv("S3_ACCESS_KEY")),
+			SecretKey: strings.TrimSpace(os.Getenv("S3_SECRET_KEY")),
+			Region:    strings.TrimSpace(os.Getenv("S3_REGION")),
+		},
+		FilesBucket: strings.TrimSpace(os.Getenv("S3_BUCKET_FILES")),
 	}
-	return "hive-files"
+
+	missing := make([]string, 0, 5)
+	if cfg.Client.Endpoint == "" {
+		missing = append(missing, "S3_ENDPOINT")
+	}
+	if cfg.Client.AccessKey == "" {
+		missing = append(missing, "S3_ACCESS_KEY")
+	}
+	if cfg.Client.SecretKey == "" {
+		missing = append(missing, "S3_SECRET_KEY")
+	}
+	if cfg.Client.Region == "" {
+		missing = append(missing, "S3_REGION")
+	}
+	if cfg.FilesBucket == "" {
+		missing = append(missing, "S3_BUCKET_FILES")
+	}
+	if len(missing) > 0 {
+		return storageRuntimeConfig{}, fmt.Errorf("missing %s", strings.Join(missing, ", "))
+	}
+
+	return cfg, nil
 }

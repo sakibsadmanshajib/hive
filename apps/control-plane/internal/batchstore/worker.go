@@ -20,11 +20,16 @@ type StorageUploader interface {
 	Upload(ctx context.Context, bucket, key string, reader io.Reader, size int64, contentType string) error
 }
 
+type FileService interface {
+	CreateFile(ctx context.Context, accountID, purpose, filename string, bytes int64, storagePath string) (filestore.File, error)
+	UpdateBatchStatus(ctx context.Context, batchID, status string, updates map[string]interface{}) error
+}
+
 // BatchWorker handles Asynq batch polling tasks.
 // It polls upstream provider (LiteLLM) for batch completion, downloads output files,
 // uploads them to S3, creates file metadata, and updates batch status.
 type BatchWorker struct {
-	fileService    *filestore.Service
+	fileService    FileService
 	litellmBaseURL string
 	litellmKey     string
 	storage        StorageUploader
@@ -34,7 +39,7 @@ type BatchWorker struct {
 
 // NewBatchWorker creates a new BatchWorker.
 func NewBatchWorker(
-	fileService *filestore.Service,
+	fileService FileService,
 	litellmBaseURL string,
 	litellmKey string,
 	storage StorageUploader,
@@ -87,7 +92,6 @@ func (w *BatchWorker) HandleBatchPoll(ctx context.Context, t *asynq.Task) error 
 // downloads output/error files, uploads to S3, creates File records, updates batch status.
 func (w *BatchWorker) handleCompleted(ctx context.Context, payload BatchPollPayload, upstreamResp map[string]interface{}) error {
 	fields := map[string]interface{}{
-		"status":       "completed",
 		"completed_at": time.Now().UTC().Unix(),
 	}
 
@@ -134,7 +138,6 @@ func (w *BatchWorker) handleCompleted(ctx context.Context, payload BatchPollPayl
 // handleFailed processes a failed upstream batch: releases credits and marks batch failed.
 func (w *BatchWorker) handleFailed(ctx context.Context, payload BatchPollPayload) error {
 	fields := map[string]interface{}{
-		"status":    "failed",
 		"failed_at": time.Now().UTC().Unix(),
 	}
 	if err := w.fileService.UpdateBatchStatus(ctx, payload.BatchID, "failed", fields); err != nil {
@@ -146,7 +149,6 @@ func (w *BatchWorker) handleFailed(ctx context.Context, payload BatchPollPayload
 // handleCancelled processes a cancelled or expired upstream batch.
 func (w *BatchWorker) handleCancelled(ctx context.Context, payload BatchPollPayload, status string) error {
 	fields := map[string]interface{}{
-		"status":       status,
 		"cancelled_at": time.Now().UTC().Unix(),
 	}
 	if err := w.fileService.UpdateBatchStatus(ctx, payload.BatchID, status, fields); err != nil {
