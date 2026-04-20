@@ -8,6 +8,20 @@ import (
 )
 
 func TestFilestoreSchemaLivesInSupabaseMigration(t *testing.T) {
+	migration := filestoreSchemaMigration(t)
+	for _, table := range []string{
+		"create table if not exists public.files",
+		"create table if not exists public.uploads",
+		"create table if not exists public.upload_parts",
+		"create table if not exists public.batches",
+	} {
+		if !strings.Contains(strings.ToLower(migration), table) {
+			t.Fatalf("filestore schema migration must contain %s", table)
+		}
+	}
+}
+
+func TestFilestoreRepositoryDoesNotRunSchemaDDL(t *testing.T) {
 	source := readRepoFile(t, "apps/control-plane/internal/filestore/repository.go")
 
 	if strings.Contains(source, "ensureSchema") {
@@ -15,18 +29,6 @@ func TestFilestoreSchemaLivesInSupabaseMigration(t *testing.T) {
 	}
 	if strings.Contains(source, "CREATE TABLE") {
 		t.Fatal("repository.go must not create tables at runtime; filestore schema belongs in Supabase migrations")
-	}
-
-	migration := filestoreSchemaMigration(t)
-	for _, table := range []string{
-		"create table public.files",
-		"create table public.uploads",
-		"create table public.upload_parts",
-		"create table public.batches",
-	} {
-		if !strings.Contains(strings.ToLower(migration), table) {
-			t.Fatalf("filestore schema migration must contain %s", table)
-		}
 	}
 }
 
@@ -64,10 +66,10 @@ func filestoreSchemaMigration(t *testing.T) string {
 	}
 
 	requiredTables := []string{
-		"create table public.files",
-		"create table public.uploads",
-		"create table public.upload_parts",
-		"create table public.batches",
+		"create table if not exists public.files",
+		"create table if not exists public.uploads",
+		"create table if not exists public.upload_parts",
+		"create table if not exists public.batches",
 	}
 	for _, path := range matches {
 		body, err := os.ReadFile(path)
