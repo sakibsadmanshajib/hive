@@ -1,11 +1,14 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -22,6 +25,20 @@ type S3Client struct {
 	httpClient *http.Client
 	signer     *v4.Signer
 	now        func() time.Time
+}
+
+type completeMultipartUpload struct {
+	XMLName xml.Name                `xml:"CompleteMultipartUpload"`
+	Parts   []completeMultipartPart `xml:"Part"`
+}
+
+type completeMultipartPart struct {
+	PartNumber int    `xml:"PartNumber"`
+	ETag       string `xml:"ETag"`
+}
+
+type initiateMultipartUploadResult struct {
+	UploadID string `xml:"UploadId"`
 }
 
 func NewS3Client(cfg Config) (*S3Client, error) {
@@ -112,23 +129,110 @@ func (c *S3Client) PresignedURL(ctx context.Context, bucket, key string, ttl tim
 }
 
 func (c *S3Client) InitMultipartUpload(ctx context.Context, bucket, key, contentType string) (string, error) {
-	return "", fmt.Errorf("storage implementation pending")
+	u := c.objectURL(bucket, key)
+	query := u.Query()
+	query.Set("uploads", "")
+	u.RawQuery = query.Encode()
+	req, err := c.newSignedRequest(ctx, http.MethodPost, u, nil, 0, contentType)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if err := s3StatusError(resp, http.MethodPost, req.URL.Path); err != nil {
+		return "", err
+	}
+	var result initiateMultipartUploadResult
+	if err := xml.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode multipart init response: %w", err)
+	}
+	if result.UploadID == "" {
+		return "", fmt.Errorf("missing UploadId in multipart init response")
+	}
+	return result.UploadID, nil
 }
 
 func (c *S3Client) UploadPart(ctx context.Context, bucket, key, uploadID string, partNum int, body io.Reader, size int64) (string, error) {
-	return "", fmt.Errorf("storage implementation pending")
+	u := c.objectURL(bucket, key)
+	query := u.Query()
+	query.Set("partNumber", strconv.Itoa(partNum))
+	query.Set("uploadId", uploadID)
+	u.RawQuery = query.Encode()
+	req, err := c.newSignedRequest(ctx, http.MethodPut, u, body, size, "")
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if err := s3StatusError(resp, http.MethodPut, req.URL.Path); err != nil {
+		return "", err
+	}
+	etag := resp.Header.Get("ETag")
+	if etag == "" {
+		return "", fmt.Errorf("missing ETag in multipart upload part response")
+	}
+	return etag, nil
 }
 
 func (c *S3Client) CompleteMultipartUpload(ctx context.Context, bucket, key, uploadID string, parts []CompletePart) error {
-	return fmt.Errorf("storage implementation pending")
+	payload := completeMultipartUpload{
+		Parts: make([]completeMultipartPart, 0, len(parts)),
+	}
+	for _, part := range parts {
+		payload.Parts = append(payload.Parts, completeMultipartPart{
+			PartNumber: part.PartNumber,
+			ETag:       part.ETag,
+		})
+	}
+	body, err := xml.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	u := c.objectURL(bucket, key)
+	query := u.Query()
+	query.Set("uploadId", uploadID)
+	u.RawQuery = query.Encode()
+	req, err := c.newSignedRequest(ctx, http.MethodPost, u, bytes.NewReader(body), int64(len(body)), "application/xml")
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return s3StatusError(resp, http.MethodPost, req.URL.Path)
 }
 
 func (c *S3Client) AbortMultipartUpload(ctx context.Context, bucket, key, uploadID string) error {
-	return fmt.Errorf("storage implementation pending")
+	u := c.objectURL(bucket, key)
+	query := u.Query()
+	query.Set("uploadId", uploadID)
+	u.RawQuery = query.Encode()
+	req, err := c.newSignedRequest(ctx, http.MethodDelete, u, nil, 0, "")
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return s3StatusError(resp, http.MethodDelete, req.URL.Path)
 }
 
 func (c *S3Client) newObjectRequest(ctx context.Context, method, bucket, key string, body io.Reader, size int64, contentType string) (*http.Request, error) {
-	req, err := http.NewRequestWithContext(ctx, method, c.objectURL(bucket, key).String(), body)
+	return c.newSignedRequest(ctx, method, c.objectURL(bucket, key), body, size, contentType)
+}
+
+func (c *S3Client) newSignedRequest(ctx context.Context, method string, u *url.URL, body io.Reader, size int64, contentType string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, u.String(), body)
 	if err != nil {
 		return nil, err
 	}
