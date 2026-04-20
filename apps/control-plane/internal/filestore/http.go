@@ -123,13 +123,14 @@ func (h *handler) handleGetFile(w http.ResponseWriter, r *http.Request) {
 }
 
 type fileResponse struct {
-	ID        string  `json:"id"`
-	Object    string  `json:"object"`
-	Bytes     int64   `json:"bytes"`
-	CreatedAt int64   `json:"created_at"`
-	Filename  string  `json:"filename"`
-	Purpose   string  `json:"purpose"`
-	Status    string  `json:"status"`
+	ID          string `json:"id"`
+	Object      string `json:"object"`
+	Bytes       int64  `json:"bytes"`
+	CreatedAt   int64  `json:"created_at"`
+	Filename    string `json:"filename"`
+	Purpose     string `json:"purpose"`
+	Status      string `json:"status"`
+	StoragePath string `json:"storage_path"`
 }
 
 func (h *handler) handleListFiles(w http.ResponseWriter, r *http.Request) {
@@ -475,38 +476,43 @@ func (h *handler) handleUpdateBatchStatus(w http.ResponseWriter, r *http.Request
 
 func fileToResponse(f File) fileResponse {
 	return fileResponse{
-		ID:        f.ID,
-		Object:    "file",
-		Bytes:     f.Bytes,
-		CreatedAt: f.CreatedAt.Unix(),
-		Filename:  f.Filename,
-		Purpose:   f.Purpose,
-		Status:    f.Status,
+		ID:          f.ID,
+		Object:      "file",
+		Bytes:       f.Bytes,
+		CreatedAt:   f.CreatedAt.Unix(),
+		Filename:    f.Filename,
+		Purpose:     f.Purpose,
+		Status:      f.Status,
+		StoragePath: f.StoragePath,
 	}
 }
 
 type uploadResponse struct {
-	ID        string        `json:"id"`
-	Object    string        `json:"object"`
-	Bytes     int64         `json:"bytes"`
-	CreatedAt int64         `json:"created_at"`
-	Filename  string        `json:"filename"`
-	Purpose   string        `json:"purpose"`
-	Status    string        `json:"status"`
-	ExpiresAt int64         `json:"expires_at"`
-	File      *fileResponse `json:"file,omitempty"`
+	ID          string        `json:"id"`
+	Object      string        `json:"object"`
+	Bytes       int64         `json:"bytes"`
+	CreatedAt   int64         `json:"created_at"`
+	Filename    string        `json:"filename"`
+	Purpose     string        `json:"purpose"`
+	Status      string        `json:"status"`
+	ExpiresAt   int64         `json:"expires_at"`
+	S3UploadID  *string       `json:"s3_upload_id,omitempty"`
+	StoragePath string        `json:"storage_path"`
+	File        *fileResponse `json:"file,omitempty"`
 }
 
 func uploadToResponse(u Upload, file *File) uploadResponse {
 	resp := uploadResponse{
-		ID:        u.ID,
-		Object:    "upload",
-		Bytes:     u.Bytes,
-		CreatedAt: u.CreatedAt.Unix(),
-		Filename:  u.Filename,
-		Purpose:   u.Purpose,
-		Status:    u.Status,
-		ExpiresAt: u.ExpiresAt.Unix(),
+		ID:          u.ID,
+		Object:      "upload",
+		Bytes:       u.Bytes,
+		CreatedAt:   u.CreatedAt.Unix(),
+		Filename:    u.Filename,
+		Purpose:     u.Purpose,
+		Status:      u.Status,
+		ExpiresAt:   u.ExpiresAt.Unix(),
+		S3UploadID:  u.S3UploadID,
+		StoragePath: u.StoragePath,
 	}
 	if file != nil {
 		fr := fileToResponse(*file)
@@ -516,14 +522,20 @@ func uploadToResponse(u Upload, file *File) uploadResponse {
 }
 
 type batchResponse struct {
-	ID               string `json:"id"`
-	Object           string `json:"object"`
-	Endpoint         string `json:"endpoint"`
-	Status           string `json:"status"`
-	InputFileID      string `json:"input_file_id"`
-	CompletionWindow string `json:"completion_window"`
-	CreatedAt        int64  `json:"created_at"`
-	ExpiresAt        int64  `json:"expires_at"`
+	ID               string  `json:"id"`
+	Object           string  `json:"object"`
+	Endpoint         string  `json:"endpoint"`
+	Status           string  `json:"status"`
+	InputFileID      string  `json:"input_file_id"`
+	OutputFileID     *string `json:"output_file_id,omitempty"`
+	ErrorFileID      *string `json:"error_file_id,omitempty"`
+	CompletionWindow string  `json:"completion_window"`
+	CreatedAt        int64   `json:"created_at"`
+	InProgressAt     *int64  `json:"in_progress_at,omitempty"`
+	CompletedAt      *int64  `json:"completed_at,omitempty"`
+	FailedAt         *int64  `json:"failed_at,omitempty"`
+	CancelledAt      *int64  `json:"cancelled_at,omitempty"`
+	ExpiresAt        int64   `json:"expires_at"`
 	RequestCounts    struct {
 		Total     int `json:"total"`
 		Completed int `json:"completed"`
@@ -538,9 +550,27 @@ func batchToResponse(b Batch) batchResponse {
 		Endpoint:         b.Endpoint,
 		Status:           b.Status,
 		InputFileID:      b.InputFileID,
+		OutputFileID:     b.OutputFileID,
+		ErrorFileID:      b.ErrorFileID,
 		CompletionWindow: b.CompletionWindow,
 		CreatedAt:        b.CreatedAt.Unix(),
 		ExpiresAt:        b.ExpiresAt.Unix(),
+	}
+	if b.InProgressAt != nil {
+		inProgressAt := b.InProgressAt.Unix()
+		resp.InProgressAt = &inProgressAt
+	}
+	if b.CompletedAt != nil {
+		completedAt := b.CompletedAt.Unix()
+		resp.CompletedAt = &completedAt
+	}
+	if b.FailedAt != nil {
+		failedAt := b.FailedAt.Unix()
+		resp.FailedAt = &failedAt
+	}
+	if b.CancelledAt != nil {
+		cancelledAt := b.CancelledAt.Unix()
+		resp.CancelledAt = &cancelledAt
 	}
 	resp.RequestCounts.Total = b.RequestCountsTotal
 	resp.RequestCounts.Completed = b.RequestCountsCompleted
