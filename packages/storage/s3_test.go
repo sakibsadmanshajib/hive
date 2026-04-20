@@ -242,7 +242,8 @@ func TestS3ClientMultipartRequestsUseS3Queries(t *testing.T) {
 			if !strings.Contains(string(body), "CompleteMultipartUpload") {
 				t.Errorf("complete body = %q, want CompleteMultipartUpload XML", body)
 			}
-			if !strings.Contains(string(body), "<PartNumber>1</PartNumber>") || !strings.Contains(string(body), "<ETag>etag-1</ETag>") {
+			hasQuotedETag := strings.Contains(string(body), `<ETag>"etag-1"</ETag>`) || strings.Contains(string(body), `<ETag>&#34;etag-1&#34;</ETag>`)
+			if !strings.Contains(string(body), "<PartNumber>1</PartNumber>") || !hasQuotedETag {
 				t.Errorf("complete body missing part fields: %q", body)
 			}
 			w.WriteHeader(http.StatusOK)
@@ -267,8 +268,8 @@ func TestS3ClientMultipartRequestsUseS3Queries(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UploadPart returned error: %v", err)
 	}
-	if etag != "etag-1" {
-		t.Fatalf("etag = %q, want etag-1", etag)
+	if etag != `"etag-1"` {
+		t.Fatalf("etag = %q, want quoted ETag", etag)
 	}
 	if err := client.CompleteMultipartUpload(ctx, "hive-files", "acct/file.jsonl", uploadID, []CompletePart{{PartNumber: 1, ETag: etag}}); err != nil {
 		t.Fatalf("CompleteMultipartUpload returned error: %v", err)
@@ -279,6 +280,26 @@ func TestS3ClientMultipartRequestsUseS3Queries(t *testing.T) {
 	want := []string{"POST?uploads=", "PUT?partNumber=1&uploadId=upload-123", "POST?uploadId=upload-123", "DELETE?uploadId=upload-123"}
 	if strings.Join(steps, ",") != strings.Join(want, ",") {
 		t.Fatalf("multipart requests = %v, want %v", steps, want)
+	}
+}
+
+func TestS3ClientUploadPartRequiresETag(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			t.Errorf("method = %s, want PUT", r.Method)
+		}
+		if r.URL.RawQuery != "partNumber=1&uploadId=upload-123" {
+			t.Errorf("query = %q, want partNumber=1&uploadId=upload-123", r.URL.RawQuery)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	client := newTestClient(t, server.URL+"/storage/v1/s3")
+	_, err := client.UploadPart(ctx, "hive-files", "acct/file.jsonl", "upload-123", 1, strings.NewReader("part-one"), int64(len("part-one")))
+	if err == nil || !strings.Contains(err.Error(), "missing ETag") {
+		t.Fatalf("UploadPart error = %v, want missing ETag", err)
 	}
 }
 
