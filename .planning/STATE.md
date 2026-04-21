@@ -1,17 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v1.0
-milestone_name: developer-api-core
-current_phase: 10
-current_plan: 11
-status: ready_to_ship
-stopped_at: Phase 10 UAT complete; Phases 11-14 deferred to v1.1
-last_updated: "2026-04-21T22:15:00.000Z"
+milestone: v1.1
+milestone_name: deferred-scope
+previous_milestone: v1.0
+previous_milestone_shipped: "2026-04-21"
+previous_milestone_name: developer-api-core
+current_phase: null
+current_plan: null
+status: milestone_shipped_awaiting_next
+stopped_at: "v1.0 shipped 2026-04-21 — next action /gsd:new-milestone for v1.1 scope"
+last_updated: "2026-04-21T23:00:00.000Z"
 progress:
-  total_phases: 10
-  completed_phases: 10
-  total_plans: 49
-  completed_plans: 49
+  total_phases_v1_0: 10
+  completed_phases_v1_0: 10
+  total_plans_v1_0: 49
+  completed_plans_v1_0: 49
 deferred:
   target_milestone: v1.1
   doc: .planning/v1.1-DEFERRED-SCOPE.md
@@ -20,26 +23,32 @@ deferred:
     - batch-success-path-terminal-settlement
     - ensure-capability-columns-wrong-table
     - amount-usd-on-bd-checkout
+    - formal-verification-phase-2-3
+archive:
+  roadmap: .planning/milestones/v1.0-ROADMAP.md
+  requirements: .planning/milestones/v1.0-REQUIREMENTS.md
+  audit: .planning/milestones/v1.0-MILESTONE-AUDIT.md
+  integration_check: .planning/milestones/v1.0-INTEGRATION-CHECK.md
+  tag: v1.0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-03-28)
+See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** v1.0 shipping — developer API core ready for chat-app and CLI-coding-agent integrators. v1.1 scope tracked in `.planning/v1.1-DEFERRED-SCOPE.md`.
+**Current focus:** v1.0 shipped 2026-04-21. Planning next milestone — run `/gsd:new-milestone` to scope v1.1 (compliance cleanup + hot-path rate limiting + console integration + invoicing/budget). Deferred-scope reference at `.planning/v1.1-DEFERRED-SCOPE.md`.
 
 ## Current Position
 
-**Current Phase:** 10
-**Current Plan:** 11
-**Total Plans in Phase:** 11
-**Status:** Phase complete — ready for verification
+**Milestone:** v1.0 SHIPPED — awaiting v1.1 scope definition.
+**Current Phase:** —
+**Current Plan:** —
+**Status:** Milestone complete, archived, tagged.
 
-Phase: 10 (routing-storage-critical-fixes) - GAP CLOSURE EXECUTION COMPLETE
-Plan: 11 of 11 completed; ready for phase verification.
+v1.0 developer-api-core shipped 2026-04-21 with phases 1–10 (49/49 plans). All archive artifacts in `.planning/milestones/`. Git tag `v1.0` created. Next action: `/gsd:new-milestone` to scope v1.1.
 
 ## Performance Metrics
 
