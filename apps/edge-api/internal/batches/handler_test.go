@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -145,9 +146,11 @@ func (m *mockStorage) Download(_ context.Context, _, _ string) (io.ReadCloser, e
 type mockAccountingClient struct {
 	reservationID string
 	reserveErr    error
+	lastInput     batches.ReservationInput
 }
 
-func (m *mockAccountingClient) CreateReservation(_ context.Context, _ batches.ReservationInput) (string, error) {
+func (m *mockAccountingClient) CreateReservation(_ context.Context, input batches.ReservationInput) (string, error) {
+	m.lastInput = input
 	if m.reserveErr != nil {
 		return "", m.reserveErr
 	}
@@ -169,8 +172,8 @@ func newTestHandler(batchClient batches.BatchClientBackend, fileClient batches.F
 
 func TestBatchCreate(t *testing.T) {
 	storage := &mockStorage{
-		content: `{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions","body":{}}` + "\n" +
-			`{"custom_id":"req-2","method":"POST","url":"/v1/chat/completions","body":{}}` + "\n",
+		content: `{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-fast"}}` + "\n" +
+			`{"custom_id":"req-2","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-fast"}}` + "\n",
 	}
 	h := newTestHandler(&mockBatchClient{}, &mockFileClient{}, storage, &mockAccountingClient{})
 
@@ -198,6 +201,34 @@ func TestBatchCreate(t *testing.T) {
 	}
 	if resp.InputFileID != "file-input" {
 		t.Errorf("expected input_file_id=file-input, got %s", resp.InputFileID)
+	}
+}
+
+func TestBatchCreatePassesModelAliasToReservation(t *testing.T) {
+	storage := &mockStorage{
+		content: `{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-fast"}}` + "\n",
+	}
+	accounting := &mockAccountingClient{}
+	h := newTestHandler(&mockBatchClient{}, &mockFileClient{}, storage, accounting)
+
+	body := `{"input_file_id":"file-input","endpoint":"/v1/chat/completions","completion_window":"24h"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	modelAliasField := reflect.ValueOf(accounting.lastInput).FieldByName("ModelAlias")
+	if !modelAliasField.IsValid() {
+		t.Fatalf("reservation input is missing ModelAlias field")
+	}
+	if got := modelAliasField.String(); got != "hive-fast" {
+		t.Fatalf("reservation model alias = %q, want %q", got, "hive-fast")
 	}
 }
 
@@ -237,6 +268,53 @@ func TestBatchCreateMalformedJSONL(t *testing.T) {
 	// Verify that reservation was NOT created (malformed lines caught before reservation)
 	// Since mockAccountingClient doesn't track calls explicitly, this is validated
 	// structurally by the handler logic: JSONL parse runs before CreateReservation
+}
+
+func TestBatchCreateRejectsMissingModelAlias(t *testing.T) {
+	storage := &mockStorage{
+		content: `{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions","body":{}}` + "\n",
+	}
+	accounting := &mockAccountingClient{}
+	h := newTestHandler(&mockBatchClient{}, &mockFileClient{}, storage, accounting)
+
+	body := `{"input_file_id":"file-input","endpoint":"/v1/chat/completions","completion_window":"24h"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "body.model is required for batch accounting") {
+		t.Fatalf("expected missing model_alias error, got %s", rec.Body.String())
+	}
+}
+
+func TestBatchCreateRejectsMixedModelAliases(t *testing.T) {
+	storage := &mockStorage{
+		content: `{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-fast"}}` + "\n" +
+			`{"custom_id":"req-2","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-auto"}}` + "\n",
+	}
+	accounting := &mockAccountingClient{}
+	h := newTestHandler(&mockBatchClient{}, &mockFileClient{}, storage, accounting)
+
+	body := `{"input_file_id":"file-input","endpoint":"/v1/chat/completions","completion_window":"24h"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "body.model must match first batch model") {
+		t.Fatalf("expected mixed model_alias error, got %s", rec.Body.String())
+	}
 }
 
 func TestBatchCreateInvalidCompletionWindow(t *testing.T) {
