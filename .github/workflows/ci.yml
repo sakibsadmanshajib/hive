@@ -13,7 +13,18 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # Docker image tags used across live-integration + web-e2e so everyone
+  # references the same pre-built image.
+  EDGE_IMAGE: hive-edge-api:ci
+  CP_IMAGE: hive-control-plane:ci
+  WEB_IMAGE: hive-web-console:ci
+
 jobs:
+  # ------------------------------------------------------------------
+  # Unit-level jobs (run on every PR including forks)
+  # ------------------------------------------------------------------
+
   go-tests:
     name: Go tests (${{ matrix.module }})
     runs-on: ubuntu-latest
@@ -37,10 +48,6 @@ jobs:
             apps/edge-api/go.sum
             apps/control-plane/go.sum
             packages/storage/go.sum
-
-      - name: Download modules
-        working-directory: ${{ matrix.path }}
-        run: go mod download
 
       - name: go vet
         working-directory: ${{ matrix.path }}
@@ -80,116 +87,124 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
 
+  # ------------------------------------------------------------------
+  # Docker build validation — fork PRs only.
+  # Same-repo PRs get this implicitly via the live-integration job
+  # (which builds + runs the stack against staging), so running both
+  # would duplicate work and waste CI minutes.
+  # ------------------------------------------------------------------
+
   docker-build:
-    name: Docker build smoke
+    name: Docker build smoke (fork PRs only)
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - uses: actions/checkout@v4
-
       - uses: docker/setup-buildx-action@v3
-
-      - name: Build edge-api image
-        uses: docker/build-push-action@v6
+      - name: Build all service images (cached)
+        uses: docker/bake-action@v6
         with:
-          context: .
-          file: deploy/docker/Dockerfile.edge-api
-          push: false
-          cache-from: type=gha,scope=edge-api
-          cache-to: type=gha,scope=edge-api,mode=max
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane,web-console
+          set: |
+            *.cache-from=type=gha,scope=docker-build
+            *.cache-to=type=gha,scope=docker-build,mode=max
 
-      - name: Build control-plane image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/docker/Dockerfile.control-plane
-          push: false
-          cache-from: type=gha,scope=control-plane
-          cache-to: type=gha,scope=control-plane,mode=max
-
-      - name: Build web-console image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: deploy/docker/Dockerfile.web-console
-          push: false
-          cache-from: type=gha,scope=web-console
-          cache-to: type=gha,scope=web-console,mode=max
+  # ------------------------------------------------------------------
+  # Live integration — builds images once with GHA cache, loads them
+  # locally, starts stack against staging Supabase, runs all three SDK
+  # suites in parallel.
+  # Gated on same-repo only so fork PRs never receive secrets.
+  # ------------------------------------------------------------------
 
   live-integration:
     name: Live integration (SDK tests + smoke)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Secrets only exposed for same-repo push or same-repo PR — never forks
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     needs: [go-tests, web-unit]
+    # Job-level env: docker compose will interpolate ${VAR} from process env,
+    # so we skip the fragile .env heredoc entirely.
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      REDIS_URL: redis://redis:6379/0
+      CONTROL_PLANE_PORT: '8081'
+      CONTROL_PLANE_BASE_URL: http://localhost:8081
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
+      GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_USE_SSL: 'true'
+      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
     steps:
       - uses: actions/checkout@v4
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Compose .env from secrets
+      - name: Reconstruct SUPABASE_DB_URL
+        shell: bash
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
           SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
           SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
           SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
-          S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
-          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
-          S3_REGION: ${{ secrets.S3_REGION }}
-          S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
-          S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
-          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
-          OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
-          OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
-          GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
         run: |
-          cat > .env <<ENV
-          SUPABASE_URL=$SUPABASE_URL
-          SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY
-          SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY
-          SUPABASE_DB_URL=postgresql://$SUPABASE_DB_USER:$SUPABASE_DB_PASSWORD@$SUPABASE_DB_HOST:$SUPABASE_DB_PORT/$SUPABASE_DB_NAME
-          REDIS_URL=redis://redis:6379/0
-          CONTROL_PLANE_PORT=8081
-          CONTROL_PLANE_BASE_URL=http://localhost:8081
-          EDGE_CONTROL_PLANE_BASE_URL=http://control-plane:8081
-          LITELLM_MASTER_KEY=$LITELLM_MASTER_KEY
-          OPENROUTER_API_KEY=$OPENROUTER_API_KEY
-          GROQ_API_KEY=$GROQ_API_KEY
-          OPENROUTER_DEFAULT_MODEL=$OPENROUTER_DEFAULT_MODEL
-          OPENROUTER_AUTO_MODEL=$OPENROUTER_AUTO_MODEL
-          OPENROUTER_FAST_FALLBACK_MODEL=$OPENROUTER_FAST_FALLBACK_MODEL
-          GROQ_FAST_MODEL=$GROQ_FAST_MODEL
-          S3_ENDPOINT=$S3_ENDPOINT
-          S3_ACCESS_KEY=$S3_ACCESS_KEY
-          S3_SECRET_KEY=$S3_SECRET_KEY
-          S3_REGION=$S3_REGION
-          S3_USE_SSL=true
-          S3_BUCKET_FILES=$S3_BUCKET_FILES
-          S3_BUCKET_IMAGES=$S3_BUCKET_IMAGES
-          NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
-          NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
-          NEXT_PUBLIC_APP_URL=http://localhost:3000
-          HIVE_API_KEY=$HIVE_API_KEY
-          ENV
+          set -euo pipefail
+          # Password was uploaded URL-encoded so no runtime re-quoting needed.
+          url="postgresql://${SUPABASE_DB_USER}:${SUPABASE_DB_PASSWORD}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
+          echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
+          echo "reconstructed DB URL (host=${SUPABASE_DB_HOST}, port=${SUPABASE_DB_PORT}, user=${SUPABASE_DB_USER}, db=${SUPABASE_DB_NAME})"
 
-      - name: Start core stack
+      - name: Pre-verify secrets reached runner env
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL \
+                   OPENROUTER_API_KEY HIVE_API_KEY S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY; do
+            val="${!v:-}"
+            if [ -z "$val" ]; then
+              echo "::error::$v is empty in workflow env"
+              exit 1
+            fi
+            echo "  $v: len=${#val}"
+          done
+
+      - name: Build stack images (buildx + GHA cache)
+        uses: docker/bake-action@v6
+        with:
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane,sdk-tests-js,sdk-tests-py,sdk-tests-java
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=stack
+            *.cache-to=type=gha,scope=stack,mode=max
+
+      - name: Start core stack (no rebuild — images already loaded)
         working-directory: deploy/docker
         run: |
-          docker compose --env-file ../../.env up -d --build \
-            redis litellm control-plane edge-api
+          docker compose up -d --no-build redis litellm control-plane edge-api
 
       - name: Wait for services to become healthy
         working-directory: deploy/docker
@@ -199,71 +214,54 @@ jobs:
           for svc in control-plane edge-api; do
             echo "waiting for $svc..."
             while :; do
-              state=$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
+              state=$(docker inspect --format '{{.State.Health.Status}}' \
+                "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
               if [ "$state" = "healthy" ]; then
                 echo "$svc: healthy"
                 break
               fi
               if [ "$(date +%s)" -gt "$deadline" ]; then
-                echo "::error::$svc did not become healthy within timeout (last state: $state)"
-                docker compose logs --tail=200
+                echo "::error::$svc did not become healthy (last state: $state)"
+                docker compose logs --tail=200 $svc
                 exit 1
               fi
               sleep 5
             done
           done
 
-      - name: Smoke test — /health endpoints
+      - name: Smoke test — /health + /v1/models
         shell: bash
         run: |
           set -euo pipefail
-          curl -fsS http://localhost:8080/health | tee /tmp/edge-health.json
-          echo
-          curl -fsS http://localhost:8081/health | tee /tmp/cp-health.json
+          curl -fsS http://localhost:8080/health | jq -c
+          curl -fsS http://localhost:8081/health | jq -c
 
-      - name: Smoke test — /v1/models via edge-api
-        shell: bash
-        env:
-          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
-        run: |
-          set -euo pipefail
-          echo "HIVE_API_KEY length in workflow env: ${#HIVE_API_KEY}"
           code=$(curl -sS -o /tmp/models.json -w "%{http_code}" \
             http://localhost:8080/v1/models \
             -H "Authorization: Bearer $HIVE_API_KEY")
-          echo "HTTP $code"
+          echo "GET /v1/models -> HTTP $code"
           if [ "$code" != "200" ]; then
             echo "::error::/v1/models returned $code"
-            cat /tmp/models.json || true
+            cat /tmp/models.json
             exit 1
           fi
-          head -c 200 /tmp/models.json; echo
+          jq -r '.data[0:3] | .[] | .id' /tmp/models.json
 
-      - name: Run SDK integration tests (JS + Python + Java)
+      - name: Run SDK suites in parallel (JS + Python + Java)
         working-directory: deploy/docker
-        env:
-          # Pass through as process env so docker compose substitution picks it up
-          # even if .env parsing differs between runners.
-          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
         run: |
-          # Diagnostic: confirm HIVE_API_KEY reaches the sdk-tests-js container
-          docker compose --env-file ../../.env --profile test run --rm \
-            --no-deps sdk-tests-js \
-            sh -c 'printf "sdk container sees HIVE_API_KEY of length %d\n" "${#HIVE_API_KEY}"'
-
-          # Each sdk-tests-* container runs its suite then exits.
-          # --abort-on-container-exit returns non-zero if any test container fails.
-          docker compose --env-file ../../.env --profile test up --build \
-            --abort-on-container-exit --exit-code-from sdk-tests-js sdk-tests-js
-          docker compose --env-file ../../.env --profile test up --build \
-            --abort-on-container-exit --exit-code-from sdk-tests-py sdk-tests-py
-          docker compose --env-file ../../.env --profile test up --build \
-            --abort-on-container-exit --exit-code-from sdk-tests-java sdk-tests-java
+          set -euo pipefail
+          # Single invocation: compose starts all 3 test services in parallel,
+          # each exits with its own status; --abort-on-container-exit ensures
+          # the whole up returns non-zero if any fails.
+          docker compose --profile test up --no-build \
+            --abort-on-container-exit \
+            sdk-tests-js sdk-tests-py sdk-tests-java
 
       - name: Dump compose logs on failure
         if: failure()
         working-directory: deploy/docker
-        run: docker compose --env-file ../../.env logs --no-color --timestamps --tail=500 > /tmp/compose.log || true
+        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose.log || true
 
       - name: Upload compose logs
         if: failure()
@@ -276,16 +274,21 @@ jobs:
       - name: Tear down stack
         if: always()
         working-directory: deploy/docker
-        run: docker compose --env-file ../../.env down -v --remove-orphans || true
+        run: docker compose down -v --remove-orphans || true
+
+  # ------------------------------------------------------------------
+  # Playwright E2E against a Next.js that points at the live staging
+  # Supabase (no need to run the Go stack here — it's independent).
+  # ------------------------------------------------------------------
 
   web-e2e:
     name: Web E2E (Playwright)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [live-integration]
+    needs: [web-unit]
     defaults:
       run:
         working-directory: apps/web-console
@@ -301,15 +304,32 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Read Playwright version
+        id: pw
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
       - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: Build + start Next.js
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_APP_URL: http://localhost:3000
-          CONTROL_PLANE_BASE_URL: http://localhost:8081
         run: |
           npm run build
           nohup npm start > /tmp/nextjs.log 2>&1 &
@@ -322,8 +342,6 @@ jobs:
       - name: Run Playwright (credentialed suites skip if creds absent)
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          # Leave E2E_* empty until dedicated test users exist in staging Supabase.
-          # Spec files call test.skip() when these are unset, so the job stays green.
           E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
