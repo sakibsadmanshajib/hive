@@ -33,7 +33,7 @@ func NewBatchClient(controlPlaneURL string) *BatchClient {
 
 // CreateBatch creates a new batch record in the control-plane.
 // POST /internal/batches/create
-func (c *BatchClient) CreateBatch(ctx context.Context, accountID, inputFileID, endpoint, completionWindow string, totalRequests int, reservationID string) (*BatchObject, error) {
+func (c *BatchClient) CreateBatch(ctx context.Context, accountID, inputFileID, endpoint, completionWindow string, totalRequests int, reservationID, apiKeyID, modelAlias string, estimatedCredits int64) (*BatchObject, error) {
 	body := map[string]interface{}{
 		"account_id":        accountID,
 		"input_file_id":     inputFileID,
@@ -41,6 +41,9 @@ func (c *BatchClient) CreateBatch(ctx context.Context, accountID, inputFileID, e
 		"completion_window": completionWindow,
 		"total_requests":    totalRequests,
 		"reservation_id":    reservationID,
+		"api_key_id":        apiKeyID,
+		"model_alias":       modelAlias,
+		"estimated_credits": estimatedCredits,
 	}
 	var resp batchAPIResponse
 	if err := c.post(ctx, "/internal/batches/create", body, &resp); err != nil {
@@ -115,16 +118,16 @@ func (c *BatchClient) CancelBatch(ctx context.Context, id, accountID string) (*B
 // --- Internal response types ---
 
 type batchAPIResponse struct {
-	ID               string `json:"id"`
-	Object           string `json:"object"`
-	Endpoint         string `json:"endpoint"`
-	Status           string `json:"status"`
-	InputFileID      string `json:"input_file_id"`
+	ID               string  `json:"id"`
+	Object           string  `json:"object"`
+	Endpoint         string  `json:"endpoint"`
+	Status           string  `json:"status"`
+	InputFileID      string  `json:"input_file_id"`
 	OutputFileID     *string `json:"output_file_id,omitempty"`
 	ErrorFileID      *string `json:"error_file_id,omitempty"`
-	CompletionWindow string `json:"completion_window"`
-	CreatedAt        int64  `json:"created_at"`
-	ExpiresAt        int64  `json:"expires_at"`
+	CompletionWindow string  `json:"completion_window"`
+	CreatedAt        int64   `json:"created_at"`
+	ExpiresAt        int64   `json:"expires_at"`
 	RequestCounts    struct {
 		Total     int `json:"total"`
 		Completed int `json:"completed"`

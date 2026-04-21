@@ -27,7 +27,7 @@ type AuthResult struct {
 
 // BatchClientBackend is the interface for the control-plane batchstore HTTP client.
 type BatchClientBackend interface {
-	CreateBatch(ctx context.Context, accountID, inputFileID, endpoint, completionWindow string, totalRequests int, reservationID string) (*BatchObject, error)
+	CreateBatch(ctx context.Context, accountID, inputFileID, endpoint, completionWindow string, totalRequests int, reservationID, apiKeyID, modelAlias string, estimatedCredits int64) (*BatchObject, error)
 	GetBatch(ctx context.Context, id, accountID string) (*BatchObject, error)
 	ListBatches(ctx context.Context, accountID string, limit int, after *string) (*BatchListResponse, error)
 	CancelBatch(ctx context.Context, id, accountID string) (*BatchObject, error)
@@ -188,7 +188,18 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create batch record in control-plane
-	batch, err := h.batchClient.CreateBatch(r.Context(), auth.AccountID, req.InputFileID, req.Endpoint, req.CompletionWindow, lineCount, reservationID)
+	batch, err := h.batchClient.CreateBatch(
+		r.Context(),
+		auth.AccountID,
+		req.InputFileID,
+		req.Endpoint,
+		req.CompletionWindow,
+		lineCount,
+		reservationID,
+		auth.APIKeyID,
+		modelAlias,
+		estimatedCredits,
+	)
 	if err != nil {
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to create batch", nil)
 		return
