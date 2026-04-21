@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 current_phase: 10
 current_plan: 11
-status: executing
-stopped_at: Completed 10-10-PLAN.md
-last_updated: "2026-04-21T01:18:20.643Z"
+status: ready_for_verification
+stopped_at: Completed 10-11-PLAN.md
+last_updated: "2026-04-21T01:42:08.000Z"
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 49
-  completed_plans: 48
+  completed_plans: 49
 ---
 
 # Project State
@@ -28,10 +28,10 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 **Current Phase:** 10
 **Current Plan:** 11
 **Total Plans in Phase:** 11
-**Status:** Ready to execute
+**Status:** Phase complete — ready for verification
 
-Phase: 10 (routing-storage-critical-fixes) - GAP CLOSURE EXECUTION
-Plan: 10 of 11 completed; ready to execute 10-11.
+Phase: 10 (routing-storage-critical-fixes) - GAP CLOSURE EXECUTION COMPLETE
+Plan: 11 of 11 completed; ready for phase verification.
 
 ## Performance Metrics
 
@@ -81,6 +81,7 @@ Plan: 10 of 11 completed; ready to execute 10-11.
 | Phase 10-routing-storage-critical-fixes P08 | 7 | 2 tasks | 3 files |
 | Phase 10-routing-storage-critical-fixes P09 | 7min | 3 tasks | 8 files |
 | Phase 10-routing-storage-critical-fixes P10 | 7min | 2 tasks | 11 files |
+| Phase 10-routing-storage-critical-fixes P11 | 18min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -205,6 +206,9 @@ Recent decisions affecting current work:
 - [Phase 10-09]: Batch reservation attribution derives model_alias from JSONL body.model — Rejecting missing or mixed model aliases before reservation creation keeps downstream spend attribution correct by model.
 - [Phase 10-10]: Batch attribution persists on public.batches — Storing api_key_id, model_alias, estimated_credits, and actual_credits on the batch record gives terminal settlement a stable source of truth.
 - [Phase 10-10]: Batch worker payload attribution fields stay optional — omitempty preserves compatibility for already-enqueued poll jobs while letting new producers pass attribution directly.
+- [Phase 10-11]: Terminal batch settlement finalizes from persisted batch attribution and caps actual credits to the reserved estimate — terminal spend stays attributable per API key/model without overcharging beyond the batch reservation.
+- [Phase 10-11]: Runtime Dockerfiles copy packages/storage because go.work declares it as a workspace module — live compose images now build the same storage code the toolchain tests exercised.
+- [Phase 10-11]: Live smoke request failures now surface honestly, and the remaining chat blocker is the current upstream provider key quota rather than a routing, storage, or batch-contract regression.
 
 ### Pending Todos
 
@@ -214,9 +218,10 @@ None yet.
 
 - Provider capability gaps must be handled explicitly so unsupported endpoints fail in an OpenAI-style way.
 - Payment-tax behavior across Stripe, bKash, and SSLCommerz needs careful validation during Phase 8.
+- The current OpenRouter key in `.env` is out of quota, so the live chat smoke cannot return HTTP 200 until provider capacity is restored.
 
 ## Session Continuity
 
-Last session: 2026-04-21T01:17:54.300Z
-Stopped at: Completed 10-10-PLAN.md
+Last session: 2026-04-21T01:42:08.000Z
+Stopped at: Completed 10-11-PLAN.md
 Resume file: None
