@@ -25,9 +25,9 @@ func (a *AccountingAdapter) CreateReservation(ctx context.Context, input Reserva
 		AttemptNumber:    1,
 		APIKeyID:         input.APIKeyID,
 		Endpoint:         input.Endpoint,
-		ModelAlias:       "",
+		ModelAlias:       input.ModelAlias,
 		EstimatedCredits: input.EstimatedCredits,
-		PolicyMode:       "soft",
+		PolicyMode:       "strict",
 	})
 	if err != nil {
 		return "", fmt.Errorf("batches: create reservation: %w", err)

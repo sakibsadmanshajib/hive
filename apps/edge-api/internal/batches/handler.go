@@ -57,6 +57,7 @@ type ReservationInput struct {
 	APIKeyID         string
 	RequestID        string
 	Endpoint         string
+	ModelAlias       string
 	EstimatedCredits int64
 }
 
@@ -164,7 +165,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate JSONL BEFORE reserving credits
-	lineCount, validationErr := h.validateJSONL(r.Context(), inputFile.StoragePath, req.Endpoint)
+	lineCount, modelAlias, validationErr := h.validateJSONL(r.Context(), inputFile.StoragePath, req.Endpoint)
 	if validationErr != nil {
 		code := "invalid_jsonl"
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", validationErr.Error(), &code)
@@ -178,6 +179,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		APIKeyID:         auth.APIKeyID,
 		RequestID:        "batch-" + req.InputFileID,
 		Endpoint:         req.Endpoint,
+		ModelAlias:       modelAlias,
 		EstimatedCredits: estimatedCredits,
 	})
 	if err != nil {
@@ -278,16 +280,17 @@ func (h *Handler) handleCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, batch)
 }
 
-// validateJSONL downloads and scans the JSONL file, returning line count or a validation error.
-func (h *Handler) validateJSONL(ctx context.Context, storagePath, expectedEndpoint string) (int, error) {
+// validateJSONL downloads and scans the JSONL file, returning line count, model alias, or a validation error.
+func (h *Handler) validateJSONL(ctx context.Context, storagePath, expectedEndpoint string) (int, string, error) {
 	reader, err := h.storage.Download(ctx, h.bucket, storagePath)
 	if err != nil {
-		return 0, fmt.Errorf("failed to download input file for validation: %w", err)
+		return 0, "", fmt.Errorf("failed to download input file for validation: %w", err)
 	}
 	defer reader.Close()
 
 	scanner := bufio.NewScanner(reader)
 	lineNum := 0
+	modelAlias := ""
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -297,24 +300,44 @@ func (h *Handler) validateJSONL(ctx context.Context, storagePath, expectedEndpoi
 
 		var input BatchInputLine
 		if err := json.Unmarshal([]byte(line), &input); err != nil {
-			return 0, fmt.Errorf("invalid JSON on line %d: %w", lineNum, err)
+			return 0, "", fmt.Errorf("invalid JSON on line %d: %w", lineNum, err)
 		}
 		if input.CustomID == "" {
-			return 0, fmt.Errorf("line %d: custom_id is required", lineNum)
+			return 0, "", fmt.Errorf("line %d: custom_id is required", lineNum)
 		}
 		if input.Method != "POST" {
-			return 0, fmt.Errorf("line %d: method must be POST, got %q", lineNum, input.Method)
+			return 0, "", fmt.Errorf("line %d: method must be POST, got %q", lineNum, input.Method)
 		}
 		if input.URL != expectedEndpoint {
-			return 0, fmt.Errorf("line %d: url %q does not match batch endpoint %q", lineNum, input.URL, expectedEndpoint)
+			return 0, "", fmt.Errorf("line %d: url %q does not match batch endpoint %q", lineNum, input.URL, expectedEndpoint)
+		}
+
+		modelValue, ok := input.Body["model"]
+		if !ok {
+			return 0, "", fmt.Errorf("line %d: body.model is required for batch accounting", lineNum)
+		}
+		modelAliasValue, ok := modelValue.(string)
+		if !ok {
+			return 0, "", fmt.Errorf("line %d: body.model is required for batch accounting", lineNum)
+		}
+		modelAliasValue = strings.TrimSpace(modelAliasValue)
+		if modelAliasValue == "" {
+			return 0, "", fmt.Errorf("line %d: body.model is required for batch accounting", lineNum)
+		}
+		if modelAlias == "" {
+			modelAlias = modelAliasValue
+			continue
+		}
+		if modelAliasValue != modelAlias {
+			return 0, "", fmt.Errorf("line %d: body.model must match first batch model %q, got %q", lineNum, modelAlias, modelAliasValue)
 		}
 	}
 
 	if err := scanner.Err(); err != nil {
-		return 0, fmt.Errorf("error reading input file: %w", err)
+		return 0, "", fmt.Errorf("error reading input file: %w", err)
 	}
 
-	return lineNum, nil
+	return lineNum, modelAlias, nil
 }
 
 // estimateBatchCredits estimates the credit cost for a batch job.
