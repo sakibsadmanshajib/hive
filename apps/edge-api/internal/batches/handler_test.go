@@ -33,9 +33,29 @@ type mockBatchClient struct {
 	listResponse   *batches.BatchListResponse
 	cancelledBatch *batches.BatchObject
 	cancelErr      error
+	lastCreate     struct {
+		accountID        string
+		inputFileID      string
+		endpoint         string
+		completionWindow string
+		totalRequests    int
+		reservationID    string
+		apiKeyID         string
+		modelAlias       string
+		estimatedCredits int64
+	}
 }
 
-func (m *mockBatchClient) CreateBatch(_ context.Context, accountID, inputFileID, endpoint, completionWindow string, totalRequests int, reservationID string) (*batches.BatchObject, error) {
+func (m *mockBatchClient) CreateBatch(_ context.Context, accountID, inputFileID, endpoint, completionWindow string, totalRequests int, reservationID, apiKeyID, modelAlias string, estimatedCredits int64) (*batches.BatchObject, error) {
+	m.lastCreate.accountID = accountID
+	m.lastCreate.inputFileID = inputFileID
+	m.lastCreate.endpoint = endpoint
+	m.lastCreate.completionWindow = completionWindow
+	m.lastCreate.totalRequests = totalRequests
+	m.lastCreate.reservationID = reservationID
+	m.lastCreate.apiKeyID = apiKeyID
+	m.lastCreate.modelAlias = modelAlias
+	m.lastCreate.estimatedCredits = estimatedCredits
 	if m.createdBatch != nil {
 		return m.createdBatch, nil
 	}
@@ -229,6 +249,39 @@ func TestBatchCreatePassesModelAliasToReservation(t *testing.T) {
 	}
 	if got := modelAliasField.String(); got != "hive-fast" {
 		t.Fatalf("reservation model alias = %q, want %q", got, "hive-fast")
+	}
+}
+
+func TestBatchCreatePropagatesAttributionToControlPlane(t *testing.T) {
+	storage := &mockStorage{
+		content: `{"custom_id":"req-1","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-fast"}}` + "\n" +
+			`{"custom_id":"req-2","method":"POST","url":"/v1/chat/completions","body":{"model":"hive-fast"}}` + "\n",
+	}
+	batchClient := &mockBatchClient{}
+	h := newTestHandler(batchClient, &mockFileClient{}, storage, &mockAccountingClient{})
+
+	body := `{"input_file_id":"file-input","endpoint":"/v1/chat/completions","completion_window":"24h"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/batches", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if got := batchClient.lastCreate.apiKeyID; got != "key-1" {
+		t.Fatalf("apiKeyID = %q, want %q", got, "key-1")
+	}
+	if got := batchClient.lastCreate.modelAlias; got != "hive-fast" {
+		t.Fatalf("modelAlias = %q, want %q", got, "hive-fast")
+	}
+	if got := batchClient.lastCreate.estimatedCredits; got != 2000 {
+		t.Fatalf("estimatedCredits = %d, want %d", got, 2000)
+	}
+	if got := batchClient.lastCreate.reservationID; got != "reservation-test-id" {
+		t.Fatalf("reservationID = %q, want %q", got, "reservation-test-id")
 	}
 }
 
