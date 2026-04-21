@@ -113,6 +113,14 @@ request_multipart() {
   printf '%s %s\n' "$code" "$out"
 }
 
+capture_request() {
+  response=$("$@") || exit $?
+  set -- $response
+  [ "$#" -eq 2 ] || fail "request helper returned $# fields, want 2"
+  REQUEST_CODE=$1
+  REQUEST_BODY=$2
+}
+
 assert_media_result() {
   label=$1
   code=$2
@@ -136,18 +144,18 @@ JSONL
 
 printf 'RIFF$\000\000\000WAVEfmt \020\000\000\000\001\000\001\000@\037\000\000@\037\000\000\001\000\010\000data\000\000\000\000' >"$WAV_FILE"
 
-set -- $(request_control_json route-image '{"alias_id":"hive-auto","need_image_generation":true}')
-assert_status_2xx route-image "$1" "$2"
-set -- $(request_control_json route-tts '{"alias_id":"hive-auto","need_tts":true}')
-assert_status_2xx route-tts "$1" "$2"
-set -- $(request_control_json route-stt '{"alias_id":"hive-auto","need_stt":true}')
-assert_status_2xx route-stt "$1" "$2"
-set -- $(request_control_json route-batch '{"alias_id":"hive-auto","need_batch":true}')
-assert_status_2xx route-batch "$1" "$2"
+capture_request request_control_json route-image '{"alias_id":"hive-auto","need_image_generation":true}'
+assert_status_2xx route-image "$REQUEST_CODE" "$REQUEST_BODY"
+capture_request request_control_json route-tts '{"alias_id":"hive-auto","need_tts":true}'
+assert_status_2xx route-tts "$REQUEST_CODE" "$REQUEST_BODY"
+capture_request request_control_json route-stt '{"alias_id":"hive-auto","need_stt":true}'
+assert_status_2xx route-stt "$REQUEST_CODE" "$REQUEST_BODY"
+capture_request request_control_json route-batch '{"alias_id":"hive-auto","need_batch":true}'
+assert_status_2xx route-batch "$REQUEST_CODE" "$REQUEST_BODY"
 
-set -- $(request_json chat POST "$HIVE_BASE_URL/v1/chat/completions" '{"model":"hive-default","messages":[{"role":"user","content":"ping"}]}')
-chat_code=$1
-chat_body=$2
+capture_request request_json chat POST "$HIVE_BASE_URL/v1/chat/completions" '{"model":"hive-default","messages":[{"role":"user","content":"ping"}]}'
+chat_code=$REQUEST_CODE
+chat_body=$REQUEST_BODY
 assert_status_code chat "$chat_code" 200 "$chat_body"
 if ! grep -Fq '"object":"chat.completion"' "$chat_body" && \
   ! grep -Fq '"object":"chat.completion.chunk"' "$chat_body" && \
@@ -155,8 +163,11 @@ if ! grep -Fq '"object":"chat.completion"' "$chat_body" && \
   fail "chat body missing chat.completion object; body: $chat_body"
 fi
 
-set -- $(request_json image POST "$HIVE_BASE_URL/v1/images/generations" '{"model":"hive-auto","prompt":"test image","n":1,"size":"1024x1024"}')
-assert_media_result image "$1" "$2" \
+capture_request request_json image POST "$HIVE_BASE_URL/v1/images/generations" '{"model":"hive-auto","prompt":"test image","n":1,"size":"1024x1024"}'
+assert_media_result image "$REQUEST_CODE" "$REQUEST_BODY" \
+  "policy_mode must be strict or temporary_overage" \
+  "model_alias is required" \
+  "Failed to reserve credits for batch" \
   "Failed to select a route" \
   "no eligible routes" \
   "supports_image_generation" \
@@ -164,8 +175,11 @@ assert_media_result image "$1" "$2" \
   "storage disabled" \
   "endpoints disabled"
 
-set -- $(request_json audio-speech POST "$HIVE_BASE_URL/v1/audio/speech" '{"model":"hive-auto","input":"ping","voice":"alloy","response_format":"mp3"}')
-assert_media_result audio-speech "$1" "$2" \
+capture_request request_json audio-speech POST "$HIVE_BASE_URL/v1/audio/speech" '{"model":"hive-auto","input":"ping","voice":"alloy","response_format":"mp3"}'
+assert_media_result audio-speech "$REQUEST_CODE" "$REQUEST_BODY" \
+  "policy_mode must be strict or temporary_overage" \
+  "model_alias is required" \
+  "Failed to reserve credits for batch" \
   "Failed to select a route" \
   "no eligible routes" \
   "supports_tts" \
@@ -173,10 +187,13 @@ assert_media_result audio-speech "$1" "$2" \
   "storage disabled" \
   "endpoints disabled"
 
-set -- $(request_multipart audio-transcription "$HIVE_BASE_URL/v1/audio/transcriptions" \
+capture_request request_multipart audio-transcription "$HIVE_BASE_URL/v1/audio/transcriptions" \
   -F "model=hive-auto" \
-  -F "file=@$WAV_FILE;type=audio/wav")
-assert_media_result audio-transcription "$1" "$2" \
+  -F "file=@$WAV_FILE;type=audio/wav"
+assert_media_result audio-transcription "$REQUEST_CODE" "$REQUEST_BODY" \
+  "policy_mode must be strict or temporary_overage" \
+  "model_alias is required" \
+  "Failed to reserve credits for batch" \
   "Failed to select a route" \
   "no eligible routes" \
   "supports_stt" \
@@ -184,18 +201,22 @@ assert_media_result audio-transcription "$1" "$2" \
   "storage disabled" \
   "endpoints disabled"
 
-set -- $(request_multipart file-upload "$HIVE_BASE_URL/v1/files" \
+capture_request request_multipart file-upload "$HIVE_BASE_URL/v1/files" \
   -F "purpose=batch" \
-  -F "file=@$JSONL_FILE;type=application/jsonl")
-file_code=$1
-file_body=$2
+  -F "file=@$JSONL_FILE;type=application/jsonl"
+file_code=$REQUEST_CODE
+file_body=$REQUEST_BODY
 assert_status_code file-upload "$file_code" 200 "$file_body"
 assert_openai_object file-upload "$file_body" file
 
-set -- $(request_get batch-list "$HIVE_BASE_URL/v1/batches")
-batch_code=$1
-batch_body=$2
+capture_request request_get batch-list "$HIVE_BASE_URL/v1/batches"
+batch_code=$REQUEST_CODE
+batch_body=$REQUEST_BODY
 assert_status_code batch-list "$batch_code" 200 "$batch_body"
+assert_body_lacks batch-list "$batch_body" \
+  "policy_mode must be strict or temporary_overage" \
+  "model_alias is required" \
+  "Failed to reserve credits for batch"
 assert_openai_object batch-list "$batch_body" list
 
 printf 'phase10-smoke: all probes passed\n'

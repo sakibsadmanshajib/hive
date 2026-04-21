@@ -5,8 +5,10 @@ WORKDIR /app
 COPY go.work go.work.sum* ./
 COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
 COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
+COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
 RUN cd apps/edge-api && go mod download
 COPY apps/edge-api/ ./apps/edge-api/
+COPY packages/storage/ ./packages/storage/
 COPY packages/openai-contract/matrix/support-matrix.json ./packages/openai-contract/matrix/support-matrix.json
 COPY packages/openai-contract/generated/hive-openapi.yaml ./packages/openai-contract/generated/hive-openapi.yaml
 EXPOSE 8080

@@ -50,7 +50,7 @@
 - [ ] **KEY-01**: Account owner can create multiple API keys under one account and sees each raw secret only once at creation time.
 - [ ] **KEY-02**: Account owner can set per-key nickname, expiration date, allowed models, and Hive Credit budget.
 - [ ] **KEY-03**: Account owner can revoke or rotate one API key without affecting other keys on the account.
-- [ ] **KEY-04**: Hive tracks usage and spend per API key and per model.
+- [x] **KEY-04**: Hive tracks usage and spend per API key and per model.
 - [ ] **KEY-05**: Hive enforces account-tier and per-key rate limits and quotas on the hot path.
 
 ### Developer Console
@@ -120,7 +120,7 @@
 | KEY-01 | Phase 13 | Pending |
 | KEY-02 | Phase 12 | Pending |
 | KEY-03 | Phase 13 | Pending |
-| KEY-04 | Phase 10 | Pending |
+| KEY-04 | Phase 10 | Complete |
 | KEY-05 | Phase 12 | Pending |
 | CONS-01 | Phase 13 | Pending |
 | CONS-02 | Phase 13 | Pending |
