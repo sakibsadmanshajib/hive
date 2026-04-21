@@ -2,11 +2,11 @@
 
 ## What This Is
 
-Hive is a **Go port of the OpenAI API** — a high-performance, developer-focused AI gateway and billing platform that mirrors the OpenAI public API surface in Go (control-plane + edge-api) for efficiency and operational control, while routing requests to internally managed upstream providers such as OpenRouter, Groq, and future providers. Drop-in compatible with official OpenAI JavaScript/TypeScript, Python, and Java SDKs for chat/completions, responses, embeddings, images, audio, files, and batches. The Go rewrite buys lean hot-path latency, predictable memory, precise `math/big` FX, and full source-level control over routing, sanitization, and billing semantics that a thin Python proxy cannot guarantee. Hides upstream provider identity, enforces prepaid credit controls, and provides a developer console for billing, usage, tax/profile data, and API key management. **v1.0 shipped 2026-04-21.**
+Hive is a developer-focused, OpenAI-compatible AI gateway and billing platform. **v1.0 developer-api-core is a full Go rewrite of the prior implementation** (control-plane + edge-api in Go 1.24), undertaken for efficiency and operational control: lean hot-path latency, predictable memory, precise `math/big` FX, and full source-level control over routing, sanitization, and billing semantics that the prior stack could not guarantee. Routes requests to internally managed upstream providers such as OpenRouter, Groq, and future providers. Drop-in compatible with official OpenAI JavaScript/TypeScript, Python, and Java SDKs for chat/completions, responses, embeddings, images, audio, files, and batches. Hides upstream provider identity, enforces prepaid credit controls, and provides a developer console for billing, usage, tax/profile data, and API key management. **v1.0 shipped 2026-04-21.**
 
 ## Core Value
 
-Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations — backed by a native Go implementation of the API surface for efficiency and full operational control.
+Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations — backed by a native Go rewrite of the prior v1.0 stack for efficiency and full operational control.
 
 ## Current State
 

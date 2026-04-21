@@ -1,6 +1,6 @@
 # Hive
 
-Go port of the OpenAI API — high-performance native Go implementation of the OpenAI public surface (control-plane + edge-api) for efficiency and full operational control. Targets the Bangladesh market with provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), and a developer console for key/billing management.
+OpenAI-compatible API gateway for the Bangladesh market — v1.0 is a full **Go rewrite** of the prior implementation, shipped for efficiency and operational control (lean hot-path latency, precise `math/big` FX, full source-level control over routing, sanitization, and billing). Provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), developer console for key/billing management.
 
 ## Tech Stack
 
