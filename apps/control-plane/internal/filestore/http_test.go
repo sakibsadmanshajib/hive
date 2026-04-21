@@ -83,6 +83,33 @@ func TestInternalBatchResponseIncludesOutputFieldsAndTimestamps(t *testing.T) {
 	}
 }
 
+func TestInternalBatchResponseIncludesAccountingAttribution(t *testing.T) {
+	apiKeyID := "key-1"
+	resp := batchToResponse(Batch{
+		ID:               "batch-1",
+		AccountID:        "acct-1",
+		InputFileID:      "file-input",
+		Endpoint:         "/v1/chat/completions",
+		CompletionWindow: "24h",
+		Status:           "validating",
+		APIKeyID:         &apiKeyID,
+		ModelAlias:       "hive-fast",
+		EstimatedCredits: 2000,
+		ActualCredits:    1800,
+		CreatedAt:        time.Unix(1700000000, 0),
+		ExpiresAt:        time.Unix(1700086400, 0),
+	})
+
+	for _, field := range []string{
+		"api_key_id",
+		"model_alias",
+		"estimated_credits",
+		"actual_credits",
+	} {
+		assertJSONField(t, resp, field)
+	}
+}
+
 func assertJSONField(t *testing.T, value interface{}, field string) {
 	t.Helper()
 

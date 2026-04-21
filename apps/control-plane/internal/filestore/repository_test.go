@@ -34,6 +34,53 @@ func TestFilestoreRepositoryDoesNotRunSchemaDDL(t *testing.T) {
 	}
 }
 
+func TestBatchAttributionMigrationAddsColumns(t *testing.T) {
+	migration := batchAttributionMigration(t)
+
+	for _, snippet := range []string{
+		"add column if not exists api_key_id text",
+		"add column if not exists model_alias text not null default ''",
+		"add column if not exists estimated_credits bigint not null default 0",
+		"add column if not exists actual_credits bigint not null default 0",
+		"create index if not exists idx_batches_api_key_id",
+		"create index if not exists idx_batches_model_alias",
+	} {
+		if !strings.Contains(strings.ToLower(migration), snippet) {
+			t.Fatalf("batch attribution migration must contain %q", snippet)
+		}
+	}
+}
+
+func TestCreateBatchPersistsAttributionFields(t *testing.T) {
+	repositorySource := createBatchSource(t, "apps/control-plane/internal/filestore/repository.go")
+	for _, field := range []string{
+		"api_key_id",
+		"model_alias",
+		"estimated_credits",
+		"actual_credits",
+		"reservation_id",
+	} {
+		if !strings.Contains(repositorySource, field) {
+			t.Fatalf("repository CreateBatch must persist %s", field)
+		}
+	}
+
+	serviceSource := createBatchSource(t, "apps/control-plane/internal/filestore/service.go")
+	for _, field := range []string{
+		"apiKeyID",
+		"modelAlias",
+		"estimatedCredits",
+		"reservationID",
+		"RequestCountsTotal",
+		"model_alias is required",
+		"estimated_credits must be greater than zero",
+	} {
+		if !strings.Contains(serviceSource, field) {
+			t.Fatalf("service CreateBatch must carry %s", field)
+		}
+	}
+}
+
 func TestUpdateBatchStatusPersistsAllowedFields(t *testing.T) {
 	body := updateBatchStatusSource(t)
 
@@ -45,6 +92,7 @@ func TestUpdateBatchStatusPersistsAllowedFields(t *testing.T) {
 		"request_counts_total",
 		"request_counts_completed",
 		"request_counts_failed",
+		"actual_credits",
 		"in_progress_at",
 		"completed_at",
 		"failed_at",
@@ -139,6 +187,28 @@ func updateBatchStatusSource(t *testing.T) string {
 		t.Fatal("could not locate end of UpdateBatchStatus body")
 	}
 	return rest[:end]
+}
+
+func createBatchSource(t *testing.T, relativePath string) string {
+	t.Helper()
+
+	source := readRepoFile(t, relativePath)
+	start := strings.Index(source, "CreateBatch")
+	if start == -1 {
+		t.Fatalf("CreateBatch not found in %s", relativePath)
+	}
+
+	return source[start:]
+}
+
+func batchAttributionMigration(t *testing.T) string {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "supabase/migrations/20260420_01_batch_accounting_attribution.sql"))
+	if err != nil {
+		t.Fatalf("read batch attribution migration: %v", err)
+	}
+	return string(body)
 }
 
 func readRepoFile(t *testing.T, relativePath string) string {
