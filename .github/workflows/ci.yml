@@ -214,20 +214,43 @@ jobs:
           done
 
       - name: Smoke test — /health endpoints
+        shell: bash
         run: |
-          curl -sf http://localhost:8080/health | tee /tmp/edge-health.json
-          curl -sf http://localhost:8081/health | tee /tmp/cp-health.json
+          set -euo pipefail
+          curl -fsS http://localhost:8080/health | tee /tmp/edge-health.json
+          echo
+          curl -fsS http://localhost:8081/health | tee /tmp/cp-health.json
 
       - name: Smoke test — /v1/models via edge-api
+        shell: bash
         env:
           HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
         run: |
-          curl -sf http://localhost:8080/v1/models \
-            -H "Authorization: Bearer $HIVE_API_KEY" | tee /tmp/models.json
+          set -euo pipefail
+          echo "HIVE_API_KEY length in workflow env: ${#HIVE_API_KEY}"
+          code=$(curl -sS -o /tmp/models.json -w "%{http_code}" \
+            http://localhost:8080/v1/models \
+            -H "Authorization: Bearer $HIVE_API_KEY")
+          echo "HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::/v1/models returned $code"
+            cat /tmp/models.json || true
+            exit 1
+          fi
+          head -c 200 /tmp/models.json; echo
 
       - name: Run SDK integration tests (JS + Python + Java)
         working-directory: deploy/docker
+        env:
+          # Pass through as process env so docker compose substitution picks it up
+          # even if .env parsing differs between runners.
+          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
         run: |
+          # Diagnostic: confirm HIVE_API_KEY reaches the sdk-tests-js container
+          docker compose --env-file ../../.env --profile test run --rm \
+            --no-deps sdk-tests-js \
+            sh -c 'printf "sdk container sees HIVE_API_KEY of length %d\n" "${#HIVE_API_KEY}"'
+
           # Each sdk-tests-* container runs its suite then exits.
           # --abort-on-container-exit returns non-zero if any test container fails.
           docker compose --env-file ../../.env --profile test up --build \
