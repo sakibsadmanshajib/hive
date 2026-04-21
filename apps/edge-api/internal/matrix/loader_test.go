@@ -10,6 +10,9 @@ const testMatrixJSON = `{
   "endpoints": [
     {"method": "GET", "path": "/v1/models", "status": "supported_now", "phase": 1, "notes": "Lists available models"},
     {"method": "POST", "path": "/v1/chat/completions", "status": "planned_for_launch", "phase": 6, "notes": "Chat completion"},
+    {"method": "GET", "path": "/v1/files/{file_id}", "status": "supported_now", "phase": 10, "notes": "Retrieve file metadata"},
+    {"method": "GET", "path": "/v1/files/{file_id}/content", "status": "supported_now", "phase": 10, "notes": "Retrieve file content"},
+    {"method": "GET", "path": "/v1/batches/{batch_id}", "status": "supported_now", "phase": 10, "notes": "Retrieve batch"},
     {"method": "GET", "path": "/v1/assistants", "status": "explicitly_unsupported_at_launch", "phase": null, "notes": "Assistants"},
     {"method": "GET", "path": "/v1/organization/users", "status": "out_of_scope", "phase": null, "notes": "Org admin"},
     {"method": "POST", "path": "/v1/models", "status": "explicitly_unsupported_at_launch", "phase": null, "notes": "Not a real endpoint"}
@@ -22,8 +25,8 @@ func TestLoadMatrixFromBytes(t *testing.T) {
 		t.Fatalf("LoadMatrixFromBytes failed: %v", err)
 	}
 
-	if len(m.Endpoints) != 5 {
-		t.Errorf("endpoint count = %d, want 5", len(m.Endpoints))
+	if len(m.Endpoints) != 8 {
+		t.Errorf("endpoint count = %d, want 8", len(m.Endpoints))
 	}
 
 	if m.Version != "0.1.0" {
@@ -84,6 +87,24 @@ func TestLookup(t *testing.T) {
 			method: "GET",
 			path:   "/v1/chat/completions",
 			want:   StatusUnknown,
+		},
+		{
+			name:   "GET concrete file metadata path matches templated route",
+			method: "GET",
+			path:   "/v1/files/file-abc",
+			want:   StatusSupportedNow,
+		},
+		{
+			name:   "GET concrete file content path matches templated route",
+			method: "GET",
+			path:   "/v1/files/file-abc/content",
+			want:   StatusSupportedNow,
+		},
+		{
+			name:   "GET concrete batch path matches templated route",
+			method: "GET",
+			path:   "/v1/batches/batch-123",
+			want:   StatusSupportedNow,
 		},
 	}
 

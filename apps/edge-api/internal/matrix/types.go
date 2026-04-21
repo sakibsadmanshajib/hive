@@ -1,5 +1,7 @@
 package matrix
 
+import "strings"
+
 // EndpointStatus represents the support classification of an API endpoint.
 type EndpointStatus string
 
@@ -44,6 +46,14 @@ func (m *SupportMatrix) Lookup(method, path string) EndpointStatus {
 	if status, ok := m.lookup[key]; ok {
 		return status
 	}
+	for _, ep := range m.Endpoints {
+		if ep.Method != method {
+			continue
+		}
+		if pathMatchesTemplate(ep.Path, path) {
+			return ep.Status
+		}
+	}
 	return StatusUnknown
 }
 
@@ -54,4 +64,43 @@ func (m *SupportMatrix) buildLookup() {
 		key := ep.Method + " " + ep.Path
 		m.lookup[key] = ep.Status
 	}
+}
+
+func pathMatchesTemplate(template, path string) bool {
+	if template == path {
+		return true
+	}
+
+	templateParts := splitPath(template)
+	pathParts := splitPath(path)
+	if len(templateParts) != len(pathParts) {
+		return false
+	}
+
+	for i := range templateParts {
+		part := templateParts[i]
+		if isTemplateSegment(part) {
+			if pathParts[i] == "" {
+				return false
+			}
+			continue
+		}
+		if part != pathParts[i] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func splitPath(path string) []string {
+	trimmed := strings.Trim(path, "/")
+	if trimmed == "" {
+		return nil
+	}
+	return strings.Split(trimmed, "/")
+}
+
+func isTemplateSegment(part string) bool {
+	return strings.HasPrefix(part, "{") && strings.HasSuffix(part, "}")
 }

@@ -128,6 +128,7 @@ func main() {
 	var accountingSvc *accounting.Service
 	var ledgerSvc *ledger.Service
 	var profilesSvc *profiles.Service
+	var routingSvc *routing.Service
 	if pool != nil {
 		if cfg.RedisURL != "" {
 			redisClient = platformredis.NewClient(cfg.RedisURL)
@@ -150,7 +151,7 @@ func main() {
 		catalogHandler = catalog.NewHandler(catalogSvc)
 
 		routingRepo := routing.NewPgxRepository(pool)
-		routingSvc := routing.NewService(routingRepo)
+		routingSvc = routing.NewService(routingRepo)
 		routingHandler = routing.NewHandler(routingSvc)
 
 		ledgerRepo := ledger.NewPgxRepository(pool)
@@ -266,8 +267,7 @@ func main() {
 			log.Printf("WARNING: filestore schema setup failed: %v", err)
 		} else {
 			filestoreSvc := filestore.NewService(filestoreRepo)
-			filestore.RegisterRoutes(routerMux, filestoreSvc)
-			log.Println("filestore routes registered")
+			var batchSubmitter filestore.BatchSubmitter
 
 			// Start Asynq batch polling worker if Redis is available.
 			if cfg.RedisURL != "" {
@@ -275,6 +275,22 @@ func main() {
 				if parseErr != nil {
 					log.Printf("WARNING: could not parse Redis URL for asynq worker: %v", parseErr)
 				} else {
+					asynqClient := asynq.NewClient(redisOpt)
+					defer asynqClient.Close()
+
+					if routingSvc != nil && accountingSvc != nil {
+						batchSubmitter = batchstore.NewSubmitter(
+							filestoreSvc,
+							routingSvc,
+							storageClient,
+							batchstore.NewAsynqQueue(asynqClient),
+							accountingSvc,
+							resolveLiteLLMBaseURL(),
+							resolveLiteLLMMasterKey(),
+							storageCfg.FilesBucket,
+						)
+					}
+
 					batchWorker := batchstore.NewBatchWorker(
 						filestoreSvc,
 						resolveLiteLLMBaseURL(),
@@ -304,6 +320,9 @@ func main() {
 					log.Println("batch worker started")
 				}
 			}
+
+			filestore.RegisterRoutes(routerMux, filestoreSvc, batchSubmitter)
+			log.Println("filestore routes registered")
 		}
 	}
 

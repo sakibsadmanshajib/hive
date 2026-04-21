@@ -120,7 +120,7 @@ func (o *Orchestrator) executeSync(
 		Endpoint:         endpoint,
 		ModelAlias:       model,
 		EstimatedCredits: estimatedCredits,
-		PolicyMode:       "enforce",
+		PolicyMode:       "strict",
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "budget") || strings.Contains(err.Error(), "insufficient") {

@@ -16,6 +16,8 @@ const testMatrixJSON = `{
   "generated": "2026-03-28",
   "endpoints": [
     {"method": "GET", "path": "/v1/models", "status": "supported_now", "phase": 1, "notes": "Lists available models"},
+    {"method": "GET", "path": "/v1/files/{file_id}", "status": "supported_now", "phase": 10, "notes": "Retrieve file metadata"},
+    {"method": "GET", "path": "/v1/files/{file_id}/content", "status": "supported_now", "phase": 10, "notes": "Retrieve file content"},
     {"method": "POST", "path": "/v1/chat/completions", "status": "planned_for_launch", "phase": 6, "notes": "Chat completion"},
     {"method": "GET", "path": "/v1/assistants", "status": "explicitly_unsupported_at_launch", "phase": null, "notes": "Assistants"},
     {"method": "GET", "path": "/v1/organization/users", "status": "out_of_scope", "phase": null, "notes": "Org admin"}
@@ -56,6 +58,20 @@ func TestUnsupportedEndpointMiddleware(t *testing.T) {
 			name:         "supported_now passes through",
 			method:       "GET",
 			path:         "/v1/models",
+			wantStatus:   http.StatusOK,
+			wantPassThru: true,
+		},
+		{
+			name:         "templated file metadata route passes through",
+			method:       "GET",
+			path:         "/v1/files/file-abc",
+			wantStatus:   http.StatusOK,
+			wantPassThru: true,
+		},
+		{
+			name:         "templated file content route passes through",
+			method:       "GET",
+			path:         "/v1/files/file-abc/content",
 			wantStatus:   http.StatusOK,
 			wantPassThru: true,
 		},

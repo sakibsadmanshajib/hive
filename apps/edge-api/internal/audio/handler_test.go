@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hivegpt/hive/apps/edge-api/internal/audio"
+	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
 )
 
 // --- Test doubles ---
@@ -309,5 +310,85 @@ func TestAudioUnknownPathReturns404(t *testing.T) {
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestSpeechUpstreamFailureIsProviderBlind(t *testing.T) {
+	raw := `{"error":{"message":"litellm.AuthenticationError: AuthenticationError: OpenrouterException: route-openrouter-default rejected openrouter/openrouter/free","type":"auth_error"}}`
+	mock := newMockLiteLLMAudio([]byte(raw), http.StatusUnauthorized, "application/json")
+	defer mock.Close()
+
+	h := buildAudioHandler(mock.server.URL)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", strings.NewReader(`{"model":"hive-fast","input":"Hello world","voice":"alloy"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+
+	resp := decodeAudioError(t, w)
+	assertAudioMessageProviderBlind(t, resp.Error.Message)
+}
+
+func TestTranscriptionUpstreamFailureIsProviderBlind(t *testing.T) {
+	raw := `{"error":{"message":"litellm.AuthenticationError: AuthenticationError: OpenrouterException: route-openrouter-default rejected openrouter/openrouter/free","type":"auth_error"}}`
+	mock := newMockLiteLLMAudio([]byte(raw), http.StatusUnauthorized, "application/json")
+	defer mock.Close()
+
+	h := buildAudioHandler(mock.server.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "hive-fast")
+	fw, _ := mw.CreateFormFile("file", "audio.mp3")
+	_, _ = fw.Write([]byte("fake-audio"))
+	_ = mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	}
+
+	resp := decodeAudioError(t, w)
+	assertAudioMessageProviderBlind(t, resp.Error.Message)
+}
+
+func decodeAudioError(t *testing.T, w *httptest.ResponseRecorder) apierrors.OpenAIError {
+	t.Helper()
+
+	var resp apierrors.OpenAIError
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response body: %v", err)
+	}
+	return resp
+}
+
+func assertAudioMessageProviderBlind(t *testing.T, message string) {
+	t.Helper()
+
+	lowerMessage := strings.ToLower(message)
+	for _, forbidden := range []string{
+		"openrouter",
+		"groq",
+		"litellm",
+		"route-openrouter-default",
+		"openrouter/auto",
+		"openrouterexception",
+		"authenticationerror",
+	} {
+		if strings.Contains(lowerMessage, forbidden) {
+			t.Fatalf("expected provider-blind message, found %q in %q", forbidden, message)
+		}
 	}
 }

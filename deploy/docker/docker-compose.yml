@@ -1,3 +1,5 @@
+name: hive
+
 services:
   edge-api:
     build:

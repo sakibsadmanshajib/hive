@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -150,7 +151,7 @@ func (o *Orchestrator) executeStreaming(
 		Endpoint:         endpoint,
 		ModelAlias:       model,
 		EstimatedCredits: estimatedCredits,
-		PolicyMode:       "enforce",
+		PolicyMode:       "strict",
 	})
 	if err != nil {
 		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "budget") || strings.Contains(err.Error(), "insufficient") {
@@ -195,6 +196,7 @@ func (o *Orchestrator) executeStreaming(
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if reservation.ID != "" {
 			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
 				AccountID:     snapshot.AccountID,
@@ -203,7 +205,8 @@ func (o *Orchestrator) executeStreaming(
 			})
 			finalized = true
 		}
-		apierrors.WriteProviderBlindUpstreamError(w, model, resp.StatusCode, "upstream error")
+		o.recordErrorEvent(ctx, snapshot, attempt, requestID, endpoint, model, resp.StatusCode, string(upstreamBody))
+		apierrors.WriteProviderBlindUpstreamError(w, model, resp.StatusCode, string(upstreamBody))
 		return nil
 	}
 

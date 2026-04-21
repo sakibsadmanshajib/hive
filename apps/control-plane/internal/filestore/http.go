@@ -1,6 +1,7 @@
 package filestore
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,8 +10,8 @@ import (
 )
 
 // RegisterRoutes registers all internal filestore HTTP endpoints on mux.
-func RegisterRoutes(mux *http.ServeMux, svc *Service) {
-	h := &handler{svc: svc}
+func RegisterRoutes(mux *http.ServeMux, svc *Service, submitter BatchSubmitter) {
+	h := &handler{svc: svc, submitter: submitter}
 
 	// File endpoints
 	mux.Handle("/internal/files/create", h)
@@ -34,7 +35,12 @@ func RegisterRoutes(mux *http.ServeMux, svc *Service) {
 }
 
 type handler struct {
-	svc *Service
+	svc       *Service
+	submitter BatchSubmitter
+}
+
+type BatchSubmitter interface {
+	SubmitBatch(ctx context.Context, batch Batch) (Batch, error)
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -385,6 +391,14 @@ func (h *handler) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeFilestoreError(w, err)
 		return
+	}
+
+	if h.submitter != nil {
+		b, err = h.submitter.SubmitBatch(r.Context(), b)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	writeJSON(w, http.StatusOK, batchToResponse(b))

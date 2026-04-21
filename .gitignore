@@ -31,3 +31,5 @@ Thumbs.db
 /packages/openai-contract/generated/
 /apps/edge-api/internal/generated/
 __pycache__/
+# Added by code-review-graph
+.code-review-graph/

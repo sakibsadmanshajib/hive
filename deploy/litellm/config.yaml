@@ -15,3 +15,7 @@ model_list:
     litellm_params:
       model: os.environ/GROQ_FAST_MODEL
       api_key: os.environ/GROQ_API_KEY
+
+files_settings:
+  - custom_llm_provider: openrouter
+    api_key: os.environ/OPENROUTER_API_KEY

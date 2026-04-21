@@ -219,8 +219,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		code := "upstream_error"
-		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Upstream audio request failed.", &code)
+		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -228,8 +227,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		code := "upstream_error"
-		apierrors.WriteError(w, resp.StatusCode, "api_error", string(upstreamBody), &code)
+		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, resp.StatusCode, string(upstreamBody))
 		return
 	}
 
@@ -378,8 +376,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		code := "upstream_error"
-		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Upstream audio request failed.", &code)
+		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, http.StatusBadGateway, err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -387,8 +384,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		code := "upstream_error"
-		apierrors.WriteError(w, resp.StatusCode, "api_error", string(upstreamBody), &code)
+		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, resp.StatusCode, string(upstreamBody))
 		return
 	}
 
