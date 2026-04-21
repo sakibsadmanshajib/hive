@@ -69,6 +69,7 @@ services:
         condition: service_healthy
     environment:
       HIVE_BASE_URL: http://edge-api:8080/v1
+      HIVE_API_KEY: ${HIVE_API_KEY:-}
 
   sdk-tests-py:
     build:
@@ -81,6 +82,7 @@ services:
         condition: service_healthy
     environment:
       HIVE_BASE_URL: http://edge-api:8080/v1
+      HIVE_API_KEY: ${HIVE_API_KEY:-}
 
   sdk-tests-java:
     build:
@@ -93,6 +95,7 @@ services:
         condition: service_healthy
     environment:
       HIVE_BASE_URL: http://edge-api:8080/v1
+      HIVE_API_KEY: ${HIVE_API_KEY:-}
 
   control-plane:
     build:
