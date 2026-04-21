@@ -125,6 +125,7 @@ func main() {
 	var redisClient *goredis.Client
 	// Hoisted so the payments wiring block below can reference them.
 	var accountsSvc *accounts.Service
+	var accountingSvc *accounting.Service
 	var ledgerSvc *ledger.Service
 	var profilesSvc *profiles.Service
 	if pool != nil {
@@ -169,7 +170,7 @@ func main() {
 		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc)
 
 		accountingRepo := accounting.NewPgxRepository(pool)
-		accountingSvc := accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc)
+		accountingSvc = accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc)
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
 		budgetsRepo := budgets.NewPgxRepository(pool)
@@ -280,6 +281,7 @@ func main() {
 						resolveLiteLLMMasterKey(),
 						storageClient,
 						storageCfg.FilesBucket,
+						accountingSvc,
 					)
 					asynqMux := asynq.NewServeMux()
 					asynqMux.HandleFunc(batchstore.TypeBatchPoll, batchWorker.HandleBatchPoll)

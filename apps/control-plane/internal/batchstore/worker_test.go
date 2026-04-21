@@ -363,11 +363,11 @@ func (f *fakeStorageUploader) Upload(_ context.Context, bucket, key string, read
 }
 
 type fakeBatchFileService struct {
-	getBatch           *filestore.Batch
-	getBatchErr        error
-	fileIDsByFilename  map[string]string
-	createCalls        []createFileCall
-	updateCalls        []updateBatchStatusCall
+	getBatch          *filestore.Batch
+	getBatchErr       error
+	fileIDsByFilename map[string]string
+	createCalls       []createFileCall
+	updateCalls       []updateBatchStatusCall
 }
 
 type createFileCall struct {
