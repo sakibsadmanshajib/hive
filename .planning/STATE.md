@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_phase: 10
-current_plan: 10
+current_plan: 11
 status: executing
-stopped_at: Completed 10-09-PLAN.md
-last_updated: "2026-04-21T01:04:39.561Z"
+stopped_at: Completed 10-10-PLAN.md
+last_updated: "2026-04-21T01:18:20.643Z"
 progress:
   total_phases: 14
   completed_phases: 9
   total_plans: 49
-  completed_plans: 47
+  completed_plans: 48
 ---
 
 # Project State
@@ -26,12 +26,12 @@ See: .planning/PROJECT.md (updated 2026-03-28)
 ## Current Position
 
 **Current Phase:** 10
-**Current Plan:** 10
+**Current Plan:** 11
 **Total Plans in Phase:** 11
 **Status:** Ready to execute
 
 Phase: 10 (routing-storage-critical-fixes) - GAP CLOSURE EXECUTION
-Plan: 9 of 11 completed; ready to execute 10-10.
+Plan: 10 of 11 completed; ready to execute 10-11.
 
 ## Performance Metrics
 
@@ -80,6 +80,7 @@ Plan: 9 of 11 completed; ready to execute 10-10.
 | Phase 10-routing-storage-critical-fixes P07 | 6 | 2 tasks | 21 files |
 | Phase 10-routing-storage-critical-fixes P08 | 7 | 2 tasks | 3 files |
 | Phase 10-routing-storage-critical-fixes P09 | 7min | 3 tasks | 8 files |
+| Phase 10-routing-storage-critical-fixes P10 | 7min | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -202,6 +203,8 @@ Recent decisions affecting current work:
 - [Phase 10-routing-storage-critical-fixes]: edge-api now receives S3_REGION from Docker Compose, matching its fail-fast storage startup requirements.
 - [Phase 10-09]: Image, audio, and batch reservations use policy_mode strict — Control-plane accounting accepts strict today, and prepaid reservation paths must not silently overrun credits.
 - [Phase 10-09]: Batch reservation attribution derives model_alias from JSONL body.model — Rejecting missing or mixed model aliases before reservation creation keeps downstream spend attribution correct by model.
+- [Phase 10-10]: Batch attribution persists on public.batches — Storing api_key_id, model_alias, estimated_credits, and actual_credits on the batch record gives terminal settlement a stable source of truth.
+- [Phase 10-10]: Batch worker payload attribution fields stay optional — omitempty preserves compatibility for already-enqueued poll jobs while letting new producers pass attribution directly.
 
 ### Pending Todos
 
@@ -214,6 +217,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-04-21T01:03:56.431Z
-Stopped at: Completed 10-09-PLAN.md
+Last session: 2026-04-21T01:17:54.300Z
+Stopped at: Completed 10-10-PLAN.md
 Resume file: None
