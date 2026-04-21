@@ -1,0 +1,116 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  go-tests:
+    name: Go tests (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: edge-api
+            path: ./apps/edge-api
+          - module: control-plane
+            path: ./apps/control-plane
+          - module: storage
+            path: ./packages/storage
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: |
+            apps/edge-api/go.sum
+            apps/control-plane/go.sum
+            packages/storage/go.sum
+
+      - name: Download modules
+        working-directory: ${{ matrix.path }}
+        run: go mod download
+
+      - name: go vet
+        working-directory: ${{ matrix.path }}
+        run: go vet ./...
+
+      - name: go test
+        working-directory: ${{ matrix.path }}
+        run: go test -count=1 -short -race -timeout 5m ./...
+
+  web-console:
+    name: Web console (lint + unit + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web-console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+      - name: Build (Next.js)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+
+  docker-build:
+    name: Docker build smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build edge-api image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.edge-api
+          push: false
+          cache-from: type=gha,scope=edge-api
+          cache-to: type=gha,scope=edge-api,mode=max
+
+      - name: Build control-plane image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.control-plane
+          push: false
+          cache-from: type=gha,scope=control-plane
+          cache-to: type=gha,scope=control-plane,mode=max
+
+      - name: Build web-console image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.web-console
+          push: false
+          cache-from: type=gha,scope=web-console
+          cache-to: type=gha,scope=web-console,mode=max
