@@ -27,7 +27,7 @@ func (a *AccountingAdapter) CreateReservation(ctx context.Context, input Reserva
 		Endpoint:         input.Endpoint,
 		ModelAlias:       input.ModelAlias,
 		EstimatedCredits: input.EstimatedCredits,
-		PolicyMode:       "soft",
+		PolicyMode:       "strict",
 	})
 	if err != nil {
 		return "", fmt.Errorf("images: create reservation: %w", err)
