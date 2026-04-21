@@ -193,7 +193,7 @@ Plans:
   5. All 3 previously broken flows (image/audio routing, file/batch registration, batch output) pass.
   6. Batch final settlement correctly attributes spend and usage per API key and model.
 
-**Plans:** 8/11 plans complete; 3 gap-closure plans planned
+**Plans:** 9/11 plans executed
 **Verification:** gaps_found — see `.planning/phases/10-routing-storage-critical-fixes/10-VERIFICATION.md`
 
 Plans:
@@ -205,7 +205,7 @@ Plans:
 - [x] 10-06-PLAN.md — Control-plane filestore response fields, batch status persistence, and StorageUploader wiring
 - [x] 10-07-PLAN.md — Env documentation and repository-wide legacy storage reference purge
 - [x] 10-08-PLAN.md — Final route/media checks, full suite, live smoke, and purge verification
-- [ ] 10-09-PLAN.md — Gap closure: accepted accounting policy modes and batch model alias reservation propagation
+- [x] 10-09-PLAN.md — Gap closure: accepted accounting policy modes and batch model alias reservation propagation
 - [ ] 10-10-PLAN.md — Gap closure: batch attribution persistence and edge-to-control-plane propagation
 - [ ] 10-11-PLAN.md — Gap closure: terminal reservation settlement, KEY-04, full suite, purge, and live smoke gate
 
@@ -284,7 +284,7 @@ Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9
 | 7. Media, File, and Async API Surface | 4/4 | Complete   | 2026-04-10 |
 | 8. Payments, FX, and Compliance Checkout | 3/3 | Complete   | 2026-04-11 |
 | 9. Developer Console & Operational Hardening | 4/4 | Complete   | 2026-04-11 |
-| 10. Routing & Storage Critical Fixes | 8/8 | Gaps Found | - |
+| 10. Routing & Storage Critical Fixes | 9/11 | In Progress|  |
 | 11. Compliance, Verification & Artifact Cleanup | 0/0 | Pending | - |
 | 12. KEY-05 Hot-Path Rate Limiting | 0/0 | Pending | - |
 | 13. Console Integration Fixes | 0/0 | Pending | - |
