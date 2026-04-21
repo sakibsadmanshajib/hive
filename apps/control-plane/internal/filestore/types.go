@@ -41,24 +41,28 @@ type UploadPart struct {
 
 // Batch represents an async batch job in Postgres.
 type Batch struct {
-	ID                      string
-	AccountID               string
-	InputFileID             string
-	OutputFileID            *string
-	ErrorFileID             *string
-	Endpoint                string
-	CompletionWindow        string
-	Status                  string // "validating","in_progress","finalizing","completed","failed","cancelled","expired"
-	Provider                string
-	UpstreamBatchID         *string
-	ReservationID           *string
-	RequestCountsTotal      int
-	RequestCountsCompleted  int
-	RequestCountsFailed     int
-	CreatedAt               time.Time
-	InProgressAt            *time.Time
-	CompletedAt             *time.Time
-	FailedAt                *time.Time
-	CancelledAt             *time.Time
-	ExpiresAt               time.Time
+	ID                     string
+	AccountID              string
+	InputFileID            string
+	OutputFileID           *string
+	ErrorFileID            *string
+	Endpoint               string
+	CompletionWindow       string
+	Status                 string // "validating","in_progress","finalizing","completed","failed","cancelled","expired"
+	Provider               string
+	UpstreamBatchID        *string
+	ReservationID          *string
+	APIKeyID               *string
+	ModelAlias             string
+	EstimatedCredits       int64
+	ActualCredits          int64
+	RequestCountsTotal     int
+	RequestCountsCompleted int
+	RequestCountsFailed    int
+	CreatedAt              time.Time
+	InProgressAt           *time.Time
+	CompletedAt            *time.Time
+	FailedAt               *time.Time
+	CancelledAt            *time.Time
+	ExpiresAt              time.Time
 }

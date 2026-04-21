@@ -159,7 +159,7 @@ func (s *Service) CancelUpload(ctx context.Context, uploadID, accountID string) 
 // --- Batch operations ---
 
 // CreateBatch creates a new batch record with a generated ID and validates the endpoint.
-func (s *Service) CreateBatch(ctx context.Context, accountID, inputFileID, endpoint, completionWindow string) (Batch, error) {
+func (s *Service) CreateBatch(ctx context.Context, accountID, inputFileID, endpoint, completionWindow, apiKeyID, modelAlias string, totalRequests int, reservationID string, estimatedCredits int64) (Batch, error) {
 	if !validBatchEndpoints[endpoint] {
 		return Batch{}, fmt.Errorf("filestore: endpoint %q is not allowed for batch; must be one of: %s",
 			endpoint, strings.Join(validEndpointList(), ", "))
@@ -169,18 +169,39 @@ func (s *Service) CreateBatch(ctx context.Context, accountID, inputFileID, endpo
 		completionWindow = "24h"
 	}
 
+	modelAlias = strings.TrimSpace(modelAlias)
+	if modelAlias == "" {
+		return Batch{}, fmt.Errorf("filestore: model_alias is required")
+	}
+	if estimatedCredits <= 0 {
+		return Batch{}, fmt.Errorf("filestore: estimated_credits must be greater than zero")
+	}
+
+	apiKeyID = strings.TrimSpace(apiKeyID)
+	reservationID = strings.TrimSpace(reservationID)
+
 	id := "batch-" + uuid.New().String()
 	now := time.Now().UTC()
 
 	b := Batch{
-		ID:               id,
-		AccountID:        accountID,
-		InputFileID:      inputFileID,
-		Endpoint:         endpoint,
-		CompletionWindow: completionWindow,
-		Status:           "validating",
-		CreatedAt:        now,
-		ExpiresAt:        now.Add(24 * time.Hour),
+		ID:                 id,
+		AccountID:          accountID,
+		InputFileID:        inputFileID,
+		Endpoint:           endpoint,
+		CompletionWindow:   completionWindow,
+		Status:             "validating",
+		ModelAlias:         modelAlias,
+		EstimatedCredits:   estimatedCredits,
+		ActualCredits:      0,
+		RequestCountsTotal: totalRequests,
+		CreatedAt:          now,
+		ExpiresAt:          now.Add(24 * time.Hour),
+	}
+	if apiKeyID != "" {
+		b.APIKeyID = &apiKeyID
+	}
+	if reservationID != "" {
+		b.ReservationID = &reservationID
 	}
 
 	if err := s.repo.CreateBatch(ctx, b); err != nil {

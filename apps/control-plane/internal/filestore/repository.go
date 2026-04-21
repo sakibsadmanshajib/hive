@@ -201,17 +201,20 @@ func (r *Repository) CreateBatch(ctx context.Context, b Batch) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO batches (
 			id, account_id, input_file_id, output_file_id, error_file_id,
-			endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+			endpoint, completion_window, status, provider, upstream_batch_id, reservation_id, api_key_id, model_alias,
+			estimated_credits, actual_credits,
 			request_counts_total, request_counts_completed, request_counts_failed,
 			created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
 		) VALUES (
 			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9, $10, $11,
-			$12, $13, $14,
-			$15, $16, $17, $18, $19, $20
+			$6, $7, $8, $9, $10, $11, $12, $13,
+			$14, $15,
+			$16, $17, $18,
+			$19, $20, $21, $22, $23, $24
 		)
 	`, b.ID, b.AccountID, b.InputFileID, b.OutputFileID, b.ErrorFileID,
-		b.Endpoint, b.CompletionWindow, b.Status, b.Provider, b.UpstreamBatchID, b.ReservationID,
+		b.Endpoint, b.CompletionWindow, b.Status, b.Provider, b.UpstreamBatchID, b.ReservationID, b.APIKeyID, b.ModelAlias,
+		b.EstimatedCredits, b.ActualCredits,
 		b.RequestCountsTotal, b.RequestCountsCompleted, b.RequestCountsFailed,
 		b.CreatedAt, b.InProgressAt, b.CompletedAt, b.FailedAt, b.CancelledAt, b.ExpiresAt)
 	if err != nil {
@@ -224,7 +227,8 @@ func (r *Repository) CreateBatch(ctx context.Context, b Batch) error {
 func (r *Repository) GetBatch(ctx context.Context, id, accountID string) (*Batch, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT id, account_id, input_file_id, output_file_id, error_file_id,
-		       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+		       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id, api_key_id, model_alias,
+		       estimated_credits, actual_credits,
 		       request_counts_total, request_counts_completed, request_counts_failed,
 		       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
 		FROM batches
@@ -253,7 +257,8 @@ func (r *Repository) ListBatches(ctx context.Context, accountID string, limit in
 	if after != nil {
 		rows, err = r.pool.Query(ctx, `
 			SELECT id, account_id, input_file_id, output_file_id, error_file_id,
-			       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+			       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id, api_key_id, model_alias,
+			       estimated_credits, actual_credits,
 			       request_counts_total, request_counts_completed, request_counts_failed,
 			       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
 			FROM batches
@@ -264,7 +269,8 @@ func (r *Repository) ListBatches(ctx context.Context, accountID string, limit in
 	} else {
 		rows, err = r.pool.Query(ctx, `
 			SELECT id, account_id, input_file_id, output_file_id, error_file_id,
-			       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id,
+			       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id, api_key_id, model_alias,
+			       estimated_credits, actual_credits,
 			       request_counts_total, request_counts_completed, request_counts_failed,
 			       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
 			FROM batches
@@ -348,6 +354,7 @@ var allowedBatchStatusUpdateFields = map[string]batchStatusUpdateField{
 	"request_counts_total":     {column: "request_counts_total", kind: batchUpdateInteger},
 	"request_counts_completed": {column: "request_counts_completed", kind: batchUpdateInteger},
 	"request_counts_failed":    {column: "request_counts_failed", kind: batchUpdateInteger},
+	"actual_credits":           {column: "actual_credits", kind: batchUpdateInteger},
 	"in_progress_at":           {column: "in_progress_at", kind: batchUpdateTimestamp},
 	"completed_at":             {column: "completed_at", kind: batchUpdateTimestamp},
 	"failed_at":                {column: "failed_at", kind: batchUpdateTimestamp},
@@ -439,7 +446,8 @@ func scanBatch(s rowScanner) (Batch, error) {
 	var b Batch
 	if err := s.Scan(
 		&b.ID, &b.AccountID, &b.InputFileID, &b.OutputFileID, &b.ErrorFileID,
-		&b.Endpoint, &b.CompletionWindow, &b.Status, &b.Provider, &b.UpstreamBatchID, &b.ReservationID,
+		&b.Endpoint, &b.CompletionWindow, &b.Status, &b.Provider, &b.UpstreamBatchID, &b.ReservationID, &b.APIKeyID, &b.ModelAlias,
+		&b.EstimatedCredits, &b.ActualCredits,
 		&b.RequestCountsTotal, &b.RequestCountsCompleted, &b.RequestCountsFailed,
 		&b.CreatedAt, &b.InProgressAt, &b.CompletedAt, &b.FailedAt, &b.CancelledAt, &b.ExpiresAt,
 	); err != nil {

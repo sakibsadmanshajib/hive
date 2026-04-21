@@ -338,6 +338,11 @@ type createBatchRequest struct {
 	InputFileID      string `json:"input_file_id"`
 	Endpoint         string `json:"endpoint"`
 	CompletionWindow string `json:"completion_window"`
+	TotalRequests    int    `json:"total_requests"`
+	ReservationID    string `json:"reservation_id"`
+	APIKeyID         string `json:"api_key_id"`
+	ModelAlias       string `json:"model_alias"`
+	EstimatedCredits int64  `json:"estimated_credits"`
 }
 
 func (h *handler) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
@@ -349,12 +354,34 @@ func (h *handler) handleCreateBatch(w http.ResponseWriter, r *http.Request) {
 
 	req.AccountID = strings.TrimSpace(req.AccountID)
 	req.InputFileID = strings.TrimSpace(req.InputFileID)
+	req.APIKeyID = strings.TrimSpace(req.APIKeyID)
+	req.ModelAlias = strings.TrimSpace(req.ModelAlias)
+	req.ReservationID = strings.TrimSpace(req.ReservationID)
 	if req.AccountID == "" || req.InputFileID == "" || req.Endpoint == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "account_id, input_file_id, and endpoint are required"})
 		return
 	}
+	if req.ModelAlias == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "model_alias is required"})
+		return
+	}
+	if req.EstimatedCredits <= 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "estimated_credits must be greater than zero"})
+		return
+	}
 
-	b, err := h.svc.CreateBatch(r.Context(), req.AccountID, req.InputFileID, req.Endpoint, req.CompletionWindow)
+	b, err := h.svc.CreateBatch(
+		r.Context(),
+		req.AccountID,
+		req.InputFileID,
+		req.Endpoint,
+		req.CompletionWindow,
+		req.APIKeyID,
+		req.ModelAlias,
+		req.TotalRequests,
+		req.ReservationID,
+		req.EstimatedCredits,
+	)
 	if err != nil {
 		writeFilestoreError(w, err)
 		return
@@ -529,6 +556,10 @@ type batchResponse struct {
 	InputFileID      string  `json:"input_file_id"`
 	OutputFileID     *string `json:"output_file_id,omitempty"`
 	ErrorFileID      *string `json:"error_file_id,omitempty"`
+	APIKeyID         *string `json:"api_key_id,omitempty"`
+	ModelAlias       string  `json:"model_alias"`
+	EstimatedCredits int64   `json:"estimated_credits"`
+	ActualCredits    int64   `json:"actual_credits"`
 	CompletionWindow string  `json:"completion_window"`
 	CreatedAt        int64   `json:"created_at"`
 	InProgressAt     *int64  `json:"in_progress_at,omitempty"`
@@ -552,6 +583,10 @@ func batchToResponse(b Batch) batchResponse {
 		InputFileID:      b.InputFileID,
 		OutputFileID:     b.OutputFileID,
 		ErrorFileID:      b.ErrorFileID,
+		APIKeyID:         b.APIKeyID,
+		ModelAlias:       b.ModelAlias,
+		EstimatedCredits: b.EstimatedCredits,
+		ActualCredits:    b.ActualCredits,
 		CompletionWindow: b.CompletionWindow,
 		CreatedAt:        b.CreatedAt.Unix(),
 		ExpiresAt:        b.ExpiresAt.Unix(),
