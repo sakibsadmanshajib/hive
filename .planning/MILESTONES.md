@@ -13,10 +13,11 @@ Shipped milestones for Hive API Platform. Details archived under `milestones/`.
 **Commits:** 580 total, 126 `feat` commits
 **Status:** tech_debt — ship-ready with 4 documented deferred items.
 
-**Delivered:** OpenAI-compatible developer API gateway with provider-agnostic routing,
-prepaid credit ledger, multi-rail BDT/USD checkout, and a developer console. Drop-in
-compatible with official OpenAI JS/Python/Java SDKs for chat/completions/responses/embeddings,
-images, audio, files, and batches (failure-path).
+**Delivered:** Go port of the OpenAI API — high-performance native implementation of the
+OpenAI public surface in Go (control-plane + edge-api) for efficiency and full operational
+control, with provider-agnostic routing, prepaid credit ledger, multi-rail BDT/USD checkout,
+and a developer console. Drop-in compatible with official OpenAI JS/Python/Java SDKs for
+chat/completions/responses/embeddings, images, audio, files, and batches (failure-path).
 
 **Key accomplishments:**
 

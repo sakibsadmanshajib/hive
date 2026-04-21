@@ -2,11 +2,11 @@
 
 ## What This Is
 
-Hive API Platform is a developer-focused AI gateway and billing platform that exposes an OpenAI-compatible API surface while routing requests to internally managed upstream providers such as OpenRouter, Groq, and future providers. Drop-in compatible with official OpenAI JavaScript/TypeScript, Python, and Java SDKs for chat/completions, responses, embeddings, images, audio, files, and batches. Hides upstream provider identity, enforces prepaid credit controls, and provides a developer console for billing, usage, tax/profile data, and API key management. **v1.0 shipped 2026-04-21.**
+Hive is a **Go port of the OpenAI API** — a high-performance, developer-focused AI gateway and billing platform that mirrors the OpenAI public API surface in Go (control-plane + edge-api) for efficiency and operational control, while routing requests to internally managed upstream providers such as OpenRouter, Groq, and future providers. Drop-in compatible with official OpenAI JavaScript/TypeScript, Python, and Java SDKs for chat/completions, responses, embeddings, images, audio, files, and batches. The Go rewrite buys lean hot-path latency, predictable memory, precise `math/big` FX, and full source-level control over routing, sanitization, and billing semantics that a thin Python proxy cannot guarantee. Hides upstream provider identity, enforces prepaid credit controls, and provides a developer console for billing, usage, tax/profile data, and API key management. **v1.0 shipped 2026-04-21.**
 
 ## Core Value
 
-Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
+Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations — backed by a native Go implementation of the API surface for efficiency and full operational control.
 
 ## Current State
 

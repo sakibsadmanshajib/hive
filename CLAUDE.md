@@ -1,6 +1,6 @@
 # Hive
 
-OpenAI-compatible API gateway for the Bangladesh market. Proxies LLM requests through provider-agnostic routing, handles prepaid credit billing with BDT payment rails, and exposes a developer console for key/billing management.
+Go port of the OpenAI API — high-performance native Go implementation of the OpenAI public surface (control-plane + edge-api) for efficiency and full operational control. Targets the Bangladesh market with provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), and a developer console for key/billing management.
 
 ## Tech Stack
 
