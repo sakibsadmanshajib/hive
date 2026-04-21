@@ -122,20 +122,26 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 
 ## Known Issues
 
-See `.planning/UAT-REPORT.md` for full runtime UAT results. Key blockers:
+See `.planning/UAT-REPORT.md` for full runtime UAT results, `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for Phase 10 UAT closure, and `.planning/v1.1-DEFERRED-SCOPE.md` for what is deferred out of v1.0. All items below are deferred to v1.1 — v1.0 ships without them because the core developer API path is unaffected in practice.
 
-1. **`ensureCapabilityColumns` targets wrong table** — `apps/control-plane/internal/routing/repository.go` targets `route_capabilities` instead of `provider_capabilities`. Blocks all inference routing.
+1. **`ensureCapabilityColumns` targets wrong table** — `apps/control-plane/internal/routing/repository.go` targets `route_capabilities` instead of `provider_capabilities`. Latent bug — current routing works because a separate seed path populates the required columns. Fix tracked in v1.1.
 2. **File storage wiring under final verification** — Phase 10 now wires file and media endpoints to Supabase Storage. Final live smoke verification is tracked in Phase 10 Plan 10-08.
 3. **`amount_usd` exposed in BD checkout** — `apps/control-plane/internal/payments/http.go:105-115`. Regulatory risk.
+4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). See `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`. Unblocks via (a) adding a supported provider key or (b) implementing a local batch executor in control-plane.
 
 ## Project State
 
-Planning artifacts live in `.planning/`. Current milestone progress, phase plans, and requirements are tracked there:
+- **v1.0 — developer-api-core**: ready to ship. Phases 1–10 complete. Covers chat-app + CLI-coding-agent integrators. See `.planning/STATE.md`.
+- **v1.1 — deferred**: phases 11–14 plus batch success-path settlement, `ensureCapabilityColumns` table fix, `amount_usd` BD checkout. See `.planning/v1.1-DEFERRED-SCOPE.md`.
 
-- `.planning/ROADMAP.md` — Phase breakdown and progress
-- `.planning/REQUIREMENTS.md` — Requirement traceability
-- `.planning/UAT-REPORT.md` — Runtime test results
-- `.planning/v1.0-MILESTONE-AUDIT.md` — Launch readiness audit
+Planning artifacts in `.planning/`:
+
+- `.planning/STATE.md` — current milestone state
+- `.planning/ROADMAP.md` — full phase breakdown (phases 11–14 listed there belong to v1.1)
+- `.planning/REQUIREMENTS.md` — requirement traceability
+- `.planning/UAT-REPORT.md` — runtime test results
+- `.planning/v1.0-MILESTONE-AUDIT.md` — earlier launch readiness audit (dated 2026-04-15; superseded by Phase 10 UAT + v1.1-DEFERRED-SCOPE.md)
+- `.planning/v1.1-DEFERRED-SCOPE.md` — deferred scope for next milestone
 
 ---
 

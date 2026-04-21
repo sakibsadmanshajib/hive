@@ -1,17 +1,25 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-milestone_name: milestone
+milestone_name: developer-api-core
 current_phase: 10
 current_plan: 11
-status: ready_for_verification
-stopped_at: Completed 10-11-PLAN.md
-last_updated: "2026-04-21T01:42:08.000Z"
+status: ready_to_ship
+stopped_at: Phase 10 UAT complete; Phases 11-14 deferred to v1.1
+last_updated: "2026-04-21T22:15:00.000Z"
 progress:
-  total_phases: 14
-  completed_phases: 9
+  total_phases: 10
+  completed_phases: 10
   total_plans: 49
   completed_plans: 49
+deferred:
+  target_milestone: v1.1
+  doc: .planning/v1.1-DEFERRED-SCOPE.md
+  phases: [11, 12, 13, 14]
+  known_issues:
+    - batch-success-path-terminal-settlement
+    - ensure-capability-columns-wrong-table
+    - amount-usd-on-bd-checkout
 ---
 
 # Project State
@@ -21,7 +29,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-28)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 10 — routing-storage-critical-fixes
+**Current focus:** v1.0 shipping — developer API core ready for chat-app and CLI-coding-agent integrators. v1.1 scope tracked in `.planning/v1.1-DEFERRED-SCOPE.md`.
 
 ## Current Position
 
