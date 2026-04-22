@@ -4,7 +4,10 @@
 package proxy
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"regexp"
 	"time"
@@ -69,6 +72,23 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(code int) {
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
+}
+
+// Flush proxies to the underlying ResponseWriter so SSE streaming handlers
+// can push chunks without the flusher assertion failing upstream.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack proxies to the underlying ResponseWriter for connections that take
+// over the raw socket.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("statusRecorder: underlying ResponseWriter does not implement http.Hijacker")
 }
 
 // uuidPattern matches UUID segments in URL paths.

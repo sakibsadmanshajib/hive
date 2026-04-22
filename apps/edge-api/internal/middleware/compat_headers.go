@@ -1,8 +1,11 @@
 package middleware
 
 import (
+	"bufio"
 	"crypto/rand"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -64,6 +67,26 @@ func (rw *responseRecorder) Write(b []byte) (int, error) {
 		rw.headerWritten = true
 	}
 	return rw.ResponseWriter.Write(b)
+}
+
+// Flush proxies to the underlying ResponseWriter so SSE streaming handlers
+// (chat.completions with stream=true, /v1/responses streaming) can push
+// chunks. Without this, the edge-api flusher assertion fails and the
+// handler returns 500 "Streaming not supported by server."
+func (rw *responseRecorder) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack proxies to the underlying ResponseWriter for connections that need
+// to take over the raw socket (e.g. WebSocket upgrades). Returns an error
+// when the underlying writer does not support hijacking.
+func (rw *responseRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := rw.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("responseRecorder: underlying ResponseWriter does not implement http.Hijacker")
 }
 
 // generateUUIDv4 generates a random UUID v4 string using crypto/rand.

@@ -1,12 +1,13 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-22T03:27:40.516Z
-> Files: 507 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-22T03:29:47.581Z
+> Files: 508 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
 - `feedback_local_first.md` (~218 tok)
-- `MEMORY.md` — Memory Index (~404 tok)
+- `feedback_respect_deletions.md` (~233 tok)
+- `MEMORY.md` — Memory Index (~444 tok)
 
 ## ./
 
