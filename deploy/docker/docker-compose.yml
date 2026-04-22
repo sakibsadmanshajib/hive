@@ -44,7 +44,7 @@ services:
       - gomodcache:/go/pkg/mod
 
   litellm:
-    image: ghcr.io/berriai/litellm:main-stable
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.77.7-stable}
     ports:
       - "4000:4000"
     environment:

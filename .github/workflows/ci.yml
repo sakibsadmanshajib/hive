@@ -191,6 +191,31 @@ jobs:
             echo "  $v: len=${#val}"
           done
 
+      - name: Cache third-party images (redis, litellm)
+        id: img-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          # Keyed on the pinned tags so tag bumps invalidate the cache.
+          key: docker-images-redis-8.4-alpine-litellm-v1.77.7-stable
+
+      - name: Load or pull + save third-party images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/docker-images
+          if [ -f /tmp/docker-images/redis.tar ] && [ -f /tmp/docker-images/litellm.tar ]; then
+            echo "loading cached images..."
+            docker load -i /tmp/docker-images/redis.tar
+            docker load -i /tmp/docker-images/litellm.tar
+          else
+            echo "cache miss — pulling..."
+            docker pull redis:8.4-alpine
+            docker pull ghcr.io/berriai/litellm:v1.77.7-stable
+            docker save redis:8.4-alpine -o /tmp/docker-images/redis.tar
+            docker save ghcr.io/berriai/litellm:v1.77.7-stable -o /tmp/docker-images/litellm.tar
+          fi
+
       - name: Build stack images (buildx + GHA cache)
         uses: docker/bake-action@v6
         with:
@@ -253,17 +278,18 @@ jobs:
         working-directory: deploy/docker
         shell: bash
         run: |
+          # Intentionally no 'set -e' — we need to capture non-zero suite rc
+          # rather than have the background subshell die at the failing command.
           set -uo pipefail
-          # docker compose run propagates the container's exit code cleanly
-          # and avoids the compose-v2 'up --abort-on-container-exit' panic
-          # when --exit-code-from is absent.
           log=/tmp/sdk
           mkdir -p "$log"
+
           run_suite() {
             local svc=$1
+            local rc=0
             docker compose --profile test run --rm --no-deps "$svc" \
-              > "$log/$svc.log" 2>&1
-            echo $? > "$log/$svc.rc"
+              > "$log/$svc.log" 2>&1 || rc=$?
+            echo "$rc" > "$log/$svc.rc"
           }
 
           run_suite sdk-tests-js   &
@@ -273,11 +299,11 @@ jobs:
 
           fail=0
           for svc in sdk-tests-js sdk-tests-py sdk-tests-java; do
-            rc=$(cat "$log/$svc.rc")
+            rc=$(cat "$log/$svc.rc" 2>/dev/null || echo 127)
             echo "=============================================="
             echo "== $svc  (exit $rc)"
             echo "=============================================="
-            tail -c 30000 "$log/$svc.log"
+            tail -c 30000 "$log/$svc.log" || true
             if [ "$rc" != "0" ]; then fail=1; fi
           done
           exit $fail
