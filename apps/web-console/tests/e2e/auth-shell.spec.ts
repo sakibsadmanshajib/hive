@@ -1,11 +1,12 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "node:child_process";
-
-const VERIFIED_EMAIL = process.env.E2E_VERIFIED_EMAIL ?? "";
-const VERIFIED_PASSWORD = process.env.E2E_VERIFIED_PASSWORD ?? "";
-const UNVERIFIED_EMAIL = process.env.E2E_UNVERIFIED_EMAIL ?? "";
-const UNVERIFIED_PASSWORD = process.env.E2E_UNVERIFIED_PASSWORD ?? "";
-const INVITATION_TOKEN = process.env.E2E_INVITATION_TOKEN ?? "";
+import {
+  E2E_VERIFIED_EMAIL as VERIFIED_EMAIL,
+  E2E_VERIFIED_PASSWORD as VERIFIED_PASSWORD,
+  E2E_UNVERIFIED_EMAIL as UNVERIFIED_EMAIL,
+  E2E_UNVERIFIED_PASSWORD as UNVERIFIED_PASSWORD,
+  E2E_INVITATION_TOKEN as INVITATION_TOKEN,
+} from "./support/e2e-auth-creds";
 
 async function signIn(
   page: import("@playwright/test").Page,
