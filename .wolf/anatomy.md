@@ -1,19 +1,30 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-22T00:51:12.953Z
-> Files: 500 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-22T03:27:40.516Z
+> Files: 507 tracked | Anatomy hits: 0 | Misses: 0
+
+## ../.claude/projects/-home-sakib-hive/memory/
+
+- `feedback_local_first.md` (~218 tok)
+- `MEMORY.md` — Memory Index (~404 tok)
 
 ## ./
 
-- `.gitignore` — Git ignore rules (~119 tok)
+- `.gitignore` — Git ignore rules (~150 tok)
 - `CLAUDE.md` — OpenWolf (~2736 tok)
 - `go.work` (~28 tok)
 - `go.work.sum` (~602 tok)
 
 ## .claude/
 
-- `settings.json` (~441 tok)
+- `settings.json` (~711 tok)
 - `settings.local.json` (~56 tok)
+
+## .claude/hooks/
+
+- `bash-safety.js` — PreToolUse hook: enforces safety rules for Bash commands. (~548 tok)
+- `commit-guard.js` — PreToolUse hook: enforces commit discipline. (~469 tok)
+- `secrets-scanner.js` — PreToolUse hook: blocks hardcoded secrets, API keys, and credentials. (~924 tok)
 
 ## .claude/rules/
 
@@ -48,12 +59,13 @@
 
 ## .github/workflows/
 
-- `ci.yml` — CI: CI (~4274 tok)
+- `ci.yml` — CI: CI (~4358 tok)
 - `pr-cleanup.yml` — CI: PR cleanup (~2124 tok)
 
 ## .planning/
 
 - `config.json` (~80 tok)
+- `E2E-EXPANSION-SYSTEM-PROMPT.md` — System Prompt — E2E Test Expansion + CI Wiring (~2393 tok)
 - `MILESTONES.md` — Milestones (~739 tok)
 - `PROJECT.md` — Hive API Platform (~2848 tok)
 - `ROADMAP.md` — Roadmap: Hive API Platform (~1949 tok)
@@ -718,8 +730,9 @@
 
 ## apps/web-console/tests/e2e/
 
-- `auth-shell.spec.ts` — VERIFIED_EMAIL: signIn (~937 tok)
-- `profile-completion.spec.ts` — VERIFIED_EMAIL: signIn (~1531 tok)
+- `auth-shell.spec.ts` — VERIFIED_EMAIL: signIn (~1063 tok)
+- `profile-completion.spec.ts` — VERIFIED_EMAIL: signIn (~1571 tok)
+- `unauth.spec.ts` — Unauthenticated Playwright coverage for landing redirects, native auth-form validation, and 404 behavior (~1060 tok)
 
 ## apps/web-console/tests/unit/
 
@@ -832,12 +845,12 @@
 
 ## packages/sdk-tests/js/tests/errors/
 
-- `error-shape.test.ts` — API routes: GET (1 endpoints) (~427 tok)
+- `error-shape.test.ts` — API routes: GET (1 endpoints) (~460 tok)
 - `unsupported-endpoint.test.ts` — Declares BASE_URL (~653 tok)
 
 ## packages/sdk-tests/js/tests/headers/
 
-- `compat-headers.test.ts` — API routes: GET (8 endpoints) (~523 tok)
+- `compat-headers.test.ts` — API routes: GET (8 endpoints) (~583 tok)
 
 ## packages/sdk-tests/js/tests/health/
 
@@ -845,7 +858,7 @@
 
 ## packages/sdk-tests/js/tests/models/
 
-- `list-models.test.ts` — BASE_URL: loadGolden (~464 tok)
+- `list-models.test.ts` — BASE_URL: loadGolden (~511 tok)
 
 ## packages/sdk-tests/js/tests/responses/
 
@@ -854,7 +867,7 @@
 ## packages/sdk-tests/js/tests/streaming/
 
 - `streaming-chat.test.ts` — Declares BASE_URL (~657 tok)
-- `streaming-error.test.ts` — API routes: GET (1 endpoints) (~288 tok)
+- `streaming-error.test.ts` — API routes: GET (1 endpoints) (~321 tok)
 
 ## packages/sdk-tests/python/
 
@@ -866,8 +879,8 @@
 - `conftest.py` — client, base_url (~110 tok)
 - `test_chat_completions.py` — Tests: chat_completion_basic, chat_completion_model_shows_alias, chat_completion_streaming (~634 tok)
 - `test_embeddings.py` — Tests: embeddings_basic, embeddings_batch (~362 tok)
-- `test_error_shape.py` — Tests: error_response_has_openai_envelope, unknown_endpoint_returns_invalid_request_error (~298 tok)
-- `test_headers.py` — Tests: compat_headers_on_success_response, compat_headers_on_error_response, unique_request_ids (~420 tok)
+- `test_error_shape.py` — test_error_response_has_openai_envelope, test_unknown_endpoint_returns_invalid_request_error (~333 tok)
+- `test_headers.py` — test_compat_headers_on_success_response, test_compat_headers_on_error_response, test_unique_request_ (~467 tok)
 - `test_health.py` — Tests: health_returns_200_with_status_ok (~114 tok)
 - `test_models.py` — Tests: list_models_returns_valid_list (~82 tok)
 - `test_unsupported.py` — Tests: chat_completions_raises_not_found_with_planned_status, fine_tuning_raises_not_found_with_unsupported_status (~467 tok)
