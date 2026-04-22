@@ -1,12 +1,16 @@
 import { describe, it, expect } from "vitest";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
+const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 
 describe("Error response shape", () => {
   it("returns the OpenAI error envelope with correct Content-Type", async () => {
     const res = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${API_KEY}`,
+      },
       body: JSON.stringify({
         model: "gpt-4o",
         messages: [{ role: "user", content: "hello" }],

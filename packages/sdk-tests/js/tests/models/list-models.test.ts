@@ -4,6 +4,8 @@ import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
+const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
+const authHeaders = { Authorization: `Bearer ${API_KEY}` };
 
 function loadGolden(name: string): unknown {
   // In Docker container, fixtures are at /fixtures/golden/
@@ -17,7 +19,7 @@ function loadGolden(name: string): unknown {
 describe("List Models", () => {
   const client = new OpenAI({
     baseURL: BASE_URL,
-    apiKey: "test-key",
+    apiKey: API_KEY,
   });
 
   it("returns a valid list response via SDK", async () => {
@@ -28,7 +30,7 @@ describe("List Models", () => {
   });
 
   it("matches the golden fixture shape", async () => {
-    const res = await fetch(`${BASE_URL}/models`);
+    const res = await fetch(`${BASE_URL}/models`, { headers: authHeaders });
     const body = await res.json();
     const golden = loadGolden("models-list.json");
 
@@ -36,7 +38,7 @@ describe("List Models", () => {
   });
 
   it("returns the seeded Hive aliases without provider leaks", async () => {
-    const res = await fetch(`${BASE_URL}/models`);
+    const res = await fetch(`${BASE_URL}/models`, { headers: authHeaders });
     const body = await res.json();
     const ids = body.data.map((model: { id: string }) => model.id);
 

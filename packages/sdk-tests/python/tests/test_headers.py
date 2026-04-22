@@ -1,9 +1,14 @@
+import os
+
 import httpx
+
+
+_AUTH = {"Authorization": f"Bearer {os.environ.get('HIVE_API_KEY') or 'test-key'}"}
 
 
 def test_compat_headers_on_success_response(base_url: str):
     """Compatibility headers appear on successful responses."""
-    response = httpx.get(f"{base_url}/models")
+    response = httpx.get(f"{base_url}/models", headers=_AUTH)
 
     assert response.status_code == 200
 
@@ -22,6 +27,7 @@ def test_compat_headers_on_error_response(base_url: str):
     """Compatibility headers appear on error responses too."""
     response = httpx.post(
         f"{base_url}/chat/completions",
+        headers=_AUTH,
         json={},
     )
 
@@ -40,8 +46,8 @@ def test_compat_headers_on_error_response(base_url: str):
 
 def test_unique_request_ids(base_url: str):
     """Each request gets a unique x-request-id."""
-    r1 = httpx.get(f"{base_url}/models")
-    r2 = httpx.get(f"{base_url}/models")
+    r1 = httpx.get(f"{base_url}/models", headers=_AUTH)
+    r2 = httpx.get(f"{base_url}/models", headers=_AUTH)
 
     id1 = r1.headers.get("x-request-id")
     id2 = r2.headers.get("x-request-id")

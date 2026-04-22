@@ -1,10 +1,16 @@
+import os
+
 import httpx
+
+
+_AUTH = {"Authorization": f"Bearer {os.environ.get('HIVE_API_KEY') or 'test-key'}"}
 
 
 def test_error_response_has_openai_envelope(base_url: str):
     """Unsupported endpoint returns the exact OpenAI error envelope shape."""
     response = httpx.post(
         f"{base_url}/chat/completions",
+        headers=_AUTH,
         json={"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]},
     )
 

@@ -1,10 +1,12 @@
 import { describe, it, expect } from "vitest";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
+const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
+const authHeaders = { Authorization: `Bearer ${API_KEY}` };
 
 describe("Compatibility headers", () => {
   it("includes x-request-id, openai-version, and openai-processing-ms on success responses", async () => {
-    const res = await fetch(`${BASE_URL}/models`);
+    const res = await fetch(`${BASE_URL}/models`, { headers: authHeaders });
 
     expect(res.status).toBe(200);
 
@@ -23,7 +25,7 @@ describe("Compatibility headers", () => {
   it("includes compatibility headers on error responses too", async () => {
     const res = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders },
       body: JSON.stringify({}),
     });
 
@@ -41,8 +43,8 @@ describe("Compatibility headers", () => {
   });
 
   it("generates unique x-request-id per request", async () => {
-    const res1 = await fetch(`${BASE_URL}/models`);
-    const res2 = await fetch(`${BASE_URL}/models`);
+    const res1 = await fetch(`${BASE_URL}/models`, { headers: authHeaders });
+    const res2 = await fetch(`${BASE_URL}/models`, { headers: authHeaders });
 
     const id1 = res1.headers.get("x-request-id");
     const id2 = res2.headers.get("x-request-id");
