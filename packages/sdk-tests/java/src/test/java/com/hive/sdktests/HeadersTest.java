@@ -15,11 +15,20 @@ class HeadersTest {
                     ? System.getenv("HIVE_BASE_URL")
                     : "http://localhost:8080/v1";
 
+    private static final String API_KEY =
+            System.getenv("HIVE_API_KEY") != null
+                    ? System.getenv("HIVE_API_KEY")
+                    : "test-key";
+
     @Test
     void successResponseIncludesCompatHeaders() throws Exception {
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request =
-                HttpRequest.newBuilder().uri(URI.create(BASE_URL + "/models")).GET().build();
+                HttpRequest.newBuilder()
+                        .uri(URI.create(BASE_URL + "/models"))
+                        .header("Authorization", "Bearer " + API_KEY)
+                        .GET()
+                        .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
 
@@ -40,12 +49,14 @@ class HeadersTest {
 
     @Test
     void errorResponseIncludesCompatHeaders() throws Exception {
+        // GET /v1/models/{model} is planned_for_launch — stable 404 from the
+        // matrix middleware, which still injects compat headers.
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request =
                 HttpRequest.newBuilder()
-                        .uri(URI.create(BASE_URL + "/chat/completions"))
-                        .header("Content-Type", "application/json")
-                        .POST(HttpRequest.BodyPublishers.ofString("{}"))
+                        .uri(URI.create(BASE_URL + "/models/hive-default"))
+                        .header("Authorization", "Bearer " + API_KEY)
+                        .GET()
                         .build();
 
         HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());

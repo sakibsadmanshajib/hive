@@ -25,39 +25,35 @@ class UnsupportedEndpointTest {
     }
 
     @Test
-    void chatCompletionsThrows404WithUnsupportedEndpointError() {
-        OpenAIClient client = createClient();
+    void modelsRetrieveThrows404WithUnsupportedEndpointError() throws Exception {
+        // GET /v1/models/{model} is planned_for_launch. The Java SDK's
+        // Models API shape differs across versions, so we call it over raw
+        // HTTP to stay SDK-version-agnostic and assert on the JSON envelope.
+        java.net.http.HttpClient httpClient = java.net.http.HttpClient.newHttpClient();
+        java.net.http.HttpRequest request =
+                java.net.http.HttpRequest.newBuilder()
+                        .uri(java.net.URI.create(BASE_URL + "/models/hive-default"))
+                        .header("Authorization", "Bearer " + API_KEY)
+                        .GET()
+                        .build();
 
-        NotFoundException ex =
-                assertThrows(
-                        NotFoundException.class,
-                        () -> {
-                            ChatCompletionCreateParams params =
-                                    ChatCompletionCreateParams.builder()
-                                            .model("gpt-4o")
-                                            .addUserMessage("hello")
-                                            .build();
-                            client.chat().completions().create(params);
-                        });
+        java.net.http.HttpResponse<String> response =
+                httpClient.send(request, java.net.http.HttpResponse.BodyHandlers.ofString());
 
-        assertEquals(404, ex.statusCode());
+        assertEquals(404, response.statusCode());
 
-        // Use the structured accessors on NotFoundException
-        assertTrue(ex.type().isPresent(), "Error type should be present");
-        assertEquals("unsupported_endpoint", ex.type().get());
-
-        assertTrue(ex.code().isPresent(), "Error code should be present");
-        assertEquals("endpoint_not_available", ex.code().get());
-
-        // Verify the message mentions planned status
-        String message = ex.getMessage();
-        assertTrue(message.contains("planned") || message.contains("not yet available"),
-                "Message should mention planned status");
+        String body = response.body();
+        assertTrue(body.contains("\"type\":\"unsupported_endpoint\""),
+                "Expected unsupported_endpoint type in body: " + body);
+        assertTrue(body.contains("\"code\":\"endpoint_not_available\""),
+                "Expected endpoint_not_available code in body: " + body);
+        assertTrue(body.contains("planned") || body.contains("not yet available"),
+                "Message should mention planned status: " + body);
 
         // Provider-blind assertions
-        String messageLower = message.toLowerCase();
-        assertFalse(messageLower.contains("provider"), "Message should not mention provider");
-        assertFalse(messageLower.contains("upstream"), "Message should not mention upstream");
+        String bodyLower = body.toLowerCase();
+        assertFalse(bodyLower.contains("provider"), "Body should not mention provider");
+        assertFalse(bodyLower.contains("upstream"), "Body should not mention upstream");
     }
 
     @Test

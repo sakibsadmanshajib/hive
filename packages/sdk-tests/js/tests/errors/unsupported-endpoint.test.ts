@@ -10,12 +10,12 @@ describe("Unsupported endpoint errors", () => {
     apiKey: API_KEY,
   });
 
-  it("chat.completions.create throws NotFoundError with planned status", async () => {
+  it("models.retrieve throws NotFoundError with planned_for_launch type", async () => {
+    // GET /v1/models/{model} is marked planned_for_launch in the support
+    // matrix — the edge-api returns a structured unsupported_endpoint error
+    // with code endpoint_not_available before any model lookup runs.
     try {
-      await client.chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: "hello" }],
-      });
+      await client.models.retrieve("hive-default");
       expect.fail("Expected NotFoundError to be thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(OpenAI.NotFoundError);

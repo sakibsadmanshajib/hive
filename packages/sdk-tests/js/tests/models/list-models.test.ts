@@ -32,9 +32,31 @@ describe("List Models", () => {
   it("matches the golden fixture shape", async () => {
     const res = await fetch(`${BASE_URL}/models`, { headers: authHeaders });
     const body = await res.json();
-    const golden = loadGolden("models-list.json");
+    const golden = loadGolden("models-list.json") as {
+      object: string;
+      data: Array<{ id: string; object: string; owned_by: string }>;
+    };
 
-    expect(body).toEqual(golden);
+    // Top-level envelope must match exactly.
+    expect(body.object).toBe(golden.object);
+
+    // Each golden entry must appear in the live response with the same
+    // structural fields. We do not compare `created` — that timestamp
+    // changes per deploy and carries no API-surface meaning.
+    for (const expected of golden.data) {
+      const actual = body.data.find(
+        (m: { id: string }) => m.id === expected.id
+      );
+      expect(actual, `missing model ${expected.id}`).toBeDefined();
+      expect(actual).toEqual(
+        expect.objectContaining({
+          id: expected.id,
+          object: expected.object,
+          owned_by: expected.owned_by,
+        })
+      );
+      expect(typeof actual.created).toBe("number");
+    }
   });
 
   it("returns the seeded Hive aliases without provider leaks", async () => {

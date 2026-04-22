@@ -23,10 +23,10 @@ describe("Compatibility headers", () => {
   });
 
   it("includes compatibility headers on error responses too", async () => {
-    const res = await fetch(`${BASE_URL}/chat/completions`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...authHeaders },
-      body: JSON.stringify({}),
+    // GET /v1/models/{model} is planned_for_launch — stable 404 from the
+    // matrix middleware. Headers must be injected regardless.
+    const res = await fetch(`${BASE_URL}/models/hive-default`, {
+      headers: authHeaders,
     });
 
     expect(res.status).toBe(404);

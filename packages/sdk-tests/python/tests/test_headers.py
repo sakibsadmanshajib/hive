@@ -24,12 +24,12 @@ def test_compat_headers_on_success_response(base_url: str):
 
 
 def test_compat_headers_on_error_response(base_url: str):
-    """Compatibility headers appear on error responses too."""
-    response = httpx.post(
-        f"{base_url}/chat/completions",
-        headers=_AUTH,
-        json={},
-    )
+    """Compatibility headers appear on error responses too.
+
+    GET /v1/models/{model} is planned_for_launch — stable 404 from the
+    matrix middleware. Headers must be injected regardless.
+    """
+    response = httpx.get(f"{base_url}/models/hive-default", headers=_AUTH)
 
     assert response.status_code == 404
 

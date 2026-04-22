@@ -9,7 +9,10 @@ const EMBEDDING_MODEL =
 describe("Embeddings", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
 
-  it("returns valid embeddings via SDK", async () => {
+  // Embedding aliases are not seeded in the v1.0 LiteLLM config yet, so the
+  // two happy-path tests below are skipped until an embedding model is
+  // registered. See .planning/v1.1-DEFERRED-SCOPE.md.
+  it.skip("returns valid embeddings via SDK", async () => {
     const response = await client.embeddings.create({
       model: EMBEDDING_MODEL,
       input: "Hello world",
@@ -23,7 +26,7 @@ describe("Embeddings", () => {
     expect(response.usage.prompt_tokens).toBeGreaterThan(0);
   });
 
-  it("supports batch input", async () => {
+  it.skip("supports batch input", async () => {
     const response = await client.embeddings.create({
       model: EMBEDDING_MODEL,
       input: ["Hello", "World"],

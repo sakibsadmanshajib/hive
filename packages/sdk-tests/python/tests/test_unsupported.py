@@ -3,13 +3,11 @@ import pytest
 from openai import OpenAI
 
 
-def test_chat_completions_raises_not_found_with_planned_status(client: OpenAI):
-    """Chat completions (planned) raises NotFoundError with unsupported_endpoint type."""
+def test_models_retrieve_raises_not_found_with_planned_status(client: OpenAI):
+    """GET /v1/models/{model} is planned_for_launch — raises NotFoundError
+    with unsupported_endpoint type before any provider lookup runs."""
     with pytest.raises(openai.NotFoundError) as exc_info:
-        client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": "hello"}],
-        )
+        client.models.retrieve("hive-default")
 
     err = exc_info.value
     assert err.status_code == 404
