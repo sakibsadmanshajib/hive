@@ -397,6 +397,10 @@ jobs:
           E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
           E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
+          # Fixture (tests/e2e/support/e2e-auth-fixtures.mjs) resets CI test users
+          # via Supabase admin API before each test. Needs admin credentials.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npx playwright test
 
       - name: Upload Playwright report

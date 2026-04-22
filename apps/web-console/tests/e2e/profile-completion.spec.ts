@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 
 const VERIFIED_EMAIL = process.env.E2E_VERIFIED_EMAIL ?? "";
 const VERIFIED_PASSWORD = process.env.E2E_VERIFIED_PASSWORD ?? "";
@@ -11,11 +12,19 @@ async function signIn(
   password: string
 ) {
   await page.goto("/auth/sign-in");
-  await page.fill('input[name="email"]', email);
-  await page.fill('input[name="password"]', password);
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
   await page.click('button[type="submit"]');
   await page.waitForURL("**/console**");
 }
+
+test.beforeEach(async () => {
+  execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+});
 
 test.describe("profile completion", () => {
   test.describe("setup saves profile", () => {
@@ -87,7 +96,6 @@ test.describe("profile completion", () => {
       await page.goto("/console/settings/billing");
 
       await page.fill('input[name="legalEntityName"]', "Acme Labs LLC");
-      await page.selectOption('select[name="legalEntityType"]', "private_company");
       await page.click('button[type="submit"]');
 
       await page.waitForURL("**/console/settings/billing");
