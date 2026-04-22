@@ -1,3 +1,10 @@
+# OpenWolf
+
+@.wolf/OPENWOLF.md
+
+This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
+
+
 # Hive
 
 OpenAI-compatible API gateway for the Bangladesh market — v1.0 is a full **Go rewrite** of the prior implementation, shipped for efficiency and operational control (lean hot-path latency, precise `math/big` FX, full source-level control over routing, sanitization, and billing). Provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), developer console for key/billing management.

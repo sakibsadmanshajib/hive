@@ -1,0 +1,13 @@
+{
+  "session_id": "",
+  "files_read": {
+    "/home/sakib/hive/.gitignore": {
+      "count": 1,
+      "tokens": 97,
+      "first_read": "2026-04-22T00:51:08.700Z"
+    }
+  },
+  "anatomy_hits": 1,
+  "anatomy_misses": 0,
+  "repeated_reads_warned": 0
+}
