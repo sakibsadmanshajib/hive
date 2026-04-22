@@ -410,3 +410,192 @@ jobs:
           name: playwright-report
           path: apps/web-console/playwright-report/
           if-no-files-found: ignore
+
+  # ------------------------------------------------------------------
+  # Playwright against a booted Go stack — exercises the OpenAI npm SDK
+  # against edge-api (openai-sdk.spec.ts). Boots the stack with the same
+  # pre-built images as live-integration and tears it down after.
+  # ------------------------------------------------------------------
+
+  web-e2e-api:
+    name: Web E2E API (OpenAI SDK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    needs: [live-integration]
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      REDIS_URL: redis://redis:6379/0
+      CONTROL_PLANE_PORT: '8081'
+      CONTROL_PLANE_BASE_URL: http://localhost:8081
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
+      GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_USE_SSL: 'true'
+      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Reconstruct SUPABASE_DB_URL
+        shell: bash
+        env:
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ENC_PW=$(python3 -c 'import os,urllib.parse as u; print(u.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
+          url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
+          echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
+
+      - name: Cache third-party images (redis, litellm)
+        id: img-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: docker-images-redis-8.4-alpine-litellm-v1.77.7-stable
+
+      - name: Load or pull + save third-party images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/docker-images
+          if [ -f /tmp/docker-images/redis.tar ] && [ -f /tmp/docker-images/litellm.tar ]; then
+            docker load -i /tmp/docker-images/redis.tar
+            docker load -i /tmp/docker-images/litellm.tar
+          else
+            docker pull redis:8.4-alpine
+            docker pull ghcr.io/berriai/litellm:v1.77.7-stable
+            docker save redis:8.4-alpine -o /tmp/docker-images/redis.tar
+            docker save ghcr.io/berriai/litellm:v1.77.7-stable -o /tmp/docker-images/litellm.tar
+          fi
+
+      - name: Build stack images (reuse GHA cache from live-integration)
+        uses: docker/bake-action@v6
+        with:
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=stack
+            *.cache-to=type=gha,scope=stack,mode=max
+
+      - name: Start core stack (no rebuild — images already loaded)
+        working-directory: deploy/docker
+        run: |
+          docker compose up -d --no-build redis litellm control-plane edge-api
+
+      - name: Wait for services to become healthy
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 300 ))
+          for svc in control-plane edge-api; do
+            while :; do
+              state=$(docker inspect --format '{{.State.Health.Status}}' \
+                "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
+              if [ "$state" = "healthy" ]; then
+                echo "$svc: healthy"
+                break
+              fi
+              if [ "$(date +%s)" -gt "$deadline" ]; then
+                echo "::error::$svc did not become healthy (last state: $state)"
+                docker compose logs --tail=200 $svc
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
+      - name: Install web-console deps
+        working-directory: apps/web-console
+        run: npm ci
+
+      - name: Read Playwright version
+        id: pw
+        working-directory: apps/web-console
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: apps/web-console
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: apps/web-console
+        run: npx playwright install-deps chromium
+
+      - name: Run openai-sdk.spec against live edge-api
+        working-directory: apps/web-console
+        env:
+          # openai-sdk.spec.ts calls edge-api directly; it does not need the
+          # Next.js server, but playwright.config still wants a base URL.
+          PLAYWRIGHT_BASE_URL: http://localhost:8080
+          EDGE_BASE_URL: http://localhost:8080/v1
+        run: npx playwright test tests/e2e/openai-sdk.spec.ts
+
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: deploy/docker
+        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose-web-e2e-api.log || true
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-web-e2e-api
+          path: /tmp/compose-web-e2e-api.log
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-api
+          path: apps/web-console/playwright-report/
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        working-directory: deploy/docker
+        run: docker compose down -v --remove-orphans || true
