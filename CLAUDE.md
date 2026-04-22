@@ -2,12 +2,12 @@
 
 @.wolf/OPENWOLF.md
 
-This project uses OpenWolf for context management. Read and follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before generating code. Check .wolf/anatomy.md before reading files.
+Project use OpenWolf for context mgmt. Read + follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files.
 
 
 # Hive
 
-OpenAI-compatible API gateway for the Bangladesh market — v1.0 is a full **Go rewrite** of the prior implementation, shipped for efficiency and operational control (lean hot-path latency, precise `math/big` FX, full source-level control over routing, sanitization, and billing). Provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), developer console for key/billing management.
+OpenAI-compatible API gateway for Bangladesh market — v1.0 full **Go rewrite** of prior impl, shipped for efficiency + operational control (lean hot-path latency, precise `math/big` FX, full source-level control over routing, sanitization, billing). Provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), dev console for key/billing mgmt.
 
 ## Tech Stack
 
@@ -41,7 +41,7 @@ deploy/alertmanager   Alert routing
 
 ## Getting Started
 
-Everything runs through Docker. No host-installed Go or Node required.
+All runs through Docker. No host-installed Go or Node required.
 
 ### 1. Environment
 
@@ -53,8 +53,8 @@ cp .env.example .env
 # Fill in at least one LLM provider: OPENROUTER_API_KEY or GROQ_API_KEY
 ```
 
-See `.env.example` for all variables with inline comments. Payment rail keys (Stripe, bKash, SSLCommerz) are optional — services start without them.
-Supabase Storage is the only object storage backend. Enable S3 protocol in Supabase Storage, pre-create the `hive-files` and `hive-images` buckets, and provide all S3 variables before starting `edge-api` or `control-plane`.
+See `.env.example` for all vars with inline comments. Payment rail keys (Stripe, bKash, SSLCommerz) optional — services start without them.
+Supabase Storage only object storage backend. Enable S3 protocol in Supabase Storage, pre-create `hive-files` + `hive-images` buckets, provide all S3 vars before start `edge-api` or `control-plane`.
 
 ### 2. Run
 
@@ -116,25 +116,25 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 
 ## Conventions
 
-- **Immutability**: New objects, never mutate existing ones. Ledger is append-only.
+- **Immutability**: New objects, never mutate existing. Ledger append-only.
 - **Commits**: `<type>: <description>` — types: feat, fix, refactor, docs, test, chore, perf, ci
-- **No hardcoded secrets**: Environment variables only. Never commit `.env`.
-- **Provider-blind errors**: Sanitize at both control-plane and edge boundaries. Provider names never leak to customers.
-- **math/big for FX**: All financial calculations use `math/big` to prevent float64 corruption.
-- **Storage backend**: Supabase Storage is the only object storage backend. `edge-api` and `control-plane` fail fast unless the required S3 env vars are present, and `hive-files` plus `hive-images` must exist before startup.
+- **No hardcoded secrets**: Env vars only. Never commit `.env`.
+- **Provider-blind errors**: Sanitize at both control-plane + edge boundaries. Provider names never leak to customers.
+- **math/big for FX**: All financial calcs use `math/big` to prevent float64 corruption.
+- **Storage backend**: Supabase Storage only object storage backend. `edge-api` + `control-plane` fail fast unless required S3 env vars present, and `hive-files` + `hive-images` must exist before startup.
 
 ## Regulatory Rules
 
-**NEVER show FX rates or currency exchange language to BD customers.** This applies to API responses, frontend UI, error messages, and any customer-visible surface. Omit `amount_usd` from BD payment responses.
+**NEVER show FX rates or currency exchange language to BD customers.** Applies to API responses, frontend UI, error messages, any customer-visible surface. Omit `amount_usd` from BD payment responses.
 
 ## Known Issues
 
-See `.planning/UAT-REPORT.md` for full runtime UAT results, `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for Phase 10 UAT closure, and `.planning/v1.1-DEFERRED-SCOPE.md` for what is deferred out of v1.0. All items below are deferred to v1.1 — v1.0 ships without them because the core developer API path is unaffected in practice.
+See `.planning/UAT-REPORT.md` for full runtime UAT results, `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for Phase 10 UAT closure, `.planning/v1.1-DEFERRED-SCOPE.md` for what deferred out of v1.0. All items below deferred to v1.1 — v1.0 ships without them because core developer API path unaffected in practice.
 
-1. **`ensureCapabilityColumns` targets wrong table** — `apps/control-plane/internal/routing/repository.go` targets `route_capabilities` instead of `provider_capabilities`. Latent bug — current routing works because a separate seed path populates the required columns. Fix tracked in v1.1.
-2. **File storage wiring under final verification** — Phase 10 now wires file and media endpoints to Supabase Storage. Final live smoke verification is tracked in Phase 10 Plan 10-08.
+1. **`ensureCapabilityColumns` targets wrong table** — `apps/control-plane/internal/routing/repository.go` targets `route_capabilities` instead of `provider_capabilities`. Latent bug — current routing works because separate seed path populates required columns. Fix tracked in v1.1.
+2. **File storage wiring under final verification** — Phase 10 now wires file + media endpoints to Supabase Storage. Final live smoke verification tracked in Phase 10 Plan 10-08.
 3. **`amount_usd` exposed in BD checkout** — `apps/control-plane/internal/payments/http.go:105-115`. Regulatory risk.
-4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). See `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`. Unblocks via (a) adding a supported provider key or (b) implementing a local batch executor in control-plane.
+4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). See `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`. Unblocks via (a) adding supported provider key or (b) implementing local batch executor in control-plane.
 
 ## Project State
 
@@ -154,11 +154,11 @@ Planning artifacts in `.planning/`:
 
 ## Claude Code Tooling
 
-This project uses a multi-layer Claude Code setup. Each plugin owns a domain — don't mix them.
+Project use multi-layer Claude Code setup. Each plugin owns domain — don't mix.
 
 ### GSD (Project Lifecycle)
 
-GSD manages phases, planning, and execution. All project state lives in `.planning/`.
+GSD manages phases, planning, execution. All project state in `.planning/`.
 
 | Action | Command |
 |--------|---------|
@@ -173,7 +173,7 @@ GSD manages phases, planning, and execution. All project state lives in `.planni
 
 ### Superpowers (Engineering Discipline)
 
-Enforces TDD, structured debugging, code review, and planning workflows.
+Enforces TDD, structured debugging, code review, planning workflows.
 
 - **Before coding**: `superpowers:brainstorming` (creative work), `superpowers:writing-plans` (multi-step tasks)
 - **Writing code**: `superpowers:test-driven-development` (always write tests first), `superpowers:executing-plans`
@@ -183,7 +183,7 @@ Enforces TDD, structured debugging, code review, and planning workflows.
 
 ### Everything Claude Code (Language Agents)
 
-ECC provides language-specific review and build agents. Use the right agent for the language:
+ECC provides language-specific review + build agents. Use right agent for language:
 
 - **Go code**: `go-reviewer` agent, `go-build` skill for build errors
 - **TypeScript/JS**: `typescript-reviewer` agent, `build-error-resolver` agent
@@ -196,7 +196,7 @@ Hooks enforce context-mode automatically. Rules:
 
 - **Bash** only for git/mkdir/rm/mv/navigation commands
 - **Large output** (>20 lines): Use `ctx_batch_execute` instead of Bash
-- **File analysis**: Use `ctx_execute_file` instead of Read (Read is correct only when editing)
+- **File analysis**: Use `ctx_execute_file` instead of Read (Read correct only when editing)
 - **Web fetches**: Use `ctx_fetch_and_index` instead of WebFetch
 - Check savings: `/ctx-stats`
 
@@ -206,21 +206,21 @@ Cross-session memory stored via `claude-mem` MCP. Survives context resets.
 
 - **Search memory**: `mem-search` skill or `get_observations([IDs])`
 - **Timeline**: `timeline` tool for chronological view
-- Observations are auto-recorded during work. Use `smart_search` for semantic queries.
+- Observations auto-recorded during work. Use `smart_search` for semantic queries.
 
 ### Supabase MCP
 
-Direct database interaction via the Supabase MCP server:
+Direct DB interaction via Supabase MCP server:
 
-- **Run SQL**: `execute_sql` — query or mutate the database directly
+- **Run SQL**: `execute_sql` — query or mutate DB directly
 - **Apply migrations**: `apply_migration` — apply new schema changes
 - **List tables**: `list_tables` — inspect current schema
-- **Generate types**: `generate_typescript_types` — TypeScript type generation from schema
+- **Generate types**: `generate_typescript_types` — TypeScript type gen from schema
 - **Get logs**: `get_logs` — check Supabase service logs
 
 ### Context7 (Documentation Lookup)
 
-Before recalling any SDK/API/framework signature from memory, verify with Context7:
+Before recall any SDK/API/framework signature from memory, verify with Context7:
 
 ```
 resolve-library-id → query-docs
@@ -228,4 +228,4 @@ resolve-library-id → query-docs
 
 ### Playwright (Browser Testing)
 
-Browser automation for E2E and UAT testing via Playwright MCP. Use for testing web-console flows.
+Browser automation for E2E + UAT testing via Playwright MCP. Use for testing web-console flows.

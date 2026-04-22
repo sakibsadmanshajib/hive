@@ -5,23 +5,23 @@ description: Systematically debug issues using graph-powered code navigation
 
 ## Debug Issue
 
-Use the knowledge graph to systematically trace and debug issues.
+Knowledge graph trace + debug issues.
 
 ### Steps
 
-1. Use `semantic_search_nodes` to find code related to the issue.
-2. Use `query_graph` with `callers_of` and `callees_of` to trace call chains.
-3. Use `get_flow` to see full execution paths through suspected areas.
-4. Run `detect_changes` to check if recent changes caused the issue.
-5. Use `get_impact_radius` on suspected files to see what else is affected.
+1. `semantic_search_nodes` — find code related to issue.
+2. `query_graph` w/ `callers_of` + `callees_of` — trace call chains.
+3. `get_flow` — full execution paths thru suspect areas.
+4. `detect_changes` — check if recent changes caused issue.
+5. `get_impact_radius` on suspect files — see what else affected.
 
 ### Tips
 
-- Check both callers and callees to understand the full context.
-- Look at affected flows to find the entry point that triggers the bug.
-- Recent changes are the most common source of new issues.
+- Check callers + callees — full context.
+- Affected flows → find entry point triggering bug.
+- Recent changes = most common source of new issues.
 
 ## Token Efficiency Rules
 - ALWAYS start with `get_minimal_context(task="<your task>")` before any other graph tool.
-- Use `detail_level="minimal"` on all calls. Only escalate to "standard" when minimal is insufficient.
-- Target: complete any review/debug/refactor task in ≤5 tool calls and ≤800 total output tokens.
+- Use `detail_level="minimal"` on all calls. Escalate to "standard" only when minimal insufficient.
+- Target: any review/debug/refactor task in ≤5 tool calls + ≤800 output tokens.

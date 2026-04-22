@@ -7,12 +7,12 @@ description: Use when you need to reply inside GitHub pull request review thread
 
 ## Overview
 
-This skill covers how to reply to existing inline review comments in this repository without confusing review-thread replies with top-level PR comments.
+Skill cover how reply to existing inline review comments in this repo without confusing review-thread replies with top-level PR comments.
 
 ## Prerequisites
 
-- `gh` CLI installed and authenticated with `gh auth status`
-- Commands run from the repo root so `repos/{owner}/{repo}` auto-resolves
+- `gh` CLI installed + authenticated via `gh auth status`
+- Run from repo root so `repos/{owner}/{repo}` auto-resolves
 
 ## Core Pattern
 
@@ -26,8 +26,8 @@ gh api repos/{owner}/{repo}/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies \
 Brief explanation of the change.'
 ```
 
-- This replies inside the existing inline review thread.
-- Use it only for comments fetched from `/pulls/<PR_NUMBER>/comments`.
+- Replies inside existing inline review thread.
+- Only for comments fetched from `/pulls/<PR_NUMBER>/comments`.
 
 ## Known Bad Pattern
 
@@ -35,11 +35,11 @@ Brief explanation of the change.'
 gh api repos/{owner}/{repo}/pulls/comments/<COMMENT_ID>/replies -X POST ...
 ```
 
-- This path is wrong in this repository and returns `404 Not Found`.
-- Keep the PR number in the path: `/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies`.
+- Wrong path in this repo. Returns `404 Not Found`.
+- Keep PR number in path: `/pulls/<PR_NUMBER>/comments/<COMMENT_ID>/replies`.
 
 ## Common Pitfalls
 
-1. Do not use the review-thread reply endpoint for top-level PR conversation comments from `/issues/<PR_NUMBER>/comments`.
-2. Do not drop the PR number from the reply path.
-3. Keep replies concise and commit-specific so reviewers can verify the change quickly.
+1. No use review-thread reply endpoint for top-level PR conversation comments from `/issues/<PR_NUMBER>/comments`.
+2. No drop PR number from reply path.
+3. Keep replies terse + commit-specific so reviewers verify quick.

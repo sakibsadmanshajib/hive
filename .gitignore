@@ -37,3 +37,6 @@ __pycache__/
 # Claude Code (user-local)
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# Caveman compression backups
+*.original.md
