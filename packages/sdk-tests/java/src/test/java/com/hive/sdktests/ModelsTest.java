@@ -14,8 +14,13 @@ class ModelsTest {
                     ? System.getenv("HIVE_BASE_URL")
                     : "http://localhost:8080/v1";
 
+    private static final String API_KEY =
+            System.getenv("HIVE_API_KEY") != null
+                    ? System.getenv("HIVE_API_KEY")
+                    : "test-key";
+
     private OpenAIClient createClient() {
-        return OpenAIOkHttpClient.builder().baseUrl(BASE_URL).apiKey("test-key").build();
+        return OpenAIOkHttpClient.builder().baseUrl(BASE_URL).apiKey(API_KEY).build();
     }
 
     @Test

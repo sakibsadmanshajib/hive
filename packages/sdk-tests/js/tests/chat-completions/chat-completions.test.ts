@@ -12,6 +12,7 @@ describe("Chat Completions", () => {
     const response = await client.chat.completions.create({
       model: MODEL,
       messages: [{ role: "user", content: "Say hello" }],
+      max_tokens: 256,
     });
 
     expect(response.object).toBe("chat.completion");
@@ -28,6 +29,7 @@ describe("Chat Completions", () => {
     const response = await client.chat.completions.create({
       model: MODEL,
       messages: [{ role: "user", content: "Say hello" }],
+      max_tokens: 256,
     });
 
     // Model should be the Hive alias, not a provider route handle.
@@ -41,6 +43,7 @@ describe("Chat Completions", () => {
       client.chat.completions.create({
         model: "nonexistent-model-12345",
         messages: [{ role: "user", content: "hello" }],
+        max_tokens: 256,
       }),
     ).rejects.toMatchObject({ status: 404 });
   });
@@ -51,6 +54,7 @@ describe("Chat Completions", () => {
       messages: [
         { role: "user", content: "What is the weather like in London?" },
       ],
+      max_tokens: 256,
       tools: [
         {
           type: "function",
@@ -85,6 +89,7 @@ describe("Chat Completions", () => {
           content: 'Return a JSON object with a single key "status" set to "ok".',
         },
       ],
+      max_tokens: 256,
       response_format: { type: "json_object" },
     });
 

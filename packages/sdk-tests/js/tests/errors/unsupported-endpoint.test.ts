@@ -2,11 +2,12 @@ import { describe, it, expect } from "vitest";
 import OpenAI from "openai";
 
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
+const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 
 describe("Unsupported endpoint errors", () => {
   const client = new OpenAI({
     baseURL: BASE_URL,
-    apiKey: "test-key",
+    apiKey: API_KEY,
   });
 
   it("chat.completions.create throws NotFoundError with planned status", async () => {

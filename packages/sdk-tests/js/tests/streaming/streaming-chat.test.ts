@@ -13,6 +13,7 @@ describe("Streaming Chat Completions", () => {
       model: MODEL,
       messages: [{ role: "user", content: "Count to 3" }],
       stream: true,
+      max_tokens: 256,
     });
 
     const chunks: OpenAI.Chat.Completions.ChatCompletionChunk[] = [];
@@ -48,6 +49,7 @@ describe("Streaming Chat Completions", () => {
       messages: [{ role: "user", content: "Say hi" }],
       stream: true,
       stream_options: { include_usage: true },
+      max_tokens: 256,
     });
 
     const chunks: OpenAI.Chat.Completions.ChatCompletionChunk[] = [];

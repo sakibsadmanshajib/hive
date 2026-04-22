@@ -18,6 +18,7 @@ def test_chat_completion_basic(client: OpenAI) -> None:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": "Say hello"}],
+        max_tokens=256,
     )
 
     assert response.object == "chat.completion"
@@ -34,6 +35,7 @@ def test_chat_completion_model_shows_alias(client: OpenAI) -> None:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[{"role": "user", "content": "Hi"}],
+        max_tokens=256,
     )
 
     assert "route-" not in response.model
@@ -48,6 +50,7 @@ def test_chat_completion_streaming(client: OpenAI) -> None:
         model=MODEL,
         messages=[{"role": "user", "content": "Count to 3"}],
         stream=True,
+        max_tokens=256,
     ) as stream:
         for chunk in stream:
             chunks.append(chunk)

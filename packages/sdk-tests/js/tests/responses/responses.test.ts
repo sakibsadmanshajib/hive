@@ -21,6 +21,7 @@ describe("Responses API", () => {
     const response = await client.responses.create({
       model: MODEL,
       input: "Say hello",
+      max_output_tokens: 256,
     });
 
     expect(response.object).toBe("response");
@@ -45,6 +46,7 @@ describe("Responses API", () => {
     const response = await client.responses.create({
       model: MODEL,
       input: "Say hello",
+      max_output_tokens: 256,
     });
 
     // Model should be the Hive alias, not a provider route handle.
@@ -63,6 +65,7 @@ describe("Responses API", () => {
       client.responses.create({
         model: MODEL,
         input: "Say hello",
+        max_output_tokens: 256,
         reasoning: { effort: "medium" },
       }),
     ).rejects.toSatisfy(

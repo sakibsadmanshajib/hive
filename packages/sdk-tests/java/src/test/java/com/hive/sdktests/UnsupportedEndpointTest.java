@@ -15,8 +15,13 @@ class UnsupportedEndpointTest {
                     ? System.getenv("HIVE_BASE_URL")
                     : "http://localhost:8080/v1";
 
+    private static final String API_KEY =
+            System.getenv("HIVE_API_KEY") != null
+                    ? System.getenv("HIVE_API_KEY")
+                    : "test-key";
+
     private OpenAIClient createClient() {
-        return OpenAIOkHttpClient.builder().baseUrl(BASE_URL).apiKey("test-key").build();
+        return OpenAIOkHttpClient.builder().baseUrl(BASE_URL).apiKey(API_KEY).build();
     }
 
     @Test
@@ -64,7 +69,7 @@ class UnsupportedEndpointTest {
                 java.net.http.HttpRequest.newBuilder()
                         .uri(java.net.URI.create(BASE_URL + "/fine_tuning/jobs"))
                         .header("Content-Type", "application/json")
-                        .header("Authorization", "Bearer test-key")
+                        .header("Authorization", "Bearer " + API_KEY)
                         .POST(
                                 java.net.http.HttpRequest.BodyPublishers.ofString(
                                         "{\"model\":\"gpt-4o\",\"training_file\":\"file-abc123\"}"))
