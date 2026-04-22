@@ -170,8 +170,10 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          # Password was uploaded URL-encoded so no runtime re-quoting needed.
-          url="postgresql://${SUPABASE_DB_USER}:${SUPABASE_DB_PASSWORD}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
+          # Password is stored in its raw decoded form — URL-encode it here so the
+          # resulting URL round-trips through pgx/pgconn URL parsing correctly.
+          ENC_PW=$(python3 -c 'import os,urllib.parse as u; print(u.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
+          url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
           echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
           echo "reconstructed DB URL (host=${SUPABASE_DB_HOST}, port=${SUPABASE_DB_PORT}, user=${SUPABASE_DB_USER}, db=${SUPABASE_DB_NAME})"
 
