@@ -127,12 +127,17 @@ async function adminCreateUser({ email, password, emailConfirm, fullName, appMet
   });
 }
 
-async function adminUpdateUserById(userId, { email, password, emailConfirm, fullName, appMetadata }) {
+async function adminUpdateUserById(userId, { password, emailConfirm, fullName, appMetadata }) {
+  // Intentionally do NOT re-send `email` on update. Staging Supabase has
+  // email-format validation enabled that rejects `.test` TLDs even when the
+  // value is unchanged from the stored record, producing:
+  //   Unable to validate email address: invalid format
+  // The fixture only needs to reset the password + confirmation + metadata,
+  // so the stored email is left alone.
   return requestJson(adminUrl(`/auth/v1/admin/users/${userId}`), {
     method: "PUT",
     headers: authHeaders(),
     body: {
-      email,
       password,
       email_confirm: emailConfirm,
       app_metadata: appMetadata,
