@@ -54,6 +54,9 @@ func (a *accountsResolverAdapter) EnsureViewerContext(ctx context.Context) (uuid
 	if err != nil {
 		return uuid.Nil, err
 	}
+	if !viewerCtx.User.EmailVerified {
+		return uuid.Nil, payments.ErrVerificationRequired
+	}
 	return viewerCtx.CurrentAccount.ID, nil
 }
 

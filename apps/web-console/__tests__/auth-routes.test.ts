@@ -135,6 +135,21 @@ describe("app/auth/callback/route.ts", () => {
     );
   });
 
+  it("allows /console/settings/profile as a valid next target", async () => {
+    const { NextRequest } = await import("next/server");
+    mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
+
+    const mod = await import("../app/auth/callback/route");
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      "http://localhost:3000/auth/callback?code=abc&next=/console/settings/profile"
+    );
+    await mod.GET(req);
+
+    expect(mockRedirect).toHaveBeenCalledWith(
+      expect.objectContaining({ href: expect.stringContaining("/console/settings/profile") })
+    );
+  });
+
   it("rejects arbitrary next targets and falls back to /console", async () => {
     const { NextRequest } = await import("next/server");
     mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });

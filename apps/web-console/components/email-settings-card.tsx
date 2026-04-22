@@ -26,9 +26,16 @@ export function EmailSettingsCard({
     setNotice(null);
     setResending(true);
 
-    const { error: resendError } = await supabase.auth.resend({
-      type: "signup",
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ??
+      (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+
+    const { error: resendError } = await supabase.auth.signInWithOtp({
       email,
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: `${appUrl}/auth/callback?next=/console/settings/profile&hive_verify=1`,
+      },
     });
 
     if (resendError) {
@@ -37,7 +44,7 @@ export function EmailSettingsCard({
       return;
     }
 
-    setNotice("Verification email sent.");
+    setNotice("Verification email sent. Use the link in that email to unlock the rest of the console.");
     setResending(false);
   }
 
@@ -84,23 +91,25 @@ export function EmailSettingsCard({
         </p>
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-        <button
-          type="button"
-          onClick={handleResendVerification}
-          disabled={resending}
-          style={{
-            padding: "0.75rem 1rem",
-            backgroundColor: "#111827",
-            color: "#fff",
-            border: "none",
-            borderRadius: "0.5rem",
-            cursor: resending ? "progress" : "pointer",
-          }}
-        >
-          {resending ? "Sending..." : "Resend verification email"}
-        </button>
-      </div>
+      {!emailVerified && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
+          <button
+            type="button"
+            onClick={handleResendVerification}
+            disabled={resending}
+            style={{
+              padding: "0.75rem 1rem",
+              backgroundColor: "#111827",
+              color: "#fff",
+              border: "none",
+              borderRadius: "0.5rem",
+              cursor: resending ? "progress" : "pointer",
+            }}
+          >
+            {resending ? "Sending..." : "Resend verification email"}
+          </button>
+        </div>
+      )}
 
       <div style={{ display: "grid", gap: "0.35rem", maxWidth: "24rem" }}>
         <label htmlFor="nextEmail">Change email</label>

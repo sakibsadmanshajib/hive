@@ -189,6 +189,20 @@ func TestGetRails_Unauthenticated_Returns401(t *testing.T) {
 	}
 }
 
+func TestGetRails_UnverifiedReturns403(t *testing.T) {
+	svc := &stubPaymentService{}
+	resolver := &stubAccountResolver{err: payments.ErrVerificationRequired}
+	h := newHandler(svc, resolver)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/checkout/rails", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/v1/accounts/current/checkout/initiate
 // ---------------------------------------------------------------------------

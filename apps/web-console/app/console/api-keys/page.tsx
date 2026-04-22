@@ -1,10 +1,16 @@
 import { getApiKeys, getViewer } from "@/lib/control-plane/client";
 import { ApiKeyList } from "@/components/api-keys/api-key-list";
 import { ApiKeyCreateForm } from "@/components/api-keys/api-key-create-form";
+import { redirect } from "next/navigation";
 
 export default async function ApiKeysPage() {
-  const [keys, viewer] = await Promise.all([getApiKeys(), getViewer()]);
+  const viewer = await getViewer();
   const canManage = viewer.gates.can_manage_api_keys;
+  if (!canManage) {
+    redirect("/console/settings/profile");
+  }
+
+  const keys = await getApiKeys();
 
   return (
     <div style={{ display: "grid", gap: "1.5rem", maxWidth: "72rem" }}>

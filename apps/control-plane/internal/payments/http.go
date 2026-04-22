@@ -31,6 +31,8 @@ type AccountResolver interface {
 	EnsureViewerContext(ctx context.Context) (uuid.UUID, error)
 }
 
+var ErrVerificationRequired = errors.New("payments: email verification required")
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -79,6 +81,13 @@ func (h *Handler) handleGetRails(w http.ResponseWriter, r *http.Request) {
 
 	accountID, err := h.accountsSvc.EnsureViewerContext(r.Context())
 	if err != nil {
+		if errors.Is(err, ErrVerificationRequired) {
+			writePaymentJSON(w, http.StatusForbidden, map[string]string{
+				"error": "email must be verified before accessing billing",
+				"code":  "email_verification_required",
+			})
+			return
+		}
 		writePaymentJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -122,6 +131,13 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 
 	accountID, err := h.accountsSvc.EnsureViewerContext(r.Context())
 	if err != nil {
+		if errors.Is(err, ErrVerificationRequired) {
+			writePaymentJSON(w, http.StatusForbidden, map[string]string{
+				"error": "email must be verified before accessing billing",
+				"code":  "email_verification_required",
+			})
+			return
+		}
 		writePaymentJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return
 	}

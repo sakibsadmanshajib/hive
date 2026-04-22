@@ -2,6 +2,7 @@ import {
   getAnalyticsUsage,
   getAnalyticsSpend,
   getAnalyticsErrors,
+  getViewer,
 } from "@/lib/control-plane/client";
 import type { UsageSummaryRow, SpendSummaryRow, ErrorSummaryRow } from "@/lib/control-plane/client";
 import { UsageChart } from "@/components/analytics/usage-chart";
@@ -9,6 +10,7 @@ import { SpendChart } from "@/components/analytics/spend-chart";
 import { ErrorChart } from "@/components/analytics/error-chart";
 import { AnalyticsTable } from "@/components/analytics/analytics-table";
 import { AnalyticsControls } from "@/components/analytics/analytics-controls";
+import { redirect } from "next/navigation";
 
 interface AnalyticsPageProps {
   searchParams: Promise<{
@@ -36,6 +38,11 @@ const TABS: { id: TabName; label: string }[] = [
 ];
 
 export default async function AnalyticsPage({ searchParams }: AnalyticsPageProps) {
+  const viewer = await getViewer();
+  if (viewer.user.email_verified === false) {
+    redirect("/console/settings/profile");
+  }
+
   const params = await searchParams;
   const activeTab: TabName = isValidTab(params.tab) ? params.tab : "overview";
   const groupBy = isValidGroupBy(params.group_by) ? params.group_by : "model";

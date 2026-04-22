@@ -4,11 +4,13 @@ import {
   getInvoices,
   getAccountProfile,
   getBudgetThreshold,
+  getViewer,
 } from "@/lib/control-plane/client";
 import { BillingOverview } from "@/components/billing/billing-overview";
 import { LedgerTable } from "@/components/billing/ledger-table";
 import { InvoiceList } from "@/components/billing/invoice-list";
 import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
+import { redirect } from "next/navigation";
 
 interface BillingPageProps {
   searchParams: Promise<{ tab?: string; cursor?: string; type?: string }>;
@@ -21,6 +23,11 @@ function isValidTab(tab: string | undefined): tab is TabName {
 }
 
 export default async function BillingPage({ searchParams }: BillingPageProps) {
+  const viewer = await getViewer();
+  if (viewer.user.email_verified === false) {
+    redirect("/console/settings/profile");
+  }
+
   const params = await searchParams;
   const activeTab: TabName = isValidTab(params.tab) ? params.tab : "overview";
   const cursor = params.cursor ?? null;

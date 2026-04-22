@@ -12,20 +12,24 @@ export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
   const viewer = await getViewer();
   const isUnverified = viewer.user.email_verified === false;
 
-  const [balanceSummary, budgetThreshold] = await Promise.allSettled([
-    getBalance(),
-    getBudgetThreshold(),
-  ]);
+  const [balanceSummary, budgetThreshold] = isUnverified
+    ? [null, null]
+    : await Promise.allSettled([
+        getBalance(),
+        getBudgetThreshold(),
+      ]);
 
   const currentBalance =
-    balanceSummary.status === "fulfilled" ? balanceSummary.value.available_credits : 0;
+    balanceSummary?.status === "fulfilled" ? balanceSummary.value.available_credits : 0;
   const threshold =
-    budgetThreshold.status === "fulfilled" ? budgetThreshold.value : null;
+    budgetThreshold?.status === "fulfilled" ? budgetThreshold.value : null;
 
   return (
     <div>
       <VerificationBanner show={isUnverified} />
-      <BudgetAlertBanner threshold={threshold} currentBalance={currentBalance} />
+      {!isUnverified && (
+        <BudgetAlertBanner threshold={threshold} currentBalance={currentBalance} />
+      )}
       <div style={{ display: "flex", minHeight: "100vh" }}>
         <nav
           style={{
@@ -44,21 +48,28 @@ export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
             <a href="/console" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
               Dashboard
             </a>
-            <a href="/console/members" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
-              Members
+            <a href="/console/settings/profile" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+              Profile Settings
             </a>
-            <a href="/console/billing" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
-              Billing
-            </a>
-            <a href="/console/api-keys" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
-              API Keys
-            </a>
-            <a href="/console/analytics" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
-              Analytics
-            </a>
-            <a href="/console/catalog" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
-              Model Catalog
-            </a>
+            {!isUnverified && (
+              <>
+                <a href="/console/members" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+                  Members
+                </a>
+                <a href="/console/billing" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+                  Billing
+                </a>
+                <a href="/console/api-keys" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+                  API Keys
+                </a>
+                <a href="/console/analytics" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+                  Analytics
+                </a>
+                <a href="/console/catalog" style={{ padding: "0.5rem", textDecoration: "none", color: "inherit" }}>
+                  Model Catalog
+                </a>
+              </>
+            )}
           </div>
         </nav>
         <main style={{ flex: 1, padding: "2rem" }}>{children}</main>

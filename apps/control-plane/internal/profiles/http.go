@@ -74,7 +74,7 @@ func (h *Handler) handleUpdateCurrentProfile(w http.ResponseWriter, r *http.Requ
 }
 
 func (h *Handler) handleGetCurrentBillingProfile(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := h.resolveCurrentAccountID(w, r)
+	accountID, ok := h.resolveVerifiedCurrentAccountID(w, r)
 	if !ok {
 		return
 	}
@@ -89,7 +89,7 @@ func (h *Handler) handleGetCurrentBillingProfile(w http.ResponseWriter, r *http.
 }
 
 func (h *Handler) handleUpdateCurrentBillingProfile(w http.ResponseWriter, r *http.Request) {
-	accountID, ok := h.resolveCurrentAccountID(w, r)
+	accountID, ok := h.resolveVerifiedCurrentAccountID(w, r)
 	if !ok {
 		return
 	}
@@ -110,19 +110,45 @@ func (h *Handler) handleUpdateCurrentBillingProfile(w http.ResponseWriter, r *ht
 }
 
 func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	viewerContext, ok := h.resolveViewerContext(w, r)
+	if !ok {
+		return uuid.Nil, false
+	}
+
+	return viewerContext.CurrentAccount.ID, true
+}
+
+func (h *Handler) resolveVerifiedCurrentAccountID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	viewerContext, ok := h.resolveViewerContext(w, r)
+	if !ok {
+		return uuid.Nil, false
+	}
+
+	if !viewerContext.User.EmailVerified {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "email must be verified before accessing billing",
+			"code":  "email_verification_required",
+		})
+		return uuid.Nil, false
+	}
+
+	return viewerContext.CurrentAccount.ID, true
+}
+
+func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (accounts.ViewerContext, bool) {
 	viewer, ok := auth.ViewerFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
-		return uuid.Nil, false
+		return accounts.ViewerContext{}, false
 	}
 
 	viewerContext, err := h.accountsSvc.EnsureViewerContext(r.Context(), viewer, parseAccountHeader(r))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return uuid.Nil, false
+		return accounts.ViewerContext{}, false
 	}
 
-	return viewerContext.CurrentAccount.ID, true
+	return viewerContext, true
 }
 
 func writeProfileError(w http.ResponseWriter, err error) {

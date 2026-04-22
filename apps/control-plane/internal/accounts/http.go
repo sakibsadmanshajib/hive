@@ -69,6 +69,14 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !vc.User.EmailVerified {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "email must be verified before accessing members",
+			"code":  "email_verification_required",
+		})
+		return
+	}
+
 	members, err := h.svc.ListMembers(r.Context(), vc.CurrentAccount.ID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

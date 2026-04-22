@@ -315,6 +315,52 @@ func TestExpandReservationRejectsInvalidUUID(t *testing.T) {
 	}
 }
 
+func TestCreateReservationRejectsUnverifiedViewer(t *testing.T) {
+	accountRepo := newAccountsRepoStub()
+	accountingRepo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledgerBalance(500)}
+	usageSvc := &usageStub{}
+
+	userID := uuid.New()
+	accountID := uuid.New()
+	accountRepo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "workspace-one",
+		DisplayName: "Workspace One",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	accountRepo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "owner", Status: "active"},
+	}
+
+	handler := newHTTPHandler(accountRepo, accountingRepo, ledgerSvc, usageSvc)
+	viewer := auth.Viewer{UserID: userID, Email: "owner@example.com", EmailVerified: false}
+
+	body, err := json.Marshal(map[string]any{
+		"request_id":        "req_http_unverified",
+		"attempt_number":    1,
+		"endpoint":          "/v1/responses",
+		"model_alias":       "hive-fast",
+		"estimated_credits": 120,
+		"policy_mode":       string(PolicyModeStrict),
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/credits/reservations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func newFinalizeHandler(t *testing.T) (*accountsRepoStub, http.Handler, auth.Viewer) {
 	t.Helper()
 

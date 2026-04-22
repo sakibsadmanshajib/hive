@@ -257,6 +257,40 @@ func TestInvitationHandler_VerifiedOwnerCreatesInvitation(t *testing.T) {
 	}
 }
 
+func TestMembersHandler_UnverifiedReturns403(t *testing.T) {
+	repo := newStubRepo()
+
+	userID := uuid.New()
+	accountID := uuid.New()
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "restricted-workspace",
+		DisplayName: "Restricted Workspace",
+		AccountType: "personal",
+		OwnerUserID: userID,
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "owner", Status: "active"},
+	}
+
+	h := newHandler(repo)
+	viewer := auth.Viewer{
+		UserID:        userID,
+		Email:         "unverified@example.com",
+		EmailVerified: false,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/members", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 // --- POST /api/v1/invitations/accept ---
 
 func TestAcceptInvitationHandler(t *testing.T) {

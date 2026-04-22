@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { getMembers, getViewer } from "@/lib/control-plane/client";
 import { canInviteMembers } from "@/lib/viewer-gates";
@@ -11,6 +12,9 @@ export default async function MembersPage() {
   } = await supabase.auth.getSession();
 
   const viewer = await getViewer();
+  if (viewer.user.email_verified === false) {
+    redirect("/console/settings/profile");
+  }
   const canInvite = canInviteMembers(viewer);
 
   const members = session ? await getMembers(session.access_token) : [];

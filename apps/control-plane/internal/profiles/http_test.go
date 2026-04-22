@@ -326,3 +326,37 @@ func TestCurrentAccountBillingProfileHandlerDefaultsPersonalEntityType(t *testin
 		t.Fatalf("expected legal_entity_type %q, got %q", "individual", profile.LegalEntityType)
 	}
 }
+
+func TestCurrentAccountBillingProfileHandlerRejectsUnverifiedViewer(t *testing.T) {
+	repo := newStubRepo()
+	accountID := uuid.New()
+	userID := uuid.New()
+
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "acme-labs",
+		DisplayName: "Acme Labs",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "owner", Status: "active"},
+	}
+
+	handler := newHTTPHandler(repo)
+	viewer := auth.Viewer{
+		UserID:        userID,
+		Email:         "alice@example.com",
+		EmailVerified: false,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/billing-profile", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}

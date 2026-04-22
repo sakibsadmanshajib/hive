@@ -162,6 +162,14 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		return uuid.Nil, false
 	}
 
+	if !viewerContext.User.EmailVerified {
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "email must be verified before accessing billing",
+			"code":  "email_verification_required",
+		})
+		return uuid.Nil, false
+	}
+
 	return viewerContext.CurrentAccount.ID, true
 }
 

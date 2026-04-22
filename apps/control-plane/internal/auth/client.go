@@ -33,11 +33,16 @@ type supabaseUserResponse struct {
 	ID               string         `json:"id"`
 	Email            string         `json:"email"`
 	EmailConfirmedAt *string        `json:"email_confirmed_at"`
+	AppMetadata      appMetadata    `json:"app_metadata"`
 	UserMetadata     userMetadata   `json:"user_metadata"`
 }
 
 type userMetadata struct {
 	FullName string `json:"full_name"`
+}
+
+type appMetadata struct {
+	HiveEmailVerified *bool `json:"hive_email_verified"`
 }
 
 // LookupUser calls GET ${SUPABASE_URL}/auth/v1/user with the caller bearer token
@@ -76,10 +81,15 @@ func (c *Client) LookupUser(ctx context.Context, bearerToken string) (Viewer, er
 		return Viewer{}, fmt.Errorf("auth: parse user id: %w", err)
 	}
 
+	emailVerified := su.EmailConfirmedAt != nil && *su.EmailConfirmedAt != ""
+	if su.AppMetadata.HiveEmailVerified != nil {
+		emailVerified = *su.AppMetadata.HiveEmailVerified
+	}
+
 	return Viewer{
 		UserID:        userID,
 		Email:         su.Email,
-		EmailVerified: su.EmailConfirmedAt != nil && *su.EmailConfirmedAt != "",
+		EmailVerified: emailVerified,
 		FullName:      su.UserMetadata.FullName,
 	}, nil
 }

@@ -61,11 +61,11 @@ describe("allowedUnverifiedRoutes", () => {
     expect(allowedUnverifiedRoutes).toContain("/console/settings/profile");
   });
 
-  it("contains /console/members", () => {
-    expect(allowedUnverifiedRoutes).toContain("/console/members");
+  it("does not contain /console/members", () => {
+    expect(allowedUnverifiedRoutes).not.toContain("/console/members");
   });
 
-  it("has exactly 4 entries", () => {
-    expect(allowedUnverifiedRoutes).toHaveLength(4);
+  it("has exactly 3 entries", () => {
+    expect(allowedUnverifiedRoutes).toHaveLength(3);
   });
 });

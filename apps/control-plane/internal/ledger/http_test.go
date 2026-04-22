@@ -147,3 +147,37 @@ func TestListLedgerEntriesDefaultsLimit(t *testing.T) {
 		t.Fatalf("expected 20 ledger entries, got %d", len(response.Entries))
 	}
 }
+
+func TestGetBalanceRejectsUnverifiedViewer(t *testing.T) {
+	repo := newStubRepo()
+	userID := uuid.New()
+	accountID := uuid.New()
+
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "workspace-one",
+		DisplayName: "Workspace One",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "owner", Status: "active"},
+	}
+
+	handler := newHTTPHandler(repo)
+	viewer := auth.Viewer{
+		UserID:        userID,
+		Email:         "owner@example.com",
+		EmailVerified: false,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/credits/balance", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}

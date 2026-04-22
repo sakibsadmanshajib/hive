@@ -19,5 +19,4 @@ export const allowedUnverifiedRoutes: string[] = [
   "/console",
   "/console/setup",
   "/console/settings/profile",
-  "/console/members",
 ];

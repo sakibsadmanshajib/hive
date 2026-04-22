@@ -1,7 +1,14 @@
 import { getCatalogModels } from "@/lib/control-plane/client";
 import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
+import { getViewer } from "@/lib/control-plane/client";
+import { redirect } from "next/navigation";
 
 export default async function CatalogPage() {
+  const viewer = await getViewer();
+  if (viewer.user.email_verified === false) {
+    redirect("/console/settings/profile");
+  }
+
   const models = await getCatalogModels();
 
   return (
