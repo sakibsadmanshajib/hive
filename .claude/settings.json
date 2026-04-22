@@ -8,6 +8,10 @@
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js\"",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "echo 'Nudge (superpowers): brainstorming for design, writing-plans for multi-step work, test-driven-development for features/bugs, systematic-debugging for bugs, requesting-code-review after edits, verification-before-completion before claiming done. All optional — skip if not installed.'"
           }
         ]
       }
