@@ -251,14 +251,36 @@ jobs:
 
       - name: Run SDK suites in parallel (JS + Python + Java)
         working-directory: deploy/docker
+        shell: bash
         run: |
-          set -euo pipefail
-          # Single invocation: compose starts all 3 test services in parallel,
-          # each exits with its own status; --abort-on-container-exit ensures
-          # the whole up returns non-zero if any fails.
-          docker compose --profile test up --no-build \
-            --abort-on-container-exit \
-            sdk-tests-js sdk-tests-py sdk-tests-java
+          set -uo pipefail
+          # docker compose run propagates the container's exit code cleanly
+          # and avoids the compose-v2 'up --abort-on-container-exit' panic
+          # when --exit-code-from is absent.
+          log=/tmp/sdk
+          mkdir -p "$log"
+          run_suite() {
+            local svc=$1
+            docker compose --profile test run --rm --no-deps "$svc" \
+              > "$log/$svc.log" 2>&1
+            echo $? > "$log/$svc.rc"
+          }
+
+          run_suite sdk-tests-js   &
+          run_suite sdk-tests-py   &
+          run_suite sdk-tests-java &
+          wait
+
+          fail=0
+          for svc in sdk-tests-js sdk-tests-py sdk-tests-java; do
+            rc=$(cat "$log/$svc.rc")
+            echo "=============================================="
+            echo "== $svc  (exit $rc)"
+            echo "=============================================="
+            tail -c 30000 "$log/$svc.log"
+            if [ "$rc" != "0" ]; then fail=1; fi
+          done
+          exit $fail
 
       - name: Dump compose logs on failure
         if: failure()
