@@ -229,7 +229,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-None yet.
+- Design RBAC authorization model (`.planning/todos/pending/2026-04-22-design-rbac-authorization-model.md`)
 
 ### Blockers/Concerns
 

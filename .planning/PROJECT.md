@@ -33,6 +33,7 @@ Developers can switch from OpenAI to Hive with only a base URL and API key chang
 - [ ] **Hot-path rate limiting** — Edge proxy enforces account-tier + per-key rate limits with 429 + Retry-After; close KEY-02 + KEY-05 (Phase 12).
 - [ ] **Console integration fixes** — Web-console proxy routes for checkout modal + API key create/revoke/rotate; close BILL-03, BILL-07, CONS-01, CONS-02, KEY-01, KEY-03 (Phase 13).
 - [ ] **Invoice-row + budget threshold integration** — Payment webhook inserts `payment_invoices` rows; budget thresholds enforced on spend/grant paths with real notifier; close BILL-05 + BILL-06 (Phase 14).
+- [ ] **RBAC + verification-aware authorization model** — Replace the current `owner`/`member` plus ad hoc gate booleans with a reusable permission model that can express guest, unverified, member, owner, billing, and API-key access consistently across control-plane handlers and web-console routes.
 - [ ] **Batch success-path terminal settlement** — Local batch executor in control-plane (fan-out `/v1/chat/completions`, compose output JSONL, settle from per-request usage). Unblocks API-07 success-path + KEY-04 success-path attribution (upstream OpenRouter/Groq have no native batch API).
 - [ ] **`ensureCapabilityColumns` wrong-table fix** — Target `provider_capabilities` not `route_capabilities`. Latent since seed path populates columns; code fix removes dead path.
 
