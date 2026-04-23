@@ -336,11 +336,14 @@ jobs:
   web-e2e:
     name: Web E2E (full stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     if: >-
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [live-integration]
+    # Independently boots its own Go stack + Next.js. Decoupled from
+    # `live-integration` so a flaky external provider (e.g. OpenRouter
+    # 429 on the SDK suites) no longer blocks the UI test coverage.
+    needs: [web-unit, go-tests]
     env:
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
