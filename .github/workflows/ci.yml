@@ -345,9 +345,13 @@ jobs:
     # 429 on the SDK suites) no longer blocks the UI test coverage.
     needs: [web-unit, go-tests]
     env:
+      # SUPABASE_SERVICE_ROLE_KEY intentionally omitted from job-level env
+      # so the Playwright runner never inherits it. Only the steps that
+      # actually need admin auth — `Start core stack` (docker compose
+      # interpolation for control-plane) and `Build + start Next.js`
+      # (/auth/callback route) — scope it in their own `env:` blocks.
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
       REDIS_URL: redis://redis:6379/0
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
@@ -431,6 +435,8 @@ jobs:
 
       - name: Start core stack (no rebuild — images already loaded)
         working-directory: deploy/docker
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           docker compose up -d --no-build redis litellm control-plane edge-api
 
