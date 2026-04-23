@@ -92,6 +92,38 @@ function hasFixtureEnv() {
   );
 }
 
+function hasEdgeFunctionEnv() {
+  return (
+    Boolean(process.env.E2E_FIXTURE_URL) &&
+    Boolean(process.env.E2E_FIXTURE_SECRET)
+  );
+}
+
+async function prepareViaEdgeFunction() {
+  const url = readEnv("E2E_FIXTURE_URL");
+  const secret = readEnv("E2E_FIXTURE_SECRET");
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "X-E2E-Secret": secret,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ action: "reset" }),
+  });
+  const text = await response.text();
+  let data = null;
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = { raw: text };
+  }
+  if (!response.ok) {
+    const message = data?.error ?? `${response.status} ${response.statusText}`;
+    throw new Error(`e2e-fixtures edge function failed: ${message}`);
+  }
+  return data;
+}
+
 function authHeaders() {
   const serviceRoleKey = readEnv("SUPABASE_SERVICE_ROLE_KEY");
   return {
@@ -479,15 +511,24 @@ function maskEmail(value) {
 }
 
 export async function prepareE2EAuthFixtures() {
-  const fixtureEnv = hasFixtureEnv();
+  const edgeEnv = hasEdgeFunctionEnv();
+  const adminEnv = hasFixtureEnv();
   if (process.env.E2E_FIXTURE_VERBOSE === "1") {
     console.log(
-      `[e2e-auth-fixtures] fixtureEnv=${fixtureEnv} verifiedEmail=${maskEmail(
+      `[e2e-auth-fixtures] mode=${edgeEnv ? "edge-function" : adminEnv ? "admin-api" : "skipped"} verifiedEmail=${maskEmail(
         E2E_VERIFIED_EMAIL
       )} unverifiedEmail=${maskEmail(E2E_UNVERIFIED_EMAIL)}`
     );
   }
-  if (!fixtureEnv) {
+
+  // Preferred path: let the Supabase Edge Function do the seeding
+  // server-side. Keeps the service-role key out of the caller's env
+  // entirely and trims 20+ REST round-trips per test down to one.
+  if (edgeEnv) {
+    return prepareViaEdgeFunction();
+  }
+
+  if (!adminEnv) {
     return;
   }
 

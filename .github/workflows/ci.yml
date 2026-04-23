@@ -505,10 +505,17 @@ jobs:
         working-directory: apps/web-console
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          # Fixture (tests/e2e/support/e2e-auth-fixtures.mjs) seeds + resets
-          # CI test users in staging Supabase before each spec via admin API.
-          # E2E_* env vars are optional — if unset, the fixture falls back to
-          # defaults baked into e2e-auth-defaults.json.
+          # Preferred path: the `e2e-fixtures` Supabase Edge Function does
+          # all seeding server-side. When both secrets are present, the
+          # fixture helper POSTs once per spec and the runner never sees
+          # the Supabase service-role key.
+          E2E_FIXTURE_URL: ${{ secrets.E2E_FIXTURE_URL }}
+          E2E_FIXTURE_SECRET: ${{ secrets.E2E_FIXTURE_SECRET }}
+          # Fallback path: if the edge function isn't deployed yet, the
+          # helper talks directly to the Supabase admin REST API using
+          # `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (already exposed
+          # as job-level env for the Next.js server). Keeps local dev and
+          # staged rollouts working without coupling the two changes.
           E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
           E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
