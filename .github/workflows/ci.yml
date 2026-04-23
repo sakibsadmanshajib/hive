@@ -327,97 +327,14 @@ jobs:
         run: docker compose down -v --remove-orphans || true
 
   # ------------------------------------------------------------------
-  # Playwright E2E against a Next.js that points at the live staging
-  # Supabase (no need to run the Go stack here — it's independent).
+  # Playwright E2E against the full booted Go stack + Next.js. Runs
+  # every spec (unauth, credentialed, openai-sdk) in a single job so
+  # `/console/*` server components can reach a real control-plane and
+  # the fixture can seed/reset staging Supabase users before each run.
   # ------------------------------------------------------------------
 
   web-e2e:
-    name: Web E2E (Playwright)
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
-    needs: [web-unit]
-    defaults:
-      run:
-        working-directory: apps/web-console
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: apps/web-console/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Read Playwright version
-        id: pw
-        run: |
-          v=$(node -p "require('@playwright/test/package.json').version")
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      - name: Cache Playwright browsers
-        id: pw-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
-
-      - name: Install Playwright browsers
-        if: steps.pw-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit path)
-        if: steps.pw-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
-
-      - name: Build + start Next.js
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_APP_URL: http://localhost:3000
-        run: |
-          npm run build
-          nohup npm start > /tmp/nextjs.log 2>&1 &
-          for i in {1..60}; do
-            if curl -sf http://localhost:3000 >/dev/null; then echo "Next.js up"; exit 0; fi
-            sleep 2
-          done
-          echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
-
-      - name: Run Playwright (static unauth suite only)
-        env:
-          PLAYWRIGHT_BASE_URL: http://localhost:3000
-        # Only the unauth suite is safe here. The credentialed suites
-        # (auth-shell + profile-completion) depend on the Go control-plane
-        # being reachable from Next.js (`/console/layout.tsx` + `/console/*`
-        # server components call `lib/control-plane/client.ts`, which throws
-        # when `CONTROL_PLANE_BASE_URL` is unset or unreachable). Running them
-        # in this job would waste minutes on guaranteed timeouts. The full
-        # stack-backed job (`web-e2e-api`) or the local dev loop is the right
-        # place for them; a follow-up can migrate them there.
-        run: npx playwright test tests/e2e/unauth.spec.ts
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-report
-          path: apps/web-console/playwright-report/
-          if-no-files-found: ignore
-
-  # ------------------------------------------------------------------
-  # Playwright against a booted Go stack — exercises the OpenAI npm SDK
-  # against edge-api (openai-sdk.spec.ts). Boots the stack with the same
-  # pre-built images as live-integration and tears it down after.
-  # ------------------------------------------------------------------
-
-  web-e2e-api:
-    name: Web E2E API (OpenAI SDK)
+    name: Web E2E (full stack)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     if: >-
@@ -564,14 +481,38 @@ jobs:
         working-directory: apps/web-console
         run: npx playwright install-deps chromium
 
-      - name: Run openai-sdk.spec against live edge-api
+      - name: Build + start Next.js (points at booted control-plane)
         working-directory: apps/web-console
         env:
-          # openai-sdk.spec.ts calls edge-api directly; it does not need the
-          # Next.js server, but playwright.config still wants a base URL.
-          PLAYWRIGHT_BASE_URL: http://localhost:8080
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          CONTROL_PLANE_BASE_URL: http://localhost:8081
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          npm run build
+          nohup npm start > /tmp/nextjs.log 2>&1 &
+          for i in {1..60}; do
+            if (echo > /dev/tcp/127.0.0.1/3000) 2>/dev/null; then echo "Next.js up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
+
+      - name: Run full Playwright suite (unauth + credentialed + openai-sdk)
+        working-directory: apps/web-console
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
           EDGE_BASE_URL: http://localhost:8080/v1
-        run: npx playwright test tests/e2e/openai-sdk.spec.ts
+          # Fixture (tests/e2e/support/e2e-auth-fixtures.mjs) seeds + resets
+          # CI test users in staging Supabase before each spec via admin API.
+          # E2E_* env vars are optional — if unset, the fixture falls back to
+          # defaults baked into e2e-auth-defaults.json.
+          E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
+          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
+          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
+          E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
+        run: npx playwright test
 
       - name: Dump compose logs on failure
         if: failure()
