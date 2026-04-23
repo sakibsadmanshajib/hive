@@ -26,7 +26,11 @@ const DEFAULTS = JSON.parse(
   )
 );
 
-function envOrDefault(name, fallback, { minLength = 0 } = {}) {
+function isValidEmail(value) {
+  return value.length >= 5 && value.includes("@") && value.includes(".");
+}
+
+function envOrDefault(name, fallback, { minLength = 0, validator } = {}) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") {
     return fallback;
@@ -37,17 +41,25 @@ function envOrDefault(name, fallback, { minLength = 0 } = {}) {
     );
     return fallback;
   }
+  if (validator && !validator(raw)) {
+    console.warn(
+      `[e2e-auth-fixtures] ${name} is set but failed validation; using fallback`
+    );
+    return fallback;
+  }
   return raw;
 }
 
 // Resolved credentials — mirror `e2e-auth-creds.ts` exactly.
 export const E2E_VERIFIED_EMAIL = envOrDefault(
   "E2E_VERIFIED_EMAIL",
-  DEFAULTS.verifiedEmail
+  DEFAULTS.verifiedEmail,
+  { validator: isValidEmail }
 );
 export const E2E_UNVERIFIED_EMAIL = envOrDefault(
   "E2E_UNVERIFIED_EMAIL",
-  DEFAULTS.unverifiedEmail
+  DEFAULTS.unverifiedEmail,
+  { validator: isValidEmail }
 );
 export const E2E_VERIFIED_PASSWORD = envOrDefault(
   "E2E_VERIFIED_PASSWORD",
@@ -461,8 +473,20 @@ async function resetProfilesAndInvitation({ verifiedUser, unverifiedUser, invite
   }
 }
 
+function maskEmail(value) {
+  const [local = "", domain = ""] = value.split("@");
+  const head = local.slice(0, 3);
+  return `${head}***@${domain}`;
+}
+
 export async function prepareE2EAuthFixtures() {
-  if (!hasFixtureEnv()) {
+  const fixtureEnv = hasFixtureEnv();
+  console.log(
+    `[e2e-auth-fixtures] fixtureEnv=${fixtureEnv} verifiedEmail=${maskEmail(
+      E2E_VERIFIED_EMAIL
+    )} unverifiedEmail=${maskEmail(E2E_UNVERIFIED_EMAIL)}`
+  );
+  if (!fixtureEnv) {
     return;
   }
 

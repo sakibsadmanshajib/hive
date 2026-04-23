@@ -24,11 +24,16 @@ type AuthDefaults = {
 
 const DEFAULTS: AuthDefaults = defaults as AuthDefaults;
 
+function isValidEmail(value: string): boolean {
+  return value.length >= 5 && value.includes("@") && value.includes(".");
+}
+
 function envOrDefault(
   name: string,
   fallback: string,
-  minLength = 0
+  opts: { minLength?: number; validator?: (value: string) => boolean } = {}
 ): string {
+  const { minLength = 0, validator } = opts;
   const raw = process.env[name];
   if (raw === undefined || raw === "") {
     return fallback;
@@ -39,29 +44,37 @@ function envOrDefault(
     );
     return fallback;
   }
+  if (validator && !validator(raw)) {
+    console.warn(
+      `[e2e-auth-creds] ${name} is set but failed validation; using fallback`
+    );
+    return fallback;
+  }
   return raw;
 }
 
 export const E2E_VERIFIED_EMAIL = envOrDefault(
   "E2E_VERIFIED_EMAIL",
-  DEFAULTS.verifiedEmail
+  DEFAULTS.verifiedEmail,
+  { validator: isValidEmail }
 );
 export const E2E_UNVERIFIED_EMAIL = envOrDefault(
   "E2E_UNVERIFIED_EMAIL",
-  DEFAULTS.unverifiedEmail
+  DEFAULTS.unverifiedEmail,
+  { validator: isValidEmail }
 );
 export const E2E_VERIFIED_PASSWORD = envOrDefault(
   "E2E_VERIFIED_PASSWORD",
   DEFAULTS.verifiedPassword,
-  DEFAULTS.minPasswordLength
+  { minLength: DEFAULTS.minPasswordLength }
 );
 export const E2E_UNVERIFIED_PASSWORD = envOrDefault(
   "E2E_UNVERIFIED_PASSWORD",
   DEFAULTS.unverifiedPassword,
-  DEFAULTS.minPasswordLength
+  { minLength: DEFAULTS.minPasswordLength }
 );
 export const E2E_INVITATION_TOKEN = envOrDefault(
   "E2E_INVITATION_TOKEN",
   DEFAULTS.invitationToken,
-  DEFAULTS.minTokenLength
+  { minLength: DEFAULTS.minTokenLength }
 );
