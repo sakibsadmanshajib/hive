@@ -21,11 +21,19 @@ async function signIn(
 }
 
 test.beforeEach(async () => {
-  execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-    cwd: process.cwd(),
-    env: process.env,
-    stdio: "inherit",
-  });
+  try {
+    execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: "pipe",
+    });
+  } catch (err: unknown) {
+    const e = err as { stdout?: Buffer; stderr?: Buffer };
+    process.stderr.write(
+      `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`
+    );
+    throw err;
+  }
 });
 
 test.describe("unverified members page stays locked", () => {

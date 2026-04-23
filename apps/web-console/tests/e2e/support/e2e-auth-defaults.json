@@ -1,8 +1,8 @@
 {
   "minPasswordLength": 6,
   "minTokenLength": 16,
-  "verifiedEmail": "e2e-verified@hive-ci.test",
-  "unverifiedEmail": "e2e-unverified@hive-ci.test",
+  "verifiedEmail": "e2e-verified@scubed.com.bd",
+  "unverifiedEmail": "e2e-unverified@scubed.com.bd",
   "verifiedPassword": "E2eFixture-Verified#2026",
   "unverifiedPassword": "E2eFixture-Unverified#2026",
   "invitationToken": "e2e-invitation-token-2026-fixture"

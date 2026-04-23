@@ -4,7 +4,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const FIXTURES = {
-  inviterEmail: "e2e-inviter@hive-ci.test",
+  inviterEmail: "e2e-inviter@scubed.com.bd",
   verifiedPrimaryAccountId: "31aadd76-fba0-46e6-827d-e3cfef50324c",
   verifiedSecondaryAccountId: "c420b965-aed6-4bfd-a7f9-e934458b3b5a",
   invitedAccountId: "a45bec1f-e648-4811-9841-3ad28c7f34a9",
@@ -182,17 +182,16 @@ async function adminCreateUser({ email, password, emailConfirm, fullName, appMet
   });
 }
 
-async function adminUpdateUserById(userId, { password, emailConfirm, fullName, appMetadata }) {
-  // Intentionally do NOT re-send `email` on update. Staging Supabase has
-  // email-format validation enabled that rejects `.test` TLDs even when the
-  // value is unchanged from the stored record, producing:
-  //   Unable to validate email address: invalid format
-  // The fixture only needs to reset the password + confirmation + metadata,
-  // so the stored email is left alone.
+async function adminUpdateUserById(userId, { email, password, emailConfirm, fullName, appMetadata }) {
+  // Re-sending `email` migrates any legacy staging user record whose stored
+  // email still uses the old `.test` placeholder TLD to the current default
+  // (`@scubed.com.bd`, which passes Supabase's email-format validation).
+  // Passing the same valid email on subsequent runs is a no-op.
   return requestJson(adminUrl(`/auth/v1/admin/users/${userId}`), {
     method: "PUT",
     headers: authHeaders(),
     body: {
+      email,
       password,
       email_confirm: emailConfirm,
       app_metadata: appMetadata,
@@ -481,11 +480,13 @@ function maskEmail(value) {
 
 export async function prepareE2EAuthFixtures() {
   const fixtureEnv = hasFixtureEnv();
-  console.log(
-    `[e2e-auth-fixtures] fixtureEnv=${fixtureEnv} verifiedEmail=${maskEmail(
-      E2E_VERIFIED_EMAIL
-    )} unverifiedEmail=${maskEmail(E2E_UNVERIFIED_EMAIL)}`
-  );
+  if (process.env.E2E_FIXTURE_VERBOSE === "1") {
+    console.log(
+      `[e2e-auth-fixtures] fixtureEnv=${fixtureEnv} verifiedEmail=${maskEmail(
+        E2E_VERIFIED_EMAIL
+      )} unverifiedEmail=${maskEmail(E2E_UNVERIFIED_EMAIL)}`
+    );
+  }
   if (!fixtureEnv) {
     return;
   }
@@ -541,7 +542,7 @@ export async function prepareE2EAuthFixtures() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   prepareE2EAuthFixtures()
     .then((summary) => {
-      if (summary) {
+      if (summary && process.env.E2E_FIXTURE_VERBOSE === "1") {
         console.log(JSON.stringify(summary, null, 2));
       }
     })
