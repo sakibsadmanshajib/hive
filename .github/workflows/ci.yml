@@ -501,11 +501,10 @@ jobs:
           done
           echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
 
-      - name: Run full Playwright suite (unauth + credentialed + openai-sdk)
+      - name: Run UI Playwright suite (unauth + credentialed)
         working-directory: apps/web-console
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          EDGE_BASE_URL: http://localhost:8080/v1
           # Fixture (tests/e2e/support/e2e-auth-fixtures.mjs) seeds + resets
           # CI test users in staging Supabase before each spec via admin API.
           # E2E_* env vars are optional — if unset, the fixture falls back to
@@ -515,7 +514,12 @@ jobs:
           E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
           E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
-        run: npx playwright test
+        # `openai-sdk.spec.ts` is covered by the `live-integration` job and
+        # is deliberately skipped here. It depends on an actual LLM
+        # completion round-trip through OpenRouter, which currently rate-
+        # limits the free `hive-default` model tier and produces 429 flakes
+        # that are unrelated to anything the UI suite exercises.
+        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts
 
       - name: Dump compose logs on failure
         if: failure()
