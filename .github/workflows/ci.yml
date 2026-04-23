@@ -389,19 +389,18 @@ jobs:
           done
           echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
 
-      - name: Run Playwright (credentialed suites skip if creds absent)
+      - name: Run Playwright (static unauth suite only)
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
-          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
-          E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
-          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
-          E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
-          # Fixture (tests/e2e/support/e2e-auth-fixtures.mjs) resets CI test users
-          # via Supabase admin API before each test. Needs admin credentials.
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: npx playwright test
+        # Only the unauth suite is safe here. The credentialed suites
+        # (auth-shell + profile-completion) depend on the Go control-plane
+        # being reachable from Next.js (`/console/layout.tsx` + `/console/*`
+        # server components call `lib/control-plane/client.ts`, which throws
+        # when `CONTROL_PLANE_BASE_URL` is unset or unreachable). Running them
+        # in this job would waste minutes on guaranteed timeouts. The full
+        # stack-backed job (`web-e2e-api`) or the local dev loop is the right
+        # place for them; a follow-up can migrate them there.
+        run: npx playwright test tests/e2e/unauth.spec.ts
 
       - name: Upload Playwright report
         if: always()
