@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T17:36:01.619Z
-> Files: 518 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T17:37:16.652Z
+> Files: 517 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
@@ -595,7 +595,6 @@
 - `tsconfig.json` — TypeScript configuration (~164 tok)
 - `tsconfig.tsbuildinfo` (~43098 tok)
 - `vitest.config.ts` — Vitest test configuration (~129 tok)
-- `wrangler.jsonc` — Cloudflare Pages configuration — source of truth for compatibility settings. (~252 tok)
 
 ## apps/web-console/__tests__/
 

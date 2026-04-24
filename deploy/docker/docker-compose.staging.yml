@@ -34,7 +34,7 @@ services:
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY required (seed /opt/hive/.env)}
       REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
-      EDGE_PUBLIC_URL: https://api.hive.scubed.co
+      EDGE_PUBLIC_URL: https://api-hive.scubed.co
       LOG_LEVEL: info
 
   control-plane:
@@ -49,7 +49,7 @@ services:
     mem_reservation: 120m
     environment:
       REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
-      CONTROL_PLANE_PUBLIC_URL: https://cp.hive.scubed.co
+      CONTROL_PLANE_PUBLIC_URL: https://cp-hive.scubed.co
       LOG_LEVEL: info
 
   litellm:

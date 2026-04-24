@@ -132,8 +132,8 @@ jobs:
         run: |
           for i in $(seq 1 12); do
             api_ok=0; cp_ok=0
-            curl -fsS https://api.hive.scubed.co/health >/dev/null && api_ok=1 || true
-            curl -fsS https://cp.hive.scubed.co/health  >/dev/null && cp_ok=1 || true
+            curl -fsS https://api-hive.scubed.co/health >/dev/null && api_ok=1 || true
+            curl -fsS https://cp-hive.scubed.co/health  >/dev/null && cp_ok=1 || true
             if [ "$api_ok" = 1 ] && [ "$cp_ok" = 1 ]; then
               echo "SMOKE OK"
               exit 0
@@ -167,8 +167,8 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_API_URL: https://api.hive.scubed.co
-          NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp.hive.scubed.co
+          NEXT_PUBLIC_API_URL: https://api-hive.scubed.co
+          NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp-hive.scubed.co
         run: npm run build:cf
 
       - name: Deploy to CF Pages
