@@ -44,11 +44,15 @@ model_list:
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries
 # exhaust. `cooldown_time` prevents hammering a model that just failed.
+# `drop_params: true` silently drops provider-unsupported request fields
+# (e.g. some OpenRouter free embedding providers reject `encoding_format`
+# or `dimensions`) instead of returning a hard 400 to the client.
 litellm_settings:
   num_retries: 3
   request_timeout: 45
   allowed_fails: 3
   cooldown_time: 30
+  drop_params: true
   fallbacks:
     - route-openrouter-default: [route-groq-fast]
     - route-openrouter-auto: [route-groq-fast]
