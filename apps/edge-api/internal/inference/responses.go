@@ -260,9 +260,12 @@ func normalizeResponsesSync(respBody []byte, aliasID string, req ResponsesReques
 	// Build output items from choices.
 	outputItems := buildOutputItemsFromChoices(chatResp.Choices)
 
-	// Translate usage.
+	// Translate usage. Clamp upstream-zero completion_tokens against the
+	// actual output text so we never bill 0 on a non-empty response (see
+	// .planning/debug/flaky-usage-tokens-root-cause.md).
 	var respUsage *ResponsesUsage
 	if chatResp.Usage != nil {
+		clampZeroCompletionUsage(chatResp.Usage, responsesOutputTexts(outputItems), chatResp.ID, aliasID, EndpointResponses)
 		respUsage = chatToResponsesUsage(chatResp.Usage)
 	}
 
