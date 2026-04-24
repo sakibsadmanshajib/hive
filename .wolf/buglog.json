@@ -194,6 +194,22 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-24T16:51:38.487Z"
+    },
+    {
+      "id": "bug-013",
+      "timestamp": "2026-04-24T17:12:51.912Z",
+      "error_message": "Missing error handling in unknown",
+      "file": ".planning/staging/cloud-init.yml",
+      "root_cause": "Code path had no error handling — exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T17:12:51.912Z"
     }
   ]
 }

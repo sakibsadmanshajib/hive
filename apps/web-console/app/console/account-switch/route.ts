@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 import { getViewer } from "@/lib/control-plane/client";
 
+export const runtime = "edge";
+
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
   const accountId = formData.get("account_id");
