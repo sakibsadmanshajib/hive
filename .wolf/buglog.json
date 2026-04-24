@@ -210,6 +210,54 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-24T17:12:51.912Z"
+    },
+    {
+      "id": "bug-014",
+      "timestamp": "2026-04-24T23:04:07.838Z",
+      "error_message": "Significant refactor of ",
+      "file": "apps/edge-api/internal/inference/stream.go",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 26→52 lines (7 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T23:04:07.838Z"
+    },
+    {
+      "id": "bug-015",
+      "timestamp": "2026-04-24T23:05:07.643Z",
+      "error_message": "Significant refactor of ",
+      "file": "apps/edge-api/internal/inference/usage_clamp.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 14→18 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T23:05:07.643Z"
+    },
+    {
+      "id": "bug-016",
+      "timestamp": "2026-04-24T23:10:28.144Z",
+      "error_message": "Significant refactor of ",
+      "file": "deploy/litellm/config.yaml",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 15→47 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yaml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T23:10:28.144Z"
     }
   ]
 }

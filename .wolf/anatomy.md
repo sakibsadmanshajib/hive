@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T18:22:51.622Z
-> Files: 524 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T23:17:35.747Z
+> Files: 528 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
@@ -71,13 +71,15 @@
 - `config.json` (~80 tok)
 - `E2E-EXPANSION-SYSTEM-PROMPT.md` — System Prompt — E2E Test Expansion + CI Wiring (~2393 tok)
 - `MILESTONES.md` — Milestones (~739 tok)
+- `next-session-clamp-responses-streaming.md` — Next Session: Extend usage clamp to responses-API + streaming paths (~1518 tok)
 - `next-session-fix-embed-env-cascade.md` — Next Session: Fix embedding model env fallback cascade (~647 tok)
 - `next-session-fix-js-fixture-path.md` — Next Session: Fix JS fixture path off-by-one + dual-branch masking (~732 tok)
 - `next-session-flaky-usage-tokens.md` — Next Session: Investigate flaky `usage.*_tokens = 0` from chat + responses (~992 tok)
+- `next-session-litellm-route-pinning.md` — Next Session: Pin LiteLLM backing providers for `hive-default` to reduce variance (~1048 tok)
 - `next-session-post-deploy-sdk-replay.md` — Next Session: Post-deploy SDK replay against staging (~816 tok)
 - `next-session-ui-styling.md` — Next Session: web-console UI framework + styling (~1096 tok)
 - `next-session-visual-regression-coverage.md` — Next Session: Add visual regression coverage to CI (~886 tok)
-- `next-sessions-INDEX.md` — Next-session prompt index (~696 tok)
+- `next-sessions-INDEX.md` — Next-session prompt index (~625 tok)
 - `PROJECT.md` — Hive API Platform (~2848 tok)
 - `ROADMAP.md` — Roadmap: Hive API Platform (~1949 tok)
 - `STATE.md` — Project State (~5891 tok)
@@ -565,13 +567,15 @@
 - `orchestrator.go` — Orchestrator (31 fields) (~2550 tok)
 - `reasoning.go` — HTTP handlers: validateReasoningCapability, validateResponsesReasoningCapability (~470 tok)
 - `responses_test.go` — TestResponsesSyncNormalization, TestResponsesRequestTranslation, TestResponsesToolTranslation, TestResponsesReasoningCapabilityGating + 2 more (~3660 tok)
-- `responses.go` — Declares body (~2942 tok)
+- `responses.go` — Declares body (~2824 tok)
 - `routing_client.go` — SelectRouteInput (28 fields); methods: SelectRoute (~795 tok)
-- `stream_responses.go` — responsesEventTranslator (46 fields) (~3791 tok)
+- `stream_responses.go` — Struct: responsesEventTranslator (~3671 tok)
 - `stream_test.go` — TestUsageAccumulatorAccumulate, TestUsageAccumulatorToUsageResponse, TestUsageAccumulatorReasoningTokensInDetails, TestStreamRelayRewritesModel + 4... (~2554 tok)
-- `stream.go` — UsageAccumulator (58 fields); methods: Accumulate, ToUsageResponse (~3049 tok)
+- `stream.go` — Struct: UsageAccumulator (~3261 tok)
 - `types_stream.go` — ChatCompletionChunk is a streaming chunk for chat completions. (~343 tok)
 - `types.go` — Endpoint type constants. (~3165 tok)
+- `usage_clamp_test.go` — TestEstimateCompletionTokens, TestClampZeroCompletionUsage_NilUsage, TestClampZeroCompletionUsage_No (~2482 tok)
+- `usage_clamp.go` (~880 tok)
 
 ## apps/edge-api/internal/matrix/
 
@@ -791,7 +795,7 @@
 
 ## deploy/litellm/
 
-- `config.yaml` (~203 tok)
+- `config.yaml` (~1302 tok)
 
 ## deploy/prometheus/
 
