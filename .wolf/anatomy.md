@@ -1,14 +1,15 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T16:39:07.903Z
-> Files: 516 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T16:51:48.054Z
+> Files: 517 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
 - `feedback_local_first.md` (~218 tok)
+- `feedback_no_direct_main_push.md` (~181 tok)
 - `feedback_respect_deletions.md` (~233 tok)
 - `feedback_wolf_commit.md` (~216 tok)
-- `MEMORY.md` — Memory Index (~486 tok)
+- `MEMORY.md` — Memory Index (~520 tok)
 
 ## ./
 
@@ -61,7 +62,7 @@
 
 ## .github/workflows/
 
-- `ci.yml` — CI: CI (~4358 tok)
+- `ci.yml` — CI: CI (~6522 tok)
 - `deploy-staging.yml` — CI: deploy-staging (~1799 tok)
 - `pr-cleanup.yml` — CI: PR cleanup (~2124 tok)
 
@@ -608,7 +609,7 @@
 
 ## apps/web-console/app/api/budget/
 
-- `route.ts` — Next.js API route: PUT, DELETE (~589 tok)
+- `route.ts` — Next.js API route: PUT, DELETE (~588 tok)
 
 ## apps/web-console/app/auth/callback/
 
