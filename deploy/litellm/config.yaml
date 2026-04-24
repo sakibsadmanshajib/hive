@@ -25,19 +25,28 @@ model_list:
       model: os.environ/GROQ_REASONING_MODEL
       api_key: os.environ/GROQ_API_KEY
 
-  # Embedding routes. OpenRouter multimodal embedding is primary; NVIDIA NIM
-  # (llama-3.2-nemoretriever-300m-embed-v1) is the free fallback when OR
-  # returns 429/5xx. Neither route is paid.
-  - model_name: route-openrouter-embedding
-    litellm_params:
-      model: os.environ/OPENROUTER_EMBEDDING_MODEL
-      api_key: os.environ/OPENROUTER_API_KEY
-    model_info:
-      mode: embedding
+  # Embedding routes. NVIDIA NIM is primary because LiteLLM's OpenRouter
+  # integration does not currently map `/embeddings` requests. OR's
+  # embedding model is still kept in the catalog as a best-effort fallback
+  # in case LiteLLM adds support; for now it returns "Unmapped LLM
+  # provider" and the router cascades straight to NIM.
+  #
+  # NVIDIA Nemotron is asymmetric: it requires `input_type` (query|passage)
+  # to pick between its two encoders. We default to `passage` at the
+  # route level so clients that omit it (including the OpenAI SDK, which
+  # does not surface NVIDIA-specific params) still get a valid response.
   - model_name: route-nvidia-embedding
     litellm_params:
       model: os.environ/NVIDIA_NIM_EMBEDDING_MODEL
       api_key: os.environ/NVIDIA_NIM_API_KEY
+      input_type: passage
+      truncate: NONE
+    model_info:
+      mode: embedding
+  - model_name: route-openrouter-embedding
+    litellm_params:
+      model: os.environ/OPENROUTER_EMBEDDING_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       mode: embedding
 
@@ -57,7 +66,10 @@ litellm_settings:
     - route-openrouter-default: [route-groq-fast]
     - route-openrouter-auto: [route-groq-fast]
     - route-openrouter-fast-fallback: [route-groq-fast]
-    - route-openrouter-embedding: [route-nvidia-embedding]
+    # Embedding fallback is declared in the other direction: if NVIDIA NIM
+    # is ever unhealthy, attempt OR (will currently no-op). Kept symmetric
+    # for future-proofing.
+    - route-nvidia-embedding: [route-openrouter-embedding]
 
 files_settings:
   - custom_llm_provider: openrouter
