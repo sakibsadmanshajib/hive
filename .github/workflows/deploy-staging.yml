@@ -213,6 +213,55 @@ jobs:
           echo "SMOKE FAIL"
           exit 1
 
+  sdk-replay:
+    name: SDK replay against staging URL
+    needs: [detect-changes, deploy-vm]
+    if: needs.detect-changes.outputs.should_deploy == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HIVE_BASE_URL: https://api-hive.scubed.co/v1
+      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+      HIVE_TEST_MODEL: hive-default
+      HIVE_EMBEDDING_MODEL: hive-embedding-default
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Assert model catalog
+        run: |
+          set -euo pipefail
+          body="$(curl -fsS -H "Authorization: Bearer $HIVE_API_KEY" "$HIVE_BASE_URL/models")"
+          echo "$body" | jq -e '.data | length >= 4' >/dev/null
+          for alias in hive-auto hive-default hive-embedding-default hive-fast; do
+            echo "$body" | jq -e --arg id "$alias" '.data | map(.id) | index($id) != null' >/dev/null \
+              || { echo "missing alias: $alias"; exit 1; }
+          done
+          echo "catalog OK"
+
+      - name: Install JS sdk-tests deps
+        working-directory: packages/sdk-tests/js
+        run: npm install --no-audit --no-fund
+
+      - name: Run JS chat-completions replay
+        working-directory: packages/sdk-tests/js
+        run: npx vitest run tests/chat-completions
+
+      - name: Install Python sdk-tests deps
+        working-directory: packages/sdk-tests/python
+        run: pip install -e '.[dev]'
+
+      - name: Run Python health/models/embeddings replay
+        working-directory: packages/sdk-tests/python
+        run: pytest tests/test_health.py tests/test_models.py tests/test_embeddings.py -q
+
   deploy-pages:
     name: Deploy web-console to Cloudflare Pages
     needs: deploy-vm
