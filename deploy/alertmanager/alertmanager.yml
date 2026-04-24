@@ -1,0 +1,23 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ['alertname']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default'
+
+receivers:
+  - name: 'default'
+    # Configure email or Slack webhook URL here for production:
+    # email_configs:
+    #   - to: 'ops@hivegpt.com'
+    #     from: 'alertmanager@hivegpt.com'
+    #     smarthost: 'smtp.example.com:587'
+    # slack_configs:
+    #   - api_url: 'https://hooks.slack.com/services/...'
+    #     channel: '#hive-alerts'
+    webhook_configs:
+      - url: 'http://localhost:9095/webhook'
+        send_resolved: true

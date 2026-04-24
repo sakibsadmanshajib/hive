@@ -1,0 +1,23 @@
+FROM golang:1.24-alpine
+
+RUN apk add --no-cache git
+
+# Install air for hot reload (requires GOTOOLCHAIN=auto for Go 1.24 base)
+ENV GOTOOLCHAIN=auto
+RUN go install github.com/air-verse/air@v1.64.5
+
+WORKDIR /app
+
+# Cache dependencies — copy go.work plus all module manifests so the workspace resolves
+COPY go.work go.work.sum* ./
+COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
+COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
+COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
+RUN cd apps/control-plane && go mod download
+
+COPY apps/control-plane/ ./apps/control-plane/
+COPY packages/storage/ ./packages/storage/
+
+EXPOSE 8081
+
+CMD ["air", "-c", "apps/control-plane/.air.toml"]

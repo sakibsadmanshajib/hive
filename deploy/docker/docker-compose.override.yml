@@ -1,0 +1,35 @@
+services:
+  edge-api:
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/edge-api
+          target: /app/apps/edge-api
+          ignore:
+            - tmp/
+        - action: sync
+          path: ../../packages/openai-contract
+          target: /app/packages/openai-contract
+        - action: rebuild
+          path: ../../apps/edge-api/go.mod
+  control-plane:
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/control-plane
+          target: /app/apps/control-plane
+          ignore:
+            - tmp/
+        - action: rebuild
+          path: ../../apps/control-plane/go.mod
+  web-console:
+    develop:
+      watch:
+        - action: sync
+          path: ../../apps/web-console
+          target: /app/apps/web-console
+          ignore:
+            - node_modules/
+            - .next/
+        - action: rebuild
+          path: ../../apps/web-console/package.json

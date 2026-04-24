@@ -1,263 +1,241 @@
-# Domain Pitfalls: OpenAI API Compliance
+# Pitfalls Research
 
-**Domain:** OpenAI-compatible API proxy (Hive)
-**Researched:** 2026-03-16
-**Confidence:** HIGH (based on OpenAI OpenAPI spec v2.3.0 at `docs/reference/openai-openapi.yml` + codebase analysis with line references)
+**Domain:** OpenAI-compatible AI gateway with prepaid billing and multi-provider routing
+**Researched:** 2026-03-28
+**Confidence:** HIGH
 
 ## Critical Pitfalls
 
-Mistakes that break the official `openai` Python/Node/Go SDKs entirely.
+### Pitfall 1: Compatibility by Approximation
 
-### Pitfall 1: Error Response Shape Mismatch
+**What goes wrong:**
+The product "mostly works" for curl demos, but official OpenAI SDKs break on edge cases such as streaming chunk order, error object shape, unsupported parameter handling, reasoning fields, or file upload semantics.
 
-**What goes wrong:** Hive returns `{ error: "string message" }` but OpenAI SDKs expect a nested object: `{ error: { message, type, param, code } }` where all four fields are required. The Python SDK (`openai >= 1.0`) parses `response["error"]["message"]` and `response["error"]["type"]` -- a flat string causes `TypeError` / `KeyError` crashes in client code.
+**Why it happens:**
+Teams implement a subset of endpoints manually and validate with ad hoc examples instead of treating OpenAI compatibility as a spec + regression-testing problem.
 
-**Current Hive state:** Every error path returns flat strings:
-- `reply.code(401).send({ error: "missing or invalid credentials" })` (auth.ts:115)
-- `reply.code(429).send({ error: "rate limit exceeded" })` (chat-completions.ts:19)
-- `return { error: "unknown model", statusCode: 400 }` (services.ts:616)
-- `return { error: "insufficient credits", statusCode: 402 }` (services.ts:622)
+**How to avoid:**
+Import the OpenAI OpenAPI contract, generate public types, and maintain SDK regression tests plus an API-shape verification suite from the start.
 
-**OpenAI spec requires (schema `Error`, spec line 41894):**
-```json
-{
-  "error": {
-    "message": "Invalid API key provided",
-    "type": "invalid_request_error",
-    "param": null,
-    "code": "invalid_api_key"
-  }
-}
-```
+**Warning signs:**
+- Different output between `stream=false` and `stream=true`
+- SDKs require request rewrites beyond base URL and key
+- Unsupported fields are silently ignored instead of failing in an OpenAI-style way
 
-**Consequences:** Every error from Hive crashes the official SDKs. Users see unhandled exceptions instead of meaningful error messages. This is the single most visible compatibility failure.
-
-**Prevention:** Create a centralized `openaiError(status, message, type, code, param)` helper used by all routes. Map Hive's internal error strings to OpenAI error types:
-- 400 -> `type: "invalid_request_error"`
-- 401 -> `type: "invalid_request_error"`, `code: "invalid_api_key"`
-- 402 -> `type: "insufficient_quota"`, `code: "insufficient_quota"`
-- 429 -> `type: "rate_limit_exceeded"`, `code: "rate_limit_exceeded"`
-- 502 -> `type: "server_error"`, `code: "upstream_error"`
-
-**Detection:** Test with `openai` Python package -- any error response will throw generic exceptions if malformed instead of typed `AuthenticationError`, `RateLimitError`, etc.
-
-**Phase:** Must be addressed in the first phase (error format standardization). Every other compliance feature is less visible than broken errors.
+**Phase to address:**
+Phase 1: Contract import and compatibility harness
 
 ---
 
-### Pitfall 2: Missing `usage` Object in Non-Streaming Responses
+### Pitfall 2: Billing Drift on Streaming and Retries
 
-**What goes wrong:** The `openai` Python SDK accesses `response.usage.prompt_tokens` after every chat completion call. Many users rely on this for cost tracking. If `usage` is `null` or missing, code crashes with `AttributeError`.
+**What goes wrong:**
+Customers get charged twice, undercharged, or blocked incorrectly because retries, streaming disconnects, or webhook races mutate balances inconsistently.
 
-**Current Hive state:** The `chatCompletions` response (services.ts:664-688) returns `choices`, `id`, `object`, `created`, `model` but **no `usage` field at all**. The provider client (openai-compatible-client.ts:92-98) does parse upstream `usage` from OpenRouter, but this data is discarded -- it is stored in `providerResult.usage` but never included in the response body sent to the client.
+**Why it happens:**
+Usage authorization, upstream execution, and ledger finalization are tightly coupled or non-idempotent.
 
-**OpenAI spec requires (`CompletionUsage`, spec line 36030):**
-```json
-{
-  "usage": {
-    "prompt_tokens": 9,
-    "completion_tokens": 12,
-    "total_tokens": 21,
-    "completion_tokens_details": {
-      "reasoning_tokens": 0,
-      "accepted_prediction_tokens": 0,
-      "rejected_prediction_tokens": 0
-    },
-    "prompt_tokens_details": {
-      "cached_tokens": 0
-    }
-  }
-}
-```
+**How to avoid:**
+Use reserve-then-finalize accounting, immutable ledger entries, idempotency keys on every billable request, and reconciliation workers for late or partial upstream outcomes.
 
-**Consequences:** SDK users cannot track token usage. Libraries like LangChain and LlamaIndex that auto-track costs will fail or report zero usage.
+**Warning signs:**
+- Balance changes are updated in-place instead of append-only
+- Usage totals differ between invoice lines and internal ledger
+- Replaying a webhook or request changes a settled balance
 
-**Prevention:** Thread `providerResult.usage` through to the response body. For the nested `*_details` objects, return them with zero defaults if not available from OpenRouter. Never let `usage` be absent -- use `{ prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }` as fallback when upstream does not provide usage (especially free-tier models).
-
-**Detection:** `assert response.usage is not None` in integration tests.
-
-**Phase:** First phase, alongside error format. This is data the provider already returns -- just needs to be passed through.
+**Phase to address:**
+Phase 2: Ledger foundation and payment canonical model
 
 ---
 
-### Pitfall 3: No Streaming Support on `/v1/chat/completions`
+### Pitfall 3: Provider Leakage Through Public Surface
 
-**What goes wrong:** When a client sends `stream: true`, Hive has no streaming codepath. The request parameter is entirely absent from the codebase. The `openai` SDK's streaming client expects SSE (`text/event-stream`) with `data: {chunk}\n\n` framing terminated by `data: [DONE]\n\n`. Receiving a JSON blob instead causes parsing failures.
+**What goes wrong:**
+Customers see Groq/OpenRouter/provider-specific model IDs, error strings, or headers, making Hive aliases meaningless and routing changes breaking.
 
-**Current Hive state:** Zero references to "stream" in `chat-completions.ts` or `services.ts`. The `OpenAICompatibleProviderClient.chat()` always calls `response.json()` (openai-compatible-client.ts:83), never handles streaming responses. The `ChatBody` type does not include a `stream` field.
+**Why it happens:**
+Teams pass upstream values through for convenience instead of enforcing a strict public alias catalog and sanitized response layer.
 
-**OpenAI streaming spec requires:**
-1. Response `Content-Type: text/event-stream`
-2. Each chunk: `data: {"id":"...","object":"chat.completion.chunk","choices":[{"delta":{"content":"..."}}]}\n\n`
-3. The `object` field must be `"chat.completion.chunk"` (not `"chat.completion"`)
-4. Final data line: `data: [DONE]\n\n`
-5. If `stream_options.include_usage` is true, a penultimate chunk with `usage` object and empty `choices: []`
+**How to avoid:**
+Keep a Hive-controlled model catalog, sanitize provider-specific metadata, and translate provider failures into Hive/OpenAI-compatible errors.
 
-**Consequences:** Any SDK user calling `client.chat.completions.create(stream=True)` gets a broken response. Streaming is table-stakes for chat applications -- this blocks most real-world usage.
+**Warning signs:**
+- Public model list includes upstream slugs
+- Response headers or error messages mention upstream vendors
+- Support needs to tell customers which provider was used to explain behavior
 
-**Prevention:**
-1. Parse `stream` boolean from request body
-2. If true: set `Content-Type: text/event-stream`, forward upstream SSE chunks from OpenRouter (which natively supports streaming)
-3. Ensure `data: [DONE]` terminator is always sent, even on upstream error
-4. Handle `stream_options.include_usage` to emit usage in final data chunk before `[DONE]`
-5. Use distinct response shape for chunks: `object: "chat.completion.chunk"`, `delta` not `message`
-
-**Detection:** `for chunk in client.chat.completions.create(stream=True): print(chunk)` -- must produce chunks.
-
-**Phase:** Should be its own dedicated phase (phase 2) due to complexity. Requires changes to provider client, route handler, and response pipeline.
+**Phase to address:**
+Phase 3: Model catalog and routing policy
 
 ---
 
-### Pitfall 4: `/v1/models` Response Missing Required Fields
+### Pitfall 4: Slow Billing in the Hot Path
 
-**What goes wrong:** OpenAI SDKs validate the model object shape. The spec requires `id`, `object`, `created`, and `owned_by` (all four required, spec line 47880). Hive's `/v1/models` returns `id`, `object`, `capability`, `costType` -- missing `created` and `owned_by`, and including non-standard fields.
+**What goes wrong:**
+Every request waits on expensive database queries, payment checks, or analytics writes, inflating latency and defeating the point of a fast AI gateway.
 
-**Current Hive state (models.ts:8-13):**
-```json
-{ "id": "smart-reasoning", "object": "model", "capability": "chat", "costType": "variable" }
-```
+**Why it happens:**
+Billing correctness is implemented as synchronous back-office logic instead of separating hot authorization data from cold reporting data.
 
-**OpenAI expects (spec line 47861-47891):**
-```json
-{ "id": "gpt-4o", "object": "model", "created": 1686935002, "owned_by": "openai" }
-```
+**How to avoid:**
+Keep hot-path checks in Redis + cached account/key policy, use a small reservation query set on Postgres, and defer reporting/alerts to workers.
 
-**Consequences:** The Go SDK (`openai-go`) uses strict struct unmarshaling -- missing required fields cause errors. The Python SDK is more lenient but tools built on it may fail. Non-standard fields (`capability`, `costType`) are harmless but signal to SDK users that this is not a compliant API.
+**Warning signs:**
+- p95 latency spikes when invoice/reporting jobs run
+- Request-serving code writes directly to many reporting tables
+- Rate limit and balance checks require multiple DB joins per request
 
-**Prevention:** Add `created` (use a fixed epoch or model registration timestamp) and `owned_by` (use `"hive"` or the upstream provider name). Keep `capability` and `costType` as extra fields -- they do not break SDKs and provide value.
-
-**Detection:** `client.models.list()` in all three official SDKs should succeed without errors.
-
-**Phase:** First phase -- simple field additions.
-
-## Moderate Pitfalls
-
-### Pitfall 5: Chat Completion ID Format Wrong
-
-**What goes wrong:** Hive generates IDs like `chatcmpl_a1b2c3d4e5f6` (underscore separator, 12-char suffix). OpenAI uses `chatcmpl-a1b2c3d4e5f6...` (hyphen separator, longer random portion). Some downstream tools (monitoring, logging, observability) parse the prefix with `id.startswith("chatcmpl-")` checks.
-
-**Current Hive state:** `chatcmpl_${randomUUID().slice(0, 12)}` (services.ts:667)
-
-**Prevention:** Change to `chatcmpl-${randomUUID()}` (full UUID, hyphen separator). Apply same pattern to other ID prefixes (`resp-`, `embd-`).
-
-**Detection:** Check `response.id.startswith("chatcmpl-")` in tests.
-
-**Phase:** First phase -- trivial string change.
+**Phase to address:**
+Phase 4: Edge API and hot-path authorization
 
 ---
 
-### Pitfall 6: Rate Limit Headers Not Following OpenAI Convention
+### Pitfall 5: No Prompt Storage, No Debug Plan
 
-**What goes wrong:** OpenAI returns specific rate-limit headers: `x-ratelimit-limit-requests`, `x-ratelimit-remaining-requests`, `x-ratelimit-reset-requests`, and token equivalents. The `openai` Python SDK reads these to implement automatic retry-after backoff. Without them, the SDK's built-in retry logic cannot determine when to retry after a 429.
+**What goes wrong:**
+The team honors the no-body-retention rule but cannot explain failures, disputes, or strange usage without prompt logs.
 
-**Current Hive state:** Returns bare `{ error: "rate limit exceeded" }` with no rate-limit headers (chat-completions.ts:19). The in-memory rate limiter tracks per-user request counts but does not expose remaining quota.
+**Why it happens:**
+Metadata design is too thin; teams assume body retention is the only usable observability strategy.
 
-**Prevention:** On 429 responses, include at minimum:
-- `x-ratelimit-limit-requests: N`
-- `x-ratelimit-remaining-requests: 0`
-- `x-ratelimit-reset-requests: <seconds>`
-- `retry-after: <seconds>`
+**How to avoid:**
+Design rich structured metadata from day one: request IDs, account/key/model alias, provider mapping, status, timings, usage counts, pricing inputs, error codes, and hashable fingerprints where appropriate.
 
-**Detection:** Trigger rate limiting and check response headers in test.
+**Warning signs:**
+- Support requests require asking customers for raw request payloads every time
+- Errors are logged only as opaque strings
+- Billing disputes cannot be traced to a deterministic request lifecycle
 
-**Phase:** Phase 1 or 2 -- depends on when rate limiting is hardened.
-
----
-
-### Pitfall 7: OpenRouter Upstream Usage Inconsistency
-
-**What goes wrong:** OpenRouter may return usage in a slightly different shape than OpenAI, or may omit it entirely for some models (especially free-tier models). If Hive forwards `usage` without normalization, some responses will have usage and others will not, creating inconsistent behavior for SDK users.
-
-**Current Hive state:** The `OpenAICompatibleProviderClient` (openai-compatible-client.ts:92-98) handles missing usage as `undefined`, which propagates as a missing field in the client response.
-
-**Prevention:** Always return a `usage` object, even if all values are zero. The OpenAI spec defines `default: 0` for all token fields (spec line 36036). Never let `usage` be `undefined`.
-
-**Detection:** Test with free-tier models that may not return usage from OpenRouter.
-
-**Phase:** First phase, alongside Pitfall 2 fix.
+**Phase to address:**
+Phase 5: Observability and support tooling
 
 ---
 
-### Pitfall 8: Model ID Mapping Transparency
+### Pitfall 6: Payment and FX Reconciliation Drift
 
-**What goes wrong:** Hive uses virtual model IDs (`smart-reasoning`, `guest-free`, `image-basic`) that do not match any real upstream model. The `model` field in responses also uses these virtual IDs (services.ts:670). SDK users who expect to see real model names (e.g., `gpt-4o`, `claude-3.5-sonnet`) in the response will be confused. If a user passes a real upstream model ID (e.g., `openai/gpt-4o`), Hive returns 400 because `findById` only matches virtual IDs.
+**What goes wrong:**
+BDT top-ups, fees, and credited Hive balances cannot be reconstructed later because the system failed to snapshot the exchange rate, payment-method fee, or verified settlement details.
 
-**Prevention:**
-1. Decide on a model ID strategy: either support upstream IDs directly, or maintain a clear mapping
-2. The response `model` field should indicate what actually ran -- consider returning `providerResult.providerModel` (the upstream model) instead of the virtual ID
-3. Document the mapping in `/v1/models` metadata
+**Why it happens:**
+Teams treat FX and payment callbacks as display concerns rather than ledger inputs.
 
-**Detection:** Try `client.chat.completions.create(model="gpt-4o")` -- should either work or return a clear error about model aliases.
+**How to avoid:**
+Persist canonical payment intents with FX rate, fee basis, payment method, tax inputs, gateway IDs, and verified settlement states before minting credits.
 
-**Phase:** Dedicated model catalog phase (listed as an active requirement in PROJECT.md).
+**Warning signs:**
+- Credit minting is based only on the final paid amount
+- BDT purchases cannot explain how the USD peg was derived
+- Gateway callback replays create duplicate top-ups
 
----
-
-### Pitfall 9: Auth Resolution Order Causes Silent Failures
-
-**What goes wrong:** The auth flow (auth.ts:63-105) tries Supabase session token first, then falls back to API key lookup. For `/v1/*` public API routes, a valid Hive API key is first evaluated as a Supabase JWT (which fails silently), then re-evaluated as an API key. This adds latency and could cause confusing failures if Supabase is temporarily down.
-
-**Prevention:** Use route-aware auth strategy. For `/v1/*` routes, try API key resolution first (cheaper, no external call needed). For web routes, try session auth first.
-
-**Detection:** Measure auth latency for API key requests -- if it includes a Supabase round-trip, the ordering is wrong.
-
-**Phase:** First phase -- auth optimization for public API routes.
-
-## Minor Pitfalls
-
-### Pitfall 10: Missing `system_fingerprint` Field
-
-**What goes wrong:** OpenAI responses include `system_fingerprint` (e.g., `"fp_44709d6fcb"`). While not strictly required for SDK function, some observability tools and caching layers key on this value.
-
-**Prevention:** Return `system_fingerprint: null` explicitly in the response body.
-
-**Phase:** First phase -- trivial addition.
+**Phase to address:**
+Phase 2: Payments and FX snapshots
 
 ---
 
-### Pitfall 11: `finish_reason` Hardcoded as `"stop"`
+### Pitfall 7: Chasing the Entire Surface Without a Capability Matrix
 
-**What goes wrong:** OpenAI defines specific `finish_reason` values: `"stop"`, `"length"`, `"content_filter"`, `"tool_calls"`. Hive hardcodes `"stop"` (services.ts:674). When upstream providers return `"length"` (max tokens hit) or `"content_filter"`, Hive masks this, hiding important information.
+**What goes wrong:**
+Hive promises the full OpenAI public surface, but some providers cannot support a given endpoint or parameter combination, leading to silent failures and confusing inconsistencies.
 
-**Prevention:** Pass through `finish_reason` from the upstream provider response. Add it to `ProviderChatResponse` type.
+**Why it happens:**
+The team treats "endpoint implemented" as binary and ignores provider capability gaps.
 
-**Phase:** First phase -- requires threading the field through from provider response.
+**How to avoid:**
+Maintain a public endpoint matrix and an internal provider capability matrix that explicitly marks pass-through, translated, emulated, and unsupported behavior.
 
----
+**Warning signs:**
+- New endpoints are marked complete without provider-level test coverage
+- Unsupported behavior differs by provider with no documented rule
+- Internal routing chooses providers that cannot honor requested parameters
 
-### Pitfall 12: Fastify Built-in Errors Not Wrapped
+**Phase to address:**
+Phase 6: Surface expansion and capability coverage
 
-**What goes wrong:** Fastify generates its own 400 errors for malformed JSON, missing content-type, and payload too large. These use Fastify's format (`{ statusCode, error, message }`), not OpenAI's. SDK users sending malformed requests get non-OpenAI error shapes.
+## Technical Debt Patterns
 
-**Prevention:** Add a Fastify `setErrorHandler` that catches all errors (including Fastify-generated ones) and wraps them in OpenAI error format. Also handle `setNotFoundHandler` to return OpenAI-shaped 404s.
+| Shortcut | Immediate Benefit | Long-term Cost | When Acceptable |
+|----------|-------------------|----------------|-----------------|
+| Store balances as mutable counters only | Easy to query | No audit trail, hard reconciliation, support pain | Never |
+| Use provider-native model IDs as public IDs | Fast initial setup | Breaks routing freedom and pricing abstraction | Never |
+| Keep analytics in Postgres only | Simpler ops | Reporting queries may eventually hit the billing database too hard | Acceptable until real usage data proves otherwise |
+| Implement only curl-smoke compatibility tests | Faster early demo | Misses SDK, SSE, and schema regressions | Never |
+| Start with Stripe-only billing and no payment abstraction | Faster global card launch | Harder to add bKash/SSLCommerz cleanly later | Acceptable only if the Bangladesh rail integration is intentionally phased, which is not this launch |
 
-**Detection:** Send malformed JSON to `/v1/chat/completions` and verify the error matches OpenAI format.
+## Integration Gotchas
 
-**Phase:** First phase -- part of error standardization.
+| Integration | Common Mistake | Correct Approach |
+|-------------|----------------|------------------|
+| OpenRouter | Assuming it is a perfect OpenAI clone | Treat it as "very similar with small differences" and normalize through Hive compatibility rules. |
+| Groq | Passing unsupported OpenAI fields straight through | Filter/translate unsupported fields and return OpenAI-style errors when necessary. |
+| Stripe | Using preview billing-credit features as the only prepaid ledger | Keep Hive's internal ledger authoritative and let Stripe support checkout/invoicing/tax. |
+| bKash | Treating payment create/execute as one step | Follow the create → redirect/callback → execute/query verification flow and persist gateway references. |
+| SSLCommerz | Letting gateway-specific business logic leak into product code | Wrap SSLCommerz behind the same canonical payment intent abstraction as Stripe and bKash. |
+| XE | Fetching live FX during reconciliation | Snapshot the exact FX rate used at quote/top-up time and store it with the transaction. |
 
-## Phase-Specific Warnings
+## Performance Traps
 
-| Phase Topic | Likely Pitfall | Mitigation |
-|-------------|---------------|------------|
-| Error standardization | Forgetting Fastify's built-in 404/400/413 errors | Add `setErrorHandler` + `setNotFoundHandler` that wrap in OpenAI format |
-| Error standardization | Not mapping 402 (Hive-specific) to a sensible OpenAI type | Use `insufficient_quota` type -- matches what OpenAI returns for exhausted billing |
-| Streaming | SSE line ending differences (`\n\n` vs `\r\n\r\n`) | Use `\n\n` consistently (matches OpenAI) and test with raw HTTP client |
-| Streaming | Forgetting `data: [DONE]` terminator | Stream hangs forever on client side. Always emit `[DONE]` even on error |
-| Streaming | Upstream OpenRouter disconnects mid-stream | Emit `[DONE]` on upstream failure, never leave the stream open |
-| Streaming | Reusing non-streaming response builder for chunks | Chunks need `"chat.completion.chunk"` object type and `delta` not `message` |
-| Streaming | Backpressure from slow clients | Use Node.js stream piping with Fastify `reply.raw` + proper backpressure |
-| Streaming | `stream_options.include_usage` sent by default | Only include usage chunk when client explicitly requests it via `stream_options` |
-| Usage telemetry | OpenRouter free models return no usage | Always return `usage` with zero defaults, never `undefined` |
-| Embeddings endpoint | Wrong `object` type on items | Must be `"embedding"` per item and `"list"` at top level per spec |
-| Model catalog | Hardcoded model list becomes stale | Pull from OpenRouter `/models` endpoint with cache TTL |
-| Auth | SDK sends `Authorization: Bearer` only | Hive already supports this (auth.ts:81) -- maintain this behavior, do not break it |
+| Trap | Symptoms | Prevention | When It Breaks |
+|------|----------|------------|----------------|
+| Heavy billing joins on every request | p95/p99 latency climbs with active customers | Cache key/account policy in Redis and keep the authorization query path minimal | Often visible well before 1k active users |
+| Writing analytics synchronously in the request path | Slow streaming start and backpressure | Use an outbox and workers for reporting/event fan-out | Breaks once traffic is bursty |
+| Single database for OLTP + high-cardinality analytics forever | Lock contention and slow dashboards | Move usage/event analytics to ClickHouse or equivalent when evidence justifies it | Common around sustained multi-million event volumes |
+
+## Security Mistakes
+
+| Mistake | Risk | Prevention |
+|---------|------|------------|
+| Logging prompt/response bodies "temporarily" | Violates privacy posture and expands breach impact | Enforce structured metadata-only logging and explicit redaction tests. |
+| Weak separation between public API keys and internal provider secrets | Full provider compromise if customer keys are confused with upstream credentials | Keep provider credentials server-only and segregated by service/account. |
+| Missing webhook signature verification and replay protection | Fraudulent credit minting or duplicated settlements | Verify signatures, persist idempotency/replay windows, and reconcile asynchronously. |
+| Returning raw upstream errors | Provider leakage and inconsistent customer behavior | Normalize upstream failures into Hive/OpenAI-compatible error objects. |
+
+## UX Pitfalls
+
+| Pitfall | User Impact | Better Approach |
+|---------|-------------|-----------------|
+| Credits feel opaque | Customers do not trust pricing or invoices | Show fiat reference price, Hive Credit conversion, FX rate snapshot, fee/tax line items, and per-model cost detail. |
+| Budgets stop traffic without warning | Teams get broken automations | Add configurable alerts and clear dashboard states before hard cutoffs. |
+| API key settings are too coarse | Teams cannot safely separate projects or customers | Support per-key names, model allowlists, budgets, expirations, and usage drill-down. |
+
+## "Looks Done But Isn't" Checklist
+
+- [ ] **Chat / Responses compatibility:** Often missing SDK and SSE regression coverage — verify with official OpenAI SDKs and streamed golden cases.
+- [ ] **Prepaid billing:** Often missing idempotent reservation/finalization — verify duplicate request and reconnect scenarios.
+- [ ] **Payments:** Often missing webhook replay handling and FX snapshots — verify credits are minted exactly once and can be reconstructed later.
+- [ ] **Model catalog:** Often missing provider capability metadata — verify routing never picks a provider that cannot satisfy the request.
+- [ ] **No-body observability:** Often missing support-grade metadata — verify incidents can be debugged without prompt storage.
+
+## Recovery Strategies
+
+| Pitfall | Recovery Cost | Recovery Steps |
+|---------|---------------|----------------|
+| Compatibility regressions | MEDIUM | Freeze public contract, diff against OpenAI spec, rerun SDK suites, patch translation layer. |
+| Billing drift | HIGH | Halt automated credits where needed, rebuild from immutable ledger + provider usage, issue adjustment entries, publish incident notes. |
+| Payment duplication | HIGH | Stop minting path, reconcile against gateway settlement IDs, void duplicate grants, harden idempotency logic. |
+| Provider leakage | LOW | Rotate public alias metadata, sanitize responses, add regression tests on headers/errors/model lists. |
+
+## Pitfall-to-Phase Mapping
+
+| Pitfall | Prevention Phase | Verification |
+|---------|------------------|--------------|
+| Compatibility by approximation | Phase 1 | Official SDK and streamed contract suites pass |
+| Billing drift on streaming and retries | Phase 2 | Duplicate/replay tests preserve exact balances |
+| Provider leakage | Phase 3 | Public models/errors/headers never reveal upstream providers |
+| Slow billing in the hot path | Phase 4 | Edge latency stays stable under billing/reporting load |
+| No prompt storage, no debug plan | Phase 5 | Support investigations succeed using metadata only |
+| Surface expansion without capability matrix | Phase 6 | Every endpoint/provider combo is explicitly classified and tested |
 
 ## Sources
 
-- OpenAI OpenAPI spec v2.3.0: `docs/reference/openai-openapi.yml` (local, authoritative)
-- Hive codebase analysis with line references: routes, services, provider clients (local)
-- OpenAI Error schema: spec lines 41894-41913
-- OpenAI CompletionUsage schema: spec lines 36030-36060
-- OpenAI Model schema: spec lines 47861-47884
-- OpenAI streaming chunk schema: spec lines 37371-37421
-- OpenAI stream_options: spec lines 35590-35596
+- OpenAI API reference and cookbook verification guide
+- Groq OpenAI compatibility docs
+- OpenRouter API reference and provider routing docs
+- LiteLLM docs
+- Stripe billing/tax docs
+- bKash developer docs
+- SSLCommerz merchant/developer docs
+- XE Currency Data API help docs
+
+---
+*Pitfalls research for: OpenAI-compatible AI gateway and developer billing platform*
+*Researched: 2026-03-28*

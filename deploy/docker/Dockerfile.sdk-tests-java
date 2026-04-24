@@ -1,0 +1,6 @@
+FROM gradle:8-jdk21-alpine
+WORKDIR /tests
+COPY packages/sdk-tests/java/build.gradle packages/sdk-tests/java/settings.gradle ./
+RUN gradle dependencies --no-daemon || true
+COPY packages/sdk-tests/java/ ./
+CMD ["gradle", "test", "--no-daemon"]

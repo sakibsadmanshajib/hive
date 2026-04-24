@@ -1,0 +1,24 @@
+# Next.js
+.next/
+out/
+
+# Dependencies
+node_modules/
+
+# Build output
+build/
+dist/
+
+# Local env files
+.env*.local
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Override root-level lib/ exclusion (Python build artifact pattern)
+# The lib/ directory here contains Next.js source code, not Python build artifacts.
+!lib/

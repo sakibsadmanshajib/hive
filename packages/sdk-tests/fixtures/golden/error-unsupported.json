@@ -1,0 +1,1 @@
+{"error": {"message": "The endpoint POST /v1/chat/completions is planned but not yet available. Check the Hive support matrix for current status.", "type": "unsupported_endpoint", "param": null, "code": "endpoint_not_available"}}

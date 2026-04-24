@@ -1,0 +1,597 @@
+overlay: 1.1.0
+info:
+  title: Hive Support Status Overlay
+  version: 0.1.0
+actions:
+  - target: "$.paths['/assistants'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/assistants'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/assistants/{assistant_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/assistants/{assistant_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/assistants/{assistant_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/audio/speech'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/audio/transcriptions'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/audio/translations'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/batches'].get"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 7
+  - target: "$.paths['/batches'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 7
+  - target: "$.paths['/batches/{batch_id}'].get"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 7
+  - target: "$.paths['/batches/{batch_id}/cancel'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 7
+  - target: "$.paths['/chat/completions'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/chat/completions'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/chat/completions/{completion_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/chat/completions/{completion_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/chat/completions/{completion_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/chat/completions/{completion_id}/messages'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/completions'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/embeddings'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/evals'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs/{run_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs/{run_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs/{run_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs/{run_id}/output_items'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/files'].get"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/files'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/files/{file_id}'].get"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/files/{file_id}'].delete"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/files/{file_id}/content'].get"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/jobs'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/jobs'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/jobs/{fine_tuning_job_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/jobs/{fine_tuning_job_id}/cancel'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/fine_tuning/jobs/{fine_tuning_job_id}/events'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/images/edits'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/images/generations'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/images/variations'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/models'].get"
+    update:
+      x-hive-status: "supported_now"
+      x-hive-phase: 1
+  - target: "$.paths['/models/{model}'].get"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 1
+  - target: "$.paths['/models/{model}'].delete"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 1
+  - target: "$.paths['/moderations'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/organization/admin_api_keys'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/admin_api_keys'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/admin_api_keys/{key_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/admin_api_keys/{key_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/audit_logs'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates/activate'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates/deactivate'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates/{certificate_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates/{certificate_id}'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/certificates/{certificate_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/costs'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/invites'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/invites'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/invites/{invite_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/invites/{invite_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/api_keys'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/api_keys/{key_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/api_keys/{key_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/archive'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/certificates'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/certificates/activate'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/certificates/deactivate'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/rate_limits'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/rate_limits/{rate_limit_id}'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/service_accounts'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/service_accounts'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/service_accounts/{service_account_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/service_accounts/{service_account_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/users'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/users'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/users/{user_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/users/{user_id}'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/projects/{project_id}/users/{user_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/audio_speeches'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/audio_transcriptions'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/code_interpreter_sessions'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/completions'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/embeddings'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/images'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/moderations'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/usage/vector_stores'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/users'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/users/{user_id}'].get"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/users/{user_id}'].post"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/organization/users/{user_id}'].delete"
+    update:
+      x-hive-status: "out_of_scope"
+      x-hive-phase: null
+  - target: "$.paths['/realtime/sessions'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/realtime/transcription_sessions'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/responses'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 6
+  - target: "$.paths['/responses/{response_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/responses/{response_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/responses/{response_id}/input_items'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/runs'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/messages'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/messages'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/messages/{message_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/messages/{message_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/messages/{message_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs/{run_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs/{run_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs/{run_id}/cancel'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs/{run_id}/steps'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs/{run_id}/steps/{step_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/threads/{thread_id}/runs/{run_id}/submit_tool_outputs'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/uploads'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/uploads/{upload_id}/cancel'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/uploads/{upload_id}/complete'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/uploads/{upload_id}/parts'].post"
+    update:
+      x-hive-status: "planned_for_launch"
+      x-hive-phase: 5
+  - target: "$.paths['/vector_stores'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/file_batches'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/file_batches/{batch_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/file_batches/{batch_id}/files'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/files'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/files'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/files/{file_id}'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/files/{file_id}'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/files/{file_id}'].delete"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/files/{file_id}/content'].get"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null
+  - target: "$.paths['/vector_stores/{vector_store_id}/search'].post"
+    update:
+      x-hive-status: "explicitly_unsupported_at_launch"
+      x-hive-phase: null

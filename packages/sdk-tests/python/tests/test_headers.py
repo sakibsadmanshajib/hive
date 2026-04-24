@@ -1,0 +1,57 @@
+import os
+
+import httpx
+
+
+_AUTH = {"Authorization": f"Bearer {os.environ.get('HIVE_API_KEY') or 'test-key'}"}
+
+
+def test_compat_headers_on_success_response(base_url: str):
+    """Compatibility headers appear on successful responses."""
+    response = httpx.get(f"{base_url}/models", headers=_AUTH)
+
+    assert response.status_code == 200
+
+    request_id = response.headers.get("x-request-id")
+    assert request_id is not None
+    assert len(request_id) > 0
+
+    assert response.headers.get("openai-version") == "2020-10-01"
+
+    processing_ms = response.headers.get("openai-processing-ms")
+    assert processing_ms is not None
+    assert int(processing_ms) >= 0
+
+
+def test_compat_headers_on_error_response(base_url: str):
+    """Compatibility headers appear on error responses too.
+
+    GET /v1/models/{model} is planned_for_launch — stable 404 from the
+    matrix middleware. Headers must be injected regardless.
+    """
+    response = httpx.get(f"{base_url}/models/hive-default", headers=_AUTH)
+
+    assert response.status_code == 404
+
+    request_id = response.headers.get("x-request-id")
+    assert request_id is not None
+    assert len(request_id) > 0
+
+    assert response.headers.get("openai-version") == "2020-10-01"
+
+    processing_ms = response.headers.get("openai-processing-ms")
+    assert processing_ms is not None
+    assert int(processing_ms) >= 0
+
+
+def test_unique_request_ids(base_url: str):
+    """Each request gets a unique x-request-id."""
+    r1 = httpx.get(f"{base_url}/models", headers=_AUTH)
+    r2 = httpx.get(f"{base_url}/models", headers=_AUTH)
+
+    id1 = r1.headers.get("x-request-id")
+    id2 = r2.headers.get("x-request-id")
+
+    assert id1 is not None
+    assert id2 is not None
+    assert id1 != id2

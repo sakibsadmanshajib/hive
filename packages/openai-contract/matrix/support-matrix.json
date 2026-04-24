@@ -1,0 +1,1042 @@
+{
+  "version": "0.1.0",
+  "generated": "2026-03-28",
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/v1/assistants",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of assistants."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/assistants",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create an assistant with a model and instructions."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/assistants/{assistant_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves an assistant."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/assistants/{assistant_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Modifies an assistant."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/assistants/{assistant_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete an assistant."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/speech",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Text-to-speech"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/transcriptions",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Speech-to-text"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/audio/translations",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Audio translation to English"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/batches",
+      "status": "supported_now",
+      "phase": 7,
+      "notes": "List batches"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/batches",
+      "status": "supported_now",
+      "phase": 7,
+      "notes": "Create batch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/batches/{batch_id}",
+      "status": "supported_now",
+      "phase": 7,
+      "notes": "Retrieve batch"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/batches/{batch_id}/cancel",
+      "status": "supported_now",
+      "phase": 7,
+      "notes": "Cancel batch"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/chat/completions",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "List stored Chat Completions. Only Chat Completions that have been stored"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Chat completion inference"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/chat/completions/{completion_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get a stored chat completion. Only Chat Completions that have been created"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/chat/completions/{completion_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Modify a stored chat completion. Only Chat Completions that have been"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/chat/completions/{completion_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete a stored chat completion. Only Chat Completions that have been"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/chat/completions/{completion_id}/messages",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get the messages in a stored chat completion. Only Chat Completions that"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/completions",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Legacy completion inference"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/embeddings",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Text embeddings"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/evals",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "List evaluations for a project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/evals",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create the structure of an evaluation that can be used to test a model's perform"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/evals/{eval_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get an evaluation by ID."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/evals/{eval_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Update certain properties of an evaluation."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/evals/{eval_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete an evaluation."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/evals/{eval_id}/runs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get a list of runs for an evaluation."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/evals/{eval_id}/runs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a new evaluation run. This is the endpoint that will kick off grading."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/evals/{eval_id}/runs/{run_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get an evaluation run by ID."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/evals/{eval_id}/runs/{run_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Cancel an ongoing evaluation run."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/evals/{eval_id}/runs/{run_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete an eval run."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/evals/{eval_id}/runs/{run_id}/output_items",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get a list of output items for an evaluation run."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get an evaluation run output item by ID."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "List files"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/files",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Upload a file"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Retrieve file metadata"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/files/{file_id}",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Delete a file"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/files/{file_id}/content",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Download file content"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "**NOTE:** This endpoint requires an [admin API key](../admin-api-keys)."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "**NOTE:** Calling this endpoint requires an [admin API key](../admin-api-keys)."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "**NOTE:** This endpoint requires an [admin API key](../admin-api-keys)."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/fine_tuning/jobs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "List your organization's fine-tuning jobs"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/fine_tuning/jobs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Creates a fine-tuning job which begins the process of creating a new model from "
+    },
+    {
+      "method": "GET",
+      "path": "/v1/fine_tuning/jobs/{fine_tuning_job_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get info about a fine-tuning job."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Immediately cancel a fine-tune job."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "List checkpoints for a fine-tuning job."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/fine_tuning/jobs/{fine_tuning_job_id}/events",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Get status updates for a fine-tuning job."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/edits",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Image editing"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/generations",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Image generation"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/images/variations",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Creates a variation of a given image. This endpoint only supports `dall-e-2`."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models",
+      "status": "supported_now",
+      "phase": 1,
+      "notes": "Lists available models"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/models/{model}",
+      "status": "planned_for_launch",
+      "phase": 1,
+      "notes": "Retrieves a model instance"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/models/{model}",
+      "status": "planned_for_launch",
+      "phase": 1,
+      "notes": "Delete a fine-tuned model"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/moderations",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Classifies if text and/or image inputs are potentially harmful. Learn"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/admin_api_keys",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "List organization API keys"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/admin_api_keys",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Create an organization admin API key"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/admin_api_keys/{key_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieve a single organization API key"
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/admin_api_keys/{key_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Delete an organization admin API key"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/audit_logs",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "List user actions and configuration changes within this organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/certificates",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "List uploaded certificates for this organization."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/certificates",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Upload a certificate to the organization. This does **not** automatically activa"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/certificates/activate",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Activate certificates at the organization level."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/certificates/deactivate",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Deactivate certificates at the organization level."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/certificates/{certificate_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get a certificate that has been uploaded to the organization."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/certificates/{certificate_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Modify a certificate. Note that only the name can be modified."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/certificates/{certificate_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Delete a certificate from the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/costs",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get costs details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/invites",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Returns a list of invites in the organization."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/invites",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Create an invite for a user to the organization. The invite must be accepted by "
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/invites/{invite_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieves an invite."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/invites/{invite_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Delete an invite. If the invite has already been accepted, it cannot be deleted."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Returns a list of projects."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Create a new project in the organization. Projects can be created and archived, "
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieves a project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Modifies a project in the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/api_keys",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Returns a list of API keys in the project."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/api_keys/{key_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieves an API key in the project."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/projects/{project_id}/api_keys/{key_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Deletes an API key from the project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/archive",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Archives a project in the organization. Archived projects cannot be used or upda"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/certificates",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "List certificates for this project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/certificates/activate",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Activate certificates at the project level."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/certificates/deactivate",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Deactivate certificates at the project level."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/rate_limits",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Returns the rate limits per model for a project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/rate_limits/{rate_limit_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Updates a project rate limit."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/service_accounts",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Returns a list of service accounts in the project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/service_accounts",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Creates a new service account in the project. This also returns an unredacted AP"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/service_accounts/{service_account_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieves a service account in the project."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/projects/{project_id}/service_accounts/{service_account_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Deletes a service account from the project."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/users",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Returns a list of users in the project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/users",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Adds a user to the project. Users must already be members of the organization to"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/projects/{project_id}/users/{user_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieves a user in the project."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/projects/{project_id}/users/{user_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Modifies a user's role in the project."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/projects/{project_id}/users/{user_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Deletes a user from the project."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/audio_speeches",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get audio speeches usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/audio_transcriptions",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get audio transcriptions usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/code_interpreter_sessions",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get code interpreter sessions usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/completions",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get completions usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/embeddings",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get embeddings usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/images",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get images usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/moderations",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get moderations usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/usage/vector_stores",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Get vector stores usage details for the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/users",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Lists all of the users in the organization."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/organization/users/{user_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Retrieves a user by their identifier."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/organization/users/{user_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Modifies a user's role in the organization."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/organization/users/{user_id}",
+      "status": "out_of_scope",
+      "phase": null,
+      "notes": "Deletes a user from the organization."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/realtime/sessions",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create an ephemeral API token for use in client-side applications with the"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/realtime/transcription_sessions",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create an ephemeral API token for use in client-side applications with the"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/responses",
+      "status": "supported_now",
+      "phase": 6,
+      "notes": "Responses API inference"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/responses/{response_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a model response with the given ID."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/responses/{response_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Deletes a model response with the given ID."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/responses/{response_id}/input_items",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of input items for a given response."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a thread."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/runs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a thread and run it in one request."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a thread."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Modifies a thread."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/threads/{thread_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete a thread."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}/messages",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of messages for a given thread."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}/messages",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a message."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}/messages/{message_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieve a message."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}/messages/{message_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Modifies a message."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/threads/{thread_id}/messages/{message_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Deletes a message."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}/runs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of runs belonging to a thread."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}/runs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a run."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}/runs/{run_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a run."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}/runs/{run_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Modifies a run."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}/runs/{run_id}/cancel",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Cancels a run that is `in_progress`."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}/runs/{run_id}/steps",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of run steps belonging to a run."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/threads/{thread_id}/runs/{run_id}/steps/{step_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a run step."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "When a run has the `status: \"requires_action\"` and `required_action.type` is `su"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/uploads",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Create upload"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/uploads/{upload_id}/cancel",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Cancel upload"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/uploads/{upload_id}/complete",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Complete upload"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/uploads/{upload_id}/parts",
+      "status": "supported_now",
+      "phase": 5,
+      "notes": "Add upload part"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of vector stores."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a vector store."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores/{vector_store_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a vector store."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores/{vector_store_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Modifies a vector store."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/vector_stores/{vector_store_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete a vector store."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores/{vector_store_id}/file_batches",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a vector store file batch."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a vector store file batch."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Cancel a vector store file batch. This attempts to cancel the processing of file"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of vector store files in a batch."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores/{vector_store_id}/files",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Returns a list of vector store files."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores/{vector_store_id}/files",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Create a vector store file by attaching a [File](/docs/api-reference/files) to a"
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores/{vector_store_id}/files/{file_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieves a vector store file."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores/{vector_store_id}/files/{file_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Update attributes on a vector store file."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/vector_stores/{vector_store_id}/files/{file_id}",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Delete a vector store file. This will remove the file from the vector store but "
+    },
+    {
+      "method": "GET",
+      "path": "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Retrieve the parsed contents of a vector store file."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/vector_stores/{vector_store_id}/search",
+      "status": "explicitly_unsupported_at_launch",
+      "phase": null,
+      "notes": "Search a vector store for relevant chunks based on a query and file attributes f"
+    }
+  ]
+}

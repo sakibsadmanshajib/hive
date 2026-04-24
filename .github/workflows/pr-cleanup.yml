@@ -1,31 +1,178 @@
-name: PR Cleanup
+name: PR cleanup
 
 on:
   pull_request:
-    types:
-      - closed
+    types: [closed]
+
+concurrency:
+  group: pr-cleanup-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
-  pull-requests: write
-
-concurrency:
-  group: cleanup-${{ github.workflow }}-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
+  pull-requests: read
 
 jobs:
   cleanup:
-    name: Post-merge cleanup
-    if: github.event.pull_request.merged == true
+    name: Purge CI test data + branch
     runs-on: ubuntu-latest
+    # Secrets only available on same-repo PRs — forks never reach here
+    if: github.event.pull_request.head.repo.full_name == github.repository
     timeout-minutes: 10
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Install psql + awscli
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client jq
+          python3 -m pip install --quiet --upgrade awscli
 
-      - name: Run post-merge cleanup script
+      - name: Resolve CI api_key_id + account_id
+        id: keys
+        env:
+          HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # control-plane hashes raw key as sha256 hex lowercase (apps/control-plane/internal/apikeys/service.go:575)
+          HASH=$(printf '%s' "$HIVE_API_KEY" | sha256sum | awk '{print $1}')
+
+          row=$(psql -At -F'|' -v ON_ERROR_STOP=1 -c \
+            "SELECT id, account_id FROM public.api_keys WHERE token_hash = '$HASH' LIMIT 1;")
+
+          if [ -z "$row" ]; then
+            echo "::warning::CI api_key not found in api_keys table — nothing to clean"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          KEY_ID="${row%|*}"
+          ACCT_ID="${row#*|}"
+
+          # Safety: confirm account is CI-dedicated (no other keys under this account)
+          OTHER=$(psql -At -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.api_keys WHERE account_id = '$ACCT_ID' AND id <> '$KEY_ID';")
+
+          echo "key_id=$KEY_ID"       >> "$GITHUB_OUTPUT"
+          echo "account_id=$ACCT_ID"  >> "$GITHUB_OUTPUT"
+          echo "other_keys=$OTHER"    >> "$GITHUB_OUTPUT"
+          echo "skip=0"               >> "$GITHUB_OUTPUT"
+
+          echo "CI api_key_id: $KEY_ID"
+          echo "CI account_id: $ACCT_ID"
+          echo "Other keys under account: $OTHER"
+
+      - name: List CI-uploaded storage paths
+        if: steps.keys.outputs.skip != '1'
+        id: paths
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          ACCT_ID: ${{ steps.keys.outputs.account_id }}
+          OTHER: ${{ steps.keys.outputs.other_keys }}
+        run: |
+          set -euo pipefail
+          if [ "$OTHER" != "0" ]; then
+            echo "::warning::Account $ACCT_ID has $OTHER other key(s) — skipping storage path listing to avoid wiping non-CI files"
+            : > /tmp/storage_paths.txt
+            exit 0
+          fi
+
+          psql -At -v ON_ERROR_STOP=1 -c \
+            "SELECT storage_path FROM public.files WHERE account_id = '$ACCT_ID'
+             UNION
+             SELECT storage_path FROM public.uploads WHERE account_id = '$ACCT_ID';" \
+            > /tmp/storage_paths.txt
+
+          count=$(wc -l < /tmp/storage_paths.txt)
+          echo "Found $count object paths to remove"
+          head -5 /tmp/storage_paths.txt || true
+
+      - name: Delete objects from Supabase Storage (S3)
+        if: steps.keys.outputs.skip != '1' && steps.keys.outputs.other_keys == '0'
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.S3_ACCESS_KEY }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.S3_SECRET_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.S3_REGION }}
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+          BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+        run: |
+          set -euo pipefail
+          [ -s /tmp/storage_paths.txt ] || { echo "no paths to delete"; exit 0; }
+
+          while IFS= read -r path; do
+            [ -z "$path" ] && continue
+            # Storage path convention in this codebase is "<bucket>/<object-key>".
+            # If the convention differs, tolerate both shapes.
+            bucket="${path%%/*}"
+            key="${path#*/}"
+            if [ "$bucket" = "$BUCKET_FILES" ] || [ "$bucket" = "$BUCKET_IMAGES" ]; then
+              aws --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$bucket/$key" || true
+            else
+              # Fall back — try both buckets
+              aws --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$BUCKET_FILES/$path" 2>/dev/null || true
+              aws --endpoint-url "$S3_ENDPOINT" s3 rm "s3://$BUCKET_IMAGES/$path" 2>/dev/null || true
+            fi
+          done < /tmp/storage_paths.txt
+
+      - name: Delete CI DB rows
+        if: steps.keys.outputs.skip != '1'
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          KEY_ID: ${{ steps.keys.outputs.key_id }}
+          ACCT_ID: ${{ steps.keys.outputs.account_id }}
+          OTHER: ${{ steps.keys.outputs.other_keys }}
+        run: |
+          set -euo pipefail
+          # api_key_id-scoped deletes are always safe (the key is dedicated)
+          psql -v ON_ERROR_STOP=1 <<SQL
+            BEGIN;
+            DELETE FROM public.usage_events WHERE api_key_id = '$KEY_ID';
+            DELETE FROM public.batches      WHERE api_key_id = '$KEY_ID';
+            -- api_key_usage_rollups / api_key_budget_windows / api_key_rate_policies
+            -- cascade on api_keys.id, but we keep the key row itself, so delete explicitly:
+            DELETE FROM public.api_key_usage_rollups   WHERE api_key_id = '$KEY_ID';
+            DELETE FROM public.api_key_budget_windows  WHERE api_key_id = '$KEY_ID';
+            DELETE FROM public.api_key_rate_policies   WHERE api_key_id = '$KEY_ID';
+            COMMIT;
+          SQL
+
+          # account-scoped deletes only if the account has no other keys
+          if [ "$OTHER" = "0" ]; then
+            psql -v ON_ERROR_STOP=1 <<SQL
+              BEGIN;
+              DELETE FROM public.upload_parts
+                WHERE upload_id IN (SELECT id FROM public.uploads WHERE account_id = '$ACCT_ID');
+              DELETE FROM public.uploads WHERE account_id = '$ACCT_ID';
+              DELETE FROM public.files   WHERE account_id = '$ACCT_ID';
+              COMMIT;
+          SQL
+          else
+            echo "::warning::account has other keys — skipping files/uploads purge"
+          fi
+
+      - name: Delete head branch (merged PRs only)
+        if: github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ github.token }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/pr-cleanup.sh
+          REF: ${{ github.event.pull_request.head.ref }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Skip protected / base branches
+          if [ "$REF" = "main" ] || [ "$REF" = "master" ]; then
+            echo "refusing to delete protected branch $REF"
+            exit 0
+          fi
+          gh api -X DELETE "repos/$REPO/git/refs/heads/$REF" || \
+            echo "branch $REF already deleted or missing"

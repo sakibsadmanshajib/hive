@@ -1,0 +1,23 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "hive-default",
+      "object": "model",
+      "created": 1716935002,
+      "owned_by": "hive"
+    },
+    {
+      "id": "hive-fast",
+      "object": "model",
+      "created": 1716935003,
+      "owned_by": "hive"
+    },
+    {
+      "id": "hive-auto",
+      "object": "model",
+      "created": 1716935004,
+      "owned_by": "hive"
+    }
+  ]
+}

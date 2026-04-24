@@ -1,139 +1,569 @@
-name: Monorepo Quality CI
+name: CI
 
 on:
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - "docs/**"
   push:
-    branches:
-      - main
-    paths-ignore:
-      - "docs/**"
-  workflow_dispatch:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: read
 
-concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+env:
+  # Docker image tags used across live-integration + web-e2e so everyone
+  # references the same pre-built image.
+  EDGE_IMAGE: hive-edge-api:ci
+  CP_IMAGE: hive-control-plane:ci
+  WEB_IMAGE: hive-web-console:ci
 
 jobs:
-  quality:
-    name: Lint, test, and build
+  # ------------------------------------------------------------------
+  # Unit-level jobs (run on every PR including forks)
+  # ------------------------------------------------------------------
+
+  go-tests:
+    name: Go tests (${{ matrix.module }})
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: edge-api
+            path: ./apps/edge-api
+          - module: control-plane
+            path: ./apps/control-plane
+          - module: storage
+            path: ./packages/storage
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
         with:
-          fetch-depth: 0
+          go-version: '1.24'
+          cache-dependency-path: |
+            apps/edge-api/go.sum
+            apps/control-plane/go.sum
+            packages/storage/go.sum
 
-      - name: Detect changed scopes
-        id: changes
-        uses: dorny/paths-filter@v3
+      - name: go vet
+        working-directory: ${{ matrix.path }}
+        run: go vet ./...
+
+      - name: go test
+        working-directory: ${{ matrix.path }}
+        run: go test -count=1 -short -race -timeout 5m ./...
+
+  web-unit:
+    name: Web console (type + unit + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web-console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
         with:
-          filters: |
-            api:
-              - 'apps/api/**'
-            web:
-              - 'apps/web/**'
-            shared:
-              - 'packages/**'
-            root:
-              - 'package.json'
-              - 'pnpm-lock.yaml'
-              - 'pnpm-workspace.yaml'
-              - 'tsconfig.base.json'
-              - '.github/workflows/**'
-              - '.github/scripts/**'
-
-      - name: Compute execution plan
-        id: scope
-        run: |
-          run_api="false"
-          run_web="false"
-
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            run_api="true"
-            run_web="true"
-          fi
-
-          if [[ "${{ steps.changes.outputs.api }}" == "true" || "${{ steps.changes.outputs.shared }}" == "true" || "${{ steps.changes.outputs.root }}" == "true" ]]; then
-            run_api="true"
-          fi
-
-          # Temporary web short-circuit while the web stack is being overhauled.
-          run_web="false"
-
-          echo "run_api=$run_api" >> "$GITHUB_OUTPUT"
-          echo "run_web=$run_web" >> "$GITHUB_OUTPUT"
-
-      - name: Checkpoint plan
-        run: |
-          echo "API checks: ${{ steps.scope.outputs.run_api }}"
-          echo "Web checks: ${{ steps.scope.outputs.run_web }}"
-
-      - name: Setup pnpm
-        if: steps.scope.outputs.run_api == 'true' || steps.scope.outputs.run_web == 'true'
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9.12.3
-
-      - name: Setup Node.js
-        if: steps.scope.outputs.run_api == 'true' || steps.scope.outputs.run_web == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Cache Next.js build cache
-        if: steps.scope.outputs.run_web == 'true'
-        uses: actions/cache@v4
-        with:
-          path: apps/web/.next/cache
-          key: nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**', 'apps/web/public/**', 'apps/web/next.config.*', 'apps/web/tsconfig*.json', 'apps/web/package.json') }}
-          restore-keys: |
-            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ hashFiles('apps/web/src/**', 'apps/web/public/**', 'apps/web/next.config.*', 'apps/web/tsconfig*.json', 'apps/web/package.json') }}-
-            nextjs-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
 
       - name: Install dependencies
-        if: steps.scope.outputs.run_api == 'true' || steps.scope.outputs.run_web == 'true'
-        run: pnpm install --frozen-lockfile --prefer-offline
+        run: npm ci
 
-      - name: Lint API
-        if: steps.scope.outputs.run_api == 'true'
-        run: pnpm --filter @hive/api lint
+      - name: Type check
+        run: npx tsc --noEmit
 
-      - name: Lint web
-        if: steps.scope.outputs.run_web == 'true'
-        run: pnpm --filter @hive/web lint
+      - name: Unit tests (vitest)
+        run: npm run test:unit
 
-      - name: Test API
-        if: steps.scope.outputs.run_api == 'true'
-        run: pnpm --filter @hive/api test
-
-      - name: Test web
-        if: steps.scope.outputs.run_web == 'true'
-        run: pnpm --filter @hive/web test
-
-      - name: Build API
-        if: steps.scope.outputs.run_api == 'true'
-        run: pnpm --filter @hive/api build
-
-      - name: Build web
-        if: steps.scope.outputs.run_web == 'true'
+      - name: Build (Next.js)
+        run: npm run build
         env:
-          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8080
-          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: test-supabase-anon-key
-        run: pnpm --filter @hive/web build
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
 
-      - name: No-op when no relevant source changed
-        if: steps.scope.outputs.run_api != 'true' && steps.scope.outputs.run_web != 'true'
-        run: echo "No API/web/shared/root source changes detected; skipping quality checks."
+  # ------------------------------------------------------------------
+  # Docker build validation — fork PRs only.
+  # Same-repo PRs get this implicitly via the live-integration job
+  # (which builds + runs the stack against staging), so running both
+  # would duplicate work and waste CI minutes.
+  # ------------------------------------------------------------------
+
+  docker-build:
+    name: Docker build smoke (fork PRs only)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build all service images (cached)
+        uses: docker/bake-action@v6
+        with:
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane,web-console
+          set: |
+            *.cache-from=type=gha,scope=docker-build
+            *.cache-to=type=gha,scope=docker-build,mode=max
+
+  # ------------------------------------------------------------------
+  # Live integration — builds images once with GHA cache, loads them
+  # locally, starts stack against staging Supabase, runs all three SDK
+  # suites in parallel.
+  # Gated on same-repo only so fork PRs never receive secrets.
+  # ------------------------------------------------------------------
+
+  live-integration:
+    name: Live integration (SDK tests + smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    needs: [go-tests, web-unit]
+    # Job-level env: docker compose will interpolate ${VAR} from process env,
+    # so we skip the fragile .env heredoc entirely.
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      REDIS_URL: redis://redis:6379/0
+      CONTROL_PLANE_PORT: '8081'
+      CONTROL_PLANE_BASE_URL: http://localhost:8081
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
+      OPENROUTER_EMBEDDING_MODEL: ${{ vars.OPENROUTER_EMBEDDING_MODEL }}
+      GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
+      GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
+      NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_USE_SSL: 'true'
+      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Reconstruct SUPABASE_DB_URL
+        shell: bash
+        env:
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Password is stored in its raw decoded form — URL-encode it here so the
+          # resulting URL round-trips through pgx/pgconn URL parsing correctly.
+          ENC_PW=$(python3 -c 'import os,urllib.parse as u; print(u.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
+          url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
+          echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
+          echo "reconstructed DB URL (host=${SUPABASE_DB_HOST}, port=${SUPABASE_DB_PORT}, user=${SUPABASE_DB_USER}, db=${SUPABASE_DB_NAME})"
+
+      - name: Pre-verify secrets reached runner env
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL \
+                   OPENROUTER_API_KEY HIVE_API_KEY S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY; do
+            val="${!v:-}"
+            if [ -z "$val" ]; then
+              echo "::error::$v is empty in workflow env"
+              exit 1
+            fi
+            echo "  $v: len=${#val}"
+          done
+
+      - name: Cache third-party images (redis, litellm)
+        id: img-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          # Keyed on the pinned tags so tag bumps invalidate the cache.
+          key: docker-images-redis-8.4-alpine-litellm-v1.77.7-stable
+
+      - name: Load or pull + save third-party images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/docker-images
+          if [ -f /tmp/docker-images/redis.tar ] && [ -f /tmp/docker-images/litellm.tar ]; then
+            echo "loading cached images..."
+            docker load -i /tmp/docker-images/redis.tar
+            docker load -i /tmp/docker-images/litellm.tar
+          else
+            echo "cache miss — pulling..."
+            docker pull redis:8.4-alpine
+            docker pull ghcr.io/berriai/litellm:v1.77.7-stable
+            docker save redis:8.4-alpine -o /tmp/docker-images/redis.tar
+            docker save ghcr.io/berriai/litellm:v1.77.7-stable -o /tmp/docker-images/litellm.tar
+          fi
+
+      - name: Build stack images (buildx + GHA cache)
+        uses: docker/bake-action@v6
+        with:
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane,sdk-tests-js,sdk-tests-py,sdk-tests-java
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=stack
+            *.cache-to=type=gha,scope=stack,mode=max
+
+      - name: Start core stack (no rebuild — images already loaded)
+        working-directory: deploy/docker
+        run: |
+          docker compose up -d --no-build redis litellm control-plane edge-api
+
+      - name: Wait for services to become healthy
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 300 ))
+          for svc in control-plane edge-api; do
+            echo "waiting for $svc..."
+            while :; do
+              state=$(docker inspect --format '{{.State.Health.Status}}' \
+                "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
+              if [ "$state" = "healthy" ]; then
+                echo "$svc: healthy"
+                break
+              fi
+              if [ "$(date +%s)" -gt "$deadline" ]; then
+                echo "::error::$svc did not become healthy (last state: $state)"
+                docker compose logs --tail=200 $svc
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
+      - name: Smoke test — /health + /v1/models
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsS http://localhost:8080/health | jq -c
+          curl -fsS http://localhost:8081/health | jq -c
+
+          code=$(curl -sS -o /tmp/models.json -w "%{http_code}" \
+            http://localhost:8080/v1/models \
+            -H "Authorization: Bearer $HIVE_API_KEY")
+          echo "GET /v1/models -> HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::/v1/models returned $code"
+            cat /tmp/models.json
+            exit 1
+          fi
+          jq -r '.data[0:3] | .[] | .id' /tmp/models.json
+
+      - name: Run SDK suites in parallel (JS + Python + Java)
+        working-directory: deploy/docker
+        shell: bash
+        run: |
+          # Intentionally no 'set -e' — we need to capture non-zero suite rc
+          # rather than have the background subshell die at the failing command.
+          set -uo pipefail
+          log=/tmp/sdk
+          mkdir -p "$log"
+
+          run_suite() {
+            local svc=$1
+            local rc=0
+            docker compose --profile test run --rm --no-deps "$svc" \
+              > "$log/$svc.log" 2>&1 || rc=$?
+            echo "$rc" > "$log/$svc.rc"
+          }
+
+          run_suite sdk-tests-js   &
+          run_suite sdk-tests-py   &
+          run_suite sdk-tests-java &
+          wait
+
+          fail=0
+          for svc in sdk-tests-js sdk-tests-py sdk-tests-java; do
+            rc=$(cat "$log/$svc.rc" 2>/dev/null || echo 127)
+            echo "=============================================="
+            echo "== $svc  (exit $rc)"
+            echo "=============================================="
+            tail -c 30000 "$log/$svc.log" || true
+            if [ "$rc" != "0" ]; then fail=1; fi
+          done
+          exit $fail
+
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: deploy/docker
+        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose.log || true
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs
+          path: /tmp/compose.log
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        working-directory: deploy/docker
+        run: docker compose down -v --remove-orphans || true
+
+  # ------------------------------------------------------------------
+  # Playwright E2E against the full booted Go stack + Next.js. Runs
+  # every spec (unauth, credentialed, openai-sdk) in a single job so
+  # `/console/*` server components can reach a real control-plane and
+  # the fixture can seed/reset staging Supabase users before each run.
+  # ------------------------------------------------------------------
+
+  web-e2e:
+    name: Web E2E (full stack)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+    # Independently boots its own Go stack + Next.js. Decoupled from
+    # `live-integration` so a flaky external provider (e.g. OpenRouter
+    # 429 on the SDK suites) no longer blocks the UI test coverage.
+    needs: [web-unit, go-tests]
+    env:
+      # SUPABASE_SERVICE_ROLE_KEY intentionally omitted from job-level env
+      # so the Playwright runner never inherits it. Only the steps that
+      # actually need admin auth — `Start core stack` (docker compose
+      # interpolation for control-plane) and `Build + start Next.js`
+      # (/auth/callback route) — scope it in their own `env:` blocks.
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      REDIS_URL: redis://redis:6379/0
+      CONTROL_PLANE_PORT: '8081'
+      CONTROL_PLANE_BASE_URL: http://localhost:8081
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
+      OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
+      OPENROUTER_EMBEDDING_MODEL: ${{ vars.OPENROUTER_EMBEDDING_MODEL }}
+      GROQ_FAST_MODEL: ${{ vars.GROQ_FAST_MODEL }}
+      GROQ_REASONING_MODEL: ${{ vars.GROQ_REASONING_MODEL }}
+      NVIDIA_NIM_EMBEDDING_MODEL: ${{ vars.NVIDIA_NIM_EMBEDDING_MODEL }}
+      S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+      S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+      S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+      S3_REGION: ${{ secrets.S3_REGION }}
+      S3_USE_SSL: 'true'
+      S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+      S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+      NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Reconstruct SUPABASE_DB_URL
+        shell: bash
+        env:
+          SUPABASE_DB_HOST: ${{ secrets.SUPABASE_DB_HOST }}
+          SUPABASE_DB_PORT: ${{ secrets.SUPABASE_DB_PORT }}
+          SUPABASE_DB_USER: ${{ secrets.SUPABASE_DB_USER }}
+          SUPABASE_DB_NAME: ${{ secrets.SUPABASE_DB_NAME }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ENC_PW=$(python3 -c 'import os,urllib.parse as u; print(u.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
+          url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
+          echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
+
+      - name: Cache third-party images (redis, litellm)
+        id: img-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-images
+          key: docker-images-redis-8.4-alpine-litellm-v1.77.7-stable
+
+      - name: Load or pull + save third-party images
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/docker-images
+          if [ -f /tmp/docker-images/redis.tar ] && [ -f /tmp/docker-images/litellm.tar ]; then
+            docker load -i /tmp/docker-images/redis.tar
+            docker load -i /tmp/docker-images/litellm.tar
+          else
+            docker pull redis:8.4-alpine
+            docker pull ghcr.io/berriai/litellm:v1.77.7-stable
+            docker save redis:8.4-alpine -o /tmp/docker-images/redis.tar
+            docker save ghcr.io/berriai/litellm:v1.77.7-stable -o /tmp/docker-images/litellm.tar
+          fi
+
+      - name: Build stack images (reuse GHA cache from live-integration)
+        uses: docker/bake-action@v6
+        with:
+          workdir: .
+          files: |
+            ./deploy/docker/docker-bake.hcl
+          targets: edge-api,control-plane
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=stack
+            *.cache-to=type=gha,scope=stack,mode=max
+
+      - name: Start core stack (no rebuild — images already loaded)
+        working-directory: deploy/docker
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          docker compose up -d --no-build redis litellm control-plane edge-api
+
+      - name: Wait for services to become healthy
+        working-directory: deploy/docker
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + 300 ))
+          for svc in control-plane edge-api; do
+            while :; do
+              state=$(docker inspect --format '{{.State.Health.Status}}' \
+                "$(docker compose ps -q $svc)" 2>/dev/null || echo "starting")
+              if [ "$state" = "healthy" ]; then
+                echo "$svc: healthy"
+                break
+              fi
+              if [ "$(date +%s)" -gt "$deadline" ]; then
+                echo "::error::$svc did not become healthy (last state: $state)"
+                docker compose logs --tail=200 $svc
+                exit 1
+              fi
+              sleep 5
+            done
+          done
+
+      - name: Install web-console deps
+        working-directory: apps/web-console
+        run: npm ci
+
+      - name: Read Playwright version
+        id: pw
+        working-directory: apps/web-console
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: apps/web-console
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: apps/web-console
+        run: npx playwright install-deps chromium
+
+      - name: Build + start Next.js (points at booted control-plane)
+        working-directory: apps/web-console
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+          CONTROL_PLANE_BASE_URL: http://localhost:8081
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          npm run build
+          nohup npm start > /tmp/nextjs.log 2>&1 &
+          for i in {1..60}; do
+            if (echo > /dev/tcp/127.0.0.1/3000) 2>/dev/null; then echo "Next.js up"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
+
+      - name: Run UI Playwright suite (unauth + credentialed)
+        working-directory: apps/web-console
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:3000
+          # Preferred path: the `e2e-fixtures` Supabase Edge Function does
+          # all seeding server-side. When both secrets are present, the
+          # fixture helper POSTs once per spec and the runner never sees
+          # the Supabase service-role key.
+          E2E_FIXTURE_URL: ${{ secrets.E2E_FIXTURE_URL }}
+          E2E_FIXTURE_SECRET: ${{ secrets.E2E_FIXTURE_SECRET }}
+          # Fallback path: if the edge function isn't deployed yet, the
+          # helper talks directly to the Supabase admin REST API using
+          # `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (already exposed
+          # as job-level env for the Next.js server). Keeps local dev and
+          # staged rollouts working without coupling the two changes.
+          E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
+          E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
+          E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
+          E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
+        # `openai-sdk.spec.ts` is covered by the `live-integration` job and
+        # is deliberately skipped here. It depends on an actual LLM
+        # completion round-trip through OpenRouter, which currently rate-
+        # limits the free `hive-default` model tier and produces 429 flakes
+        # that are unrelated to anything the UI suite exercises.
+        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts
+
+      - name: Dump compose logs on failure
+        if: failure()
+        working-directory: deploy/docker
+        run: docker compose logs --no-color --timestamps --tail=500 > /tmp/compose-web-e2e-api.log || true
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-logs-web-e2e-api
+          path: /tmp/compose-web-e2e-api.log
+          if-no-files-found: ignore
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-api
+          path: apps/web-console/playwright-report/
+          if-no-files-found: ignore
+
+      - name: Tear down stack
+        if: always()
+        working-directory: deploy/docker
+        run: docker compose down -v --remove-orphans || true

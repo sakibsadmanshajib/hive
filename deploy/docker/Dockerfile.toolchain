@@ -1,0 +1,7 @@
+FROM golang:1.24-alpine AS base
+RUN apk add --no-cache git curl nodejs npm python3 py3-pip py3-yaml
+RUN GOTOOLCHAIN=auto go install github.com/ogen-go/ogen/cmd/ogen@v1.20.2
+RUN GOTOOLCHAIN=auto go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.6.0
+RUN npm install -g @redocly/cli@latest
+WORKDIR /workspace
+ENTRYPOINT ["/bin/sh", "-c"]

@@ -1,0 +1,37 @@
+groups:
+  - name: hive-critical
+    rules:
+      - alert: HighAPIErrorRate
+        expr: |
+          sum(rate(hive_http_requests_total{status_class=~"4xx|5xx"}[5m]))
+          /
+          sum(rate(hive_http_requests_total[5m]))
+          > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API error rate above 10% for 5 minutes"
+          description: "Combined 4xx+5xx error rate is {{ $value | humanizePercentage }}"
+
+      - alert: UpstreamProviderDown
+        expr: |
+          sum by (provider) (rate(hive_upstream_requests_total{status="success"}[2m])) == 0
+          AND
+          sum by (provider) (rate(hive_upstream_requests_total[2m])) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Upstream provider {{ $labels.provider }} has 0% success rate"
+          description: "Provider {{ $labels.provider }} returning no successful responses for 2 minutes"
+
+      - alert: PaymentWebhookFailures
+        expr: |
+          increase(hive_payment_events_total{status="error"}[10m]) > 3
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Payment webhook failures detected"
+          description: "More than 3 payment webhook errors in the last 10 minutes for rail {{ $labels.rail }}"

@@ -1,25 +1,44 @@
-
-# Node/TypeScript monorepo
-node_modules/
-dist/
-.pnpm-store/
-.turbo/
-coverage/
-*.tsbuildinfo
-.next/
-playwright-report/
-test-results/
+# Environment
 .env
-.worktrees/
 
-# AI Agent Artifacts
-artifacts/
+# Go
+/apps/edge-api/tmp/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
 
-# Superpowers skills (local files – each dev runs their own install)
-.agents/skills/*
-!.agents/skills/gh-api/
-!.agents/skills/gh-reading-reviews/
-!.agents/skills/gh-responding-to-reviews/
-!.agents/skills/gh-editing-prs/
-!.agents/skills/docker-local-smoke-validation/
-!.agents/skills/docker-local-smoke-validation/SKILL.md
+# Dependencies
+/vendor/
+node_modules/
+package-lock.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.docker/
+
+# Generated
+/packages/openai-contract/generated/
+/apps/edge-api/internal/generated/
+__pycache__/
+/apps/web-console/playwright-report/
+/apps/web-console/test-results/
+# Added by code-review-graph
+.code-review-graph/
+
+# Claude Code (user-local)
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
+# Caveman compression backups
+*.original.md

@@ -1,0 +1,71 @@
+{
+  "version": 1,
+  "bugs": [
+    {
+      "id": "bug-001",
+      "timestamp": "2026-04-22T00:56:00.977Z",
+      "error_message": "Type error",
+      "file": "packages/sdk-tests/js/tests/headers/compat-headers.test.ts",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-22T00:56:00.977Z"
+    },
+    {
+      "id": "bug-002",
+      "timestamp": "2026-04-22T00:56:11.555Z",
+      "error_message": "Type error",
+      "file": "packages/sdk-tests/js/tests/models/list-models.test.ts",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation | Also: const res = await fetch(`${BASE_URL}/models`, { headers: aut",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-04-22T00:56:30.253Z"
+    },
+    {
+      "id": "bug-003",
+      "timestamp": "2026-04-22T03:20:41.761Z",
+      "error_message": "Incorrect value in code",
+      "file": "apps/web-console/tests/e2e/profile-completion.spec.ts",
+      "root_cause": "Had \");\n      await page.selectOption('",
+      "fix": "Changed to \");\n      await page.click('",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-22T03:20:41.762Z"
+    },
+    {
+      "id": "bug-004",
+      "timestamp": "2026-04-22T03:22:44.257383Z",
+      "error_message": "Workspace switcher POST /console/account-switch sets cookie but subsequent /console render bounces to /auth/sign-in",
+      "file": "apps/web-console/tests/e2e/auth-shell.spec.ts:71",
+      "root_cause": "Likely: getViewer() / middleware does not honor hive_account_id cookie for session scoping \u2014 after switch, Supabase session still bound to original account but cookie points to new, so viewer fetch fails or redirects",
+      "fix": "Test marked test.fixme() \u2014 deferred. Need: middleware + getViewer read hive_account_id cookie and select matching membership; redirect back to /console with new scope",
+      "tags": [
+        "web-console",
+        "account-switch",
+        "workspace-switcher",
+        "middleware",
+        "fixme"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-22T03:22:44.257416Z"
+    }
+  ]
+}
