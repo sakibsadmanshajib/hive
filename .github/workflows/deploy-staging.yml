@@ -1,0 +1,142 @@
+name: deploy-staging
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/edge-api/**'
+      - 'apps/control-plane/**'
+      - 'packages/**'
+      - 'deploy/docker/**'
+      - 'deploy/litellm/**'
+      - '.github/workflows/deploy-staging.yml'
+  schedule:
+    # Every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-images:
+    name: Build & push Go images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        component: [edge-api, control-plane]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: deploy/docker/Dockerfile.${{ matrix.component }}.prod
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:main
+            ${{ env.IMAGE_PREFIX }}/${{ matrix.component }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.component }}
+          cache-to: type=gha,scope=${{ matrix.component }},mode=max
+
+  deploy-vm:
+    name: Deploy to OCI VM
+    needs: build-images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync compose + litellm config
+        run: |
+          scp -i ~/.ssh/id_ed25519 \
+            deploy/docker/docker-compose.yml \
+            deploy/docker/docker-compose.staging.yml \
+            deploy@${{ secrets.STAGING_HOST }}:/opt/hive/deploy/docker/
+          scp -i ~/.ssh/id_ed25519 \
+            deploy/litellm/config.yaml \
+            deploy@${{ secrets.STAGING_HOST }}:/opt/hive/deploy/litellm/config.yaml
+
+      - name: Pull & restart stack
+        run: |
+          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} bash <<'SH'
+          set -euo pipefail
+          cd /opt/hive/deploy/docker
+          docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env pull edge-api control-plane litellm
+          docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env up -d --remove-orphans edge-api control-plane litellm
+          docker image prune -f
+          SH
+
+      - name: Smoke test
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if curl -fsS https://api.hive.scubed.co/health && curl -fsS https://cp.hive.scubed.co/health; then
+              echo "SMOKE OK"
+              exit 0
+            fi
+            echo "attempt $i failed, retry in 10s"
+            sleep 10
+          done
+          echo "SMOKE FAIL"
+          exit 1
+
+  deploy-pages:
+    name: Deploy web-console to Cloudflare Pages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web-console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (CF Pages — Next.js static export)
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_API_URL: https://api.hive.scubed.co
+          NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp.hive.scubed.co
+        run: npm run build
+
+      - name: Deploy to CF Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/web-console
+          command: pages deploy .vercel/output/static --project-name=hive-console --branch=main

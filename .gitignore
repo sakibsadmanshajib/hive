@@ -42,3 +42,4 @@ __pycache__/
 
 # Caveman compression backups
 *.original.md
+.planning/staging/oci-resources.env

@@ -1,0 +1,60 @@
+# Staging override — overlays docker-compose.yml
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
+#       up -d edge-api control-plane litellm
+#
+# Only edge-api, control-plane, litellm are started on staging.
+# redis is external (Upstash). web-console is on Cloudflare Pages.
+#
+# Diffs vs dev compose:
+#   - Pulls images from GHCR (no local build)
+#   - Production Go binaries (no air hot-reload volumes)
+#   - Loopback-only ports (Caddy on host fronts TLS)
+#   - Memory limits for 1GB RAM VM (E2.1.Micro)
+
+services:
+  edge-api:
+    image: ghcr.io/sakibsadmanshajib/hive/edge-api:main
+    build: !reset null
+    volumes: !reset []
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    ports: !override
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+    mem_limit: 180m
+    mem_reservation: 120m
+    environment:
+      EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      REDIS_URL: ${REDIS_URL}
+      EDGE_PUBLIC_URL: https://api.hive.scubed.co
+      LOG_LEVEL: info
+
+  control-plane:
+    image: ghcr.io/sakibsadmanshajib/hive/control-plane:main
+    build: !reset null
+    volumes: !reset []
+    depends_on: !reset []
+    ports: !override
+      - "127.0.0.1:8081:8081"
+    restart: unless-stopped
+    mem_limit: 180m
+    mem_reservation: 120m
+    environment:
+      REDIS_URL: ${REDIS_URL}
+      CONTROL_PLANE_PUBLIC_URL: https://cp.hive.scubed.co
+      LOG_LEVEL: info
+
+  litellm:
+    ports: !override
+      - "127.0.0.1:4000:4000"
+    restart: unless-stopped
+    mem_limit: 420m
+    mem_reservation: 280m
+
+volumes:
+  gomodcache: !reset null
+  gobuildcache: !reset null
