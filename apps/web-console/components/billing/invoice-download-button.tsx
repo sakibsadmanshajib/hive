@@ -85,7 +85,10 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
         },
       });
 
-      const currency = invoice.local_currency || "USD";
+      const currency = invoice.local_currency;
+      if (!currency) {
+        throw new Error("Invoice is missing local_currency; refusing to render.");
+      }
       const amountDisplay = formatAmount(invoice.amount_local, currency);
 
       const lineItems = Array.isArray(invoice.line_items) ? invoice.line_items : [];
@@ -202,8 +205,9 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      // Defer revoke so the browser has a tick to start the download before the blob URL is invalidated.
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      // Give the browser enough time to start the download on slow connections
+      // before invalidating the blob URL. Unconditional 0ms revoke risked a race.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
     } catch (err) {
       // eslint-disable-next-line no-alert
       alert(`Failed to generate PDF: ${err instanceof Error ? err.message : String(err)}`);
