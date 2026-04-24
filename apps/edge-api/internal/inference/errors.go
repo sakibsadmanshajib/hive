@@ -2,6 +2,7 @@ package inference
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
@@ -15,6 +16,7 @@ func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {
 
 func writeModelNotFoundError(w http.ResponseWriter, model string) {
 	code := "model_not_found"
+	log.Printf("inference: model_not_found via routing layer model=%q", model)
 	apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error",
 		fmt.Sprintf("The model `%s` does not exist or you do not have access to it.", model), &code)
 }

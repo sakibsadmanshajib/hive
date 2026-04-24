@@ -5,8 +5,11 @@ const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const MODEL = process.env.HIVE_TEST_MODEL ?? "hive-default";
 
-// Known reasoning model identifiers — skip reasoning parameter rejection test for these.
-const REASONING_MODEL_PATTERNS = ["o1", "o3", "reasoning"];
+// Known reasoning model identifiers — skip reasoning parameter rejection test
+// for these. `hive-default` is included because the CI stack now cascades
+// (via LiteLLM fallback) to gpt-oss models that natively accept reasoning
+// parameters, so the alias no longer rejects `reasoning` at the edge.
+const REASONING_MODEL_PATTERNS = ["o1", "o3", "reasoning", "hive-default", "hive-auto"];
 
 function isReasoningModel(model: string): boolean {
   return REASONING_MODEL_PATTERNS.some((pattern) =>

@@ -3,6 +3,7 @@ package authz
 import (
 	"context"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 
@@ -61,6 +62,7 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 				&code,
 			)
 		case "model_not_allowed":
+			log.Printf("authz: model_not_allowed alias=%q allow_all=%v allowed_aliases=%v", aliasID, snapshot.AllowAllModels, snapshot.AllowedAliases)
 			code := "model_not_found"
 			return AuthSnapshot{}, nil, newErr(
 				"invalid_request_error",
