@@ -182,3 +182,34 @@
 | 13:37 | Edited deploy/docker/docker-compose.staging.yml | inline fix | ~8 |
 | 13:37 | Edited .planning/staging/cloud-init.yml | inline fix | ~6 |
 | 13:37 | Edited .planning/staging/cloud-init.yml | inline fix | ~5 |
+| 13:49 | Session end: 28 writes across 9 files (route.ts, invoice-download-button.tsx, docker-compose.staging.yml, deploy-staging.yml, feedback_no_direct_main_push.md) | 12 reads | ~28406 tok |
+| 13:53 | Session end: 28 writes across 9 files (route.ts, invoice-download-button.tsx, docker-compose.staging.yml, deploy-staging.yml, feedback_no_direct_main_push.md) | 12 reads | ~28406 tok |
+
+## Session: 2026-04-24 13:56
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 14:10 | Created .planning/next-session-ui-styling.md | — | ~1169 |
+
+| 14:09 | staging SDK+smoke tests all pass against deployed env | packages/sdk-tests/{js,python,java} | JS 25/1-fail/1-skip, Py 14/14, Java BUILD OK, smoke 200/200 | ~3000 |
+| 14:11 | next-session UI prompt written | .planning/next-session-ui-styling.md | created | ~800 |
+| 14:11 | Session end: 1 writes across 1 files (next-session-ui-styling.md) | 0 reads | ~1252 tok |
+| 14:13 | Session end: 1 writes across 1 files (next-session-ui-styling.md) | 0 reads | ~1252 tok |
+| 14:15 | Created .planning/next-session-post-deploy-sdk-replay.md | — | ~871 |
+| 14:15 | Created .planning/next-session-fix-js-fixture-path.md | — | ~781 |
+| 14:16 | Created .planning/next-session-fix-embed-env-cascade.md | — | ~690 |
+
+## Session: 2026-04-24 14:16
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 14:16 | Created .planning/next-session-flaky-usage-tokens.md | — | ~1058 |
+| 14:17 | Created .planning/next-session-visual-regression-coverage.md | — | ~945 |
+| 14:17 | Created .planning/next-sessions-INDEX.md | — | ~742 |
+| 14:17 | Session end: 3 writes across 3 files (next-session-flaky-usage-tokens.md, next-session-visual-regression-coverage.md, next-sessions-INDEX.md) | 0 reads | ~2941 tok |
+
+## Session: 2026-04-24 14:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 14:22 | Edited .gitignore | expanded (+6 lines) | ~91 |
