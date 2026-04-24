@@ -1,10 +1,7 @@
 "use client";
 
-import { createElement as h, useState } from "react";
-import { Download } from "lucide-react";
-
+import { useState } from "react";
 import type { Invoice } from "@/lib/control-plane/client";
-import { Button } from "@/components/ui/button";
 
 interface InvoiceDownloadButtonProps {
   invoice: Invoice;
@@ -40,6 +37,7 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       const { pdf, Document, Page, Text, View, StyleSheet } = await import(
         "@react-pdf/renderer"
       );
+      const { createElement: h } = await import("react");
 
       const styles = StyleSheet.create({
         page: { fontFamily: "Helvetica", fontSize: 11, padding: 40, color: "#1f2937" },
@@ -88,19 +86,14 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
         },
       });
 
-      const currency = invoice.local_currency;
-      if (!currency) {
-        throw new Error("Invoice is missing local_currency; refusing to render.");
-      }
-      const amountDisplay = formatAmount(invoice.amount_local, currency);
+      const amountDisplay = formatAmount(invoice.amount_local, invoice.local_currency || "USD");
 
-      const lineItems = Array.isArray(invoice.line_items) ? invoice.line_items : [];
-      const extraRows = lineItems.map((item, idx) => {
+      const extraRows = invoice.line_items.map((item, idx) => {
         const desc = typeof item.description === "string" ? item.description : `Line item ${idx + 1}`;
         const credits = typeof item.credits === "number" ? item.credits.toLocaleString() : "";
         const amount =
           typeof item.amount_local === "number"
-            ? formatAmount(item.amount_local, currency)
+            ? formatAmount(item.amount_local, invoice.local_currency || "USD")
             : "";
         return h(
           View,
@@ -110,18 +103,6 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
           h(Text, { style: styles.col3 }, amount),
         );
       });
-
-      const extraCreditsSum = lineItems.reduce(
-        (sum, item) => sum + (typeof item.credits === "number" ? item.credits : 0),
-        0,
-      );
-      const extraAmountSum = lineItems.reduce(
-        (sum, item) => sum + (typeof item.amount_local === "number" ? item.amount_local : 0),
-        0,
-      );
-      const totalCredits = invoice.credits + extraCreditsSum;
-      const totalAmountLocal = invoice.amount_local + extraAmountSum;
-      const totalAmountDisplay = formatAmount(totalAmountLocal, currency);
 
       const doc = h(
         Document,
@@ -189,8 +170,8 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
             View,
             { style: styles.totalRow },
             h(Text, { style: styles.col1 }, "Total"),
-            h(Text, { style: styles.col2 }, totalCredits.toLocaleString()),
-            h(Text, { style: styles.col3 }, totalAmountDisplay),
+            h(Text, { style: styles.col2 }, invoice.credits.toLocaleString()),
+            h(Text, { style: styles.col3 }, amountDisplay),
           ),
           h(
             Text,
@@ -208,9 +189,7 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      // Give the browser enough time to start the download on slow connections
-      // before invalidating the blob URL. Unconditional 0ms revoke risked a race.
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      URL.revokeObjectURL(url);
     } catch (err) {
       // eslint-disable-next-line no-alert
       alert(`Failed to generate PDF: ${err instanceof Error ? err.message : String(err)}`);
@@ -220,15 +199,22 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
   }
 
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="sm"
-      onClick={() => void handleClick()}
+      onClick={handleClick}
       disabled={busy}
+      style={{
+        color: "#1d4ed8",
+        background: "none",
+        border: "none",
+        padding: 0,
+        cursor: busy ? "wait" : "pointer",
+        textDecoration: "none",
+        fontSize: "0.875rem",
+        opacity: busy ? 0.6 : 1,
+      }}
     >
-      <Download size={14} aria-hidden="true" />
       {busy ? "Generating…" : "Download PDF"}
-    </Button>
+    </button>
   );
 }

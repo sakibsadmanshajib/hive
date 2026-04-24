@@ -12,6 +12,7 @@
 # Dependencies
 /vendor/
 node_modules/
+package-lock.json
 
 # IDE
 .idea/
@@ -32,28 +33,6 @@ Thumbs.db
 __pycache__/
 /apps/web-console/playwright-report/
 /apps/web-console/test-results/
-
-# Python (global — any venv/egg/cache anywhere in tree)
-.venv/
-venv/
-env/
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.tox/
-.coverage
-.coverage.*
-coverage.xml
-htmlcov/
-*.pyc
-*.pyo
-
-# Java / Gradle (global — any gradle build output anywhere in tree)
-.gradle/
-/packages/sdk-tests/java/build/
-*.class
-hs_err_pid*.log
 # Added by code-review-graph
 .code-review-graph/
 
@@ -61,27 +40,6 @@ hs_err_pid*.log
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
 
-# OpenWolf — per-developer cross-session memory, never tracked.
-.wolf/
-
 # Caveman compression backups
 *.original.md
 .planning/staging/oci-resources.env
-
-# Admin-only local scripts — never deployed, never shared.
-/scripts/admin/
-
-# Codex CLI marker — never tracked or auto-created in the repo root.
-/.codex
-
-# Local developer tooling caches and artefacts (graphify, gh CLI cache,
-# node compile cache, root-level Go build binary, agent worktrees, skill lock).
-.claude/worktrees/
-.graphifyignore
-graphify-out/
-.graphify_*
-.graphify_python
-gh-cli-cache/
-node-compile-cache/
-/server
-skills-lock.json
