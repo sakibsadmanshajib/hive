@@ -34,11 +34,27 @@ __pycache__/
 /apps/web-console/playwright-report/
 /apps/web-console/test-results/
 
-# SDK-tests build/cache artifacts
-/packages/sdk-tests/java/.gradle/
+# Python (global — any venv/egg/cache anywhere in tree)
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+*.pyc
+*.pyo
+
+# Java / Gradle (global — any gradle build output anywhere in tree)
+.gradle/
 /packages/sdk-tests/java/build/
-/packages/sdk-tests/python/.venv/
-/packages/sdk-tests/python/*.egg-info/
+*.class
+hs_err_pid*.log
 # Added by code-review-graph
 .code-review-graph/
 
