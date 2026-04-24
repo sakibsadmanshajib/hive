@@ -4,7 +4,7 @@ import OpenAI from "openai";
 const BASE_URL = process.env.HIVE_BASE_URL ?? "http://localhost:8080/v1";
 const API_KEY = process.env.HIVE_API_KEY ?? "test-key";
 const EMBEDDING_MODEL =
-  process.env.HIVE_EMBEDDING_MODEL ?? process.env.HIVE_TEST_MODEL ?? "hive-embedding-default";
+  process.env.HIVE_EMBEDDING_MODEL ?? "hive-embedding-default";
 
 describe("Embeddings", () => {
   const client = new OpenAI({ baseURL: BASE_URL, apiKey: API_KEY });
