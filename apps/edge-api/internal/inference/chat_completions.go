@@ -55,6 +55,8 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 	resp.Model = aliasID
 	resp.Object = "chat.completion"
 
+	clampZeroCompletionUsage(resp.Usage, chatChoiceTexts(resp.Choices), resp.ID, aliasID, EndpointChatCompletions)
+
 	normalized, err := json.Marshal(resp)
 	if err != nil {
 		return nil, nil, err

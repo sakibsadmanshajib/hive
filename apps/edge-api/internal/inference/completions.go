@@ -55,6 +55,8 @@ func normalizeCompletion(respBody []byte, aliasID string) ([]byte, *UsageRespons
 	resp.Model = aliasID
 	resp.Object = "text_completion"
 
+	clampZeroCompletionUsage(resp.Usage, completionChoiceTexts(resp.Choices), resp.ID, aliasID, EndpointCompletions)
+
 	normalized, err := json.Marshal(resp)
 	if err != nil {
 		return nil, nil, err
