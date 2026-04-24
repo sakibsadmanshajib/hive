@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-04-22T00:50:18.611Z",
   "lifetime": {
-    "total_tokens_estimated": 637269,
-    "total_reads": 275,
-    "total_writes": 534,
-    "total_sessions": 15,
-    "anatomy_hits": 262,
-    "anatomy_misses": 13,
-    "repeated_reads_blocked": 65,
-    "estimated_savings_vs_bare_cli": 118752
+    "total_tokens_estimated": 666069,
+    "total_reads": 291,
+    "total_writes": 551,
+    "total_sessions": 16,
+    "anatomy_hits": 275,
+    "anatomy_misses": 16,
+    "repeated_reads_blocked": 68,
+    "estimated_savings_vs_bare_cli": 125686
   },
   "sessions": [
     {
@@ -5119,6 +5119,238 @@
         "writes_count": 0,
         "repeated_reads_blocked": 0,
         "anatomy_lookups": 2
+      }
+    },
+    {
+      "id": "session-2026-04-24-1419",
+      "started": "2026-04-24T18:19:22.465Z",
+      "ended": "2026-04-24T22:58:17.680Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 696,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-ui-styling.md",
+          "tokens_estimated": 1096,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.gitignore",
+          "tokens_estimated": 150,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/.gitignore",
+          "tokens_estimated": 97,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1734,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1197,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 1120,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 1942,
+        "output_tokens_estimated": 4148,
+        "reads_count": 3,
+        "writes_count": 4,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 3
+      }
+    },
+    {
+      "id": "session-2026-04-24-1419",
+      "started": "2026-04-24T18:19:22.465Z",
+      "ended": "2026-04-24T22:59:57.047Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 696,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-ui-styling.md",
+          "tokens_estimated": 1096,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.gitignore",
+          "tokens_estimated": 150,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/.gitignore",
+          "tokens_estimated": 97,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1734,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1197,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 1120,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 1942,
+        "output_tokens_estimated": 4148,
+        "reads_count": 3,
+        "writes_count": 4,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 3
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:11:54.782Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 12894,
+        "output_tokens_estimated": 3726,
+        "reads_count": 10,
+        "writes_count": 9,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 7
       }
     }
   ],
