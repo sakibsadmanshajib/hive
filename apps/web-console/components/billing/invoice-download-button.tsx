@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { createElement as h, useState } from "react";
 import type { Invoice } from "@/lib/control-plane/client";
 
 interface InvoiceDownloadButtonProps {
@@ -37,7 +37,6 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       const { pdf, Document, Page, Text, View, StyleSheet } = await import(
         "@react-pdf/renderer"
       );
-      const { createElement: h } = await import("react");
 
       const styles = StyleSheet.create({
         page: { fontFamily: "Helvetica", fontSize: 11, padding: 40, color: "#1f2937" },
@@ -86,14 +85,16 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
         },
       });
 
-      const amountDisplay = formatAmount(invoice.amount_local, invoice.local_currency || "USD");
+      const currency = invoice.local_currency || "USD";
+      const amountDisplay = formatAmount(invoice.amount_local, currency);
 
-      const extraRows = invoice.line_items.map((item, idx) => {
+      const lineItems = Array.isArray(invoice.line_items) ? invoice.line_items : [];
+      const extraRows = lineItems.map((item, idx) => {
         const desc = typeof item.description === "string" ? item.description : `Line item ${idx + 1}`;
         const credits = typeof item.credits === "number" ? item.credits.toLocaleString() : "";
         const amount =
           typeof item.amount_local === "number"
-            ? formatAmount(item.amount_local, invoice.local_currency || "USD")
+            ? formatAmount(item.amount_local, currency)
             : "";
         return h(
           View,
@@ -103,6 +104,18 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
           h(Text, { style: styles.col3 }, amount),
         );
       });
+
+      const extraCreditsSum = lineItems.reduce(
+        (sum, item) => sum + (typeof item.credits === "number" ? item.credits : 0),
+        0,
+      );
+      const extraAmountSum = lineItems.reduce(
+        (sum, item) => sum + (typeof item.amount_local === "number" ? item.amount_local : 0),
+        0,
+      );
+      const totalCredits = invoice.credits + extraCreditsSum;
+      const totalAmountLocal = invoice.amount_local + extraAmountSum;
+      const totalAmountDisplay = formatAmount(totalAmountLocal, currency);
 
       const doc = h(
         Document,
@@ -170,8 +183,8 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
             View,
             { style: styles.totalRow },
             h(Text, { style: styles.col1 }, "Total"),
-            h(Text, { style: styles.col2 }, invoice.credits.toLocaleString()),
-            h(Text, { style: styles.col3 }, amountDisplay),
+            h(Text, { style: styles.col2 }, totalCredits.toLocaleString()),
+            h(Text, { style: styles.col3 }, totalAmountDisplay),
           ),
           h(
             Text,
@@ -189,7 +202,8 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // Defer revoke so the browser has a tick to start the download before the blob URL is invalidated.
+      setTimeout(() => URL.revokeObjectURL(url), 0);
     } catch (err) {
       // eslint-disable-next-line no-alert
       alert(`Failed to generate PDF: ${err instanceof Error ? err.message : String(err)}`);
