@@ -1,20 +1,13 @@
 import type { NextConfig } from "next";
-import { initOpenNextCloudflareForDev } from "@opennextjs/cloudflare";
 
-// Only spin up the Cloudflare bindings + miniflare runtime during
-// `next dev`. Calling this during `next build` (production bundles in
-// CI) starts a Workerd instance whose SQLite state directory races on
-// some filesystems (WSL2, NTFS-mounted volumes), and the build doesn't
-// need the dev bindings — the OpenNext bundler handles production
-// bindings via wrangler.jsonc.
-if (process.env.NODE_ENV === "development") {
-  initOpenNextCloudflareForDev();
-}
-
+// CF Pages + Next 15 — keep config minimal; @cloudflare/next-on-pages
+// handles edge runtime compat at build time.
 const config: NextConfig = {
   images: {
+    // CF Pages does not use Next's Node image optimizer
     unoptimized: true,
   },
+  // Reduce build noise on CI
   productionBrowserSourceMaps: false,
 };
 
