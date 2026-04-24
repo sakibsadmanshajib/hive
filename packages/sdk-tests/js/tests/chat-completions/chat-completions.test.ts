@@ -48,11 +48,7 @@ describe("Chat Completions", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  // `openrouter/free` routes across a heterogeneous free-model pool where many
-  // providers lack tool-calling support, producing deterministic
-  // `No endpoints found that support tool use` 404s. Skipped until the CI
-  // routing policy is widened to a tool-capable (paid) tier.
-  it.skip("supports tool calling", async () => {
+  it("supports tool calling", async () => {
     const response = await client.chat.completions.create({
       model: MODEL,
       messages: [

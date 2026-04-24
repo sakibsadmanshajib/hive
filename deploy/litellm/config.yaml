@@ -1,4 +1,6 @@
 model_list:
+  # OpenRouter primary routes (chat). `openrouter/free` disperses load across
+  # OR's free-model pool — fragile under burst, hence the Groq fallbacks below.
   - model_name: route-openrouter-default
     litellm_params:
       model: os.environ/OPENROUTER_DEFAULT_MODEL
@@ -11,16 +13,47 @@ model_list:
     litellm_params:
       model: os.environ/OPENROUTER_FAST_FALLBACK_MODEL
       api_key: os.environ/OPENROUTER_API_KEY
+
+  # Groq FREE tier fallback for chat. gpt-oss-20b handles everyday
+  # prompts; gpt-oss-120b reserved for reasoning-heavy workloads.
   - model_name: route-groq-fast
     litellm_params:
       model: os.environ/GROQ_FAST_MODEL
       api_key: os.environ/GROQ_API_KEY
+  - model_name: route-groq-reasoning
+    litellm_params:
+      model: os.environ/GROQ_REASONING_MODEL
+      api_key: os.environ/GROQ_API_KEY
+
+  # Embedding routes. OpenRouter multimodal embedding is primary; NVIDIA NIM
+  # (llama-3.2-nemoretriever-300m-embed-v1) is the free fallback when OR
+  # returns 429/5xx. Neither route is paid.
   - model_name: route-openrouter-embedding
     litellm_params:
       model: os.environ/OPENROUTER_EMBEDDING_MODEL
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       mode: embedding
+  - model_name: route-nvidia-embedding
+    litellm_params:
+      model: os.environ/NVIDIA_NIM_EMBEDDING_MODEL
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+    model_info:
+      mode: embedding
+
+# Retry each upstream call up to 3 times before falling back to another group.
+# Covers 429/5xx automatically. `fallbacks:` kicks in only after retries
+# exhaust. `cooldown_time` prevents hammering a model that just failed.
+litellm_settings:
+  num_retries: 3
+  request_timeout: 45
+  allowed_fails: 3
+  cooldown_time: 30
+  fallbacks:
+    - route-openrouter-default: [route-groq-fast]
+    - route-openrouter-auto: [route-groq-fast]
+    - route-openrouter-fast-fallback: [route-groq-fast]
+    - route-openrouter-embedding: [route-nvidia-embedding]
 
 files_settings:
   - custom_llm_provider: openrouter

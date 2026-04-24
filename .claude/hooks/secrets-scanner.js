@@ -1,8 +1,14 @@
 #!/usr/bin/env node
-// PreToolUse hook: blocks hardcoded secrets, API keys, and credentials.
+// PreToolUse hook: blocks hardcoded secrets, API keys, and credentials in
+// files that are candidates for version control.
 // - BLOCKS: high-confidence secret patterns (known key prefixes, private keys, AWS keys)
 // - WARNS: lower-confidence patterns (generic api_key, secret, token assignments)
-// - SKIPS: .env.example, test files, markdown files
+// - SKIPS:
+//     * local-only secret files (.env, .env.local, .env.*.local) — these are
+//       meant to hold real credentials and are gitignored by convention
+//     * sample/template env files (.env.example, .env.sample)
+//     * test files (*.test.*, *.spec.*)
+//     * markdown files
 
 const path = require('path');
 
@@ -21,8 +27,13 @@ process.stdin.on('end', () => {
 
     const basename = path.basename(filePath);
 
-    // Skip files that legitimately contain secret-like patterns
+    // Skip files that legitimately contain secret-like patterns.
+    // Local-only env files (`.env`, `.env.local`, `.env.*.local`) are
+    // gitignored by convention and must hold real secrets for local dev/CI
+    // tooling to work. Template/sample env files never hold real secrets.
     if (basename === '.env.example' || basename === '.env.sample') process.exit(0);
+    if (basename === '.env' || basename === '.env.local') process.exit(0);
+    if (/^\.env\..+\.local$/.test(basename)) process.exit(0);
     if (/\.(test|spec)\.(ts|js|tsx|jsx|go|py)$/.test(basename)) process.exit(0);
     if (basename.endsWith('.md')) process.exit(0);
 

@@ -56,6 +56,9 @@ services:
       OPENROUTER_FAST_FALLBACK_MODEL: ${OPENROUTER_FAST_FALLBACK_MODEL}
       OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL}
       GROQ_FAST_MODEL: ${GROQ_FAST_MODEL}
+      GROQ_REASONING_MODEL: ${GROQ_REASONING_MODEL}
+      NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY}
+      NVIDIA_NIM_EMBEDDING_MODEL: ${NVIDIA_NIM_EMBEDDING_MODEL}
     volumes:
       - ../../deploy/litellm/config.yaml:/app/config.yaml
     command: ["--config=/app/config.yaml"]
