@@ -40,11 +40,11 @@ write_files:
         email sakibsadmanshajib@gmail.com
       }
 
-      api.hive.scubed.co {
+      api-hive.scubed.co {
         reverse_proxy 127.0.0.1:8080
       }
 
-      cp.hive.scubed.co {
+      cp-hive.scubed.co {
         reverse_proxy 127.0.0.1:8081
       }
 
