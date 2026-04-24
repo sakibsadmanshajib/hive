@@ -1,18 +1,50 @@
 model_list:
-  # OpenRouter primary routes (chat). `openrouter/free` disperses load across
-  # OR's free-model pool — fragile under burst, hence the Groq fallbacks below.
+  # OpenRouter primary routes (chat).
+  #
+  # OpenRouter's `:free` and `/free` shapes route across a multi-provider
+  # backing pool with different tokenizers + reasoning budgets, which
+  # produces wild variance in `usage.prompt_tokens` and `usage.completion_tokens`
+  # for identical requests (see .planning/debug/flaky-usage-tokens-root-cause.md).
+  # PR #99 added an edge-api clamp that prevents the worst symptom (ct=0 on
+  # non-empty output → 0-billed); this provider pin attacks the variance
+  # itself so the clamp rarely needs to fire.
+  #
+  # Pinning strategy (effective when OPENROUTER_*_MODEL points at a specific
+  # model — e.g. `openrouter/meta-llama/llama-3.3-70b-instruct:free` — rather
+  # than the meta `openrouter/free` route, which OR resolves before honoring
+  # provider preferences):
+  #
+  #   provider.allow_fallbacks: false  — refuse silent re-route to a
+  #                                       different backing tokenizer
+  #   provider.sort: throughput        — prefer fastest reporter; ties broken
+  #                                       deterministically by OR
+  #
+  # Groq routes below stay as the cross-provider safety net so a strict pin
+  # never produces a hard 503 — see `litellm_settings.fallbacks` further down.
   - model_name: route-openrouter-default
     litellm_params:
       model: os.environ/OPENROUTER_DEFAULT_MODEL
       api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          sort: throughput
   - model_name: route-openrouter-auto
     litellm_params:
       model: os.environ/OPENROUTER_AUTO_MODEL
       api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          sort: throughput
   - model_name: route-openrouter-fast-fallback
     litellm_params:
       model: os.environ/OPENROUTER_FAST_FALLBACK_MODEL
       api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          sort: throughput
 
   # Groq FREE tier fallback for chat. gpt-oss-20b handles everyday
   # prompts; gpt-oss-120b reserved for reasoning-heavy workloads.
