@@ -1,0 +1,22 @@
+// Cloudflare Pages configuration — source of truth for compatibility settings.
+//
+// Applied at project-scope via CF API during initial setup and also via
+// `wrangler pages deploy`. See docs:
+//   https://developers.cloudflare.com/pages/functions/wrangler-configuration/
+//   https://developers.cloudflare.com/workers/configuration/compatibility-flags/
+//
+// Why nodejs_compat:
+//   Next 15 + @cloudflare/next-on-pages pulls in Node built-ins (process,
+//   Buffer, util) through Supabase SSR + Next runtime helpers. Without this
+//   flag the Worker runtime throws:
+//     "Error - no nodejs_compat compatibility flag"
+//
+// compatibility_date 2024-09-23 is the earliest date that enables
+// nodejs_compat v2 semantics.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "hive-console",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": ".vercel/output/static"
+}
