@@ -125,13 +125,13 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build (CF Pages — Next.js static export)
+      - name: Build (CF Pages via @cloudflare/next-on-pages)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_API_URL: https://api.hive.scubed.co
           NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp.hive.scubed.co
-        run: npm run build
+        run: npm run build:cf
 
       - name: Deploy to CF Pages
         uses: cloudflare/wrangler-action@v3

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { upsertBudgetThreshold, dismissBudgetAlert } from "@/lib/control-plane/client";
 
+export const runtime = "edge";
+
 export async function PUT(request: Request): Promise<Response> {
   try {
     const body: unknown = await request.json();
