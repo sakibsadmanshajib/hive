@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T17:37:16.652Z
-> Files: 517 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T18:22:51.622Z
+> Files: 524 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
@@ -13,7 +13,7 @@
 
 ## ./
 
-- `.gitignore` — Git ignore rules (~150 tok)
+- `.gitignore` — Git ignore rules (~206 tok)
 - `CLAUDE.md` — OpenWolf (~2736 tok)
 - `go.work` (~28 tok)
 - `go.work.sum` (~602 tok)
@@ -71,6 +71,13 @@
 - `config.json` (~80 tok)
 - `E2E-EXPANSION-SYSTEM-PROMPT.md` — System Prompt — E2E Test Expansion + CI Wiring (~2393 tok)
 - `MILESTONES.md` — Milestones (~739 tok)
+- `next-session-fix-embed-env-cascade.md` — Next Session: Fix embedding model env fallback cascade (~647 tok)
+- `next-session-fix-js-fixture-path.md` — Next Session: Fix JS fixture path off-by-one + dual-branch masking (~732 tok)
+- `next-session-flaky-usage-tokens.md` — Next Session: Investigate flaky `usage.*_tokens = 0` from chat + responses (~992 tok)
+- `next-session-post-deploy-sdk-replay.md` — Next Session: Post-deploy SDK replay against staging (~816 tok)
+- `next-session-ui-styling.md` — Next Session: web-console UI framework + styling (~1096 tok)
+- `next-session-visual-regression-coverage.md` — Next Session: Add visual regression coverage to CI (~886 tok)
+- `next-sessions-INDEX.md` — Next-session prompt index (~696 tok)
 - `PROJECT.md` — Hive API Platform (~2848 tok)
 - `ROADMAP.md` — Roadmap: Hive API Platform (~1949 tok)
 - `STATE.md` — Project State (~5891 tok)

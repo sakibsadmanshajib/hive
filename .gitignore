@@ -33,6 +33,12 @@ Thumbs.db
 __pycache__/
 /apps/web-console/playwright-report/
 /apps/web-console/test-results/
+
+# SDK-tests build/cache artifacts
+/packages/sdk-tests/java/.gradle/
+/packages/sdk-tests/java/build/
+/packages/sdk-tests/python/.venv/
+/packages/sdk-tests/python/*.egg-info/
 # Added by code-review-graph
 .code-review-graph/
 
