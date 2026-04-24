@@ -7,6 +7,7 @@ on:
     paths:
       - 'apps/edge-api/**'
       - 'apps/control-plane/**'
+      - 'apps/web-console/**'
       - 'packages/**'
       - 'deploy/docker/**'
       - 'deploy/litellm/**'
@@ -104,12 +105,23 @@ jobs:
         env:
           GHCR_ACTOR: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_PREFIX: ${{ env.IMAGE_PREFIX }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} \
-            "GHCR_ACTOR=$GHCR_ACTOR GHCR_TOKEN=$GHCR_TOKEN bash -s" <<'SH'
+          # Generate the remote script with token + tag substituted locally so
+          # they never appear in the VM process environment (/proc/<pid>/environ).
+          # Unquoted heredoc delimiter expands $VARS on the runner; literal `$`s
+          # for the remote shell are escaped with \$ where needed.
+          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} 'bash -s' <<SH
           set -euo pipefail
           cd /opt/hive/deploy/docker
-          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
+          printf '%s' '${GHCR_TOKEN}' | docker login ghcr.io -u '${GHCR_ACTOR}' --password-stdin
+          # Persist the deployed tag so any manual \`docker compose\` invocation
+          # on the VM resolves IMAGE_TAG without re-running the workflow.
+          grep -vE '^(IMAGE_TAG|IMAGE_PREFIX)=' /opt/hive/.env > /opt/hive/.env.tmp || true
+          printf 'IMAGE_TAG=%s\nIMAGE_PREFIX=%s\n' '${IMAGE_TAG}' '${IMAGE_PREFIX}' >> /opt/hive/.env.tmp
+          mv /opt/hive/.env.tmp /opt/hive/.env
+          chmod 600 /opt/hive/.env
           docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env pull edge-api control-plane litellm
           docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env up -d --remove-orphans edge-api control-plane litellm
           docker image prune -f
@@ -134,6 +146,7 @@ jobs:
 
   deploy-pages:
     name: Deploy web-console to Cloudflare Pages
+    needs: deploy-vm
     runs-on: ubuntu-latest
     defaults:
       run:

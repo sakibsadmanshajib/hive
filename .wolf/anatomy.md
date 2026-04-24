@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T15:52:26.435Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T16:39:07.903Z
 > Files: 516 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
@@ -62,7 +62,7 @@
 ## .github/workflows/
 
 - `ci.yml` — CI: CI (~4358 tok)
-- `deploy-staging.yml` — CI: deploy-staging (~1561 tok)
+- `deploy-staging.yml` — CI: deploy-staging (~1799 tok)
 - `pr-cleanup.yml` — CI: PR cleanup (~2124 tok)
 
 ## .planning/
@@ -608,7 +608,7 @@
 
 ## apps/web-console/app/api/budget/
 
-- `route.ts` — Next.js API route: PUT, DELETE (~371 tok)
+- `route.ts` — Next.js API route: PUT, DELETE (~589 tok)
 
 ## apps/web-console/app/auth/callback/
 
@@ -708,7 +708,7 @@
 - `budget-alert-form.tsx` — BudgetAlertForm — renders form — uses useState (~1215 tok)
 - `checkout-modal.test.tsx` — result (~292 tok)
 - `checkout-modal.tsx` — formatPrice — uses useState, useEffect (~3286 tok)
-- `invoice-download-button.tsx` — formatDate (~2216 tok)
+- `invoice-download-button.tsx` — formatDate (~2264 tok)
 - `invoice-list.tsx` — formatDate — renders table (~1742 tok)
 - `ledger-csv-export.tsx` — LedgerCsvExport (~368 tok)
 - `ledger-table.tsx` — entryTypeLabel — renders table (~1965 tok)
@@ -757,7 +757,7 @@
 
 - `docker-bake.hcl` — Shared bake definition for both local development and CI. (~338 tok)
 - `docker-compose.override.yml` — Docker Compose: 0 services (~262 tok)
-- `docker-compose.staging.yml` — Staging override — overlays docker-compose.yml (~600 tok)
+- `docker-compose.staging.yml` — Staging override — overlays docker-compose.yml (~618 tok)
 - `docker-compose.yml` — Docker Compose services (~1868 tok)
 - `Dockerfile.control-plane` (~200 tok)
 - `Dockerfile.control-plane.prod` — Production multi-stage build for control-plane (~234 tok)

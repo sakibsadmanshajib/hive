@@ -146,6 +146,38 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-24T15:46:58.081Z"
+    },
+    {
+      "id": "bug-010",
+      "timestamp": "2026-04-24T16:35:55.182Z",
+      "error_message": "Wrong reference: main should be $",
+      "file": "deploy/docker/docker-compose.staging.yml",
+      "root_cause": "Used \"main\" instead of \"$\"",
+      "fix": "Changed main → $",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-04-24T16:37:39.143Z"
+    },
+    {
+      "id": "bug-011",
+      "timestamp": "2026-04-24T16:36:16.814Z",
+      "error_message": "Significant refactor of ",
+      "file": ".github/workflows/deploy-staging.yml",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 15→33 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T16:36:16.814Z"
     }
   ]
 }

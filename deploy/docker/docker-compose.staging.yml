@@ -18,7 +18,7 @@
 
 services:
   edge-api:
-    image: ghcr.io/sakibsadmanshajib/hive/edge-api:main
+    image: ${IMAGE_PREFIX:-ghcr.io/sakibsadmanshajib/hive}/edge-api:${IMAGE_TAG:-main}
     build: !reset null
     volumes: !reset []
     depends_on:
@@ -38,7 +38,7 @@ services:
       LOG_LEVEL: info
 
   control-plane:
-    image: ghcr.io/sakibsadmanshajib/hive/control-plane:main
+    image: ${IMAGE_PREFIX:-ghcr.io/sakibsadmanshajib/hive}/control-plane:${IMAGE_TAG:-main}
     build: !reset null
     volumes: !reset []
     depends_on: !reset []

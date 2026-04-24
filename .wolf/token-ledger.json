@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-04-22T00:50:18.611Z",
   "lifetime": {
-    "total_tokens_estimated": 45254,
-    "total_reads": 33,
-    "total_writes": 78,
-    "total_sessions": 10,
-    "anatomy_hits": 23,
-    "anatomy_misses": 10,
-    "repeated_reads_blocked": 0,
-    "estimated_savings_vs_bare_cli": 4600
+    "total_tokens_estimated": 96527,
+    "total_reads": 69,
+    "total_writes": 117,
+    "total_sessions": 12,
+    "anatomy_hits": 56,
+    "anatomy_misses": 13,
+    "repeated_reads_blocked": 6,
+    "estimated_savings_vs_bare_cli": 18961
   },
   "sessions": [
     {
@@ -868,6 +868,516 @@
         "writes_count": 11,
         "repeated_reads_blocked": 0,
         "anatomy_lookups": 4
+      }
+    },
+    {
+      "id": "session-2026-04-24-1142",
+      "started": "2026-04-24T15:42:06.796Z",
+      "ended": "2026-04-24T15:52:41.829Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 1375,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1104,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 497,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 2017,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 390,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 160,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1804,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 219,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 63,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 42,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 37,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 45,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 400,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 80,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 129,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/feedback_wolf_commit.md",
+          "tokens_estimated": 232,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+          "tokens_estimated": 94,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 4993,
+        "output_tokens_estimated": 3695,
+        "reads_count": 5,
+        "writes_count": 13,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 4
+      }
+    },
+    {
+      "id": "session-2026-04-24-1142",
+      "started": "2026-04-24T15:42:06.796Z",
+      "ended": "2026-04-24T15:56:33.665Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 1375,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1104,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 497,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 2017,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 390,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 160,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1804,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 219,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 63,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 42,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 37,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 45,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 400,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 80,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 129,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/feedback_wolf_commit.md",
+          "tokens_estimated": 232,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+          "tokens_estimated": 94,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 4993,
+        "output_tokens_estimated": 3695,
+        "reads_count": 5,
+        "writes_count": 13,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 4
+      }
+    },
+    {
+      "id": "session-2026-04-24-1142",
+      "started": "2026-04-24T15:42:06.796Z",
+      "ended": "2026-04-24T16:01:09.247Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 1375,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1104,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 497,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 2017,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 390,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 160,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1804,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 219,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 63,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 42,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 37,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 45,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 400,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 80,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 129,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/feedback_wolf_commit.md",
+          "tokens_estimated": 232,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+          "tokens_estimated": 94,
+          "action": "edit"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 4993,
+        "output_tokens_estimated": 3695,
+        "reads_count": 5,
+        "writes_count": 13,
+        "repeated_reads_blocked": 0,
+        "anatomy_lookups": 4
+      }
+    },
+    {
+      "id": "session-2026-04-24-1209",
+      "started": "2026-04-24T16:09:56.923Z",
+      "ended": "2026-04-24T16:25:34.438Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 2216,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-list.tsx",
+          "tokens_estimated": 1742,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/app/api/budget/route.ts",
+          "tokens_estimated": 371,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/next.config.ts",
+          "tokens_estimated": 109,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 1561,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1804,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 600,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 8403,
+        "output_tokens_estimated": 0,
+        "reads_count": 7,
+        "writes_count": 0,
+        "repeated_reads_blocked": 2,
+        "anatomy_lookups": 7
+      }
+    },
+    {
+      "id": "session-2026-04-24-1209",
+      "started": "2026-04-24T16:09:56.923Z",
+      "ended": "2026-04-24T16:28:16.370Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 2216,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-list.tsx",
+          "tokens_estimated": 1742,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/app/api/budget/route.ts",
+          "tokens_estimated": 371,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/next.config.ts",
+          "tokens_estimated": 109,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 1561,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1804,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 600,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 8403,
+        "output_tokens_estimated": 0,
+        "reads_count": 7,
+        "writes_count": 0,
+        "repeated_reads_blocked": 2,
+        "anatomy_lookups": 7
+      }
+    },
+    {
+      "id": "session-2026-04-24-1209",
+      "started": "2026-04-24T16:09:56.923Z",
+      "ended": "2026-04-24T16:32:23.772Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-download-button.tsx",
+          "tokens_estimated": 2216,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/components/billing/invoice-list.tsx",
+          "tokens_estimated": 1742,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/app/api/budget/route.ts",
+          "tokens_estimated": 371,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/web-console/next.config.ts",
+          "tokens_estimated": 109,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.github/workflows/deploy-staging.yml",
+          "tokens_estimated": 1561,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/staging/cloud-init.yml",
+          "tokens_estimated": 1804,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/docker/docker-compose.staging.yml",
+          "tokens_estimated": 600,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [],
+      "totals": {
+        "input_tokens_estimated": 8403,
+        "output_tokens_estimated": 0,
+        "reads_count": 7,
+        "writes_count": 0,
+        "repeated_reads_blocked": 2,
+        "anatomy_lookups": 7
       }
     }
   ],
