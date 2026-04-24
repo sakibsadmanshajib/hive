@@ -25,6 +25,7 @@ write_files:
       RemainAfterExit=yes
       WorkingDirectory=/opt/hive/deploy/docker
       EnvironmentFile=/opt/hive/.env
+      ExecStartPre=/bin/bash -c 'set -e; . /opt/hive/.env; : "${REDIS_URL:?REDIS_URL required in /opt/hive/.env}"; : "${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY required in /opt/hive/.env}"'
       ExecStart=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env up -d
       ExecStop=/usr/bin/docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env down
       TimeoutStartSec=900
@@ -61,6 +62,8 @@ write_files:
       Group=caddy
       ExecStart=/usr/local/bin/caddy run --environ --config /etc/caddy/Caddyfile
       ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --force
+      Restart=on-failure
+      RestartSec=5s
       TimeoutStopSec=5s
       LimitNOFILE=1048576
       PrivateTmp=true
@@ -70,6 +73,12 @@ write_files:
       [Install]
       WantedBy=multi-user.target
 
+  - path: /etc/sysctl.d/99-hive-swappiness.conf
+    permissions: "0644"
+    content: |
+      # Reduce swap aggressiveness on a 1GB RAM VM with a 2GB swapfile
+      vm.swappiness=10
+
 runcmd:
   # Swap for safety on 1GB RAM VM
   - fallocate -l 2G /swapfile
@@ -77,14 +86,20 @@ runcmd:
   - mkswap /swapfile
   - swapon /swapfile
   - echo '/swapfile none swap sw 0 0' >> /etc/fstab
-  - sysctl vm.swappiness=10
+  - sysctl --system
 
-  # iptables — OCI Ubuntu ships restrictive INPUT; open 80/443
-  - iptables -I INPUT 6 -p tcp --dport 80 -m state --state NEW,ESTABLISHED -j ACCEPT
-  - iptables -I INPUT 7 -p tcp --dport 443 -m state --state NEW,ESTABLISHED -j ACCEPT
+  # iptables — OCI Ubuntu ships restrictive INPUT; open 80/443 robustly.
+  # Ensure RELATED,ESTABLISHED accept is present first, then append NEW accepts
+  # for 80/443 so rules cannot end up below a REJECT.
+  - iptables -C INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  - iptables -C INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT
+  - iptables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
+  - ip6tables -C INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -I INPUT 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+  - ip6tables -C INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT
+  - ip6tables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
   - netfilter-persistent save
 
-  # Docker install (amd64)
+  # Docker install (amd64) — pin docker-compose-plugin >= 2.24 (for !reset/!override tag support)
   - install -m 0755 -d /etc/apt/keyrings
   - curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
   - chmod a+r /etc/apt/keyrings/docker.gpg
@@ -93,9 +108,14 @@ runcmd:
   - DEBIAN_FRONTEND=noninteractive apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
   - systemctl enable --now docker
   - usermod -aG docker ubuntu
+  # Fail-fast sanity check: docker compose >= 2.24 required for !reset/!override in docker-compose.staging.yml
+  - |
+    COMPOSE_VER=$(docker compose version --short 2>/dev/null || echo 0.0.0)
+    awk -v v="$COMPOSE_VER" 'BEGIN{split(v,p,".");if((p[1]+0)<2||((p[1]+0)==2&&(p[2]+0)<24)){print "ERROR: docker compose "v" < 2.24 (required for !reset/!override)"; exit 1}}'
 
-  # Caddy install (amd64 static)
+  # Caddy install (amd64 static) with sha256 verification
   - curl -fsSL -o /tmp/caddy.tar.gz https://github.com/caddyserver/caddy/releases/download/v2.8.4/caddy_2.8.4_linux_amd64.tar.gz
+  - echo 'a7e8306c54138cf88e371c5ec0caf7baf142ecc1d60a30897dfb67d65d3748c8  /tmp/caddy.tar.gz' | sha256sum -c -
   - tar -xzf /tmp/caddy.tar.gz -C /usr/local/bin caddy
   - chmod +x /usr/local/bin/caddy
   - useradd --system --home /var/lib/caddy --create-home --shell /usr/sbin/nologin caddy || true
@@ -104,14 +124,24 @@ runcmd:
   - systemctl daemon-reload
   - systemctl enable --now caddy
 
-  # Deploy user + hive workdir
+  # Deploy user + hive workdir. Clone only if repo not already present — never swallow real errors.
   - useradd -m -s /bin/bash -G docker deploy || true
   - mkdir -p /opt/hive
   - chown deploy:deploy /opt/hive
-  - sudo -u deploy git clone https://github.com/sakibsadmanshajib/hive.git /opt/hive || true
+  - |
+    if [ ! -d /opt/hive/.git ]; then
+      sudo -u deploy git clone https://github.com/sakibsadmanshajib/hive.git /opt/hive
+    fi
 
-  # Placeholder .env — real secrets written over SSH later
-  - touch /opt/hive/.env
+  # .env placeholder — real values seeded over SSH by GitHub Actions deploy-staging workflow.
+  # hive.service ExecStartPre refuses to start until REDIS_URL + LITELLM_MASTER_KEY are populated.
+  - |
+    if [ ! -s /opt/hive/.env ]; then
+      cat > /opt/hive/.env <<'EOF'
+    # TODO: populate via GitHub Actions "Seed staging env" step (secrets.STAGING_ENV).
+    # hive.service will refuse to start until REDIS_URL and LITELLM_MASTER_KEY are set.
+    EOF
+    fi
   - chown deploy:deploy /opt/hive/.env
   - chmod 600 /opt/hive/.env
 

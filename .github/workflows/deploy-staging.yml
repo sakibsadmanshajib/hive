@@ -64,6 +64,7 @@ jobs:
     name: Deploy to OCI VM
     needs: build-images
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: read
@@ -76,6 +77,18 @@ jobs:
           echo "${{ secrets.STAGING_SSH_KEY }}" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H ${{ secrets.STAGING_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Seed staging env
+        env:
+          STAGING_ENV: ${{ secrets.STAGING_ENV }}
+        run: |
+          printf '%s' "$STAGING_ENV" > /tmp/hive.env
+          chmod 600 /tmp/hive.env
+          scp -i ~/.ssh/id_ed25519 /tmp/hive.env \
+            deploy@${{ secrets.STAGING_HOST }}:/opt/hive/.env
+          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} \
+            'chmod 600 /opt/hive/.env'
+          rm -f /tmp/hive.env
 
       - name: Sync compose + litellm config
         run: |
@@ -105,12 +118,15 @@ jobs:
 
       - name: Smoke test
         run: |
-          for i in 1 2 3 4 5 6; do
-            if curl -fsS https://api.hive.scubed.co/health && curl -fsS https://cp.hive.scubed.co/health; then
+          for i in $(seq 1 12); do
+            api_ok=0; cp_ok=0
+            curl -fsS https://api.hive.scubed.co/health >/dev/null && api_ok=1 || true
+            curl -fsS https://cp.hive.scubed.co/health  >/dev/null && cp_ok=1 || true
+            if [ "$api_ok" = 1 ] && [ "$cp_ok" = 1 ]; then
               echo "SMOKE OK"
               exit 0
             fi
-            echo "attempt $i failed, retry in 10s"
+            echo "attempt $i failed (api=$api_ok, cp=$cp_ok), retry in 10s"
             sleep 10
           done
           echo "SMOKE FAIL"

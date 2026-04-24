@@ -11,6 +11,10 @@
 #   - Production Go binaries (no air hot-reload volumes)
 #   - Loopback-only ports (Caddy on host fronts TLS)
 #   - Memory limits for 1GB RAM VM (E2.1.Micro)
+#
+# Requires Docker Compose >= 2.24 (for !reset / !override tags).
+# cloud-init enforces this at bootstrap; hive.service ExecStartPre enforces
+# required env vars (REDIS_URL, LITELLM_MASTER_KEY) are present in /opt/hive/.env.
 
 services:
   edge-api:
@@ -28,8 +32,8 @@ services:
     environment:
       EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
       LITELLM_BASE_URL: http://litellm:4000
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
-      REDIS_URL: ${REDIS_URL}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY required (seed /opt/hive/.env)}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
       EDGE_PUBLIC_URL: https://api.hive.scubed.co
       LOG_LEVEL: info
 
@@ -44,7 +48,7 @@ services:
     mem_limit: 180m
     mem_reservation: 120m
     environment:
-      REDIS_URL: ${REDIS_URL}
+      REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
       CONTROL_PLANE_PUBLIC_URL: https://cp.hive.scubed.co
       LOG_LEVEL: info
 
