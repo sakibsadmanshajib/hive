@@ -1,0 +1,21 @@
+# Production multi-stage build for control-plane
+FROM golang:1.24-alpine AS build
+RUN apk add --no-cache git ca-certificates
+WORKDIR /src
+COPY go.work go.work.sum* ./
+COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
+COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
+COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
+RUN cd apps/control-plane && go mod download
+COPY apps/control-plane/ ./apps/control-plane/
+COPY packages/storage/ ./packages/storage/
+WORKDIR /src/apps/control-plane
+RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/control-plane ./cmd/server
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates wget && adduser -D -u 10001 app
+COPY --from=build /out/control-plane /usr/local/bin/control-plane
+WORKDIR /app
+USER app
+EXPOSE 8081
+ENTRYPOINT ["/usr/local/bin/control-plane"]

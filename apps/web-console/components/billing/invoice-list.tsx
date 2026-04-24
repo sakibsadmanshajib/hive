@@ -1,4 +1,5 @@
 import type { Invoice } from "@/lib/control-plane/client";
+import { InvoiceDownloadButton } from "./invoice-download-button";
 
 interface InvoiceListProps {
   invoices: Invoice[];
@@ -207,12 +208,7 @@ export function InvoiceList({ invoices }: InvoiceListProps) {
                   fontSize: "1rem",
                 }}
               >
-                <a
-                  href={`/console/billing/${invoice.id}/download`}
-                  style={{ color: "#1d4ed8", textDecoration: "none", fontSize: "0.875rem" }}
-                >
-                  Download PDF
-                </a>
+                <InvoiceDownloadButton invoice={invoice} />
               </td>
             </tr>
           );

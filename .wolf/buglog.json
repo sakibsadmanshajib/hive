@@ -54,8 +54,8 @@
       "timestamp": "2026-04-22T03:22:44.257383Z",
       "error_message": "Workspace switcher POST /console/account-switch sets cookie but subsequent /console render bounces to /auth/sign-in",
       "file": "apps/web-console/tests/e2e/auth-shell.spec.ts:71",
-      "root_cause": "Likely: getViewer() / middleware does not honor hive_account_id cookie for session scoping \u2014 after switch, Supabase session still bound to original account but cookie points to new, so viewer fetch fails or redirects",
-      "fix": "Test marked test.fixme() \u2014 deferred. Need: middleware + getViewer read hive_account_id cookie and select matching membership; redirect back to /console with new scope",
+      "root_cause": "Likely: getViewer() / middleware does not honor hive_account_id cookie for session scoping — after switch, Supabase session still bound to original account but cookie points to new, so viewer fetch fails or redirects",
+      "fix": "Test marked test.fixme() — deferred. Need: middleware + getViewer read hive_account_id cookie and select matching membership; redirect back to /console with new scope",
       "tags": [
         "web-console",
         "account-switch",
@@ -66,6 +66,134 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-22T03:22:44.257416Z"
+    },
+    {
+      "id": "bug-005",
+      "timestamp": "2026-04-24T09:03:42.399Z",
+      "error_message": "Wrong reference: edge should be server",
+      "file": "deploy/docker/Dockerfile.edge-api.prod",
+      "root_cause": "Used \"edge\" instead of \"server\"",
+      "fix": "Changed edge → server",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "prod"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T09:03:42.399Z"
+    },
+    {
+      "id": "bug-006",
+      "timestamp": "2026-04-24T15:44:59.179Z",
+      "error_message": "Significant refactor of ",
+      "file": ".github/workflows/deploy-staging.yml",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 12→15 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T15:44:59.179Z"
+    },
+    {
+      "id": "bug-007",
+      "timestamp": "2026-04-24T15:46:22.997Z",
+      "error_message": "Significant refactor of ",
+      "file": "deploy/docker/docker-compose.staging.yml",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 3→3 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T15:46:22.997Z"
+    },
+    {
+      "id": "bug-008",
+      "timestamp": "2026-04-24T15:46:40.026Z",
+      "error_message": "Type error",
+      "file": "apps/web-console/components/billing/invoice-download-button.tsx",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T15:46:40.026Z"
+    },
+    {
+      "id": "bug-009",
+      "timestamp": "2026-04-24T15:46:58.081Z",
+      "error_message": "Significant refactor of ",
+      "file": "apps/web-console/components/billing/invoice-download-button.tsx",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 17→31 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T15:46:58.081Z"
+    },
+    {
+      "id": "bug-010",
+      "timestamp": "2026-04-24T16:35:55.182Z",
+      "error_message": "Wrong reference: main should be $",
+      "file": "deploy/docker/docker-compose.staging.yml",
+      "root_cause": "Used \"main\" instead of \"$\"",
+      "fix": "Changed main → $",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-04-24T16:37:39.143Z"
+    },
+    {
+      "id": "bug-011",
+      "timestamp": "2026-04-24T16:36:16.814Z",
+      "error_message": "Significant refactor of ",
+      "file": ".github/workflows/deploy-staging.yml",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 15→33 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T16:36:16.814Z"
+    },
+    {
+      "id": "bug-012",
+      "timestamp": "2026-04-24T16:51:38.487Z",
+      "error_message": "Incorrect value in code",
+      "file": "apps/web-console/app/api/budget/route.ts",
+      "root_cause": "Had \"nodejs\"",
+      "fix": "Changed to \"edge\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-24T16:51:38.487Z"
     }
   ]
 }
