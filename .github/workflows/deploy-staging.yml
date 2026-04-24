@@ -13,8 +13,8 @@ on:
       - 'deploy/litellm/**'
       - '.github/workflows/deploy-staging.yml'
   schedule:
-    # Every 6 hours
-    - cron: '0 */6 * * *'
+    # Hourly — `detect-changes` job skips deploy if no diff vs last successful run
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 concurrency:
@@ -26,8 +26,77 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
+  detect-changes:
+    name: Detect changes vs last successful deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      should_deploy: ${{ steps.check.outputs.should_deploy }}
+      reason: ${{ steps.check.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # push + workflow_dispatch: always deploy (paths filter already applies to push)
+          if [ "$EVENT" != "schedule" ]; then
+            echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+            echo "reason=non-cron ($EVENT)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Cron: only deploy if watched paths changed vs the SHA of the last
+          # successful deploy-staging run. If no prior run recorded, deploy once.
+          last_sha=$(gh run list \
+              --workflow=deploy-staging.yml \
+              --branch=main \
+              --status=success \
+              --limit=1 \
+              --json headSha \
+              --jq '.[0].headSha // ""')
+
+          if [ -z "$last_sha" ]; then
+            echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+            echo "reason=no prior successful deploy"  >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$last_sha" = "$HEAD_SHA" ]; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "reason=HEAD == last_deploy_sha ($last_sha)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Make sure we have the last-deploy SHA locally so git diff can resolve it.
+          git fetch --quiet origin "$last_sha" || true
+
+          if git diff --quiet "$last_sha" "$HEAD_SHA" -- \
+              apps packages deploy/docker deploy/litellm \
+              .github/workflows/deploy-staging.yml; then
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+            echo "reason=no diff in watched paths since $last_sha" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy=true"  >> "$GITHUB_OUTPUT"
+            echo "reason=diff detected since $last_sha"  >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log decision
+        run: echo "should_deploy=${{ steps.check.outputs.should_deploy }} reason='${{ steps.check.outputs.reason }}'"
+
   build-images:
     name: Build & push Go images
+    needs: detect-changes
+    if: needs.detect-changes.outputs.should_deploy == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
