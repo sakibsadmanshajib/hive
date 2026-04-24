@@ -88,16 +88,31 @@ runcmd:
   - echo '/swapfile none swap sw 0 0' >> /etc/fstab
   - sysctl --system
 
-  # iptables — OCI Ubuntu ships restrictive INPUT; open 80/443 robustly.
-  # Ensure RELATED,ESTABLISHED accept is present first, then append NEW accepts
-  # for 80/443 so rules cannot end up below a REJECT.
-  - iptables -C INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-  - iptables -C INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT
-  - iptables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || iptables -A INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
-  - ip6tables -C INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || ip6tables -I INPUT 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
-  - ip6tables -C INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 80  -m conntrack --ctstate NEW -j ACCEPT
-  - ip6tables -C INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null || ip6tables -A INPUT -p tcp --dport 443 -m conntrack --ctstate NEW -j ACCEPT
-  - netfilter-persistent save
+  # iptables — OCI Ubuntu ships a restrictive INPUT chain with a catch-all
+  # REJECT at the bottom. `iptables -A INPUT ... ACCEPT` appends BELOW the
+  # REJECT, so the ACCEPT is never reached (symptom: 443 refused).
+  # Fix: insert ACCEPTs at the REJECT rule's position so they land above it.
+  - |
+    insert_before_reject() {
+      local ipt=$1 dport=$2
+      "$ipt" -C INPUT -p tcp --dport "$dport" -m conntrack --ctstate NEW -j ACCEPT 2>/dev/null && return 0
+      local line
+      line=$("$ipt" -L INPUT --line-numbers -n | awk '/REJECT/{print $1; exit}')
+      if [ -n "$line" ]; then
+        "$ipt" -I INPUT "$line" -p tcp --dport "$dport" -m conntrack --ctstate NEW -j ACCEPT
+      else
+        "$ipt" -A INPUT -p tcp --dport "$dport" -m conntrack --ctstate NEW -j ACCEPT
+      fi
+    }
+    iptables -C INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+      || iptables -I INPUT 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    insert_before_reject iptables 80
+    insert_before_reject iptables 443
+    ip6tables -C INPUT -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+      || ip6tables -I INPUT 1 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+    insert_before_reject ip6tables 80
+    insert_before_reject ip6tables 443
+    netfilter-persistent save
 
   # Docker install (amd64) — pin docker-compose-plugin >= 2.24 (for !reset/!override tag support)
   - install -m 0755 -d /etc/apt/keyrings

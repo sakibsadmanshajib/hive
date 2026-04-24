@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+export const runtime = "edge";
+
 const ALLOWED_NEXT_TARGETS = new Set([
   "/console",
   "/console/settings/profile",

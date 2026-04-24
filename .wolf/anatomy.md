@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T16:51:48.054Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T17:12:51.903Z
 > Files: 517 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
@@ -287,7 +287,7 @@
 
 ## .planning/staging/
 
-- `cloud-init.yml` — cloud-config (~1804 tok)
+- `cloud-init.yml` — cloud-config (~1828 tok)
 
 ## apps/control-plane/
 
@@ -604,7 +604,7 @@
 
 ## apps/web-console/app/
 
-- `layout.tsx` — RootLayout (~70 tok)
+- `layout.tsx` — All dynamic routes run on the Cloudflare Pages Edge runtime. (~117 tok)
 - `page.tsx` — RootPage (~122 tok)
 
 ## apps/web-console/app/api/budget/
@@ -613,7 +613,7 @@
 
 ## apps/web-console/app/auth/callback/
 
-- `route.ts` — Next.js API route: GET (~457 tok)
+- `route.ts` — Next.js API route: GET (~763 tok)
 
 ## apps/web-console/app/auth/forgot-password/
 
@@ -638,7 +638,7 @@
 
 ## apps/web-console/app/console/account-switch/
 
-- `route.ts` — Next.js API route: POST (~393 tok)
+- `route.ts` — Next.js API route: POST (~402 tok)
 
 ## apps/web-console/app/console/analytics/
 
