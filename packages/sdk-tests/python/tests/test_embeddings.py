@@ -5,10 +5,7 @@ from openai import OpenAI
 
 BASE_URL = os.getenv("HIVE_BASE_URL", "http://localhost:8080/v1")
 API_KEY = os.getenv("HIVE_API_KEY", "test-key")
-EMBEDDING_MODEL = os.getenv(
-    "HIVE_EMBEDDING_MODEL",
-    os.getenv("HIVE_TEST_MODEL", "hive-embedding-default"),
-)
+EMBEDDING_MODEL = os.getenv("HIVE_EMBEDDING_MODEL", "hive-embedding-default")
 
 
 @pytest.fixture

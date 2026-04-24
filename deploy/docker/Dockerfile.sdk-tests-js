@@ -4,4 +4,5 @@ COPY packages/sdk-tests/js/package.json packages/sdk-tests/js/package-lock.json*
 RUN npm install
 COPY packages/sdk-tests/js/ ./
 COPY packages/sdk-tests/fixtures/ /fixtures/
+ENV HIVE_FIXTURES_DIR=/fixtures/golden
 CMD ["npx", "vitest", "run"]
