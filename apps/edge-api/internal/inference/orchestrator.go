@@ -144,8 +144,8 @@ func (o *Orchestrator) executeSync(
 		}
 	}()
 
-	// 5. Dispatch to LiteLLM
-	resp, err := dispatch(ctx, route.LiteLLMModelName, body)
+	// 5. Dispatch to LiteLLM with bounded retry on 429/5xx.
+	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, dispatch)
 	if err != nil {
 		if reservation.ID != "" {
 			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{

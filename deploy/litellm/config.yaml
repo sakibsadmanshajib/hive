@@ -15,6 +15,12 @@ model_list:
     litellm_params:
       model: os.environ/GROQ_FAST_MODEL
       api_key: os.environ/GROQ_API_KEY
+  - model_name: route-openrouter-embedding
+    litellm_params:
+      model: os.environ/OPENROUTER_EMBEDDING_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+    model_info:
+      mode: embedding
 
 files_settings:
   - custom_llm_provider: openrouter

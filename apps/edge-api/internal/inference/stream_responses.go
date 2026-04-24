@@ -142,8 +142,10 @@ func (o *Orchestrator) executeResponsesStreaming(
 		}
 	}()
 
-	// 6. Dispatch to LiteLLM (always with stream_options for usage)
-	resp, err := o.litellm.ChatCompletion(ctx, route.LiteLLMModelName, body)
+	// 6. Dispatch to LiteLLM (always with stream_options for usage) with
+	// bounded retry on 429/5xx; safe because no bytes have been written
+	// to the client yet at this point.
+	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, o.litellm.ChatCompletion)
 	if err != nil {
 		if reservation.ID != "" {
 			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
