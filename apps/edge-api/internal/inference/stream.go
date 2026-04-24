@@ -16,14 +16,17 @@ import (
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
 )
 
-// UsageAccumulator tracks token usage across SSE streaming chunks.
+// UsageAccumulator tracks token usage and output text across SSE streaming chunks.
+// Content is recorded so the usage clamp can recompute completion_tokens when
+// the upstream terminal usage chunk reports 0 on a non-empty response.
 type UsageAccumulator struct {
-	InputTokens      int64
-	OutputTokens     int64
-	ReasoningTokens  int64
-	CachedTokens     int64
-	TotalTokens      int64
-	HasUsage         bool
+	InputTokens     int64
+	OutputTokens    int64
+	ReasoningTokens int64
+	CachedTokens    int64
+	TotalTokens     int64
+	HasUsage        bool
+	Content         strings.Builder
 }
 
 // Accumulate copies usage fields from a chunk if present.
@@ -41,6 +44,29 @@ func (a *UsageAccumulator) Accumulate(chunk ChatCompletionChunk) {
 	if chunk.Usage.PromptTokensDetails != nil {
 		a.CachedTokens = chunk.Usage.PromptTokensDetails.CachedTokens
 	}
+}
+
+// AccumulateContent appends all delta content + refusal text carried by a
+// streaming chunk. Tool-call deltas are ignored — they do not consume
+// completion tokens in the same way as visible output text.
+func (a *UsageAccumulator) AccumulateContent(chunk ChatCompletionChunk) {
+	for _, choice := range chunk.Choices {
+		if choice.Delta.Content != nil {
+			a.Content.WriteString(*choice.Delta.Content)
+		}
+		if choice.Delta.Refusal != nil {
+			a.Content.WriteString(*choice.Delta.Refusal)
+		}
+	}
+}
+
+// ClampUsage applies the zero-completion-tokens clamp against the accumulated
+// output text. Safe to call with nil chunk.Usage — it's a no-op.
+func (a *UsageAccumulator) ClampUsage(u *UsageResponse, upstreamID, aliasID, endpoint string) {
+	if u == nil {
+		return
+	}
+	clampZeroCompletionUsage(u, []string{a.Content.String()}, upstreamID, aliasID, endpoint)
 }
 
 // ToUsageResponse constructs a UsageResponse from accumulated values.
@@ -255,6 +281,14 @@ func (o *Orchestrator) executeStreaming(
 			if err := json.Unmarshal([]byte(jsonData), &chunk); err == nil {
 				// Rewrite model to alias ID
 				chunk.Model = aliasID
+				// Track output content so the usage clamp has ground truth.
+				accumulator.AccumulateContent(chunk)
+				// Clamp upstream-zero completion_tokens against the
+				// content streamed so far. Usage typically arrives in
+				// the terminal chunk once all deltas are flushed.
+				if chunk.Usage != nil {
+					accumulator.ClampUsage(chunk.Usage, chunk.ID, aliasID, endpoint)
+				}
 				// Accumulate usage if present
 				accumulator.Accumulate(chunk)
 				// Re-marshal sanitized chunk

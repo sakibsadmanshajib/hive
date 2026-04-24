@@ -241,6 +241,13 @@ func (o *Orchestrator) executeResponsesStreaming(
 			continue
 		}
 
+		// Clamp upstream-zero completion_tokens against the content streamed
+		// so far. Usage chunks typically arrive last with empty choices, so
+		// translator.currentContent already holds the full response body.
+		if chunk.Usage != nil {
+			clampZeroCompletionUsage(chunk.Usage, []string{translator.currentContent.String()}, chunk.ID, model, EndpointResponses)
+		}
+
 		// Accumulate usage if present.
 		acc.Accumulate(chunk)
 

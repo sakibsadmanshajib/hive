@@ -79,3 +79,22 @@ func completionChoiceTexts(choices []CompletionChoice) []string {
 	}
 	return out
 }
+
+// responsesOutputTexts returns the visible output_text content of every
+// Responses API message item. Tool-call and reasoning items have no billable
+// completion-text contribution (reasoning tokens are tracked separately via
+// usage.completion_tokens_details.reasoning_tokens) and are skipped.
+func responsesOutputTexts(items []ResponseOutputItem) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Type != "message" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Type == "output_text" && part.Text != "" {
+				out = append(out, part.Text)
+			}
+		}
+	}
+	return out
+}

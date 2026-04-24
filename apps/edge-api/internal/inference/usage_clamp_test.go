@@ -130,3 +130,112 @@ func TestNormalizeChatCompletion_PreservesNonZeroCt(t *testing.T) {
 		t.Fatalf("clamp wrongly mutated nonzero usage: %+v", usage)
 	}
 }
+
+func TestNormalizeResponsesSync_ClampsZeroCt(t *testing.T) {
+	// Upstream chat body with nonempty content and completion_tokens=0.
+	body := []byte(`{"id":"gen-zct-responses","object":"chat.completion","created":0,"model":"hive-default","choices":[{"index":0,"message":{"role":"assistant","content":"ok\n"},"finish_reason":"stop"}],"usage":{"prompt_tokens":4,"completion_tokens":0,"total_tokens":4}}`)
+	req := ResponsesRequest{Model: "hive-default"}
+	_, usage, err := normalizeResponsesSync(body, "hive-default", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage == nil {
+		t.Fatal("usage nil")
+	}
+	if usage.CompletionTokens == 0 {
+		t.Fatalf("clamp did not engage: %+v", usage)
+	}
+	if usage.TotalTokens != usage.PromptTokens+usage.CompletionTokens {
+		t.Fatalf("total_tokens not recomputed: %+v", usage)
+	}
+}
+
+func TestNormalizeResponsesSync_PreservesNonZeroCt(t *testing.T) {
+	body := []byte(`{"id":"r","object":"chat.completion","created":0,"model":"hive-default","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":7,"total_tokens":12}}`)
+	req := ResponsesRequest{Model: "hive-default"}
+	_, usage, err := normalizeResponsesSync(body, "hive-default", req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.CompletionTokens != 7 || usage.TotalTokens != 12 {
+		t.Fatalf("clamp wrongly mutated nonzero usage: %+v", usage)
+	}
+}
+
+func TestResponsesOutputTexts_IgnoresNonOutputText(t *testing.T) {
+	items := []ResponseOutputItem{
+		{
+			Type: "message",
+			Content: []ResponseContentPart{
+				{Type: "output_text", Text: "hello"},
+				{Type: "output_text", Text: ""},      // empty — skipped
+				{Type: "reasoning", Text: "hidden"},  // non-output_text part — skipped
+			},
+		},
+		{
+			Type:    "reasoning", // reasoning item — whole item skipped (reasoning_tokens tracked separately)
+			Content: []ResponseContentPart{{Type: "output_text", Text: "deep thoughts"}},
+		},
+	}
+	got := responsesOutputTexts(items)
+	if len(got) != 1 {
+		t.Fatalf("unexpected output texts: %+v", got)
+	}
+	if got[0] != "hello" {
+		t.Fatalf("first text wrong: %q", got[0])
+	}
+}
+
+func TestUsageAccumulator_AccumulateContentAndClamp(t *testing.T) {
+	acc := &UsageAccumulator{}
+	// Deltas.
+	acc.AccumulateContent(ChatCompletionChunk{
+		Choices: []ChunkChoice{{Delta: ChunkDelta{Content: ptrStr("hello ")}}},
+	})
+	acc.AccumulateContent(ChatCompletionChunk{
+		Choices: []ChunkChoice{{Delta: ChunkDelta{Content: ptrStr("world")}}},
+	})
+	// Terminal usage chunk with ct=0 — should be clamped.
+	usage := &UsageResponse{PromptTokens: 3, CompletionTokens: 0, TotalTokens: 3}
+	acc.ClampUsage(usage, "chatcmpl-stream", "hive-default", EndpointChatCompletions)
+	if usage.CompletionTokens == 0 {
+		t.Fatalf("expected clamp to engage on streamed content, got 0")
+	}
+	if usage.TotalTokens != usage.PromptTokens+usage.CompletionTokens {
+		t.Fatalf("total_tokens not recomputed: %+v", usage)
+	}
+}
+
+func TestUsageAccumulator_ClampNoopWithEmptyContent(t *testing.T) {
+	acc := &UsageAccumulator{}
+	// No deltas accumulated — legit empty stream (e.g. tool-call only).
+	usage := &UsageResponse{PromptTokens: 5, CompletionTokens: 0, TotalTokens: 5}
+	acc.ClampUsage(usage, "id", "alias", EndpointChatCompletions)
+	if usage.CompletionTokens != 0 || usage.TotalTokens != 5 {
+		t.Fatalf("clamp engaged on empty content: %+v", usage)
+	}
+}
+
+func TestUsageAccumulator_ClampPreservesNonZero(t *testing.T) {
+	acc := &UsageAccumulator{}
+	acc.AccumulateContent(ChatCompletionChunk{
+		Choices: []ChunkChoice{{Delta: ChunkDelta{Content: ptrStr("hi")}}},
+	})
+	usage := &UsageResponse{PromptTokens: 3, CompletionTokens: 4, TotalTokens: 7}
+	acc.ClampUsage(usage, "id", "alias", EndpointChatCompletions)
+	if usage.CompletionTokens != 4 || usage.TotalTokens != 7 {
+		t.Fatalf("clamp wrongly mutated nonzero usage: %+v", usage)
+	}
+}
+
+func TestUsageAccumulator_AccumulateContentRefusal(t *testing.T) {
+	acc := &UsageAccumulator{}
+	acc.AccumulateContent(ChatCompletionChunk{
+		Choices: []ChunkChoice{{Delta: ChunkDelta{Refusal: ptrStr("I cannot help with that")}}},
+	})
+	usage := &UsageResponse{PromptTokens: 5, CompletionTokens: 0, TotalTokens: 5}
+	acc.ClampUsage(usage, "id", "alias", EndpointChatCompletions)
+	if usage.CompletionTokens == 0 {
+		t.Fatalf("refusal content should clamp ct, got 0")
+	}
+}
