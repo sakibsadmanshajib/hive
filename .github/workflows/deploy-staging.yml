@@ -64,6 +64,9 @@ jobs:
     name: Deploy to OCI VM
     needs: build-images
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
 
@@ -85,13 +88,19 @@ jobs:
             deploy@${{ secrets.STAGING_HOST }}:/opt/hive/deploy/litellm/config.yaml
 
       - name: Pull & restart stack
+        env:
+          GHCR_ACTOR: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} bash <<'SH'
+          ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} \
+            "GHCR_ACTOR=$GHCR_ACTOR GHCR_TOKEN=$GHCR_TOKEN bash -s" <<'SH'
           set -euo pipefail
           cd /opt/hive/deploy/docker
+          echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_ACTOR" --password-stdin
           docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env pull edge-api control-plane litellm
           docker compose -f docker-compose.yml -f docker-compose.staging.yml --env-file /opt/hive/.env up -d --remove-orphans edge-api control-plane litellm
           docker image prune -f
+          docker logout ghcr.io
           SH
 
       - name: Smoke test
