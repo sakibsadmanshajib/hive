@@ -2,7 +2,10 @@ import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
 
-async function signOutAndRedirect(request: NextRequest) {
+// Sign-out is a state-changing action — only allow POST so the
+// SameSite=Lax auth cookies cannot be used to terminate a session via
+// cross-site top-level navigation (CSRF-style logout).
+export async function POST(request: NextRequest) {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
 
@@ -21,12 +24,4 @@ async function signOutAndRedirect(request: NextRequest) {
   });
 
   return response;
-}
-
-export async function POST(request: NextRequest) {
-  return signOutAndRedirect(request);
-}
-
-export async function GET(request: NextRequest) {
-  return signOutAndRedirect(request);
 }
