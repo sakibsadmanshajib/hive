@@ -11,14 +11,21 @@ export async function POST(request: NextRequest) {
 
   await supabase.auth.signOut();
 
-  // Build the redirect URL from `request.nextUrl` (which honors the
-  // X-Forwarded-Host / X-Forwarded-Proto headers Next.js sets on the
-  // edge) instead of `request.url`. The latter falls back to the
-  // socket bind address — `0.0.0.0:3000` inside a container — which
-  // browsers cannot resolve.
-  const redirectUrl = request.nextUrl.clone();
-  redirectUrl.pathname = "/auth/sign-in";
-  redirectUrl.search = "";
+  // Build the redirect URL from explicit Host / X-Forwarded-* headers.
+  // Inside the docker image Next.js runs in standalone mode with
+  // `HOSTNAME=0.0.0.0`, which leaks into both `request.url` and
+  // `request.nextUrl.origin`. Resolving the host from headers gives a
+  // browser-resolvable origin in dev (localhost) and behind any
+  // upstream proxy (forwarded host) in staging/prod.
+  const headers = request.headers;
+  const host =
+    headers.get("x-forwarded-host") ?? headers.get("host") ?? "localhost";
+  const proto =
+    headers.get("x-forwarded-proto") ??
+    (host.startsWith("localhost") || host.startsWith("127.0.0.1")
+      ? "http"
+      : "https");
+  const redirectUrl = new URL("/auth/sign-in", `${proto}://${host}`);
 
   const response = NextResponse.redirect(redirectUrl, { status: 303 });
 
