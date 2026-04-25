@@ -2,7 +2,17 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+
 import { createClient } from "@/lib/supabase/browser";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/input";
 
 interface EmailSettingsCardProps {
   email: string;
@@ -28,7 +38,9 @@ export function EmailSettingsCard({
 
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL ??
-      (typeof window !== "undefined" ? window.location.origin : "http://localhost:3000");
+      (typeof window !== "undefined"
+        ? window.location.origin
+        : "http://localhost:3000");
 
     const { error: resendError } = await supabase.auth.signInWithOtp({
       email,
@@ -44,7 +56,9 @@ export function EmailSettingsCard({
       return;
     }
 
-    setNotice("Verification email sent. Use the link in that email to unlock the rest of the console.");
+    setNotice(
+      "Verification email sent. Use the link in that email to unlock the rest of the console.",
+    );
     setResending(false);
   }
 
@@ -70,85 +84,66 @@ export function EmailSettingsCard({
   }
 
   return (
-    <section
-      style={{
-        padding: "1rem",
-        border: "1px solid #d1d5db",
-        borderRadius: "0.75rem",
-        display: "grid",
-        gap: "0.75rem",
-      }}
-    >
-      <div style={{ display: "grid", gap: "0.25rem" }}>
-        <h2 style={{ margin: 0 }}>Email settings</h2>
-        <p style={{ margin: 0, color: "#4b5563" }}>
-          Current login email: <strong>{email}</strong>
-        </p>
-        <p style={{ margin: 0, color: "#6b7280" }}>
-          {emailVerified
+    <Card>
+      <CardHeader>
+        <CardTitle>Email settings</CardTitle>
+        <CardDescription>
+          Login email is{" "}
+          <strong className="font-medium text-[var(--color-ink)]">
+            {email}
+          </strong>
+          . {emailVerified
             ? "Your login email is verified."
             : "Your login email still needs verification."}
-        </p>
-      </div>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 px-5 py-5">
+        {!emailVerified ? (
+          <div>
+            <Button
+              type="button"
+              variant="primary"
+              size="md"
+              onClick={() => void handleResendVerification()}
+              disabled={resending}
+            >
+              {resending ? "Sending…" : "Resend verification email"}
+            </Button>
+          </div>
+        ) : null}
 
-      {!emailVerified && (
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem" }}>
-          <button
+        <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+          <Field label="Change email" htmlFor="nextEmail">
+            <Input
+              id="nextEmail"
+              type="email"
+              value={nextEmail}
+              onChange={(event) => setNextEmail(event.target.value)}
+              autoComplete="email"
+            />
+          </Field>
+          <Button
             type="button"
-            onClick={handleResendVerification}
-            disabled={resending}
-            style={{
-              padding: "0.75rem 1rem",
-              backgroundColor: "#111827",
-              color: "#fff",
-              border: "none",
-              borderRadius: "0.5rem",
-              cursor: resending ? "progress" : "pointer",
-            }}
+            variant="secondary"
+            size="md"
+            onClick={() => void handleChangeEmail()}
+            disabled={updating}
           >
-            {resending ? "Sending..." : "Resend verification email"}
-          </button>
+            {updating ? "Updating…" : "Change email"}
+          </Button>
         </div>
-      )}
 
-      <div style={{ display: "grid", gap: "0.35rem", maxWidth: "24rem" }}>
-        <label htmlFor="nextEmail">Change email</label>
-        <input
-          id="nextEmail"
-          type="email"
-          value={nextEmail}
-          onChange={(event) => setNextEmail(event.target.value)}
-          autoComplete="email"
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-        <button
-          type="button"
-          onClick={handleChangeEmail}
-          disabled={updating}
-          style={{
-            width: "fit-content",
-            padding: "0.75rem 1rem",
-            backgroundColor: "#fff",
-            color: "#111827",
-            border: "1px solid #111827",
-            borderRadius: "0.5rem",
-            cursor: updating ? "progress" : "pointer",
-          }}
-        >
-          {updating ? "Updating..." : "Change email"}
-        </button>
-      </div>
-
-      {notice && (
-        <p role="status" style={{ margin: 0, color: "#166534" }}>
-          {notice}
-        </p>
-      )}
-      {error && (
-        <p role="alert" style={{ margin: 0, color: "#b91c1c" }}>
-          {error}
-        </p>
-      )}
-    </section>
+        {notice ? (
+          <p role="status" className="text-xs text-[var(--color-success)]">
+            {notice}
+          </p>
+        ) : null}
+        {error ? (
+          <p role="alert" className="text-xs text-[var(--color-danger)]">
+            {error}
+          </p>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

@@ -1,22 +1,28 @@
-// Cloudflare Pages configuration — source of truth for compatibility settings.
+// Cloudflare Workers configuration for the OpenNext-built Next.js bundle.
 //
-// Applied at project-scope via CF API during initial setup and also via
-// `wrangler pages deploy`. See docs:
-//   https://developers.cloudflare.com/pages/functions/wrangler-configuration/
-//   https://developers.cloudflare.com/workers/configuration/compatibility-flags/
+// Switched from Cloudflare Pages (`@cloudflare/next-on-pages`) to Workers
+// (`@opennextjs/cloudflare`) so the SSR runtime persists `Set-Cookie`
+// headers correctly across the Next 15 + Supabase SSR stack. Pages
+// Functions silently dropped cookies set inside Route Handlers, which
+// surfaced as redirect loops on every authed page.
 //
-// Why nodejs_compat:
-//   Next 15 + @cloudflare/next-on-pages pulls in Node built-ins (process,
-//   Buffer, util) through Supabase SSR + Next runtime helpers. Without this
-//   flag the Worker runtime throws:
-//     "Error - no nodejs_compat compatibility flag"
+// Build artifacts live under `.open-next/` produced by
+// `opennextjs-cloudflare build`. The static asset binding is wired to
+// `.open-next/assets` and exposed via the `ASSETS` binding name.
 //
-// compatibility_date 2024-09-23 is the earliest date that enables
-// nodejs_compat v2 semantics.
+// `nodejs_compat` keeps Node built-ins (process, Buffer, util) reachable
+// from Supabase SSR + the Next runtime.
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "hive-console",
-  "compatibility_date": "2024-09-23",
-  "compatibility_flags": ["nodejs_compat"],
-  "pages_build_output_dir": ".vercel/output/static"
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2025-03-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "assets": {
+    "directory": ".open-next/assets",
+    "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  }
 }

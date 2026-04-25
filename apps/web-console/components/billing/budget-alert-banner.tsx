@@ -1,14 +1,20 @@
 "use client";
 
 import { useState } from "react";
+
 import type { BudgetThreshold } from "@/lib/control-plane/client";
+import { Button } from "@/components/ui/button";
+import { formatCredits } from "@/lib/format/credits";
 
 interface BudgetAlertBannerProps {
   threshold: BudgetThreshold | null;
   currentBalance: number;
 }
 
-export function BudgetAlertBanner({ threshold, currentBalance }: BudgetAlertBannerProps) {
+export function BudgetAlertBanner({
+  threshold,
+  currentBalance,
+}: BudgetAlertBannerProps) {
   const [dismissed, setDismissed] = useState(false);
 
   if (!threshold || threshold.alert_dismissed || dismissed) {
@@ -24,52 +30,34 @@ export function BudgetAlertBanner({ threshold, currentBalance }: BudgetAlertBann
     return null;
   }
 
+  const formatted = formatCredits(threshold.threshold_credits);
   const message = isCrossed
-    ? `Your balance has dropped below your alert threshold of ${threshold.threshold_credits.toLocaleString()} Hive Credits.`
-    : `Your balance is approaching your alert threshold of ${threshold.threshold_credits.toLocaleString()} Hive Credits.`;
+    ? `Your balance has dropped below your alert threshold of ${formatted} credits.`
+    : `Your balance is approaching your alert threshold of ${formatted} credits.`;
 
   async function handleDismiss() {
     try {
       await fetch("/api/budget", { method: "DELETE" });
     } catch {
-      // Best-effort dismiss — hide locally even if network fails
+      // Best-effort dismiss — hide locally even if network fails.
     }
     setDismissed(true);
   }
 
   return (
     <div
-      style={{
-        maxWidth: "36rem",
-        margin: "0 auto",
-        backgroundColor: "#fef9c3",
-        border: "1px solid #fde047",
-        borderRadius: "0.5rem",
-        padding: "0.75rem 1rem",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: "1rem",
-      }}
+      role="status"
+      className="flex items-center justify-between gap-3 border-b border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-6 py-2 text-xs text-[var(--color-warning)]"
     >
-      <p style={{ margin: 0, fontSize: "0.875rem", color: "#854d0e" }}>{message}</p>
-      <button
+      <p className="m-0 tabular-nums">{message}</p>
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
         onClick={() => void handleDismiss()}
-        style={{
-          flexShrink: 0,
-          padding: "0.25rem 0.625rem",
-          fontSize: "0.75rem",
-          fontWeight: 600,
-          borderRadius: "0.375rem",
-          border: "1px solid #fde047",
-          backgroundColor: "transparent",
-          color: "#854d0e",
-          cursor: "pointer",
-          whiteSpace: "nowrap",
-        }}
       >
-        Dismiss alert
-      </button>
+        Dismiss
+      </Button>
     </div>
   );
 }

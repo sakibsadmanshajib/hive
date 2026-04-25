@@ -1,92 +1,63 @@
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+
 interface ColumnDef {
   key: string;
   label: string;
 }
 
+type AnalyticsRow = Record<string, unknown>;
+
 interface AnalyticsTableProps {
-  data: Array<Record<string, unknown>>;
-  columns: ColumnDef[];
+  data: ReadonlyArray<AnalyticsRow>;
+  columns: ReadonlyArray<ColumnDef>;
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === "number";
+}
+
+function formatCell(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (isNumber(value)) return value.toLocaleString();
+  return String(value);
 }
 
 export function AnalyticsTable({ data, columns }: AnalyticsTableProps) {
   if (data.length === 0) {
     return (
-      <div
-        style={{
-          textAlign: "center",
-          padding: "2rem",
-          color: "#6b7280",
-          backgroundColor: "#f9fafb",
-          borderRadius: "0.75rem",
-          border: "1px solid #e5e7eb",
-        }}
-      >
-        <p style={{ margin: 0, fontWeight: 500 }}>No usage data</p>
-        <p style={{ margin: "0.5rem 0 0", fontSize: "0.875rem" }}>
-          Usage data will appear here after your first API request.
-        </p>
-      </div>
+      <EmptyState
+        title="No usage data"
+        description="Usage data will appear here once your first API request lands."
+      />
     );
   }
 
+  // Map ColumnDef[] into typed Column<AnalyticsRow>[]; first column is text,
+  // remaining numeric columns get tabular-nums + right-align via numeric flag.
+  const tableColumns: Column<AnalyticsRow>[] = columns.map((col, idx) => {
+    const numeric = idx > 0;
+    return {
+      key: col.key,
+      header: col.label,
+      align: numeric ? "right" : "left",
+      numeric,
+      cell: (row) => formatCell(row[col.key]),
+    };
+  });
+
+  // Augment each row with a stable string key for DataTable rowKey.
+  type Indexed = AnalyticsRow & { __key: string };
+  const rows: Indexed[] = data.map((row, idx) => ({
+    ...row,
+    __key: typeof row.group_key === "string" ? row.group_key : String(idx),
+  }));
+
   return (
-    <div
-      style={{
-        overflowX: "auto",
-        border: "1px solid #e5e7eb",
-        borderRadius: "0.75rem",
-      }}
-    >
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
-        <thead>
-          <tr style={{ backgroundColor: "#f9fafb" }}>
-            {columns.map((col) => (
-              <th
-                key={col.key}
-                style={{
-                  padding: "0.75rem 1rem",
-                  textAlign: "left",
-                  fontWeight: 600,
-                  color: "#374151",
-                  borderBottom: "1px solid #e5e7eb",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                {col.label}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.map((row, rowIndex) => (
-            <tr
-              key={rowIndex}
-              style={{ borderBottom: rowIndex < data.length - 1 ? "1px solid #f3f4f6" : "none" }}
-            >
-              {columns.map((col) => {
-                const cellValue = row[col.key];
-                const displayValue =
-                  cellValue === null || cellValue === undefined
-                    ? "—"
-                    : typeof cellValue === "number"
-                    ? cellValue.toLocaleString()
-                    : String(cellValue);
-                return (
-                  <td
-                    key={col.key}
-                    style={{
-                      padding: "0.75rem 1rem",
-                      color: "#111827",
-                    }}
-                  >
-                    {displayValue}
-                  </td>
-                );
-              })}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <DataTable<Indexed>
+      rows={rows}
+      columns={tableColumns}
+      rowKey={(row) => row.__key}
+    />
   );
 }

@@ -1,6 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import type { ChangeEvent } from "react";
+
+import { Field } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 import { TimeWindowPicker } from "./time-window-picker";
 
 interface AnalyticsControlsProps {
@@ -8,6 +12,15 @@ interface AnalyticsControlsProps {
   currentWindow: string;
   activeTab: string;
 }
+
+const SELECT_CLASSES = cn(
+  "flex h-9 w-full rounded-md border border-[var(--color-border)]",
+  "bg-[var(--color-surface)] px-3 text-sm text-[var(--color-ink)]",
+  "transition-[border,box-shadow] duration-[var(--duration-fast)]",
+  "ease-[var(--ease-out-expo)]",
+  "focus-visible:outline-none focus-visible:border-[var(--color-accent)]",
+  "focus-visible:ring-4 focus-visible:ring-[var(--color-accent-soft)]",
+);
 
 export function AnalyticsControls({
   currentGroupBy,
@@ -24,7 +37,7 @@ export function AnalyticsControls({
     return `/console/analytics?${params.toString()}`;
   }
 
-  function handleGroupByChange(e: React.ChangeEvent<HTMLSelectElement>) {
+  function handleGroupByChange(e: ChangeEvent<HTMLSelectElement>) {
     router.push(buildUrl({ group_by: e.target.value }));
   }
 
@@ -33,49 +46,25 @@ export function AnalyticsControls({
   }
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: "1rem",
-        alignItems: "flex-start",
-        flexWrap: "wrap",
-        marginBottom: "1.5rem",
-      }}
-    >
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-        <label
-          htmlFor="group-by"
-          style={{ fontSize: "0.75rem", color: "#6b7280", fontWeight: 500 }}
-        >
-          Group by
-        </label>
+    <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+      <Field label="Group by" htmlFor="group-by" className="sm:w-48">
         <select
           id="group-by"
           value={currentGroupBy}
           onChange={handleGroupByChange}
-          style={{
-            padding: "0.375rem 0.5rem",
-            fontSize: "0.875rem",
-            border: "1px solid #d1d5db",
-            borderRadius: "0.375rem",
-            backgroundColor: "#ffffff",
-            cursor: "pointer",
-          }}
+          className={SELECT_CLASSES}
         >
           <option value="model">Model</option>
-          <option value="api_key">API Key</option>
+          <option value="api_key">API key</option>
           <option value="endpoint">Endpoint</option>
         </select>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-        <span style={{ fontSize: "0.75rem", color: "#6b7280", fontWeight: 500 }}>
-          Time window
-        </span>
+      </Field>
+      <Field label="Time window" htmlFor="time-window" className="sm:w-auto">
         <TimeWindowPicker
           currentWindow={currentWindow}
           onWindowChange={handleWindowChange}
         />
-      </div>
+      </Field>
     </div>
   );
 }

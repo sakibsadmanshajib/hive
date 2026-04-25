@@ -1,7 +1,16 @@
-import { getApiKeys, getViewer } from "@/lib/control-plane/client";
-import { ApiKeyList } from "@/components/api-keys/api-key-list";
-import { ApiKeyCreateForm } from "@/components/api-keys/api-key-create-form";
 import { redirect } from "next/navigation";
+import { KeyRound } from "lucide-react";
+
+import {
+  getAccountProfile,
+  getApiKeys,
+  getViewer,
+} from "@/lib/control-plane/client";
+import { ApiKeyCreateForm } from "@/components/api-keys/api-key-create-form";
+import { ApiKeyList } from "@/components/api-keys/api-key-list";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export default async function ApiKeysPage() {
   const viewer = await getViewer();
@@ -10,17 +19,43 @@ export default async function ApiKeysPage() {
     redirect("/console/settings/profile");
   }
 
-  const keys = await getApiKeys();
+  const [keys, profile] = await Promise.all([
+    getApiKeys(),
+    getAccountProfile().catch(
+      (): { owner_name: string } => ({ owner_name: "" }),
+    ),
+  ]);
 
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "72rem" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>API Keys</h1>
+    <ConsoleShell
+      workspace={{
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      active="/console/api-keys"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">API keys</span>
+      }
+    >
+      <PageHeader
+        eyebrow="Authentication"
+        title="API keys"
+        description="Issue, rotate, and revoke programmatic credentials. Keys are shown in full only at creation — store them in a secret manager."
+      />
+
+      <div className="flex flex-col gap-6">
+        <ApiKeyCreateForm />
+        {keys.length === 0 ? (
+          <EmptyState
+            icon={<KeyRound size={20} aria-hidden="true" />}
+            title="No API keys yet"
+            description="Create your first key above to start authenticating requests against the Hive API."
+          />
+        ) : (
+          <ApiKeyList keys={keys} canManage={canManage} />
+        )}
       </div>
-
-      {canManage && <ApiKeyCreateForm />}
-
-      <ApiKeyList keys={keys} canManage={canManage} />
-    </div>
+    </ConsoleShell>
   );
 }

@@ -1,7 +1,10 @@
 "use client";
 
 import { createElement as h, useState } from "react";
+import { Download } from "lucide-react";
+
 import type { Invoice } from "@/lib/control-plane/client";
+import { Button } from "@/components/ui/button";
 
 interface InvoiceDownloadButtonProps {
   invoice: Invoice;
@@ -217,22 +220,15 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
   }
 
   return (
-    <button
+    <Button
       type="button"
-      onClick={handleClick}
+      variant="ghost"
+      size="sm"
+      onClick={() => void handleClick()}
       disabled={busy}
-      style={{
-        color: "#1d4ed8",
-        background: "none",
-        border: "none",
-        padding: 0,
-        cursor: busy ? "wait" : "pointer",
-        textDecoration: "none",
-        fontSize: "0.875rem",
-        opacity: busy ? 0.6 : 1,
-      }}
     >
+      <Download size={14} aria-hidden="true" />
       {busy ? "Generating…" : "Download PDF"}
-    </button>
+    </Button>
   );
 }

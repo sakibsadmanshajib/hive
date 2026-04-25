@@ -17,7 +17,7 @@ test("landing page redirects logged-out viewers to sign-in", async ({ page }) =>
 
   await page.waitForURL("**/auth/sign-in");
   await expect(
-    page.getByRole("heading", { level: 1, name: "Sign in to Hive" })
+    page.getByRole("heading", { level: 1, name: "Sign in to your console" })
   ).toBeVisible();
 });
 
@@ -27,7 +27,7 @@ test("sign-in form renders and blocks empty or malformed submissions client-side
   await page.goto("/auth/sign-in");
 
   await expect(
-    page.getByRole("heading", { level: 1, name: "Sign in to Hive" })
+    page.getByRole("heading", { level: 1, name: "Sign in to your console" })
   ).toBeVisible();
   const email = page.getByLabel("Email");
   const password = page.getByLabel("Password");
@@ -100,7 +100,7 @@ test("console redirects logged-out viewers to sign-in", async ({ page }) => {
 
   await page.waitForURL("**/auth/sign-in");
   await expect(
-    page.getByRole("heading", { level: 1, name: "Sign in to Hive" })
+    page.getByRole("heading", { level: 1, name: "Sign in to your console" })
   ).toBeVisible();
 });
 

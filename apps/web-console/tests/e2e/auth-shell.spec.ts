@@ -76,10 +76,6 @@ test.describe("accepting an invitation keeps current workspace until switcher ch
 
 test.describe("workspace switcher persists selected account", () => {
   test.skip(!VERIFIED_EMAIL || !VERIFIED_PASSWORD, "E2E_VERIFIED_EMAIL/PASSWORD not set");
-  // TODO: post-switch redirect bounces /console → /auth/sign-in. Account-switch
-  // cookie flow needs reconciling with middleware/getViewer scope before this
-  // spec can exercise the switcher end-to-end. Tracking outside T1b.
-  test.fixme();
 
   test("workspace switcher persists selected account", async ({ page }) => {
     await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);

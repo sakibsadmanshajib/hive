@@ -8,13 +8,7 @@ export function VerificationBanner({ show }: VerificationBannerProps) {
   return (
     <div
       role="alert"
-      style={{
-        backgroundColor: "#fef3c7",
-        borderBottom: "1px solid #fbbf24",
-        padding: "0.75rem 1.5rem",
-        textAlign: "center",
-        fontSize: "0.875rem",
-      }}
+      className="border-b border-[var(--color-warning)]/40 bg-[var(--color-warning-soft)] px-6 py-2 text-center text-xs text-[var(--color-warning)]"
     >
       Please verify your email address to unlock all features.
     </div>

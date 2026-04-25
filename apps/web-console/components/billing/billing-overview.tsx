@@ -1,8 +1,24 @@
+import Link from "next/link";
+
 import type { BalanceSummary, LedgerEntry } from "@/lib/control-plane/client";
+import { buttonVariants } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { formatCredits, formatShortDate } from "@/lib/format/credits";
 
 interface BillingOverviewProps {
   balance: BalanceSummary;
   recentEntries: LedgerEntry[];
+  // Country code is intentionally accepted but not displayed — locale rendering
+  // is done downstream by checkout-modal which uses Intl with the rail's
+  // currency. Surfacing FX hints to BD accounts is a regulatory violation.
   accountCountryCode: string;
 }
 
@@ -11,7 +27,7 @@ function entryTypeLabel(entryType: string): string {
     case "grant":
       return "Purchase";
     case "usage_charge":
-      return "Usage Charge";
+      return "Usage charge";
     case "refund":
       return "Refund";
     case "adjustment":
@@ -25,200 +41,131 @@ function entryTypeLabel(entryType: string): string {
   }
 }
 
-function formatDate(isoString: string): string {
-  try {
-    return new Date(isoString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return isoString;
-  }
-}
-
-export function BillingOverview({ balance, recentEntries, accountCountryCode }: BillingOverviewProps) {
+export function BillingOverview({
+  balance,
+  recentEntries,
+}: BillingOverviewProps) {
   const recent = recentEntries.slice(0, 5);
 
+  const ledgerColumns: Column<LedgerEntry>[] = [
+    {
+      key: "type",
+      header: "Type",
+      cell: (row) => entryTypeLabel(row.entry_type),
+    },
+    {
+      key: "credits",
+      header: "Credits",
+      numeric: true,
+      align: "right",
+      cell: (row) => (
+        <span
+          className={
+            row.credits_delta >= 0
+              ? "text-[var(--color-success)]"
+              : "text-[var(--color-danger)]"
+          }
+        >
+          {row.credits_delta >= 0 ? "+" : ""}
+          {formatCredits(row.credits_delta)}
+        </span>
+      ),
+    },
+    {
+      key: "date",
+      header: "Date",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatShortDate(row.created_at),
+    },
+  ];
+
   return (
-    <div style={{ display: "grid", gap: "1.5rem" }}>
-      {/* Balance card */}
-      <div
-        style={{
-          border: "1px solid #d1d5db",
-          borderRadius: "0.75rem",
-          padding: "1rem",
-          display: "grid",
-          gap: "1rem",
-        }}
-      >
-        <div style={{ display: "grid", gap: "0.25rem" }}>
-          <span style={{ fontSize: "0.875rem", color: "#4b5563", fontWeight: 700 }}>
-            Current balance
-          </span>
-          <span style={{ fontSize: "1.5rem", fontWeight: 700, color: "#1f2937" }}>
-            {balance.available_credits.toLocaleString()} Hive Credits
-          </span>
-          {balance.reserved_credits > 0 && (
-            <span style={{ fontSize: "0.875rem", color: "#6b7280" }}>
-              {balance.reserved_credits.toLocaleString()} credits reserved
-            </span>
-          )}
-        </div>
-
-        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-          {/* Buy Credits button rendered as a form trigger — client-side modal opened via data attribute */}
-          <a
-            href="/console/billing?action=buy"
-            style={{
-              display: "inline-block",
-              background: "#1d4ed8",
-              color: "#ffffff",
-              padding: "0.5rem 1rem",
-              borderRadius: "0.375rem",
-              textDecoration: "none",
-              fontWeight: 700,
-              fontSize: "1rem",
-            }}
-          >
-            Buy Credits
-          </a>
-          <a
-            href="/console/settings/billing"
-            style={{ color: "#1d4ed8", fontSize: "0.875rem" }}
-          >
-            Tax profile settings
-          </a>
-        </div>
-      </div>
-
-      {/* Recent transactions */}
-      <div
-        style={{
-          border: "1px solid #d1d5db",
-          borderRadius: "0.75rem",
-          padding: "1rem",
-          display: "grid",
-          gap: "1rem",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: "1.25rem", fontWeight: 700 }}>
-          Recent transactions
-        </h2>
-
-        {recent.length === 0 ? (
-          <div style={{ display: "grid", gap: "0.5rem", textAlign: "center", padding: "2rem 0" }}>
-            <p style={{ margin: 0, fontWeight: 700, color: "#1f2937" }}>No transactions yet</p>
-            <p style={{ margin: 0, color: "#6b7280" }}>
-              Your credit transactions will appear here after your first top-up.
-            </p>
-            <a
-              href="/console/billing?action=buy"
-              style={{
-                display: "inline-block",
-                width: "fit-content",
-                margin: "0 auto",
-                background: "#1d4ed8",
-                color: "#ffffff",
-                padding: "0.5rem 1rem",
-                borderRadius: "0.375rem",
-                textDecoration: "none",
-                fontWeight: 700,
-              }}
+    <div className="grid gap-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Available balance</CardTitle>
+          <CardDescription>
+            Top up to keep production traffic flowing without interruption.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col gap-1">
+            <p
+              className="font-display text-3xl tabular-nums text-[var(--color-ink)]"
+              data-numeric
             >
-              Buy Credits
-            </a>
+              {formatCredits(balance.available_credits)}
+            </p>
+            <p className="text-xs text-[var(--color-ink-3)] tabular-nums">
+              Posted{" "}
+              <span className="text-[var(--color-ink-2)]">
+                {formatCredits(balance.posted_credits)}
+              </span>{" "}
+              · Reserved{" "}
+              <span className="text-[var(--color-ink-2)]">
+                {formatCredits(balance.reserved_credits)}
+              </span>{" "}
+              <span className="ml-1 text-[var(--color-ink-3)]">credits</span>
+            </p>
           </div>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    textAlign: "left",
-                    fontWeight: 700,
-                    fontSize: "0.875rem",
-                    borderBottom: "1px solid #e5e7eb",
-                    color: "#4b5563",
-                  }}
-                >
-                  Type
-                </th>
-                <th
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    textAlign: "left",
-                    fontWeight: 700,
-                    fontSize: "0.875rem",
-                    borderBottom: "1px solid #e5e7eb",
-                    color: "#4b5563",
-                  }}
-                >
-                  Credits
-                </th>
-                <th
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    textAlign: "left",
-                    fontWeight: 700,
-                    fontSize: "0.875rem",
-                    borderBottom: "1px solid #e5e7eb",
-                    color: "#4b5563",
-                  }}
-                >
-                  Date
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {recent.map((entry) => (
-                <tr key={entry.id}>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                    }}
-                  >
-                    {entryTypeLabel(entry.entry_type)}
-                  </td>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                      color: entry.credits_delta >= 0 ? "#10b981" : "#dc2626",
-                    }}
-                  >
-                    {entry.credits_delta >= 0 ? "+" : ""}
-                    {entry.credits_delta.toLocaleString()}
-                  </td>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                      color: "#6b7280",
-                    }}
-                  >
-                    {formatDate(entry.created_at)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+          <div className="flex items-center gap-3">
+            <Link
+              href="/console/billing?action=buy"
+              className={buttonVariants({ variant: "accent", size: "md" })}
+            >
+              Buy credits
+            </Link>
+            <Link
+              href="/console/settings/billing"
+              className="text-xs text-[var(--color-ink-3)] underline-offset-4 hover:text-[var(--color-ink)] hover:underline"
+            >
+              Tax profile
+            </Link>
+          </div>
+        </CardContent>
+      </Card>
 
-        {recent.length > 0 && (
-          <a
-            href="/console/billing?tab=ledger"
-            style={{ color: "#1d4ed8", fontSize: "0.875rem", textDecoration: "none" }}
-          >
-            View full ledger history
-          </a>
-        )}
-      </div>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div className="flex flex-col gap-1">
+            <CardTitle>Recent transactions</CardTitle>
+            <CardDescription>The last five ledger events.</CardDescription>
+          </div>
+          {recent.length > 0 ? (
+            <Link
+              href="/console/billing?tab=ledger"
+              className="text-xs text-[var(--color-accent)] underline-offset-4 hover:underline"
+            >
+              View ledger
+            </Link>
+          ) : null}
+        </CardHeader>
+        <CardContent className="px-5 py-5">
+          {recent.length === 0 ? (
+            <EmptyState
+              title="No transactions yet"
+              description="Your credit ledger fills up after the first top-up."
+              action={
+                <Link
+                  href="/console/billing?action=buy"
+                  className={buttonVariants({ variant: "accent", size: "sm" })}
+                >
+                  Buy credits
+                </Link>
+              }
+            />
+          ) : (
+            <DataTable<LedgerEntry>
+              rows={recent}
+              columns={ledgerColumns}
+              rowKey={(row) => row.id}
+              className="border-0 shadow-none"
+            />
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }
+

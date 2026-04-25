@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+
 import {
   getAccountProfile,
   getBillingProfile,
@@ -13,10 +14,12 @@ import {
   BillingContactForm,
   type BillingProfileFormState,
 } from "@/components/profile/billing-contact-form";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { PageHeader } from "@/components/ui/page-header";
 
 function toFormValues(
   accountProfile: Awaited<ReturnType<typeof getAccountProfile>>,
-  billingProfile: Awaited<ReturnType<typeof getBillingProfile>>
+  billingProfile: Awaited<ReturnType<typeof getBillingProfile>>,
 ): BillingProfileFormValues {
   return {
     accountType: accountProfile.account_type,
@@ -40,7 +43,9 @@ function readFormValues(formData: FormData): BillingProfileFormValues {
     billingContactEmail: String(formData.get("billingContactEmail") ?? ""),
     legalEntityName: String(formData.get("legalEntityName") ?? ""),
     legalEntityType: String(formData.get("legalEntityType") ?? ""),
-    businessRegistrationNumber: String(formData.get("businessRegistrationNumber") ?? ""),
+    businessRegistrationNumber: String(
+      formData.get("businessRegistrationNumber") ?? "",
+    ),
     vatNumber: String(formData.get("vatNumber") ?? ""),
     taxIdType: String(formData.get("taxIdType") ?? ""),
     taxIdValue: String(formData.get("taxIdValue") ?? ""),
@@ -63,7 +68,7 @@ export default async function BillingSettingsPage() {
 
   async function saveBillingProfile(
     _state: BillingProfileFormState,
-    formData: FormData
+    formData: FormData,
   ): Promise<BillingProfileFormState> {
     "use server";
 
@@ -80,13 +85,14 @@ export default async function BillingSettingsPage() {
 
     try {
       await updateBillingProfile(parsed.data);
-    } catch (error) {
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to save your billing profile. Please try again.";
       return {
         fieldErrors: {},
-        formError:
-          error instanceof Error
-            ? error.message
-            : "Failed to save your billing profile. Please try again.",
+        formError: message,
         values: parsed.data,
       };
     }
@@ -95,24 +101,33 @@ export default async function BillingSettingsPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "48rem" }}>
-      <div style={{ display: "grid", gap: "0.5rem" }}>
-        <h1 style={{ margin: 0 }}>Billing settings</h1>
-        <p style={{ margin: 0, color: "#4b5563" }}>
-          Optional until checkout or invoicing.
-        </p>
-        <p style={{ margin: 0, color: "#6b7280" }}>
-          Save whatever billing, legal-entity, and tax context you already
-          know, then come back later when a payment or invoice flow needs the
-          rest.
-        </p>
-      </div>
+    <ConsoleShell
+      workspace={{
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      user={{
+        email: viewer.user.email,
+        name: accountProfile.owner_name || null,
+      }}
+      active="/console/settings/profile"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">
+          Billing settings
+        </span>
+      }
+    >
+      <PageHeader
+        eyebrow="Settings"
+        title="Billing settings"
+        description="Optional until checkout or invoicing. Save whatever billing, legal-entity, and tax context you already know — come back later when a payment or invoice flow needs the rest."
+      />
 
       <BillingContactForm
         action={saveBillingProfile}
         initialValues={initialValues}
         submitLabel="Save billing details"
       />
-    </div>
+    </ConsoleShell>
   );
 }

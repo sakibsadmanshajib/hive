@@ -2,12 +2,30 @@ import type {
   BillingProfileFieldErrors,
   BillingProfileFormValues,
 } from "@/lib/profile-schemas";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 
 interface BusinessTaxFormProps {
   accountType: string;
   fieldErrors: BillingProfileFieldErrors;
   values: BillingProfileFormValues;
 }
+
+const SELECT_CLASSES = cn(
+  "flex h-9 w-full rounded-md border border-[var(--color-border)]",
+  "bg-[var(--color-surface)] px-3 text-sm text-[var(--color-ink)]",
+  "transition-[border,box-shadow] duration-[var(--duration-fast)]",
+  "ease-[var(--ease-out-expo)]",
+  "focus-visible:outline-none focus-visible:border-[var(--color-accent)]",
+  "focus-visible:ring-4 focus-visible:ring-[var(--color-accent-soft)]",
+);
 
 export function BusinessTaxForm({
   accountType,
@@ -17,126 +35,105 @@ export function BusinessTaxForm({
   const isPersonal = accountType === "personal";
 
   return (
-    <section
-      style={{
-        display: "grid",
-        gap: "1rem",
-        padding: "1rem",
-        border: "1px solid #d1d5db",
-        borderRadius: "0.75rem",
-        backgroundColor: "#f9fafb",
-      }}
-    >
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <h2 style={{ margin: 0 }}>Legal entity and tax</h2>
-        <p style={{ margin: 0, color: "#6b7280" }}>
+    <Card>
+      <CardHeader>
+        <CardTitle>Legal entity and tax</CardTitle>
+        <CardDescription>
           {isPersonal
             ? "Business-specific fields matter only when later checkout or invoicing requires them."
             : "You can save partial business identity details now and complete the rest only when checkout or invoicing needs them."}
-        </p>
-      </div>
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4 px-5 py-5">
+        <Field label="Legal entity name" htmlFor="legalEntityName">
+          <Input
+            id="legalEntityName"
+            name="legalEntityName"
+            defaultValue={values.legalEntityName}
+          />
+        </Field>
 
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="legalEntityName">Legal entity name</label>
-        <input
-          id="legalEntityName"
-          name="legalEntityName"
-          defaultValue={values.legalEntityName}
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-      </div>
-
-      {isPersonal ? (
-        <>
-          <input type="hidden" name="legalEntityType" value={values.legalEntityType} readOnly />
-          <p style={{ margin: 0, color: "#6b7280" }}>
-            Personal accounts default the legal entity type to individual until
-            a later billing flow needs something more specific.
-          </p>
-        </>
-      ) : (
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <label htmlFor="legalEntityType">Legal entity type</label>
-          <select
-            id="legalEntityType"
-            name="legalEntityType"
-            defaultValue={values.legalEntityType || "private_company"}
-            style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
+        {isPersonal ? (
+          <>
+            <input
+              type="hidden"
+              name="legalEntityType"
+              value={values.legalEntityType || "individual"}
+              readOnly
+            />
+            <p className="text-xs text-[var(--color-ink-3)]">
+              Personal accounts default the legal entity type to individual
+              until a later billing flow needs something more specific.
+            </p>
+          </>
+        ) : (
+          <Field
+            label="Legal entity type"
+            htmlFor="legalEntityType"
+            error={fieldErrors.legalEntityType}
           >
-            <option value="private_company">Private company</option>
-            <option value="public_company">Public company</option>
-            <option value="sole_proprietor">Sole proprietor</option>
-            <option value="non_profit">Non-profit</option>
-            <option value="individual">Individual</option>
-          </select>
-          {fieldErrors.legalEntityType && (
-            <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-              {fieldErrors.legalEntityType}
-            </p>
-          )}
-        </div>
-      )}
-
-      {!isPersonal && (
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <label htmlFor="businessRegistrationNumber">Business registration number</label>
-          <input
-            id="businessRegistrationNumber"
-            name="businessRegistrationNumber"
-            defaultValue={values.businessRegistrationNumber}
-            style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-          />
-        </div>
-      )}
-
-      <div
-        style={{
-          display: "grid",
-          gap: "1rem",
-          gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))",
-        }}
-      >
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <label htmlFor="vatNumber">VAT number</label>
-          <input
-            id="vatNumber"
-            name="vatNumber"
-            defaultValue={values.vatNumber}
-            style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-          />
-          {fieldErrors.vatNumber && (
-            <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-              {fieldErrors.vatNumber}
-            </p>
-          )}
-        </div>
-
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <label htmlFor="taxIdType">Tax ID type</label>
-          <input
-            id="taxIdType"
-            name="taxIdType"
-            defaultValue={values.taxIdType}
-            placeholder="ein, gst, vat"
-            style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-          />
-        </div>
-      </div>
-
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="taxIdValue">VAT / Tax ID</label>
-        <input
-          id="taxIdValue"
-          name="taxIdValue"
-          defaultValue={values.taxIdValue}
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-        {fieldErrors.taxIdValue && (
-          <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-            {fieldErrors.taxIdValue}
-          </p>
+            <select
+              id="legalEntityType"
+              name="legalEntityType"
+              defaultValue={values.legalEntityType || "private_company"}
+              className={SELECT_CLASSES}
+            >
+              <option value="private_company">Private company</option>
+              <option value="public_company">Public company</option>
+              <option value="sole_proprietor">Sole proprietor</option>
+              <option value="non_profit">Non-profit</option>
+              <option value="individual">Individual</option>
+            </select>
+          </Field>
         )}
-      </div>
-    </section>
+
+        {!isPersonal && (
+          <Field
+            label="Business registration number"
+            htmlFor="businessRegistrationNumber"
+          >
+            <Input
+              id="businessRegistrationNumber"
+              name="businessRegistrationNumber"
+              defaultValue={values.businessRegistrationNumber}
+            />
+          </Field>
+        )}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field
+            label="VAT number"
+            htmlFor="vatNumber"
+            error={fieldErrors.vatNumber}
+          >
+            <Input
+              id="vatNumber"
+              name="vatNumber"
+              defaultValue={values.vatNumber}
+            />
+          </Field>
+          <Field label="Tax ID type" htmlFor="taxIdType">
+            <Input
+              id="taxIdType"
+              name="taxIdType"
+              defaultValue={values.taxIdType}
+              placeholder="ein, gst, vat"
+            />
+          </Field>
+        </div>
+
+        <Field
+          label="VAT / Tax ID"
+          htmlFor="taxIdValue"
+          error={fieldErrors.taxIdValue}
+        >
+          <Input
+            id="taxIdValue"
+            name="taxIdValue"
+            defaultValue={values.taxIdValue}
+          />
+        </Field>
+      </CardContent>
+    </Card>
   );
 }

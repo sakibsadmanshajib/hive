@@ -1,24 +1,44 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+
 import type { BudgetThreshold } from "@/lib/control-plane/client";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/input";
 
 interface BudgetAlertFormProps {
   currentThreshold: BudgetThreshold | null;
 }
 
+interface BudgetErrorBody {
+  error?: string;
+}
+
+function readErrorMessage(value: unknown, fallback: string): string {
+  if (value === null || typeof value !== "object") return fallback;
+  const candidate = value as BudgetErrorBody;
+  return typeof candidate.error === "string" ? candidate.error : fallback;
+}
+
 export function BudgetAlertForm({ currentThreshold }: BudgetAlertFormProps) {
   const [thresholdCredits, setThresholdCredits] = useState<string>(
-    currentThreshold ? String(currentThreshold.threshold_credits) : ""
+    currentThreshold ? String(currentThreshold.threshold_credits) : "",
   );
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const parsed = parseInt(thresholdCredits, 10);
-    if (isNaN(parsed) || parsed <= 0) {
+    if (Number.isNaN(parsed) || parsed <= 0) {
       setError("Please enter a valid positive number.");
       return;
     }
@@ -36,44 +56,40 @@ export function BudgetAlertForm({ currentThreshold }: BudgetAlertFormProps) {
 
       if (!response.ok) {
         const data: unknown = await response.json();
-        const errMsg =
-          data !== null &&
-          typeof data === "object" &&
-          "error" in data &&
-          typeof (data as { error: unknown }).error === "string"
-            ? (data as { error: string }).error
-            : "Failed to save alert.";
-        setError(errMsg);
+        setError(readErrorMessage(data, "Failed to save alert."));
         return;
       }
 
       setSaved(true);
-    } catch {
-      setError("Network error. Please try again.");
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Network error. Please try again.";
+      setError(message);
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div style={{ marginTop: "2rem", paddingTop: "2rem", borderTop: "1px solid #e5e7eb" }}>
-      <h2 style={{ margin: "0 0 1rem", fontSize: "1.25rem", fontWeight: 700 }}>Spend alerts</h2>
-      <form onSubmit={handleSubmit}>
-        <div style={{ marginBottom: "0.75rem" }}>
-          <label
+    <Card>
+      <CardHeader>
+        <CardTitle>Spend alerts</CardTitle>
+        <CardDescription>
+          Get notified when your balance drops below a threshold. Requests keep
+          flowing — alerts are advisory only.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="px-5 py-5">
+        <form
+          onSubmit={(e) => void handleSubmit(e)}
+          className="grid gap-4 sm:grid-cols-[200px_auto] sm:items-end"
+        >
+          <Field
+            label="Alert threshold"
             htmlFor="threshold-credits"
-            style={{
-              display: "block",
-              fontSize: "0.875rem",
-              fontWeight: 500,
-              color: "#374151",
-              marginBottom: "0.375rem",
-            }}
+            hint="In Hive credits"
           >
-            Alert me when balance drops below
-          </label>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <input
+            <Input
               id="threshold-credits"
               type="number"
               min={1}
@@ -83,48 +99,36 @@ export function BudgetAlertForm({ currentThreshold }: BudgetAlertFormProps) {
                 setSaved(false);
                 setError(null);
               }}
-              placeholder="e.g. 500000"
-              style={{
-                padding: "0.5rem 0.75rem",
-                fontSize: "0.875rem",
-                border: "1px solid #d1d5db",
-                borderRadius: "0.375rem",
-                width: "160px",
-              }}
+              placeholder="500000"
+              className="tabular-nums"
             />
-            <span style={{ fontSize: "0.875rem", color: "#6b7280", fontWeight: 500 }}>
-              Hive Credits
-            </span>
-          </div>
-        </div>
-        <p style={{ margin: "0 0 1rem", fontSize: "0.875rem", color: "#6b7280" }}>
-          Alerts are notifications only. Requests continue until your balance reaches zero.
-        </p>
-        {error && (
-          <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#dc2626" }}>{error}</p>
-        )}
-        {saved && (
-          <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#16a34a" }}>
-            Alert threshold saved.
-          </p>
-        )}
-        <button
-          type="submit"
-          disabled={loading || !thresholdCredits}
-          style={{
-            padding: "0.5rem 1rem",
-            fontSize: "0.875rem",
-            fontWeight: 600,
-            borderRadius: "0.375rem",
-            border: "none",
-            cursor: loading || !thresholdCredits ? "not-allowed" : "pointer",
-            backgroundColor: loading || !thresholdCredits ? "#e5e7eb" : "#1d4ed8",
-            color: loading || !thresholdCredits ? "#9ca3af" : "#ffffff",
-          }}
-        >
-          {loading ? "Saving…" : "Save alert"}
-        </button>
-      </form>
-    </div>
+          </Field>
+          <Button
+            type="submit"
+            variant="primary"
+            size="md"
+            disabled={loading || !thresholdCredits}
+          >
+            {loading ? "Saving…" : "Save alert"}
+          </Button>
+          {error ? (
+            <p
+              role="alert"
+              className="text-xs text-[var(--color-danger)] sm:col-span-2"
+            >
+              {error}
+            </p>
+          ) : null}
+          {saved ? (
+            <p
+              role="status"
+              className="text-xs text-[var(--color-success)] sm:col-span-2"
+            >
+              Alert threshold saved.
+            </p>
+          ) : null}
+        </form>
+      </CardContent>
+    </Card>
   );
 }
