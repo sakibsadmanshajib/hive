@@ -27,9 +27,12 @@ export function TimeWindowPicker({
   currentWindow,
   onWindowChange,
 }: TimeWindowPickerProps) {
-  const [showCustom, setShowCustom] = useState(false);
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const customParts = currentWindow.startsWith("custom:")
+    ? currentWindow.split(":")
+    : null;
+  const [showCustom, setShowCustom] = useState(Boolean(customParts));
+  const [fromDate, setFromDate] = useState(customParts?.[1] ?? "");
+  const [toDate, setToDate] = useState(customParts?.[2] ?? "");
 
   function handlePresetClick(value: string) {
     setShowCustom(false);

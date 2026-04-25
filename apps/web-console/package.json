@@ -13,14 +13,14 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@opennextjs/cloudflare": "^1.10.0",
+    "@opennextjs/cloudflare": "~1.18.0",
     "@react-pdf/renderer": "^4.4.1",
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.48.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.469.0",
-    "next": "15.1.0",
+    "next": "15.1.12",
     "react": "19.0.0",
     "react-dom": "19.0.0",
     "recharts": "^3.8.1",

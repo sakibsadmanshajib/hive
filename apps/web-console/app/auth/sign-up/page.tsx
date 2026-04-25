@@ -21,7 +21,11 @@ export default function SignUpPage() {
     setError(null);
     setLoading(true);
 
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+    const appUrl =
+      process.env.NEXT_PUBLIC_APP_URL ??
+      (typeof window !== "undefined"
+        ? window.location.origin
+        : "http://localhost:3000");
 
     const { error } = await supabase.auth.signUp({
       email,

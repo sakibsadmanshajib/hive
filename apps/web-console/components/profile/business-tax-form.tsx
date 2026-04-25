@@ -58,7 +58,7 @@ export function BusinessTaxForm({
             <input
               type="hidden"
               name="legalEntityType"
-              value={values.legalEntityType}
+              value={values.legalEntityType || "individual"}
               readOnly
             />
             <p className="text-xs text-[var(--color-ink-3)]">

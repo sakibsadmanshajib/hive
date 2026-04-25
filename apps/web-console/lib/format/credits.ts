@@ -23,9 +23,10 @@ export function formatTokens(value: number): string {
 }
 
 /**
- * Format an ISO date string as a short day/month/year for tables.
- * Returns an em-dash for null/undefined/empty values so columns line
- * up visually.
+ * Format an ISO date string as a short day/month/year for tables. Uses
+ * the en-GB locale so output renders day-first (e.g. "25 Apr 2026") for
+ * BD-market consistency. Returns an em-dash for null/undefined/empty
+ * values so columns line up visually.
  */
 export function formatShortDate(value: string | null | undefined): string {
   if (!value) {
@@ -35,7 +36,7 @@ export function formatShortDate(value: string | null | undefined): string {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return new Intl.DateTimeFormat("en-US", {
+  return new Intl.DateTimeFormat("en-GB", {
     year: "numeric",
     month: "short",
     day: "numeric",

@@ -12,7 +12,6 @@
 # Dependencies
 /vendor/
 node_modules/
-package-lock.json
 
 # IDE
 .idea/
@@ -61,6 +60,9 @@ hs_err_pid*.log
 # Claude Code (user-local)
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+
+# OpenWolf — per-developer cross-session memory, never tracked.
+.wolf/
 
 # Caveman compression backups
 *.original.md
