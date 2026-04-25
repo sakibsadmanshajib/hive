@@ -154,6 +154,25 @@ jobs:
         run: |
           printf '%s' "$STAGING_ENV" > /tmp/hive.env
           chmod 600 /tmp/hive.env
+
+          # Defensive: staging must use managed Upstash Redis, never the
+          # local docker container. The base compose `redis` service is
+          # gated to `--profile local` and the staging override drops the
+          # depends_on, but we assert here too so a copy-paste mistake in
+          # the STAGING_ENV secret can't silently route writes to a
+          # non-existent localhost redis.
+          if grep -E '^REDIS_URL=redis://(redis|localhost|127\.0\.0\.1)' /tmp/hive.env; then
+            echo "FATAL: STAGING_ENV REDIS_URL points at a docker/local redis." >&2
+            echo "Staging must use rediss://default:<token>@<host>:6379 (Upstash)." >&2
+            rm -f /tmp/hive.env
+            exit 1
+          fi
+          if ! grep -qE '^REDIS_URL=' /tmp/hive.env; then
+            echo "FATAL: STAGING_ENV missing REDIS_URL." >&2
+            rm -f /tmp/hive.env
+            exit 1
+          fi
+
           scp -i ~/.ssh/id_ed25519 /tmp/hive.env \
             deploy@${{ secrets.STAGING_HOST }}:/opt/hive/.env
           ssh -i ~/.ssh/id_ed25519 deploy@${{ secrets.STAGING_HOST }} \
@@ -262,8 +281,8 @@ jobs:
         working-directory: packages/sdk-tests/python
         run: pytest tests/test_health.py tests/test_models.py tests/test_embeddings.py -q
 
-  deploy-pages:
-    name: Deploy web-console to Cloudflare Pages
+  deploy-workers:
+    name: Deploy web-console to Cloudflare Workers (OpenNext)
     needs: deploy-vm
     runs-on: ubuntu-latest
     defaults:
@@ -281,7 +300,7 @@ jobs:
       - name: Install deps
         run: npm ci
 
-      - name: Build (CF Pages via @cloudflare/next-on-pages)
+      - name: Build (OpenNext for Cloudflare Workers)
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
@@ -289,10 +308,17 @@ jobs:
           NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp-hive.scubed.co
         run: npm run build:cf
 
-      - name: Deploy to CF Pages
+      - name: Deploy to CF Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/web-console
-          command: pages deploy .vercel/output/static --project-name=hive-console --branch=main
+          command: deploy
+          # Pre-deploy: populate the OpenNext incremental cache (no-op when no R2 bucket bound).
+          preCommands: npx opennextjs-cloudflare populateCache --target remote || true
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_API_URL: https://api-hive.scubed.co
+          NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp-hive.scubed.co

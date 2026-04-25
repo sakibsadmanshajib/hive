@@ -150,8 +150,17 @@ services:
       retries: 5
       start_period: 120s
 
+  # Local-dev Redis only. Staging + production use Upstash via REDIS_URL.
+  # Gated to `local` and `test` profiles so a bare `docker compose up`
+  # (or any deploy that doesn't opt in) never starts a docker redis. Local
+  # dev: `docker compose --profile local up`. SDK tests: also activate
+  # `--profile test` so the redis dependency resolves for sdk-tests-*
+  # services.
   redis:
     image: redis:8.4-alpine
+    profiles:
+      - local
+      - test
     ports:
       - "6379:6379"
     healthcheck:

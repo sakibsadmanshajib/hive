@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-24T23:17:35.747Z
-> Files: 528 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-25T00:05:19.161Z
+> Files: 545 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
@@ -63,7 +63,7 @@
 ## .github/workflows/
 
 - `ci.yml` — CI: CI (~6522 tok)
-- `deploy-staging.yml` — CI: deploy-staging (~1799 tok)
+- `deploy-staging.yml` — CI: deploy-staging (~3430 tok)
 - `pr-cleanup.yml` — CI: PR cleanup (~2124 tok)
 
 ## .planning/
@@ -79,7 +79,8 @@
 - `next-session-post-deploy-sdk-replay.md` — Next Session: Post-deploy SDK replay against staging (~816 tok)
 - `next-session-ui-styling.md` — Next Session: web-console UI framework + styling (~1096 tok)
 - `next-session-visual-regression-coverage.md` — Next Session: Add visual regression coverage to CI (~886 tok)
-- `next-sessions-INDEX.md` — Next-session prompt index (~625 tok)
+- `next-session-web-console-revamp.md` — Next session: Web-console revamp — OpenNext + Claude-grade design + auth fix (~3854 tok)
+- `next-sessions-INDEX.md` — Next-session prompt index (~685 tok)
 - `PROJECT.md` — Hive API Platform (~2848 tok)
 - `ROADMAP.md` — Roadmap: Hive API Platform (~1949 tok)
 - `STATE.md` — Project State (~5891 tok)
@@ -285,6 +286,10 @@
 ## .planning/phases/14-payments-invoicing-budget-integration/
 
 - `.gitkeep` (~0 tok)
+
+## .planning/phases/web-console-revamp/
+
+- `RESEARCH.md` — Web Console Revamp — Research (~9507 tok)
 
 ## .planning/research/
 
@@ -599,13 +604,16 @@
 - `.gitignore` — Git ignore rules (~89 tok)
 - `middleware.ts` — Exports middleware, config (~560 tok)
 - `next-env.d.ts` — / <reference types="next" /> (~61 tok)
-- `next.config.ts` — CF Pages + Next 15 — keep config minimal; @cloudflare/next-on-pages (~109 tok)
+- `next.config.ts` — Declares config (~80 tok)
+- `open-next.config.ts` (~32 tok)
 - `package-lock.json` — npm lock file (~49009 tok)
-- `package.json` — Node.js package manifest (~258 tok)
+- `package.json` — Node.js package manifest (~348 tok)
 - `playwright.config.ts` — Playwright test configuration (~140 tok)
+- `postcss.config.mjs` — Declares config (~26 tok)
 - `tsconfig.json` — TypeScript configuration (~164 tok)
 - `tsconfig.tsbuildinfo` (~43098 tok)
 - `vitest.config.ts` — Vitest test configuration (~129 tok)
+- `wrangler.jsonc` — Cloudflare Workers configuration for the OpenNext-built Next.js bundle. (~291 tok)
 
 ## apps/web-console/__tests__/
 
@@ -615,7 +623,8 @@
 
 ## apps/web-console/app/
 
-- `layout.tsx` — All dynamic routes run on the Cloudflare Pages Edge runtime. (~117 tok)
+- `globals.css` — Styles: 5 rules, 64 vars (~1539 tok)
+- `layout.tsx` — geistSans (~314 tok)
 - `page.tsx` — RootPage (~122 tok)
 
 ## apps/web-console/app/api/budget/
@@ -628,15 +637,15 @@
 
 ## apps/web-console/app/auth/forgot-password/
 
-- `page.tsx` — ForgotPasswordPage — renders form — uses useState (~480 tok)
+- `page.tsx` — ForgotPasswordPage — renders form (~962 tok)
 
 ## apps/web-console/app/auth/reset-password/
 
-- `page.tsx` — ResetPasswordPage — renders form — uses useRouter, useState (~512 tok)
+- `page.tsx` — ResetPasswordPage — renders form (~698 tok)
 
 ## apps/web-console/app/auth/sign-in/
 
-- `page.tsx` — SignInPage — renders form — uses useRouter, useState (~518 tok)
+- `page.tsx` — SignInPage — renders form (~962 tok)
 
 ## apps/web-console/app/auth/sign-up/
 
@@ -713,6 +722,11 @@
 - `api-key-list.tsx` — statusStyle — renders table (~1852 tok)
 - `revoke-confirm-panel.tsx` — RevokeConfirmPanel — uses useState, useRouter (~1025 tok)
 
+## apps/web-console/components/app-shell/
+
+- `auth-shell.tsx` — AuthShell (~656 tok)
+- `console-shell.tsx` — NAV_GROUPS (~2024 tok)
+
 ## apps/web-console/components/billing/
 
 - `billing-overview.tsx` — entryTypeLabel — renders table (~1978 tok)
@@ -735,8 +749,23 @@
 - `billing-contact-form.tsx` — emptyErrors — renders form (~1238 tok)
 - `business-tax-form.tsx` — BusinessTaxForm (~1393 tok)
 
+## apps/web-console/components/ui/
+
+- `badge.tsx` — badgeVariants (~435 tok)
+- `button.tsx` — buttonVariants (~682 tok)
+- `card.tsx` — Card (~609 tok)
+- `data-table.tsx` — DataTable — renders table (~811 tok)
+- `empty-state.tsx` — EmptyState (~292 tok)
+- `input.tsx` — Input (~709 tok)
+- `page-header.tsx` — PageHeader (~347 tok)
+
+## apps/web-console/docs/
+
+- `STYLE_GUIDE.md` — Hive Console — Style Guide (~1390 tok)
+
 ## apps/web-console/lib/
 
+- `cn.ts` — Exports cn (~51 tok)
 - `profile-schemas.ts` — Exports AccountProfileFormValues, BillingProfileFormValues, AccountProfileFieldErrors, BillingProfileFieldErrors + 2 more (~1614 tok)
 - `viewer-gates.ts` — Exports ViewerGates, ViewerForGates, canInviteMembers, canManageApiKeys, allowedUnverifiedRoutes (~150 tok)
 
@@ -770,7 +799,7 @@
 - `docker-bake.hcl` — Shared bake definition for both local development and CI. (~338 tok)
 - `docker-compose.override.yml` — Docker Compose: 0 services (~262 tok)
 - `docker-compose.staging.yml` — Staging override — overlays docker-compose.yml (~618 tok)
-- `docker-compose.yml` — Docker Compose services (~1868 tok)
+- `docker-compose.yml` — Docker Compose services (~2052 tok)
 - `Dockerfile.control-plane` (~200 tok)
 - `Dockerfile.control-plane.prod` — Production multi-stage build for control-plane (~234 tok)
 - `Dockerfile.edge-api` (~210 tok)

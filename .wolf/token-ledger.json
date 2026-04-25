@@ -2,14 +2,14 @@
   "version": 1,
   "created_at": "2026-04-22T00:50:18.611Z",
   "lifetime": {
-    "total_tokens_estimated": 666069,
-    "total_reads": 291,
-    "total_writes": 551,
-    "total_sessions": 16,
-    "anatomy_hits": 275,
-    "anatomy_misses": 16,
-    "repeated_reads_blocked": 68,
-    "estimated_savings_vs_bare_cli": 125686
+    "total_tokens_estimated": 785617,
+    "total_reads": 357,
+    "total_writes": 615,
+    "total_sessions": 17,
+    "anatomy_hits": 323,
+    "anatomy_misses": 34,
+    "repeated_reads_blocked": 76,
+    "estimated_savings_vs_bare_cli": 154188
   },
   "sessions": [
     {
@@ -5351,6 +5351,824 @@
         "writes_count": 9,
         "repeated_reads_blocked": 1,
         "anatomy_lookups": 7
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:24:16.196Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 980,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 714,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 13874,
+        "output_tokens_estimated": 4440,
+        "reads_count": 11,
+        "writes_count": 10,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:33:25.262Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 980,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 714,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 13874,
+        "output_tokens_estimated": 4440,
+        "reads_count": 11,
+        "writes_count": 10,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:35:26.198Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 980,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 714,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 13874,
+        "output_tokens_estimated": 4440,
+        "reads_count": 11,
+        "writes_count": 10,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:39:17.892Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 980,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 714,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 13874,
+        "output_tokens_estimated": 4440,
+        "reads_count": 11,
+        "writes_count": 10,
+        "repeated_reads_blocked": 1,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:45:28.623Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 625,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 714,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-web-console-revamp.md",
+          "tokens_estimated": 4404,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 783,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 13519,
+        "output_tokens_estimated": 9627,
+        "reads_count": 11,
+        "writes_count": 12,
+        "repeated_reads_blocked": 2,
+        "anatomy_lookups": 8
+      }
+    },
+    {
+      "id": "session-2026-04-24-1900",
+      "started": "2026-04-24T23:00:14.208Z",
+      "ended": "2026-04-24T23:46:12.234Z",
+      "reads": [
+        {
+          "file": "/home/sakib/hive/.planning/next-session-clamp-responses-streaming.md",
+          "tokens_estimated": 1518,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-litellm-route-pinning.md",
+          "tokens_estimated": 1048,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 2942,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 3049,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/types_stream.go",
+          "tokens_estimated": 343,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 3791,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 203,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/debug/flaky-usage-tokens-root-cause.md",
+          "tokens_estimated": 0,
+          "was_repeated": false,
+          "anatomy_had_description": false
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 625,
+          "was_repeated": true,
+          "anatomy_had_description": false
+        }
+      ],
+      "writes": [
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 215,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/responses.go",
+          "tokens_estimated": 151,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 530,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream.go",
+          "tokens_estimated": 284,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/stream_responses.go",
+          "tokens_estimated": 161,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 1420,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp.go",
+          "tokens_estimated": 180,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/apps/edge-api/internal/inference/usage_clamp_test.go",
+          "tokens_estimated": 206,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/deploy/litellm/config.yaml",
+          "tokens_estimated": 579,
+          "action": "edit"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 714,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-session-web-console-revamp.md",
+          "tokens_estimated": 4404,
+          "action": "create"
+        },
+        {
+          "file": "/home/sakib/hive/.planning/next-sessions-INDEX.md",
+          "tokens_estimated": 783,
+          "action": "create"
+        }
+      ],
+      "totals": {
+        "input_tokens_estimated": 13519,
+        "output_tokens_estimated": 9627,
+        "reads_count": 11,
+        "writes_count": 12,
+        "repeated_reads_blocked": 2,
+        "anatomy_lookups": 8
       }
     }
   ],

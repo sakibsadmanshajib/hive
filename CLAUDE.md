@@ -16,6 +16,7 @@ OpenAI-compatible API gateway for Bangladesh market — v1.0 full **Go rewrite**
 | **control-plane** | Go | 1.24 |
 | **edge-api** | Go | 1.24 |
 | **web-console** | Next.js / React / TypeScript | 15 / 19 / 5.8 |
+| **web-console hosting** | Cloudflare Workers via `@opennextjs/cloudflare` | latest stable |
 | **Database** | Postgres (Supabase-hosted) | — |
 | **Cache** | Redis | 8.4 |
 | **Model routing** | LiteLLM | latest-stable |
@@ -61,11 +62,13 @@ Supabase Storage only object storage backend. Enable S3 protocol in Supabase Sto
 ```bash
 cd deploy/docker
 
-# Core stack (edge-api + control-plane + redis + litellm + web-console)
-docker compose --env-file ../../.env up --build
+# Core stack (edge-api + control-plane + redis + litellm + web-console).
+# `--profile local` activates the in-stack docker redis. Staging + prod
+# do not carry that profile — they use managed Upstash Redis via REDIS_URL.
+docker compose --env-file ../../.env --profile local up --build
 
 # With monitoring (adds Prometheus, Grafana, Alertmanager)
-docker compose --env-file ../../.env --profile monitoring up --build
+docker compose --env-file ../../.env --profile local --profile monitoring up --build
 ```
 
 ### 3. Verify

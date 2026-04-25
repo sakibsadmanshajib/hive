@@ -1,0 +1,174 @@
+@import "tailwindcss";
+
+/*
+ * Hive console design tokens. CSS-first @theme so Tailwind v4 emits the
+ * matching utilities (`bg-surface`, `text-ink`, `font-display`, etc.).
+ *
+ * Aesthetic anchor: Claude.com — restrained, dense, calm. One accent
+ * (sienna), monochrome data, generous letter-spacing on display type,
+ * tabular numerals on every numeric surface.
+ */
+@theme {
+  /* Type — display = Fraunces (serif), body = Geist Sans, mono = Geist Mono.
+     Variables are wired via next/font in app/layout.tsx. */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+
+  /* Type scale — dense, 14px body, 12-step. */
+  --text-2xs: 0.6875rem; /* 11 */
+  --text-xs: 0.75rem; /* 12 */
+  --text-sm: 0.8125rem; /* 13 */
+  --text-base: 0.875rem; /* 14 — body */
+  --text-md: 0.9375rem; /* 15 */
+  --text-lg: 1rem; /* 16 */
+  --text-xl: 1.125rem; /* 18 */
+  --text-2xl: 1.375rem; /* 22 */
+  --text-3xl: 1.75rem; /* 28 — page heading */
+  --text-4xl: 2.25rem; /* 36 — hero only */
+
+  /* Color — surface stack and ink stack. Single accent: sienna. */
+  --color-canvas: oklch(0.985 0 0); /* page bg */
+  --color-surface: oklch(1 0 0); /* card bg */
+  --color-surface-2: oklch(0.975 0.002 90); /* hover surface */
+  --color-surface-inset: oklch(0.96 0.002 90); /* code, table stripes */
+  --color-border: oklch(0.92 0.003 90);
+  --color-border-strong: oklch(0.84 0.005 90);
+
+  --color-ink: oklch(0.16 0.005 90); /* primary text */
+  --color-ink-2: oklch(0.38 0.005 90); /* secondary */
+  --color-ink-3: oklch(0.56 0.005 90); /* muted */
+  --color-ink-4: oklch(0.72 0.005 90); /* disabled/ghost */
+
+  --color-accent: oklch(0.58 0.13 38); /* sienna — Claude-adjacent */
+  --color-accent-hover: oklch(0.52 0.14 38);
+  --color-accent-soft: oklch(0.96 0.025 38);
+  --color-accent-ink: oklch(0.32 0.10 38);
+
+  --color-success: oklch(0.55 0.12 150);
+  --color-success-soft: oklch(0.96 0.03 150);
+  --color-warning: oklch(0.72 0.13 75);
+  --color-warning-soft: oklch(0.96 0.04 75);
+  --color-danger: oklch(0.55 0.18 25);
+  --color-danger-soft: oklch(0.96 0.04 25);
+
+  /* Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+
+  /* Shadows — subtle, layered. No heavy drop-shadows. */
+  --shadow-xs: 0 1px 0 0 oklch(0.20 0.005 90 / 0.05);
+  --shadow-sm: 0 1px 2px 0 oklch(0.20 0.005 90 / 0.06), 0 1px 0 0 oklch(0.20 0.005 90 / 0.04);
+  --shadow-md: 0 4px 12px -2px oklch(0.20 0.005 90 / 0.08), 0 2px 4px -1px oklch(0.20 0.005 90 / 0.04);
+  --shadow-lg: 0 12px 32px -8px oklch(0.20 0.005 90 / 0.12), 0 4px 12px -4px oklch(0.20 0.005 90 / 0.06);
+
+  /* Motion — Linear-style, 120-180ms ease-out. */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 280ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme inline {
+    --color-canvas: oklch(0.16 0.005 90);
+    --color-surface: oklch(0.19 0.005 90);
+    --color-surface-2: oklch(0.22 0.005 90);
+    --color-surface-inset: oklch(0.14 0.005 90);
+    --color-border: oklch(0.27 0.005 90);
+    --color-border-strong: oklch(0.36 0.005 90);
+
+    --color-ink: oklch(0.96 0.005 90);
+    --color-ink-2: oklch(0.78 0.005 90);
+    --color-ink-3: oklch(0.60 0.005 90);
+    --color-ink-4: oklch(0.44 0.005 90);
+
+    --color-accent: oklch(0.72 0.14 38);
+    --color-accent-hover: oklch(0.78 0.14 38);
+    --color-accent-soft: oklch(0.30 0.05 38);
+    --color-accent-ink: oklch(0.86 0.10 38);
+
+    --color-success-soft: oklch(0.28 0.05 150);
+    --color-warning-soft: oklch(0.30 0.06 75);
+    --color-danger-soft: oklch(0.30 0.08 25);
+  }
+}
+
+/*
+ * Base layer — sane defaults. Tabular numerals on every numeric element
+ * (.tnum), system selection color, focus ring uses the accent, and we
+ * disable iOS tap-highlight which leaks orange flashes on touch.
+ */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    border-color: var(--color-border);
+  }
+
+  html {
+    color-scheme: light dark;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: 1.5;
+    font-feature-settings: "ss01", "cv11";
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  h1, h2 {
+    font-family: var(--font-display);
+    letter-spacing: -0.02em;
+    font-weight: 500;
+  }
+  h3, h4, h5, h6 {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+
+  code, kbd, pre, samp {
+    font-family: var(--font-mono);
+    font-size: 0.92em;
+  }
+
+  .tnum,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum", "ss01";
+  }
+}
+
+/*
+ * Utility layer additions used across the console. Keeps Tailwind class
+ * authoring tight without exploding into bespoke component CSS.
+ */
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  .text-pretty {
+    text-wrap: pretty;
+  }
+}

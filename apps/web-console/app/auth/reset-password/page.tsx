@@ -2,10 +2,12 @@
 
 import { createClient } from "@/lib/supabase/browser";
 import { useState, type FormEvent } from "react";
-import { useRouter } from "next/navigation";
+
+import { AuthShell } from "@/components/app-shell/auth-shell";
+import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/input";
 
 export default function ResetPasswordPage() {
-  const router = useRouter();
   const supabase = createClient();
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -31,38 +33,56 @@ export default function ResetPasswordPage() {
       return;
     }
 
-    router.push("/console");
-    router.refresh();
+    // Hard navigation so middleware sees the refreshed session cookies.
+    window.location.assign("/console");
   }
 
   return (
-    <main>
-      <h1>Set a new password</h1>
-      <form onSubmit={handleSubmit}>
-        <label htmlFor="password">New password</label>
-        <input
-          id="password"
-          type="password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-          autoComplete="new-password"
-          minLength={8}
-        />
-        <label htmlFor="confirm">Confirm new password</label>
-        <input
-          id="confirm"
-          type="password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          required
-          autoComplete="new-password"
-        />
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={loading}>
+    <AuthShell
+      eyebrow="Final step"
+      title="Set a new password"
+      subtitle="Pick something memorable but uncrackable. At least 8 characters."
+    >
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <Field label="New password" htmlFor="password" required>
+          <Input
+            id="password"
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+            autoComplete="new-password"
+            minLength={8}
+          />
+        </Field>
+        <Field label="Confirm new password" htmlFor="confirm" required>
+          <Input
+            id="confirm"
+            type="password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            required
+            autoComplete="new-password"
+          />
+        </Field>
+        {error ? (
+          <p
+            role="alert"
+            className="text-xs text-[var(--color-danger)] leading-tight"
+          >
+            {error}
+          </p>
+        ) : null}
+        <Button
+          type="submit"
+          variant="primary"
+          size="lg"
+          disabled={loading}
+          className="w-full"
+        >
           {loading ? "Updating…" : "Update password"}
-        </button>
+        </Button>
       </form>
-    </main>
+    </AuthShell>
   );
 }

@@ -8,15 +8,12 @@ landed each one.
 
 | File | Title | Priority | Notes |
 |------|-------|----------|-------|
-| [next-session-ui-styling.md](./next-session-ui-styling.md) | web-console UI framework + styling | P0 | Needs framework pick + designqc loop. Default rec: Tailwind v4 + shadcn/ui. |
-| [next-session-visual-regression-coverage.md](./next-session-visual-regression-coverage.md) | Playwright visual regression in CI | P2 | Blocked on UI styling — baselines only stabilize after the framework swap. |
+| [next-session-web-console-revamp.md](./next-session-web-console-revamp.md) | Web-console revamp — OpenNext + Claude-grade design + auth fix | P0 | Single PR — runtime swap (`@cloudflare/next-on-pages` → `@opennextjs/cloudflare`), Supabase SSR cookie fix (unblocks 7 failing Playwright specs on staging), full visual rebuild via `/frontend-design:frontend-design` skill. Subsumes the prior `ui-styling` + `visual-regression-coverage` prompts. |
 
 ## Suggested order
 
-1. **UI styling** (P0) — user-input gate on framework choice; biggest
-   user-visible improvement.
-2. **Visual regression coverage** (P2) — only after UI styling lands a
-   stable baseline.
+1. **Web-console revamp** (P0) — only pending prompt; blocks staging
+   E2E coverage on the deployed Pages/Workers surface.
 
 ## Shipped (2026-04-24 follow-up session)
 
@@ -30,14 +27,17 @@ landed each one.
 | #99 | fix(edge-api): clamp upstream `completion_tokens=0` on non-empty output | `next-session-flaky-usage-tokens.md` (code half) |
 | #101 | fix(edge-api): extend usage clamp to responses + streaming paths | `next-session-clamp-responses-streaming.md` |
 | #102 | chore(litellm): pin OpenRouter backing providers | `next-session-litellm-route-pinning.md` |
+| #103 | docs(planning): clean up consumed session prompts + sync wolf state | (cleanup pass) |
 
 ## Why this decomposition
 
-- **Reviewable diffs** — P2 trivia stays in its own PR instead of being
-  hidden inside a framework swap.
-- **Revert safety** — UI styling needs iteration; a visual-regression
-  gate committed alongside would block styling PRs until baselines
-  settle.
+- **Bundling auth fix + runtime swap + redesign** is intentional — the
+  three are entangled (the auth bug needs SSR cookie behavior that
+  changes between Pages and Workers; the redesign needs authed pages
+  reachable so `designqc` can iterate). See the revamp prompt for the
+  full rationale.
+- **Reviewable diffs** — kept its own PR so reviewers can sequence
+  rollback if any one of the three legs misbehaves.
 - **Billing risk isolation** — `usage.tokens=0` got an investigation
   doc (#97) before any code (#99 → #101); same pattern for any future
   billing-affecting change.
