@@ -57,7 +57,7 @@ test.describe("profile completion", () => {
       await page.selectOption('select[name="accountType"]', "business");
       await page.fill('input[name="countryCode"]', "US");
       await page.fill('input[name="stateRegion"]', "CA");
-      await page.click('button[type="submit"]');
+      await page.getByRole("button", { name: "Save and continue" }).click();
 
       await page.waitForURL("**/console");
       await expect(page.getByText("Workspace:")).toBeVisible();
@@ -82,7 +82,7 @@ test.describe("profile completion", () => {
       await page.selectOption('select[name="accountType"]', "business");
       await page.fill('input[name="countryCode"]', "US");
       await page.fill('input[name="stateRegion"]', "CA");
-      await page.click('button[type="submit"]');
+      await page.getByRole("button", { name: "Save and continue" }).click();
 
       await page.waitForURL("**/console");
       // The redesigned dashboard's H1 is the workspace display name. Use a
@@ -118,7 +118,7 @@ test.describe("profile completion", () => {
       await page.goto("/console/settings/billing");
 
       await page.fill('input[name="legalEntityName"]', "Acme Labs LLC");
-      await page.click('button[type="submit"]');
+      await page.getByRole("button", { name: "Save billing details" }).click();
 
       await page.waitForURL("**/console/settings/billing");
       await expect(
