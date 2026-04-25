@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { Button } from "@/components/ui/button";
+
 interface RevokeConfirmPanelProps {
   keyId: string;
   keyNickname: string;
@@ -26,11 +28,14 @@ export function RevokeConfirmPanel({
     setError(null);
 
     try {
-      const response = await fetch(`/api/v1/accounts/current/api-keys/${keyId}/revoke`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-      });
+      const response = await fetch(
+        `/api/v1/accounts/current/api-keys/${keyId}/revoke`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+        },
+      );
 
       if (!response.ok) {
         setError("Failed to revoke key. Please try again.");
@@ -43,8 +48,10 @@ export function RevokeConfirmPanel({
       if (onComplete) {
         onComplete();
       }
-    } catch {
-      setError("Failed to revoke key. Please try again.");
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : "Failed to revoke key.";
+      setError(message);
       setLoading(false);
     }
   }
@@ -59,84 +66,53 @@ export function RevokeConfirmPanel({
 
   if (!showPanel) {
     return (
-      <button
+      <Button
         type="button"
+        variant="ghost"
+        size="sm"
         onClick={() => setShowPanel(true)}
-        style={{
-          background: "transparent",
-          color: "#dc2626",
-          border: "none",
-          padding: 0,
-          fontSize: "0.875rem",
-          cursor: "pointer",
-          fontFamily: "inherit",
-        }}
+        className="text-[var(--color-danger)] hover:bg-[var(--color-danger-soft)] hover:text-[var(--color-danger)]"
       >
         Revoke
-      </button>
+      </Button>
     );
   }
 
   return (
-    <div
-      style={{
-        border: "1px solid #fecaca",
-        borderRadius: "0.375rem",
-        padding: "0.75rem",
-        background: "#fef2f2",
-        display: "grid",
-        gap: "0.5rem",
-        minWidth: "240px",
-      }}
-    >
-      <p style={{ margin: 0, fontWeight: 700, color: "#dc2626" }}>Revoke this key?</p>
-      <p style={{ margin: 0, fontSize: "0.875rem", color: "#4b5563" }}>
-        Revoking this key immediately blocks all requests using it. This cannot be undone.
+    <div className="flex min-w-[260px] flex-col gap-2 rounded-md border border-[var(--color-danger)]/30 bg-[var(--color-danger-soft)] px-3 py-3">
+      <p className="text-sm font-semibold text-[var(--color-danger)]">
+        Revoke this key?
       </p>
-      <p style={{ margin: 0, fontSize: "0.875rem", color: "#6b7280" }}>
-        Key: <strong>{keyNickname}</strong>
+      <p className="text-xs text-[var(--color-ink-2)] leading-relaxed">
+        Revoking <strong className="font-semibold">{keyNickname}</strong>{" "}
+        immediately blocks all requests using it. This cannot be undone.
       </p>
 
-      {error && (
-        <p style={{ margin: 0, color: "#dc2626", fontSize: "0.875rem" }}>{error}</p>
-      )}
+      {error ? (
+        <p role="alert" className="text-xs text-[var(--color-danger)]">
+          {error}
+        </p>
+      ) : null}
 
-      <div style={{ display: "flex", gap: "0.5rem" }}>
-        <button
+      <div className="flex items-center gap-2">
+        <Button
           type="button"
+          variant="danger"
+          size="sm"
           onClick={() => void handleRevoke()}
           disabled={loading}
-          style={{
-            background: loading ? "#9ca3af" : "#dc2626",
-            color: "#ffffff",
-            padding: "0.5rem 1rem",
-            borderRadius: "0.375rem",
-            border: "none",
-            fontWeight: 700,
-            cursor: loading ? "not-allowed" : "pointer",
-            opacity: loading ? 0.7 : 1,
-            fontSize: "0.875rem",
-          }}
         >
-          {loading ? "Loading..." : "Revoke key"}
-        </button>
-        <button
+          {loading ? "Revoking…" : "Revoke key"}
+        </Button>
+        <Button
           type="button"
+          variant="secondary"
+          size="sm"
           onClick={handleCancel}
           disabled={loading}
-          style={{
-            background: "transparent",
-            color: "#1d4ed8",
-            border: "1px solid #1d4ed8",
-            padding: "0.5rem 1rem",
-            borderRadius: "0.375rem",
-            fontWeight: 700,
-            cursor: "pointer",
-            fontSize: "0.875rem",
-          }}
         >
           Keep key
-        </button>
+        </Button>
       </div>
     </div>
   );
