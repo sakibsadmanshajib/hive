@@ -40,5 +40,10 @@ export function formatShortDate(value: string | null | undefined): string {
     year: "numeric",
     month: "short",
     day: "numeric",
+    // Pin to Asia/Dhaka so SSR (Cloudflare Workers UTC) and CSR
+    // (browser local) render identical days near midnight UTC. This
+    // also keeps date columns visually consistent for the BD-market
+    // audience this console targets.
+    timeZone: "Asia/Dhaka",
   }).format(date);
 }

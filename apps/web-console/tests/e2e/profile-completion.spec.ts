@@ -76,7 +76,11 @@ test.describe("profile completion", () => {
       await page.click('button[type="submit"]');
 
       await page.waitForURL("**/console");
-      await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
+      // The redesigned dashboard's H1 is the workspace display name. Use a
+      // stable Card heading to confirm we landed on the overview screen.
+      await expect(
+        page.getByRole("heading", { name: "Credit balance" }),
+      ).toBeVisible();
       await expect(page.getByRole("link", { name: "Complete setup" })).toHaveCount(0);
     });
   });
