@@ -339,12 +339,23 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "method not allowed" }, 405);
   }
 
-  const secret = Deno.env.get("E2E_FIXTURE_SECRET");
-  if (!secret) {
-    return jsonResponse({ error: "E2E_FIXTURE_SECRET not configured" }, 500);
+  // Auth: accept EITHER the dedicated E2E_FIXTURE_SECRET (when set) OR the
+  // auto-injected SUPABASE_SERVICE_ROLE_KEY. The service role key is what
+  // every caller in CI / local already has, so accepting it removes the
+  // separate secret-setup step while keeping the endpoint locked to the same
+  // blast radius (root DB access).
+  const acceptedSecrets = [
+    Deno.env.get("E2E_FIXTURE_SECRET"),
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+  ].filter((v): v is string => !!v);
+  if (acceptedSecrets.length === 0) {
+    return jsonResponse(
+      { error: "E2E_FIXTURE_SECRET / SUPABASE_SERVICE_ROLE_KEY not configured" },
+      500,
+    );
   }
   const provided = req.headers.get("X-E2E-Secret");
-  if (!provided || provided !== secret) {
+  if (!provided || !acceptedSecrets.includes(provided)) {
     return jsonResponse({ error: "unauthorized" }, 401);
   }
 

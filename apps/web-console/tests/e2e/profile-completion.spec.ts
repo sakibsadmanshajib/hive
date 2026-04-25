@@ -13,11 +13,20 @@ async function signIn(
   password: string
 ) {
   await page.goto("/auth/sign-in");
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  await page.locator("#email").fill(email);
+  await page.locator("#password").fill(password);
   await page.click('button[type="submit"]');
-  await page.waitForURL("**/console**");
+  // baseURL hostname contains "console" so "**/console**" globs match the
+  // sign-in URL too — wait for an exact /console path landing instead.
+  await page.waitForURL((url) => url.pathname.startsWith("/console"), {
+    timeout: 25000,
+  });
 }
+
+// Fixture reset mutates global Supabase state (auth users, accounts,
+// memberships). Parallel workers racing on the same reset cause sessions to
+// flap mid-test, so this file MUST run serially against the shared backend.
+test.describe.configure({ mode: "serial" });
 
 test.beforeEach(async () => {
   try {
