@@ -151,24 +151,40 @@ jobs:
       - name: Seed staging env
         env:
           STAGING_ENV: ${{ secrets.STAGING_ENV }}
+          STAGING_REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
         run: |
           printf '%s' "$STAGING_ENV" > /tmp/hive.env
+          chmod 600 /tmp/hive.env
+
+          # REDIS_URL is sourced from a dedicated secret (STAGING_REDIS_URL)
+          # so staging-only Upstash credentials can be rotated without
+          # rewriting the full STAGING_ENV blob. Any REDIS_URL line baked
+          # into STAGING_ENV is overridden here.
+          if [ -z "${STAGING_REDIS_URL:-}" ]; then
+            echo "FATAL: STAGING_REDIS_URL secret is empty or unset." >&2
+            rm -f /tmp/hive.env
+            exit 1
+          fi
+          # Strip any existing REDIS_URL= lines, then append the canonical one.
+          grep -vE '^REDIS_URL=' /tmp/hive.env > /tmp/hive.env.tmp || true
+          mv /tmp/hive.env.tmp /tmp/hive.env
+          printf 'REDIS_URL=%s\n' "$STAGING_REDIS_URL" >> /tmp/hive.env
           chmod 600 /tmp/hive.env
 
           # Defensive: staging must use managed Upstash Redis, never the
           # local docker container. The base compose `redis` service is
           # gated to `--profile local` and the staging override drops the
           # depends_on, but we assert here too so a copy-paste mistake in
-          # the STAGING_ENV secret can't silently route writes to a
+          # the STAGING_REDIS_URL secret can't silently route writes to a
           # non-existent localhost redis.
           if grep -E '^REDIS_URL=redis://(redis|localhost|127\.0\.0\.1)' /tmp/hive.env; then
-            echo "FATAL: STAGING_ENV REDIS_URL points at a docker/local redis." >&2
+            echo "FATAL: STAGING_REDIS_URL points at a docker/local redis." >&2
             echo "Staging must use rediss://default:<token>@<host>:6379 (Upstash)." >&2
             rm -f /tmp/hive.env
             exit 1
           fi
           if ! grep -qE '^REDIS_URL=' /tmp/hive.env; then
-            echo "FATAL: STAGING_ENV missing REDIS_URL." >&2
+            echo "FATAL: REDIS_URL injection failed (no REDIS_URL line in /tmp/hive.env)." >&2
             rm -f /tmp/hive.env
             exit 1
           fi
