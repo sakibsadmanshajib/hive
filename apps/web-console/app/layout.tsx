@@ -45,7 +45,17 @@ export default function RootLayout({ children }: RootLayoutProps) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable}`}
     >
-      <body className="min-h-screen bg-canvas text-ink antialiased">
+      {/*
+        Browser extensions (Grammarly, etc.) mutate <body> attributes
+        before React hydrates, which produces a hydration mismatch
+        warning on every page load. Suppressing the warning on this
+        single boundary node is the React-recommended workaround and
+        does not silence mismatches inside the tree.
+      */}
+      <body
+        className="min-h-screen bg-canvas text-ink antialiased"
+        suppressHydrationWarning
+      >
         {children}
       </body>
     </html>
