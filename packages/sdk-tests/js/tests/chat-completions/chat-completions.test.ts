@@ -94,11 +94,12 @@ describe("Chat Completions", () => {
     });
 
     expect(response.choices.length).toBeGreaterThanOrEqual(1);
-    // response_format json_object is a best-effort provider hint. Some
-    // providers truncate and return null content under max_tokens pressure
-    // while still metering usage. Verify the request reached the provider
-    // (tokens billed) and, when content is present, parses as valid JSON.
-    expect(response.usage?.completion_tokens ?? 0).toBeGreaterThan(0);
+    // response_format json_object is a best-effort provider hint. Upstream
+    // providers may return null content with completion_tokens=0 (finish
+    // reason "stop") when the schema constraint can't be satisfied. Verify
+    // the request reached the provider (prompt billed) and, when content is
+    // present, parses as valid JSON.
+    expect(response.usage?.prompt_tokens ?? 0).toBeGreaterThan(0);
     const content = response.choices[0].message.content;
     if (content) {
       expect(() => JSON.parse(content)).not.toThrow();
