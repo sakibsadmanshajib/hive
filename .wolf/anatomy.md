@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-25T00:05:19.161Z
-> Files: 545 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-25T00:23:50.121Z
+> Files: 548 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
@@ -9,7 +9,9 @@
 - `feedback_no_direct_main_push.md` (~181 tok)
 - `feedback_respect_deletions.md` (~233 tok)
 - `feedback_wolf_commit.md` (~216 tok)
-- `MEMORY.md` — Memory Index (~520 tok)
+- `MEMORY.md` — Memory Index (~597 tok)
+- `project_staging_redis_upstash.md` (~395 tok)
+- `project_web_console_runtime.md` (~424 tok)
 
 ## ./
 
@@ -653,8 +655,8 @@
 
 ## apps/web-console/app/console/
 
-- `layout.tsx` — ConsoleLayout (~754 tok)
-- `page.tsx` — ConsolePage (~503 tok)
+- `layout.tsx` — ConsoleLayout (~531 tok)
+- `page.tsx` — ConsolePage (~1650 tok)
 
 ## apps/web-console/app/console/account-switch/
 
@@ -662,15 +664,15 @@
 
 ## apps/web-console/app/console/analytics/
 
-- `page.tsx` — isValidTab — renders chart (~2422 tok)
+- `page.tsx` — isValidTab (~2924 tok)
 
 ## apps/web-console/app/console/api-keys/
 
-- `page.tsx` — ApiKeysPage (~223 tok)
+- `page.tsx` — ApiKeysPage (~558 tok)
 
 ## apps/web-console/app/console/billing/
 
-- `page.tsx` — isValidTab (~966 tok)
+- `page.tsx` — isValidTab (~1187 tok)
 
 ## apps/web-console/app/console/billing/[invoiceId]/download/
 
@@ -678,49 +680,49 @@
 
 ## apps/web-console/app/console/catalog/
 
-- `page.tsx` — CatalogPage (~133 tok)
+- `page.tsx` — CatalogPage (~392 tok)
 
 ## apps/web-console/app/console/members/
 
-- `page.tsx` — MembersPage — renders form, table (~1021 tok)
+- `page.tsx` — roleTone — renders form, table (~1572 tok)
 
 ## apps/web-console/app/console/settings/billing/
 
-- `page.tsx` — toFormValues (~1116 tok)
+- `page.tsx` — toFormValues (~1215 tok)
 
 ## apps/web-console/app/console/settings/profile/
 
-- `page.tsx` — toFormValues (~1035 tok)
+- `page.tsx` — toFormValues (~982 tok)
 
 ## apps/web-console/app/console/setup/
 
-- `page.tsx` — toFormValues (~763 tok)
+- `page.tsx` — toFormValues (~891 tok)
 
 ## apps/web-console/app/invitations/accept/
 
-- `page.tsx` — readErrorMessage (~675 tok)
+- `page.tsx` — readErrorMessage (~902 tok)
 
 ## apps/web-console/components/
 
-- `email-settings-card.tsx` — EmailSettingsCard — uses useRouter, useState (~1127 tok)
+- `email-settings-card.tsx` — EmailSettingsCard (~1147 tok)
 - `nav-shell.tsx` — NavShell (~282 tok)
-- `verification-banner.tsx` — VerificationBanner (~137 tok)
+- `verification-banner.tsx` — VerificationBanner (~123 tok)
 - `workspace-switcher.tsx` — WorkspaceSwitcher — renders form (~388 tok)
 
 ## apps/web-console/components/analytics/
 
-- `analytics-controls.tsx` — AnalyticsControls — uses useRouter (~654 tok)
-- `analytics-table.tsx` — AnalyticsTable — renders table (~724 tok)
+- `analytics-controls.tsx` — SELECT_CLASSES (~634 tok)
+- `analytics-table.tsx` — isNumber — renders table (~491 tok)
 - `error-chart.tsx` — ErrorChart — renders chart (~301 tok)
 - `spend-chart.tsx` — SpendChart — renders chart (~281 tok)
-- `time-window-picker.tsx` — PRESET_WINDOWS — uses useState (~1261 tok)
+- `time-window-picker.tsx` — PRESET_WINDOWS (~945 tok)
 - `usage-chart.tsx` — UsageChart — renders chart (~365 tok)
 
 ## apps/web-console/components/api-keys/
 
-- `api-key-create-form.tsx` — ApiKeyCreateForm — renders form — uses useState, useRouter (~2178 tok)
-- `api-key-list.tsx` — statusStyle — renders table (~1852 tok)
-- `revoke-confirm-panel.tsx` — RevokeConfirmPanel — uses useState, useRouter (~1025 tok)
+- `api-key-create-form.tsx` — isApiKeyResponse — renders form (~2037 tok)
+- `api-key-list.tsx` — statusTone — renders table (~778 tok)
+- `revoke-confirm-panel.tsx` — RevokeConfirmPanel (~841 tok)
 
 ## apps/web-console/components/app-shell/
 
@@ -729,25 +731,25 @@
 
 ## apps/web-console/components/billing/
 
-- `billing-overview.tsx` — entryTypeLabel — renders table (~1978 tok)
-- `budget-alert-banner.tsx` — BudgetAlertBanner — uses useState (~607 tok)
-- `budget-alert-form.tsx` — BudgetAlertForm — renders form — uses useState (~1215 tok)
+- `billing-overview.tsx` — entryTypeLabel — renders table (~1499 tok)
+- `budget-alert-banner.tsx` — BudgetAlertBanner (~502 tok)
+- `budget-alert-form.tsx` — readErrorMessage — renders form (~1090 tok)
 - `checkout-modal.test.tsx` — result (~292 tok)
-- `checkout-modal.tsx` — formatPrice — uses useState, useEffect (~3286 tok)
-- `invoice-download-button.tsx` — formatDate (~2264 tok)
-- `invoice-list.tsx` — formatDate — renders table (~1742 tok)
-- `ledger-csv-export.tsx` — LedgerCsvExport (~368 tok)
-- `ledger-table.tsx` — entryTypeLabel — renders table (~1965 tok)
+- `checkout-modal.tsx` — formatPrice (~3107 tok)
+- `invoice-download-button.tsx` — formatDate (~2244 tok)
+- `invoice-list.tsx` — statusBadge — renders table (~820 tok)
+- `ledger-csv-export.tsx` — LedgerCsvExport (~353 tok)
+- `ledger-table.tsx` — entryTypeLabel — renders table (~1472 tok)
 
 ## apps/web-console/components/catalog/
 
-- `model-catalog-table.tsx` — lifecycleStatus — renders table (~1323 tok)
+- `model-catalog-table.tsx` — capabilityTone — renders table (~922 tok)
 
 ## apps/web-console/components/profile/
 
-- `account-profile-form.tsx` — emptyErrors — renders form (~1322 tok)
-- `billing-contact-form.tsx` — emptyErrors — renders form (~1238 tok)
-- `business-tax-form.tsx` — BusinessTaxForm (~1393 tok)
+- `account-profile-form.tsx` — emptyErrors — renders form (~1615 tok)
+- `billing-contact-form.tsx` — emptyErrors — renders form (~1015 tok)
+- `business-tax-form.tsx` — SELECT_CLASSES (~1212 tok)
 
 ## apps/web-console/components/ui/
 
@@ -773,6 +775,10 @@
 
 - `client.ts` — API routes: GET (1 endpoints) (~12210 tok)
 
+## apps/web-console/lib/format/
+
+- `credits.ts` — Format integer credit values for display in the console. Credits are (~352 tok)
+
 ## apps/web-console/lib/supabase/
 
 - `browser.ts` — Exports createClient (~62 tok)
@@ -780,9 +786,9 @@
 
 ## apps/web-console/tests/e2e/
 
-- `auth-shell.spec.ts` — VERIFIED_EMAIL: signIn (~1063 tok)
+- `auth-shell.spec.ts` — Declares signIn (~1041 tok)
 - `profile-completion.spec.ts` — VERIFIED_EMAIL: signIn (~1571 tok)
-- `unauth.spec.ts` — Unauthenticated Playwright coverage for landing redirects, native auth-form validation, and 404 behavior (~1060 tok)
+- `unauth.spec.ts` — submitForm: readValidationMessage (~1009 tok)
 
 ## apps/web-console/tests/unit/
 

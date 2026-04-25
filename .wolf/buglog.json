@@ -306,6 +306,118 @@
       "related_bugs": [],
       "occurrences": 2,
       "last_seen": "2026-04-25T00:01:04.484Z"
+    },
+    {
+      "id": "bug-020",
+      "timestamp": "2026-04-25T00:13:39.232Z",
+      "error_message": "Incorrect value in code",
+      "file": "apps/web-console/components/billing/billing-overview.tsx",
+      "root_cause": "Had \"@/components/ui/badge\"",
+      "fix": "Changed to \"@/components/ui/button\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:13:39.232Z"
+    },
+    {
+      "id": "bug-021",
+      "timestamp": "2026-04-25T00:15:26.608Z",
+      "error_message": "Significant refactor of ",
+      "file": "apps/web-console/components/profile/business-tax-form.tsx",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 17→12 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:15:26.608Z"
+    },
+    {
+      "id": "bug-022",
+      "timestamp": "2026-04-25T00:17:20.843Z",
+      "error_message": "Significant refactor of ",
+      "file": "apps/web-console/components/billing/invoice-download-button.tsx",
+      "root_cause": "13 lines replaced/restructured",
+      "fix": "Rewrote 20→13 lines (13 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:17:20.843Z"
+    },
+    {
+      "id": "bug-023",
+      "timestamp": "2026-04-25T00:20:03.040Z",
+      "error_message": "Incorrect value in code",
+      "file": "apps/web-console/app/console/analytics/page.tsx",
+      "root_cause": "Had \"next/link\"",
+      "fix": "Changed to \"react\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:20:03.040Z"
+    },
+    {
+      "id": "bug-024",
+      "timestamp": "2026-04-25T00:20:11.674Z",
+      "error_message": "CSS fix: children",
+      "file": "apps/web-console/app/console/analytics/page.tsx",
+      "root_cause": "children: React.ReactNode → ReactNode",
+      "fix": "Changed children: React.ReactNode → ReactNode",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "tsx"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:20:11.674Z"
+    },
+    {
+      "id": "bug-025",
+      "timestamp": "2026-04-25T00:22:50.848Z",
+      "error_message": "Incorrect value in code",
+      "file": "apps/web-console/tests/e2e/unauth.spec.ts",
+      "root_cause": "Had \"Sign in to Hive\"",
+      "fix": "Changed to \"Sign in to your console\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:22:50.848Z"
+    },
+    {
+      "id": "bug-026",
+      "timestamp": "2026-04-25T00:23:06.999Z",
+      "error_message": "Significant refactor of ",
+      "file": "apps/web-console/tests/e2e/auth-shell.spec.ts",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 8→4 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:23:06.999Z"
     }
   ]
 }
