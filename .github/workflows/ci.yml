@@ -234,7 +234,9 @@ jobs:
       - name: Start core stack (no rebuild — images already loaded)
         working-directory: deploy/docker
         run: |
-          docker compose up -d --no-build redis litellm control-plane edge-api
+          # `--profile local` activates the in-stack docker redis. Staging
+          # uses Upstash via REDIS_URL and never carries that profile.
+          docker compose --profile local up -d --no-build redis litellm control-plane edge-api
 
       - name: Wait for services to become healthy
         working-directory: deploy/docker
@@ -445,7 +447,9 @@ jobs:
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          docker compose up -d --no-build redis litellm control-plane edge-api
+          # `--profile local` activates the in-stack docker redis. Staging
+          # uses Upstash via REDIS_URL and never carries that profile.
+          docker compose --profile local up -d --no-build redis litellm control-plane edge-api
 
       - name: Wait for services to become healthy
         working-directory: deploy/docker
