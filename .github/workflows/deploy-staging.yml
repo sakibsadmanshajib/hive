@@ -157,7 +157,7 @@ jobs:
           chmod 600 /tmp/hive.env
 
           # REDIS_URL is sourced from a dedicated secret (STAGING_REDIS_URL)
-          # so staging-only Upstash credentials can be rotated without
+          # so staging-only managed-Redis credentials can be rotated without
           # rewriting the full STAGING_ENV blob. Any REDIS_URL line baked
           # into STAGING_ENV is overridden here.
           if [ -z "${STAGING_REDIS_URL:-}" ]; then
@@ -171,15 +171,18 @@ jobs:
           printf 'REDIS_URL=%s\n' "$STAGING_REDIS_URL" >> /tmp/hive.env
           chmod 600 /tmp/hive.env
 
-          # Defensive: staging must use managed Upstash Redis, never the
-          # local docker container. The base compose `redis` service is
-          # gated to `--profile local` and the staging override drops the
-          # depends_on, but we assert here too so a copy-paste mistake in
-          # the STAGING_REDIS_URL secret can't silently route writes to a
-          # non-existent localhost redis.
-          if grep -E '^REDIS_URL=redis://(redis|localhost|127\.0\.0\.1)' /tmp/hive.env; then
+          # Defensive: staging must use a managed Redis (Upstash, Redis
+          # Cloud, etc.), never the local docker container. The base
+          # compose `redis` service is gated to `--profile local` and the
+          # staging override drops the depends_on, but we assert here too
+          # so a copy-paste mistake in the STAGING_REDIS_URL secret can't
+          # silently route writes to a non-existent localhost redis.
+          # Hostname token must be bounded by `:` `/` or end-of-line so
+          # legitimate managed hostnames like `redis-19287.foo.cloud` are
+          # not falsely flagged as the docker `redis` service name.
+          if grep -E '^REDIS_URL=rediss?://([^@]*@)?(redis|localhost|127\.0\.0\.1)(:|/|$)' /tmp/hive.env; then
             echo "FATAL: STAGING_REDIS_URL points at a docker/local redis." >&2
-            echo "Staging must use rediss://default:<token>@<host>:6379 (Upstash)." >&2
+            echo "Staging must use a managed Redis (e.g. redis://default:<token>@<host>:<port>)." >&2
             rm -f /tmp/hive.env
             exit 1
           fi
