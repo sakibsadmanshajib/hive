@@ -11,21 +11,30 @@ export async function POST(request: NextRequest) {
 
   await supabase.auth.signOut();
 
-  // Build the redirect URL from explicit Host / X-Forwarded-* headers.
-  // Inside the docker image Next.js runs in standalone mode with
-  // `HOSTNAME=0.0.0.0`, which leaks into both `request.url` and
-  // `request.nextUrl.origin`. Resolving the host from headers gives a
-  // browser-resolvable origin in dev (localhost) and behind any
-  // upstream proxy (forwarded host) in staging/prod.
-  const headers = request.headers;
-  const host =
-    headers.get("x-forwarded-host") ?? headers.get("host") ?? "localhost";
-  const proto =
-    headers.get("x-forwarded-proto") ??
-    (host.startsWith("localhost") || host.startsWith("127.0.0.1")
-      ? "http"
-      : "https");
-  const redirectUrl = new URL("/auth/sign-in", `${proto}://${host}`);
+  // Resolve the redirect origin against the canonical app URL when one
+  // is configured (matches sign-up + forgot-password). This keeps the
+  // host trustworthy (no open-redirect via spoofed X-Forwarded-Host)
+  // and avoids the standalone-runtime trap where Next.js leaks
+  // `HOSTNAME=0.0.0.0` into `request.url` / `request.nextUrl.origin`.
+  // Fall back to the X-Forwarded-Host / Host headers for environments
+  // where NEXT_PUBLIC_APP_URL is not set (local dev, ad-hoc previews).
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  let origin: string;
+  if (appUrl) {
+    origin = new URL(appUrl).origin;
+  } else {
+    const headers = request.headers;
+    const host =
+      headers.get("x-forwarded-host") ?? headers.get("host") ?? "localhost";
+    const isLoopback =
+      host.startsWith("localhost") ||
+      host.startsWith("127.0.0.1") ||
+      host.startsWith("[::1]");
+    const proto =
+      headers.get("x-forwarded-proto") ?? (isLoopback ? "http" : "https");
+    origin = `${proto}://${host}`;
+  }
+  const redirectUrl = new URL("/auth/sign-in", origin);
 
   const response = NextResponse.redirect(redirectUrl, { status: 303 });
 

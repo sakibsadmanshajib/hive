@@ -161,22 +161,7 @@ export function ConsoleShell({
                 {user.email}
               </span>
             </div>
-            <form action="/auth/sign-out" method="post" className="shrink-0">
-              <button
-                type="submit"
-                aria-label="Sign out"
-                title="Sign out"
-                className={cn(
-                  "h-7 w-7 grid place-items-center rounded-md",
-                  "text-[var(--color-ink-3)]",
-                  "transition-colors duration-[var(--duration-fast)]",
-                  "hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-inset)]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
-                )}
-              >
-                <LogOut size={14} />
-              </button>
-            </form>
+            <SignOutButton className="shrink-0" />
           </div>
         </div>
       </aside>
@@ -199,22 +184,7 @@ export function ConsoleShell({
             >
               Docs
             </Link>
-            <form action="/auth/sign-out" method="post" className="lg:hidden">
-              <button
-                type="submit"
-                aria-label="Sign out"
-                title="Sign out"
-                className={cn(
-                  "h-7 w-7 grid place-items-center rounded-md",
-                  "text-[var(--color-ink-3)]",
-                  "transition-colors duration-[var(--duration-fast)]",
-                  "hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-inset)]",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
-                )}
-              >
-                <LogOut size={14} />
-              </button>
-            </form>
+            <SignOutButton className="lg:hidden" />
           </div>
         </header>
         <main className="flex-1 overflow-y-auto">
@@ -222,6 +192,27 @@ export function ConsoleShell({
         </main>
       </div>
     </div>
+  );
+}
+
+function SignOutButton({ className }: { className?: string }) {
+  return (
+    <form action="/auth/sign-out" method="post" className={className}>
+      <button
+        type="submit"
+        aria-label="Sign out"
+        title="Sign out"
+        className={cn(
+          "h-7 w-7 grid place-items-center rounded-md",
+          "text-[var(--color-ink-3)]",
+          "transition-colors duration-[var(--duration-fast)]",
+          "hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-inset)]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
+        )}
+      >
+        <LogOut size={14} />
+      </button>
+    </form>
   );
 }
 
