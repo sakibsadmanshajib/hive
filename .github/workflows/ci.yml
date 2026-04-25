@@ -129,6 +129,12 @@ jobs:
     # Job-level env: docker compose will interpolate ${VAR} from process env,
     # so we skip the fragile .env heredoc entirely.
     env:
+      # Activate the in-stack docker redis (gated to the `local` profile in
+      # docker-compose.yml so staging never accidentally starts a docker
+      # redis). Setting COMPOSE_PROFILES at the job level so every
+      # `docker compose <subcommand>` invocation in this job — up, ps,
+      # logs, down — sees the profile.
+      COMPOSE_PROFILES: local
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -350,6 +356,9 @@ jobs:
     # 429 on the SDK suites) no longer blocks the UI test coverage.
     needs: [web-unit, go-tests]
     env:
+      # Activate the in-stack docker redis profile for every compose call
+      # in this job (see live-integration job for the rationale).
+      COMPOSE_PROFILES: local
       # SUPABASE_SERVICE_ROLE_KEY intentionally omitted from job-level env
       # so the Playwright runner never inherits it. Only the steps that
       # actually need admin auth — `Start core stack` (docker compose
