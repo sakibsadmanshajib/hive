@@ -1,6 +1,9 @@
 "use client";
 
+import { Download } from "lucide-react";
+
 import type { LedgerEntry } from "@/lib/control-plane/client";
+import { Button } from "@/components/ui/button";
 
 interface LedgerCsvExportProps {
   entries: LedgerEntry[];
@@ -30,21 +33,15 @@ export function LedgerCsvExport({ entries }: LedgerCsvExportProps) {
   }
 
   return (
-    <button
+    <Button
       type="button"
+      variant="secondary"
+      size="sm"
       onClick={handleExport}
-      style={{
-        padding: "0.375rem 0.75rem",
-        borderRadius: "0.375rem",
-        fontSize: "0.875rem",
-        fontWeight: 400,
-        background: "#f9fafb",
-        color: "#4b5563",
-        border: "1px solid #e5e7eb",
-        cursor: "pointer",
-      }}
+      disabled={entries.length === 0}
     >
+      <Download size={14} aria-hidden="true" />
       Export CSV
-    </button>
+    </Button>
   );
 }

@@ -1,16 +1,21 @@
+import Link from "next/link";
+import { redirect } from "next/navigation";
+
 import {
-  getBalance,
-  getLedgerEntries,
-  getInvoices,
   getAccountProfile,
+  getBalance,
   getBudgetThreshold,
+  getInvoices,
+  getLedgerEntries,
   getViewer,
 } from "@/lib/control-plane/client";
 import { BillingOverview } from "@/components/billing/billing-overview";
-import { LedgerTable } from "@/components/billing/ledger-table";
-import { InvoiceList } from "@/components/billing/invoice-list";
 import { BudgetAlertForm } from "@/components/billing/budget-alert-form";
-import { redirect } from "next/navigation";
+import { InvoiceList } from "@/components/billing/invoice-list";
+import { LedgerTable } from "@/components/billing/ledger-table";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { PageHeader } from "@/components/ui/page-header";
+import { cn } from "@/lib/cn";
 
 interface BillingPageProps {
   searchParams: Promise<{ tab?: string; cursor?: string; type?: string }>;
@@ -21,6 +26,12 @@ type TabName = "overview" | "ledger" | "invoices";
 function isValidTab(tab: string | undefined): tab is TabName {
   return tab === "overview" || tab === "ledger" || tab === "invoices";
 }
+
+const TABS: ReadonlyArray<{ id: TabName; label: string }> = [
+  { id: "overview", label: "Overview" },
+  { id: "ledger", label: "Ledger" },
+  { id: "invoices", label: "Invoices" },
+];
 
 export default async function BillingPage({ searchParams }: BillingPageProps) {
   const viewer = await getViewer();
@@ -36,67 +47,67 @@ export default async function BillingPage({ searchParams }: BillingPageProps) {
   const [balance, profile, budgetThreshold] = await Promise.all([
     getBalance(),
     getAccountProfile(),
-    getBudgetThreshold().catch(() => null),
+    getBudgetThreshold().catch((): null => null),
   ]);
 
-  const tabs: { id: TabName; label: string }[] = [
-    { id: "overview", label: "Overview" },
-    { id: "ledger", label: "Ledger" },
-    { id: "invoices", label: "Invoices" },
-  ];
-
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "72rem" }}>
-      <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>Billing</h1>
+    <ConsoleShell
+      workspace={{
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      active="/console/billing"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">Billing</span>
+      }
+    >
+      <PageHeader
+        eyebrow="Workspace"
+        title="Billing"
+        description="Top up credits, browse the ledger, and download invoices for past purchases."
+      />
 
-      {/* Tab bar */}
-      <div
-        style={{
-          display: "flex",
-          borderBottom: "1px solid #e5e7eb",
-          gap: "0",
-          marginBottom: "0",
-        }}
+      <nav
+        aria-label="Billing sections"
+        className="mb-6 flex items-center gap-1 border-b border-[var(--color-border)]"
       >
-        {tabs.map((tab) => {
+        {TABS.map((tab) => {
           const isActive = activeTab === tab.id;
           return (
-            <a
+            <Link
               key={tab.id}
               href={`/console/billing?tab=${tab.id}`}
-              style={{
-                padding: "0.5rem 1rem",
-                color: isActive ? "#1d4ed8" : "#6b7280",
-                borderBottom: isActive ? "2px solid #1d4ed8" : "2px solid transparent",
-                fontWeight: isActive ? 700 : 400,
-                textDecoration: "none",
-                fontSize: "1rem",
-              }}
+              className={cn(
+                "relative -mb-px inline-flex h-9 items-center px-3 text-sm transition-colors",
+                isActive
+                  ? "border-b-2 border-[var(--color-ink)] text-[var(--color-ink)]"
+                  : "border-b-2 border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)]",
+              )}
             >
               {tab.label}
-            </a>
+            </Link>
           );
         })}
-      </div>
+      </nav>
 
-      {/* Tab content */}
-      {activeTab === "overview" && (
-        <>
+      {activeTab === "overview" ? (
+        <div className="flex flex-col gap-6">
           <BillingOverview
             balance={balance}
             recentEntries={[]}
             accountCountryCode={profile.country_code}
           />
           <BudgetAlertForm currentThreshold={budgetThreshold} />
-        </>
-      )}
+        </div>
+      ) : null}
 
-      {activeTab === "ledger" && (
+      {activeTab === "ledger" ? (
         <LedgerEntries cursor={cursor} typeFilter={typeFilter} />
-      )}
+      ) : null}
 
-      {activeTab === "invoices" && <InvoicesTab />}
-    </div>
+      {activeTab === "invoices" ? <InvoicesTab /> : null}
+    </ConsoleShell>
   );
 }
 

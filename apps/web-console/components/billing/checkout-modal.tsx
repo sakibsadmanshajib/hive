@@ -1,12 +1,18 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import type { CheckoutOptions, CheckoutRail } from "@/lib/control-plane/client";
+import { useState, useEffect, type MouseEvent } from "react";
+import { Minus, Plus, X } from "lucide-react";
 
-// REGULATORY: BDT accounts must never see FX rates, USD equivalents, or conversion language.
-// See CONTEXT.md locked decision. For ALL customers, show only the final price in the
-// account's local currency. Never show USD equivalent, FX rate, "converted from",
-// "includes conversion fee", or any exchange language.
+import type {
+  CheckoutOptions,
+  CheckoutRail,
+} from "@/lib/control-plane/client";
+import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/input";
+
+// REGULATORY: never display USD equivalents, FX rates, or any conversion
+// language to BD accounts. The total is rendered in the rail's local
+// currency only.
 export function formatPrice(amountCents: number, currency: string): string {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
@@ -20,7 +26,28 @@ interface CheckoutModalProps {
   onClose: () => void;
 }
 
-export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose }: CheckoutModalProps) {
+interface CheckoutInitiateBody {
+  redirect_url?: string;
+}
+
+function readRedirectUrl(value: unknown): string | null {
+  if (value === null || typeof value !== "object") return null;
+  const candidate = value as CheckoutInitiateBody;
+  return typeof candidate.redirect_url === "string"
+    ? candidate.redirect_url
+    : null;
+}
+
+function isCheckoutOptions(value: unknown): value is CheckoutOptions {
+  if (value === null || typeof value !== "object") return false;
+  const candidate = value as { rails?: unknown };
+  return Array.isArray(candidate.rails);
+}
+
+export function CheckoutModal({
+  accountCountryCode: _accountCountryCode,
+  onClose,
+}: CheckoutModalProps) {
   const [options, setOptions] = useState<CheckoutOptions | null>(null);
   const [selectedRail, setSelectedRail] = useState<string>("");
   const [creditAmount, setCreditAmount] = useState<number>(1000);
@@ -31,32 +58,31 @@ export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose
   useEffect(() => {
     async function fetchRails() {
       try {
-        const response = await fetch("/api/v1/accounts/current/checkout/rails", {
-          credentials: "include",
-        });
+        const response = await fetch(
+          "/api/v1/accounts/current/checkout/rails",
+          { credentials: "include" },
+        );
         if (!response.ok) {
           setFetchError("Unable to load payment options. Please refresh.");
           return;
         }
         const data: unknown = await response.json();
-        if (
-          data !== null &&
-          typeof data === "object" &&
-          "rails" in data &&
-          Array.isArray((data as { rails: unknown[] }).rails)
-        ) {
-          const typed = data as CheckoutOptions;
-          setOptions(typed);
-          const enabledRails = typed.rails.filter((r) => r.enabled);
+        if (isCheckoutOptions(data)) {
+          setOptions(data);
+          const enabledRails = data.rails.filter((r) => r.enabled);
           if (enabledRails.length > 0) {
             setSelectedRail(enabledRails[0].rail);
           }
-          if (typed.min_credits) {
-            setCreditAmount(typed.min_credits);
+          if (data.min_credits) {
+            setCreditAmount(data.min_credits);
           }
         }
-      } catch {
-        setFetchError("Unable to load payment options. Please refresh.");
+      } catch (err: unknown) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Unable to load payment options. Please refresh.";
+        setFetchError(message);
       }
     }
 
@@ -64,39 +90,37 @@ export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose
   }, []);
 
   const selectedRailData: CheckoutRail | undefined = options?.rails.find(
-    (r) => r.rail === selectedRail
+    (r) => r.rail === selectedRail,
   );
 
   function computeAmountLocal(): number {
-    if (!options || !selectedRailData) {
-      return 0;
-    }
-    // Amount is in cents: price_per_credit_usd is in USD per credit
-    // The backend returns amount_local via initiate, but we can estimate here
-    // using price_per_credit_usd as a proxy for the local amount display
+    if (!options || !selectedRailData) return 0;
     return Math.round(creditAmount * options.price_per_credit_usd * 100);
   }
 
   async function handleCheckout() {
-    if (!selectedRail || !options) {
-      return;
-    }
+    if (!selectedRail || !options) return;
 
     setLoading(true);
     setCheckoutError(null);
 
     try {
-      const idempotencyKey = `checkout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const response = await fetch("/api/v1/accounts/current/checkout/initiate", {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          rail: selectedRail,
-          credits: creditAmount,
-          idempotency_key: idempotencyKey,
-        }),
-      });
+      const idempotencyKey = `checkout-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2)}`;
+      const response = await fetch(
+        "/api/v1/accounts/current/checkout/initiate",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            rail: selectedRail,
+            credits: creditAmount,
+            idempotency_key: idempotencyKey,
+          }),
+        },
+      );
 
       if (!response.ok) {
         setCheckoutError("Unable to start checkout. Please try again.");
@@ -105,24 +129,24 @@ export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose
       }
 
       const data: unknown = await response.json();
-      if (
-        data !== null &&
-        typeof data === "object" &&
-        "redirect_url" in data &&
-        typeof (data as { redirect_url: unknown }).redirect_url === "string"
-      ) {
-        window.location.href = (data as { redirect_url: string }).redirect_url;
+      const redirect = readRedirectUrl(data);
+      if (redirect) {
+        window.location.href = redirect;
       } else {
         setCheckoutError("Unable to start checkout. Please try again.");
         setLoading(false);
       }
-    } catch {
-      setCheckoutError("Unable to start checkout. Please try again.");
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Unable to start checkout. Please try again.";
+      setCheckoutError(message);
       setLoading(false);
     }
   }
 
-  function handleOverlayClick(e: React.MouseEvent<HTMLDivElement>) {
+  function handleOverlayClick(e: MouseEvent<HTMLDivElement>) {
     if (e.target === e.currentTarget) {
       onClose();
     }
@@ -130,7 +154,7 @@ export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose
 
   const increment = options?.credit_increment ?? 1000;
   const minCredits = options?.min_credits ?? 1000;
-  const maxCredits = options?.max_credits ?? 100000;
+  const maxCredits = options?.max_credits ?? 100_000;
 
   function decrementAmount() {
     setCreditAmount((prev) => Math.max(minCredits, prev - increment));
@@ -142,96 +166,94 @@ export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose
 
   return (
     <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        backgroundColor: "rgba(0,0,0,0.4)",
-        zIndex: 50,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-      }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-ink)]/40 px-4"
       onClick={handleOverlayClick}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="checkout-title"
     >
-      <div
-        style={{
-          backgroundColor: "#ffffff",
-          borderRadius: "0.75rem",
-          padding: "1.5rem",
-          width: "100%",
-          maxWidth: "32rem",
-          display: "grid",
-          gap: "1rem",
-        }}
-      >
-        <h2 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>Buy Credits</h2>
+      <div className="flex w-full max-w-md flex-col gap-5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-6 shadow-[var(--shadow-md)]">
+        <div className="flex items-center justify-between">
+          <h2
+            id="checkout-title"
+            className="font-display text-xl text-[var(--color-ink)]"
+          >
+            Buy credits
+          </h2>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <X size={16} aria-hidden="true" />
+          </Button>
+        </div>
 
-        {fetchError && (
-          <p style={{ margin: 0, color: "#dc2626", fontSize: "0.875rem" }}>{fetchError}</p>
-        )}
+        {fetchError ? (
+          <p role="alert" className="text-sm text-[var(--color-danger)]">
+            {fetchError}
+          </p>
+        ) : null}
 
-        {!options && !fetchError && (
-          <p style={{ margin: 0, color: "#6b7280" }}>Loading...</p>
-        )}
+        {!options && !fetchError ? (
+          <p className="text-sm text-[var(--color-ink-3)]">
+            Loading payment options…
+          </p>
+        ) : null}
 
-        {options && (
+        {options ? (
           <>
-            {/* Payment method selection */}
-            <div style={{ display: "grid", gap: "0.5rem" }}>
-              <span style={{ fontWeight: 700, fontSize: "0.875rem", color: "#4b5563" }}>
+            <fieldset className="flex flex-col gap-2">
+              <legend className="mb-1 text-xs font-medium text-[var(--color-ink-2)]">
                 Payment method
-              </span>
-              {options.rails
-                .filter((r) => r.enabled)
-                .map((rail) => (
-                  <label
-                    key={rail.rail}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.5rem",
-                      cursor: "pointer",
-                      padding: "0.5rem",
-                      border: `1px solid ${selectedRail === rail.rail ? "#1d4ed8" : "#d1d5db"}`,
-                      borderRadius: "0.375rem",
-                    }}
-                  >
-                    <input
-                      type="radio"
-                      name="rail"
-                      value={rail.rail}
-                      checked={selectedRail === rail.rail}
-                      onChange={() => setSelectedRail(rail.rail)}
-                    />
-                    {rail.label}
-                  </label>
-                ))}
-            </div>
+              </legend>
+              <div className="flex flex-col gap-2">
+                {options.rails
+                  .filter((r) => r.enabled)
+                  .map((rail) => {
+                    const isActive = selectedRail === rail.rail;
+                    return (
+                      <label
+                        key={rail.rail}
+                        className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 transition-colors ${
+                          isActive
+                            ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)]"
+                            : "border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-strong)]"
+                        }`}
+                      >
+                        <input
+                          type="radio"
+                          name="rail"
+                          value={rail.rail}
+                          checked={isActive}
+                          onChange={() => setSelectedRail(rail.rail)}
+                          className="accent-[var(--color-accent)]"
+                        />
+                        <span className="text-sm text-[var(--color-ink)]">
+                          {rail.label}
+                        </span>
+                      </label>
+                    );
+                  })}
+              </div>
+            </fieldset>
 
-            {/* Amount picker */}
-            <div style={{ display: "grid", gap: "0.5rem" }}>
-              <span style={{ fontWeight: 700, fontSize: "0.875rem", color: "#4b5563" }}>
-                Credits to purchase
-              </span>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <button
+            <Field label="Credits to purchase" htmlFor="credit-amount">
+              <div className="flex items-center gap-2">
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="icon"
                   onClick={decrementAmount}
                   disabled={creditAmount <= minCredits}
-                  style={{
-                    background: "transparent",
-                    color: "#1d4ed8",
-                    border: "1px solid #1d4ed8",
-                    borderRadius: "0.375rem",
-                    padding: "0.5rem 0.75rem",
-                    cursor: creditAmount <= minCredits ? "not-allowed" : "pointer",
-                    fontWeight: 700,
-                    opacity: creditAmount <= minCredits ? 0.5 : 1,
-                  }}
+                  aria-label="Decrease"
                 >
-                  −
-                </button>
-                <input
+                  <Minus size={14} aria-hidden="true" />
+                </Button>
+                <Input
+                  id="credit-amount"
                   type="number"
                   value={creditAmount}
                   min={minCredits}
@@ -239,96 +261,69 @@ export function CheckoutModal({ accountCountryCode: _accountCountryCode, onClose
                   step={increment}
                   onChange={(e) => {
                     const val = Number(e.target.value);
-                    if (!isNaN(val)) {
-                      setCreditAmount(Math.max(minCredits, Math.min(maxCredits, val)));
+                    if (!Number.isNaN(val)) {
+                      setCreditAmount(
+                        Math.max(minCredits, Math.min(maxCredits, val)),
+                      );
                     }
                   }}
-                  style={{
-                    border: "1px solid #d1d5db",
-                    borderRadius: "0.375rem",
-                    padding: "0.5rem",
-                    width: "8rem",
-                    textAlign: "center",
-                    fontSize: "1rem",
-                  }}
+                  className="w-32 text-center tabular-nums"
                 />
-                <button
+                <Button
                   type="button"
+                  variant="secondary"
+                  size="icon"
                   onClick={incrementAmount}
                   disabled={creditAmount >= maxCredits}
-                  style={{
-                    background: "transparent",
-                    color: "#1d4ed8",
-                    border: "1px solid #1d4ed8",
-                    borderRadius: "0.375rem",
-                    padding: "0.5rem 0.75rem",
-                    cursor: creditAmount >= maxCredits ? "not-allowed" : "pointer",
-                    fontWeight: 700,
-                    opacity: creditAmount >= maxCredits ? 0.5 : 1,
-                  }}
+                  aria-label="Increase"
                 >
-                  +
-                </button>
-                <span style={{ color: "#6b7280", fontSize: "0.875rem" }}>Hive Credits</span>
+                  <Plus size={14} aria-hidden="true" />
+                </Button>
+                <span className="text-xs text-[var(--color-ink-3)]">
+                  credits
+                </span>
               </div>
-            </div>
+            </Field>
 
-            {/* Price display — REGULATORY COMPLIANT: shows only local currency, never USD equivalent or FX rates */}
-            {selectedRailData && (
-              <div
-                style={{
-                  padding: "0.75rem",
-                  background: "#f9fafb",
-                  borderRadius: "0.375rem",
-                  fontSize: "1rem",
-                }}
-              >
-                <span style={{ fontWeight: 700 }}>Total: </span>
-                {formatPrice(computeAmountLocal(), selectedRailData.currency)}
+            {selectedRailData ? (
+              <div className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-4 py-3">
+                <span className="text-xs text-[var(--color-ink-3)]">Total</span>
+                <span
+                  className="font-display text-lg tabular-nums text-[var(--color-ink)]"
+                  data-numeric
+                >
+                  {formatPrice(computeAmountLocal(), selectedRailData.currency)}
+                </span>
               </div>
-            )}
+            ) : null}
 
-            {checkoutError && (
-              <p style={{ margin: 0, color: "#dc2626", fontSize: "0.875rem" }}>{checkoutError}</p>
-            )}
+            {checkoutError ? (
+              <p role="alert" className="text-sm text-[var(--color-danger)]">
+                {checkoutError}
+              </p>
+            ) : null}
 
-            {/* Actions */}
-            <div style={{ display: "flex", gap: "0.75rem" }}>
-              <button
+            <div className="flex items-center justify-end gap-2">
+              <Button
                 type="button"
-                onClick={() => void handleCheckout()}
-                disabled={loading || !selectedRail}
-                style={{
-                  background: loading || !selectedRail ? "#9ca3af" : "#1d4ed8",
-                  color: "#ffffff",
-                  padding: "0.5rem 1rem",
-                  borderRadius: "0.375rem",
-                  border: "none",
-                  fontWeight: 700,
-                  cursor: loading || !selectedRail ? "not-allowed" : "pointer",
-                  opacity: loading || !selectedRail ? 0.7 : 1,
-                }}
-              >
-                {loading ? "Loading..." : "Continue to payment"}
-              </button>
-              <button
-                type="button"
+                variant="ghost"
+                size="md"
                 onClick={onClose}
-                style={{
-                  background: "transparent",
-                  color: "#1d4ed8",
-                  border: "1px solid #1d4ed8",
-                  padding: "0.5rem 1rem",
-                  borderRadius: "0.375rem",
-                  fontWeight: 700,
-                  cursor: "pointer",
-                }}
               >
                 Keep balance
-              </button>
+              </Button>
+              <Button
+                type="button"
+                variant="accent"
+                size="md"
+                onClick={() => void handleCheckout()}
+                disabled={loading || !selectedRail}
+              >
+                {loading ? "Loading…" : "Continue to payment"}
+              </Button>
             </div>
           </>
-        )}
+        ) : null}
       </div>
     </div>
   );

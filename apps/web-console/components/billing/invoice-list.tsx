@@ -1,219 +1,108 @@
 import type { Invoice } from "@/lib/control-plane/client";
+import { Badge } from "@/components/ui/badge";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { formatCredits, formatShortDate } from "@/lib/format/credits";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 
 interface InvoiceListProps {
   invoices: Invoice[];
 }
 
-function formatDate(isoString: string): string {
-  try {
-    return new Date(isoString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return isoString;
-  }
-}
+type ToneName = "success" | "warning" | "danger" | "neutral";
 
-function statusLabel(status: string): { label: string; color: string } {
+function statusBadge(status: string): { label: string; tone: ToneName } {
   switch (status) {
     case "completed":
     case "paid":
-      return { label: "Paid", color: "#10b981" };
+      return { label: "Paid", tone: "success" };
     case "pending":
-      return { label: "Pending", color: "#f59e0b" };
+      return { label: "Pending", tone: "warning" };
     case "cancelled":
     case "failed":
-      return { label: "Cancelled", color: "#dc2626" };
+      return { label: "Cancelled", tone: "danger" };
     default:
-      return { label: status, color: "#6b7280" };
+      return { label: status, tone: "neutral" };
   }
+}
+
+function formatLocalAmount(amountCents: number, currency: string): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency || "USD",
+    minimumFractionDigits: 2,
+  }).format(amountCents / 100);
 }
 
 export function InvoiceList({ invoices }: InvoiceListProps) {
   if (invoices.length === 0) {
     return (
-      <p style={{ margin: 0, color: "#6b7280" }}>
-        No invoices yet. Invoices appear after each completed purchase.
-      </p>
+      <EmptyState
+        title="No invoices yet"
+        description="Invoices appear here once a checkout settles. Successful purchases produce a downloadable PDF."
+      />
     );
   }
 
-  return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Invoice #
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Date
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Credits
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Amount
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Rail
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Status
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Action
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {invoices.map((invoice) => {
-          const { label: statusText, color: statusColor } = statusLabel(invoice.status);
-          const amountDisplay = new Intl.NumberFormat("en-US", {
-            style: "currency",
-            currency: invoice.local_currency || "USD",
-            minimumFractionDigits: 2,
-          }).format(invoice.amount_local / 100);
+  const columns: Column<Invoice>[] = [
+    {
+      key: "invoice_number",
+      header: "Invoice",
+      cell: (row) => (
+        <code className="font-mono text-xs text-[var(--color-ink-2)]">
+          {row.invoice_number || row.id.slice(0, 8)}
+        </code>
+      ),
+    },
+    {
+      key: "date",
+      header: "Date",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatShortDate(row.created_at),
+    },
+    {
+      key: "credits",
+      header: "Credits",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatCredits(row.credits),
+    },
+    {
+      key: "amount",
+      header: "Amount",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatLocalAmount(row.amount_local, row.local_currency),
+    },
+    {
+      key: "rail",
+      header: "Method",
+      cell: (row) => (
+        <span className="text-xs text-[var(--color-ink-3)]">{row.rail}</span>
+      ),
+    },
+    {
+      key: "status",
+      header: "Status",
+      cell: (row) => {
+        const { label, tone } = statusBadge(row.status);
+        return <Badge tone={tone}>{label}</Badge>;
+      },
+    },
+    {
+      key: "actions",
+      header: <span className="sr-only">Action</span>,
+      align: "right",
+      cell: (row) => <InvoiceDownloadButton invoice={row} />,
+    },
+  ];
 
-          return (
-            <tr key={invoice.id}>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  fontFamily: "monospace",
-                }}
-              >
-                {invoice.invoice_number || invoice.id.slice(0, 8)}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  color: "#6b7280",
-                }}
-              >
-                {formatDate(invoice.created_at)}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                }}
-              >
-                {invoice.credits.toLocaleString()}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                }}
-              >
-                {amountDisplay}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  color: "#6b7280",
-                }}
-              >
-                {invoice.rail}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  color: statusColor,
-                  fontWeight: 700,
-                }}
-              >
-                {statusText}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                }}
-              >
-                <InvoiceDownloadButton invoice={invoice} />
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+  return (
+    <DataTable<Invoice>
+      rows={invoices}
+      columns={columns}
+      rowKey={(row) => row.id}
+    />
   );
 }

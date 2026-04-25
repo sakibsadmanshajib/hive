@@ -1,4 +1,11 @@
+import Link from "next/link";
+
 import type { LedgerEntry } from "@/lib/control-plane/client";
+import { buttonVariants } from "@/components/ui/button";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { cn } from "@/lib/cn";
+import { formatCredits } from "@/lib/format/credits";
 import { LedgerCsvExport } from "./ledger-csv-export";
 
 interface LedgerTableProps {
@@ -13,7 +20,7 @@ function entryTypeLabel(entryType: string): string {
     case "grant":
       return "Purchase";
     case "usage_charge":
-      return "Usage Charge";
+      return "Usage charge";
     case "refund":
       return "Refund";
     case "adjustment":
@@ -27,23 +34,26 @@ function entryTypeLabel(entryType: string): string {
   }
 }
 
-function formatDate(isoString: string): string {
-  try {
-    return new Date(isoString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
+function formatDateTime(isoString: string): string {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
     return isoString;
   }
+  return new Intl.DateTimeFormat("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
 }
 
-type FilterOption = { label: string; value: string | null };
+interface FilterOption {
+  label: string;
+  value: string | null;
+}
 
-const FILTER_OPTIONS: FilterOption[] = [
+const FILTER_OPTIONS: ReadonlyArray<FilterOption> = [
   { label: "All", value: null },
   { label: "Purchases", value: "grant" },
   { label: "Charges", value: "usage_charge" },
@@ -51,177 +61,126 @@ const FILTER_OPTIONS: FilterOption[] = [
   { label: "Adjustments", value: "adjustment" },
 ];
 
-function buildTabUrl(tab: string, type: string | null, cursor: string | null): string {
+function buildLedgerUrl(type: string | null, cursor: string | null): string {
   const params = new URLSearchParams();
-  params.set("tab", tab);
-  if (type) {
-    params.set("type", type);
-  }
-  if (cursor) {
-    params.set("cursor", cursor);
-  }
+  params.set("tab", "ledger");
+  if (type) params.set("type", type);
+  if (cursor) params.set("cursor", cursor);
   return `/console/billing?${params.toString()}`;
 }
 
-export function LedgerTable({ entries, nextCursor, currentType, currentCursor }: LedgerTableProps) {
+function readMetadataDescription(metadata: Record<string, unknown>): string {
+  const value = metadata.description;
+  return typeof value === "string" ? value : "";
+}
+
+export function LedgerTable({
+  entries,
+  nextCursor,
+  currentType,
+  currentCursor,
+}: LedgerTableProps) {
+  const columns: Column<LedgerEntry>[] = [
+    {
+      key: "type",
+      header: "Type",
+      cell: (row) => entryTypeLabel(row.entry_type),
+    },
+    {
+      key: "credits",
+      header: "Credits",
+      numeric: true,
+      align: "right",
+      cell: (row) => (
+        <span
+          className={
+            row.credits_delta >= 0
+              ? "text-[var(--color-success)]"
+              : "text-[var(--color-danger)]"
+          }
+        >
+          {row.credits_delta >= 0 ? "+" : ""}
+          {formatCredits(row.credits_delta)}
+        </span>
+      ),
+    },
+    {
+      key: "description",
+      header: "Description",
+      cell: (row) => (
+        <span className="text-xs text-[var(--color-ink-3)]">
+          {readMetadataDescription(row.metadata)}
+        </span>
+      ),
+    },
+    {
+      key: "date",
+      header: "Date",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatDateTime(row.created_at),
+    },
+  ];
+
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
-      {/* Type filters */}
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
         {FILTER_OPTIONS.map((option) => {
           const isActive = currentType === option.value;
           return (
-            <a
+            <Link
               key={option.label}
-              href={buildTabUrl("ledger", option.value, null)}
-              style={{
-                padding: "0.375rem 0.75rem",
-                borderRadius: "0.375rem",
-                textDecoration: "none",
-                fontSize: "0.875rem",
-                fontWeight: isActive ? 700 : 400,
-                background: isActive ? "#eff6ff" : "#f9fafb",
-                color: isActive ? "#1d4ed8" : "#4b5563",
-                border: `1px solid ${isActive ? "#93c5fd" : "#e5e7eb"}`,
-              }}
+              href={buildLedgerUrl(option.value, null)}
+              className={cn(
+                "inline-flex h-8 items-center rounded-md border px-3 text-xs",
+                "transition-colors",
+                isActive
+                  ? "border-[var(--color-border-strong)] bg-[var(--color-surface-inset)] text-[var(--color-ink)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-ink-3)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-ink)]",
+              )}
             >
               {option.label}
-            </a>
+            </Link>
           );
         })}
-        <LedgerCsvExport entries={entries} />
+        <div className="ml-auto">
+          <LedgerCsvExport entries={entries} />
+        </div>
       </div>
 
       {entries.length === 0 ? (
-        <p style={{ margin: 0, color: "#6b7280" }}>No transactions found.</p>
+        <EmptyState
+          title="No transactions"
+          description="There are no ledger entries for this filter."
+        />
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <thead>
-            <tr>
-              <th
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  textAlign: "left",
-                  fontWeight: 700,
-                  fontSize: "0.875rem",
-                  borderBottom: "1px solid #e5e7eb",
-                  color: "#4b5563",
-                }}
-              >
-                Type
-              </th>
-              <th
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  textAlign: "left",
-                  fontWeight: 700,
-                  fontSize: "0.875rem",
-                  borderBottom: "1px solid #e5e7eb",
-                  color: "#4b5563",
-                }}
-              >
-                Credits
-              </th>
-              <th
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  textAlign: "left",
-                  fontWeight: 700,
-                  fontSize: "0.875rem",
-                  borderBottom: "1px solid #e5e7eb",
-                  color: "#4b5563",
-                }}
-              >
-                Description
-              </th>
-              <th
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  textAlign: "left",
-                  fontWeight: 700,
-                  fontSize: "0.875rem",
-                  borderBottom: "1px solid #e5e7eb",
-                  color: "#4b5563",
-                }}
-              >
-                Date
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((entry) => {
-              const description =
-                typeof entry.metadata?.description === "string"
-                  ? entry.metadata.description
-                  : "";
-              return (
-                <tr key={entry.id}>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                    }}
-                  >
-                    {entryTypeLabel(entry.entry_type)}
-                  </td>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                      color: entry.credits_delta >= 0 ? "#10b981" : "#dc2626",
-                    }}
-                  >
-                    {entry.credits_delta >= 0 ? "+" : ""}
-                    {entry.credits_delta.toLocaleString()}
-                  </td>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                      color: "#6b7280",
-                    }}
-                  >
-                    {description}
-                  </td>
-                  <td
-                    style={{
-                      padding: "0.5rem 0.75rem",
-                      borderBottom: "1px solid #f3f4f6",
-                      fontSize: "1rem",
-                      color: "#6b7280",
-                    }}
-                  >
-                    {formatDate(entry.created_at)}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <DataTable<LedgerEntry>
+          rows={entries}
+          columns={columns}
+          rowKey={(row) => row.id}
+        />
       )}
 
-      {/* Pagination */}
-      <div style={{ display: "flex", gap: "1rem" }}>
-        {currentCursor && (
-          <a
-            href={buildTabUrl("ledger", currentType, null)}
-            style={{ color: "#1d4ed8", textDecoration: "none", fontSize: "0.875rem" }}
-          >
-            Previous
-          </a>
-        )}
-        {nextCursor && (
-          <a
-            href={buildTabUrl("ledger", currentType, nextCursor)}
-            style={{ color: "#1d4ed8", textDecoration: "none", fontSize: "0.875rem" }}
-          >
-            Next
-          </a>
-        )}
-      </div>
+      {(currentCursor || nextCursor) && (
+        <div className="flex items-center gap-2">
+          {currentCursor ? (
+            <Link
+              href={buildLedgerUrl(currentType, null)}
+              className={buttonVariants({ variant: "secondary", size: "sm" })}
+            >
+              Reset
+            </Link>
+          ) : null}
+          {nextCursor ? (
+            <Link
+              href={buildLedgerUrl(currentType, nextCursor)}
+              className={buttonVariants({ variant: "secondary", size: "sm" })}
+            >
+              Next
+            </Link>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

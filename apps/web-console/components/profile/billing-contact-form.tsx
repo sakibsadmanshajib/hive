@@ -1,11 +1,21 @@
 "use client";
 
 import { useActionState } from "react";
+
 import type {
   BillingProfileFieldErrors,
   BillingProfileFormValues,
 } from "@/lib/profile-schemas";
 import { BusinessTaxForm } from "@/components/profile/business-tax-form";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/input";
 
 export interface BillingProfileFormState {
   fieldErrors: BillingProfileFieldErrors;
@@ -15,7 +25,7 @@ export interface BillingProfileFormState {
 
 export type BillingProfileFormAction = (
   state: BillingProfileFormState,
-  formData: FormData
+  formData: FormData,
 ) => Promise<BillingProfileFormState>;
 
 interface BillingContactFormProps {
@@ -40,75 +50,65 @@ export function BillingContactForm({
   const values = state.values;
 
   return (
-    <form
-      action={formAction}
-      style={{ display: "grid", gap: "1.5rem", maxWidth: "40rem" }}
-    >
-      <input type="hidden" name="accountType" value={values.accountType} readOnly />
+    <form action={formAction} className="grid gap-6">
+      <input
+        type="hidden"
+        name="accountType"
+        value={values.accountType}
+        readOnly
+      />
 
-      <section style={{ display: "grid", gap: "1rem" }}>
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <h2 style={{ margin: 0 }}>Billing contact</h2>
-          <p style={{ margin: 0, color: "#6b7280" }}>
+      <Card>
+        <CardHeader>
+          <CardTitle>Billing contact</CardTitle>
+          <CardDescription>
             Use these fields for later invoicing or checkout notices without
             turning them into a setup gate today.
-          </p>
-        </div>
-
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <label htmlFor="billingContactName">Billing contact name</label>
-          <input
-            id="billingContactName"
-            name="billingContactName"
-            defaultValue={values.billingContactName}
-            style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-          />
-        </div>
-
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <label htmlFor="billingContactEmail">Billing contact email</label>
-          <input
-            id="billingContactEmail"
-            name="billingContactEmail"
-            type="email"
-            defaultValue={values.billingContactEmail}
-            style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-          />
-          {state.fieldErrors.billingContactEmail && (
-            <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-              {state.fieldErrors.billingContactEmail}
-            </p>
-          )}
-        </div>
-
-        <div
-          style={{
-            display: "grid",
-            gap: "1rem",
-            gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))",
-          }}
-        >
-          <div style={{ display: "grid", gap: "0.35rem" }}>
-            <label htmlFor="countryCode">Country</label>
-            <input
-              id="countryCode"
-              name="countryCode"
-              defaultValue={values.countryCode}
-              style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 px-5 py-5">
+          <Field
+            label="Billing contact name"
+            htmlFor="billingContactName"
+          >
+            <Input
+              id="billingContactName"
+              name="billingContactName"
+              defaultValue={values.billingContactName}
             />
-          </div>
+          </Field>
 
-          <div style={{ display: "grid", gap: "0.35rem" }}>
-            <label htmlFor="stateRegion">State / Province</label>
-            <input
-              id="stateRegion"
-              name="stateRegion"
-              defaultValue={values.stateRegion}
-              style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
+          <Field
+            label="Billing contact email"
+            htmlFor="billingContactEmail"
+            error={state.fieldErrors.billingContactEmail}
+          >
+            <Input
+              id="billingContactEmail"
+              name="billingContactEmail"
+              type="email"
+              defaultValue={values.billingContactEmail}
             />
+          </Field>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Country" htmlFor="countryCode">
+              <Input
+                id="countryCode"
+                name="countryCode"
+                defaultValue={values.countryCode}
+              />
+            </Field>
+            <Field label="State / Province" htmlFor="stateRegion">
+              <Input
+                id="stateRegion"
+                name="stateRegion"
+                defaultValue={values.stateRegion}
+              />
+            </Field>
           </div>
-        </div>
-      </section>
+        </CardContent>
+      </Card>
 
       <BusinessTaxForm
         accountType={values.accountType}
@@ -116,27 +116,21 @@ export function BillingContactForm({
         values={values}
       />
 
-      {state.formError && (
-        <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
+      {state.formError ? (
+        <p role="alert" className="text-sm text-[var(--color-danger)]">
           {state.formError}
         </p>
-      )}
+      ) : null}
 
-      <button
+      <Button
         type="submit"
+        variant="primary"
+        size="md"
         disabled={isPending}
-        style={{
-          width: "fit-content",
-          padding: "0.75rem 1.25rem",
-          backgroundColor: "#111827",
-          color: "#fff",
-          border: "none",
-          borderRadius: "0.5rem",
-          cursor: isPending ? "progress" : "pointer",
-        }}
+        className="self-start"
       >
-        {isPending ? "Saving..." : submitLabel}
-      </button>
+        {isPending ? "Saving…" : submitLabel}
+      </Button>
     </form>
   );
 }
