@@ -1,4 +1,9 @@
-FROM node:22-alpine
+# node:22-slim (glibc/Debian) instead of -alpine (musl) so the
+# `@cloudflare/workerd-linux-64` binary spawned by
+# `initOpenNextCloudflareForDev()` in next.config.ts can run.
+# Alpine ships musl libc which is incompatible with workerd's
+# pre-built glibc binary, producing ENOENT on `next dev`.
+FROM node:22-slim
 
 WORKDIR /app/apps/web-console
 
