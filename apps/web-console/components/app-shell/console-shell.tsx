@@ -9,6 +9,7 @@ import {
   Users,
   Settings,
   Wallet,
+  LogOut,
 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
@@ -152,7 +153,7 @@ export function ConsoleShell({
             <div className="h-7 w-7 rounded-full bg-[var(--color-accent-soft)] grid place-items-center text-2xs text-[var(--color-accent-ink)] font-semibold">
               {(user.name?.[0] ?? user.email[0] ?? "?").toUpperCase()}
             </div>
-            <div className="flex flex-col gap-0.5 min-w-0">
+            <div className="flex flex-col gap-0.5 min-w-0 flex-1">
               <span className="text-xs text-[var(--color-ink)] truncate">
                 {user.name ?? user.email}
               </span>
@@ -160,6 +161,22 @@ export function ConsoleShell({
                 {user.email}
               </span>
             </div>
+            <form action="/auth/sign-out" method="post" className="shrink-0">
+              <button
+                type="submit"
+                aria-label="Sign out"
+                title="Sign out"
+                className={cn(
+                  "h-7 w-7 grid place-items-center rounded-md",
+                  "text-[var(--color-ink-3)]",
+                  "transition-colors duration-[var(--duration-fast)]",
+                  "hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-inset)]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
+                )}
+              >
+                <LogOut size={14} />
+              </button>
+            </form>
           </div>
         </div>
       </aside>
@@ -175,13 +192,29 @@ export function ConsoleShell({
           <div className="flex items-center gap-3 text-sm text-[var(--color-ink-2)]">
             {topbar}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <Link
               href="https://hivegpt.io"
               className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
             >
               Docs
             </Link>
+            <form action="/auth/sign-out" method="post" className="lg:hidden">
+              <button
+                type="submit"
+                aria-label="Sign out"
+                title="Sign out"
+                className={cn(
+                  "h-7 w-7 grid place-items-center rounded-md",
+                  "text-[var(--color-ink-3)]",
+                  "transition-colors duration-[var(--duration-fast)]",
+                  "hover:text-[var(--color-ink)] hover:bg-[var(--color-surface-inset)]",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]",
+                )}
+              >
+                <LogOut size={14} />
+              </button>
+            </form>
           </div>
         </header>
         <main className="flex-1 overflow-y-auto">
