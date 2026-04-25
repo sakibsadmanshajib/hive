@@ -149,13 +149,14 @@ export default async function ConsolePage() {
               </span>
               <div className="flex flex-col">
                 <p
-                  className="font-display text-2xl tabular-nums text-[var(--color-ink)]"
+                  className="font-display text-2xl tabular-nums text-[var(--color-ink-3)]"
                   data-numeric
                 >
-                  0
+                  —
                 </p>
                 <p className="text-xs text-[var(--color-ink-3)]">
-                  All requests succeeded.
+                  Error telemetry not yet wired up. View detailed failures in
+                  Analytics.
                 </p>
               </div>
             </div>

@@ -101,10 +101,21 @@ export function ConsoleShell({
               </span>
               <ul className="flex flex-col gap-0.5">
                 {group.items.map((item) => {
+                  // Special-case "/console" so the dashboard root only
+                  // lights up on an exact match (otherwise its prefix
+                  // would mark Overview active for every nested route).
+                  // Settings' href is a sub-route — broaden the match
+                  // to its parent path so /console/settings/billing
+                  // also activates the Settings nav item.
+                  const matchPrefix =
+                    item.href === "/console/settings/profile"
+                      ? "/console/settings"
+                      : item.href;
                   const isActive =
-                    active === item.href ||
-                    (active && active.startsWith(item.href + "/")) ||
-                    false;
+                    item.href === "/console"
+                      ? active === "/console"
+                      : active === item.href ||
+                        (active?.startsWith(matchPrefix + "/") ?? false);
                   return (
                     <li key={item.href}>
                       <Link

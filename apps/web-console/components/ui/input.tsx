@@ -55,6 +55,11 @@ export interface FieldProps {
   className?: string;
 }
 
+interface ChildProps extends React.AriaAttributes {
+  id?: string;
+  required?: boolean;
+}
+
 export function Field({
   label,
   hint,
@@ -64,10 +69,30 @@ export function Field({
   children,
   className,
 }: FieldProps) {
+  // Auto-wire id + a11y attributes onto the (single) child so screen
+  // readers link the error/hint text to the input. Without this, the
+  // visual `*` asterisk on `required` and the visual error message
+  // would have no programmatic counterpart.
+  const reactId = React.useId();
+  const controlId = htmlFor ?? reactId;
+  const describedById = error
+    ? `${controlId}-error`
+    : hint
+      ? `${controlId}-hint`
+      : undefined;
+  const wiredChild = React.isValidElement<ChildProps>(children)
+    ? React.cloneElement<ChildProps>(children, {
+        id: children.props.id ?? controlId,
+        "aria-invalid": error ? true : undefined,
+        "aria-describedby": describedById,
+        required: required || children.props.required,
+      })
+    : children;
+
   return (
     <div className={cn("flex flex-col gap-1.5", className)}>
       {label ? (
-        <Label htmlFor={htmlFor}>
+        <Label htmlFor={controlId}>
           {label}
           {required ? (
             <span
@@ -79,16 +104,20 @@ export function Field({
           ) : null}
         </Label>
       ) : null}
-      {children}
+      {wiredChild}
       {error ? (
         <p
+          id={`${controlId}-error`}
           role="alert"
           className="text-xs text-[var(--color-danger)] leading-tight"
         >
           {error}
         </p>
       ) : hint ? (
-        <p className="text-xs text-[var(--color-ink-3)] leading-tight">
+        <p
+          id={`${controlId}-hint`}
+          className="text-xs text-[var(--color-ink-3)] leading-tight"
+        >
           {hint}
         </p>
       ) : null}

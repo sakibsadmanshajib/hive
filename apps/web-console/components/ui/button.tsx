@@ -63,9 +63,12 @@ export interface ButtonProps
     VariantProps<typeof buttonVariants> {}
 
 export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, ...props }, ref) => (
+  ({ className, variant, size, type, ...props }, ref) => (
+    // Default `type` to "button" so a Button rendered inside a <form>
+    // never accidentally submits when the consumer forgot to set it.
     <button
       ref={ref}
+      type={type ?? "button"}
       className={cn(buttonVariants({ variant, size }), className)}
       {...props}
     />

@@ -45,7 +45,7 @@ function isCheckoutOptions(value: unknown): value is CheckoutOptions {
 }
 
 export function CheckoutModal({
-  accountCountryCode: _accountCountryCode,
+  accountCountryCode,
   onClose,
 }: CheckoutModalProps) {
   const [options, setOptions] = useState<CheckoutOptions | null>(null);
@@ -93,8 +93,16 @@ export function CheckoutModal({
     (r) => r.rail === selectedRail,
   );
 
-  function computeAmountLocal(): number {
-    if (!options || !selectedRailData) return 0;
+  // Whether to render the pre-checkout USD estimate. BD accounts must
+  // never see USD or any FX conversion language (regulatory rule); the
+  // hosted checkout page (Stripe / bKash / SSLCommerz) is the only
+  // place a BD user sees the BDT total, computed server-side at
+  // initiate time. For non-BD accounts USD is the rail currency, so an
+  // estimate is fine.
+  const isBdAccount = accountCountryCode === "BD";
+
+  function computeAmountUsdCents(): number {
+    if (!options) return 0;
     return Math.round(creditAmount * options.price_per_credit_usd * 100);
   }
 
@@ -287,13 +295,21 @@ export function CheckoutModal({
 
             {selectedRailData ? (
               <div className="flex items-center justify-between rounded-md border border-[var(--color-border)] bg-[var(--color-surface-inset)] px-4 py-3">
-                <span className="text-xs text-[var(--color-ink-3)]">Total</span>
-                <span
-                  className="font-display text-lg tabular-nums text-[var(--color-ink)]"
-                  data-numeric
-                >
-                  {formatPrice(computeAmountLocal(), selectedRailData.currency)}
+                <span className="text-xs text-[var(--color-ink-3)]">
+                  {isBdAccount ? "Final amount" : "Total"}
                 </span>
+                {isBdAccount ? (
+                  <span className="text-xs text-[var(--color-ink-3)]">
+                    Shown on the {selectedRailData.label} payment page.
+                  </span>
+                ) : (
+                  <span
+                    className="font-display text-lg tabular-nums text-[var(--color-ink)]"
+                    data-numeric
+                  >
+                    {formatPrice(computeAmountUsdCents(), "USD")}
+                  </span>
+                )}
               </div>
             ) : null}
 
