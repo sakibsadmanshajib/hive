@@ -439,6 +439,22 @@ export async function getAccountProfile(): Promise<AccountProfile> {
     cache: "no-store",
   });
 
+  // Fresh accounts have no profile row yet — control-plane returns 404.
+  // Surface that as an empty, not-yet-set-up profile so dashboard, setup,
+  // and billing pages can render their needs-setup state instead of
+  // crashing the whole Server Components tree.
+  if (response.status === 404) {
+    return {
+      owner_name: "",
+      login_email: "",
+      display_name: "",
+      account_type: "",
+      country_code: "",
+      state_region: "",
+      profile_setup_complete: false,
+    };
+  }
+
   if (!response.ok) {
     throw new Error(await readResponseError(response, "Failed to fetch account profile"));
   }
