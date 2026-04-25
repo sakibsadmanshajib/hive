@@ -22,6 +22,13 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "vars": {
+    // Server-only: Next.js Server Components and Route Handlers call
+    // the control-plane via this URL. Non-sensitive (public DNS), so
+    // checked in here. Sensitive secrets (e.g. SUPABASE_SERVICE_ROLE_KEY)
+    // must be set via `wrangler secret put`, never via `vars`.
+    "CONTROL_PLANE_BASE_URL": "https://cp-hive.scubed.co"
+  },
   "observability": {
     "enabled": true
   }
