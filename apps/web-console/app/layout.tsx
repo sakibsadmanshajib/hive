@@ -20,7 +20,12 @@ const fraunces = Fraunces({
   variable: "--font-fraunces",
   subsets: ["latin"],
   display: "swap",
-  axes: ["opsz", "SOFT"],
+  // `opsz` is the default axis Next bakes in when building Fraunces;
+  // listing it explicitly here emitted a `Duplicate key "axisIndex"`
+  // esbuild warning during the OpenNext production build, after which
+  // the prerendered RSC payload dropped the root <html> className
+  // entirely. Keep only the non-default `SOFT` axis.
+  axes: ["SOFT"],
 });
 
 export const metadata: Metadata = {
