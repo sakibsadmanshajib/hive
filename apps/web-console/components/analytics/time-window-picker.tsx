@@ -2,19 +2,31 @@
 
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
+
 interface TimeWindowPickerProps {
   currentWindow: string;
   onWindowChange: (window: string) => void;
 }
 
-const PRESET_WINDOWS = [
-  { value: "24h", label: "Last 24 hours" },
-  { value: "7d", label: "Last 7 days" },
-  { value: "30d", label: "Last 30 days" },
-  { value: "90d", label: "Last 90 days" },
+interface PresetWindow {
+  value: string;
+  label: string;
+}
+
+const PRESET_WINDOWS: ReadonlyArray<PresetWindow> = [
+  { value: "24h", label: "24h" },
+  { value: "7d", label: "7d" },
+  { value: "30d", label: "30d" },
+  { value: "90d", label: "90d" },
 ];
 
-export function TimeWindowPicker({ currentWindow, onWindowChange }: TimeWindowPickerProps) {
+export function TimeWindowPicker({
+  currentWindow,
+  onWindowChange,
+}: TimeWindowPickerProps) {
   const [showCustom, setShowCustom] = useState(false);
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
@@ -22,10 +34,6 @@ export function TimeWindowPicker({ currentWindow, onWindowChange }: TimeWindowPi
   function handlePresetClick(value: string) {
     setShowCustom(false);
     onWindowChange(value);
-  }
-
-  function handleCustomClick() {
-    setShowCustom(true);
   }
 
   function handleCustomApply() {
@@ -37,103 +45,74 @@ export function TimeWindowPicker({ currentWindow, onWindowChange }: TimeWindowPi
   const isCustomActive = currentWindow.startsWith("custom:");
 
   return (
-    <div>
-      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+    <div className="flex flex-col gap-3">
+      <div
+        className="inline-flex items-center rounded-md border border-[var(--color-border)] bg-[var(--color-surface)] p-0.5"
+        role="group"
+        aria-label="Time window"
+      >
         {PRESET_WINDOWS.map((preset) => {
           const isActive = currentWindow === preset.value;
           return (
             <button
               key={preset.value}
+              type="button"
               onClick={() => handlePresetClick(preset.value)}
-              style={{
-                padding: "0.375rem 0.75rem",
-                fontSize: "0.875rem",
-                borderRadius: "0.375rem",
-                border: "1px solid",
-                cursor: "pointer",
-                backgroundColor: isActive ? "#1d4ed8" : "transparent",
-                color: isActive ? "#ffffff" : "#374151",
-                borderColor: isActive ? "#1d4ed8" : "#d1d5db",
-                fontWeight: isActive ? 600 : 400,
-              }}
+              className={cn(
+                "h-7 rounded px-3 text-xs transition-colors",
+                isActive
+                  ? "bg-[var(--color-ink)] text-[var(--color-canvas)]"
+                  : "text-[var(--color-ink-2)] hover:bg-[var(--color-surface-2)]",
+              )}
             >
               {preset.label}
             </button>
           );
         })}
         <button
-          onClick={handleCustomClick}
-          style={{
-            padding: "0.375rem 0.75rem",
-            fontSize: "0.875rem",
-            borderRadius: "0.375rem",
-            border: "1px solid",
-            cursor: "pointer",
-            backgroundColor: isCustomActive ? "#1d4ed8" : "transparent",
-            color: isCustomActive ? "#ffffff" : "#374151",
-            borderColor: isCustomActive ? "#1d4ed8" : "#d1d5db",
-            fontWeight: isCustomActive ? 600 : 400,
-          }}
+          type="button"
+          onClick={() => setShowCustom(true)}
+          className={cn(
+            "h-7 rounded px-3 text-xs transition-colors",
+            isCustomActive
+              ? "bg-[var(--color-ink)] text-[var(--color-canvas)]"
+              : "text-[var(--color-ink-2)] hover:bg-[var(--color-surface-2)]",
+          )}
         >
-          Custom range
+          Custom
         </button>
       </div>
-      {showCustom && (
-        <div
-          style={{
-            marginTop: "0.75rem",
-            display: "flex",
-            gap: "0.75rem",
-            alignItems: "flex-end",
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <label style={{ fontSize: "0.75rem", color: "#6b7280", fontWeight: 500 }}>From</label>
-            <input
+      {showCustom ? (
+        <div className="flex flex-wrap items-end gap-2">
+          <Field label="From" htmlFor="window-from">
+            <Input
+              id="window-from"
               type="date"
               value={fromDate}
               onChange={(e) => setFromDate(e.target.value)}
-              style={{
-                padding: "0.375rem 0.5rem",
-                fontSize: "0.875rem",
-                border: "1px solid #d1d5db",
-                borderRadius: "0.375rem",
-              }}
+              className="w-40"
             />
-          </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
-            <label style={{ fontSize: "0.75rem", color: "#6b7280", fontWeight: 500 }}>To</label>
-            <input
+          </Field>
+          <Field label="To" htmlFor="window-to">
+            <Input
+              id="window-to"
               type="date"
               value={toDate}
               onChange={(e) => setToDate(e.target.value)}
-              style={{
-                padding: "0.375rem 0.5rem",
-                fontSize: "0.875rem",
-                border: "1px solid #d1d5db",
-                borderRadius: "0.375rem",
-              }}
+              className="w-40"
             />
-          </div>
-          <button
+          </Field>
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
             onClick={handleCustomApply}
             disabled={!fromDate || !toDate}
-            style={{
-              padding: "0.375rem 0.75rem",
-              fontSize: "0.875rem",
-              borderRadius: "0.375rem",
-              border: "1px solid #1d4ed8",
-              cursor: fromDate && toDate ? "pointer" : "not-allowed",
-              backgroundColor: fromDate && toDate ? "#1d4ed8" : "#e5e7eb",
-              color: fromDate && toDate ? "#ffffff" : "#9ca3af",
-              fontWeight: 600,
-            }}
           >
             Apply
-          </button>
+          </Button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

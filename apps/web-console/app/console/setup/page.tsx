@@ -1,6 +1,8 @@
 import { redirect } from "next/navigation";
+
 import {
   getAccountProfile,
+  getViewer,
   updateAccountProfile,
 } from "@/lib/control-plane/client";
 import {
@@ -11,8 +13,12 @@ import {
   AccountProfileForm,
   type AccountProfileFormState,
 } from "@/components/profile/account-profile-form";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { PageHeader } from "@/components/ui/page-header";
 
-function toFormValues(profile: Awaited<ReturnType<typeof getAccountProfile>>): AccountProfileFormValues {
+function toFormValues(
+  profile: Awaited<ReturnType<typeof getAccountProfile>>,
+): AccountProfileFormValues {
   return {
     ownerName: profile.owner_name,
     loginEmail: profile.login_email,
@@ -35,12 +41,15 @@ function readFormValues(formData: FormData): AccountProfileFormValues {
 }
 
 export default async function SetupPage() {
-  const profile = await getAccountProfile();
+  const [profile, viewer] = await Promise.all([
+    getAccountProfile(),
+    getViewer(),
+  ]);
   const initialValues = toFormValues(profile);
 
   async function saveProfile(
     _state: AccountProfileFormState,
-    formData: FormData
+    formData: FormData,
   ): Promise<AccountProfileFormState> {
     "use server";
 
@@ -57,13 +66,14 @@ export default async function SetupPage() {
 
     try {
       await updateAccountProfile(parsed.data);
-    } catch (error) {
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to save your profile. Please try again.";
       return {
         fieldErrors: {},
-        formError:
-          error instanceof Error
-            ? error.message
-            : "Failed to save your profile. Please try again.",
+        formError: message,
         values: parsed.data,
       };
     }
@@ -72,20 +82,30 @@ export default async function SetupPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: "1rem" }}>
-      <div style={{ display: "grid", gap: "0.5rem" }}>
-        <h1 style={{ margin: 0 }}>Complete your workspace profile</h1>
-        <p style={{ margin: 0, color: "#4b5563", maxWidth: "40rem" }}>
-          Finish the minimal setup now so the dashboard can reflect your account
-          details without pulling billing or tax fields into onboarding.
-        </p>
-      </div>
+    <ConsoleShell
+      workspace={{
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      active="/console"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">
+          Workspace setup
+        </span>
+      }
+    >
+      <PageHeader
+        eyebrow="Onboarding"
+        title="Complete your workspace profile"
+        description="Three short sections — owner, account and location. Save what you have now; you can return to refine billing and tax details later."
+      />
 
       <AccountProfileForm
         action={saveProfile}
         initialValues={initialValues}
         submitLabel="Save and continue"
       />
-    </div>
+    </ConsoleShell>
   );
 }

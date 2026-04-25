@@ -1,10 +1,21 @@
 "use client";
 
 import { useActionState } from "react";
+
 import type {
   AccountProfileFieldErrors,
   AccountProfileFormValues,
 } from "@/lib/profile-schemas";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { Field, Input } from "@/components/ui/input";
+import { cn } from "@/lib/cn";
 
 export interface AccountProfileFormState {
   fieldErrors: AccountProfileFieldErrors;
@@ -14,7 +25,7 @@ export interface AccountProfileFormState {
 
 export type AccountProfileFormAction = (
   state: AccountProfileFormState,
-  formData: FormData
+  formData: FormData,
 ) => Promise<AccountProfileFormState>;
 
 interface AccountProfileFormProps {
@@ -24,6 +35,15 @@ interface AccountProfileFormProps {
 }
 
 const emptyErrors: AccountProfileFieldErrors = {};
+
+const SELECT_CLASSES = cn(
+  "flex h-9 w-full rounded-md border border-[var(--color-border)]",
+  "bg-[var(--color-surface)] px-3 text-sm text-[var(--color-ink)]",
+  "transition-[border,box-shadow] duration-[var(--duration-fast)]",
+  "ease-[var(--ease-out-expo)]",
+  "focus-visible:outline-none focus-visible:border-[var(--color-accent)]",
+  "focus-visible:ring-4 focus-visible:ring-[var(--color-accent-soft)]",
+);
 
 export function AccountProfileForm({
   action,
@@ -39,114 +59,142 @@ export function AccountProfileForm({
   const values = state.values;
 
   return (
-    <form action={formAction} style={{ display: "grid", gap: "1rem", maxWidth: "32rem" }}>
-      <input type="hidden" name="loginEmail" value={values.loginEmail} readOnly />
+    <form action={formAction} className="grid gap-6">
+      <input
+        type="hidden"
+        name="loginEmail"
+        value={values.loginEmail}
+        readOnly
+      />
 
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="ownerName">Owner name</label>
-        <input
-          id="ownerName"
-          name="ownerName"
-          defaultValue={values.ownerName}
-          required
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-        {state.fieldErrors.ownerName && (
-          <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-            {state.fieldErrors.ownerName}
+      <Card>
+        <CardHeader>
+          <CardTitle>Owner</CardTitle>
+          <CardDescription>
+            The person responsible for this workspace. We use these details on
+            invoices, account verification and admin notifications.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 px-5 py-5">
+          <Field
+            label="Owner name"
+            htmlFor="ownerName"
+            required
+            error={state.fieldErrors.ownerName}
+          >
+            <Input
+              id="ownerName"
+              name="ownerName"
+              defaultValue={values.ownerName}
+              required
+            />
+          </Field>
+          <p className="text-xs text-[var(--color-ink-3)]">
+            Login email:{" "}
+            <span className="font-mono text-[var(--color-ink-2)]">
+              {values.loginEmail}
+            </span>
           </p>
-        )}
-      </div>
+        </CardContent>
+      </Card>
 
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="accountName">Account name</label>
-        <input
-          id="accountName"
-          name="accountName"
-          defaultValue={values.accountName}
-          required
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-        {state.fieldErrors.accountName && (
-          <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-            {state.fieldErrors.accountName}
-          </p>
-        )}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Account</CardTitle>
+          <CardDescription>
+            Whether you&rsquo;re billing as an individual or a company. You can
+            switch later if your structure changes.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 px-5 py-5 sm:grid-cols-2">
+          <Field
+            label="Account name"
+            htmlFor="accountName"
+            required
+            error={state.fieldErrors.accountName}
+            className="sm:col-span-2"
+          >
+            <Input
+              id="accountName"
+              name="accountName"
+              defaultValue={values.accountName}
+              required
+            />
+          </Field>
+          <Field
+            label="Account type"
+            htmlFor="accountType"
+            required
+            error={state.fieldErrors.accountType}
+            className="sm:col-span-2"
+          >
+            <select
+              id="accountType"
+              name="accountType"
+              defaultValue={values.accountType || "personal"}
+              className={SELECT_CLASSES}
+            >
+              <option value="personal">Personal</option>
+              <option value="business">Business</option>
+            </select>
+          </Field>
+        </CardContent>
+      </Card>
 
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="accountType">Account type</label>
-        <select
-          id="accountType"
-          name="accountType"
-          defaultValue={values.accountType || "personal"}
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        >
-          <option value="personal">Personal</option>
-          <option value="business">Business</option>
-        </select>
-        {state.fieldErrors.accountType && (
-          <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-            {state.fieldErrors.accountType}
-          </p>
-        )}
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Location</CardTitle>
+          <CardDescription>
+            Used for tax treatment and regulatory pricing. Stored in ISO 3166
+            country codes — e.g. <code className="font-mono">US</code>,{" "}
+            <code className="font-mono">BD</code>.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid gap-4 px-5 py-5 sm:grid-cols-2">
+          <Field
+            label="Country"
+            htmlFor="countryCode"
+            required
+            error={state.fieldErrors.countryCode}
+          >
+            <Input
+              id="countryCode"
+              name="countryCode"
+              defaultValue={values.countryCode}
+              required
+            />
+          </Field>
+          <Field
+            label="State / Province"
+            htmlFor="stateRegion"
+            required
+            error={state.fieldErrors.stateRegion}
+          >
+            <Input
+              id="stateRegion"
+              name="stateRegion"
+              defaultValue={values.stateRegion}
+              required
+            />
+          </Field>
+        </CardContent>
+      </Card>
 
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="countryCode">Country</label>
-        <input
-          id="countryCode"
-          name="countryCode"
-          defaultValue={values.countryCode}
-          required
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-        {state.fieldErrors.countryCode && (
-          <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-            {state.fieldErrors.countryCode}
-          </p>
-        )}
-      </div>
-
-      <div style={{ display: "grid", gap: "0.35rem" }}>
-        <label htmlFor="stateRegion">State / Province</label>
-        <input
-          id="stateRegion"
-          name="stateRegion"
-          defaultValue={values.stateRegion}
-          required
-          style={{ padding: "0.75rem", border: "1px solid #d1d5db", borderRadius: "0.5rem" }}
-        />
-        {state.fieldErrors.stateRegion && (
-          <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
-            {state.fieldErrors.stateRegion}
-          </p>
-        )}
-      </div>
-
-      <p style={{ margin: 0, color: "#6b7280" }}>Login email: {values.loginEmail}</p>
-
-      {state.formError && (
-        <p role="alert" style={{ color: "#b91c1c", margin: 0 }}>
+      {state.formError ? (
+        <p role="alert" className="text-sm text-[var(--color-danger)]">
           {state.formError}
         </p>
-      )}
+      ) : null}
 
-      <button
+      <Button
         type="submit"
+        variant="primary"
+        size="md"
         disabled={isPending}
-        style={{
-          width: "fit-content",
-          padding: "0.75rem 1.25rem",
-          backgroundColor: "#111827",
-          color: "#fff",
-          border: "none",
-          borderRadius: "0.5rem",
-          cursor: isPending ? "progress" : "pointer",
-        }}
+        className="self-start"
       >
-        {isPending ? "Saving..." : submitLabel}
-      </button>
+        {isPending ? "Saving…" : submitLabel}
+      </Button>
     </form>
   );
 }
