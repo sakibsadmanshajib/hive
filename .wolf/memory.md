@@ -331,3 +331,51 @@
 | 20:22 | Edited apps/web-console/tests/e2e/unauth.spec.ts | "Sign in to Hive" → "Sign in to your console" | ~9 |
 | 20:23 | Edited apps/web-console/tests/e2e/auth-shell.spec.ts | 8→4 lines | ~68 |
 | 20:23 | Edited apps/web-console/app/console/layout.tsx | modified ConsoleLayout() | ~530 |
+| 20:27 | Created apps/web-console/app/auth/sign-up/page.tsx | — | ~1035 |
+| 20:28 | Edited .planning/next-sessions-INDEX.md | 10→10 lines | ~50 |
+| 20:28 | Edited .planning/next-sessions-INDEX.md | modified docs() | ~61 |
+
+## Session: 2026-04-25 23:42
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:42
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:45
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:45
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:46
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-04-25 23:47
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|

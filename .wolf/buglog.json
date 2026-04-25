@@ -418,6 +418,22 @@
       "related_bugs": [],
       "occurrences": 1,
       "last_seen": "2026-04-25T00:23:06.999Z"
+    },
+    {
+      "id": "bug-027",
+      "timestamp": "2026-04-25T00:28:02.460Z",
+      "error_message": "Significant refactor of ",
+      "file": ".planning/next-sessions-INDEX.md",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 10→10 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-04-25T00:28:02.460Z"
     }
   ]
 }

@@ -8,12 +8,12 @@ landed each one.
 
 | File | Title | Priority | Notes |
 |------|-------|----------|-------|
-| [next-session-web-console-revamp.md](./next-session-web-console-revamp.md) | Web-console revamp — OpenNext + Claude-grade design + auth fix | P0 | Single PR — runtime swap (`@cloudflare/next-on-pages` → `@opennextjs/cloudflare`), Supabase SSR cookie fix (unblocks 7 failing Playwright specs on staging), full visual rebuild via `/frontend-design:frontend-design` skill. Subsumes the prior `ui-styling` + `visual-regression-coverage` prompts. |
+
+_(none — last P0 consumed by branch `feat/web-console-opennext-revamp`)_
 
 ## Suggested order
 
-1. **Web-console revamp** (P0) — only pending prompt; blocks staging
-   E2E coverage on the deployed Pages/Workers surface.
+(empty)
 
 ## Shipped (2026-04-24 follow-up session)
 
@@ -28,6 +28,7 @@ landed each one.
 | #101 | fix(edge-api): extend usage clamp to responses + streaming paths | `next-session-clamp-responses-streaming.md` |
 | #102 | chore(litellm): pin OpenRouter backing providers | `next-session-litellm-route-pinning.md` |
 | #103 | docs(planning): clean up consumed session prompts + sync wolf state | (cleanup pass) |
+| TBD | feat(web-console): OpenNext + Upstash + Supabase auth fix + Claude-grade redesign | `next-session-web-console-revamp.md` |
 
 ## Why this decomposition
 

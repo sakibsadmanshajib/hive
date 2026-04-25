@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-04-25T00:23:50.121Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-04-25T00:28:04.914Z
 > Files: 548 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../.claude/projects/-home-sakib-hive/memory/
@@ -82,7 +82,7 @@
 - `next-session-ui-styling.md` — Next Session: web-console UI framework + styling (~1096 tok)
 - `next-session-visual-regression-coverage.md` — Next Session: Add visual regression coverage to CI (~886 tok)
 - `next-session-web-console-revamp.md` — Next session: Web-console revamp — OpenNext + Claude-grade design + auth fix (~3854 tok)
-- `next-sessions-INDEX.md` — Next-session prompt index (~685 tok)
+- `next-sessions-INDEX.md` — Next-session prompt index (~596 tok)
 - `PROJECT.md` — Hive API Platform (~2848 tok)
 - `ROADMAP.md` — Roadmap: Hive API Platform (~1949 tok)
 - `STATE.md` — Project State (~5891 tok)
@@ -651,7 +651,7 @@
 
 ## apps/web-console/app/auth/sign-up/
 
-- `page.tsx` — SignUpPage — renders form — uses useState (~597 tok)
+- `page.tsx` — SignUpPage — renders form (~1035 tok)
 
 ## apps/web-console/app/console/
 
