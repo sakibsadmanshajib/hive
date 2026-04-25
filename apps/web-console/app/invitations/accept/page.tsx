@@ -1,19 +1,27 @@
-import { redirect } from "next/navigation";
+import Link from "next/link";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+
 import { createClient } from "@/lib/supabase/server";
+import { AuthShell } from "@/components/app-shell/auth-shell";
+import { buttonVariants } from "@/components/ui/button";
 
 interface AcceptPageProps {
   searchParams: Promise<{ token?: string }>;
 }
 
+interface InvitationErrorBody {
+  error?: string;
+}
+
 function readErrorMessage(text: string): string | null {
-  if (!text) {
-    return null;
-  }
+  if (!text) return null;
 
   try {
-    const payload: { error?: string } = JSON.parse(text);
-    return typeof payload.error === "string" ? payload.error : null;
+    const payload: unknown = JSON.parse(text);
+    if (payload === null || typeof payload !== "object") return null;
+    const candidate = payload as InvitationErrorBody;
+    return typeof candidate.error === "string" ? candidate.error : null;
   } catch {
     return null;
   }
@@ -37,11 +45,18 @@ export default async function AcceptInvitationPage({
 
   if (!token) {
     return (
-      <div>
-        <h1>Invalid invitation</h1>
-        <p>No invitation token was provided.</p>
-        <a href="/console">Go to console</a>
-      </div>
+      <AuthShell
+        eyebrow="Invitation"
+        title="Invalid invitation"
+        subtitle="No invitation token was provided. Ask the workspace owner for a fresh link."
+      >
+        <Link
+          href="/console"
+          className={buttonVariants({ variant: "primary", size: "lg" })}
+        >
+          Go to console
+        </Link>
+      </AuthShell>
     );
   }
 
@@ -52,29 +67,30 @@ export default async function AcceptInvitationPage({
 
   if (baseUrl) {
     try {
-      const response = await fetch(
-        `${baseUrl}/api/v1/invitations/accept`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${session.access_token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ token }),
-          cache: "no-store",
-        }
-      );
+      const response = await fetch(`${baseUrl}/api/v1/invitations/accept`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ token }),
+        cache: "no-store",
+      });
 
       if (response.ok) {
         accepted = true;
       } else {
-        const responseText = await response.text().catch(() => "");
+        const responseText = await response.text().catch((): string => "");
         errorMessage =
           readErrorMessage(responseText) ??
           `Failed to accept invitation (${response.status})`;
       }
-    } catch {
-      errorMessage = "Failed to connect to the server. Please try again.";
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Failed to connect to the server. Please try again.";
+      errorMessage = message;
     }
   } else {
     errorMessage = "Server configuration error. Please contact support.";
@@ -87,10 +103,17 @@ export default async function AcceptInvitationPage({
   }
 
   return (
-    <div>
-      <h1>Invitation error</h1>
-      <p>{errorMessage}</p>
-      <a href="/console">Go to console</a>
-    </div>
+    <AuthShell
+      eyebrow="Invitation"
+      title="Invitation error"
+      subtitle={errorMessage ?? "We couldn't accept this invitation."}
+    >
+      <Link
+        href="/console"
+        className={buttonVariants({ variant: "primary", size: "lg" })}
+      >
+        Go to console
+      </Link>
+    </AuthShell>
   );
 }

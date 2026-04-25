@@ -1,7 +1,13 @@
-import { getCatalogModels } from "@/lib/control-plane/client";
-import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
-import { getViewer } from "@/lib/control-plane/client";
 import { redirect } from "next/navigation";
+
+import {
+  getAccountProfile,
+  getCatalogModels,
+  getViewer,
+} from "@/lib/control-plane/client";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
+import { ModelCatalogTable } from "@/components/catalog/model-catalog-table";
+import { PageHeader } from "@/components/ui/page-header";
 
 export default async function CatalogPage() {
   const viewer = await getViewer();
@@ -9,12 +15,34 @@ export default async function CatalogPage() {
     redirect("/console/settings/profile");
   }
 
-  const models = await getCatalogModels();
+  const [models, profile] = await Promise.all([
+    getCatalogModels(),
+    getAccountProfile().catch(
+      (): { owner_name: string } => ({ owner_name: "" }),
+    ),
+  ]);
 
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "72rem" }}>
-      <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: 700 }}>Model Catalog</h1>
+    <ConsoleShell
+      workspace={{
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      active="/console/catalog"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">
+          Model catalog
+        </span>
+      }
+    >
+      <PageHeader
+        eyebrow="Build"
+        title="Model catalog"
+        description="Available models and per-million-token pricing across providers. Capabilities are surfaced as tags."
+      />
+
       <ModelCatalogTable models={models} />
-    </div>
+    </ConsoleShell>
   );
 }

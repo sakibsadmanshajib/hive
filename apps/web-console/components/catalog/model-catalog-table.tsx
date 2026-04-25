@@ -1,163 +1,111 @@
 import type { CatalogModel } from "@/lib/control-plane/client";
+import { Badge } from "@/components/ui/badge";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { EmptyState } from "@/components/ui/empty-state";
+import { formatCredits } from "@/lib/format/credits";
 
 interface ModelCatalogTableProps {
   models: CatalogModel[];
 }
 
-function lifecycleStatus(lifecycle: string): { label: string; color: string } {
+type ToneName = "neutral" | "accent" | "success" | "warning" | "danger";
+
+function capabilityTone(badge: string): ToneName {
+  const lowered = badge.toLowerCase();
+  if (lowered.includes("chat")) return "accent";
+  if (lowered.includes("embed")) return "neutral";
+  if (lowered.includes("vision") || lowered.includes("image")) return "success";
+  if (lowered.includes("audio") || lowered.includes("voice")) return "warning";
+  if (lowered.includes("tool") || lowered.includes("function"))
+    return "warning";
+  return "neutral";
+}
+
+function statusBadge(lifecycle: string): { label: string; tone: ToneName } {
   if (lifecycle === "active") {
-    return { label: "Available", color: "#10b981" };
+    return { label: "Available", tone: "success" };
   }
-  return { label: "Unavailable", color: "#6b7280" };
+  if (lifecycle === "preview") {
+    return { label: "Preview", tone: "warning" };
+  }
+  return { label: "Unavailable", tone: "neutral" };
 }
 
 export function ModelCatalogTable({ models }: ModelCatalogTableProps) {
   if (models.length === 0) {
     return (
-      <p style={{ margin: 0, color: "#6b7280" }}>
-        No models available. Check back soon.
-      </p>
+      <EmptyState
+        title="No models available"
+        description="The model catalog is empty for this workspace. Check back soon."
+      />
     );
   }
 
-  return (
-    <table style={{ width: "100%", borderCollapse: "collapse" }}>
-      <thead>
-        <tr>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Model
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Capabilities
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Input (per 1M tokens)
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Output (per 1M tokens)
-          </th>
-          <th
-            style={{
-              padding: "0.5rem 0.75rem",
-              textAlign: "left",
-              fontWeight: 700,
-              fontSize: "0.875rem",
-              borderBottom: "1px solid #e5e7eb",
-              color: "#4b5563",
-            }}
-          >
-            Status
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {models.map((model) => {
-          const { label: statusLabel, color: statusColor } = lifecycleStatus(model.lifecycle);
-          const capabilities = model.capability_badges.join(", ");
+  const columns: Column<CatalogModel>[] = [
+    {
+      key: "model",
+      header: "Model",
+      cell: (row) => (
+        <div className="flex flex-col gap-0.5">
+          <span className="text-sm font-medium text-[var(--color-ink)]">
+            {row.display_name}
+          </span>
+          <code className="font-mono text-2xs text-[var(--color-ink-3)]">
+            {row.id}
+          </code>
+          {row.summary ? (
+            <span className="text-xs text-[var(--color-ink-3)]">
+              {row.summary}
+            </span>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: "capabilities",
+      header: "Capabilities",
+      cell: (row) =>
+        row.capability_badges.length === 0 ? (
+          <span className="text-xs text-[var(--color-ink-3)]">—</span>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {row.capability_badges.map((badge) => (
+              <Badge key={badge} tone={capabilityTone(badge)}>
+                {badge}
+              </Badge>
+            ))}
+          </div>
+        ),
+    },
+    {
+      key: "input",
+      header: "Input / 1M",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatCredits(row.pricing.input_price_credits),
+    },
+    {
+      key: "output",
+      header: "Output / 1M",
+      numeric: true,
+      align: "right",
+      cell: (row) => formatCredits(row.pricing.output_price_credits),
+    },
+    {
+      key: "status",
+      header: "Status",
+      cell: (row) => {
+        const { label, tone } = statusBadge(row.lifecycle);
+        return <Badge tone={tone}>{label}</Badge>;
+      },
+    },
+  ];
 
-          return (
-            <tr key={model.id}>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  fontWeight: 700,
-                }}
-              >
-                <div>{model.display_name}</div>
-                {model.summary && (
-                  <div
-                    style={{
-                      fontSize: "0.875rem",
-                      color: "#6b7280",
-                      fontWeight: 400,
-                      marginTop: "0.125rem",
-                    }}
-                  >
-                    {model.summary}
-                  </div>
-                )}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  color: "#4b5563",
-                }}
-              >
-                {capabilities || "—"}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                }}
-              >
-                {model.pricing.input_price_credits.toLocaleString()}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                }}
-              >
-                {model.pricing.output_price_credits.toLocaleString()}
-              </td>
-              <td
-                style={{
-                  padding: "0.5rem 0.75rem",
-                  borderBottom: "1px solid #f3f4f6",
-                  fontSize: "1rem",
-                  color: statusColor,
-                  fontWeight: 700,
-                }}
-              >
-                {statusLabel}
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+  return (
+    <DataTable<CatalogModel>
+      rows={models}
+      columns={columns}
+      rowKey={(row) => row.id}
+    />
   );
 }

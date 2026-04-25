@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+
 import {
   getAccountProfile,
   getViewer,
@@ -12,9 +13,13 @@ import {
   AccountProfileForm,
   type AccountProfileFormState,
 } from "@/components/profile/account-profile-form";
+import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { EmailSettingsCard } from "@/components/email-settings-card";
+import { PageHeader } from "@/components/ui/page-header";
 
-function toFormValues(profile: Awaited<ReturnType<typeof getAccountProfile>>): AccountProfileFormValues {
+function toFormValues(
+  profile: Awaited<ReturnType<typeof getAccountProfile>>,
+): AccountProfileFormValues {
   return {
     ownerName: profile.owner_name,
     loginEmail: profile.login_email,
@@ -37,13 +42,15 @@ function readFormValues(formData: FormData): AccountProfileFormValues {
 }
 
 export default async function ProfileSettingsPage() {
-  const viewer = await getViewer();
-  const profile = await getAccountProfile();
+  const [viewer, profile] = await Promise.all([
+    getViewer(),
+    getAccountProfile(),
+  ]);
   const initialValues = toFormValues(profile);
 
   async function saveProfile(
     _state: AccountProfileFormState,
-    formData: FormData
+    formData: FormData,
   ): Promise<AccountProfileFormState> {
     "use server";
 
@@ -60,13 +67,14 @@ export default async function ProfileSettingsPage() {
 
     try {
       await updateAccountProfile(parsed.data);
-    } catch (error) {
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to save your profile. Please try again.";
       return {
         fieldErrors: {},
-        formError:
-          error instanceof Error
-            ? error.message
-            : "Failed to save your profile. Please try again.",
+        formError: message,
         values: parsed.data,
       };
     }
@@ -75,47 +83,37 @@ export default async function ProfileSettingsPage() {
   }
 
   return (
-    <div style={{ display: "grid", gap: "1.5rem", maxWidth: "48rem" }}>
-      <div style={{ display: "grid", gap: "0.5rem" }}>
-        <h1 style={{ margin: 0 }}>Profile settings</h1>
-        <p style={{ margin: 0, color: "#4b5563" }}>
-          Maintain the minimal account profile here. This page stays available
-          even when your email is not yet verified.
-        </p>
-        <p style={{ margin: 0, color: "#6b7280" }}>
-          Resend verification email or change the login address here before you
-          unlock the rest of the console.
-        </p>
-      </div>
-
-      <EmailSettingsCard
-        email={viewer.user.email}
-        emailVerified={viewer.user.email_verified}
+    <ConsoleShell
+      workspace={{
+        name: viewer.current_account.display_name,
+        slug: viewer.current_account.slug,
+      }}
+      user={{ email: viewer.user.email, name: profile.owner_name || null }}
+      active="/console/settings/profile"
+      topbar={
+        <span className="font-medium text-[var(--color-ink-2)]">
+          Profile settings
+        </span>
+      }
+    >
+      <PageHeader
+        eyebrow="Settings"
+        title="Profile settings"
+        description="Maintain the minimal account profile here. This page stays available even when your email is not yet verified — resend verification or change the login email below."
       />
 
-      <section
-        style={{
-          padding: "1rem",
-          border: "1px solid #d1d5db",
-          borderRadius: "0.75rem",
-          display: "grid",
-          gap: "1rem",
-        }}
-      >
-        <div style={{ display: "grid", gap: "0.35rem" }}>
-          <h2 style={{ margin: 0 }}>Account profile</h2>
-          <p style={{ margin: 0, color: "#6b7280" }}>
-            Update the owner, workspace, and location fields used before any
-            billing flow begins.
-          </p>
-        </div>
+      <div className="flex flex-col gap-6">
+        <EmailSettingsCard
+          email={viewer.user.email}
+          emailVerified={viewer.user.email_verified}
+        />
 
         <AccountProfileForm
           action={saveProfile}
           initialValues={initialValues}
           submitLabel="Save profile"
         />
-      </section>
-    </div>
+      </div>
+    </ConsoleShell>
   );
 }
