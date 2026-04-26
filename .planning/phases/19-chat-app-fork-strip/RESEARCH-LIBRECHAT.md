@@ -15,7 +15,7 @@
 - **Hosting = chat-app on Oracle Cloud Infrastructure (OCI) container instance(s); web-console stays on Cloudflare Workers via `@opennextjs/cloudflare` (unchanged).** Workers is NOT a chat-app deploy target.
 - **DNS / TLS via Cloudflare in front of OCI** for chat-app subdomain.
 - **Pin to a specific upstream tag at fork time** (not floating `main`).
-- **Lock to single OpenAI-compatible provider pointed at `http://edge-api:8080`** — strip Anthropic, Google, Mistral, Bedrock, Vertex, etc. from default config.
+- **Lock to single OpenAI-compatible provider pointed at `http://edge-api:8080/v1`** — strip Anthropic, Google, Mistral, Bedrock, Vertex, etc. from default config. (Canonical base URL across the doc; OpenAI-compatible spec mounts under `/v1`.)
 - **First-run language picker (bn-BD / en-US)** at first session, persists to user prefs after auth.
 - **MongoDB added to Hive infra** (LibreChat is Mongo-native). Hive Postgres ledger unchanged.
 - **No FX/USD exposure on customer surfaces** (regulatory — Phase 17 audit applies to chat-app).
@@ -45,14 +45,14 @@
 
 | ID | Description | Research Support |
 |----|-------------|------------------|
-| CHAT-19-01 | Fork `danny-avila/LibreChat` at pinned tag into `apps/chat-app/` | §1 Pinned Tag Recommendation |
-| CHAT-19-02 | Strip non-Hive providers from default config and code | §3 Provider Strip Surface |
-| CHAT-19-03 | Wire single OpenAI-compatible provider → `http://edge-api:8080` | §4 Base-URL Config |
-| CHAT-19-04 | Boot LibreChat locally + via Docker Compose service | §10 Docker Compose Service Draft |
-| CHAT-19-05 | Add first-run language picker modal (bn-BD / en-US) | §6 Language Picker Insertion Plan |
-| CHAT-19-06 | Document upgrade procedure (`LIBRECHAT-UPGRADE-PLAYBOOK.md`) | §1 + §11 Open Questions |
-| CHAT-19-07 | MongoDB connection wired (recommend Atlas vs self-host) | §5 MongoDB Recommendation |
-| CHAT-19-08 | OCI deploy plan documented (shape, image, CF-front) | §9 OCI Deployment Guide |
+| CHATAPP-19-01 | Fork `danny-avila/LibreChat` at pinned tag into `apps/chat-app/` | §1 Pinned Tag Recommendation |
+| CHATAPP-19-02 | Strip non-Hive providers from default config and code | §3 Provider Strip Surface |
+| CHATAPP-19-03 | Wire single OpenAI-compatible provider → `http://edge-api:8080/v1` | §4 Base-URL Config |
+| CHATAPP-19-04 | Boot LibreChat locally + via Docker Compose service | §10 Docker Compose Service Draft |
+| CHATAPP-19-05 | Add first-run language picker modal (bn-BD / en-US) | §6 Language Picker Insertion Plan |
+| CHATAPP-19-06 | Document upgrade procedure (`LIBRECHAT-UPGRADE-PLAYBOOK.md`) | §1 + §11 Open Questions |
+| CHATAPP-19-07 | MongoDB connection wired (recommend Atlas vs self-host) | §5 MongoDB Recommendation |
+| CHATAPP-19-08 | OCI deploy plan documented (shape, image, CF-front) | §9 OCI Deployment Guide |
 </phase_requirements>
 
 ---
@@ -1011,15 +1011,15 @@ i18n.use(initReactI18next).init({
 ### Phase Requirements → Test Map
 | Req ID | Behavior | Test Type | Automated Command | File Exists? |
 |--------|----------|-----------|-------------------|-------------|
-| CHAT-19-01 | Fork at pinned tag matches `LIBRECHAT-VERSION.md` SHA | smoke | `git -C apps/chat-app rev-parse HEAD` vs version file | ❌ Wave 0 |
-| CHAT-19-02 | Provider strip — Hive only endpoint visible | e2e | `npx playwright test tests/e2e/providers.spec.ts` | ❌ Wave 0 |
-| CHAT-19-03 | Chat completion routes to Hive edge-api | integration | curl→stub edge-api→assert request seen | ❌ Wave 0 |
-| CHAT-19-04 | `docker compose up chat-app` healthy in <60s | smoke | `docker compose ps + curl /health` | ❌ Wave 0 |
-| CHAT-19-05 | First-run picker modal shows when localStorage empty | e2e | `npx playwright test tests/e2e/language-picker.spec.ts` | ❌ Wave 0 |
-| CHAT-19-05 | Picker writes localStorage and applies bn-BD | e2e | same | ❌ Wave 0 |
-| CHAT-19-06 | Upgrade playbook documented + executable on staging clone | manual | document review | ❌ Wave 0 |
-| CHAT-19-07 | Mongo connection healthy on boot | smoke | container log scan for `Mongoose connected` | ❌ Wave 0 |
-| CHAT-19-08 | Compose stack runs on ARM64 (multi-arch verified) | smoke | `docker manifest inspect` | ❌ Wave 0 |
+| CHATAPP-19-01 | Fork at pinned tag matches `LIBRECHAT-VERSION.md` SHA | smoke | `git -C apps/chat-app rev-parse HEAD` vs version file | ❌ Wave 0 |
+| CHATAPP-19-02 | Provider strip — Hive only endpoint visible | e2e | `npx playwright test tests/e2e/providers.spec.ts` | ❌ Wave 0 |
+| CHATAPP-19-03 | Chat completion routes to Hive edge-api | integration | curl→stub edge-api→assert request seen | ❌ Wave 0 |
+| CHATAPP-19-04 | `docker compose up chat-app` healthy in <60s | smoke | `docker compose ps + curl /health` | ❌ Wave 0 |
+| CHATAPP-19-05 | First-run picker modal shows when localStorage empty | e2e | `npx playwright test tests/e2e/language-picker.spec.ts` | ❌ Wave 0 |
+| CHATAPP-19-05 | Picker writes localStorage and applies bn-BD | e2e | same | ❌ Wave 0 |
+| CHATAPP-19-06 | Upgrade playbook documented + executable on staging clone | manual | document review | ❌ Wave 0 |
+| CHATAPP-19-07 | Mongo connection healthy on boot | smoke | container log scan for `Mongoose connected` | ❌ Wave 0 |
+| CHATAPP-19-08 | Compose stack runs on ARM64 (multi-arch verified) | smoke | `docker manifest inspect` | ❌ Wave 0 |
 
 ### Sampling Rate
 - **Per task commit:** `cd apps/chat-app && npm test -- --testPathPattern <area>` (~30s).
@@ -1027,10 +1027,10 @@ i18n.use(initReactI18next).init({
 - **Phase gate:** full suite + manual fork-from-clean dry-run on OCI staging instance before `/gsd:verify-work`.
 
 ### Wave 0 Gaps
-- [ ] `apps/chat-app/tests/e2e/providers.spec.ts` — verify only Hive endpoint surfaces (CHAT-19-02).
-- [ ] `apps/chat-app/tests/e2e/language-picker.spec.ts` — first-run modal + persistence (CHAT-19-05).
-- [ ] `apps/chat-app/tests/integration/hive-routing.test.ts` — assert outbound request hits `${HIVE_BASE_URL}` (CHAT-19-03).
-- [ ] `apps/chat-app/tests/smoke/health.test.ts` — container boot + `/health` check (CHAT-19-04, CHAT-19-07).
+- [ ] `apps/chat-app/tests/e2e/providers.spec.ts` — verify only Hive endpoint surfaces (CHATAPP-19-02).
+- [ ] `apps/chat-app/tests/e2e/language-picker.spec.ts` — first-run modal + persistence (CHATAPP-19-05).
+- [ ] `apps/chat-app/tests/integration/hive-routing.test.ts` — assert outbound request hits `${HIVE_BASE_URL}` (CHATAPP-19-03).
+- [ ] `apps/chat-app/tests/smoke/health.test.ts` — container boot + `/health` check (CHATAPP-19-04, CHATAPP-19-07).
 - [ ] `deploy/docker/docker-compose.chatapp.yml` — service overlay (covered in §10 above).
 - [ ] `.planning/v1.1-chatapp/LIBRECHAT-VERSION.md` — pinned-tag artifact.
 - [ ] `.planning/v1.1-chatapp/LIBRECHAT-UPGRADE-PLAYBOOK.md` — upgrade procedure.

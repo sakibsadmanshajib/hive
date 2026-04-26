@@ -2,6 +2,7 @@
 milestone: v1.1
 status: planning
 created: 2026-04-25
+revised: 2026-04-25 (v3 — chat-app base pivoted from Lobe Chat to LibreChat per LICENSE-DECISION.md; hosting locked to OCI; auto-trial removed in favor of owner-discretionary credits)
 scope: dev-api-hardening + chat-app product wedge (folded)
 geo: BD soft launch
 locales: bn-BD (default), en-US
@@ -12,32 +13,38 @@ locales: bn-BD (default), en-US
 Single milestone, two tracks shipped together.
 
 - **Track A — API Hardening** (carry-over from v1.0): rate limiting, payments, verification, RBAC, regulatory compliance.
-- **Track B — Hive Chat** (new product wedge): Bengali + English chat-app on Hive API, with file-upload RAG, fork of Lobe Chat. 50 BDT trial credits on signup.
+- **Track B — Hive Chat** (new product wedge): Bengali + English chat-app on Hive API, with file-upload RAG, fork of **LibreChat (MIT)**. **No auto-trial**; owner-discretionary credit grants only.
 
-## Decisions Locked
+## Decisions Locked (v3)
 
 | Item | Choice |
 |------|--------|
-| OSS base | **Lobe Chat** (Next.js 15 + Postgres + Drizzle, Apache-2.0) |
+| OSS base | **LibreChat** (MIT — `danny-avila/LibreChat`, pinned tag). Replaces v1's Lobe Chat (rejected: LobeHub Community License §1.b commercial-derivative clause + Cloudflare Workers incompatibility). |
+| Free tier | **No auto-grant on signup.** Verified users get a free chat tier with tier-based rate limits (see `V1.1-MASTER-PLAN.md` §Tier Model). Credits are issued only via the owner-discretionary credit grant tool (Phase 14). |
+| Anti-abuse | Phone OTP + email verify (already required for verified tier), captcha on signup, Redis IP rate-limit on signup endpoint. No device-fingerprint or IP/device dedupe — that scope was dropped with the auto-trial. |
 | Milestone | Folded into v1.1 (single milestone, two tracks) |
-| Free tier | 50 BDT trial credits on signup + anti-abuse (phone OTP, email verify, IP/device dedupe) |
 | Geo | BD soft launch — bn-BD default + en-US fallback |
+| Chat-app hosting | **Oracle Cloud Infrastructure (OCI) container instance(s)** with Cloudflare DNS/TLS in front. Cloudflare Workers is **NOT** a chat-app deploy target (LibreChat is Vite + Express + WebSocket — not Workers compatible). Web-console hosting on Workers is unchanged. |
+| New infra | **MongoDB** (LibreChat is Mongo-native — Atlas M0 vs OCI self-host decided in Phase 19). Postgres + Supabase Storage + pgvector retained. |
 | Subdomain | TBD (suggested: `chat.hive.bd`) |
 
 ## Architecture (Track B)
 
 ```
-hive/apps/chat-app                ← new, fork of Lobe Chat
+hive/apps/chat-app                ← new, fork of LibreChat (pinned tag)
   ├── auth: Supabase (shared with web-console SSO)
-  ├── default OpenAI provider → hive edge-api
-  ├── DB: Postgres (new schema in same Supabase project)
-  ├── files: Supabase Storage (hive-files bucket, reused)
-  ├── embeddings: hive edge-api /v1/embeddings → pgvector
-  ├── billing: per-message metering via existing prepaid ledger
-  └── i18n: bn-BD primary, en-US secondary, browser-detected
+  ├── default OpenAI-compatible provider → hive edge-api (http://edge-api:8080/v1)
+  ├── primary DB: MongoDB (LibreChat-native, Atlas or OCI self-host)
+  ├── secondary DB: Postgres (chat_app schema in same Supabase project) for tier/credit/referral state
+  ├── files: Supabase Storage (hive-files bucket, reused) — verified-tier+ only
+  ├── embeddings: hive edge-api /v1/embeddings → Supabase pgvector (HNSW index)
+  ├── billing: per-message metering via existing prepaid ledger (credited tier only)
+  ├── deploy: OCI container instance, CF DNS/TLS in front
+  └── i18n: bn-BD primary, en-US secondary, first-run language picker
 ```
 
-No new infra. Reuses Supabase + Hive edge-api + control-plane.
+New infra: **MongoDB** (LibreChat persistence) and **OCI compute** (chat-app host).
+Reused: Supabase Postgres + Storage + pgvector, Hive edge-api, control-plane, Cloudflare DNS/TLS.
 
 ## Unified Phase Order
 
@@ -53,13 +60,13 @@ Chat-app depends on hardening Phase 12 (rate limit), 13 (console), 14 (payments)
 | 16 | `ensureCapabilityColumns` table fix | A | — |
 | 17 | `amount_usd` BD checkout regulatory fix | A | 14 |
 | 18 | RBAC + verification-aware authorization | A | 13 |
-| 19 | **chat-app: fork-and-strip Lobe Chat** | B | — |
-| 20 | **chat-app: auth-bridge (Supabase SSO)** | B | 18, 19 |
-| 21 | **chat-app: billing-meter + 50 BDT trial credits + anti-abuse** | B | 14, 20 |
+| 19 | **chat-app: fork-and-strip LibreChat (pinned tag) + first-run language picker** | B | — |
+| 20 | **chat-app: auth-bridge (Supabase SSO) + tier resolution** | B | 18, 19 |
+| 21 | **chat-app: tier limits + invite/referral system** (no auto-trial; owner-discretionary credits only) | B | 14, 20 |
 | 22 | **chat-app: file-upload RAG (pgvector)** | B | 19 |
 | 23 | **chat-app: bn-BD + en-US i18n + Bengali model defaults** | B | 19 |
-| 24 | **chat-app: deploy staging (Workers or Fly.io decision)** | B | 19–23 |
-| 25 | **chat-app: UAT + soft launch** | B | 24, 12 (rate limit live) |
+| 24 | **chat-app: deploy staging on OCI** (CF DNS/TLS in front; Workers NOT a target) | B | 19–23 |
+| 25 | **chat-app: UAT + soft launch** | B | 24, 12 (rate limit live), 17 (FX audit clean) |
 
 Phases 11/12/16/19 can run in **parallel** (no shared deps). Phases 22/23 parallel after 19. Critical path: 13 → 14 → 20 → 21 → 24 → 25.
 
@@ -73,31 +80,33 @@ Phases 11/12/16/19 can run in **parallel** (no shared deps). Phases 22/23 parall
 | Chat-app integration | 20, 21 | typescript-reviewer + security-reviewer |
 | Chat-app launch | 24, 25 | e2e-runner + loop-operator |
 
-## Anti-Abuse for 50 BDT Trial
+## Anti-Abuse (auto-trial removed)
 
-Layered defense (Supabase has all primitives):
+Auto-grant on signup was rejected in v3 (see `V1.1-MASTER-PLAN.md` §v2 Revisions). Without an automatic credit grant, the abuse surface collapses to bot-signup throttling and tier integrity:
 
-1. **Phone OTP** — Supabase Phone Auth (BD numbers)
-2. **Email verify** — required before credit grant
-3. **IP rate limit** — max 1 trial per IP per 24h (Redis)
-4. **Device fingerprint** — FingerprintJS open-source
-5. **Manual review queue** — flagged signups held for review
+1. **Phone OTP** — Supabase Phone Auth (BD numbers); required for `verified` tier.
+2. **Email verify** — required for `verified` tier.
+3. **Captcha on signup** — hCaptcha or Cloudflare Turnstile.
+4. **Redis IP rate limit on signup endpoint** — throttle bot signups (existing infra).
+5. **Owner-grant audit log** — every credit grant is logged with `granted_by_user_id`, amount, timestamp, optional note (Phase 14). Non-owner accounts cannot grant.
+
+Device fingerprint and manual review queue from v1's plan are **dropped** with the auto-trial.
 
 ## Risks & Mitigations
 
 | Risk | Mitigation |
 |------|-----------|
-| Lobe upstream drift | Minimal patches, contribute generic fixes upstream |
-| pgvector cold-start | HNSW index migration in phase 22 |
-| Bengali tokenization (~3x English tokens) | Default to Gemini Flash / Qwen 2.5 (strong bn) |
-| Workers cold-start for Lobe | Phase 24 evaluates Workers vs Fly.io |
-| FX leak (regulatory) | Phase 17 + chat-app launch audit |
-| Trial-credit abuse | 5-layer anti-abuse stack |
+| LibreChat upstream drift | Pin to fork-time tag; minimal patches; documented upgrade procedure (`LIBRECHAT-UPGRADE-PLAYBOOK.md`); 3-way-merge protocol re-verifies the FX-leak guard each upgrade. |
+| Bengali tokenization cost | Accepted (dropped as a v1.1 risk per v3 plan). |
+| MongoDB ops complexity | Atlas M0 free tier for MVP; OCI self-host evaluated in Phase 19 if Atlas constraints hit. |
+| OCI quota / image build / multi-arch (ARM64) | Phase 19/24 validate `VM.Standard.A1.Flex` ARM shape and image platform target. |
+| FX leak (regulatory) | Phase 17 zero-tolerance audit gates v1.1.0; chat-app re-audited in Phase 25 + CI grep guard. |
+| Bot signups | Captcha + Redis IP rate-limit on signup endpoint (no auto-credit means low payoff for bots). |
 
 ## Definition of Done (v1.1 ships when)
 
-- [ ] Track A: phases 11–18 complete, regulatory fixes live, RBAC enforced.
-- [ ] Track B: chat-app deployed at `chat.hive.bd`, Bengali + English UX, RAG works on PDF/DOCX/TXT/MD, 50 BDT trial flow live with anti-abuse, BDT-only billing display.
+- [ ] Track A: phases 11–18 complete, regulatory fixes live, FX/USD audit clean (Phase 17), RBAC + tier enforced.
+- [ ] Track B: chat-app deployed at `chat.hive.bd` (OCI host, CF DNS/TLS in front), Bengali + English UX with first-run picker, RAG works on PDF/DOCX/TXT/MD, four-tier model live (guest / unverified / verified / credited), invite/referral system live, owner-discretionary credit grant tool live, BDT-only billing display.
 - [ ] E2E suite green for both tracks.
 - [ ] Tag `v1.1.0`.
 
@@ -116,6 +125,6 @@ Layered defense (Supabase has all primitives):
 
 If approved, start in parallel:
 - **Hardening track:** spawn `go-build-resolver` + `go-reviewer` agents on phases 11, 12, 16.
-- **Chat track:** spawn `Explore` agent to audit Lobe Chat fork target + plan phase 19 in detail.
+- **Chat track:** Phase 19 LibreChat fork-and-strip executed on branch `b/phase-19-chat-app-fork-strip` (PR #131). See `.planning/phases/19-chat-app-fork-strip/RESEARCH-LIBRECHAT.md` and `PLAN.md` for the active execution artifacts.
 
 Both tracks proceed concurrently. User reviews phase plans before each execution.
