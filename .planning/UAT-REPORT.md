@@ -182,3 +182,65 @@ Scanned all 24 responses for forbidden strings: `openrouter`, `groq`, `litellm`,
 3. **Re-run inference UAT** after routing fix
 4. **Browser-based UAT** for web console authenticated pages
 5. **Payment flow test** with Stripe test mode
+
+---
+
+## Post-Phase-10 Annotations
+
+> Annotations added by Phase 11 (2026-04-25) reconciling the 2026-04-13 report
+> against Phase 10 closure. **Original 2026-04-13 entries above are preserved
+> verbatim** — this section is append-only. See
+> `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for the Phase
+> 10 closure log and `.planning/REQUIREMENTS.md` for the active requirement
+> matrix.
+
+### Storage status — was "Gracefully degraded", now Required + Live
+
+- **Original entry (2026-04-13):** "S3 Storage: Gracefully degraded (Supabase
+  Storage S3 endpoint format incompatible with legacy S3-compatible client path
+  restriction)". File / image / audio / batch endpoints listed as disabled.
+- **Phase 10 reality (2026-04-21):** Plans 10-07, 10-08, and 10-11 wired
+  edge-api + control-plane to Supabase Storage and made the storage init
+  fail-fast at startup unless required S3 env vars are present and the
+  `hive-files` + `hive-images` buckets exist. File + media endpoints are
+  routable; live smoke completed in Phase 10 Plan 10-08 (see
+  `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md`).
+- **Live status (2026-04-25):** Required at startup; Supabase Storage is the
+  only object-storage backend. See `apps/edge-api/internal/...` storage init
+  + Phase 10 UAT for the closure evidence.
+
+### File / media endpoints — was "Disabled", now Live (subject to API-07 caveat)
+
+- **Original entry:** Endpoints disabled gracefully when storage init failed.
+- **Phase 10 reality:** Endpoints are wired and exercised. Failure-path is
+  conditional only on Supabase Storage availability (managed dependency).
+- **Live status:** API-05 + API-06 → Satisfied per archived
+  `.planning/milestones/v1.0-REQUIREMENTS.md` (Phase 10 UAT Tests 7 + 8).
+  API-07 (`files`/`uploads`/`batches`) is **Partial**: success-path of
+  `/v1/batches` remains blocked by upstream provider capability — neither
+  OpenRouter nor Groq exposes a native batch API and LiteLLM's managed file
+  upload path does not list them. Tracked in
+  `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`
+  and `CLAUDE.md` Known Issues §4.
+
+### Batch success-path — confirmed still blocked upstream
+
+- **Original entry:** Not explicitly listed in the 2026-04-13 report (Phase 10
+  introduced the batch surface).
+- **Phase 10 reality:** Submitter + failure-path terminal settlement
+  verified live (reservation release + attribution). Success-path
+  (`status=completed`) not exercisable with the current provider mix.
+- **Live status:** Unblocks via either (a) adding a key for a LiteLLM-supported
+  batch provider (OpenAI / Azure / Vertex AI / Manus / Anthropic) or
+  (b) implementing a local batch executor in control-plane. Both routes are
+  v1.1 scope.
+
+### Cross-reference
+
+For every annotation above, the affected requirement's evidence file in
+`.planning/phases/11-verification-cleanup/evidence/` carries the matching
+caveat under its `## Known Caveats` heading. AUTH-01 / AUTH-02 are independent
+of these annotations — they were verified as Satisfied via Phase 02 code paths
+during Phase 11 Task 1.
+
+*Annotations dated 2026-04-25.*
