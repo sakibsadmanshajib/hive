@@ -25,7 +25,7 @@ if [[ ! -f "${REQ_FILE}" ]]; then
   exit 1
 fi
 
-REQUIRED_KEYS=("requirement_id" "status" "verified_at" "verified_by" "evidence")
+REQUIRED_KEYS=("requirement_id" "status" "verified_at" "verified_by" "phase_satisfied" "evidence")
 
 # Collect every relative evidence path from REQUIREMENTS.md table rows.
 #
