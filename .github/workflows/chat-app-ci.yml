@@ -1,0 +1,62 @@
+name: chat-app-ci
+
+on:
+  pull_request:
+    paths:
+      - 'apps/chat-app/**'
+      - '.github/workflows/chat-app-ci.yml'
+  push:
+    branches:
+      - main
+      - 'b/phase-19-*'
+      - 'b/phase-2[0-5]-*'
+    paths:
+      - 'apps/chat-app/**'
+      - '.github/workflows/chat-app-ci.yml'
+
+jobs:
+  lint-typecheck-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: apps/chat-app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/chat-app/package-lock.json
+
+      - name: Install dependencies (workspaces)
+        run: npm ci --no-audit
+
+      # Phase 19 vendors LibreChat v0.7.9 unmodified (~1996 files). Upstream's
+      # `npm run lint` enforces `i18next/no-literal-string` + prettier across the
+      # entire fork, including upstream code Hive does not own. Phase 19 ship
+      # gate is FX zero-leak + build (below) — lint is scoped to Hive-added
+      # files only so upstream style mismatches do not gate the Hive track.
+      - name: Lint (Hive-added paths only)
+        run: |
+          npx eslint --no-error-on-unmatched-pattern \
+            client/src/hooks/useFirstRunLocale.ts \
+            client/src/components/Nav/LanguagePicker/FirstRunLanguageModal.tsx
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Build client (LibreChat v0.7.9 frontend script)
+        run: npm run frontend
+        env:
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: FX zero-leak guard
+        run: |
+          set -eu
+          grep -q "^  showCost: false" librechat.yaml
+          grep -q "^  showTokens: false" librechat.yaml
+          ! grep -qE "^  (openAI|anthropic|google|azureOpenAI|bedrock):" librechat.yaml
+          grep -q "edge-api:8080/v1" librechat.yaml
+          echo "FX zero-leak + single-provider guard: OK"

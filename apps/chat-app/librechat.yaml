@@ -1,0 +1,47 @@
+# Hive chat-app — LibreChat v0.7.9 vendored fork
+# Single-provider lock: ALL inference traffic flows through Hive edge-api.
+# Upstream LibreChat schema: https://www.librechat.ai/docs/configuration/librechat_yaml
+
+version: 1.0.5
+cache: true
+
+# ─────────────────────────────────────────────────────────────────────
+# FX/USD ZERO-LEAK MANDATE  (Phase 17 — regulatory: BD market)
+# DO NOT FLIP TO TRUE. DO NOT REMOVE. Re-verify after every upstream bump.
+# Customer-visible USD/FX/token-cost rendering is a regulatory blocker.
+# v0.7.9 default UI does not render per-message cost; these keys are set
+# defensively for forward-compat with v0.8.x where token-cost UI was promoted.
+# ─────────────────────────────────────────────────────────────────────
+interface:
+  showCost: false
+  showTokens: false
+  customWelcome: "Welcome to Hive Chat"
+  privacyPolicy:
+    externalUrl: ""
+  termsOfService:
+    externalUrl: ""
+  fileSearch: false
+
+# ─────────────────────────────────────────────────────────────────────
+# PROVIDER STRIP — single Hive endpoint only.
+# No `endpoints.openAI`, `endpoints.anthropic`, `endpoints.google`,
+# `endpoints.azureOpenAI`, `endpoints.bedrock`, `endpoints.assistants`.
+# Per-user endpoint override is locked down (apiKey is server-side only).
+# ─────────────────────────────────────────────────────────────────────
+endpoints:
+  custom:
+    - name: "Hive"
+      apiKey: "${HIVE_EDGE_API_KEY}"
+      baseURL: "${HIVE_EDGE_API_BASE_URL}"   # default http://edge-api:8080/v1
+      models:
+        default: ["gpt-4o-mini"]              # Phase 23 sets Bengali-strong default
+        fetch: false                          # Hive control-plane catalog is source of truth
+      titleConvo: true
+      titleModel: "gpt-4o-mini"
+      summarize: false
+      forcePrompt: false
+      modelDisplayLabel: "Hive"
+      addParams: {}
+      dropParams: []
+      headers:
+        X-Hive-Source: "chat-app"
