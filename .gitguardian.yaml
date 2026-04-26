@@ -1,0 +1,30 @@
+version: 2
+
+# GitGuardian (ggshield) config — whitelist intentional sample/documentation
+# values in the Phase 19 LibreChat fork. These files are NOT deployable config:
+#
+#   - apps/chat-app/.env.upstream.example
+#       Verbatim upstream LibreChat v0.7.9 reference env file, preserved for
+#       upgrade diff tracking per .planning/v1.1-chatapp/LIBRECHAT-UPGRADE-PLAYBOOK.md.
+#       Contains LibreChat upstream's documentation sample MEILI_MASTER_KEY +
+#       JWT secrets (their docs, not real secrets).
+#
+#   - apps/chat-app/.devcontainer/**
+#       Upstream LibreChat devcontainer scaffolding with sample MEILI_MASTER_KEY.
+#       Hive does not use the devcontainer track (we use docker compose +
+#       deploy/docker/Dockerfile for Phase 19); preserved unmodified for
+#       upstream-merge cleanliness.
+#
+#   - apps/chat-app/.env.example
+#       Initial vendor commit (3988db27) included full upstream sample env;
+#       feat(19-02) commit (6d6e6931) replaced it with Hive-curated subset
+#       using `replace-me-phase-19-only` placeholders. Path is allowlisted for
+#       PR scans because GG inspects every commit in the PR range.
+#
+# Live Hive secrets (Stripe, bKash, SSLCommerz, Supabase, OpenRouter, Groq) are
+# NOT in any of these paths — they live in /.env (gitignored) and CI secrets.
+
+paths-ignore:
+  - apps/chat-app/.env.upstream.example
+  - apps/chat-app/.devcontainer/**
+  - apps/chat-app/.env.example

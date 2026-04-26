@@ -1,3 +1,7 @@
+/* eslint-disable i18next/no-literal-string --
+ * Intentional: bilingual native labels for the first-run picker. User cannot
+ * read i18n-routed strings until *after* this picker resolves their locale.
+ */
 import * as Dialog from '@radix-ui/react-dialog';
 import { useFirstRunLocale, type SupportedLocale } from '~/hooks/useFirstRunLocale';
 

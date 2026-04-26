@@ -8,7 +8,11 @@ import { useTranslation } from 'react-i18next';
  * modal blocks only once per browser. Phase 20 will bridge this hook to
  * Supabase user prefs once auth swap lands.
  *
- * Storage key: `hive_locale_v1`
+ * Storage key: `hive_locale_v1` (Hive-specific marker — first-run modal flag)
+ * Plus mirrors to upstream's canonical `lang` localStorage key + `lang` cookie
+ * so `client/src/store/language.ts` (Recoil atomWithLocalStorage) and
+ * `client/src/hooks/useLocalize.ts` agree with first-run choice.
+ *
  * Supported locales: bn-BD (Bengali — Bangladesh), en-US (English — US alias for upstream `en`)
  *
  * Note on locale code mapping:
@@ -18,6 +22,8 @@ import { useTranslation } from 'react-i18next';
  */
 
 const LOCALE_KEY = 'hive_locale_v1';
+const CANONICAL_LANG_KEY = 'lang';
+const COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365;
 
 export type SupportedLocale = 'bn-BD' | 'en-US';
 const SUPPORTED: SupportedLocale[] = ['bn-BD', 'en-US'];
@@ -49,13 +55,21 @@ export function useFirstRunLocale() {
       if (!SUPPORTED.includes(next)) {
         return;
       }
+      const resolved = resolveResourceKey(next);
       try {
         window.localStorage.setItem(LOCALE_KEY, next);
+        // Mirror to upstream canonical `lang` atom (atomWithLocalStorage uses JSON.stringify on writes).
+        window.localStorage.setItem(CANONICAL_LANG_KEY, JSON.stringify(resolved));
       } catch {
         // localStorage unavailable (private mode, quota); fall through — language switch still applies.
       }
+      try {
+        document.cookie = `${CANONICAL_LANG_KEY}=${encodeURIComponent(resolved)}; path=/; max-age=${COOKIE_MAX_AGE_SECONDS}; samesite=lax`;
+      } catch {
+        // Cookie write failed (SSR / sandboxed iframe); language change below still applies in-memory.
+      }
       setLocaleState(next);
-      void i18n.changeLanguage(resolveResourceKey(next));
+      void i18n.changeLanguage(resolved);
       // Phase 20 bridge: forward `next` to Supabase user prefs once auth swap lands.
     },
     [i18n],

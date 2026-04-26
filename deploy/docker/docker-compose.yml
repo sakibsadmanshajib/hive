@@ -200,6 +200,13 @@ services:
       HIVE_EDGE_API_KEY: ${HIVE_EDGE_API_KEY:-}
       JWT_SECRET: ${CHAT_APP_JWT_SECRET:-replace-me-phase-19-only}
       JWT_REFRESH_SECRET: ${CHAT_APP_JWT_REFRESH_SECRET:-replace-me-phase-19-only}
+      # CREDS_KEY (32-byte hex / 64 chars) + CREDS_IV (16-byte hex / 32 chars) drive
+      # AES-256-CBC encryption in apps/chat-app/packages/api/src/crypto/encryption.ts
+      # for user-stored secrets (UserService.encrypt, PluginService.encrypt). Without
+      # these, any user/plugin credential save throws at runtime. Defaults are
+      # placeholder Phase-19 dev values — staging/prod MUST set real random values.
+      CREDS_KEY: ${CHAT_APP_CREDS_KEY:-replace-me-phase-19-only}
+      CREDS_IV: ${CHAT_APP_CREDS_IV:-replace-me-phase-19-only}
       DOMAIN_CLIENT: ${CHAT_APP_DOMAIN_CLIENT:-http://localhost:3080}
       DOMAIN_SERVER: ${CHAT_APP_DOMAIN_SERVER:-http://localhost:3080}
     depends_on:
