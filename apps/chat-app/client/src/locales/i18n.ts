@@ -35,6 +35,8 @@ import translationHy from './hy/translation.json';
 import translationFi from './fi/translation.json';
 import translationZh_Hans from './zh-Hans/translation.json';
 import translationZh_Hant from './zh-Hant/translation.json';
+// Hive Phase 19: bn-BD skeleton scaffolded from en (Phase 23 owns translations).
+import translationBn_BD from './bn-BD/translation.json';
 
 export const defaultNS = 'translation';
 
@@ -71,6 +73,8 @@ export const resources = {
   hu: { translation: translationHu },
   hy: { translation: translationHy },
   fi: { translation: translationFi },
+  // Hive Phase 19: bn-BD registered alongside upstream codes.
+  'bn-BD': { translation: translationBn_BD },
 } as const;
 
 i18n
