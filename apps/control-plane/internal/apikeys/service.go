@@ -311,6 +311,33 @@ func (s *Service) RotateKey(ctx context.Context, accountID, actorUserID, keyID u
 	}, nil
 }
 
+// GetLimits returns the per-key RPM/TPM and tier overrides. Caller must have
+// already passed the owner gate at the HTTP layer; this method enforces only
+// the account-scope gate via repository.
+func (s *Service) GetLimits(ctx context.Context, accountID, keyID uuid.UUID) (KeyLimits, error) {
+	limits, err := s.repo.GetLimits(ctx, accountID, keyID)
+	if err != nil {
+		return KeyLimits{}, fmt.Errorf("apikeys: get limits: %w", err)
+	}
+	return limits, nil
+}
+
+// UpdateLimits writes the per-key RPM/TPM and tier overrides. Caller must have
+// already passed the owner gate at the HTTP layer. The snapshot cache is
+// invalidated after a successful write so the next hot-path resolve picks up
+// the new values without staleness.
+func (s *Service) UpdateLimits(ctx context.Context, accountID, keyID uuid.UUID, input KeyLimitsInput) (KeyLimits, error) {
+	limits, err := s.repo.UpdateLimits(ctx, accountID, keyID, input)
+	if err != nil {
+		return KeyLimits{}, fmt.Errorf("apikeys: update limits: %w", err)
+	}
+	key, err := s.repo.GetKey(ctx, accountID, keyID)
+	if err == nil {
+		_ = s.invalidateSnapshot(ctx, key.TokenHash)
+	}
+	return limits, nil
+}
+
 // UpdatePolicy updates the per-key policy configuration.
 func (s *Service) UpdatePolicy(ctx context.Context, accountID, actorUserID, keyID uuid.UUID, input UpdatePolicyInput) (KeyPolicy, error) {
 	policy, err := s.repo.UpsertPolicy(ctx, accountID, keyID, input)

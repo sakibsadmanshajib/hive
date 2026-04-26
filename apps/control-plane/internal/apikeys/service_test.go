@@ -16,6 +16,7 @@ type stubRepo struct {
 	budgetWindows     map[string]BudgetWindow
 	accountRatePolicy map[uuid.UUID]RatePolicy
 	keyRatePolicy     map[uuid.UUID]RatePolicy
+	keyLimits         map[uuid.UUID]KeyLimits
 	events            []KeyEvent
 }
 
@@ -26,6 +27,7 @@ func newStubRepo() *stubRepo {
 		budgetWindows:     make(map[string]BudgetWindow),
 		accountRatePolicy: make(map[uuid.UUID]RatePolicy),
 		keyRatePolicy:     make(map[uuid.UUID]RatePolicy),
+		keyLimits:         make(map[uuid.UUID]KeyLimits),
 	}
 }
 
@@ -294,6 +296,58 @@ func (r *stubRepo) MarkLastUsed(_ context.Context, apiKeyID uuid.UUID, usedAt ti
 	key.LastUsedAt = &usedAt
 	r.keys[apiKeyID] = key
 	return nil
+}
+
+func (r *stubRepo) GetLimits(_ context.Context, accountID, keyID uuid.UUID) (KeyLimits, error) {
+	key, ok := r.keys[keyID]
+	if !ok || key.AccountID != accountID {
+		return KeyLimits{}, ErrNotFound
+	}
+	if existing, ok := r.keyLimits[keyID]; ok {
+		return existing, nil
+	}
+	return KeyLimits{
+		APIKeyID:      keyID,
+		RPM:           60,
+		TPM:           120000,
+		TierOverrides: map[string]TierLimit{},
+	}, nil
+}
+
+func (r *stubRepo) UpdateLimits(_ context.Context, accountID, keyID uuid.UUID, input KeyLimitsInput) (KeyLimits, error) {
+	if input.RPM < 0 || input.RPM > RateLimitRPMMax {
+		return KeyLimits{}, ErrLimitsOutOfRange
+	}
+	if input.TPM < 0 || input.TPM > RateLimitTPMMax {
+		return KeyLimits{}, ErrLimitsOutOfRange
+	}
+	for tier, lim := range input.TierOverrides {
+		if !IsValidTierName(tier) {
+			return KeyLimits{}, ErrLimitsOutOfRange
+		}
+		if lim.RPM < 0 || lim.RPM > RateLimitRPMMax {
+			return KeyLimits{}, ErrLimitsOutOfRange
+		}
+		if lim.TPM < 0 || lim.TPM > RateLimitTPMMax {
+			return KeyLimits{}, ErrLimitsOutOfRange
+		}
+	}
+	key, ok := r.keys[keyID]
+	if !ok || key.AccountID != accountID {
+		return KeyLimits{}, ErrNotFound
+	}
+	tiers := input.TierOverrides
+	if tiers == nil {
+		tiers = map[string]TierLimit{}
+	}
+	out := KeyLimits{
+		APIKeyID:      keyID,
+		RPM:           input.RPM,
+		TPM:           input.TPM,
+		TierOverrides: tiers,
+	}
+	r.keyLimits[keyID] = out
+	return out, nil
 }
 
 func budgetWindowKey(apiKeyID uuid.UUID, budgetKind string, windowStart time.Time) string {

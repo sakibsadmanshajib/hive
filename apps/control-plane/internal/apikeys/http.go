@@ -2,6 +2,7 @@ package apikeys
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -11,6 +12,25 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 )
+
+func errIs(err, target error) bool { return errors.Is(err, target) }
+
+func limitsResponse(l KeyLimits) map[string]interface{} {
+	tiers := l.TierOverrides
+	if tiers == nil {
+		tiers = map[string]TierLimit{}
+	}
+	tierMap := make(map[string]map[string]int, len(tiers))
+	for tier, lim := range tiers {
+		tierMap[tier] = map[string]int{"rpm": lim.RPM, "tpm": lim.TPM}
+	}
+	return map[string]interface{}{
+		"api_key_id":     l.APIKeyID.String(),
+		"rpm":            l.RPM,
+		"tpm":            l.TPM,
+		"tier_overrides": tierMap,
+	}
+}
 
 // Handler handles all API-key HTTP routes.
 type Handler struct {
@@ -32,6 +52,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && path == base:
 		h.handleListKeys(w, r)
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/limits"):
+		h.handleGetLimits(w, r)
+	case r.Method == http.MethodPut && strings.HasSuffix(path, "/limits"):
+		h.handleUpdateLimits(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, base+"/"):
 		h.handleGetKey(w, r)
 	case r.Method == http.MethodPost && path == base:
@@ -375,6 +399,64 @@ func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) handleGetLimits(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r)
+	if !ok {
+		return
+	}
+	keyID, ok := extractKeyID(w, r)
+	if !ok {
+		return
+	}
+	limits, err := h.svc.GetLimits(r.Context(), vc.CurrentAccount.ID, keyID)
+	if err != nil {
+		handleKeyError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, limitsResponse(limits))
+}
+
+func (h *Handler) handleUpdateLimits(w http.ResponseWriter, r *http.Request) {
+	vc, ok := h.resolveViewerContext(w, r)
+	if !ok {
+		return
+	}
+	keyID, ok := extractKeyID(w, r)
+	if !ok {
+		return
+	}
+
+	var body struct {
+		RPM           int                  `json:"rpm"`
+		TPM           int                  `json:"tpm"`
+		TierOverrides map[string]TierLimit `json:"tier_overrides"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	limits, err := h.svc.UpdateLimits(r.Context(), vc.CurrentAccount.ID, keyID, KeyLimitsInput{
+		RPM:           body.RPM,
+		TPM:           body.TPM,
+		TierOverrides: body.TierOverrides,
+	})
+	if err != nil {
+		switch {
+		case errIs(err, ErrLimitsOutOfRange):
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{
+				"error": "rate-limit value out of range",
+				"code":  "limits_out_of_range",
+			})
+		default:
+			handleKeyError(w, err)
+		}
+		return
+	}
+
+	writeJSON(w, http.StatusOK, limitsResponse(limits))
+}
+
 func (h *Handler) handleInternalResolve(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		TokenHash string `json:"token_hash"`
@@ -431,14 +513,14 @@ func extractKeyID(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 }
 
 func handleKeyError(w http.ResponseWriter, err error) {
-	switch err {
-	case ErrNotFound:
+	switch {
+	case errors.Is(err, ErrNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "key not found"})
-	case ErrRevoked:
+	case errors.Is(err, ErrRevoked):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "key is revoked"})
-	case ErrDisabled:
+	case errors.Is(err, ErrDisabled):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "key is not disabled"})
-	case ErrNotActive:
+	case errors.Is(err, ErrNotActive):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "key is not active"})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

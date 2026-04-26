@@ -114,6 +114,54 @@ type RatePolicy struct {
 	RollingFiveHourLimit  int64 `json:"rolling_five_hour_limit"`
 	WeeklyLimit           int64 `json:"weekly_limit"`
 	FreeTokenWeightTenths int   `json:"free_token_weight_tenths"`
+	// TierOverrides carries per-tier RPM/TPM overrides that take precedence over
+	// env-driven tier defaults at hot-path enforcement. Tiers absent from this
+	// map fall through to env defaults. Tiers present override env defaults.
+	TierOverrides map[string]TierLimit `json:"tier_overrides,omitempty"`
+}
+
+// TierLimit is a per-tier override pair. Either field at zero means
+// "no override for that dimension; use env default".
+type TierLimit struct {
+	RPM int `json:"rpm"`
+	TPM int `json:"tpm"`
+}
+
+// KeyLimitsInput carries the user-supplied per-key limits update.
+type KeyLimitsInput struct {
+	RPM           int                  `json:"rpm"`
+	TPM           int                  `json:"tpm"`
+	TierOverrides map[string]TierLimit `json:"tier_overrides"`
+}
+
+// KeyLimits is the read model for a key's rate-limit configuration.
+type KeyLimits struct {
+	APIKeyID      uuid.UUID            `json:"api_key_id"`
+	RPM           int                  `json:"rpm"`
+	TPM           int                  `json:"tpm"`
+	TierOverrides map[string]TierLimit `json:"tier_overrides"`
+}
+
+// Range bounds enforced at the application layer to keep the DB CHECK
+// surface small and to avoid drift between SQL constraints and Go validation.
+const (
+	RateLimitRPMMax = 100000
+	RateLimitTPMMax = 10000000
+)
+
+// ErrLimitsOutOfRange is returned when an UpdateLimits call carries an
+// RPM/TPM value outside the allowed bounds.
+var ErrLimitsOutOfRange = errors.New("apikeys: rate-limit value out of range")
+
+// IsValidTierName returns true if the tier name is one of the four known
+// hot-path tiers. Phase 12 ships with a fixed enumeration; Phase 20 may
+// extend the resolver but the enumeration stays stable.
+func IsValidTierName(name string) bool {
+	switch name {
+	case "guest", "unverified", "verified", "credited":
+		return true
+	}
+	return false
 }
 
 // ExpirationSummary is the customer-visible expiration projection for a key.
