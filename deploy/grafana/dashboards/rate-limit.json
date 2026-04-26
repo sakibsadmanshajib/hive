@@ -1,0 +1,64 @@
+{
+  "annotations": { "list": [] },
+  "description": "Hive — hot-path rate-limit rejection telemetry (Phase 12 / KEY-05).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Rejection rate by tier",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum by (tier) (rate(rate_limit_exceeded_total[5m]))",
+          "legendFormat": "{{tier}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list" }, "tooltip": { "mode": "multi" } }
+    },
+    {
+      "title": "Top 10 keys by 5m rejection rate",
+      "type": "table",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "topk(10, sum by (key_id, tier) (rate(rate_limit_exceeded_total[5m])))",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "title": "Rejection breakdown by limit_type",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum by (limit_type) (rate(rate_limit_exceeded_total[5m]))",
+          "legendFormat": "{{limit_type}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] }
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["hive", "rate-limit", "phase-12"],
+  "templating": { "list": [] },
+  "time": { "from": "now-6h", "to": "now" },
+  "timepicker": {},
+  "timezone": "",
+  "title": "Hive — Rate Limit",
+  "uid": "hive-rate-limit",
+  "version": 1
+}
