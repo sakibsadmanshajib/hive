@@ -1,6 +1,20 @@
-# Phase 19: Chat-App — Fork & Strip Lobe Chat (Pinned Version) + Language Picker — Research
+> ⚠️ **DEPRECATED — DO NOT FOLLOW THIS DOCUMENT FOR EXECUTION.**
+>
+> Phase 19 was pivoted from Lobe Chat to **LibreChat (MIT)** on 2026-04-25 per
+> [`../../v1.1-chatapp/LICENSE-DECISION.md`](../../v1.1-chatapp/LICENSE-DECISION.md).
+> The active research artifact is **[RESEARCH-LIBRECHAT.md](RESEARCH-LIBRECHAT.md)**;
+> the executable plan is **[PLAN.md](PLAN.md)**.
+>
+> This file is retained as the historical record of the rejected Lobe Chat alternative
+> (license blocker + Cloudflare Workers incompatibility). Executor agents MUST NOT
+> read this document for implementation guidance — all references to Lobe Chat,
+> LobeHub Community License, Apache-2.0, Workers/Fly fallback, Drizzle/Postgres-only
+> schema, and `lobehub/lobe-chat` upstream are obsolete.
+
+# Phase 19: Chat-App — Fork & Strip Lobe Chat (Pinned Version) + Language Picker — Research [DEPRECATED]
 
 **Researched:** 2026-04-25
+**Status:** Superseded 2026-04-25 — see `RESEARCH-LIBRECHAT.md`.
 **Domain:** Next.js 15 fork integration, multi-provider chat UI, Drizzle/Postgres schema migration, OpenNext+CF Workers compatibility, i18n insertion, license compliance
 **Confidence:** HIGH on tag selection / provider strip surface / schema layout / Workers blockers; MEDIUM on exact base-URL config behavior; **HIGH** on license-derivative-work risk.
 
