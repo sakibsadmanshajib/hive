@@ -40,6 +40,13 @@ RUN mkdir -p /app/client/public/images /app/api/logs
 # Node API setup
 EXPOSE 3080
 ENV HOST=0.0.0.0
+
+# Hive Phase 19: healthcheck against upstream `/health` route
+# (api/server/index.js:54 — `app.get('/health', ...)`).
+# wget ships with node:20-alpine via busybox; no extra apk install needed.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- http://127.0.0.1:3080/health || exit 1
+
 CMD ["npm", "run", "backend"]
 
 # Optional: for client with nginx routing
