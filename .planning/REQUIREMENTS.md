@@ -112,6 +112,25 @@ remains **Pending** until the target phase produces an evidence file.
 
 ---
 
+## v1.1 Requirements (in flight)
+
+### Routing & Catalog
+
+| ID | Phase | Status | Evidence |
+|----|-------|--------|----------|
+| CAP-16-01 | 16 | Satisfied | [evidence/CAP-16-01.md](phases/16-capability-columns-fix/evidence/CAP-16-01.md) |
+
+CAP-16-01 closes the v1.0 latent bug formerly recorded in `CLAUDE.md` Known
+Issues §1 (`ensureCapabilityColumns` targeting `route_capabilities` instead
+of `provider_capabilities`). The bug was eliminated by Phase 14's
+media-columns work (DDL moved to
+`supabase/migrations/20260414_01_provider_capabilities_media_columns.sql`,
+which targets `public.provider_capabilities`); Phase 16 formally verifies
+that closure with a regression-guard test
+(`TestRoutingRepositoryDoesNotRunCapabilityDDL`) and an evidence file.
+
+---
+
 ## Out of Scope
 
 | Feature | Reason |
