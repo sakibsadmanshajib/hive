@@ -66,6 +66,8 @@ bower_components/
 #config file
 librechat.yaml
 librechat.yml
+# Hive override (Phase 19): we DO track librechat.yaml — single-provider lock + FX zero-leak guard.
+!librechat.yaml
 
 # Environment
 .npmrc
@@ -73,6 +75,8 @@ librechat.yml
 my.secrets
 !**/.env.example
 !**/.env.test.example
+# Hive override (Phase 19): preserve upstream env reference for upgrade diff'ing.
+!**/.env.upstream.example
 cache.json
 api/data/
 owner.yml
