@@ -34,6 +34,13 @@ type BatchTaskQueue interface {
 	Enqueue(ctx context.Context, payload BatchPollPayload) error
 }
 
+// BatchExecuteQueue enqueues a local-executor task (TypeBatchExecute). The
+// production AsynqQueue implements both BatchTaskQueue and BatchExecuteQueue.
+// Kept as a separate interface so tests can fake one without the other.
+type BatchExecuteQueue interface {
+	EnqueueExecute(ctx context.Context, payload BatchExecutePayload) error
+}
+
 type BatchReservationReleaser interface {
 	ReleaseReservation(ctx context.Context, input accounting.ReleaseReservationInput) (accounting.Reservation, error)
 }
@@ -43,10 +50,12 @@ type Submitter struct {
 	routing        BatchRouteSelector
 	storage        BatchInputStorage
 	queue          BatchTaskQueue
+	executeQueue   BatchExecuteQueue
 	accounting     BatchReservationReleaser
 	litellmBaseURL string
 	litellmKey     string
 	bucket         string
+	executorKind   string
 	httpClient     *http.Client
 	now            func() time.Time
 }
@@ -68,9 +77,25 @@ func NewSubmitter(
 		litellmBaseURL: strings.TrimRight(litellmBaseURL, "/"),
 		litellmKey:     litellmKey,
 		bucket:         bucket,
+		executorKind:   "upstream", // legacy default; main.go calls WithLocalExecutor to enable local path.
 		httpClient:     &http.Client{Timeout: 60 * time.Second},
 		now:            time.Now,
 	}
+}
+
+// WithLocalExecutor wires the local-executor path. The submitter consults
+// kind ("auto"|"local"|"upstream") plus the route's provider to decide
+// whether to enqueue a TypeBatchExecute task or run the legacy LiteLLM
+// upstream upload path. See PLAN.md Phase 15.
+func (s *Submitter) WithLocalExecutor(executeQueue BatchExecuteQueue, kind string) *Submitter {
+	s.executeQueue = executeQueue
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "local", "upstream", "auto":
+		s.executorKind = strings.ToLower(strings.TrimSpace(kind))
+	default:
+		s.executorKind = "auto"
+	}
+	return s
 }
 
 func (s *Submitter) SubmitBatch(ctx context.Context, batch filestore.Batch) (filestore.Batch, error) {
@@ -85,6 +110,13 @@ func (s *Submitter) SubmitBatch(ctx context.Context, batch filestore.Batch) (fil
 	})
 	if err != nil {
 		return s.failSubmission(ctx, batch, fmt.Errorf("select batch route: %w", err))
+	}
+
+	// Phase 15: branch on executor strategy. The local executor path bypasses
+	// LiteLLM's /v1/files + /v1/batches and processes the JSONL line-by-line
+	// via /v1/chat/completions. See PLAN.md Phase 15 + DECISIONS.md Q1.
+	if s.shouldUseLocalExecutor(route) {
+		return s.submitLocal(ctx, batch, inputFile, route)
 	}
 
 	upstreamFileID, err := s.uploadUpstreamBatchFile(ctx, inputFile, route)
@@ -331,4 +363,52 @@ func stringPointer(value string) *string {
 	}
 	copy := value
 	return &copy
+}
+
+// shouldUseLocalExecutor decides between local executor vs LiteLLM upstream
+// upload path. Order:
+//  1. Env override BATCH_EXECUTOR_KIND=local|upstream is honored verbatim.
+//  2. "auto" (default) selects local for non-OpenAI/Anthropic providers
+//     (openrouter, groq, etc.) and upstream for OpenAI/Azure/Vertex/Anthropic.
+func (s *Submitter) shouldUseLocalExecutor(route routing.SelectionResult) bool {
+	if s.executeQueue == nil {
+		return false
+	}
+	switch s.executorKind {
+	case "local":
+		return true
+	case "upstream":
+		return false
+	}
+	provider := strings.ToLower(strings.TrimSpace(route.Provider))
+	switch provider {
+	case "openai", "azure", "vertex_ai", "vertex", "anthropic":
+		return false
+	default:
+		return true
+	}
+}
+
+// submitLocal enqueues a TypeBatchExecute task for the local executor and
+// transitions the batch row to in_progress so subsequent submissions are
+// idempotent and the executor can claim it.
+func (s *Submitter) submitLocal(ctx context.Context, batch filestore.Batch, _ *filestore.File, route routing.SelectionResult) (filestore.Batch, error) {
+	now := s.now().UTC()
+	updates := map[string]interface{}{
+		"executor_kind":  "local",
+		"in_progress_at": now.Unix(),
+	}
+	if err := s.files.UpdateBatchStatus(ctx, batch.ID, "in_progress", updates); err != nil {
+		return batch, fmt.Errorf("batchstore: update local batch status: %w", err)
+	}
+	if err := s.executeQueue.EnqueueExecute(ctx, BatchExecutePayload{
+		BatchID:   batch.ID,
+		AccountID: batch.AccountID,
+	}); err != nil {
+		return batch, fmt.Errorf("batchstore: enqueue local execute: %w", err)
+	}
+	batch.Status = "in_progress"
+	batch.Provider = route.Provider
+	batch.InProgressAt = &now
+	return batch, nil
 }

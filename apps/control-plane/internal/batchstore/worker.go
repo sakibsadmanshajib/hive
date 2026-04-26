@@ -3,6 +3,7 @@ package batchstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
+	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 )
 
@@ -44,6 +46,15 @@ type BatchWorker struct {
 	storage        StorageUploader
 	bucket         string
 	httpClient     *http.Client
+	localExecutor  *executor.Executor
+}
+
+// WithLocalExecutor wires the local executor entry point used by
+// HandleBatchExecute. The worker is unaffected when the executor is nil
+// (HandleBatchExecute returns an error if invoked).
+func (w *BatchWorker) WithLocalExecutor(ex *executor.Executor) *BatchWorker {
+	w.localExecutor = ex
+	return w
 }
 
 // NewBatchWorker creates a new BatchWorker.
@@ -457,6 +468,30 @@ func (w *BatchWorker) fetchUpstreamBatch(ctx context.Context, upstreamBatchID st
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return result, nil
+}
+
+// HandleBatchExecute processes a batch:execute Asynq task by delegating to
+// the local executor. ctx.Canceled (graceful shutdown) is returned as an
+// error so Asynq re-enqueues; terminal failures mark the batch failed.
+func (w *BatchWorker) HandleBatchExecute(ctx context.Context, t *asynq.Task) error {
+	if w.localExecutor == nil {
+		return fmt.Errorf("batchstore: local executor not wired")
+	}
+	var payload BatchExecutePayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		return fmt.Errorf("batchstore: unmarshal execute payload: %w", err)
+	}
+	if err := w.localExecutor.Run(ctx, payload.BatchID); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		log.Printf("batchstore: local execute %s failed: %v", payload.BatchID, err)
+		_ = w.fileService.UpdateBatchStatus(ctx, payload.BatchID, "failed", map[string]interface{}{
+			"failed_at": time.Now().UTC().Unix(),
+		})
+		return fmt.Errorf("batch execute failed: %w", err)
+	}
+	return nil
 }
 
 // downloadUpstreamFile downloads the content of an upstream file and returns a reader + metadata.

@@ -1,3 +1,16 @@
+# ─── Phase 15: Local batch executor ───
+# OpenRouter and Groq chat-completions routes ship with
+# `route_capabilities.executor_kind = 'local'` (set in supabase/migrations/
+# 0015_batch_local_executor.sql). The control-plane submitter routes
+# `POST /v1/batches` for these providers to the in-process executor (which
+# calls `POST /v1/chat/completions` line-by-line via this LiteLLM gateway)
+# instead of LiteLLM's `POST /v1/files purpose=batch` upload path — that
+# path is only supported by openai/azure/vertex_ai/anthropic providers.
+# No `files_settings` block is required for the openrouter/groq batch
+# success-path under this design. See
+# .planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md
+# for the original constraint.
+
 model_list:
   # OpenRouter primary routes (chat).
   #

@@ -223,6 +223,47 @@ func (r *Repository) CreateBatch(ctx context.Context, b Batch) error {
 	return nil
 }
 
+// GetBatchByID retrieves a batch by ID without an account-id scope check —
+// for server-side workers (e.g., the local batch executor) that need to load
+// a batch row before they know which account owns it.
+func (r *Repository) GetBatchByID(ctx context.Context, id string) (*Batch, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, account_id, input_file_id, output_file_id, error_file_id,
+		       endpoint, completion_window, status, provider, upstream_batch_id, reservation_id, api_key_id, model_alias,
+		       estimated_credits, actual_credits,
+		       request_counts_total, request_counts_completed, request_counts_failed,
+		       created_at, in_progress_at, completed_at, failed_at, cancelled_at, expires_at
+		FROM batches
+		WHERE id = $1
+	`, id)
+	b, err := scanBatch(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("filestore: get batch by id: %w", err)
+	}
+	return &b, nil
+}
+
+// GetFileByID retrieves a file by ID without an account-id scope check —
+// counterpart to GetBatchByID for the local batch executor.
+func (r *Repository) GetFileByID(ctx context.Context, id string) (*File, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT id, account_id, purpose, filename, bytes, status, storage_path, created_at, expires_at
+		FROM files
+		WHERE id = $1
+	`, id)
+	f, err := scanFile(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("filestore: get file by id: %w", err)
+	}
+	return &f, nil
+}
+
 // GetBatch retrieves a batch by ID and account ID.
 func (r *Repository) GetBatch(ctx context.Context, id, accountID string) (*Batch, error) {
 	row := r.pool.QueryRow(ctx, `
