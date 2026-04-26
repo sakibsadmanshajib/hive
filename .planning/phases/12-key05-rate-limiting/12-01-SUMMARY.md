@@ -114,4 +114,16 @@ None. Toolchain Docker container ran without external auth.
 - Load p99 test (`tests/load/ratelimit_p99_test.go`) — same; defer to Phase 24.
 - Prometheus counter emission code path — single follow-up commit.
 
-## Self-Check
+## Self-Check: PASSED
+
+- supabase/migrations/20260425_01_api_key_rate_limits.sql — FOUND
+- apps/edge-api/internal/authz/tier.go — FOUND
+- apps/edge-api/internal/authz/ratelimit.go (CheckWithTier) — FOUND
+- apps/control-plane/internal/apikeys/http.go (limits routes) — FOUND
+- apps/web-console/app/console/api-keys/[id]/limits/page.tsx — FOUND
+- deploy/prometheus/alerts/rate-limit.yml — FOUND, validated by promtool
+- deploy/grafana/dashboards/rate-limit.json — FOUND
+- 12-VERIFICATION.md — FOUND
+- REQUIREMENTS.md KEY-05-01..07 — Satisfied
+- Commits per task: 3 (12-01 control-plane, 12-02 edge-api, 12-03 ui+infra+planning)
+
