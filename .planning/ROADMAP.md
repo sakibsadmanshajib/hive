@@ -35,7 +35,7 @@ Full breakdown: `.planning/milestones/v1.0-ROADMAP.md`
 
 - [ ] **Phase 11: Compliance, Verification & Artifact Cleanup** — Remove `amount_usd` from BD checkout, formal VERIFICATION.md for Phases 2 & 3, live-verify analytics/monitoring, close AUTH-01..04, BILL-01/02/04, CONS-03, PRIV-01, OPS-01.
 - [ ] **Phase 12: KEY-05 Hot-Path Rate Limiting** — Edge-enforced account-tier + per-key rate limits; close KEY-02 + KEY-05.
-- [ ] **Phase 13: Console Integration Fixes** — Web-console proxy routes for checkout + API key mutations; close BILL-03/07, CONS-01/02, KEY-01/03.
+- [x] **Phase 13: Console Integration Fixes** — Audit-first web-console integration sweep; FX/USD leak strip on customer-surface `Invoice` interface, strict-TS cast removal, `lib/control-plane/types.ts` re-export shim, BDT-only billing + whole-console FX-guard Playwright specs. Closes CONSOLE-13-01..10. Six hand-offs filed to Phases 14/17/18 (fixture-seed flake, control-plane FX response strip, tier-aware viewer-gates). Shipped 2026-04-27.
 - [ ] **Phase 14: Payments, Invoicing & Budget Integration** — Invoice-row creation on payment success + budget threshold enforcement on spend/grant paths; close BILL-05/06.
 
 Plus four tech-debt items from v1.0 (see `.planning/v1.1-DEFERRED-SCOPE.md`):
