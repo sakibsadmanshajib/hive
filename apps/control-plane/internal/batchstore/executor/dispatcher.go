@@ -105,10 +105,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 		return d.errResult(line.CustomID, "invalid_request",
 			"method must be POST and url must be /v1/chat/completions", 1)
 	}
-	model, err := extractModel(line.Body)
-	if err != nil {
+	if _, err := extractModel(line.Body); err != nil {
 		return d.errResult(line.CustomID, "invalid_request",
 			"request body missing or invalid model field", 1)
+	}
+	alias := strings.TrimSpace(line.Alias)
+	if alias == "" {
+		return d.errResult(line.CustomID, "invalid_request",
+			"missing batch model alias", 1)
 	}
 
 	backoff := []time.Duration{100 * time.Millisecond, 400 * time.Millisecond, 1600 * time.Millisecond}
@@ -117,7 +121,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 	for attempt := 1; attempt <= d.cfg.MaxRetries; attempt++ {
 		callCtx, cancel := context.WithTimeout(ctx, d.cfg.LineTimeout)
 		d.bumpInFlight(+1)
-		body, usage, status, callErr := d.inference.ChatCompletion(callCtx, model, line.Body)
+		body, usage, status, callErr := d.inference.ChatCompletion(callCtx, alias, line.Body)
 		d.bumpInFlight(-1)
 		cancel()
 

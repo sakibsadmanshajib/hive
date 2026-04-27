@@ -103,6 +103,7 @@ func TestDispatcher_BoundedConcurrency(t *testing.T) {
 				Method:   "POST",
 				URL:      "/v1/chat/completions",
 				Body:     mustBody(t, "alias-1", fmt.Sprintf("p%d", i)),
+				Alias:    "alias-1",
 			}
 		}
 		close(in)
@@ -149,6 +150,7 @@ func TestDispatcher_Retry503ThenSuccess(t *testing.T) {
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
 		Body:     mustBody(t, "alias-1", ""),
+		Alias:    "alias-1",
 	})
 	if res.Error != nil {
 		t.Fatalf("expected success after retries, got error %+v", res.Error)
@@ -181,6 +183,7 @@ func TestDispatcher_4xxNoRetry(t *testing.T) {
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
 		Body:     mustBody(t, "alias-1", ""),
+		Alias:    "alias-1",
 	})
 	if res.Output != nil {
 		t.Fatalf("expected error, got success")
@@ -222,6 +225,7 @@ func TestDispatcher_LineTimeout(t *testing.T) {
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
 		Body:     mustBody(t, "alias-1", ""),
+		Alias:    "alias-1",
 	})
 	elapsed := time.Since(start)
 	if elapsed > 1*time.Second {
@@ -250,6 +254,7 @@ func TestDispatcher_ProviderNameSanitized(t *testing.T) {
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
 		Body:     mustBody(t, "alias-1", ""),
+		Alias:    "alias-1",
 	})
 	if res.Error == nil {
 		t.Fatalf("expected error result")

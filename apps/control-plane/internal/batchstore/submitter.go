@@ -399,13 +399,13 @@ func (s *Submitter) submitLocal(ctx context.Context, batch filestore.Batch, _ *f
 		"in_progress_at": now.Unix(),
 	}
 	if err := s.files.UpdateBatchStatus(ctx, batch.ID, "in_progress", updates); err != nil {
-		return batch, fmt.Errorf("batchstore: update local batch status: %w", err)
+		return s.failSubmission(ctx, batch, fmt.Errorf("update local batch status: %w", err))
 	}
 	if err := s.executeQueue.EnqueueExecute(ctx, BatchExecutePayload{
 		BatchID:   batch.ID,
 		AccountID: batch.AccountID,
 	}); err != nil {
-		return batch, fmt.Errorf("batchstore: enqueue local execute: %w", err)
+		return s.failSubmission(ctx, batch, fmt.Errorf("enqueue local execute: %w", err))
 	}
 	batch.Status = "in_progress"
 	batch.Provider = route.Provider

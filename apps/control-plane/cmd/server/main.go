@@ -321,7 +321,8 @@ func main() {
 							batchStore := batchstore.NewPgxBatchStore(filestoreSvc, filestoreSvc)
 							lineStore := batchstore.NewPgxLineStore(pool)
 							reservationPort := batchstore.NewAccountingReservationAdapter(accountingSvc)
-							ex, exErr := batchexecutor.NewExecutor(execCfg, batchStore, lineStore, storageClient, storageCfg.FilesBucket, dispatcher, reservationPort)
+							fileRegistrar := batchstore.NewPgxFileRegistrar(filestoreSvc)
+							ex, exErr := batchexecutor.NewExecutor(execCfg, batchStore, lineStore, storageClient, fileRegistrar, storageCfg.FilesBucket, dispatcher, reservationPort)
 							if exErr != nil {
 								log.Printf("WARNING: batch executor init failed: %v", exErr)
 							} else {

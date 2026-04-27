@@ -273,6 +273,19 @@ func (f *fakeReservationLE) Settle(ctx context.Context, batchID, accountID, rese
 	return nil
 }
 
+// fakeFileRegistrarLE implements executor.FileRegistrar with synthetic IDs.
+type fakeFileRegistrarLE struct {
+	mu   sync.Mutex
+	next int
+}
+
+func (f *fakeFileRegistrarLE) Register(_ context.Context, _, _, _, _ string, _ int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.next++
+	return fmt.Sprintf("file-le-%d", f.next), nil
+}
+
 // fakeInfer implements executor.InferencePort.
 type fakeInfer struct {
 	response json.RawMessage
@@ -302,11 +315,12 @@ func TestBatchWorker_HandlesBatchExecuteTask(t *testing.T) {
 	}
 	bs := &fakeBatchSnapLE{snap: executor.BatchSnapshot{
 		ID: "bx", AccountID: uuid.New().String(), InputFilePath: "batches/bx/input.jsonl",
-		ReservationID: uuid.New().String(), ReservedCredits: 1000,
+		ReservationID: uuid.New().String(), ModelAlias: "alias-1", ReservedCredits: 1000,
 	}}
 	ls := newFakeLineStoreLE()
 	rp := &fakeReservationLE{}
-	ex, err := executor.NewExecutor(executor.Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 5 * time.Second}, bs, ls, storeFs, "hive-files", disp, rp)
+	fr := &fakeFileRegistrarLE{}
+	ex, err := executor.NewExecutor(executor.Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 5 * time.Second}, bs, ls, storeFs, fr, "hive-files", disp, rp)
 	if err != nil {
 		t.Fatal(err)
 	}

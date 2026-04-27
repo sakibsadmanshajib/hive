@@ -64,6 +64,15 @@ type ReservationPort interface {
 	Settle(ctx context.Context, batchID, accountID, reservationID string, actualCredits int64, overconsumed bool, terminalStatus string) error
 }
 
+// FileRegistrar persists a public.files row for an output/error artifact the
+// executor uploaded to object storage and returns the generated file ID.
+// MarkCompleted writes that ID into batches.output_file_id / error_file_id
+// (FK -> public.files.id), so this port must be invoked before MarkCompleted
+// — otherwise the FK references a non-existent row.
+type FileRegistrar interface {
+	Register(ctx context.Context, accountID, purpose, filename, storagePath string, bytes int64) (string, error)
+}
+
 // Executor is the local batch executor entry point. Constructed once at
 // startup and shared by the asynq worker handling the batch:execute task.
 type Executor struct {
@@ -71,6 +80,7 @@ type Executor struct {
 	batches      BatchStore
 	lines        LineStore
 	storage      StoragePort
+	files        FileRegistrar
 	bucket       string
 	dispatcher   *Dispatcher
 	reservations ReservationPort
@@ -81,11 +91,11 @@ type Executor struct {
 }
 
 // NewExecutor wires the executor with its ports.
-func NewExecutor(cfg Config, batches BatchStore, lines LineStore, storage StoragePort, bucket string, dispatcher *Dispatcher, reservations ReservationPort) (*Executor, error) {
+func NewExecutor(cfg Config, batches BatchStore, lines LineStore, storage StoragePort, files FileRegistrar, bucket string, dispatcher *Dispatcher, reservations ReservationPort) (*Executor, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if batches == nil || lines == nil || storage == nil || dispatcher == nil || reservations == nil {
+	if batches == nil || lines == nil || storage == nil || files == nil || dispatcher == nil || reservations == nil {
 		return nil, fmt.Errorf("executor: all ports are required")
 	}
 	if strings.TrimSpace(bucket) == "" {
@@ -96,6 +106,7 @@ func NewExecutor(cfg Config, batches BatchStore, lines LineStore, storage Storag
 		batches:      batches,
 		lines:        lines,
 		storage:      storage,
+		files:        files,
 		bucket:       bucket,
 		dispatcher:   dispatcher,
 		reservations: reservations,
@@ -191,10 +202,12 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 			if err := e.lines.UpsertPending(ctx, batchID, line.CustomID); err != nil {
 				log.Printf("executor: upsert pending %s/%s: %v", batchID, line.CustomID, err)
 			}
+			out := *line
+			out.Alias = batch.ModelAlias
 			select {
 			case <-ctx.Done():
 				return
-			case in <- *line:
+			case in <- out:
 			}
 		}
 		close(scanDone)
@@ -250,12 +263,27 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 	// Finalize uploads.
 	outputKey := e.outputKey(batchID)
 	errorKey := e.errorKey(batchID)
-	if _, err := output.Finalize(ctx, e.storage, e.bucket, outputKey, false); err != nil {
+	_, outputBytes, err := output.Finalize(ctx, e.storage, e.bucket, outputKey, false)
+	if err != nil {
 		return fmt.Errorf("executor: upload output: %w", err)
 	}
-	uploadedErrs, err := errs.Finalize(ctx, e.storage, e.bucket, errorKey, true)
+	uploadedErrs, errorBytes, err := errs.Finalize(ctx, e.storage, e.bucket, errorKey, true)
 	if err != nil {
 		return fmt.Errorf("executor: upload errors: %w", err)
+	}
+
+	// Register output/error artifacts in public.files so the FK targets in
+	// batches.output_file_id / error_file_id resolve to real rows.
+	outputFileID, err := e.files.Register(ctx, batch.AccountID, "batch_output", "output.jsonl", outputKey, outputBytes)
+	if err != nil {
+		return fmt.Errorf("executor: register output file: %w", err)
+	}
+	errorFileID := ""
+	if uploadedErrs {
+		errorFileID, err = e.files.Register(ctx, batch.AccountID, "batch_output", "errors.jsonl", errorKey, errorBytes)
+		if err != nil {
+			return fmt.Errorf("executor: register error file: %w", err)
+		}
 	}
 
 	// Settle credits.
@@ -270,11 +298,7 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 		return fmt.Errorf("executor: settle reservation: %w", err)
 	}
 
-	resolvedErrorKey := ""
-	if uploadedErrs {
-		resolvedErrorKey = errorKey
-	}
-	if err := e.batches.MarkCompleted(ctx, batchID, completed, failed, outputKey, resolvedErrorKey, overconsumed, time.Now().UTC()); err != nil {
+	if err := e.batches.MarkCompleted(ctx, batchID, completed, failed, outputFileID, errorFileID, overconsumed, time.Now().UTC()); err != nil {
 		return fmt.Errorf("executor: mark completed: %w", err)
 	}
 

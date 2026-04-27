@@ -25,6 +25,36 @@ type FileLookup interface {
 	GetFileByID(ctx context.Context, id string) (*filestore.File, error)
 }
 
+// FileCreator persists a public.files row for a server-side artifact (e.g.
+// the local executor's output.jsonl / errors.jsonl uploads). Concrete impl
+// is filestore.Service.CreateFile.
+type FileCreator interface {
+	CreateFile(ctx context.Context, accountID, purpose, filename string, bytes int64, storagePath string) (filestore.File, error)
+}
+
+// pgxFileRegistrar adapts filestore.Service.CreateFile to executor.FileRegistrar.
+type pgxFileRegistrar struct {
+	svc FileCreator
+}
+
+// NewPgxFileRegistrar wires the production FileRegistrar adapter.
+func NewPgxFileRegistrar(svc FileCreator) executor.FileRegistrar {
+	return &pgxFileRegistrar{svc: svc}
+}
+
+// Register creates a public.files row pointing at the executor's uploaded
+// artifact and returns the generated file ID.
+func (r *pgxFileRegistrar) Register(ctx context.Context, accountID, purpose, filename, storagePath string, bytes int64) (string, error) {
+	if r.svc == nil {
+		return "", fmt.Errorf("file registrar not configured")
+	}
+	f, err := r.svc.CreateFile(ctx, accountID, purpose, filename, bytes, storagePath)
+	if err != nil {
+		return "", fmt.Errorf("create file record: %w", err)
+	}
+	return f.ID, nil
+}
+
 // pgxBatchStore implements executor.BatchStore against the existing
 // filestore.Service plus a direct pgx pool for the new executor-specific
 // columns added in supabase/migrations/0015_batch_local_executor.sql.

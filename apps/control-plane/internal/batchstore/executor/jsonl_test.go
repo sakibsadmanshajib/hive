@@ -182,12 +182,15 @@ func TestJSONLWriter_ConcurrentAppend(t *testing.T) {
 func TestJSONLWriter_Finalize_SkipEmpty(t *testing.T) {
 	w := &JSONLWriter{}
 	store := newFakeStorage()
-	uploaded, err := w.Finalize(context.Background(), store, "hive-files", "batches/abc/errors.jsonl", true)
+	uploaded, size, err := w.Finalize(context.Background(), store, "hive-files", "batches/abc/errors.jsonl", true)
 	if err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
 	if uploaded {
 		t.Fatalf("expected empty writer to skip upload")
+	}
+	if size != 0 {
+		t.Fatalf("expected size=0, got %d", size)
 	}
 	if len(store.uploads) != 0 {
 		t.Fatalf("unexpected upload: %v", store.uploads)
@@ -204,7 +207,7 @@ func TestJSONLWriter_Finalize_UploadsContent(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 	store := newFakeStorage()
-	uploaded, err := w.Finalize(context.Background(), store, "hive-files", "batches/abc/output.jsonl", true)
+	uploaded, size, err := w.Finalize(context.Background(), store, "hive-files", "batches/abc/output.jsonl", true)
 	if err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
@@ -212,6 +215,9 @@ func TestJSONLWriter_Finalize_UploadsContent(t *testing.T) {
 		t.Fatalf("expected upload")
 	}
 	got := store.uploads["hive-files/batches/abc/output.jsonl"]
+	if size != int64(len(got)) {
+		t.Fatalf("size=%d want %d", size, len(got))
+	}
 	if !bytes.HasSuffix(got, []byte("\n")) {
 		t.Fatalf("expected trailing newline, got %q", got)
 	}

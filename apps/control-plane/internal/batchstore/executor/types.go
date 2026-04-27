@@ -94,11 +94,18 @@ func (c *Config) Validate() error {
 // InputLine is a single decoded entry from the customer-supplied input.jsonl.
 // Body is preserved as raw bytes so the chat-completions dispatcher can pass
 // it through with only the model field rewritten to the LiteLLM model name.
+//
+// Alias is injected by the executor before dispatch and carries the batch's
+// model_alias resolved at submission time. Routing uses Alias, not body.model
+// — per-line body.model is treated as opaque customer payload (the inference
+// port rewrites it to the routed LiteLLM model name). Alias is not present
+// in the on-disk JSONL.
 type InputLine struct {
 	CustomID string          `json:"custom_id"`
 	Method   string          `json:"method"`
 	URL      string          `json:"url"`
 	Body     json.RawMessage `json:"body"`
+	Alias    string          `json:"-"`
 }
 
 // OutputLine is the OpenAI-shape success entry written to output.jsonl.

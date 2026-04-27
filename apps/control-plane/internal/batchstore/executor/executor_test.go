@@ -129,6 +129,27 @@ func (s *fakeLineStore) snapshot(batchID string) []LineRow {
 	return out
 }
 
+// fakeFileRegistrar records Register calls and returns predictable IDs.
+type fakeFileRegistrar struct {
+	mu    sync.Mutex
+	next  int
+	calls []fakeRegisterCall
+}
+
+type fakeRegisterCall struct {
+	accountID, purpose, filename, storagePath, id string
+	bytes                                         int64
+}
+
+func (f *fakeFileRegistrar) Register(_ context.Context, accountID, purpose, filename, storagePath string, bytes int64) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.next++
+	id := fmt.Sprintf("file-test-%d", f.next)
+	f.calls = append(f.calls, fakeRegisterCall{accountID, purpose, filename, storagePath, id, bytes})
+	return id, nil
+}
+
 // fakeReservation records settlements.
 type fakeReservation struct {
 	mu                                          sync.Mutex
@@ -200,7 +221,8 @@ func TestExecutor_MixedSuccessFailure(t *testing.T) {
 	}}
 	ls := newFakeLineStore()
 	rp := &fakeReservation{}
-	ex, err := NewExecutor(Config{Concurrency: 4, MaxRetries: 2, LineTimeout: 5 * time.Second}, bs, ls, storeFs, "hive-files", disp, rp)
+	fr := &fakeFileRegistrar{}
+	ex, err := NewExecutor(Config{Concurrency: 4, MaxRetries: 2, LineTimeout: 5 * time.Second}, bs, ls, storeFs, fr, "hive-files", disp, rp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,6 +234,13 @@ func TestExecutor_MixedSuccessFailure(t *testing.T) {
 	}
 	if bs.completed.completedLines != 95 || bs.completed.failedLines != 5 {
 		t.Fatalf("counts=%d/%d want 95/5", bs.completed.completedLines, bs.completed.failedLines)
+	}
+	// Output + errors files must both be registered (so MarkCompleted gets real file IDs).
+	if len(fr.calls) != 2 {
+		t.Fatalf("file registrar calls=%d want 2", len(fr.calls))
+	}
+	if bs.completed.outputFileID != fr.calls[0].id || bs.completed.errorFileID != fr.calls[1].id {
+		t.Fatalf("MarkCompleted got file IDs %q/%q want %q/%q", bs.completed.outputFileID, bs.completed.errorFileID, fr.calls[0].id, fr.calls[1].id)
 	}
 	out := storeFs.uploads["hive-files/batches/b1/output.jsonl"]
 	errs := storeFs.uploads["hive-files/batches/b1/errors.jsonl"]
@@ -250,7 +279,8 @@ func TestExecutor_EmptyInput(t *testing.T) {
 	}}
 	ls := newFakeLineStore()
 	rp := &fakeReservation{}
-	ex, _ := NewExecutor(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 1 * time.Second}, bs, ls, storeFs, "hive-files", disp, rp)
+	fr := &fakeFileRegistrar{}
+	ex, _ := NewExecutor(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 1 * time.Second}, bs, ls, storeFs, fr, "hive-files", disp, rp)
 	if err := ex.Run(context.Background(), "b2"); err != nil {
 		t.Fatal(err)
 	}
@@ -259,6 +289,13 @@ func TestExecutor_EmptyInput(t *testing.T) {
 	}
 	if _, ok := storeFs.uploads["hive-files/batches/b2/errors.jsonl"]; ok {
 		t.Fatalf("errors.jsonl should not be uploaded for empty input")
+	}
+	// Empty input still registers the (empty) output file but skips errors.
+	if len(fr.calls) != 1 {
+		t.Fatalf("registrar calls=%d want 1 (output only)", len(fr.calls))
+	}
+	if bs.completed.errorFileID != "" {
+		t.Fatalf("errorFileID=%q want empty when errors.jsonl skipped", bs.completed.errorFileID)
 	}
 	out, ok := storeFs.uploads["hive-files/batches/b2/output.jsonl"]
 	if !ok {
@@ -287,7 +324,8 @@ func TestExecutor_AllErrors(t *testing.T) {
 	}}
 	ls := newFakeLineStore()
 	rp := &fakeReservation{}
-	ex, _ := NewExecutor(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, bs, ls, storeFs, "hive-files", disp, rp)
+	fr := &fakeFileRegistrar{}
+	ex, _ := NewExecutor(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, bs, ls, storeFs, fr, "hive-files", disp, rp)
 	if err := ex.Run(context.Background(), "b3"); err != nil {
 		t.Fatal(err)
 	}
@@ -330,10 +368,11 @@ func TestExecutor_RestartResume(t *testing.T) {
 	disp, _ := NewDispatcher(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b4", AccountID: "acct", InputFilePath: "batches/b4/input.jsonl",
-		ReservationID: "res4", ReservedCredits: 100000,
+		ReservationID: "res4", ModelAlias: "alias-1", ReservedCredits: 100000,
 	}}
 	rp := &fakeReservation{}
-	ex, _ := NewExecutor(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, bs, ls, storeFs, "hive-files", disp, rp)
+	fr := &fakeFileRegistrar{}
+	ex, _ := NewExecutor(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, bs, ls, storeFs, fr, "hive-files", disp, rp)
 	if err := ex.Run(context.Background(), "b4"); err != nil {
 		t.Fatal(err)
 	}

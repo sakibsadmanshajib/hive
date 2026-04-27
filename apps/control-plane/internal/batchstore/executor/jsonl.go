@@ -106,20 +106,21 @@ type StoragePort interface {
 	Download(ctx context.Context, bucket, key string) (io.ReadCloser, error)
 }
 
-// Finalize uploads the accumulated buffer to storage. If empty=skipEmpty is
-// true and the writer is empty, no upload is performed and Finalize returns
-// (false, nil). Otherwise it uploads and returns (true, nil).
-func (w *JSONLWriter) Finalize(ctx context.Context, storage StoragePort, bucket, key string, skipEmpty bool) (bool, error) {
+// Finalize uploads the accumulated buffer to storage. If skipEmpty is true
+// and the writer is empty, no upload is performed and Finalize returns
+// (false, 0, nil). Otherwise it uploads and returns (true, size, nil) where
+// size is the number of bytes uploaded.
+func (w *JSONLWriter) Finalize(ctx context.Context, storage StoragePort, bucket, key string, skipEmpty bool) (bool, int64, error) {
 	w.mu.Lock()
 	size := w.buf.Len()
 	body := make([]byte, size)
 	copy(body, w.buf.Bytes())
 	w.mu.Unlock()
 	if size == 0 && skipEmpty {
-		return false, nil
+		return false, 0, nil
 	}
 	if err := storage.Upload(ctx, bucket, key, bytes.NewReader(body), int64(size), "application/jsonl"); err != nil {
-		return false, fmt.Errorf("upload %s: %w", key, err)
+		return false, 0, fmt.Errorf("upload %s: %w", key, err)
 	}
-	return true, nil
+	return true, int64(size), nil
 }
