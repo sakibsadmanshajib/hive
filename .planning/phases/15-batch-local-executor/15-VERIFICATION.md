@@ -179,10 +179,47 @@ When operator runs this dry-run pre-release, paste the audit outputs here as
    of truth for billing. Customers polling status see the line in output.jsonl
    without re-billing.
 
+   **OpenAI compliance gap.** The sentinel body diverges from the real
+   chat-completion response shape; SDKs that try to parse `response.body` as
+   a chat-completion will fail on resumed lines. Mitigation: see
+   "Phase 18 — Batch Resume Compliance" plan below.
+
 3. **In-process inference vs LiteLLM-direct** — DECISIONS.md Q1 documents the
    pivot from in-process call to LiteLLM HTTP. Trade-off accepted because Go
    `internal/` package rules forbid cross-module import (control-plane and
    edge-api are separate modules under go.work).
+
+## Codex Review Addressed (PR 134)
+
+Three findings from the Codex automated review on PR 134 fixed in commit
+`2dfb0ca`:
+
+1. **P0 — `MarkCompleted` wrote storage keys into `files(id)` FK columns.**
+   `batches.output_file_id` / `error_file_id` reference `public.files(id)`,
+   so writing raw storage paths broke `GET /v1/files/{id}` resolution after
+   batch completion. Fix: added `executor.FileRegistrar` port +
+   `pgxFileRegistrar` adapter wrapping `filestore.Service.CreateFile`.
+   Executor now creates `public.files` rows for the uploaded
+   `output.jsonl` / `errors.jsonl` artifacts and persists the returned IDs.
+   `JSONLWriter.Finalize` returns uploaded byte count so the registrar
+   records accurate `bytes`. Verified via updated `TestExecutor_*` tests.
+
+2. **P1 — `submitLocal` left credits reserved on enqueue failure.**
+   Pre-fix: `UpdateBatchStatus` to `in_progress` ran before `EnqueueExecute`;
+   if Asynq/Redis was unavailable the batch row stuck `in_progress` with
+   credits reserved indefinitely. Fix: both `UpdateBatchStatus` and
+   `EnqueueExecute` failure paths now route through `failSubmission`, which
+   marks the batch `failed` and releases the reservation. Mirrors the
+   upstream-path failure handling.
+
+3. **P2 — Dispatcher routed by per-line `body.model`, not batch alias.**
+   Pre-fix: dispatcher extracted the alias from each JSONL line's
+   `body.model`. That diverged from the upstream-path semantics
+   (`rewriteBatchJSONL` uses the batch's resolved `LiteLLMModelName`) and
+   could send lines to unintended routes. Fix: added `InputLine.Alias`
+   (json:"-"); executor injects `batch.ModelAlias` before dispatch;
+   dispatcher uses `Alias` for routing. Per-line `body.model` stays opaque
+   (the inference port still rewrites it to the LiteLLM model name).
 
 ## Out of Scope (separate phases)
 
@@ -192,3 +229,53 @@ When operator runs this dry-run pre-release, paste the audit outputs here as
 - **Phase 17:** Full FX/USD leak audit across all customer-visible
   surfaces (batch surface pre-checked here; `/v1/payments` surface owned
   by Phase 17).
+- **Phase 18 — Batch Resume Compliance (planned).** Closes Known Caveat #2
+  above. SDK-compatible resume of mid-run-killed batches without billing
+  divergence.
+
+  **Goal.** When the executor resumes a batch after a mid-run kill,
+  re-emitted output lines must carry the original chat-completion response
+  body verbatim so OpenAI SDK parsers don't fail. Billing semantics
+  (`consumed_credits` in `batch_lines` is source of truth, no re-dispatch,
+  no re-charge) are unchanged.
+
+  **Approach (recommended).** Persist the upstream response body to a new
+  `batch_lines.response_body bytea` column at the same transaction as
+  `MarkSucceeded`. On resume, re-emit prior succeeded lines using the
+  persisted body instead of the `{"resumed": true}` sentinel. Errors path
+  parallel: persist `last_error` (already present) plus `error_body bytea`
+  for the structured error envelope.
+
+  **Schema migration.** `0019_batch_resume_response.sql`:
+  ```sql
+  alter table public.batch_lines
+      add column response_body bytea,
+      add column error_body bytea;
+  ```
+
+  **Code touch points.**
+  - `executor.LineStore.MarkSucceeded`: add `responseBody []byte` parameter.
+  - `executor.LineStore.MarkFailed`: add `errorBody []byte` parameter.
+  - `executor.Executor.Run`: stop emitting the `{"resumed": true}` sentinel;
+    re-marshal prior `LineRow.ResponseBody` / `ErrorBody` instead.
+  - `pgxLineStore`: persist + scan the new columns.
+
+  **Trade-offs.**
+  - Storage cost: chat-completion bodies typically 1–20KB; 1M-line batch
+    ≈ 1–20GB on `batch_lines`. Acceptable at v1.1 scale; revisit at v1.2 if
+    batch volume grows. Mitigation: optionally compress with `pglz` or
+    column-level toast (Postgres handles automatically for >2KB).
+  - Migration ordering: column addition is non-blocking; backfill not
+    required (existing rows resume with sentinel until the next run).
+
+  **Acceptance criteria.**
+  - Resumed batch's `output.jsonl` parses end-to-end with the OpenAI Python
+    SDK (`openai.types.batch.Batch.output`).
+  - No duplicate `custom_id` rows; no double-charge.
+  - Existing `TestExecutor_RestartResume` extended to assert response body
+    contents match the original dispatch (not the sentinel shape).
+
+  **Out of scope for Phase 18.**
+  - Streaming-partial responses (chat-completion only; Phase 15 already
+    rejects non-`/v1/chat/completions` lines).
+  - Retroactive re-emission for batches completed before the migration.
