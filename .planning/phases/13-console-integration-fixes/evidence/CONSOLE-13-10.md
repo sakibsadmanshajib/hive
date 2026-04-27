@@ -24,7 +24,7 @@ Discoveries during Phase 13 audit + execution that require work outside the web-
 | HANDOFF-13-05 | Phase 18 | Tier-aware viewer-gates extension |
 | HANDOFF-13-06 | Phase 14 | Discretionary credit-grant UI |
 
-Total: 6 hand-offs filed (4 unique target phases: 14, 17, 18).
+Total: 6 hand-offs filed across 3 unique target phases (14, 17, 18).
 
 ## Source
 

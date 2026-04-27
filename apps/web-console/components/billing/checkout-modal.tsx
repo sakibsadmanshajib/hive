@@ -26,20 +26,13 @@ interface CheckoutModalProps {
   onClose: () => void;
 }
 
-interface CheckoutInitiateBody {
-  redirect_url?: string;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
 }
 
 function readRedirectUrl(value: unknown): string | null {
-  if (value === null || typeof value !== "object") return null;
-  const candidate = value as CheckoutInitiateBody;
-  return typeof candidate.redirect_url === "string"
-    ? candidate.redirect_url
-    : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object";
+  if (!isRecord(value)) return null;
+  return typeof value.redirect_url === "string" ? value.redirect_url : null;
 }
 
 function isCheckoutOptions(value: unknown): value is CheckoutOptions {

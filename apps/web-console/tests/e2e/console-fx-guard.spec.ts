@@ -40,7 +40,10 @@ const ROUTES = [
   "/console/setup",
 ];
 
-const FX_FORBIDDEN = [/amount_usd/, /\bfx_/, /exchange_rate/i];
+// All patterns case-insensitive — the guard's job is to catch *any* FX
+// field-name spelling that escapes to the customer surface, regardless of
+// upstream casing.
+const FX_FORBIDDEN = [/amount_usd/i, /\bfx_/i, /exchange_rate/i];
 
 async function signIn(page: Page, email: string, password: string) {
   await page.goto("/auth/sign-in");
@@ -60,8 +63,14 @@ test.describe("FX-leak whole-console guard (CONSOLE-13-04)", () => {
 
     for (const route of ROUTES) {
       await page.goto(route, { waitUntil: "domcontentloaded" });
-      // Allow lazy data fetches to settle.
-      await page.waitForLoadState("networkidle", { timeout: 15_000 });
+      // Wait for a concrete UI signal instead of `networkidle`. Streamed
+      // Next.js pages, polling fetches, and Supabase realtime can keep
+      // network activity above the idle threshold past the timeout, causing
+      // flakes. Every console route renders an <h1>/<h2> as soon as its
+      // server-component shell hydrates — assert that instead.
+      await expect(
+        page.locator("h1, h2").first(),
+      ).toBeVisible({ timeout: 15_000 });
 
       const html = await page.content();
       for (const pattern of FX_FORBIDDEN) {

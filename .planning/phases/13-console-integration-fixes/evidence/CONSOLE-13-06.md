@@ -22,7 +22,7 @@ Sign-in, sign-up, forgot-password, reset-password, sign-out, OAuth callback all 
 
 ## Command
 
-```
+```bash
 npm run test:unit                  # 9 files, 45 tests, exit 0
 CI=true npx playwright test \
   tests/e2e/unauth.spec.ts          # 5 tests pass

@@ -80,18 +80,18 @@ Plans: 0 plans
 
 Plans: 0 plans
 
-### Phase 13: Console Integration Fixes
+### Phase 13: Console Integration Fixes (SHIPPED 2026-04-27)
 
-**Goal:** Add the missing web-console proxy routes and UI fixes that make checkout, API key management, and billing pages fully functional from the browser.
-**Depends on:** Phases 8, 9
-**Requirements:** [BILL-03, BILL-07, CONS-01, CONS-02, KEY-01, KEY-03]
-**Gap Closure:** Closes integration gaps #5 (console checkout not reachable) and #6 (console API key mutations broken).
-**Success Criteria** (what must be TRUE):
-  1. Buy Credits CTA opens a rendered checkout modal; modal submits to a working web-console proxy route.
-  2. Checkout applies tax/rail data and posts to control-plane payment intent endpoint.
-  3. API key create and revoke fetch correct web-console proxy routes and receive control-plane responses.
-  4. API key rotate page exists and completes rotation end-to-end.
-  5. Billing and key-management console pages pass a full browser E2E walkthrough.
+**Goal:** Audit-first console integration sweep — strip customer-surface FX/USD leak, eliminate unsafe TypeScript widening casts, add canonical control-plane types re-export shim, lock regression with BDT-only billing + whole-console FX-guard Playwright specs.
+**Depends on:** Phases 8, 9, 12
+**Requirements:** [CONSOLE-13-01..10]
+**Gap Closure:** Removes `Invoice.amount_usd` from customer-facing type/decoder (P0 regulatory). Replaces unsafe `as { rails?: unknown }` cast with structural guard. Adds `lib/control-plane/types.ts` re-export shim. Files Phase 14/17/18 hand-offs (HANDOFF-13-01..06) for fixture-seed flake, control-plane FX response strip, tier-aware viewer-gates, discretionary credit-grant UI. The original BILL-03/BILL-07/CONS-01/CONS-02/KEY-01/KEY-03 remain Pending — re-routed to a future phase.
+**Outcome:**
+  1. `Invoice` interface and decoder strip `amount_usd`; runtime fallback to `"USD"` removed (now treated as decode failure).
+  2. Strict-TS cleanliness: zero `as any` / `as unknown` / `<any>` / `<unknown>` matches in `apps/web-console/{app,components,lib}`.
+  3. New `tests/e2e/console-billing.spec.ts` and `tests/e2e/console-fx-guard.spec.ts` lock the BDT-only customer surface across 9 console routes.
+  4. New `tests/unit/invoice-decode.test.ts` enforces type-level + runtime FX-leak guard, including optional-field reintroduction.
+  5. CONSOLE-13-01..10 satisfied with evidence files; six Phase 14/17/18 hand-offs filed.
 
 Plans: 0 plans
 
@@ -126,9 +126,9 @@ Plans: 0 plans
 | 10. Routing & Storage Critical Fixes | v1.0 | 11/11 | Complete | 2026-04-21 |
 | 11. Compliance, Verification & Artifact Cleanup | v1.1 | 0/0 | Planned | - |
 | 12. KEY-05 Hot-Path Rate Limiting | v1.1 | 0/0 | Planned | - |
-| 13. Console Integration Fixes | v1.1 | 0/0 | Planned | - |
+| 13. Console Integration Fixes | v1.1 | n/a | Complete | 2026-04-27 |
 | 14. Payments, Invoicing & Budget Integration | v1.1 | 0/0 | Planned | - |
 
 ---
 
-*Last updated: 2026-04-21 after v1.0 milestone completion.*
+*Last updated: 2026-04-27 after Phase 13 (Console Integration Fixes) shipped.*

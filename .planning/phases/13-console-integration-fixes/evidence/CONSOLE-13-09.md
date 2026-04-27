@@ -25,7 +25,7 @@ The web-console workspace passes `npx tsc --noEmit` AND `npm run build` AND `npm
 
 ## Command
 
-```
+```bash
 set -a && . .env && set +a
 cd apps/web-console
 npx tsc --noEmit             # exit 0

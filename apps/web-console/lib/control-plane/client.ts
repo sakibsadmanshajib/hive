@@ -715,12 +715,15 @@ function decodeInvoice(value: JsonValue): Invoice | null {
   // boundary — never reaches the customer-facing Invoice surface.
   // Hand-off to Phase 17 to remove on the wire (HANDOFF-13-03).
   const amountLocal = readNumberField(value, "amount_local") ?? 0;
-  const localCurrency = readStringField(value, "local_currency") ?? "USD";
+  // CONSOLE-13-04 regulatory: never default to "USD". A missing
+  // local_currency is a decode failure — propagate null so the customer
+  // surface never silently inherits a USD label.
+  const localCurrency = readStringField(value, "local_currency");
   const taxTreatment = readStringField(value, "tax_treatment") ?? "";
   const rail = readStringField(value, "rail") ?? "";
   const createdAt = readStringField(value, "created_at");
 
-  if (!id || !createdAt) {
+  if (!id || !createdAt || !localCurrency) {
     return null;
   }
 
@@ -1081,7 +1084,13 @@ export async function initiateCheckout(
   const responsRail = readStringField(payload, "rail") ?? rail;
   const responseCredits = readNumberField(payload, "credits") ?? credits;
   const amountLocal = readNumberField(payload, "amount_local") ?? 0;
-  const localCurrency = readStringField(payload, "local_currency") ?? "USD";
+  // CONSOLE-13-04 regulatory: never default to "USD". Treat a missing
+  // local_currency as a decode failure rather than silently labelling the
+  // checkout response in USD.
+  const localCurrency = readStringField(payload, "local_currency");
+  if (!localCurrency) {
+    throw new Error("Failed to parse checkout response");
+  }
 
   return {
     payment_intent_id: paymentIntentId,
