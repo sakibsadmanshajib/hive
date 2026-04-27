@@ -86,6 +86,10 @@ export function validateLimits(input: KeyLimitsInput): string | null {
   }
   for (const [tier, limit] of Object.entries(input.tier_overrides)) {
     if (!isTierName(tier)) return `Unknown tier name: ${tier}`;
+    // Partial<Record<TierName, TierLimit>> permits undefined slots; an
+    // explicit guard keeps strict-mode narrowing happy and treats a
+    // present-but-undefined entry as "no override" rather than throwing.
+    if (limit === undefined) continue;
     if (limit.rpm < 0 || limit.rpm > RATE_LIMIT_RPM_MAX) {
       return `Tier ${tier} RPM out of range`;
     }

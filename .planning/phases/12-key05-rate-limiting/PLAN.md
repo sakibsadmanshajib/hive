@@ -110,6 +110,38 @@ must_haves:
       pattern: "rate_limit_exceeded_total"
 ---
 
+<shipped_deviations>
+The `must_haves.truths` and link-pattern hints above were drafted before the
+final implementation landed. Honor the source code as the canonical reference;
+the items below differ from what shipped:
+
+- **Storage location.** Truths and `key_links` say per-key limits live on
+  `public.api_keys` with columns `rate_limit_rpm`, `rate_limit_tpm`,
+  `tier_overrides`. The shipped migration
+  (`supabase/migrations/20260425_01_api_key_rate_limits.sql`) instead extends
+  the existing `public.api_key_rate_policies` table — rate-policy data already
+  lives there and the edge-api hot path reads it via
+  `Repository.GetKeyRatePolicy`. Only `tier_overrides jsonb` is added; the
+  `requests_per_minute` / `tokens_per_minute` columns predate Phase 12.
+- **Console route.** Truths and `key_links` cite
+  `/v1/admin/api-keys/{id}/limits`. The shipped owner-gated routes are
+  `/api/v1/accounts/current/api-keys/{id}/limits` (GET and PUT) under the
+  account-scoped API key tree.
+- **p99 measurement.** The "<2 ms p99 limiter overhead" truth is **deferred to
+  Phase 24 (load-test gate)**; `tests/load/ratelimit_p99_test.go` ships as a
+  scaffold-only skip-by-default benchmark in this phase.
+- **Prometheus counter emission.** The
+  `rate_limit_exceeded_total{tier,key_id,limit_type}` truth and the
+  Grafana/alert rule are wired in shape only — the alert rules pass
+  `promtool check rules`, but counter emission from
+  `apps/edge-api/internal/authz/ratelimit.go` is **deferred to a follow-up
+  commit before Phase 13**. KEY-05-06 is therefore Partial in
+  `.planning/REQUIREMENTS.md`, not Satisfied.
+- **Cardinality note (post-deferral).** When the counter lands, only `tier`
+  and `limit_type` should be Prometheus labels — `key_id` belongs in
+  structured logs / traces to keep series cardinality bounded.
+</shipped_deviations>
+
 <objective>
 Wire per-API-key + per-tier rate limiting in the edge-api hot path with <2ms p99 added latency. Phase 12 closes ship-gate item KEY-05 and lays the tier-enforcement primitive that Phases 18 (RBAC), 20 (chat-app SSO + tier resolution), and 21 (chat-app tier limits) all consume.
 

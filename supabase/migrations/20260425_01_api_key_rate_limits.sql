@@ -29,6 +29,9 @@ ALTER TABLE public.api_key_rate_policies
 COMMENT ON COLUMN public.api_key_rate_policies.tier_overrides IS
   'Per-tier RPM/TPM overrides keyed by tier name (guest|unverified|verified|credited). Empty object = use env defaults. Missing keys fall through to env defaults.';
 
--- Speed up lookup-by-key when joining hot-path resolver.
+-- Support ordered scans of recently-updated policies for cache freshness
+-- checks (e.g., periodic resolver-cache invalidation sweeps that pull
+-- rows updated since a high-water mark). Hot-path lookups by api_key_id
+-- continue to use the primary key index, not this one.
 CREATE INDEX IF NOT EXISTS idx_api_key_rate_policies_updated_at
   ON public.api_key_rate_policies (updated_at);

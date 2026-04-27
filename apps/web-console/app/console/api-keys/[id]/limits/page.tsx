@@ -1,3 +1,4 @@
+import type { ReactElement } from "react";
 import { redirect, notFound } from "next/navigation";
 import { getViewer } from "@/lib/control-plane/client";
 import {
@@ -19,9 +20,18 @@ const serverFetchClient: ApiKeysClient = {
   fetch: (input, init) => fetch(input, init),
 };
 
-export default async function ApiKeyLimitsPage(props: PageProps): Promise<JSX.Element> {
+export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactElement> {
   const { id: keyID } = await props.params;
   const viewer = await getViewer();
+
+  // Account-membership gate runs before the control-plane round-trip.
+  // Authenticated users without an active account row should never reach
+  // the limits page — bounce to profile setup. `current_account.id` is
+  // the membership invariant; `email` would always be present for any
+  // logged-in viewer and is the wrong signal here.
+  if (!viewer.current_account?.id) {
+    redirect("/console/settings/profile");
+  }
 
   // Owner-gate: members without can_manage_api_keys see read-only.
   const canEdit = viewer.gates.can_manage_api_keys;
@@ -35,11 +45,6 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<JSX.El
       notFound();
     }
     throw err;
-  }
-
-  // If the viewer can neither manage keys nor read this account, redirect.
-  if (!viewer.gates.can_manage_api_keys && !viewer.user.email) {
-    redirect("/console/settings/profile");
   }
 
   return (

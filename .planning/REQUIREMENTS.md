@@ -98,7 +98,7 @@ remains **Pending** until the target phase produces an evidence file.
 | KEY-05-03 | 12 | Satisfied | [12-VERIFICATION.md](phases/12-key05-rate-limiting/12-VERIFICATION.md) — `X-RateLimit-Limit/Remaining/Reset` emitted by `apps/edge-api/internal/authz/authorizer.go` `rateLimitHeaders` |
 | KEY-05-04 | 12 | Satisfied | [12-VERIFICATION.md](phases/12-key05-rate-limiting/12-VERIFICATION.md) — 429 + `Retry-After` emitted by existing authorizer rejection path |
 | KEY-05-05 | 12 | Satisfied | [12-VERIFICATION.md](phases/12-key05-rate-limiting/12-VERIFICATION.md) — `TierResolver` in `apps/edge-api/internal/authz/tier.go` reads JWT claim `hive_tier` w/ env defaults; Phase 20 swap point preserved |
-| KEY-05-06 | 12 | Satisfied | [12-VERIFICATION.md](phases/12-key05-rate-limiting/12-VERIFICATION.md) — Prometheus alert `deploy/prometheus/alerts/rate-limit.yml` validated by `promtool check rules` |
+| KEY-05-06 | 12 | Partial | [12-VERIFICATION.md](phases/12-key05-rate-limiting/12-VERIFICATION.md) — Prometheus alert `deploy/prometheus/alerts/rate-limit.yml` validated by `promtool check rules`. Counter `rate_limit_exceeded_total` emission deferred to follow-up commit before Phase 13; rules are inert until then. |
 | KEY-05-07 | 12 | Satisfied | [12-VERIFICATION.md](phases/12-key05-rate-limiting/12-VERIFICATION.md) — owner-gated `/console/api-keys/[id]/limits` page + `RateLimitForm` w/ vitest unit tests |
 
 ### Developer Console

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactElement } from "react";
 import {
   TIER_NAMES,
   validateLimits,
@@ -51,7 +51,7 @@ function clearTier(overrides: TierOverrides, tier: TierName): TierOverrides {
   return next;
 }
 
-export function RateLimitForm({ keyID, initial, canEdit, client }: RateLimitFormProps): JSX.Element {
+export function RateLimitForm({ keyID, initial, canEdit, client }: RateLimitFormProps): ReactElement {
   const [state, setState] = useState<FormState>(() => initialState(initial));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
