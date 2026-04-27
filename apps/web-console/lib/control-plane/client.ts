@@ -596,7 +596,11 @@ export interface Invoice {
   invoice_number: string;
   status: string;
   credits: number;
-  amount_usd: number;
+  // PHASE-17-OWNER-ONLY: The control-plane response carries a USD field for
+  // internal accounting; this customer-surface interface intentionally omits
+  // it. BD accounts must never see USD or any FX conversion language
+  // (Phase 13 CONSOLE-13-04). Phase 17 strips the field at source — see
+  // HANDOFF-13-03 in 13-AUDIT.md.
   amount_local: number;
   local_currency: string;
   tax_treatment: string;
@@ -617,7 +621,7 @@ export interface CheckoutOptions {
   credit_increment: number;
   min_credits: number;
   max_credits: number;
-  price_per_credit_usd: number;
+  price_per_credit_usd: number; // PHASE-17-OWNER-ONLY — non-BD USD-rail pricing primitive; gated by accountCountryCode !== "BD" in checkout-modal.tsx (regulatory rule). Phase 17 splits to per-country pricing.
 }
 
 export interface CheckoutInitiateResponse {
@@ -707,7 +711,9 @@ function decodeInvoice(value: JsonValue): Invoice | null {
   const invoiceNumber = readStringField(value, "invoice_number") ?? "";
   const status = readStringField(value, "status") ?? "";
   const credits = readNumberField(value, "credits") ?? 0;
-  const amountUsd = readNumberField(value, "amount_usd") ?? 0;
+  // PHASE-17-OWNER-ONLY: drop the USD accounting field at the client
+  // boundary — never reaches the customer-facing Invoice surface.
+  // Hand-off to Phase 17 to remove on the wire (HANDOFF-13-03).
   const amountLocal = readNumberField(value, "amount_local") ?? 0;
   const localCurrency = readStringField(value, "local_currency") ?? "USD";
   const taxTreatment = readStringField(value, "tax_treatment") ?? "";
@@ -737,7 +743,6 @@ function decodeInvoice(value: JsonValue): Invoice | null {
     invoice_number: invoiceNumber,
     status,
     credits,
-    amount_usd: amountUsd,
     amount_local: amountLocal,
     local_currency: localCurrency,
     tax_treatment: taxTreatment,
@@ -1039,14 +1044,13 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   const creditIncrement = readNumberField(payload, "credit_increment") ?? 1000;
   const minCredits = readNumberField(payload, "min_credits") ?? 1000;
   const maxCredits = readNumberField(payload, "max_credits") ?? 100000;
-  const pricePerCreditUsd = readNumberField(payload, "price_per_credit_usd") ?? 0.01;
-
+  const pricePerCreditUsd = readNumberField(payload, "price_per_credit_usd") ?? 0.01; // PHASE-17-OWNER-ONLY
   return {
     rails,
     credit_increment: creditIncrement,
     min_credits: minCredits,
     max_credits: maxCredits,
-    price_per_credit_usd: pricePerCreditUsd,
+    price_per_credit_usd: pricePerCreditUsd, // PHASE-17-OWNER-ONLY
   };
 }
 

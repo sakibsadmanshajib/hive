@@ -38,10 +38,15 @@ function readRedirectUrl(value: unknown): string | null {
     : null;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
 function isCheckoutOptions(value: unknown): value is CheckoutOptions {
-  if (value === null || typeof value !== "object") return false;
-  const candidate = value as { rails?: unknown };
-  return Array.isArray(candidate.rails);
+  if (!isRecord(value)) return false;
+  // The isRecord narrowing types `value` as a structural object, so
+  // `value.rails` access is type-safe without a widening cast.
+  return Array.isArray(value.rails);
 }
 
 export function CheckoutModal({
