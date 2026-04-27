@@ -313,12 +313,12 @@ func main() {
 							LineTimeout: time.Duration(cfg.BatchExecutorLineTimeoutMs) * time.Millisecond,
 							Kind:        batchexecutor.ExecutorKind(cfg.BatchExecutorKind),
 						}
-						inferenceClient := batchstore.NewLiteLLMInferenceClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey(), routingSvc)
+						inferenceClient := batchstore.NewLiteLLMInferenceClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
 						dispatcher, dispErr := batchexecutor.NewDispatcher(execCfg, inferenceClient, nil)
 						if dispErr != nil {
 							log.Printf("WARNING: batch executor dispatcher init failed: %v", dispErr)
 						} else {
-							batchStore := batchstore.NewPgxBatchStore(filestoreSvc, filestoreSvc)
+							batchStore := batchstore.NewPgxBatchStore(filestoreSvc, filestoreSvc, routingSvc)
 							lineStore := batchstore.NewPgxLineStore(pool)
 							reservationPort := batchstore.NewAccountingReservationAdapter(accountingSvc)
 							fileRegistrar := batchstore.NewPgxFileRegistrar(filestoreSvc)

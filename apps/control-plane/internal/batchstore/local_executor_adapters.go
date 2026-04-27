@@ -10,6 +10,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
+	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -56,16 +57,21 @@ func (r *pgxFileRegistrar) Register(ctx context.Context, accountID, purpose, fil
 }
 
 // pgxBatchStore implements executor.BatchStore against the existing
-// filestore.Service plus a direct pgx pool for the new executor-specific
-// columns added in supabase/migrations/0015_batch_local_executor.sql.
+// filestore.Service plus the routing service (to resolve LiteLLMModel
+// once per batch) and the new executor-specific columns added in
+// supabase/migrations/20260427_01_batch_local_executor.sql.
 type pgxBatchStore struct {
-	loader BatchSnapshotLoader
-	files  FileLookup
+	loader  BatchSnapshotLoader
+	files   FileLookup
+	routing BatchRouteSelector
 }
 
-// NewPgxBatchStore wires the production BatchStore adapter.
-func NewPgxBatchStore(loader BatchSnapshotLoader, files FileLookup) executor.BatchStore {
-	return &pgxBatchStore{loader: loader, files: files}
+// NewPgxBatchStore wires the production BatchStore adapter. The routing
+// selector is required so LoadBatch can resolve the LiteLLM model name
+// once per batch (matching the submitter's NeedBatch=true criteria),
+// avoiding per-line route lookups in the hot path.
+func NewPgxBatchStore(loader BatchSnapshotLoader, files FileLookup, routes BatchRouteSelector) executor.BatchStore {
+	return &pgxBatchStore{loader: loader, files: files, routing: routes}
 }
 
 func (p *pgxBatchStore) LoadBatch(ctx context.Context, batchID string) (executor.BatchSnapshot, error) {
@@ -83,6 +89,19 @@ func (p *pgxBatchStore) LoadBatch(ctx context.Context, batchID string) (executor
 	if file == nil {
 		return executor.BatchSnapshot{}, fmt.Errorf("input file %s not found", batch.InputFileID)
 	}
+	if p.routing == nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("routing selector not configured")
+	}
+	route, err := p.routing.SelectRoute(ctx, routing.SelectionInput{
+		AliasID:   batch.ModelAlias,
+		NeedBatch: true,
+	})
+	if err != nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("select batch route: %w", err)
+	}
+	if strings.TrimSpace(route.LiteLLMModelName) == "" {
+		return executor.BatchSnapshot{}, fmt.Errorf("route %q resolved to empty LiteLLM model", batch.ModelAlias)
+	}
 	snap := executor.BatchSnapshot{
 		ID:              batch.ID,
 		AccountID:       batch.AccountID,
@@ -90,6 +109,7 @@ func (p *pgxBatchStore) LoadBatch(ctx context.Context, batchID string) (executor
 		InputFilePath:   file.StoragePath,
 		Endpoint:        batch.Endpoint,
 		ModelAlias:      batch.ModelAlias,
+		LiteLLMModel:    route.LiteLLMModelName,
 		ReservedCredits: batch.EstimatedCredits,
 	}
 	if batch.ReservationID != nil {
@@ -127,7 +147,7 @@ func NewPgxLineStore(pool *pgxpool.Pool) executor.LineStore {
 func (s *pgxLineStore) LoadLines(ctx context.Context, batchID string) ([]executor.LineRow, error) {
 	rows, err := s.pool.Query(ctx, `
 		select batch_id, custom_id, status, attempt, consumed_credits,
-		       output_index, error_index, coalesce(last_error, '')
+		       output_index, error_index, coalesce(last_error, ''), completed_at
 		from public.batch_lines
 		where batch_id = $1`, batchID)
 	if err != nil {
@@ -139,12 +159,14 @@ func (s *pgxLineStore) LoadLines(ctx context.Context, batchID string) ([]executo
 		var r executor.LineRow
 		var consumed float64
 		var outIdx, errIdx *int
-		if err := rows.Scan(&r.BatchID, &r.CustomID, &r.Status, &r.Attempt, &consumed, &outIdx, &errIdx, &r.LastError); err != nil {
+		var completedAt *time.Time
+		if err := rows.Scan(&r.BatchID, &r.CustomID, &r.Status, &r.Attempt, &consumed, &outIdx, &errIdx, &r.LastError, &completedAt); err != nil {
 			return nil, err
 		}
 		r.ConsumedCredits = int64(consumed)
 		r.OutputIndex = outIdx
 		r.ErrorIndex = errIdx
+		r.CompletedAt = completedAt
 		out = append(out, r)
 	}
 	return out, rows.Err()

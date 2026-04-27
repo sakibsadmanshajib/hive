@@ -217,6 +217,7 @@ func TestExecutor_MixedSuccessFailure(t *testing.T) {
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b1", AccountID: "acct", InputFileID: "f1", InputFilePath: "batches/b1/input.jsonl",
 		ReservationID: "res1", Endpoint: "/v1/chat/completions", ModelAlias: "alias-1",
+		LiteLLMModel:    "openrouter/gpt-4o-mini",
 		ReservedCredits: 100000,
 	}}
 	ls := newFakeLineStore()
@@ -275,7 +276,8 @@ func TestExecutor_EmptyInput(t *testing.T) {
 	disp, _ := NewDispatcher(Config{Concurrency: 1, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b2", AccountID: "acct", InputFilePath: "batches/b2/input.jsonl",
-		ReservationID: "res2", ReservedCredits: 100,
+		ReservationID: "res2", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini",
+		ReservedCredits: 100,
 	}}
 	ls := newFakeLineStore()
 	rp := &fakeReservation{}
@@ -320,7 +322,8 @@ func TestExecutor_AllErrors(t *testing.T) {
 	disp, _ := NewDispatcher(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b3", AccountID: "acct", InputFilePath: "batches/b3/input.jsonl",
-		ReservationID: "res3", ReservedCredits: 5000,
+		ReservationID: "res3", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini",
+		ReservedCredits: 5000,
 	}}
 	ls := newFakeLineStore()
 	rp := &fakeReservation{}
@@ -368,7 +371,8 @@ func TestExecutor_RestartResume(t *testing.T) {
 	disp, _ := NewDispatcher(Config{Concurrency: 2, MaxRetries: 1, LineTimeout: 1 * time.Second}, infer, nil)
 	bs := &fakeBatchStore{snap: BatchSnapshot{
 		ID: "b4", AccountID: "acct", InputFilePath: "batches/b4/input.jsonl",
-		ReservationID: "res4", ModelAlias: "alias-1", ReservedCredits: 100000,
+		ReservationID: "res4", ModelAlias: "alias-1", LiteLLMModel: "openrouter/gpt-4o-mini",
+		ReservedCredits: 100000,
 	}}
 	rp := &fakeReservation{}
 	fr := &fakeFileRegistrar{}

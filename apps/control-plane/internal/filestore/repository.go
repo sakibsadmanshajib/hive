@@ -380,6 +380,7 @@ const (
 	batchUpdateString batchUpdateKind = iota
 	batchUpdateInteger
 	batchUpdateTimestamp
+	batchUpdateBool
 )
 
 type batchStatusUpdateField struct {
@@ -400,6 +401,11 @@ var allowedBatchStatusUpdateFields = map[string]batchStatusUpdateField{
 	"completed_at":             {column: "completed_at", kind: batchUpdateTimestamp},
 	"failed_at":                {column: "failed_at", kind: batchUpdateTimestamp},
 	"cancelled_at":             {column: "cancelled_at", kind: batchUpdateTimestamp},
+	// Phase 15 — local batch executor columns (migration 20260427_01).
+	"executor_kind":   {column: "executor_kind", kind: batchUpdateString},
+	"completed_lines": {column: "completed_lines", kind: batchUpdateInteger},
+	"failed_lines":    {column: "failed_lines", kind: batchUpdateInteger},
+	"overconsumed":    {column: "overconsumed", kind: batchUpdateBool},
 }
 
 func normalizeBatchUpdateValue(field string, value interface{}, kind batchUpdateKind) (interface{}, error) {
@@ -424,6 +430,14 @@ func normalizeBatchUpdateValue(field string, value interface{}, kind batchUpdate
 			return nil, fmt.Errorf("filestore: invalid batch timestamp field %s: %w", field, err)
 		}
 		return time.Unix(seconds, 0).UTC(), nil
+	case batchUpdateBool:
+		if value == nil {
+			return nil, nil
+		}
+		if b, ok := value.(bool); ok {
+			return b, nil
+		}
+		return nil, fmt.Errorf("filestore: invalid batch bool field %s: %T", field, value)
 	default:
 		return nil, fmt.Errorf("filestore: unsupported batch update field %s", field)
 	}

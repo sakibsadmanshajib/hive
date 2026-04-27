@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
-	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
 )
 
 // LiteLLMInferenceClient is the production InferencePort that the local batch
@@ -21,40 +20,39 @@ import (
 // reuses LiteLLM's provider routing, retry, and capability path — the same
 // surface edge-api exposes — while keeping control-plane's go.mod free of
 // edge-api/internal imports.
+//
+// Route resolution happens once per batch in pgxBatchStore.LoadBatch (which
+// uses the same NeedBatch=true criteria the submitter applied). The
+// resolved LiteLLM model name flows through BatchSnapshot.LiteLLMModel →
+// InputLine.LiteLLMModel and is passed verbatim as the model argument
+// here — no per-line route lookup, no risk of diverging from the
+// submitter's batch-time selection.
 type LiteLLMInferenceClient struct {
 	baseURL    string
 	apiKey     string
 	httpClient *http.Client
-	routing    BatchRouteSelector
 }
 
 // NewLiteLLMInferenceClient constructs the production inference port.
-func NewLiteLLMInferenceClient(baseURL, apiKey string, routing BatchRouteSelector) *LiteLLMInferenceClient {
+func NewLiteLLMInferenceClient(baseURL, apiKey string) *LiteLLMInferenceClient {
 	return &LiteLLMInferenceClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		apiKey:     apiKey,
 		httpClient: &http.Client{Timeout: 90 * time.Second},
-		routing:    routing,
 	}
 }
 
-// ChatCompletion calls POST {baseURL}/v1/chat/completions. The model field in
-// the body is rewritten to the LiteLLM-routed model name resolved via the
-// routing selector. Returns the upstream response body, the OpenAI usage
-// object decoded from the response, the HTTP status code, and an error.
-func (c *LiteLLMInferenceClient) ChatCompletion(ctx context.Context, alias string, body json.RawMessage) (json.RawMessage, *executor.Usage, int, error) {
-	if c.routing == nil {
-		return nil, nil, 0, fmt.Errorf("local inference: routing selector not configured")
+// ChatCompletion calls POST {baseURL}/v1/chat/completions. The model
+// argument must already be the LiteLLM-routed model name (resolved once
+// per batch by pgxBatchStore.LoadBatch). The body's top-level model field
+// is rewritten to that name; all other fields are preserved verbatim.
+// Returns the upstream response body, the OpenAI usage object decoded
+// from the response, the HTTP status code, and an error.
+func (c *LiteLLMInferenceClient) ChatCompletion(ctx context.Context, model string, body json.RawMessage) (json.RawMessage, *executor.Usage, int, error) {
+	if strings.TrimSpace(model) == "" {
+		return nil, nil, 0, fmt.Errorf("local inference: model is required")
 	}
-	route, err := c.routing.SelectRoute(ctx, routing.SelectionInput{
-		AliasID:             alias,
-		NeedChatCompletions: true,
-	})
-	if err != nil {
-		return nil, nil, 0, fmt.Errorf("select route: %w", err)
-	}
-
-	rewritten, err := rewriteModel(body, route.LiteLLMModelName)
+	rewritten, err := rewriteModel(body, model)
 	if err != nil {
 		return nil, nil, 0, fmt.Errorf("rewrite model: %w", err)
 	}

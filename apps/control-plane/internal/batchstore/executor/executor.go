@@ -12,14 +12,21 @@ import (
 
 // BatchSnapshot is the slice of public.batches the executor needs to do its
 // work. Concrete implementations live in the batchstore package.
+//
+// LiteLLMModel is the route resolved at submission time (or re-resolved at
+// LoadBatch time using the same NeedBatch=true criteria the submitter
+// applied). Resolving once here — instead of per dispatched line — avoids
+// O(n) routing repository calls and prevents the executor's chosen route
+// from diverging from the submitter's batch-time route.
 type BatchSnapshot struct {
-	ID            string
-	AccountID     string
-	InputFileID   string
-	InputFilePath string
-	ReservationID string
-	Endpoint      string
-	ModelAlias    string
+	ID              string
+	AccountID       string
+	InputFileID     string
+	InputFilePath   string
+	ReservationID   string
+	Endpoint        string
+	ModelAlias      string
+	LiteLLMModel    string
 	ReservedCredits int64
 }
 
@@ -33,6 +40,7 @@ type LineRow struct {
 	OutputIndex     *int
 	ErrorIndex      *int
 	LastError       string
+	CompletedAt     *time.Time
 }
 
 // BatchStore is the persistence port the executor depends on. Production
@@ -160,25 +168,41 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 		switch r.Status {
 		case "succeeded":
 			completed++
-			// Re-emit a placeholder row to preserve ordering — the actual
-			// upstream response is gone (transient memory). We cannot reissue
-			// the call without double-charging. Document in test 2: the
-			// re-upload contains a sentinel response body marked
-			// {"resumed":true}; restart-safety contract is that the line is
-			// NOT re-charged and NOT re-dispatched.
+			// Re-emit an interim placeholder row — the original upstream
+			// response body is no longer in memory and not yet persisted.
+			// Phase 18 (see 15-VERIFICATION.md) will replace the placeholder
+			// with the persisted response body. Until then, expose enough
+			// diagnostic metadata for support to correlate.
+			body := map[string]any{
+				"resumed":              true,
+				"resume_reason":        "executor_restart_after_partial_run",
+				"original_attempt":     r.Attempt,
+				"original_consumed":    r.ConsumedCredits,
+			}
+			if r.CompletedAt != nil {
+				body["original_completed_at"] = r.CompletedAt.UTC().Format(time.RFC3339Nano)
+			}
 			_, _ = output.Append(map[string]any{
 				"id":        "batch_req_resumed_" + r.CustomID,
 				"custom_id": r.CustomID,
-				"response":  map[string]any{"status_code": 200, "request_id": "resumed", "body": map[string]any{"resumed": true}},
+				"response":  map[string]any{"status_code": 200, "request_id": "resumed", "body": body},
 				"error":     nil,
 			})
 		case "failed":
 			failed++
+			errBody := map[string]any{
+				"code":             "resumed",
+				"message":          SanitizeMessage(r.LastError),
+				"original_attempt": r.Attempt,
+			}
+			if r.CompletedAt != nil {
+				errBody["original_completed_at"] = r.CompletedAt.UTC().Format(time.RFC3339Nano)
+			}
 			_, _ = errs.Append(map[string]any{
 				"id":        "batch_req_resumed_" + r.CustomID,
 				"custom_id": r.CustomID,
 				"response":  nil,
-				"error":     map[string]any{"code": "resumed", "message": SanitizeMessage(r.LastError)},
+				"error":     errBody,
 			})
 		}
 	}
@@ -204,6 +228,7 @@ func (e *Executor) Run(ctx context.Context, batchID string) error {
 			}
 			out := *line
 			out.Alias = batch.ModelAlias
+			out.LiteLLMModel = batch.LiteLLMModel
 			select {
 			case <-ctx.Done():
 				return

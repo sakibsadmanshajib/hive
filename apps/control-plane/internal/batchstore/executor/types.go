@@ -95,17 +95,20 @@ func (c *Config) Validate() error {
 // Body is preserved as raw bytes so the chat-completions dispatcher can pass
 // it through with only the model field rewritten to the LiteLLM model name.
 //
-// Alias is injected by the executor before dispatch and carries the batch's
-// model_alias resolved at submission time. Routing uses Alias, not body.model
-// — per-line body.model is treated as opaque customer payload (the inference
-// port rewrites it to the routed LiteLLM model name). Alias is not present
-// in the on-disk JSONL.
+// Alias and LiteLLMModel are injected by the executor before dispatch from
+// the BatchSnapshot. Alias is the customer-facing model alias (used for
+// diagnostics and the "missing batch alias" guard); LiteLLMModel is the
+// pre-resolved LiteLLM model name passed verbatim to the inference port —
+// no per-line route lookup. Per-line body.model stays opaque (the
+// inference port rewrites it to LiteLLMModel before dispatch). Neither
+// field is serialized to the on-disk JSONL.
 type InputLine struct {
-	CustomID string          `json:"custom_id"`
-	Method   string          `json:"method"`
-	URL      string          `json:"url"`
-	Body     json.RawMessage `json:"body"`
-	Alias    string          `json:"-"`
+	CustomID     string          `json:"custom_id"`
+	Method       string          `json:"method"`
+	URL          string          `json:"url"`
+	Body         json.RawMessage `json:"body"`
+	Alias        string          `json:"-"`
+	LiteLLMModel string          `json:"-"`
 }
 
 // OutputLine is the OpenAI-shape success entry written to output.jsonl.

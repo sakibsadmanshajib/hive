@@ -99,11 +99,12 @@ func TestDispatcher_BoundedConcurrency(t *testing.T) {
 	go func() {
 		for i := 0; i < 100; i++ {
 			in <- InputLine{
-				CustomID: fmt.Sprintf("req-%d", i),
-				Method:   "POST",
-				URL:      "/v1/chat/completions",
-				Body:     mustBody(t, "alias-1", fmt.Sprintf("p%d", i)),
-				Alias:    "alias-1",
+				CustomID:     fmt.Sprintf("req-%d", i),
+				Method:       "POST",
+				URL:          "/v1/chat/completions",
+				Body:         mustBody(t, "alias-1", fmt.Sprintf("p%d", i)),
+				Alias:        "alias-1",
+				LiteLLMModel: "openrouter/gpt-4o-mini",
 			}
 		}
 		close(in)
@@ -149,8 +150,9 @@ func TestDispatcher_Retry503ThenSuccess(t *testing.T) {
 		CustomID: "x",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body:     mustBody(t, "alias-1", ""),
-		Alias:    "alias-1",
+		Body:         mustBody(t, "alias-1", ""),
+		Alias:        "alias-1",
+		LiteLLMModel: "openrouter/gpt-4o-mini",
 	})
 	if res.Error != nil {
 		t.Fatalf("expected success after retries, got error %+v", res.Error)
@@ -182,8 +184,9 @@ func TestDispatcher_4xxNoRetry(t *testing.T) {
 		CustomID: "x",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body:     mustBody(t, "alias-1", ""),
-		Alias:    "alias-1",
+		Body:         mustBody(t, "alias-1", ""),
+		Alias:        "alias-1",
+		LiteLLMModel: "openrouter/gpt-4o-mini",
 	})
 	if res.Output != nil {
 		t.Fatalf("expected error, got success")
@@ -224,8 +227,9 @@ func TestDispatcher_LineTimeout(t *testing.T) {
 		CustomID: "x",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body:     mustBody(t, "alias-1", ""),
-		Alias:    "alias-1",
+		Body:         mustBody(t, "alias-1", ""),
+		Alias:        "alias-1",
+		LiteLLMModel: "openrouter/gpt-4o-mini",
 	})
 	elapsed := time.Since(start)
 	if elapsed > 1*time.Second {
@@ -253,8 +257,9 @@ func TestDispatcher_ProviderNameSanitized(t *testing.T) {
 		CustomID: "x",
 		Method:   "POST",
 		URL:      "/v1/chat/completions",
-		Body:     mustBody(t, "alias-1", ""),
-		Alias:    "alias-1",
+		Body:         mustBody(t, "alias-1", ""),
+		Alias:        "alias-1",
+		LiteLLMModel: "openrouter/gpt-4o-mini",
 	})
 	if res.Error == nil {
 		t.Fatalf("expected error result")

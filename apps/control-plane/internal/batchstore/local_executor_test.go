@@ -315,7 +315,8 @@ func TestBatchWorker_HandlesBatchExecuteTask(t *testing.T) {
 	}
 	bs := &fakeBatchSnapLE{snap: executor.BatchSnapshot{
 		ID: "bx", AccountID: uuid.New().String(), InputFilePath: "batches/bx/input.jsonl",
-		ReservationID: uuid.New().String(), ModelAlias: "alias-1", ReservedCredits: 1000,
+		ReservationID: uuid.New().String(), ModelAlias: "alias-1",
+		LiteLLMModel: "openrouter/gpt-4o-mini", ReservedCredits: 1000,
 	}}
 	ls := newFakeLineStoreLE()
 	rp := &fakeReservationLE{}

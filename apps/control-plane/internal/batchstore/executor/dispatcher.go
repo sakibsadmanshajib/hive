@@ -109,10 +109,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 		return d.errResult(line.CustomID, "invalid_request",
 			"request body missing or invalid model field", 1)
 	}
-	alias := strings.TrimSpace(line.Alias)
-	if alias == "" {
+	if strings.TrimSpace(line.Alias) == "" {
 		return d.errResult(line.CustomID, "invalid_request",
 			"missing batch model alias", 1)
+	}
+	model := strings.TrimSpace(line.LiteLLMModel)
+	if model == "" {
+		return d.errResult(line.CustomID, "invalid_request",
+			"missing resolved LiteLLM model for batch", 1)
 	}
 
 	backoff := []time.Duration{100 * time.Millisecond, 400 * time.Millisecond, 1600 * time.Millisecond}
@@ -121,7 +125,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, line InputLine) DispatchResul
 	for attempt := 1; attempt <= d.cfg.MaxRetries; attempt++ {
 		callCtx, cancel := context.WithTimeout(ctx, d.cfg.LineTimeout)
 		d.bumpInFlight(+1)
-		body, usage, status, callErr := d.inference.ChatCompletion(callCtx, alias, line.Body)
+		body, usage, status, callErr := d.inference.ChatCompletion(callCtx, model, line.Body)
 		d.bumpInFlight(-1)
 		cancel()
 
@@ -225,8 +229,11 @@ func (d *Dispatcher) errResult(customID, code, message string, attempts int) Dis
 }
 
 // providerNameRe matches provider tokens that must never appear in
-// customer-facing error messages. Case-insensitive.
-var providerNameRe = regexp.MustCompile(`(?i)\b(openrouter|groq|litellm)\b`)
+// customer-facing error messages. Case-insensitive. The list mirrors
+// apps/edge-api/internal/errors/provider_blind.go so the local-executor
+// surface enforces the same blocklist as edge-api's hot-path response
+// sanitization.
+var providerNameRe = regexp.MustCompile(`(?i)\b(anthropic|azure|bedrock|cerebras|cohere|deepseek|fireworks|gemini|google|groq|litellm|mistral|openai|openrouter|perplexity|together|vertex|xai)\b`)
 
 // SanitizeMessage strips provider tokens and any attached path/qualifier.
 // Replacement collapses adjacent whitespace.

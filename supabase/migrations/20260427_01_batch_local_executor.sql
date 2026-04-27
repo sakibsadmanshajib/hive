@@ -1,27 +1,24 @@
--- 0015_batch_local_executor.sql
+-- 20260427_01_batch_local_executor.sql
 -- Phase 15: local batch executor — per-line idempotency + progress tracking.
 -- Adds executor_kind column to batches plus completion progress + overconsumed
 -- flag, and creates batch_lines table for restart-safe per-line state.
+--
+-- Filename was renumbered from 0015_* (which sorted alphabetically before the
+-- 20260414_02 migration that creates public.batches) so this migration runs
+-- after every prior migration in chronological order. See PR 134 review.
 
 -- Extend batches with executor strategy + progress columns.
-alter table public.batches
+alter table if exists public.batches
   add column if not exists executor_kind text not null default 'upstream'
     check (executor_kind in ('upstream','local')),
   add column if not exists completed_lines integer not null default 0,
   add column if not exists failed_lines integer not null default 0,
   add column if not exists overconsumed boolean not null default false;
 
--- Tag the route_capabilities table with the executor strategy used by the
--- submitter to choose between local executor and LiteLLM upstream batch upload.
--- Default is 'local' since the v1.0 + v1.1 provider mix (openrouter + groq)
--- has no LiteLLM-supported batch upstream.
-alter table if exists public.route_capabilities
-  add column if not exists executor_kind text not null default 'local'
-    check (executor_kind in ('upstream','local'));
-
 -- Per-line state for restart-safe resume + idempotent line settlement.
+-- batch_id is text to match public.batches.id (not uuid).
 create table if not exists public.batch_lines (
-  batch_id uuid not null references public.batches(id) on delete cascade,
+  batch_id text not null references public.batches(id) on delete cascade,
   custom_id text not null,
   status text not null check (status in ('pending','in_progress','succeeded','failed')),
   attempt integer not null default 0,
