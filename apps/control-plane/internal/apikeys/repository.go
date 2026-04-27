@@ -27,6 +27,8 @@ type Repository interface {
 	GetBudgetWindow(ctx context.Context, apiKeyID uuid.UUID, budgetKind string, at time.Time) (BudgetWindow, error)
 	GetKeyRatePolicy(ctx context.Context, apiKeyID uuid.UUID) (RatePolicy, error)
 	GetAccountRatePolicy(ctx context.Context, accountID uuid.UUID) (RatePolicy, error)
+	GetLimits(ctx context.Context, accountID, keyID uuid.UUID) (KeyLimits, error)
+	UpdateLimits(ctx context.Context, accountID, keyID uuid.UUID, input KeyLimitsInput) (KeyLimits, error)
 	GetByTokenHash(ctx context.Context, tokenHash string) (APIKey, error)
 	GetPolicyByTokenHash(ctx context.Context, tokenHash string) (APIKey, KeyPolicy, error)
 	CreateDefaultPolicy(ctx context.Context, keyID uuid.UUID) error
@@ -378,15 +380,108 @@ func (r *pgxRepository) GetBudgetWindow(ctx context.Context, apiKeyID uuid.UUID,
 
 func (r *pgxRepository) GetKeyRatePolicy(ctx context.Context, apiKeyID uuid.UUID) (RatePolicy, error) {
 	row := r.pool.QueryRow(ctx, `
-		SELECT requests_per_minute, tokens_per_minute, rolling_five_hour_limit, weekly_limit, free_token_weight_tenths
+		SELECT requests_per_minute, tokens_per_minute, rolling_five_hour_limit, weekly_limit, free_token_weight_tenths, tier_overrides
 		FROM public.api_key_rate_policies
 		WHERE api_key_id = $1
 	`, apiKeyID)
-	policy, err := scanRatePolicy(row)
+	policy, err := scanRatePolicyWithTier(row)
 	if err == ErrNotFound {
 		return defaultRatePolicy(), nil
 	}
 	return policy, err
+}
+
+// GetLimits returns the per-key RPM/TPM and tier overrides. Account-scope
+// gate is enforced via GetKey to ensure the caller may read this row.
+func (r *pgxRepository) GetLimits(ctx context.Context, accountID, keyID uuid.UUID) (KeyLimits, error) {
+	if _, err := r.GetKey(ctx, accountID, keyID); err != nil {
+		return KeyLimits{}, err
+	}
+
+	row := r.pool.QueryRow(ctx, `
+		SELECT api_key_id, requests_per_minute, tokens_per_minute, COALESCE(tier_overrides, '{}'::jsonb)
+		FROM public.api_key_rate_policies
+		WHERE api_key_id = $1
+	`, keyID)
+
+	var (
+		out          KeyLimits
+		tierBytes    []byte
+		apiKeyIDOut  uuid.UUID
+		rpm, tpm     int
+	)
+	if err := row.Scan(&apiKeyIDOut, &rpm, &tpm, &tierBytes); err != nil {
+		if err == pgx.ErrNoRows {
+			// Key exists but has no rate-policy row — return defaults seeded
+			// against the key id so the owner UI shows the actual baseline.
+			defaults := defaultRatePolicy()
+			return KeyLimits{
+				APIKeyID:      keyID,
+				RPM:           defaults.RateLimitRPM,
+				TPM:           defaults.RateLimitTPM,
+				TierOverrides: map[string]TierLimit{},
+			}, nil
+		}
+		return KeyLimits{}, err
+	}
+
+	out.APIKeyID = apiKeyIDOut
+	out.RPM = rpm
+	out.TPM = tpm
+	out.TierOverrides = parseTierOverrides(tierBytes)
+	return out, nil
+}
+
+// UpdateLimits validates and writes per-key RPM/TPM and tier overrides. Out-of-range
+// values surface as ErrLimitsOutOfRange. Tier overrides are validated for tier name
+// and per-tier range.
+func (r *pgxRepository) UpdateLimits(ctx context.Context, accountID, keyID uuid.UUID, input KeyLimitsInput) (KeyLimits, error) {
+	if input.RPM < 0 || input.RPM > RateLimitRPMMax {
+		return KeyLimits{}, ErrLimitsOutOfRange
+	}
+	if input.TPM < 0 || input.TPM > RateLimitTPMMax {
+		return KeyLimits{}, ErrLimitsOutOfRange
+	}
+	for tier, lim := range input.TierOverrides {
+		if !IsValidTierName(tier) {
+			return KeyLimits{}, ErrLimitsOutOfRange
+		}
+		if lim.RPM < 0 || lim.RPM > RateLimitRPMMax {
+			return KeyLimits{}, ErrLimitsOutOfRange
+		}
+		if lim.TPM < 0 || lim.TPM > RateLimitTPMMax {
+			return KeyLimits{}, ErrLimitsOutOfRange
+		}
+	}
+
+	// Owner-gate via account check: GetKey returns ErrNotFound if the key
+	// does not belong to the supplied account.
+	if _, err := r.GetKey(ctx, accountID, keyID); err != nil {
+		return KeyLimits{}, err
+	}
+
+	tiersJSON, err := json.Marshal(input.TierOverrides)
+	if err != nil {
+		return KeyLimits{}, err
+	}
+	if input.TierOverrides == nil {
+		tiersJSON = []byte("{}")
+	}
+
+	_, err = r.pool.Exec(ctx, `
+		INSERT INTO public.api_key_rate_policies (api_key_id, requests_per_minute, tokens_per_minute, tier_overrides, updated_at)
+		VALUES ($1, $2, $3, $4::jsonb, now())
+		ON CONFLICT (api_key_id) DO UPDATE
+		SET requests_per_minute = EXCLUDED.requests_per_minute,
+		    tokens_per_minute   = EXCLUDED.tokens_per_minute,
+		    tier_overrides      = EXCLUDED.tier_overrides,
+		    updated_at          = now()
+	`, keyID, input.RPM, input.TPM, string(tiersJSON))
+	if err != nil {
+		return KeyLimits{}, err
+	}
+
+	return r.GetLimits(ctx, accountID, keyID)
 }
 
 func (r *pgxRepository) GetAccountRatePolicy(ctx context.Context, accountID uuid.UUID) (RatePolicy, error) {
@@ -543,6 +638,43 @@ func scanRatePolicy(row scannable) (RatePolicy, error) {
 		return RatePolicy{}, err
 	}
 	return policy, nil
+}
+
+// scanRatePolicyWithTier reads the same five core columns plus tier_overrides JSONB.
+func scanRatePolicyWithTier(row scannable) (RatePolicy, error) {
+	var (
+		policy    RatePolicy
+		tierBytes []byte
+	)
+	if err := row.Scan(
+		&policy.RateLimitRPM,
+		&policy.RateLimitTPM,
+		&policy.RollingFiveHourLimit,
+		&policy.WeeklyLimit,
+		&policy.FreeTokenWeightTenths,
+		&tierBytes,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			return RatePolicy{}, ErrNotFound
+		}
+		return RatePolicy{}, err
+	}
+	policy.TierOverrides = parseTierOverrides(tierBytes)
+	return policy, nil
+}
+
+// parseTierOverrides decodes the tier_overrides JSONB column. Empty / null /
+// unparseable input is treated as "no overrides" (returns empty map). Hot path
+// must never blow up on malformed JSON in the DB.
+func parseTierOverrides(data []byte) map[string]TierLimit {
+	if len(data) == 0 {
+		return map[string]TierLimit{}
+	}
+	out := map[string]TierLimit{}
+	if err := json.Unmarshal(data, &out); err != nil {
+		return map[string]TierLimit{}
+	}
+	return out
 }
 
 func defaultRatePolicy() RatePolicy {

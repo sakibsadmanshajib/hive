@@ -76,6 +76,94 @@ func NewLimiter(redisURL string) (*Limiter, error) {
 	return limiter, nil
 }
 
+// CheckWithTier runs Check and additionally enforces a tier-scoped sliding-window
+// bucket whose effective per-dimension limit is min(keyLimit, tierLimit).
+// Phase 12 wires this seam from the proxy hot-path: account+key checks first,
+// then a tier check at scope tier:<tier>:<account_id> using the merged
+// (key vs tier) effective limit. The tier check writes a separate Redis key —
+// so a tight key limit and a loose tier limit do NOT consume the tier bucket
+// twice when account+key already deny. Tier-binding info populates LimitType.
+func (l *Limiter) CheckWithTier(
+	ctx context.Context,
+	snapshot AuthSnapshot,
+	aliasID string,
+	tier Tier,
+	tierLimits TierLimits,
+	estimatedCredits int64,
+	billableTokens int64,
+	freeTokens int64,
+) (LimitResult, error) {
+	// Run the existing account+key path first. If it denies, return immediately.
+	if result, err := l.Check(ctx, snapshot, aliasID, estimatedCredits, billableTokens, freeTokens); err != nil || !result.Allowed {
+		return result, err
+	}
+	if l == nil || tier == "" {
+		return LimitResult{Allowed: true}, nil
+	}
+
+	// Layer the tier-scoped bucket. Effective per-dimension limit is
+	// min(keyLimit, tierLimit) where 0 means "no limit at that layer".
+	keyRPM := 0
+	keyTPM := 0
+	if snapshot.KeyRatePolicy != nil {
+		keyRPM = snapshot.KeyRatePolicy.RateLimitRPM
+		keyTPM = snapshot.KeyRatePolicy.RateLimitTPM
+		// Per-key tier_overrides take precedence over env defaults.
+		if override, ok := snapshot.KeyRatePolicy.TierOverrides[string(tier)]; ok {
+			if override.RPM > 0 {
+				tierLimits.RPM = override.RPM
+			}
+			if override.TPM > 0 {
+				tierLimits.TPM = override.TPM
+			}
+		}
+	}
+	effectiveRPM := MinPositive(keyRPM, tierLimits.RPM)
+	effectiveTPM := MinPositive(keyTPM, tierLimits.TPM)
+
+	if effectiveRPM <= 0 && effectiveTPM <= 0 {
+		return LimitResult{Allowed: true}, nil
+	}
+
+	l.ensureDefaults()
+	now := l.now()
+	tierScope := fmt.Sprintf("tier:%s:%s", tier, snapshot.AccountID)
+
+	if effectiveRPM > 0 {
+		allowed, remaining, reset, err := l.runSlidingWindow(ctx, slidingWindowKeys(tierScope, "rpm"), effectiveRPM, 1, now)
+		if err != nil {
+			return LimitResult{}, err
+		}
+		if !allowed {
+			return LimitResult{
+				Allowed:             false,
+				Reason:              "request_limit_exceeded",
+				RequestLimit:        effectiveRPM,
+				RequestRemaining:    maxInt(remaining, 0),
+				RequestResetSeconds: maxInt(reset, 0),
+			}, nil
+		}
+	}
+	if effectiveTPM > 0 {
+		totalTokens := billableTokens + freeTokens
+		allowed, remaining, reset, err := l.runSlidingWindow(ctx, slidingWindowKeys(tierScope, "tpm"), effectiveTPM, totalTokens, now)
+		if err != nil {
+			return LimitResult{}, err
+		}
+		if !allowed {
+			return LimitResult{
+				Allowed:           false,
+				Reason:            "token_limit_exceeded",
+				TokenLimit:        effectiveTPM,
+				TokenRemaining:    maxInt(remaining, 0),
+				TokenResetSeconds: maxInt(reset, 0),
+			}, nil
+		}
+	}
+
+	return LimitResult{Allowed: true}, nil
+}
+
 // Check enforces account and key rate limits independently.
 func (l *Limiter) Check(ctx context.Context, snapshot AuthSnapshot, aliasID string, estimatedCredits int64, billableTokens int64, freeTokens int64) (LimitResult, error) {
 	if l == nil {

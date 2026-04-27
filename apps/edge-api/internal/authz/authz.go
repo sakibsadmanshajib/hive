@@ -31,11 +31,19 @@ type AuthSnapshot struct {
 
 // RatePolicy is the edge-side rate-limit projection for one scope.
 type RatePolicy struct {
-	RateLimitRPM          int   `json:"rate_limit_rpm"`
-	RateLimitTPM          int   `json:"rate_limit_tpm"`
-	RollingFiveHourLimit  int64 `json:"rolling_five_hour_limit"`
-	WeeklyLimit           int64 `json:"weekly_limit"`
-	FreeTokenWeightTenths int   `json:"free_token_weight_tenths"`
+	RateLimitRPM          int                       `json:"rate_limit_rpm"`
+	RateLimitTPM          int                       `json:"rate_limit_tpm"`
+	RollingFiveHourLimit  int64                     `json:"rolling_five_hour_limit"`
+	WeeklyLimit           int64                     `json:"weekly_limit"`
+	FreeTokenWeightTenths int                       `json:"free_token_weight_tenths"`
+	TierOverrides         map[string]TierOverridePol `json:"tier_overrides,omitempty"`
+}
+
+// TierOverridePol is the edge-side projection of a per-tier RPM/TPM override
+// supplied by the control-plane via api_key_rate_policies.tier_overrides.
+type TierOverridePol struct {
+	RPM int `json:"rpm"`
+	TPM int `json:"tpm"`
 }
 
 // Resolver fetches AuthSnapshots from the control plane.

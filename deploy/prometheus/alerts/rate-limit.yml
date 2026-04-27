@@ -1,0 +1,38 @@
+groups:
+  - name: hive_rate_limit
+    rules:
+      - alert: HighRateLimitRejections
+        # 5m rate of rate_limit_exceeded_total per tier exceeds 0.5 rejections/sec.
+        # Threshold is intentionally conservative for v1.1 baseline; ops tunes per
+        # tier as production traffic shapes the curve.
+        #
+        # Counter labels are kept low-cardinality on purpose: only `tier` is a
+        # Prometheus label. Per-key drill-down belongs in structured logs /
+        # traces — emitting `key_id` as a label would explode series cardinality.
+        expr: sum by (tier) (rate(rate_limit_exceeded_total[5m])) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+          subsystem: rate_limit
+        annotations:
+          summary: "Tier {{ $labels.tier }} rate-limit rejections elevated"
+          description: |
+            Rejections at tier {{ $labels.tier }} sustained above baseline
+            for 5+ minutes. Drill into per-key offenders via the edge-api
+            structured logs (filter by event=rate_limit_exceeded, tier label)
+            — `key_id` is intentionally not a Prometheus label.
+
+      - alert: VerifiedTierUnusuallyRejecting
+        # Verified tier should rarely reject; if it does at >0.1/s for 10m,
+        # likely a noisy customer or a tier-resolver regression.
+        expr: sum(rate(rate_limit_exceeded_total{tier="verified"}[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          subsystem: rate_limit
+        annotations:
+          summary: "Verified-tier rate-limit rejection rate above expected baseline"
+          description: |
+            Verified tier rejection rate sustained above 0.1/s for 10+ minutes.
+            Either a customer is exceeding their key cap, or tier resolution
+            is misclassifying. Inspect resolveTier seam in apps/edge-api/internal/authz/tier.go.
