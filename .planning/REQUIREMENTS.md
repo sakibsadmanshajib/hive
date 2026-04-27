@@ -109,6 +109,21 @@ remains **Pending** until the target phase produces an evidence file.
 | CONS-02 | 13 | Pending | Phase 13 (planned) |
 | CONS-03 | 11 | Pending | Phase 11 (planned — chart UIs shipped Phase 09; live-data verification deferred) |
 
+### Console Integration (Phase 13)
+
+| ID | Phase | Status | Evidence |
+|----|-------|--------|----------|
+| CONSOLE-13-01 | 13 | Satisfied | [evidence/CONSOLE-13-01.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-01.md) — every console route reachable; 18/21 Green, 2 Phase-14-deferred (fixture-seed flake), 1 Broken-P0 fixed inline |
+| CONSOLE-13-02 | 13 | Satisfied | [evidence/CONSOLE-13-02.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-02.md) — `apps/web-console/lib/control-plane/types.ts` re-export shim over canonical `client.ts` interface set |
+| CONSOLE-13-03 | 13 | Satisfied | [evidence/CONSOLE-13-03.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-03.md) — strict-TS clean: `tsc --noEmit` exit 0, zero `as any`/`as unknown`/`<any>`/`<unknown>` matches |
+| CONSOLE-13-04 | 13 | Satisfied | [evidence/CONSOLE-13-04.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-04.md) — zero customer-surface FX/USD leak in `apps/web-console/{app,components,lib}` (PHASE-17-OWNER-ONLY annotated remnants only) |
+| CONSOLE-13-05 | 13 | Satisfied | [evidence/CONSOLE-13-05.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-05.md) — viewer-gates honoured on owner-only routes; vitest 18 tests cover owner / non-owner role matrix |
+| CONSOLE-13-06 | 13 | Satisfied | [evidence/CONSOLE-13-06.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-06.md) — auth flows (sign-in/up/forgot/reset/out/callback) green via `__tests__/auth-routes.test.ts` (12 tests) + `tests/e2e/unauth.spec.ts` (5 tests) |
+| CONSOLE-13-07 | 13 | Partial | [evidence/CONSOLE-13-07.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-07.md) — workspace switch + invitation accept code paths exercised; workspace-switcher E2E spec fails on pre-existing fixture-seed race (HANDOFF-13-01 → Phase 14) |
+| CONSOLE-13-08 | 13 | Satisfied | [evidence/CONSOLE-13-08.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-08.md) — Playwright spec coverage map + 2 new specs (console-billing BDT-only, console-fx-guard whole-console) |
+| CONSOLE-13-09 | 13 | Satisfied | [evidence/CONSOLE-13-09.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-09.md) — `tsc --noEmit` + `npm run build` + `npm run test:unit` all exit 0 |
+| CONSOLE-13-10 | 13 | Satisfied | [evidence/CONSOLE-13-10.md](phases/13-console-integration-fixes/evidence/CONSOLE-13-10.md) — 6 hand-offs filed (HANDOFF-13-01..06) targeting Phases 14, 17, 18 |
+
 ### Privacy & Operations
 
 | ID | Phase | Status | Evidence |

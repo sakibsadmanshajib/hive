@@ -27,9 +27,12 @@ function statusBadge(status: string): { label: string; tone: ToneName } {
 }
 
 function formatLocalAmount(amountCents: number, currency: string): string {
+  // CONSOLE-13-04 regulatory: never fall back to "USD". The Invoice decoder
+  // already rejects rows missing `local_currency` (returns null), so this
+  // path always receives a non-empty rail currency.
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: currency || "USD",
+    currency,
     minimumFractionDigits: 2,
   }).format(amountCents / 100);
 }
