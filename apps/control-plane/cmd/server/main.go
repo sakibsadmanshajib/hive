@@ -19,6 +19,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore"
+	batchexecutor "github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
@@ -281,17 +282,18 @@ func main() {
 					asynqClient := asynq.NewClient(redisOpt)
 					defer asynqClient.Close()
 
+					asynqQueue := batchstore.NewAsynqQueue(asynqClient)
 					if routingSvc != nil && accountingSvc != nil {
 						batchSubmitter = batchstore.NewSubmitter(
 							filestoreSvc,
 							routingSvc,
 							storageClient,
-							batchstore.NewAsynqQueue(asynqClient),
+							asynqQueue,
 							accountingSvc,
 							resolveLiteLLMBaseURL(),
 							resolveLiteLLMMasterKey(),
 							storageCfg.FilesBucket,
-						)
+						).WithLocalExecutor(asynqQueue, cfg.BatchExecutorKind)
 					}
 
 					batchWorker := batchstore.NewBatchWorker(
@@ -302,8 +304,37 @@ func main() {
 						storageCfg.FilesBucket,
 						accountingSvc,
 					)
+
+					// Phase 15: build local executor and wire into worker.
+					if routingSvc != nil && accountingSvc != nil {
+						execCfg := batchexecutor.Config{
+							Concurrency: cfg.BatchExecutorConcurrency,
+							MaxRetries:  cfg.BatchExecutorMaxRetries,
+							LineTimeout: time.Duration(cfg.BatchExecutorLineTimeoutMs) * time.Millisecond,
+							Kind:        batchexecutor.ExecutorKind(cfg.BatchExecutorKind),
+						}
+						inferenceClient := batchstore.NewLiteLLMInferenceClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
+						dispatcher, dispErr := batchexecutor.NewDispatcher(execCfg, inferenceClient, nil)
+						if dispErr != nil {
+							log.Printf("WARNING: batch executor dispatcher init failed: %v", dispErr)
+						} else {
+							batchStore := batchstore.NewPgxBatchStore(filestoreSvc, filestoreSvc, routingSvc)
+							lineStore := batchstore.NewPgxLineStore(pool)
+							reservationPort := batchstore.NewAccountingReservationAdapter(accountingSvc)
+							fileRegistrar := batchstore.NewPgxFileRegistrar(filestoreSvc)
+							ex, exErr := batchexecutor.NewExecutor(execCfg, batchStore, lineStore, storageClient, fileRegistrar, storageCfg.FilesBucket, dispatcher, reservationPort)
+							if exErr != nil {
+								log.Printf("WARNING: batch executor init failed: %v", exErr)
+							} else {
+								batchWorker.WithLocalExecutor(ex)
+								log.Printf("batch local executor ready (concurrency=%d kind=%s)", execCfg.Concurrency, execCfg.Kind)
+							}
+						}
+					}
+
 					asynqMux := asynq.NewServeMux()
 					asynqMux.HandleFunc(batchstore.TypeBatchPoll, batchWorker.HandleBatchPoll)
+					asynqMux.HandleFunc(batchstore.TypeBatchExecute, batchWorker.HandleBatchExecute)
 
 					asynqSrv := asynq.NewServer(
 						redisOpt,

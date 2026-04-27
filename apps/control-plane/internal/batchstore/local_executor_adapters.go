@@ -1,0 +1,254 @@
+package batchstore
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
+	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
+	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
+	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// BatchSnapshotLoader is the slice of filestore.Service the BatchStore adapter needs.
+type BatchSnapshotLoader interface {
+	GetBatchByID(ctx context.Context, id string) (*filestore.Batch, error)
+	UpdateBatchStatus(ctx context.Context, batchID, status string, updates map[string]interface{}) error
+}
+
+// FileLookup resolves an input file ID to its storage path. The executor runs
+// server-side and looks up the file by ID without account scoping.
+type FileLookup interface {
+	GetFileByID(ctx context.Context, id string) (*filestore.File, error)
+}
+
+// FileCreator persists a public.files row for a server-side artifact (e.g.
+// the local executor's output.jsonl / errors.jsonl uploads). Concrete impl
+// is filestore.Service.CreateFile.
+type FileCreator interface {
+	CreateFile(ctx context.Context, accountID, purpose, filename string, bytes int64, storagePath string) (filestore.File, error)
+}
+
+// pgxFileRegistrar adapts filestore.Service.CreateFile to executor.FileRegistrar.
+type pgxFileRegistrar struct {
+	svc FileCreator
+}
+
+// NewPgxFileRegistrar wires the production FileRegistrar adapter.
+func NewPgxFileRegistrar(svc FileCreator) executor.FileRegistrar {
+	return &pgxFileRegistrar{svc: svc}
+}
+
+// Register creates a public.files row pointing at the executor's uploaded
+// artifact and returns the generated file ID.
+func (r *pgxFileRegistrar) Register(ctx context.Context, accountID, purpose, filename, storagePath string, bytes int64) (string, error) {
+	if r.svc == nil {
+		return "", fmt.Errorf("file registrar not configured")
+	}
+	f, err := r.svc.CreateFile(ctx, accountID, purpose, filename, bytes, storagePath)
+	if err != nil {
+		return "", fmt.Errorf("create file record: %w", err)
+	}
+	return f.ID, nil
+}
+
+// pgxBatchStore implements executor.BatchStore against the existing
+// filestore.Service plus the routing service (to resolve LiteLLMModel
+// once per batch) and the new executor-specific columns added in
+// supabase/migrations/20260427_01_batch_local_executor.sql.
+type pgxBatchStore struct {
+	loader  BatchSnapshotLoader
+	files   FileLookup
+	routing BatchRouteSelector
+}
+
+// NewPgxBatchStore wires the production BatchStore adapter. The routing
+// selector is required so LoadBatch can resolve the LiteLLM model name
+// once per batch (matching the submitter's NeedBatch=true criteria),
+// avoiding per-line route lookups in the hot path.
+func NewPgxBatchStore(loader BatchSnapshotLoader, files FileLookup, routes BatchRouteSelector) executor.BatchStore {
+	return &pgxBatchStore{loader: loader, files: files, routing: routes}
+}
+
+func (p *pgxBatchStore) LoadBatch(ctx context.Context, batchID string) (executor.BatchSnapshot, error) {
+	batch, err := p.loader.GetBatchByID(ctx, batchID)
+	if err != nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("get batch: %w", err)
+	}
+	if batch == nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("batch %s not found", batchID)
+	}
+	file, err := p.files.GetFileByID(ctx, batch.InputFileID)
+	if err != nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("get input file: %w", err)
+	}
+	if file == nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("input file %s not found", batch.InputFileID)
+	}
+	if p.routing == nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("routing selector not configured")
+	}
+	route, err := p.routing.SelectRoute(ctx, routing.SelectionInput{
+		AliasID:   batch.ModelAlias,
+		NeedBatch: true,
+	})
+	if err != nil {
+		return executor.BatchSnapshot{}, fmt.Errorf("select batch route: %w", err)
+	}
+	if strings.TrimSpace(route.LiteLLMModelName) == "" {
+		return executor.BatchSnapshot{}, fmt.Errorf("route %q resolved to empty LiteLLM model", batch.ModelAlias)
+	}
+	snap := executor.BatchSnapshot{
+		ID:              batch.ID,
+		AccountID:       batch.AccountID,
+		InputFileID:     batch.InputFileID,
+		InputFilePath:   file.StoragePath,
+		Endpoint:        batch.Endpoint,
+		ModelAlias:      batch.ModelAlias,
+		LiteLLMModel:    route.LiteLLMModelName,
+		ReservedCredits: batch.EstimatedCredits,
+	}
+	if batch.ReservationID != nil {
+		snap.ReservationID = *batch.ReservationID
+	}
+	return snap, nil
+}
+
+func (p *pgxBatchStore) MarkCompleted(ctx context.Context, batchID string, completedLines, failedLines int, outputFileID, errorFileID string, overconsumed bool, completedAt time.Time) error {
+	updates := map[string]interface{}{
+		"completed_at":    completedAt.Unix(),
+		"completed_lines": completedLines,
+		"failed_lines":    failedLines,
+		"overconsumed":    overconsumed,
+	}
+	if outputFileID != "" {
+		updates["output_file_id"] = outputFileID
+	}
+	if errorFileID != "" {
+		updates["error_file_id"] = errorFileID
+	}
+	return p.loader.UpdateBatchStatus(ctx, batchID, "completed", updates)
+}
+
+// pgxLineStore implements executor.LineStore against public.batch_lines.
+type pgxLineStore struct {
+	pool *pgxpool.Pool
+}
+
+// NewPgxLineStore wires the production LineStore.
+func NewPgxLineStore(pool *pgxpool.Pool) executor.LineStore {
+	return &pgxLineStore{pool: pool}
+}
+
+func (s *pgxLineStore) LoadLines(ctx context.Context, batchID string) ([]executor.LineRow, error) {
+	rows, err := s.pool.Query(ctx, `
+		select batch_id, custom_id, status, attempt, consumed_credits,
+		       output_index, error_index, coalesce(last_error, ''), completed_at
+		from public.batch_lines
+		where batch_id = $1`, batchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]executor.LineRow, 0)
+	for rows.Next() {
+		var r executor.LineRow
+		var consumed float64
+		var outIdx, errIdx *int
+		var completedAt *time.Time
+		if err := rows.Scan(&r.BatchID, &r.CustomID, &r.Status, &r.Attempt, &consumed, &outIdx, &errIdx, &r.LastError, &completedAt); err != nil {
+			return nil, err
+		}
+		r.ConsumedCredits = int64(consumed)
+		r.OutputIndex = outIdx
+		r.ErrorIndex = errIdx
+		r.CompletedAt = completedAt
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *pgxLineStore) UpsertPending(ctx context.Context, batchID, customID string) error {
+	_, err := s.pool.Exec(ctx, `
+		insert into public.batch_lines (batch_id, custom_id, status)
+		values ($1, $2, 'pending')
+		on conflict (batch_id, custom_id) do nothing`, batchID, customID)
+	return err
+}
+
+func (s *pgxLineStore) MarkSucceeded(ctx context.Context, batchID, customID string, attempt int, consumedCredits int64, outputIndex int) error {
+	_, err := s.pool.Exec(ctx, `
+		insert into public.batch_lines
+		    (batch_id, custom_id, status, attempt, consumed_credits, output_index, completed_at)
+		values ($1, $2, 'succeeded', $3, $4, $5, now())
+		on conflict (batch_id, custom_id) do update
+		set status = 'succeeded',
+		    attempt = excluded.attempt,
+		    consumed_credits = excluded.consumed_credits,
+		    output_index = excluded.output_index,
+		    completed_at = excluded.completed_at`,
+		batchID, customID, attempt, consumedCredits, outputIndex)
+	return err
+}
+
+func (s *pgxLineStore) MarkFailed(ctx context.Context, batchID, customID string, attempt int, errorIndex int, lastError string) error {
+	_, err := s.pool.Exec(ctx, `
+		insert into public.batch_lines
+		    (batch_id, custom_id, status, attempt, error_index, last_error, completed_at)
+		values ($1, $2, 'failed', $3, $4, $5, now())
+		on conflict (batch_id, custom_id) do update
+		set status = 'failed',
+		    attempt = excluded.attempt,
+		    error_index = excluded.error_index,
+		    last_error = excluded.last_error,
+		    completed_at = excluded.completed_at`,
+		batchID, customID, attempt, errorIndex, lastError)
+	return err
+}
+
+// AccountingReservationAdapter adapts accounting.Service to executor.ReservationPort.
+type AccountingReservationAdapter struct {
+	svc AccountingSettler
+}
+
+// NewAccountingReservationAdapter wires the production ReservationPort.
+func NewAccountingReservationAdapter(svc AccountingSettler) executor.ReservationPort {
+	return &AccountingReservationAdapter{svc: svc}
+}
+
+// Settle finalizes the reservation when actualCredits > 0; otherwise it
+// releases the full reservation. Mirrors the existing settleTerminalReservation
+// path in worker.go for the upstream-batch case.
+func (a *AccountingReservationAdapter) Settle(ctx context.Context, batchID, accountID, reservationID string, actualCredits int64, overconsumed bool, terminalStatus string) error {
+	if a.svc == nil {
+		return fmt.Errorf("accounting settler not configured")
+	}
+	parsedAccount, err := uuid.Parse(strings.TrimSpace(accountID))
+	if err != nil {
+		return fmt.Errorf("parse account_id: %w", err)
+	}
+	parsedReservation, err := uuid.Parse(strings.TrimSpace(reservationID))
+	if err != nil {
+		return fmt.Errorf("parse reservation_id: %w", err)
+	}
+	if actualCredits > 0 {
+		_, err := a.svc.FinalizeReservation(ctx, accounting.FinalizeReservationInput{
+			AccountID:              parsedAccount,
+			ReservationID:          parsedReservation,
+			ActualCredits:          actualCredits,
+			TerminalUsageConfirmed: true,
+			Status:                 terminalStatus,
+		})
+		return err
+	}
+	_, err = a.svc.ReleaseReservation(ctx, accounting.ReleaseReservationInput{
+		AccountID:     parsedAccount,
+		ReservationID: parsedReservation,
+		Reason:        "batch_completed_unused",
+	})
+	return err
+}

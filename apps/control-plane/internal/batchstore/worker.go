@@ -3,6 +3,7 @@ package batchstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
+	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 )
 
@@ -44,6 +46,15 @@ type BatchWorker struct {
 	storage        StorageUploader
 	bucket         string
 	httpClient     *http.Client
+	localExecutor  *executor.Executor
+}
+
+// WithLocalExecutor wires the local executor entry point used by
+// HandleBatchExecute. The worker is unaffected when the executor is nil
+// (HandleBatchExecute returns an error if invoked).
+func (w *BatchWorker) WithLocalExecutor(ex *executor.Executor) *BatchWorker {
+	w.localExecutor = ex
+	return w
 }
 
 // NewBatchWorker creates a new BatchWorker.
@@ -457,6 +468,95 @@ func (w *BatchWorker) fetchUpstreamBatch(ctx context.Context, upstreamBatchID st
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	return result, nil
+}
+
+// HandleBatchExecute processes a batch:execute Asynq task by delegating to
+// the local executor. ctx.Canceled (graceful shutdown) is returned as an
+// error so Asynq re-enqueues; transient errors are returned for Asynq to
+// retry. Only when retries are exhausted is the batch marked failed and
+// the credit reservation released — otherwise the next retry resumes via
+// the restart-safe path in executor.Run.
+func (w *BatchWorker) HandleBatchExecute(ctx context.Context, t *asynq.Task) error {
+	if w.localExecutor == nil {
+		return fmt.Errorf("batchstore: local executor not wired")
+	}
+	var payload BatchExecutePayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		return fmt.Errorf("batchstore: unmarshal execute payload: %w", err)
+	}
+	if err := w.localExecutor.Run(ctx, payload.BatchID); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+		log.Printf("batchstore: local execute %s failed: %v", payload.BatchID, err)
+		w.handleLocalExecuteFailure(ctx, payload, err)
+		return fmt.Errorf("batch execute failed: %w", err)
+	}
+	return nil
+}
+
+// handleLocalExecuteFailure decides whether this Run-failure is the terminal
+// attempt. On non-terminal attempts it returns immediately so Asynq retries
+// the next attempt — the restart-safe path in executor.Run resumes
+// per-line state from public.batch_lines without re-charging. On the
+// terminal attempt it marks the batch row `failed` and releases the
+// reservation so credits aren't permanently locked.
+func (w *BatchWorker) handleLocalExecuteFailure(ctx context.Context, payload BatchExecutePayload, runErr error) {
+	retried, retriedOK := asynq.GetRetryCount(ctx)
+	maxRetry, maxOK := asynq.GetMaxRetry(ctx)
+	if retriedOK && maxOK && retried < maxRetry {
+		// Asynq will re-enqueue this task; defer terminal cleanup until the
+		// retry budget is exhausted so transient failures don't flicker
+		// status to `failed` then back to `completed` on the next run.
+		return
+	}
+	now := time.Now().UTC().Unix()
+	if updErr := w.fileService.UpdateBatchStatus(ctx, payload.BatchID, "failed", map[string]interface{}{
+		"failed_at": now,
+	}); updErr != nil {
+		log.Printf("batchstore: mark local batch %s failed: %v", payload.BatchID, updErr)
+	}
+	w.releaseLocalReservation(ctx, payload, runErr)
+}
+
+// releaseLocalReservation releases the batch's credit reservation when the
+// local executor's terminal attempt fails. Without this, the reservation
+// stays in `reserved` indefinitely because executor.Settle is only called
+// on the success path.
+func (w *BatchWorker) releaseLocalReservation(ctx context.Context, payload BatchExecutePayload, runErr error) {
+	if w.accounting == nil {
+		return
+	}
+	batch, err := w.fileService.GetBatch(ctx, payload.BatchID, payload.AccountID)
+	if err != nil || batch == nil {
+		log.Printf("batchstore: load batch %s for reservation release: %v", payload.BatchID, err)
+		return
+	}
+	accountID := strings.TrimSpace(batch.AccountID)
+	reservationID := ""
+	if batch.ReservationID != nil {
+		reservationID = strings.TrimSpace(*batch.ReservationID)
+	}
+	if accountID == "" || reservationID == "" {
+		return
+	}
+	parsedAccount, err := uuid.Parse(accountID)
+	if err != nil {
+		log.Printf("batchstore: parse account_id for batch %s reservation release: %v", payload.BatchID, err)
+		return
+	}
+	parsedReservation, err := uuid.Parse(reservationID)
+	if err != nil {
+		log.Printf("batchstore: parse reservation_id for batch %s reservation release: %v", payload.BatchID, err)
+		return
+	}
+	if _, err := w.accounting.ReleaseReservation(ctx, accounting.ReleaseReservationInput{
+		AccountID:     parsedAccount,
+		ReservationID: parsedReservation,
+		Reason:        "local_batch_execute_failed",
+	}); err != nil {
+		log.Printf("batchstore: release reservation for batch %s after local execute failure (%v): %v", payload.BatchID, runErr, err)
+	}
 }
 
 // downloadUpstreamFile downloads the content of an upstream file and returns a reader + metadata.

@@ -215,6 +215,19 @@ func (s *Service) GetBatch(ctx context.Context, id, accountID string) (*Batch, e
 	return s.repo.GetBatch(ctx, id, accountID)
 }
 
+// GetBatchByID retrieves a batch without account scoping. Used by server-side
+// workers (e.g., the local batch executor in batchstore/executor) that load a
+// batch by ID before resolving its owning account.
+func (s *Service) GetBatchByID(ctx context.Context, id string) (*Batch, error) {
+	return s.repo.GetBatchByID(ctx, id)
+}
+
+// GetFileByID retrieves a file without account scoping. Counterpart to
+// GetBatchByID for the local batch executor.
+func (s *Service) GetFileByID(ctx context.Context, id string) (*File, error) {
+	return s.repo.GetFileByID(ctx, id)
+}
+
 // ListBatches retrieves batches for an account with cursor-based pagination.
 func (s *Service) ListBatches(ctx context.Context, accountID string, limit int, after *string) ([]Batch, error) {
 	return s.repo.ListBatches(ctx, accountID, limit, after)
