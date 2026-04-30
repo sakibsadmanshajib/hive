@@ -198,3 +198,110 @@ The `TestGate_HardCapExceeded_Blocks402` test guards against any of `amount_usd`
 
 Next pointer: **Task 4 — Invoices module (PDF generation + listing endpoint + Phase 18 owner-gate hand-off).**
 
+
+---
+
+## Task 4 — done
+
+Closed 2026-04-30. Two atomic commits on `a/phase-14-payments-budget-grant`:
+
+- `d8ddf9a feat(14): task 4a — invoices module skeleton + repository + service`
+- `8ee4fad feat(14): task 4b — invoice PDF generator + monthly cron + wire-in`
+
+Both pushed. Branch `a/phase-14-payments-budget-grant` HEAD = `8ee4fad`.
+
+### Build + test (toolchain Docker, sh entrypoint, -buildvcs=false)
+
+```
+$ cd deploy/docker && docker compose --env-file ../../.env --profile tools --profile local run --rm toolchain \
+    "cd /workspace && go build -buildvcs=false ./apps/control-plane/... \
+       && go test -buildvcs=false ./apps/control-plane/internal/payments/invoices/... -count=1 -short"
+ok   github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices  0.006s
+```
+
+Wider sanity (vet + budgets + platform tests):
+
+```
+$ go vet ./apps/control-plane/internal/payments/invoices/...    # clean
+$ go test ./apps/control-plane/internal/{payments/invoices,budgets,platform}/...
+ok  invoices  0.006s
+ok  budgets   0.004s
+ok  platform  0.003s
+```
+
+### PDF lib decision
+
+Locked: `github.com/jung-kurt/gofpdf v1.16.2` — pure Go, MIT, no CGO, no Docker
+image bloat. Recorded via `go mod edit -require=...@v1.16.2 && go mod tidy`.
+`go.sum` shows the matching hashes:
+
+```
+github.com/jung-kurt/gofpdf v1.16.2 h1:jgbatWHfRlPYiK85qgevsZTHviWXKwB1TTiKdz5PtRc=
+github.com/jung-kurt/gofpdf v1.16.2/go.mod h1:1hl7y57EsiPAkLbOwzpzqgx1A30nQCk/YmFV8S2vmK0=
+```
+
+### PDF — BDT-only proof
+
+The renderer collects every customer-visible cell label into `textBuf`
+(strings.Builder); after the page is laid out it runs `assertNoFXLeak` over
+the concatenation BEFORE `pdf.Output` flushes bytes. The tripwire token list:
+
+```
+$, usd, amount_usd, fx_, price_per_credit_usd, exchange_rate, exchange
+```
+
+`pdf_test.go::TestRender_ProducesPDFWithBDTOnly` exercises a real two-line
+invoice (gpt-4o-mini @ BDT 50.00, claude-haiku @ BDT 75.00, total BDT 125.00).
+Failure modes are tested both ways:
+- `assertNoFXLeak(<static labels>)` returns nil (regulator-clean).
+- `assertNoFXLeak("Total\nUSD 125.00\n")` returns non-nil (false-negative
+  guard).
+
+Customer-controlled metadata is sanitized before it reaches the page
+(`sanitize` strips `$`, `usd`, `fx_`, ... — `TestSanitize_RedactsBannedTokens`
+covers).
+
+### math/big audit
+
+```
+$ grep -RnE '\bfloat64\b|\bfloat32\b' apps/control-plane/internal/payments/invoices/ \
+    | grep -v _test.go | grep -v 'docstring\|comment'
+# (matches are ALL: gofpdf cell width/height parameters — page geometry, not
+#  money. Money paths use *big.Int exclusively. No float types appear in the
+#  monetary code path.)
+```
+
+### Cron registration
+
+`apps/control-plane/cmd/server/main.go` builds the cron after the spend-alert
+runner inside the `pool != nil` block:
+
+```go
+invoicesCron := invoices.NewCron(invoicesSvc, invoicesRepo, invoices.CronConfig{
+    Logger:   slog.Default(),
+    Interval: time.Hour,
+})
+invoicesCron.Start(context.Background())
+defer invoicesCron.Stop()
+```
+
+Trigger window: day-1 02:00 UTC (per `Cron.maybeRun`). Per-workspace error
+isolation verified by `cron_test.go::TestGenerateMonthlyInvoices_Isolates...`.
+
+### HTTP routes
+
+`routerMux.Handle("/api/v1/invoices", authMiddleware.Require(invoicesHandler))`
+and `"/api/v1/invoices/"` registered post `platformhttp.NewRouter`. PDF
+endpoint returns 302 + `Content-Disposition` to a short-TTL Supabase Storage
+presigned URL (10 min) — avoids edge-api proxy CPU cost while preserving
+ownership semantics. Cross-workspace = 404 by design (id-enumeration leak
+guard) — `http_test.go::TestHandleGet_NotMemberReturns404NotForbidden`.
+
+### Blockers
+
+- None.
+
+### Next pointer
+
+Task 5 — Discretionary credit grants (owner-only API, immutable audit, single-tx
+ledger credit, admin UI pages, grantee lookup).
