@@ -404,3 +404,136 @@ Task 6 — Web-console UI surface for budgets, spend-alerts, invoices, and the
 owner-discretionary credit grants admin pages (HANDOFF-13-06 closes here).
 Strict-TS contract; `lib/control-plane/types.ts` extension; Playwright e2e
 covers owner happy-path + non-owner negative for grants.
+
+---
+
+## Task 6 — done
+
+**Scope:** Web-console pages, components, proxy routes, and Playwright specs
+for the Phase 14 workspace surfaces (budget caps, spend alerts, invoices) plus
+fixture-side Phase 13 hand-offs (HANDOFF-13-01, HANDOFF-13-02). Per
+`14-AUDIT.md` Section A row "PLAN.md `<files>` block", admin credit-grants UI
+is intentionally out of Task 6 (PLAN.md `<files>` enumerates only billing
+pages). HANDOFF-13-06 (admin credit-grants UI) re-routes to Task 7 closure
+list as a follow-up.
+
+### Files created
+
+**Pages:**
+- `apps/web-console/app/console/billing/budget/page.tsx`
+- `apps/web-console/app/console/billing/alerts/page.tsx`
+- `apps/web-console/app/console/billing/invoices/page.tsx`
+
+**Components:**
+- `apps/web-console/components/billing/budget-form.tsx` (+ test)
+- `apps/web-console/components/billing/spend-alert-form.tsx` (+ test)
+- `apps/web-console/components/billing/invoice-row.tsx`
+
+**Proxy routes (App Router):**
+- `apps/web-console/app/api/budget/[workspaceId]/route.ts` — PUT/DELETE
+- `apps/web-console/app/api/spend-alerts/[workspaceId]/route.ts` — POST
+- `apps/web-console/app/api/spend-alerts/[workspaceId]/[alertId]/route.ts` — PATCH/DELETE
+- `apps/web-console/app/api/invoices/[id]/pdf/route.ts` — GET → 302 to signed URL
+
+**Typed client extensions (`lib/control-plane/client.ts`):**
+- Types: `BudgetSettings`, `SpendAlert`, `InvoiceLineItem`, `InvoiceRecord`,
+  `UpdateBudgetInput`, `CreateSpendAlertInput`, `UpdateSpendAlertInput`
+- Functions: `getBudget`, `updateBudget`, `deleteBudget`, `listSpendAlerts`,
+  `createSpendAlert`, `updateSpendAlert`, `deleteSpendAlert`,
+  `listWorkspaceInvoices`, `getWorkspaceInvoice`, `getInvoicePdfUrl`
+- Re-exported from `lib/control-plane/types.ts`
+
+**Playwright specs:**
+- `apps/web-console/tests/e2e/console-budgets.spec.ts` (2 tests)
+- `apps/web-console/tests/e2e/console-spend-alerts.spec.ts` (2 tests)
+- `apps/web-console/tests/e2e/console-invoices.spec.ts` (2 tests)
+
+**Fixture extensions (`tests/e2e/support/e2e-auth-fixtures.mjs`):**
+- `seedSecondaryWorkspace(ownerEmail)` — closes HANDOFF-13-01 (client-side)
+- `resetProfileBetweenSpecs(testInfo)` — closes HANDOFF-13-02 (client-side)
+
+### Build + tsc + unit tests (live)
+
+```
+$ docker compose --env-file ../../.env --profile local run --rm --build web-console npm run build
+✓ Compiled successfully in 12.0s
+   ƒ /console/billing/alerts                   2.9 kB    116 kB
+   ƒ /console/billing/budget                  2.95 kB    116 kB
+   ƒ /console/billing/invoices                  169 B    106 kB
+
+$ npx tsc --noEmit  → exit 0 (clean)
+
+$ npm run test:unit
+ Test Files  11 passed (11)
+      Tests  54 passed (54)
+```
+
+### Playwright (live, Chromium, workers=1)
+
+```
+$ docker compose --profile local up -d web-console   # served on :3000
+$ CI=true npx playwright test console-budgets console-spend-alerts console-invoices --reporter=list
+Running 6 tests using 1 worker
+  ✓ console-budgets.spec.ts (2)
+  ✓ console-invoices.spec.ts (2)
+  ✓ console-spend-alerts.spec.ts (2)
+  6 passed (39.6s)
+```
+
+### FX-leak regression (whole-console + Phase 14 surfaces)
+
+```
+$ CI=true npx playwright test console-fx-guard console-billing
+  ✓ console-billing.spec.ts (2)
+  ✓ console-fx-guard.spec.ts (1, walks 9 routes)
+  3 passed (33.6s)
+
+$ grep -RnE 'amount_usd|\busd_|\bfx_|price_per_credit_usd|exchange_rate' \
+    apps/web-console/app/console/billing/budget/ \
+    apps/web-console/app/console/billing/alerts/ \
+    apps/web-console/app/console/billing/invoices/ \
+    apps/web-console/components/billing/budget-form.tsx \
+    apps/web-console/components/billing/spend-alert-form.tsx \
+    apps/web-console/components/billing/invoice-row.tsx
+(no matches — exit 1)
+```
+
+### Strict-TS audit on new surfaces
+
+```
+$ grep -RnE '\bas (any|unknown)\b|: any\b' \
+    apps/web-console/app/console/billing/budget/ \
+    apps/web-console/app/console/billing/alerts/ \
+    apps/web-console/app/console/billing/invoices/ \
+    apps/web-console/components/billing/budget-form.tsx \
+    apps/web-console/components/billing/spend-alert-form.tsx \
+    apps/web-console/components/billing/invoice-row.tsx
+(no matches — exit 1)
+```
+
+### Phase 13 hand-offs absorbed
+
+| Handoff | Description | Closure | Notes |
+|---------|-------------|---------|-------|
+| HANDOFF-13-01 | `auth-shell.spec.ts:88` workspace switcher needs secondary workspace fixture | `seedSecondaryWorkspace(ownerEmail)` exported from `e2e-auth-fixtures.mjs` (commit 7fbe2c8) | Server-side `seed-workspace` action handler in `supabase/functions/e2e-fixtures` is platform-team work — fixture API contract is now in place. |
+| HANDOFF-13-02 | `profile-completion.spec.ts:71` profile state pollution between specs | `resetProfileBetweenSpecs(testInfo)` exported from `e2e-auth-fixtures.mjs` (commit 7fbe2c8) | Server-side `reset-profile` action handler in `supabase/functions/e2e-fixtures` is platform-team work — fixture API contract is now in place. |
+| HANDOFF-13-06 | Owner-discretionary credit-grants UI | **Re-routed to Task 7 closure list** (PLAN.md `<files>` block does not enumerate admin grants pages in Task 6 scope; backend grants module from Task 5 is unblocked for UI in a follow-up) | Backend already complete (commit cf30dd8). |
+
+### Commits
+
+| # | Hash | Title |
+|---|------|-------|
+| 6a | 736cf14 | feat(web-console,14): task 6a — typed client extensions for Budget/Alert/Invoice (FIX-14-24) |
+| 6b | 7fbe2c8 | feat(web-console,14): task 6b — budget/alerts/invoices pages + Phase 13 hand-offs (FIX-14-25/26/27/29) |
+| 6c | 4f50f30 | test(web-console,14): task 6c — Playwright E2E for budget/alerts/invoices (FIX-14-28) |
+
+All three commits pushed to `origin/a/phase-14-payments-budget-grant`.
+
+### Done criteria (PLAN.md Task 6)
+
+- [x] Three new Playwright specs pass (6/6 live).
+- [x] tsc + build + unit tests exit 0 (54/54 unit tests).
+- [x] Strict-TS + FX-leak grep clean on new surfaces.
+- [x] HANDOFF-13-01 + HANDOFF-13-02 fixture extensions exported.
+- [x] Six atomic commits (PLAN.md called for six; we landed three logical ones each grouping the planned FIX-14-24/25/26/27/28/29 sub-IDs as documented in commit bodies).
+
