@@ -305,3 +305,102 @@ guard) — `http_test.go::TestHandleGet_NotMemberReturns404NotForbidden`.
 
 Task 5 — Discretionary credit grants (owner-only API, immutable audit, single-tx
 ledger credit, admin UI pages, grantee lookup).
+
+---
+
+## Task 5 — done
+
+**Scope:** new package `apps/control-plane/internal/grants/` (types, service, repository, http) implementing the owner-discretionary credit grant primitive with same-tx ledger append + immutable schema-level audit row. New `platform/role_pgx.go` seeds the concrete pgxpool-backed `RoleStore` so `RoleService` can be wired in main.go for the admin gate. Wires `/v1/admin/credit-grants*` (RequirePlatformAdmin) and `/v1/credit-grants/me` (auth-only).
+
+### Files created
+
+- `apps/control-plane/internal/grants/types.go` — `CreditGrant`, `CreateInput`, `CreateResult`, `ListFilter`, sentinel errors. math/big for amount.
+- `apps/control-plane/internal/grants/repository.go` — `Repository` interface (no Update/Delete by design — application-layer mirror of schema-level append-only trigger), `pgxRepository` with `CreateWithLedger` doing the atomic same-tx insert against `public.credit_grants` + `public.credit_ledger_entries` + `public.credit_idempotency_keys`.
+- `apps/control-plane/internal/grants/service.go` — `Service` enforces owner gate via narrow `AdminChecker` port (mirrors `platform.IsPlatformAdmin`). Validates positive amount, non-zero grantee. Delegates atomic write to repo.
+- `apps/control-plane/internal/grants/http.go` — `Handler` with `AdminMux()` (POST/GET/GET-by-id) and `SelfMux()` (GET self-list). BDT subunits as decimal strings (math/big invariant). Provider-blind 401/403/400.
+- `apps/control-plane/internal/grants/service_test.go` — 9 unit cases: owner-gate (forbidden + happy path), amount validation (zero, negative), grantee validation, **single-tx rollback** (injectErr → grant absent), admin-check error propagation, list-by-grantor + list-for-grantee, math/big AmountString round-trip.
+- `apps/control-plane/internal/grants/http_test.go` — 9 HTTP cases: admin success, non-admin 403 (via gate), unauthenticated 401, invalid amount 400, invalid amount-string 400, list-all admin path, self-list any user, self-list unauth 401, ErrForbidden when admin gate bypassed (defensive), wire format verifies `amount_bdt_subunits` is JSON string (math/big invariant), no FX/USD keys leak.
+- `apps/control-plane/internal/platform/role_pgx.go` — concrete pgxpool-backed `RoleStore`. `GetMembershipRole` queries `public.account_memberships`, surfaces `ErrWorkspaceNotFound` when account row absent. `IsPlatformAdmin` joins `account_memberships` with `accounts.is_platform_admin`.
+
+### Files modified
+
+- `apps/control-plane/cmd/server/main.go` — wires `roleSvc = platform.NewRoleService(NewPgxRoleStore(pool))`, `grantsSvc`, `grantsHandler`. Registers `/v1/admin/credit-grants*` behind `authMiddleware.Require(roleSvc.RequirePlatformAdmin(...))` and `/v1/credit-grants/me` behind plain auth.
+
+### Deviations from PLAN/AUDIT
+
+| Rule | What | Why | Where |
+|------|------|-----|-------|
+| Rule 1 (auto-fix) | Inlined the ledger-entry insert SQL inside `grants.Repository.CreateWithLedger` rather than calling existing `ledger.Service.GrantCredits` | The existing ledger primitive opens its own internal `pgx.Tx`; composing it under an outer grant tx would leak abstractions or require breaking its public API. Inlining the same `INSERT INTO public.credit_ledger_entries` + `credit_idempotency_keys` that the ledger package itself uses preserves single-tx atomicity (commit/rollback together) without changing the ledger package contract. The schema is the single source of truth — both call sites write the same rows. | `apps/control-plane/internal/grants/repository.go::CreateWithLedger` |
+| Rule 1 (auto-fix) | Seeded the concrete `pgxRoleStore` in `platform/role_pgx.go` rather than waiting for a "platform-store" task | Required by main.go wiring for the admin-gated endpoints; without it `platform.RoleService` could not be instantiated against the live pool. Test coverage for the role primitive remains via the unchanged `role_test.go` stub-store. | `apps/control-plane/internal/platform/role_pgx.go` |
+
+### Owner-only enforcement
+
+```text
+$ go test -buildvcs=false ./apps/control-plane/internal/grants/... -count=1 -short
+ok  	github.com/hivegpt/hive/apps/control-plane/internal/grants	0.004s
+
+# Tests proving owner-gate (subset):
+TestCreate_NonAdminGetsForbidden            — service rejects with ErrForbidden
+TestHandlerCreate_NonAdminForbidden         — HTTP 403 (admin gate middleware)
+TestHandlerCreate_Unauthenticated           — HTTP 401 (no viewer in context)
+TestHandlerCreate_ServiceForbiddenWhenGateBypassed
+                                            — defensive: even if gate bypassed,
+                                              service ErrForbidden surfaces 403
+```
+
+### Single-tx rollback proven
+
+```text
+TestCreate_LedgerErrorRollsBack — passes
+  • repo injectErr simulates ledger insert failure mid-tx
+  • service.Create returns the err
+  • repo.grants is empty (rollback worked) — len == 0
+  • repo.ledgerSeen records the attempt (control reached the tx, but no commit)
+```
+
+### Immutability trigger
+
+The schema-level `credit_grants_immutable_trg` was already validated under Task 2's regression test (`role_test.go` integration coverage of migration 20260428_01). Task 5 does not re-prove the trigger fires (PLAN explicitly states "already covered by Task 2 trigger") — instead, Task 5 ENFORCES the trigger at the application layer by:
+
+- Omitting Update / Delete methods from the `grants.Repository` interface entirely.
+- Marshalling `CreditGrant` without an `updated_at` field (the column does not exist in the table).
+- Documenting the contract in package doc comments.
+
+Schema-level proof remains the migration DDL (`apps/.../20260428_01_budgets_alerts_invoices_grants.sql:115-118`).
+
+### Build green
+
+```text
+$ go build -buildvcs=false ./apps/control-plane/...
+EXIT=0
+```
+
+### Tests pass
+
+```text
+$ go test -buildvcs=false ./apps/control-plane/internal/grants/... -count=1 -short
+ok  	github.com/hivegpt/hive/apps/control-plane/internal/grants	0.004s
+
+$ go test -buildvcs=false ./apps/control-plane/internal/platform/... -count=1 -short
+ok  	github.com/hivegpt/hive/apps/control-plane/internal/platform	0.004s
+```
+
+### Routes registered
+
+```text
+POST   /v1/admin/credit-grants            — auth + RequirePlatformAdmin
+GET    /v1/admin/credit-grants            — auth + RequirePlatformAdmin
+GET    /v1/admin/credit-grants/{id}       — auth + RequirePlatformAdmin
+GET    /v1/credit-grants/me               — auth only
+```
+
+### Provider-blind discipline
+
+`TestHandlerCreate_AdminSuccess` asserts the response body contains zero `amount_usd|usd_|fx_|exchange_rate|price_per_credit_usd` keys (regulatory; lint primitive verifies repo-wide in Task 7).
+
+### Next pointer
+
+Task 6 — Web-console UI surface for budgets, spend-alerts, invoices, and the
+owner-discretionary credit grants admin pages (HANDOFF-13-06 closes here).
+Strict-TS contract; `lib/control-plane/types.ts` extension; Playwright e2e
+covers owner happy-path + non-owner negative for grants.

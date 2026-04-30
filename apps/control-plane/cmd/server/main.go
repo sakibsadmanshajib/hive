@@ -23,6 +23,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
+	"github.com/hivegpt/hive/apps/control-plane/internal/grants"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
 	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
@@ -32,6 +33,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
+	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
@@ -171,6 +173,8 @@ func main() {
 	var apikeysHandler *apikeys.Handler
 	var budgetsHandler *budgets.Handler
 	var invoicesHandler *invoices.Handler
+	var grantsHandler *grants.Handler
+	var roleSvc *platform.RoleService
 	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
@@ -270,6 +274,16 @@ func main() {
 		invoicesCron.Start(context.Background())
 		defer invoicesCron.Stop()
 		log.Println("invoice monthly cron started (window=day-1 02:00 UTC)")
+
+		// Phase 14 — owner-discretionary credit grants. Same-tx ledger
+		// append + immutable audit row (BEFORE UPDATE OR DELETE trigger
+		// guards mutations at schema level). RoleService gates the admin
+		// surface; the self-list surface uses plain auth middleware only.
+		roleSvc = platform.NewRoleService(platform.NewPgxRoleStore(pool))
+		grantsRepo := grants.NewPgxRepository(pool)
+		grantsSvc := grants.NewService(grantsRepo, roleSvc)
+		grantsHandler = grants.NewHandler(grantsSvc)
+		log.Println("credit grants module ready (owner-discretionary)")
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -456,6 +470,20 @@ func main() {
 		routerMux.Handle("/api/v1/invoices", protectedInvoices)
 		routerMux.Handle("/api/v1/invoices/", protectedInvoices)
 		log.Println("invoices routes registered (Phase 14)")
+	}
+
+	// Phase 14 — register credit grant routes. Admin surface gated via
+	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
+	// surface gated via plain auth middleware.
+	if grantsHandler != nil && roleSvc != nil {
+		adminGate := roleSvc.RequirePlatformAdmin(grantsHandler.AdminMux())
+		protectedAdminGrants := authMiddleware.Require(adminGate)
+		routerMux.Handle("/v1/admin/credit-grants", protectedAdminGrants)
+		routerMux.Handle("/v1/admin/credit-grants/", protectedAdminGrants)
+
+		protectedSelfGrants := authMiddleware.Require(grantsHandler.SelfMux())
+		routerMux.Handle("/v1/credit-grants/me", protectedSelfGrants)
+		log.Println("credit grants routes registered (Phase 14)")
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
