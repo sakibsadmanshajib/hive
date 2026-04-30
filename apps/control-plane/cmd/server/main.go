@@ -35,6 +35,7 @@ import (
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
+	"github.com/hivegpt/hive/apps/control-plane/internal/spendalerts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 	"github.com/hivegpt/hive/packages/storage"
 	goredis "github.com/redis/go-redis/v9"
@@ -179,9 +180,21 @@ func main() {
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
 		budgetsRepo := budgets.NewPgxRepository(pool)
+		workspaceBudgetsRepo := budgets.NewWorkspacePgxRepository(pool)
 		emailNotifier := budgets.NewLogNotifier(slog.Default())
-		budgetsSvc := budgets.NewService(budgetsRepo, emailNotifier)
+		alertNotifier := budgets.NewCompositeNotifier(nil, slog.Default())
+		budgetsSvc := budgets.NewServiceWithWorkspace(budgetsRepo, emailNotifier, workspaceBudgetsRepo, alertNotifier, redisClient)
 		budgetsHandler = budgets.NewHandler(budgetsSvc, accountsSvc)
+
+		// Phase 14 — spend-alert cron runner (50/80/100% thresholds, one-shot per period).
+		alertEvaluator := budgets.NewCronEvaluator(workspaceBudgetsRepo, alertNotifier, slog.Default())
+		alertRunner := spendalerts.NewRunner(alertEvaluator, spendalerts.Config{
+			Interval: 60 * time.Second,
+			Logger:   slog.Default(),
+		})
+		alertRunner.Start(context.Background())
+		defer alertRunner.Stop()
+		log.Println("spend-alert cron runner started (interval=60s)")
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
