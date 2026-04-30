@@ -141,6 +141,15 @@ remains **Pending** until the target phase produces an evidence file.
 |----|-------|--------|----------|
 | CAP-16-01 | 16 | Satisfied | [evidence/CAP-16-01.md](phases/16-capability-columns-fix/evidence/CAP-16-01.md) |
 
+### Payments / Budget / Grant (Phase 14)
+
+| ID | Phase | Status | Evidence |
+|----|-------|--------|----------|
+| PAY-14-05 | 14 | Satisfied | [evidence/PAY-14-05.md](phases/14-payments-budget-grant/evidence/PAY-14-05.md) |
+| PAY-14-06 | 14 | Satisfied | [evidence/PAY-14-06.md](phases/14-payments-budget-grant/evidence/PAY-14-06.md) |
+| PAY-14-07 | 14 | Satisfied | [evidence/PAY-14-07.md](phases/14-payments-budget-grant/evidence/PAY-14-07.md) |
+| PAY-14-08 | 14 | Satisfied | [evidence/PAY-14-08.md](phases/14-payments-budget-grant/evidence/PAY-14-08.md) |
+
 CAP-16-01 closes the v1.0 latent bug formerly recorded in `CLAUDE.md` Known
 Issues §1 (`ensureCapabilityColumns` targeting `route_capabilities` instead
 of `provider_capabilities`). The bug was eliminated by Phase 14's

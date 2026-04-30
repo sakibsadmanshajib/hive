@@ -23,18 +23,22 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
 	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
+	"github.com/hivegpt/hive/apps/control-plane/internal/grants"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
 	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
+	"github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices"
 	sslcommerzRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/sslcommerz"
 	stripeRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/stripe"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
+	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
+	"github.com/hivegpt/hive/apps/control-plane/internal/spendalerts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 	"github.com/hivegpt/hive/packages/storage"
 	goredis "github.com/redis/go-redis/v9"
@@ -44,6 +48,53 @@ import (
 // It extracts the viewer from context (set by auth middleware) and resolves the current account.
 type accountsResolverAdapter struct {
 	svc *accounts.Service
+}
+
+// =============================================================================
+// Phase 14 invoices adapters — bridge accounts.Repository to the invoice
+// service's narrow AccessChecker + WorkspaceNamer ports. Phase 18 RBAC will
+// replace these with the tier-aware predicate layer.
+// =============================================================================
+
+type accountsAccessChecker struct{ repo accounts.Repository }
+
+func newAccountsAccessChecker(repo accounts.Repository) invoices.AccessChecker {
+	return &accountsAccessChecker{repo: repo}
+}
+
+// IsWorkspaceMember returns whether userID has any active membership row on
+// the given workspace (account) id. Phase 14 = "any role"; Phase 18 may
+// narrow.
+func (a *accountsAccessChecker) IsWorkspaceMember(ctx context.Context, userID, workspaceID uuid.UUID) (bool, error) {
+	memberships, err := a.repo.ListMembershipsByUserID(ctx, userID)
+	if err != nil {
+		return false, fmt.Errorf("invoices access: list memberships: %w", err)
+	}
+	for _, m := range memberships {
+		if m.AccountID == workspaceID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+type accountsNamer struct{ repo accounts.Repository }
+
+func newAccountsNamer(repo accounts.Repository) invoices.WorkspaceNamer {
+	return &accountsNamer{repo: repo}
+}
+
+// WorkspaceName resolves the human label printed in the invoice PDF header.
+// Falls back to the UUID string when the row is missing or has no name.
+func (a *accountsNamer) WorkspaceName(ctx context.Context, workspaceID uuid.UUID) (string, error) {
+	acct, err := a.repo.GetAccountByID(ctx, workspaceID)
+	if err != nil {
+		return "", err
+	}
+	if acct == nil || acct.DisplayName == "" {
+		return workspaceID.String(), nil
+	}
+	return acct.DisplayName, nil
 }
 
 func (a *accountsResolverAdapter) EnsureViewerContext(ctx context.Context) (uuid.UUID, error) {
@@ -121,6 +172,9 @@ func main() {
 	var accountingHandler *accounting.Handler
 	var apikeysHandler *apikeys.Handler
 	var budgetsHandler *budgets.Handler
+	var invoicesHandler *invoices.Handler
+	var grantsHandler *grants.Handler
+	var roleSvc *platform.RoleService
 	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
@@ -179,9 +233,57 @@ func main() {
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
 		budgetsRepo := budgets.NewPgxRepository(pool)
+		workspaceBudgetsRepo := budgets.NewWorkspacePgxRepository(pool)
 		emailNotifier := budgets.NewLogNotifier(slog.Default())
-		budgetsSvc := budgets.NewService(budgetsRepo, emailNotifier)
+		alertNotifier := budgets.NewCompositeNotifier(nil, slog.Default())
+		budgetsSvc := budgets.NewServiceWithWorkspace(budgetsRepo, emailNotifier, workspaceBudgetsRepo, alertNotifier, redisClient)
 		budgetsHandler = budgets.NewHandler(budgetsSvc, accountsSvc)
+
+		// Phase 14 — spend-alert cron runner (50/80/100% thresholds, one-shot per period).
+		alertEvaluator := budgets.NewCronEvaluator(workspaceBudgetsRepo, alertNotifier, slog.Default())
+		alertRunner := spendalerts.NewRunner(alertEvaluator, spendalerts.Config{
+			Interval: 60 * time.Second,
+			Logger:   slog.Default(),
+		})
+		alertRunner.Start(context.Background())
+		defer alertRunner.Stop()
+		log.Println("spend-alert cron runner started (interval=60s)")
+
+		// Phase 14 — Invoices: monthly BDT-only invoice generator + cron.
+		// Wires the new sub-package /internal/payments/invoices/. The cron
+		// fires at 02:00 UTC on day 1 each month and produces one invoice per
+		// active workspace covering the prior calendar month. Idempotent.
+		invoicesRepo := invoices.NewPgxRepository(pool)
+		invoicesAccess := newAccountsAccessChecker(accountsRepo)
+		invoicesNamer := newAccountsNamer(accountsRepo)
+		invoicesStorage := invoices.NewStorageAdapter(storageClient)
+		invoicesSvc := invoices.NewService(
+			invoicesRepo,
+			invoicesStorage,
+			invoices.NewGofpdfRenderer(),
+			invoicesAccess,
+			invoicesNamer,
+			slog.Default(),
+		)
+		invoicesHandler = invoices.NewHandler(invoicesSvc)
+
+		invoicesCron := invoices.NewCron(invoicesSvc, invoicesRepo, invoices.CronConfig{
+			Logger:   slog.Default(),
+			Interval: time.Hour,
+		})
+		invoicesCron.Start(context.Background())
+		defer invoicesCron.Stop()
+		log.Println("invoice monthly cron started (window=day-1 02:00 UTC)")
+
+		// Phase 14 — owner-discretionary credit grants. Same-tx ledger
+		// append + immutable audit row (BEFORE UPDATE OR DELETE trigger
+		// guards mutations at schema level). RoleService gates the admin
+		// surface; the self-list surface uses plain auth middleware only.
+		roleSvc = platform.NewRoleService(platform.NewPgxRoleStore(pool))
+		grantsRepo := grants.NewPgxRepository(pool)
+		grantsSvc := grants.NewService(grantsRepo, roleSvc)
+		grantsHandler = grants.NewHandler(grantsSvc)
+		log.Println("credit grants module ready (owner-discretionary)")
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -358,6 +460,30 @@ func main() {
 			filestore.RegisterRoutes(routerMux, filestoreSvc, batchSubmitter)
 			log.Println("filestore routes registered")
 		}
+	}
+
+	// Phase 14 — register the invoices handler. Auth middleware gates
+	// every customer route; the handler internally enforces workspace
+	// membership via AccessChecker.
+	if invoicesHandler != nil {
+		protectedInvoices := authMiddleware.Require(invoicesHandler)
+		routerMux.Handle("/api/v1/invoices", protectedInvoices)
+		routerMux.Handle("/api/v1/invoices/", protectedInvoices)
+		log.Println("invoices routes registered (Phase 14)")
+	}
+
+	// Phase 14 — register credit grant routes. Admin surface gated via
+	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
+	// surface gated via plain auth middleware.
+	if grantsHandler != nil && roleSvc != nil {
+		adminGate := roleSvc.RequirePlatformAdmin(grantsHandler.AdminMux())
+		protectedAdminGrants := authMiddleware.Require(adminGate)
+		routerMux.Handle("/v1/admin/credit-grants", protectedAdminGrants)
+		routerMux.Handle("/v1/admin/credit-grants/", protectedAdminGrants)
+
+		protectedSelfGrants := authMiddleware.Require(grantsHandler.SelfMux())
+		routerMux.Handle("/v1/credit-grants/me", protectedSelfGrants)
+		log.Println("credit grants routes registered (Phase 14)")
 	}
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
