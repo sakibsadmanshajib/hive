@@ -1544,3 +1544,431 @@ export async function getMembers(accessToken: string): Promise<AccountMember[]> 
 
   return decodeMembers(payload);
 }
+
+// =============================================================================
+// Phase 14 — workspace budget / spend-alert / invoice surface (BDT-only).
+//
+// All amounts are BDT subunits (paisa). The control-plane returns `int64`
+// values (Phase 14 design — see `apps/control-plane/internal/budgets/http.go`
+// `budgetWireFormat`). math/big is the source-of-truth on the backend; the
+// console treats subunits as fixed-precision integers via `number` with
+// safe-integer guards. No USD / FX fields anywhere on this surface.
+// =============================================================================
+
+export interface BudgetSettings {
+  workspace_id: string;
+  period_start: string;
+  soft_cap_bdt_subunits: number;
+  hard_cap_bdt_subunits: number;
+  currency: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SpendAlert {
+  id: string;
+  workspace_id: string;
+  threshold_pct: number;
+  email: string | null;
+  webhook_url: string | null;
+  last_fired_at: string | null;
+  last_fired_period: string | null;
+  created_at: string;
+}
+
+export interface InvoiceLineItem {
+  model_id: string;
+  request_count: number;
+  bdt_subunits: number;
+}
+
+export interface InvoiceRecord {
+  id: string;
+  workspace_id: string;
+  period_start: string;
+  period_end: string;
+  total_bdt_subunits: number;
+  line_items: InvoiceLineItem[];
+  generated_at: string;
+}
+
+export interface UpdateBudgetInput {
+  soft_cap_bdt_subunits: number;
+  hard_cap_bdt_subunits: number;
+  period_start?: string;
+}
+
+export interface CreateSpendAlertInput {
+  threshold_pct: number;
+  email?: string | null;
+  webhook_url?: string | null;
+  webhook_secret?: string | null;
+}
+
+export interface UpdateSpendAlertInput {
+  email?: string | null;
+  webhook_url?: string | null;
+  webhook_secret?: string | null;
+}
+
+function decodeBudgetSettings(value: JsonValue | null): BudgetSettings | null {
+  if (!isJsonObject(value)) return null;
+  const workspaceId = readStringField(value, "workspace_id");
+  const periodStart = readStringField(value, "period_start");
+  const softCap = readNumberField(value, "soft_cap_bdt_subunits");
+  const hardCap = readNumberField(value, "hard_cap_bdt_subunits");
+  const currency = readStringField(value, "currency");
+  const createdAt = readStringField(value, "created_at");
+  const updatedAt = readStringField(value, "updated_at");
+  if (
+    workspaceId === null ||
+    periodStart === null ||
+    softCap === null ||
+    hardCap === null ||
+    currency === null ||
+    createdAt === null ||
+    updatedAt === null
+  ) {
+    return null;
+  }
+  return {
+    workspace_id: workspaceId,
+    period_start: periodStart,
+    soft_cap_bdt_subunits: softCap,
+    hard_cap_bdt_subunits: hardCap,
+    currency,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+function decodeSpendAlert(value: JsonValue): SpendAlert | null {
+  if (!isJsonObject(value)) return null;
+  const id = readStringField(value, "id");
+  const workspaceId = readStringField(value, "workspace_id");
+  const thresholdPct = readNumberField(value, "threshold_pct");
+  const createdAt = readStringField(value, "created_at");
+  if (
+    id === null ||
+    workspaceId === null ||
+    thresholdPct === null ||
+    createdAt === null
+  ) {
+    return null;
+  }
+  return {
+    id,
+    workspace_id: workspaceId,
+    threshold_pct: thresholdPct,
+    email: readStringField(value, "email"),
+    webhook_url: readStringField(value, "webhook_url"),
+    last_fired_at: readStringField(value, "last_fired_at"),
+    last_fired_period: readStringField(value, "last_fired_period"),
+    created_at: createdAt,
+  };
+}
+
+function decodeInvoiceLineItem(value: JsonValue): InvoiceLineItem | null {
+  if (!isJsonObject(value)) return null;
+  const modelId = readStringField(value, "model_id");
+  const requestCount = readNumberField(value, "request_count");
+  const bdtSubunits = readNumberField(value, "bdt_subunits");
+  if (modelId === null || requestCount === null || bdtSubunits === null) {
+    return null;
+  }
+  return {
+    model_id: modelId,
+    request_count: requestCount,
+    bdt_subunits: bdtSubunits,
+  };
+}
+
+function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
+  if (!isJsonObject(value)) return null;
+  const id = readStringField(value, "id");
+  const workspaceId = readStringField(value, "workspace_id");
+  const periodStart = readStringField(value, "period_start");
+  const periodEnd = readStringField(value, "period_end");
+  const total = readNumberField(value, "total_bdt_subunits");
+  const generatedAt = readStringField(value, "generated_at");
+  const itemsRaw = readArrayField(value, "line_items") ?? [];
+  if (
+    id === null ||
+    workspaceId === null ||
+    periodStart === null ||
+    periodEnd === null ||
+    total === null ||
+    generatedAt === null
+  ) {
+    return null;
+  }
+  const items: InvoiceLineItem[] = [];
+  for (const it of itemsRaw) {
+    const decoded = decodeInvoiceLineItem(it);
+    if (decoded) items.push(decoded);
+  }
+  return {
+    id,
+    workspace_id: workspaceId,
+    period_start: periodStart,
+    period_end: periodEnd,
+    total_bdt_subunits: total,
+    line_items: items,
+    generated_at: generatedAt,
+  };
+}
+
+export async function getBudget(
+  workspaceId: string,
+): Promise<BudgetSettings | null> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/budgets/${workspaceId}`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    if (response.status === 404) return null;
+    throw new Error(await readResponseError(response, "Failed to fetch budget"));
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) return null;
+  const budgetField = payload["budget"];
+  if (budgetField === null || budgetField === undefined) return null;
+  return decodeBudgetSettings(budgetField);
+}
+
+export async function updateBudget(
+  workspaceId: string,
+  input: UpdateBudgetInput,
+): Promise<BudgetSettings> {
+  const { baseUrl, headers } = await getRequestContext();
+  const body: Record<string, JsonValue> = {
+    soft_cap_bdt_subunits: input.soft_cap_bdt_subunits,
+    hard_cap_bdt_subunits: input.hard_cap_bdt_subunits,
+  };
+  if (input.period_start) {
+    body.period_start = input.period_start;
+  }
+  const response = await fetch(`${baseUrl}/api/v1/budgets/${workspaceId}`, {
+    method: "PUT",
+    headers,
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to update budget"));
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse budget response");
+  }
+  const decoded = decodeBudgetSettings(payload["budget"] ?? null);
+  if (decoded === null) {
+    throw new Error("Failed to parse budget response");
+  }
+  return decoded;
+}
+
+export async function deleteBudget(workspaceId: string): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/budgets/${workspaceId}`, {
+    method: "DELETE",
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(await readResponseError(response, "Failed to delete budget"));
+  }
+}
+
+export async function listSpendAlerts(workspaceId: string): Promise<SpendAlert[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/spend-alerts/${workspaceId}`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(
+      await readResponseError(response, "Failed to fetch spend alerts"),
+    );
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) return [];
+  const raw = readArrayField(payload, "alerts") ?? [];
+  const alerts: SpendAlert[] = [];
+  for (const item of raw) {
+    const decoded = decodeSpendAlert(item);
+    if (decoded) alerts.push(decoded);
+  }
+  return alerts;
+}
+
+export async function createSpendAlert(
+  workspaceId: string,
+  input: CreateSpendAlertInput,
+): Promise<SpendAlert> {
+  const { baseUrl, headers } = await getRequestContext();
+  const body: Record<string, JsonValue> = {
+    threshold_pct: input.threshold_pct,
+  };
+  if (input.email !== undefined) body.email = input.email;
+  if (input.webhook_url !== undefined) body.webhook_url = input.webhook_url;
+  if (input.webhook_secret !== undefined) {
+    body.webhook_secret = input.webhook_secret;
+  }
+  const response = await fetch(`${baseUrl}/api/v1/spend-alerts/${workspaceId}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    throw new Error(
+      await readResponseError(response, "Failed to create spend alert"),
+    );
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse spend alert response");
+  }
+  const alertField = payload["alert"];
+  if (alertField === null || alertField === undefined) {
+    throw new Error("Spend alert response missing alert field");
+  }
+  const decoded = decodeSpendAlert(alertField);
+  if (decoded === null) {
+    throw new Error("Failed to parse spend alert response");
+  }
+  return decoded;
+}
+
+export async function updateSpendAlert(
+  workspaceId: string,
+  alertId: string,
+  input: UpdateSpendAlertInput,
+): Promise<SpendAlert> {
+  const { baseUrl, headers } = await getRequestContext();
+  const body: Record<string, JsonValue> = {};
+  if (input.email !== undefined) body.email = input.email;
+  if (input.webhook_url !== undefined) body.webhook_url = input.webhook_url;
+  if (input.webhook_secret !== undefined) {
+    body.webhook_secret = input.webhook_secret;
+  }
+  const response = await fetch(
+    `${baseUrl}/api/v1/spend-alerts/${workspaceId}/${alertId}`,
+    {
+      method: "PATCH",
+      headers,
+      body: JSON.stringify(body),
+      cache: "no-store",
+    },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await readResponseError(response, "Failed to update spend alert"),
+    );
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse spend alert response");
+  }
+  const alertField = payload["alert"];
+  if (alertField === null || alertField === undefined) {
+    throw new Error("Spend alert response missing alert field");
+  }
+  const decoded = decodeSpendAlert(alertField);
+  if (decoded === null) {
+    throw new Error("Failed to parse spend alert response");
+  }
+  return decoded;
+}
+
+export async function deleteSpendAlert(
+  workspaceId: string,
+  alertId: string,
+): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/spend-alerts/${workspaceId}/${alertId}`,
+    { method: "DELETE", headers, cache: "no-store" },
+  );
+  if (!response.ok) {
+    throw new Error(
+      await readResponseError(response, "Failed to delete spend alert"),
+    );
+  }
+}
+
+export async function listWorkspaceInvoices(
+  workspaceId: string,
+  limit: number = 50,
+): Promise<InvoiceRecord[]> {
+  const { baseUrl, headers } = await getRequestContext();
+  const url = new URL(`${baseUrl}/api/v1/invoices`);
+  url.searchParams.set("workspace_id", workspaceId);
+  url.searchParams.set("limit", String(limit));
+  const response = await fetch(url.toString(), { headers, cache: "no-store" });
+  if (!response.ok) {
+    if (response.status === 404) return [];
+    throw new Error(
+      await readResponseError(response, "Failed to fetch invoices"),
+    );
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) return [];
+  const raw = readArrayField(payload, "items") ?? [];
+  const items: InvoiceRecord[] = [];
+  for (const it of raw) {
+    const decoded = decodeInvoiceRecord(it);
+    if (decoded) items.push(decoded);
+  }
+  return items;
+}
+
+export async function getWorkspaceInvoice(
+  invoiceId: string,
+): Promise<InvoiceRecord | null> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/invoices/${invoiceId}`, {
+    headers,
+    cache: "no-store",
+  });
+  if (!response.ok) {
+    if (response.status === 404) return null;
+    throw new Error(
+      await readResponseError(response, "Failed to fetch invoice"),
+    );
+  }
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) return null;
+  const invoiceField = payload["invoice"];
+  if (invoiceField === null || invoiceField === undefined) return null;
+  return decodeInvoiceRecord(invoiceField);
+}
+
+// getInvoicePdfUrl performs the redirect handshake server-side and returns the
+// signed Supabase Storage URL. The control-plane responds with 302 + Location;
+// fetch's `redirect: "manual"` lets us read the header without auto-following.
+export async function getInvoicePdfUrl(invoiceId: string): Promise<string | null> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/invoices/${invoiceId}/pdf`,
+    { headers, redirect: "manual", cache: "no-store" },
+  );
+  if (response.status === 302 || response.status === 301) {
+    const location = response.headers.get("Location");
+    return location ?? null;
+  }
+  if (!response.ok) {
+    throw new Error(
+      await readResponseError(response, "Failed to resolve invoice PDF URL"),
+    );
+  }
+  // Some edge proxies follow redirects despite `redirect: manual` — fall back
+  // to body parse in that case.
+  const payload = parseJsonValue(await readResponseText(response));
+  if (isJsonObject(payload)) {
+    return readStringField(payload, "url");
+  }
+  return null;
+}
