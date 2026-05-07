@@ -145,10 +145,18 @@ remains **Pending** until the target phase produces an evidence file.
 
 | ID | Phase | Status | Evidence |
 |----|-------|--------|----------|
+| PAY-14-01 | 14 | Satisfied | [evidence/PAY-14-01.md](phases/14-payments-budget-grant/evidence/PAY-14-01.md) |
+| PAY-14-02 | 14 | Satisfied | [evidence/PAY-14-02.md](phases/14-payments-budget-grant/evidence/PAY-14-02.md) |
+| PAY-14-03 | 14 | Satisfied | [evidence/PAY-14-03.md](phases/14-payments-budget-grant/evidence/PAY-14-03.md) |
+| PAY-14-04 | 14 | Satisfied | [evidence/PAY-14-04.md](phases/14-payments-budget-grant/evidence/PAY-14-04.md) |
 | PAY-14-05 | 14 | Satisfied | [evidence/PAY-14-05.md](phases/14-payments-budget-grant/evidence/PAY-14-05.md) |
 | PAY-14-06 | 14 | Satisfied | [evidence/PAY-14-06.md](phases/14-payments-budget-grant/evidence/PAY-14-06.md) |
 | PAY-14-07 | 14 | Satisfied | [evidence/PAY-14-07.md](phases/14-payments-budget-grant/evidence/PAY-14-07.md) |
 | PAY-14-08 | 14 | Satisfied | [evidence/PAY-14-08.md](phases/14-payments-budget-grant/evidence/PAY-14-08.md) |
+| PAY-14-09 | 14 | Satisfied | [evidence/PAY-14-09.md](phases/14-payments-budget-grant/evidence/PAY-14-09.md) |
+| PAY-14-10 | 14 | Satisfied | [evidence/PAY-14-10.md](phases/14-payments-budget-grant/evidence/PAY-14-10.md) |
+| PAY-14-11 | 14 | Satisfied | [evidence/PAY-14-11.md](phases/14-payments-budget-grant/evidence/PAY-14-11.md) |
+| PAY-14-12 | 14 | Satisfied | [evidence/PAY-14-12.md](phases/14-payments-budget-grant/evidence/PAY-14-12.md) |
 
 CAP-16-01 closes the v1.0 latent bug formerly recorded in `CLAUDE.md` Known
 Issues §1 (`ensureCapabilityColumns` targeting `route_capabilities` instead

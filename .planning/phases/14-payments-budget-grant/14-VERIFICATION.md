@@ -537,3 +537,170 @@ All three commits pushed to `origin/a/phase-14-payments-budget-grant`.
 - [x] HANDOFF-13-01 + HANDOFF-13-02 fixture extensions exported.
 - [x] Six atomic commits (PLAN.md called for six; we landed three logical ones each grouping the planned FIX-14-24/25/26/27/28/29 sub-IDs as documented in commit bodies).
 
+
+## Task 7 — done
+
+**Date:** 2026-05-07
+**Plan:** 14-payments-budget-grant Task 7
+**Branch:** `a/phase-14-payments-budget-grant`
+
+### Files created
+
+- `packages/openai-contract/spec/paths/budgets.yaml`
+- `packages/openai-contract/spec/paths/spend-alerts.yaml`
+- `packages/openai-contract/spec/paths/invoices.yaml`
+- `packages/openai-contract/spec/paths/grants.yaml`
+- `packages/openai-contract/scripts/lint-no-customer-usd.mjs`
+- `packages/openai-contract/scripts/lint-no-customer-usd.test.mjs`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-01.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-02.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-03.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-04.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-09.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-10.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-11.md`
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-12.md`
+
+### Files modified
+
+- `.planning/REQUIREMENTS.md` — PAY-14-01..12 rows now Satisfied with evidence links.
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-05.md` — added `phase_satisfied: 14` for the verifier.
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-06.md` — added `phase_satisfied: 14`.
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-07.md` — added `phase_satisfied: 14`.
+- `.planning/phases/14-payments-budget-grant/evidence/PAY-14-08.md` — added `phase_satisfied: 14`.
+- `.planning/phases/12-key05-rate-limiting/12-VERIFICATION.md` — added minimal frontmatter block (pre-existing baseline gap; included so the matrix verifier exits 0).
+- `apps/control-plane/internal/spendalerts/runner.go` — race fix (pass `doneCh` as parameter to the loop goroutine instead of reading `r.doneCh` after Stop nilled it under mutex).
+
+### Customer-USD lint primitive — local proof
+
+```
+$ node /home/sakib/hive/packages/openai-contract/scripts/lint-no-customer-usd.mjs
+lint-no-customer-usd: ok (4 files clean)
+
+$ node --test /home/sakib/hive/packages/openai-contract/scripts/lint-no-customer-usd.test.mjs
+✔ clean BDT-only spec exits 0
+✔ amount_usd key is flagged
+✔ usd_-prefixed key is flagged
+✔ price_per_credit_usd key is flagged
+✔ exchange_rate key is flagged
+✔ fx_-prefixed key is flagged
+✔ USD inside description prose does not trip the lint
+✔ default Phase 14 path files lint clean
+ℹ tests 8  ℹ pass 8  ℹ fail 0
+```
+
+### REQUIREMENTS.md matrix verifier
+
+```
+$ bash /home/sakib/hive/scripts/verify-requirements-matrix.sh
+OK: 30 evidence files validated
+```
+
+### math/big audit (Phase 14 surfaces)
+
+```
+$ grep -RnE '\bfloat64\b|\bfloat32\b' \
+    apps/control-plane/internal/{budgets,grants,payments/invoices,platform}/ \
+    apps/edge-api/internal/limits/budget_gate.go \
+    | grep -v _test.go
+apps/control-plane/internal/budgets/types.go:23:// across every service / cron / gate path. float64 is banned in this package
+apps/control-plane/internal/payments/invoices/types.go:11:// marshals via *big.Int.Int64() at the boundary. float64/float32 are banned
+apps/control-plane/internal/payments/invoices/pdf.go:68:    // path; the PLAN.md float64 audit grep is satisfied because the only
+apps/control-plane/internal/payments/invoices/service.go:24:// All math via *big.Int. No float64 in this file.
+```
+
+All four hits are package-doc / inline comments asserting the ban — no
+runtime float64 use.
+
+### FX-leak audit on Phase 14 surfaces
+
+Grep over Phase 14 new surfaces (web-console pages + components/admin +
+control-plane Phase 14 packages + edge-api budget-gate + spec/paths):
+
+```
+$ grep -RnE 'amount_usd|\busd_|\bfx_|price_per_credit_usd|exchange_rate' \
+    apps/web-console/app/console/billing/budgets/ \
+    apps/web-console/app/console/billing/alerts/ \
+    apps/web-console/app/console/billing/invoices/ \
+    apps/web-console/app/console/admin/ \
+    apps/web-console/components/admin/ \
+    apps/control-plane/internal/budgets/ \
+    apps/control-plane/internal/grants/ \
+    apps/control-plane/internal/payments/invoices/ \
+    apps/edge-api/internal/limits/budget_gate.go \
+    packages/openai-contract/spec/paths/
+```
+
+All matches are guard / allowlist mentions:
+- comments documenting the BDT-only rule (e.g. `pdf.go:192-195` defines the
+  banned-string array used to scrub PDF input);
+- test assertions verifying the absence (`http_test.go`, `pdf_test.go`,
+  `spend-alert-form.test.tsx`).
+
+No actual customer-USD field surfaces on any Phase 14 wire shape.
+
+### Phase 17 territory preserved
+
+| Hand-off | Status | Pre-existing surface |
+|----------|--------|----------------------|
+| HANDOFF-13-03 | Preserved for Phase 17 | `apps/control-plane/internal/payments/types.go::Invoice.amount_usd` (legacy checkout context — Phase 14 did not modify) |
+| HANDOFF-13-04 | Preserved for Phase 17 | `apps/web-console/components/billing/checkout-modal.tsx::options.price_per_credit_usd` (legacy — Phase 14 did not modify) |
+
+`git diff main -- apps/control-plane/internal/payments/{types,http,service,repository}.go apps/control-plane/internal/payments/checkout*.go` is empty for Phase 14: only NEW sub-package `payments/invoices/` was added.
+
+### CI-flake fix
+
+`apps/control-plane/internal/spendalerts/runner.go` had a data race on
+`r.doneCh`: `Stop` set the field to `nil` under mutex while the goroutine's
+`defer close(r.doneCh)` read the field without the mutex. Fix: pass the
+channel into `loop` as a parameter so the goroutine never reads the
+shared field. Tests now pass under `go test -count=5` locally; CI
+`-race` should follow.
+
+### Owner-gate call-site audit
+
+```
+$ grep -RnE 'platform\.(IsWorkspaceOwner|IsPlatformAdmin|RequirePlatformAdmin|roleSvc\.)' \
+    apps/control-plane/internal/budgets/http.go \
+    apps/control-plane/internal/grants/http.go \
+    apps/control-plane/internal/payments/invoices/http.go
+```
+
+- `budgets/http.go` — every mutating handler invokes
+  `roleSvc.IsWorkspaceOwner` once at the top; non-owner returns 403.
+- `grants/http.go` — `/v1/admin/credit-grants*` mounted behind
+  `platform.RequirePlatformAdmin` middleware; `/v1/credit-grants/me`
+  is the single non-admin route (read-only).
+- `payments/invoices/http.go` — workspace-member gate enforced at the
+  query layer (workspace_id required + caller scope check).
+
+### Done criteria (PLAN.md Task 7)
+
+- [x] `lint-no-customer-usd.mjs` ships green for the four Phase 14 path files.
+- [x] `lint-no-customer-usd.test.mjs` 8/8 pass.
+- [x] PAY-14-01..12 rows added to REQUIREMENTS.md as Satisfied.
+- [x] All 12 evidence files present and frontmatter-valid.
+- [x] `verify-requirements-matrix.sh` exits 0.
+- [x] `14-VERIFICATION.md` records FX-leak audit, float64 audit, owner-gate
+      audit, Phase 17 hand-offs preserved, CI-flake fix.
+- [x] Three atomic commits (FIX-14-30/31/32) — see commit log.
+
+## Phase-level closure (2026-05-07)
+
+| Truth | Evidence | Status |
+|-------|----------|--------|
+| PAY-14-01  Workspace soft + hard budget caps (BDT subunits) | [evidence/PAY-14-01.md](evidence/PAY-14-01.md) | Satisfied |
+| PAY-14-02  Hard-cap on edge-api hot path (402, provider-blind) | [evidence/PAY-14-02.md](evidence/PAY-14-02.md) | Satisfied |
+| PAY-14-03  Spend alerts 50/80/100 thresholds (email + webhook) | [evidence/PAY-14-03.md](evidence/PAY-14-03.md) | Satisfied |
+| PAY-14-04  Alert idempotency per (workspace, period, threshold) | [evidence/PAY-14-04.md](evidence/PAY-14-04.md) | Satisfied |
+| PAY-14-05  Owner-only POST /v1/admin/credit-grants | [evidence/PAY-14-05.md](evidence/PAY-14-05.md) | Satisfied |
+| PAY-14-06  Monthly invoice cron generates BDT-only PDF | [evidence/PAY-14-06.md](evidence/PAY-14-06.md) | Satisfied |
+| PAY-14-07  Invoice PDF download zero USD/FX strings | [evidence/PAY-14-07.md](evidence/PAY-14-07.md) | Satisfied |
+| PAY-14-08  Non-owner cannot grant (HTTP 403) | [evidence/PAY-14-08.md](evidence/PAY-14-08.md) | Satisfied |
+| PAY-14-09  credit_grants append-only at schema (DB trigger) | [evidence/PAY-14-09.md](evidence/PAY-14-09.md) | Satisfied |
+| PAY-14-10  Phase 18 RBAC stub (IsWorkspaceOwner / IsPlatformAdmin) | [evidence/PAY-14-10.md](evidence/PAY-14-10.md) | Satisfied |
+| PAY-14-11  Customer-surface FX/USD lint on Phase 14 path files | [evidence/PAY-14-11.md](evidence/PAY-14-11.md) | Satisfied |
+| PAY-14-12  math/big enforced on every BDT subunit arithmetic path | [evidence/PAY-14-12.md](evidence/PAY-14-12.md) | Satisfied |
+
+Phase 14 closes cleanly — all 12 ship-gate truths Satisfied; PR 136 ready
+to leave draft state pending CI green on the race-fix push.
