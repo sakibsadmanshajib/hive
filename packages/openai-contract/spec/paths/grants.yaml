@@ -1,0 +1,159 @@
+# Phase 14 — discretionary credit grants.
+# Owner-only writes; immutable audit (DB trigger).
+# BDT-only amounts. Zero customer-USD fields.
+openapi: 3.0.0
+info:
+  title: Hive Credit Grants
+  version: 14.0.0
+paths:
+  /v1/admin/credit-grants:
+    post:
+      operationId: createCreditGrant
+      summary: Owner-only. Issue a discretionary credit grant + same-tx ledger append.
+      security:
+        - PlatformAdmin: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreditGrantCreate"
+      responses:
+        "201":
+          description: Grant created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditGrant"
+        "401":
+          description: Unauthenticated.
+        "403":
+          description: Caller is not a platform admin.
+        "404":
+          description: Grantee lookup failed.
+    get:
+      operationId: listCreditGrants
+      summary: Owner-only. List recent grants.
+      security:
+        - PlatformAdmin: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Grants list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grants]
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CreditGrant"
+  /v1/admin/credit-grants/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: getCreditGrant
+      summary: Owner-only. Fetch a single grant by id.
+      security:
+        - PlatformAdmin: []
+      responses:
+        "200":
+          description: Grant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreditGrant"
+        "404":
+          description: Not found.
+  /v1/credit-grants/me:
+    get:
+      operationId: listCallerCreditGrants
+      summary: Authenticated caller. Read-only list of grants targeted at the caller.
+      responses:
+        "200":
+          description: Grants list (caller scoped).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [grants]
+                properties:
+                  grants:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CreditGrant"
+components:
+  securitySchemes:
+    PlatformAdmin:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: Bearer token whose subject has accounts.users.is_platform_admin = true.
+  schemas:
+    CreditGrantCreate:
+      type: object
+      required:
+        - amount_bdt_subunits
+      properties:
+        grantee_email:
+          type: string
+          format: email
+          nullable: true
+        grantee_phone:
+          type: string
+          nullable: true
+        amount_bdt_subunits:
+          type: string
+          description: Positive amount in BDT subunits. math/big decimal string.
+        reason_note:
+          type: string
+          maxLength: 500
+    CreditGrant:
+      type: object
+      required:
+        - id
+        - granted_by_user_id
+        - granted_to_user_id
+        - granted_to_workspace_id
+        - amount_bdt_subunits
+        - currency
+        - ledger_entry_id
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        granted_by_user_id:
+          type: string
+          format: uuid
+        granted_to_user_id:
+          type: string
+          format: uuid
+        granted_to_workspace_id:
+          type: string
+          format: uuid
+        amount_bdt_subunits:
+          type: string
+        currency:
+          type: string
+          enum: [BDT]
+        reason_note:
+          type: string
+          nullable: true
+        ledger_entry_id:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
