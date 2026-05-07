@@ -109,11 +109,12 @@ func (r *Runner) Start(parent context.Context) {
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
+	doneCh := make(chan struct{})
 	r.cancel = cancel
-	r.doneCh = make(chan struct{})
+	r.doneCh = doneCh
 	r.started = true
 
-	go r.loop(ctx)
+	go r.loop(ctx, doneCh)
 }
 
 // Stop signals the loop to exit and waits for the in-flight pass to finish.
@@ -135,8 +136,8 @@ func (r *Runner) Stop() {
 	<-doneCh
 }
 
-func (r *Runner) loop(ctx context.Context) {
-	defer close(r.doneCh)
+func (r *Runner) loop(ctx context.Context, doneCh chan<- struct{}) {
+	defer close(doneCh)
 
 	// Eager first pass so a service start surfaces breaches without a full
 	// interval delay.
