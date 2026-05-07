@@ -1,0 +1,137 @@
+# Phase 14 — workspace spend alerts (50/80/100 % thresholds).
+# Idempotent per (workspace, period, threshold).
+openapi: 3.0.0
+info:
+  title: Hive Spend Alerts
+  version: 14.0.0
+paths:
+  /api/v1/spend-alerts/{workspace_id}:
+    parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: listWorkspaceSpendAlerts
+      summary: List configured alert thresholds for a workspace.
+      responses:
+        "200":
+          description: Alert thresholds.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [alerts]
+                properties:
+                  alerts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SpendAlert"
+    post:
+      operationId: createWorkspaceSpendAlert
+      summary: Create a new threshold alert.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpendAlertCreate"
+      responses:
+        "201":
+          description: Alert created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendAlert"
+  /api/v1/spend-alerts/{workspace_id}/{alert_id}:
+    parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+      - name: alert_id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    patch:
+      operationId: updateWorkspaceSpendAlert
+      summary: Update threshold or delivery channel of an existing alert.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SpendAlertUpdate"
+      responses:
+        "200":
+          description: Alert updated.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SpendAlert"
+    delete:
+      operationId: deleteWorkspaceSpendAlert
+      summary: Remove an alert.
+      responses:
+        "204":
+          description: Alert removed.
+components:
+  schemas:
+    SpendAlert:
+      type: object
+      required:
+        - id
+        - workspace_id
+        - threshold_pct
+        - delivery_channel
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        threshold_pct:
+          type: integer
+          enum: [50, 80, 100]
+        delivery_channel:
+          type: string
+          enum: [email, webhook]
+        webhook_url:
+          type: string
+          format: uri
+          nullable: true
+        last_fired_period:
+          type: string
+          format: date
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    SpendAlertCreate:
+      type: object
+      required: [threshold_pct, delivery_channel]
+      properties:
+        threshold_pct:
+          type: integer
+          enum: [50, 80, 100]
+        delivery_channel:
+          type: string
+          enum: [email, webhook]
+        webhook_url:
+          type: string
+          format: uri
+    SpendAlertUpdate:
+      type: object
+      properties:
+        threshold_pct:
+          type: integer
+          enum: [50, 80, 100]
+        delivery_channel:
+          type: string
+          enum: [email, webhook]
+        webhook_url:
+          type: string
+          format: uri

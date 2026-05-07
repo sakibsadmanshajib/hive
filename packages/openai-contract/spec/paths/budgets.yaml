@@ -1,0 +1,118 @@
+# Phase 14 — workspace budgets (soft + hard caps in BDT subunits).
+# BDT-only; no customer-USD fields.
+openapi: 3.0.0
+info:
+  title: Hive Budgets
+  version: 14.0.0
+paths:
+  /api/v1/budgets/{workspace_id}:
+    parameters:
+      - name: workspace_id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      operationId: getWorkspaceBudget
+      summary: Read soft + hard caps for a workspace.
+      responses:
+        "200":
+          description: Budget settings.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+        "404":
+          description: Budget not configured for this workspace.
+    put:
+      operationId: putWorkspaceBudget
+      summary: Create or update soft + hard caps.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetUpsert"
+      responses:
+        "200":
+          description: Budget upserted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+    delete:
+      operationId: deleteWorkspaceBudget
+      summary: Remove caps (disables hard-cap gate + threshold alerts).
+      responses:
+        "204":
+          description: Budget deleted.
+  /api/v1/accounts/current/budget:
+    get:
+      operationId: getCurrentAccountBudget
+      summary: Account-scoped budget (legacy single-workspace).
+      responses:
+        "200":
+          description: Current account budget.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+    put:
+      operationId: putCurrentAccountBudget
+      summary: Upsert account-scoped budget.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BudgetUpsert"
+      responses:
+        "200":
+          description: Budget upserted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Budget"
+  /api/v1/accounts/current/budget/dismiss:
+    post:
+      operationId: dismissCurrentAccountBudgetWarning
+      summary: Dismiss the current threshold-warning banner for the caller.
+      responses:
+        "204":
+          description: Dismissed.
+components:
+  schemas:
+    Budget:
+      type: object
+      required:
+        - workspace_id
+        - soft_cap_bdt_subunits
+        - hard_cap_bdt_subunits
+        - currency
+      properties:
+        workspace_id:
+          type: string
+          format: uuid
+        soft_cap_bdt_subunits:
+          type: string
+          description: Soft cap in BDT subunits. math/big decimal string.
+        hard_cap_bdt_subunits:
+          type: string
+          description: Hard cap in BDT subunits. math/big decimal string.
+        currency:
+          type: string
+          enum: [BDT]
+        updated_at:
+          type: string
+          format: date-time
+    BudgetUpsert:
+      type: object
+      required:
+        - soft_cap_bdt_subunits
+        - hard_cap_bdt_subunits
+      properties:
+        soft_cap_bdt_subunits:
+          type: string
+        hard_cap_bdt_subunits:
+          type: string
