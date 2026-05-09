@@ -2,11 +2,13 @@
 phase: 17
 title: FX/USD Zero-Leak Audit & Hardening
 goal: Zero USD/FX exposure on any customer-visible surface. BDT-only customer surface; USD = internal accounting only.
-status: in-progress
+status: closed
 opened: 2026-05-08
+date_closed: 2026-05-09
 depends_on: [13, 14]
 launch_blocker: true
 hand_offs_inherited: [HANDOFF-13-03, HANDOFF-13-04]
+hand_offs_emitted: [HANDOFF-17-01, HANDOFF-17-02]
 ---
 
 # Phase 17 — FX/USD Zero-Leak Audit & Hardening
