@@ -18,12 +18,15 @@ import (
 // unexported type. The test asserts the wire bytes the HTTP handler emits.
 func TestInitiateResponseWireShape_FXZeroLeak(t *testing.T) {
 	expires := "2026-05-08T12:34:56Z"
+	// Note: post-FX-17-01 GREEN, initiateResponse no longer carries an
+	// AmountUSD field. Internal accounting USD persists on
+	// payments.PaymentIntent (json:"-") and the server→Stripe payload is
+	// built from the Go struct, not from this wire DTO.
 	resp := initiateResponse{
 		PaymentIntentID: "11111111-2222-3333-4444-555555555555",
 		RedirectURL:     "https://pay.example.test/redirect",
 		Rail:            RailBkash,
 		Credits:         100_000,
-		AmountUSD:       100, // internal accounting only — must not cross wire
 		AmountLocal:     12_500_00,
 		LocalCurrency:   "BDT",
 		TaxTreatment:    "vat_inclusive",

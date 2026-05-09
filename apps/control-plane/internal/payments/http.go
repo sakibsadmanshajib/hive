@@ -111,12 +111,19 @@ type initiateRequest struct {
 	IdempotencyKey string `json:"idempotency_key"`
 }
 
+// initiateResponse is the customer-surface JSON returned from
+// POST /api/v1/accounts/current/checkout/initiate. Phase 17 FX/USD zero-leak
+// (FX-17-01) requires this wire DTO carry NO USD/FX fields. The internal
+// AmountUSD lives on payments.PaymentIntent (json:"-"); the Stripe USD
+// payload is built server-side in stripe/rail.go from the Go struct, not
+// from this wire DTO.
 type initiateResponse struct {
 	PaymentIntentID string  `json:"payment_intent_id"`
 	RedirectURL     string  `json:"redirect_url"`
 	Rail            Rail    `json:"rail"`
 	Credits         int64   `json:"credits"`
-	AmountUSD       int64   `json:"amount_usd"`
+	// AmountUSD intentionally omitted (Phase 17 FX-17-01).
+	// Internal accounting USD is preserved on PaymentIntent (json:"-").
 	AmountLocal     int64   `json:"amount_local"`
 	LocalCurrency   string  `json:"local_currency"`
 	TaxTreatment    string  `json:"tax_treatment"`
@@ -190,12 +197,14 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Phase 17 FX-17-01: do NOT copy intent.AmountUSD into the wire DTO.
+	// AmountUSD remains on the internal PaymentIntent struct for ledger +
+	// rail USD payload, but is never marshalled to the customer.
 	resp := initiateResponse{
 		PaymentIntentID: intent.ID.String(),
 		RedirectURL:     intent.RedirectURL,
 		Rail:            intent.Rail,
 		Credits:         intent.Credits,
-		AmountUSD:       intent.AmountUSD,
 		AmountLocal:     intent.AmountLocal,
 		LocalCurrency:   intent.LocalCurrency,
 		TaxTreatment:    intent.TaxTreatment,

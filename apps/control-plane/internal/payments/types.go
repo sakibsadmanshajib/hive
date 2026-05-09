@@ -71,7 +71,11 @@ type PaymentIntent struct {
 	Rail             Rail           `json:"rail"`
 	Status           IntentStatus   `json:"status"`
 	Credits          int64          `json:"credits"`
-	AmountUSD        int64          `json:"amount_usd"`
+	// AmountUSD is internal accounting only — never serialised to customer
+	// surface. Phase 17 FX/USD zero-leak (FX-17-01). Server→Stripe USD
+	// payload (apps/control-plane/internal/payments/stripe/rail.go) reads
+	// this field via the Go struct, NOT via JSON.
+	AmountUSD        int64          `json:"-"`
 	AmountLocal      int64          `json:"amount_local"`
 	LocalCurrency    string         `json:"local_currency"`
 	FXSnapshotID     *uuid.UUID     `json:"fx_snapshot_id,omitempty"`
