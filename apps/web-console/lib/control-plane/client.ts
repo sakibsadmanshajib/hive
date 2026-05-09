@@ -638,7 +638,12 @@ export interface CheckoutOptions {
   credit_increment: number;
   min_credits: number;
   max_credits: number;
-  price_per_credit_usd: number; // PHASE-17-OWNER-ONLY — non-BD USD-rail pricing primitive; gated by accountCountryCode !== "BD" in checkout-modal.tsx (regulatory rule). Phase 17 splits to per-country pricing.
+  // Per-country pricing primitive in minor units of the resolved currency
+  // (paisa for BDT, cents for USD). Mirrors the control-plane Go int64
+  // wire field. Replaces the FX-leaking legacy primitive removed in
+  // Phase 17 / FX-17-03..04 (regulatory).
+  price_per_credit_minor: number;
+  currency: string;
 }
 
 export interface CheckoutInitiateResponse {
@@ -1064,13 +1069,22 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   const creditIncrement = readNumberField(payload, "credit_increment") ?? 1000;
   const minCredits = readNumberField(payload, "min_credits") ?? 1000;
   const maxCredits = readNumberField(payload, "max_credits") ?? 100000;
-  const pricePerCreditUsd = readNumberField(payload, "price_per_credit_usd") ?? 0.01; // PHASE-17-OWNER-ONLY
+  // FX-17-04 regulatory: pricing primitive must be in minor units of a
+  // declared currency. Reject payload without these fields rather than
+  // defaulting to a USD assumption (mirrors the local_currency check
+  // pattern in initiateCheckout below).
+  const pricePerCreditMinor = readNumberField(payload, "price_per_credit_minor");
+  const currency = readStringField(payload, "currency");
+  if (pricePerCreditMinor === null || !currency) {
+    throw new Error("Failed to parse checkout rails response");
+  }
   return {
     rails,
     credit_increment: creditIncrement,
     min_credits: minCredits,
     max_credits: maxCredits,
-    price_per_credit_usd: pricePerCreditUsd, // PHASE-17-OWNER-ONLY
+    price_per_credit_minor: pricePerCreditMinor,
+    currency,
   };
 }
 

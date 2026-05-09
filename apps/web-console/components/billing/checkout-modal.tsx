@@ -91,17 +91,20 @@ export function CheckoutModal({
     (r) => r.rail === selectedRail,
   );
 
-  // Whether to render the pre-checkout USD estimate. BD accounts must
-  // never see USD or any FX conversion language (regulatory rule); the
-  // hosted checkout page (Stripe / bKash / SSLCommerz) is the only
-  // place a BD user sees the BDT total, computed server-side at
-  // initiate time. For non-BD accounts USD is the rail currency, so an
-  // estimate is fine.
+  // Whether to render a pre-checkout estimate. BD accounts must never
+  // see any FX conversion language or non-local currency total
+  // (regulatory rule); the hosted checkout page (Stripe / bKash /
+  // SSLCommerz) is the only place a BD user sees the BDT total,
+  // computed server-side at initiate time. For non-BD accounts the
+  // estimate is rendered in the resolved options.currency.
   const isBdAccount = accountCountryCode === "BD";
 
-  function computeAmountUsdCents(): number {
+  // FX-17-04: pricing primitive is already in minor units of
+  // options.currency (paisa for BDT, cents for USD), so the credit
+  // count multiplies directly with no float scaling.
+  function computeAmountMinor(): number {
     if (!options) return 0;
-    return Math.round(creditAmount * options.price_per_credit_usd * 100);
+    return creditAmount * options.price_per_credit_minor;
   }
 
   async function handleCheckout() {
@@ -305,7 +308,7 @@ export function CheckoutModal({
                     className="font-display text-lg tabular-nums text-[var(--color-ink)]"
                     data-numeric
                   >
-                    {formatPrice(computeAmountUsdCents(), "USD")}
+                    {formatPrice(computeAmountMinor(), options.currency)}
                   </span>
                 )}
               </div>
