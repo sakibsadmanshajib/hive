@@ -1923,7 +1923,6 @@ export async function listWorkspaceInvoices(
   if (!response.ok) {
     if (response.status === 404) return [];
     await throwControlPlaneError(response, "Failed to fetch invoices");
-    );
   }
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) return [];
