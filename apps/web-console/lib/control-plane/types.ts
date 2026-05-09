@@ -43,4 +43,12 @@ export type {
   ErrorSummaryRow,
   // Budget surface
   BudgetThreshold,
+  // Phase 14 — workspace budget / spend-alert / invoice surface
+  BudgetSettings,
+  SpendAlert,
+  InvoiceLineItem,
+  InvoiceRecord,
+  UpdateBudgetInput,
+  CreateSpendAlertInput,
+  UpdateSpendAlertInput,
 } from "./client";

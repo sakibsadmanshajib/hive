@@ -1,0 +1,111 @@
+# Phase 14 — monthly BDT-only invoices.
+# PDF rendered by gofpdf; stored in Supabase Storage hive-files bucket.
+# Zero customer-USD fields anywhere on this surface.
+openapi: 3.0.0
+info:
+  title: Hive Invoices
+  version: 14.0.0
+paths:
+  /api/v1/invoices:
+    get:
+      operationId: listWorkspaceInvoices
+      summary: List invoices for a workspace.
+      parameters:
+        - name: workspace_id
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Invoice list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [invoices]
+                properties:
+                  invoices:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Invoice"
+  /api/v1/invoices/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: getInvoice
+      summary: Fetch a single invoice's metadata.
+      responses:
+        "200":
+          description: Invoice.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Invoice"
+        "404":
+          description: Not found.
+  /api/v1/invoices/{id}/pdf:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: string, format: uuid}
+    get:
+      operationId: downloadInvoicePdf
+      summary: Redirect to short-lived signed URL for the BDT-only PDF.
+      responses:
+        "302":
+          description: Redirect to signed Supabase Storage URL.
+          headers:
+            Location:
+              schema: {type: string, format: uri}
+        "404":
+          description: Invoice or PDF not found.
+components:
+  schemas:
+    Invoice:
+      type: object
+      required:
+        - id
+        - workspace_id
+        - period_start
+        - period_end
+        - amount_bdt_subunits
+        - currency
+        - generated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        workspace_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date
+        period_end:
+          type: string
+          format: date
+        amount_bdt_subunits:
+          type: string
+          description: Total in BDT subunits. math/big decimal string.
+        currency:
+          type: string
+          enum: [BDT]
+        pdf_storage_key:
+          type: string
+          nullable: true
+          description: Supabase Storage object key (bucket=hive-files).
+        generated_at:
+          type: string
+          format: date-time

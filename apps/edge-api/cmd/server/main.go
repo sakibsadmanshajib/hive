@@ -17,10 +17,12 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/internal/files"
 	"github.com/hivegpt/hive/apps/edge-api/internal/images"
 	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
+	"github.com/hivegpt/hive/apps/edge-api/internal/limits"
 	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
 	"github.com/hivegpt/hive/apps/edge-api/internal/proxy"
 	"github.com/hivegpt/hive/packages/storage"
+	"github.com/redis/go-redis/v9"
 )
 
 type storageConfig struct {
@@ -145,9 +147,21 @@ func main() {
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
-	// Apply middleware: CompatHeaders (outermost) -> Metrics -> UnsupportedEndpoint (inner)
+	// Apply middleware: CompatHeaders (outermost) -> Metrics -> BudgetGate -> UnsupportedEndpoint (inner)
+	//
+	// Phase 14 — BudgetGate sits between metrics and unsupported-endpoint detection.
+	// It pulls workspace identity by hashing the bearer token through the authz
+	// resolver, then enforces the hard-cap stored in Redis (key written by the
+	// control-plane budgets service on every Set/DeleteBudget call). Soft-cap
+	// crossings are non-blocking but emit `budget_soft_cap_crossed_total`.
+	budgetGate, err := buildBudgetGate(authzClient)
+	if err != nil {
+		log.Fatalf("failed to initialize budget gate: %v", err)
+	}
+
 	var handler http.Handler = mux
 	handler = middleware.UnsupportedEndpointMiddleware(m)(handler)
+	handler = budgetGate.Wrap(handler)
 	handler = proxy.InstrumentHandler(edgeMetrics, handler)
 	handler = middleware.CompatHeaders()(handler)
 
@@ -312,6 +326,51 @@ func resolveLiteLLMMasterKey() string {
 		return k
 	}
 	return "litellm-dev-key"
+}
+
+// buildBudgetGate constructs the Phase 14 BudgetGate middleware. The gate
+// resolves the workspace by hashing the bearer token through the authz client,
+// then enforces the hard cap from Redis (key written by the control-plane
+// budgets service on every Set/DeleteBudget). Soft-cap crossings increment
+// the `budget_soft_cap_crossed_total` counter without blocking the request.
+//
+// Cache invalidation strategy: the control-plane PUSHES the latest hard_cap
+// to Redis on every upsert; the gate READS with a brief TTL so missed pushes
+// heal on the next read. The MTD spend counter is INCRed inline by the
+// control-plane settlement path keyed by `budget:mtd_spend:{ws}:YYYY-MM`.
+func buildBudgetGate(authzClient *authz.Client) (*limits.BudgetGate, error) {
+	opt, err := redis.ParseURL(resolveRedisURL())
+	if err != nil {
+		return nil, fmt.Errorf("budget gate: parse redis URL: %w", err)
+	}
+	redisClient := redis.NewClient(opt)
+	cache := limits.NewRedisCacheReader(redisClient)
+
+	resolver := func(r *http.Request) (string, bool) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			return "", false
+		}
+		// Resolve is best-effort here — auth failures will be re-rejected by
+		// the per-route authz path. We only need the workspace identity.
+		snap, rerr := authzClient.Resolve(r.Context(), authHeader)
+		if rerr != nil {
+			return "", false
+		}
+		if snap.AccountID == "" {
+			return "", false
+		}
+		return snap.AccountID, true
+	}
+
+	return limits.New(limits.Config{
+		Cache:                cache,
+		WorkspaceFromRequest: resolver,
+		// SoftCapResolver intentionally nil — soft-cap evaluation lives in the
+		// control-plane spendalerts cron. Phase 18 may surface a thin
+		// internal endpoint for inline soft-cap checks if hot-path needs it.
+		SoftCapResolver: nil,
+	})
 }
 
 // authorizeAliasRequest performs hot-path authorization.

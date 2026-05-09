@@ -328,7 +328,8 @@ func TestInternalResolveRouteIncludesSeparateRatePolicyFields(t *testing.T) {
 		BudgetLimitCredits: &limit,
 		PolicyVersion:      2,
 	}
-	windowStart := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
+	windowStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	repo.budgetWindows[budgetWindowKey(keyID, "monthly", windowStart)] = BudgetWindow{
 		APIKeyID:        keyID,
 		WindowKind:      "monthly",

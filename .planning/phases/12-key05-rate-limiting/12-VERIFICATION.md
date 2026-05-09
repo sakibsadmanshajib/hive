@@ -1,3 +1,15 @@
+---
+requirement_id: KEY-05
+status: Satisfied
+phase_satisfied: 12
+verified_at: 2026-04-26
+verified_by: phase-12-task-1
+evidence:
+  - apps/edge-api/internal/authz/ratelimit.go
+  - apps/edge-api/internal/authz/authorizer.go
+  - apps/edge-api/internal/authz/tier.go
+---
+
 # Phase 12 — KEY-05 Hot-Path Rate Limiting — Verification Log
 
 **Phase:** 12-key05-rate-limiting
