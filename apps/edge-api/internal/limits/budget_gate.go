@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -115,6 +116,26 @@ func NewNoopSoftCapMetric() SoftCapMetric { return noopSoftCapMetric{} }
 
 func (noopSoftCapMetric) Inc(string) {}
 
+// FailOpenCounterMetric reports the Prometheus counter name the gate
+// increments every time `evaluate` fails-open on a cache error. Sustained
+// non-zero rate is a hard-cap-bypass alert: it means workspaces are being
+// implicitly granted unbounded budgets.
+const FailOpenCounterMetric = "budget_gate_fail_open_total"
+
+// FailOpenMetric is a tiny seam mirroring SoftCapMetric for the fail-open
+// observability counter.
+type FailOpenMetric interface {
+	Inc(workspaceID string)
+}
+
+type noopFailOpenMetric struct{}
+
+// NewNoopFailOpenMetric returns a metric that drops Inc calls. Tests pass this
+// when fail-open observability is not under assertion.
+func NewNoopFailOpenMetric() FailOpenMetric { return noopFailOpenMetric{} }
+
+func (noopFailOpenMetric) Inc(string) {}
+
 // WorkspaceFromRequest resolves the active workspace ID for an inbound
 // request. Production wiring forwards to authz.Authorize; tests pass a stub.
 //
@@ -138,6 +159,15 @@ type Config struct {
 	SoftCapResolver SoftCapResolver
 	// SoftCapMetric is the counter incremented on soft-cap crossings.
 	SoftCapMetric SoftCapMetric
+	// FailOpenMetric is the counter incremented every time the gate fails open
+	// because of a Cache / Redis error. Optional; nil means no counter, only
+	// the structured-log warning lands. Track this metric — a sustained
+	// non-zero rate means workspaces are being implicitly granted unbounded
+	// budgets, masking a hard-cap bypass.
+	FailOpenMetric FailOpenMetric
+	// Logger is used for fail-open warnings. nil → slog.Default(). Each
+	// warning emits {workspace_id, error} so operators can audit bypasses.
+	Logger *slog.Logger
 	// HardCapTTL bounds drift from a missed control-plane publish. Default 30s.
 	HardCapTTL time.Duration
 	// Now is a clock seam for tests.
@@ -147,12 +177,14 @@ type Config struct {
 // BudgetGate is the middleware factory. The returned `Wrap(next)` produces an
 // http.Handler that fronts `next` with the 402 hard-cap check.
 type BudgetGate struct {
-	cache   CacheReader
-	resolve WorkspaceFromRequest
-	soft    SoftCapResolver
-	metric  SoftCapMetric
-	ttl     time.Duration
-	now     func() time.Time
+	cache    CacheReader
+	resolve  WorkspaceFromRequest
+	soft     SoftCapResolver
+	metric   SoftCapMetric
+	failOpen FailOpenMetric
+	logger   *slog.Logger
+	ttl      time.Duration
+	now      func() time.Time
 }
 
 // New constructs a BudgetGate with the supplied config. Returns an error when
@@ -176,13 +208,23 @@ func New(cfg Config) (*BudgetGate, error) {
 	if metric == nil {
 		metric = NewNoopSoftCapMetric()
 	}
+	failOpen := cfg.FailOpenMetric
+	if failOpen == nil {
+		failOpen = NewNoopFailOpenMetric()
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &BudgetGate{
-		cache:   cfg.Cache,
-		resolve: cfg.WorkspaceFromRequest,
-		soft:    cfg.SoftCapResolver,
-		metric:  metric,
-		ttl:     ttl,
-		now:     now,
+		cache:    cfg.Cache,
+		resolve:  cfg.WorkspaceFromRequest,
+		soft:     cfg.SoftCapResolver,
+		metric:   metric,
+		failOpen: failOpen,
+		logger:   logger,
+		ttl:      ttl,
+		now:      now,
 	}, nil
 }
 
@@ -199,7 +241,13 @@ func (g *BudgetGate) Wrap(next http.Handler) http.Handler {
 		if err != nil {
 			// Fail-open on Redis errors — better to bill a few extra requests
 			// than crash the hot path. The 24-hour budget cron settles below
-			// the cap on the next pass.
+			// the cap on the next pass. We MUST emit observability though:
+			// silent fail-open is a hard-cap bypass and SRE needs a counter +
+			// log line to detect sustained Redis outages or malformed cache
+			// values rather than discover them via reconciliation drift.
+			g.failOpen.Inc(workspaceID)
+			g.logger.WarnContext(r.Context(), "budget_gate: fail-open on cache error",
+				"workspace_id", workspaceID, "error", err)
 			next.ServeHTTP(w, r)
 			return
 		}

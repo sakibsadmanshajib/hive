@@ -32,9 +32,20 @@ export default async function WorkspaceInvoicesPage() {
   const profile = await getAccountProfile();
   const workspaceId = viewer.current_account.id;
 
-  const invoices: InvoiceRecord[] = await listWorkspaceInvoices(
-    workspaceId,
-  ).catch((): InvoiceRecord[] => []);
+  // Fetch invoices but distinguish three states:
+  //   - success → InvoiceRecord[]            (may legitimately be empty)
+  //   - fetch failure → fetchFailed=true     (render error state, NEVER masquerade as empty)
+  //
+  // Collapsing failure to [] would mislead users with "No invoices generated
+  // yet" while a backend outage continues silently. Surface the failure
+  // explicitly so they retry or contact support.
+  let invoices: InvoiceRecord[] = [];
+  let fetchFailed = false;
+  try {
+    invoices = await listWorkspaceInvoices(workspaceId);
+  } catch {
+    fetchFailed = true;
+  }
 
   return (
     <ConsoleShell
@@ -58,7 +69,9 @@ export default async function WorkspaceInvoicesPage() {
         <CardHeader>
           <CardTitle>Workspace invoices</CardTitle>
           <CardDescription>
-            {invoices.length === 0
+            {fetchFailed
+              ? "Could not load invoices right now. Please refresh in a moment, or contact support if the problem persists."
+              : invoices.length === 0
               ? "No invoices generated yet. Invoices appear here on the first of each month."
               : `${invoices.length} invoice${invoices.length === 1 ? "" : "s"} on file.`}
           </CardDescription>

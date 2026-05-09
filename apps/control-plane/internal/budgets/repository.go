@@ -228,14 +228,17 @@ func (r *pgxRepository) CreateAlert(ctx context.Context, in CreateAlertInput) (*
 }
 
 func (r *pgxRepository) UpdateAlert(ctx context.Context, in UpdateAlertInput) (*SpendAlert, error) {
+	// Workspace_id is part of the WHERE clause so a Phase 14 owner of
+	// workspace A cannot mutate an alert that belongs to workspace B by
+	// guessing the alert UUID. Tenant isolation enforced at the data layer.
 	row := r.pool.QueryRow(ctx, `
 		UPDATE public.spend_alerts
-		SET email = COALESCE($2, email),
-		    webhook_url = COALESCE($3, webhook_url),
-		    webhook_secret = COALESCE($4, webhook_secret)
-		WHERE id = $1
+		SET email = COALESCE($3, email),
+		    webhook_url = COALESCE($4, webhook_url),
+		    webhook_secret = COALESCE($5, webhook_secret)
+		WHERE id = $1 AND workspace_id = $2
 		RETURNING id, workspace_id, threshold_pct, email, webhook_url, webhook_secret, last_fired_at, last_fired_period, created_at
-	`, in.ID, in.Email, in.WebhookURL, in.WebhookSecret)
+	`, in.ID, in.WorkspaceID, in.Email, in.WebhookURL, in.WebhookSecret)
 
 	a, err := scanAlert(row)
 	if err != nil {
@@ -247,10 +250,13 @@ func (r *pgxRepository) UpdateAlert(ctx context.Context, in UpdateAlertInput) (*
 	return &a, nil
 }
 
-func (r *pgxRepository) DeleteAlert(ctx context.Context, alertID uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `DELETE FROM public.spend_alerts WHERE id = $1`, alertID)
+func (r *pgxRepository) DeleteAlert(ctx context.Context, workspaceID, alertID uuid.UUID) error {
+	cmd, err := r.pool.Exec(ctx, `DELETE FROM public.spend_alerts WHERE id = $1 AND workspace_id = $2`, alertID, workspaceID)
 	if err != nil {
 		return fmt.Errorf("budgets: delete alert: %w", err)
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrBudgetNotFound
 	}
 	return nil
 }

@@ -62,6 +62,11 @@ type InvoiceLineItem struct {
 // id-enumeration leakage).
 var ErrInvoiceNotFound = errors.New("invoices: invoice not found")
 
+// ErrAccessCheckUnavailable is returned when the workspace-membership check
+// itself failed (DB error, nil checker). Surfaces as 500 — distinct from
+// ErrInvoiceNotFound so the HTTP layer does not mask infra failures as 404.
+var ErrAccessCheckUnavailable = errors.New("invoices: access check unavailable")
+
 // =============================================================================
 // Repository surface (defined where used per Go interface-placement convention)
 // =============================================================================

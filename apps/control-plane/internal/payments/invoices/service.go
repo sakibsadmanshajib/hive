@@ -145,14 +145,16 @@ func (s *Service) GenerateInvoiceForPeriod(ctx context.Context, workspaceID uuid
 // Get returns one invoice by id, gated on workspace membership of the caller.
 //
 // Cross-workspace access is surfaced as ErrInvoiceNotFound (404) — never 403 —
-// to avoid id-enumeration leakage.
+// to avoid id-enumeration leakage. Infrastructure errors during the access
+// check are surfaced as ErrAccessCheckUnavailable so the HTTP layer can map
+// them to 500 instead of masking them as 404.
 func (s *Service) Get(ctx context.Context, userID, invoiceID uuid.UUID) (*Invoice, error) {
 	inv, err := s.repo.GetByID(ctx, invoiceID)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.requireMembership(ctx, userID, inv.WorkspaceID); err != nil {
-		return nil, ErrInvoiceNotFound
+		return nil, err
 	}
 	return inv, nil
 }
@@ -161,20 +163,20 @@ func (s *Service) Get(ctx context.Context, userID, invoiceID uuid.UUID) (*Invoic
 // membership.
 func (s *Service) ListForWorkspace(ctx context.Context, userID, workspaceID uuid.UUID, limit int) ([]Invoice, error) {
 	if err := s.requireMembership(ctx, userID, workspaceID); err != nil {
-		return nil, ErrInvoiceNotFound
+		return nil, err
 	}
 	return s.repo.ListByWorkspace(ctx, workspaceID, limit)
 }
 
 // PDFURL returns a short-lived presigned URL for the invoice PDF. Gated on
-// workspace membership; cross-workspace = 404.
+// workspace membership; cross-workspace = 404; infra errors = 500.
 func (s *Service) PDFURL(ctx context.Context, userID, invoiceID uuid.UUID) (string, error) {
 	inv, err := s.repo.GetByID(ctx, invoiceID)
 	if err != nil {
 		return "", err
 	}
 	if err := s.requireMembership(ctx, userID, inv.WorkspaceID); err != nil {
-		return "", ErrInvoiceNotFound
+		return "", err
 	}
 	if inv.PDFStorageKey == "" || s.storage == nil {
 		return "", ErrInvoiceNotFound
@@ -190,16 +192,24 @@ func (s *Service) PDFURL(ctx context.Context, userID, invoiceID uuid.UUID) (stri
 // Helpers
 // =============================================================================
 
+// requireMembership returns:
+//   - nil                          → caller is a member
+//   - ErrInvoiceNotFound           → caller is NOT a member (id-enumeration safe 404)
+//   - ErrAccessCheckUnavailable    → access check failed (DB error / nil checker → 500)
+//
+// The HTTP layer maps these distinct sentinels to distinct status codes so a
+// transient infrastructure failure is never silently presented to the
+// customer as a 404 "no invoices yet".
 func (s *Service) requireMembership(ctx context.Context, userID, workspaceID uuid.UUID) error {
 	if s.access == nil {
-		return fmt.Errorf("invoices: access checker unavailable")
+		return ErrAccessCheckUnavailable
 	}
 	ok, err := s.access.IsWorkspaceMember(ctx, userID, workspaceID)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", ErrAccessCheckUnavailable, err)
 	}
 	if !ok {
-		return fmt.Errorf("invoices: not a member")
+		return ErrInvoiceNotFound
 	}
 	return nil
 }

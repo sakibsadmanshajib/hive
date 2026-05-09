@@ -280,6 +280,13 @@ func main() {
 		// guards mutations at schema level). RoleService gates the admin
 		// surface; the self-list surface uses plain auth middleware only.
 		roleSvc = platform.NewRoleService(platform.NewPgxRoleStore(pool))
+
+		// Phase 14 — wire role service into the budgets handler so owner-gated
+		// workspace routes (PUT/DELETE /api/v1/budgets/{ws}, /api/v1/spend-alerts)
+		// can call IsWorkspaceOwner. Without this the customer-facing surface
+		// returns 503 "role service unavailable" on every mutating request.
+		budgetsHandler = budgetsHandler.WithRoleService(roleSvc)
+
 		grantsRepo := grants.NewPgxRepository(pool)
 		grantsSvc := grants.NewService(grantsRepo, roleSvc)
 		grantsHandler = grants.NewHandler(grantsSvc)

@@ -7,6 +7,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import {
+  ControlPlaneError,
   createSpendAlert,
   type CreateSpendAlertInput,
 } from "@/lib/control-plane/client";
@@ -64,8 +65,23 @@ export async function POST(
     const alert = await createSpendAlert(workspaceId, input);
     return NextResponse.json({ alert });
   } catch (err) {
-    const message =
-      err instanceof Error ? err.message : "Failed to create alert";
-    return NextResponse.json({ error: message }, { status: 500 });
+    // Preserve upstream HTTP status (4xx vs 5xx) so the browser sees real
+    // permission / validation outcomes. Never surface raw upstream messages —
+    // those can leak internal details. Generic per-class summary instead.
+    if (err instanceof ControlPlaneError) {
+      const status = err.status >= 400 && err.status < 600 ? err.status : 502;
+      const summary =
+        status >= 500
+          ? "Upstream service error"
+          : status === 401
+          ? "Unauthorized"
+          : status === 403
+          ? "Forbidden"
+          : status === 404
+          ? "Not found"
+          : "Request rejected";
+      return NextResponse.json({ error: summary }, { status });
+    }
+    return NextResponse.json({ error: "Failed to create alert" }, { status: 502 });
   }
 }

@@ -394,6 +394,7 @@ func (h *Handler) handleSpendAlerts(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a, err := h.svc.UpdateAlert(r.Context(), UpdateAlertInput{
+			WorkspaceID:   wsID,
 			ID:            alertID,
 			Email:         req.Email,
 			WebhookURL:    req.WebhookURL,
@@ -418,7 +419,11 @@ func (h *Handler) handleSpendAlerts(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid alert_id"})
 			return
 		}
-		if err := h.svc.DeleteAlert(r.Context(), alertID); err != nil {
+		if err := h.svc.DeleteAlert(r.Context(), wsID, alertID); err != nil {
+			if errors.Is(err, ErrBudgetNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": "alert not found"})
+				return
+			}
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "delete alert failed"})
 			return
 		}

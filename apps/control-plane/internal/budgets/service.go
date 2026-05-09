@@ -298,12 +298,14 @@ func (s *Service) UpdateAlert(ctx context.Context, in UpdateAlertInput) (*SpendA
 	return a, nil
 }
 
-// DeleteAlert removes an alert.
-func (s *Service) DeleteAlert(ctx context.Context, alertID uuid.UUID) error {
+// DeleteAlert removes an alert. workspaceID + alertID together constrain the
+// data-layer mutation so tenant isolation holds even if a caller guesses an
+// alert UUID belonging to another workspace.
+func (s *Service) DeleteAlert(ctx context.Context, workspaceID, alertID uuid.UUID) error {
 	if s.workspaceCtx == nil {
 		return fmt.Errorf("budgets: workspace surface not wired")
 	}
-	if err := s.workspaceCtx.wrepo.DeleteAlert(ctx, alertID); err != nil {
+	if err := s.workspaceCtx.wrepo.DeleteAlert(ctx, workspaceID, alertID); err != nil {
 		return fmt.Errorf("budgets: delete alert: %w", err)
 	}
 	return nil

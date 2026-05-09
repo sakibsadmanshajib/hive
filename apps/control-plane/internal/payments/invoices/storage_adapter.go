@@ -2,11 +2,19 @@ package invoices
 
 import (
 	"context"
+	"errors"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/hivegpt/hive/packages/storage"
 )
+
+// ErrStorageBackend is the sanitized sentinel surfaced across the service
+// boundary on any object-storage failure. The original error is logged
+// (via slog) for debug, but never returned upstream verbatim — that prevents
+// provider / bucket internals leaking onto a customer-visible response.
+var ErrStorageBackend = errors.New("invoices: storage backend unavailable")
 
 // =============================================================================
 // Storage adapter — bridges packages/storage.Storage (io.Reader) to the local
@@ -31,11 +39,22 @@ func (a *storageAdapter) Upload(
 	size int64,
 	contentType string,
 ) error {
-	return a.inner.Upload(ctx, bucket, key, asReader{body}, size, contentType)
+	if err := a.inner.Upload(ctx, bucket, key, asReader{body}, size, contentType); err != nil {
+		slog.WarnContext(ctx, "invoices: storage upload failed",
+			"bucket", bucket, "key", key, "error", err)
+		return ErrStorageBackend
+	}
+	return nil
 }
 
 func (a *storageAdapter) PresignedURL(ctx context.Context, bucket, key string, ttl time.Duration) (string, error) {
-	return a.inner.PresignedURL(ctx, bucket, key, ttl)
+	url, err := a.inner.PresignedURL(ctx, bucket, key, ttl)
+	if err != nil {
+		slog.WarnContext(ctx, "invoices: storage presign failed",
+			"bucket", bucket, "key", key, "error", err)
+		return "", ErrStorageBackend
+	}
+	return url, nil
 }
 
 // asReader lifts a bytesReader to io.Reader (a method-set widening; the body

@@ -166,7 +166,7 @@ func (r *inMemoryRepo) UpdateAlert(_ context.Context, _ budgets.UpdateAlertInput
 	return nil, errors.New("not used")
 }
 
-func (r *inMemoryRepo) DeleteAlert(_ context.Context, _ uuid.UUID) error { return nil }
+func (r *inMemoryRepo) DeleteAlert(_ context.Context, _ uuid.UUID, _ uuid.UUID) error { return nil }
 
 func (r *inMemoryRepo) ListWorkspacesWithBudget(_ context.Context) ([]uuid.UUID, error) {
 	if r.budget == nil {

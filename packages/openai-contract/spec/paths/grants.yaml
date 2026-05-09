@@ -80,6 +80,8 @@ paths:
     get:
       operationId: listCallerCreditGrants
       summary: Authenticated caller. Read-only list of grants targeted at the caller.
+      security:
+        - BearerAuth: []
       responses:
         "200":
           description: Grants list (caller scoped).
@@ -93,13 +95,24 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/CreditGrant"
+        "401":
+          description: Unauthenticated.
 components:
   securitySchemes:
+    # Authenticated user — Authorization: Bearer <jwt>.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    # Same Bearer transport, but the subject must have
+    # accounts.is_platform_admin = true. Used for the /v1/admin/credit-grants
+    # routes; the control-plane platform.RequirePlatformAdmin middleware
+    # enforces the flag.
     PlatformAdmin:
-      type: apiKey
-      in: header
-      name: Authorization
-      description: Bearer token whose subject has accounts.users.is_platform_admin = true.
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer JWT whose subject has accounts.is_platform_admin = true.
   schemas:
     CreditGrantCreate:
       type: object

@@ -74,7 +74,11 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 	}
 
 	// Step 1: claim idempotency key. ON CONFLICT DO NOTHING so duplicate
-	// calls with the same key short-circuit.
+	// calls with the same key short-circuit. Per payment-system convention
+	// (Stripe / bKash / SSLCommerz wrapper here), a repeated submission with
+	// the same key MUST return the original result, not error — otherwise the
+	// admin console retry-after-network-blip lands a "duplicate" failure even
+	// though the first call succeeded.
 	cmd, err := tx.Exec(ctx, `
 		INSERT INTO public.credit_idempotency_keys
 			(account_id, operation_type, idempotency_key, request_id, attempt_id)
@@ -85,7 +89,52 @@ func (r *pgxRepository) CreateWithLedger(ctx context.Context, input CreateInput)
 		return CreateResult{}, fmt.Errorf("grants: insert idempotency key: %w", err)
 	}
 	if cmd.RowsAffected() == 0 {
-		return CreateResult{}, fmt.Errorf("grants: duplicate idempotency_key %q", idempotencyKey)
+		// Replay path. Look up the original grant + ledger entry that
+		// previously claimed this idempotency key and return them verbatim.
+		// The grant row is FK-tied to its ledger_entry_id, and the
+		// idempotency row stores ledger_entry_id post-commit, so a single
+		// join surfaces the prior result.
+		var (
+			existingLedger uuid.UUID
+			existingGrant  CreditGrant
+			existingAmt    int64
+		)
+		err = tx.QueryRow(ctx, `
+			SELECT idem.ledger_entry_id,
+			       g.id, g.granted_by_user_id, g.granted_to_user_id, g.granted_to_workspace_id,
+			       g.amount_bdt_subunits, COALESCE(g.reason_note, ''), g.ledger_entry_id, g.currency, g.created_at
+			  FROM public.credit_idempotency_keys idem
+			  JOIN public.credit_grants g ON g.ledger_entry_id = idem.ledger_entry_id
+			 WHERE idem.account_id = $1
+			   AND idem.operation_type = 'grant'
+			   AND idem.idempotency_key = $2
+		`, input.GrantedToWorkspaceID, idempotencyKey).Scan(
+			&existingLedger,
+			&existingGrant.ID,
+			&existingGrant.GrantedByUserID,
+			&existingGrant.GrantedToUserID,
+			&existingGrant.GrantedToWorkspaceID,
+			&existingAmt,
+			&existingGrant.ReasonNote,
+			&existingGrant.LedgerEntryID,
+			&existingGrant.Currency,
+			&existingGrant.CreatedAt,
+		)
+		if err != nil {
+			// The idempotency key was claimed but the join hit zero rows,
+			// meaning the original transaction is mid-flight or rolled back
+			// without releasing the key. Surface as a transient error so the
+			// caller can retry, not as a permanent duplicate failure.
+			if errors.Is(err, pgx.ErrNoRows) {
+				return CreateResult{}, fmt.Errorf("grants: idempotency_key %q claimed but no committed grant yet — retry", idempotencyKey)
+			}
+			return CreateResult{}, fmt.Errorf("grants: lookup idempotent grant: %w", err)
+		}
+		existingGrant.AmountBDTSubunits = big.NewInt(existingAmt)
+		// Roll back the empty tx (no rows written) and return the prior
+		// result. Replay is observably indistinguishable from the original.
+		_ = tx.Rollback(ctx)
+		return CreateResult{Grant: existingGrant, LedgerEntryID: existingLedger}, nil
 	}
 
 	// Step 2: insert the ledger entry (entry_type='grant', positive credits).

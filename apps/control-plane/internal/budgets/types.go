@@ -68,7 +68,12 @@ type CreateAlertInput struct {
 }
 
 // UpdateAlertInput carries the inputs to update an existing spend alert.
+//
+// WorkspaceID is required and constrains the WHERE clause so an owner of
+// workspace A cannot mutate an alert that belongs to workspace B even with a
+// guessed alert UUID. Tenant isolation enforced at the data layer.
 type UpdateAlertInput struct {
+	WorkspaceID   uuid.UUID
 	ID            uuid.UUID
 	Email         *string
 	WebhookURL    *string
@@ -109,7 +114,9 @@ type WorkspaceBudgetRepository interface {
 	ListAlerts(ctx context.Context, workspaceID uuid.UUID) ([]SpendAlert, error)
 	CreateAlert(ctx context.Context, in CreateAlertInput) (*SpendAlert, error)
 	UpdateAlert(ctx context.Context, in UpdateAlertInput) (*SpendAlert, error)
-	DeleteAlert(ctx context.Context, alertID uuid.UUID) error
+	// DeleteAlert removes an alert constrained by both workspaceID + alertID
+	// for tenant isolation.
+	DeleteAlert(ctx context.Context, workspaceID, alertID uuid.UUID) error
 
 	// Cron support
 	ListWorkspacesWithBudget(ctx context.Context) ([]uuid.UUID, error)

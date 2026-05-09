@@ -116,7 +116,7 @@ func (f *fakeWorkspaceRepo) UpdateAlert(_ context.Context, in budgets.UpdateAler
 	return nil, budgets.ErrBudgetNotFound
 }
 
-func (f *fakeWorkspaceRepo) DeleteAlert(_ context.Context, alertID uuid.UUID) error {
+func (f *fakeWorkspaceRepo) DeleteAlert(_ context.Context, _ uuid.UUID, alertID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for ws, list := range f.alerts {

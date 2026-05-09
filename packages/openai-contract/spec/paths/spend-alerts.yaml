@@ -123,6 +123,19 @@ components:
         webhook_url:
           type: string
           format: uri
+      oneOf:
+        - title: EmailAlert
+          properties:
+            delivery_channel:
+              const: email
+        - title: WebhookAlert
+          required: [webhook_url]
+          properties:
+            delivery_channel:
+              const: webhook
+            webhook_url:
+              type: string
+              format: uri
     SpendAlertUpdate:
       type: object
       properties:
@@ -135,3 +148,10 @@ components:
         webhook_url:
           type: string
           format: uri
+      # When delivery_channel is patched to "webhook", webhook_url MUST be
+      # present in the same patch body. The conditional dependency is
+      # expressed via dependentRequired (OpenAPI 3.1 forward-compat: the
+      # JSON Schema 2020-12 keyword is also accepted by most validators
+      # against an OpenAPI 3.0 document).
+      dependentRequired:
+        delivery_channel: [webhook_url]

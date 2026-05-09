@@ -1579,7 +1579,9 @@ export interface SpendAlert {
 export interface InvoiceLineItem {
   model_id: string;
   request_count: number;
-  bdt_subunits: number;
+  // BDT subunit decimal string. Wire shape is JSON string (Go `,string` tag)
+  // so callers parse with BigInt and never round at 2^53.
+  bdt_subunits: string;
 }
 
 export interface InvoiceRecord {
@@ -1587,7 +1589,8 @@ export interface InvoiceRecord {
   workspace_id: string;
   period_start: string;
   period_end: string;
-  total_bdt_subunits: number;
+  // BDT subunit decimal string — see InvoiceLineItem.bdt_subunits comment.
+  total_bdt_subunits: string;
   line_items: InvoiceLineItem[];
   generated_at: string;
 }
@@ -1672,7 +1675,17 @@ function decodeInvoiceLineItem(value: JsonValue): InvoiceLineItem | null {
   if (!isJsonObject(value)) return null;
   const modelId = readStringField(value, "model_id");
   const requestCount = readNumberField(value, "request_count");
-  const bdtSubunits = readNumberField(value, "bdt_subunits");
+  // bdt_subunits arrives as a JSON string (server `,string` tag) for BigInt
+  // safety. Tolerate JSON number too for forward-compat with any older test
+  // fixture that still emits a number.
+  const bdtSubunitsRaw = readStringField(value, "bdt_subunits");
+  const bdtSubunitsNumeric = readNumberField(value, "bdt_subunits");
+  const bdtSubunits =
+    bdtSubunitsRaw !== null
+      ? bdtSubunitsRaw
+      : bdtSubunitsNumeric !== null
+      ? String(bdtSubunitsNumeric)
+      : null;
   if (modelId === null || requestCount === null || bdtSubunits === null) {
     return null;
   }
@@ -1689,7 +1702,14 @@ function decodeInvoiceRecord(value: JsonValue): InvoiceRecord | null {
   const workspaceId = readStringField(value, "workspace_id");
   const periodStart = readStringField(value, "period_start");
   const periodEnd = readStringField(value, "period_end");
-  const total = readNumberField(value, "total_bdt_subunits");
+  const totalRaw = readStringField(value, "total_bdt_subunits");
+  const totalNumeric = readNumberField(value, "total_bdt_subunits");
+  const total =
+    totalRaw !== null
+      ? totalRaw
+      : totalNumeric !== null
+      ? String(totalNumeric)
+      : null;
   const generatedAt = readStringField(value, "generated_at");
   const itemsRaw = readArrayField(value, "line_items") ?? [];
   if (
@@ -1728,7 +1748,7 @@ export async function getBudget(
   });
   if (!response.ok) {
     if (response.status === 404) return null;
-    throw new Error(await readResponseError(response, "Failed to fetch budget"));
+    await throwControlPlaneError(response, "Failed to fetch budget");
   }
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) return null;
@@ -1756,7 +1776,7 @@ export async function updateBudget(
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to update budget"));
+    await throwControlPlaneError(response, "Failed to update budget");
   }
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) {
@@ -1777,7 +1797,7 @@ export async function deleteBudget(workspaceId: string): Promise<void> {
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to delete budget"));
+    await throwControlPlaneError(response, "Failed to delete budget");
   }
 }
 
@@ -1788,9 +1808,7 @@ export async function listSpendAlerts(workspaceId: string): Promise<SpendAlert[]
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(
-      await readResponseError(response, "Failed to fetch spend alerts"),
-    );
+    await throwControlPlaneError(response, "Failed to fetch spend alerts");
   }
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) return [];
@@ -1823,9 +1841,7 @@ export async function createSpendAlert(
     cache: "no-store",
   });
   if (!response.ok) {
-    throw new Error(
-      await readResponseError(response, "Failed to create spend alert"),
-    );
+    await throwControlPlaneError(response, "Failed to create spend alert");
   }
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) {
@@ -1864,9 +1880,7 @@ export async function updateSpendAlert(
     },
   );
   if (!response.ok) {
-    throw new Error(
-      await readResponseError(response, "Failed to update spend alert"),
-    );
+    await throwControlPlaneError(response, "Failed to update spend alert");
   }
   const payload = parseJsonValue(await readResponseText(response));
   if (!isJsonObject(payload)) {
@@ -1893,9 +1907,7 @@ export async function deleteSpendAlert(
     { method: "DELETE", headers, cache: "no-store" },
   );
   if (!response.ok) {
-    throw new Error(
-      await readResponseError(response, "Failed to delete spend alert"),
-    );
+    await throwControlPlaneError(response, "Failed to delete spend alert");
   }
 }
 
@@ -1910,8 +1922,7 @@ export async function listWorkspaceInvoices(
   const response = await fetch(url.toString(), { headers, cache: "no-store" });
   if (!response.ok) {
     if (response.status === 404) return [];
-    throw new Error(
-      await readResponseError(response, "Failed to fetch invoices"),
+    await throwControlPlaneError(response, "Failed to fetch invoices");
     );
   }
   const payload = parseJsonValue(await readResponseText(response));

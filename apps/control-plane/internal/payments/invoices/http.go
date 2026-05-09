@@ -63,12 +63,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // Wire format
 // =============================================================================
 
+// invoiceWire is the JSON shape for invoice list / detail responses.
+//
+// Currency subunits (`total_bdt_subunits`, line-item `bdt_subunits`) are
+// emitted as JSON strings (`,string` tag) so client-side code that parses
+// them with BigInt avoids any Number.MAX_SAFE_INTEGER precision loss when
+// totals exceed 2^53. The server math itself is performed via *big.Int;
+// the wire shape preserves that invariant end-to-end.
 type invoiceWire struct {
 	ID                 uuid.UUID         `json:"id"`
 	WorkspaceID        uuid.UUID         `json:"workspace_id"`
 	PeriodStart        string            `json:"period_start"`
 	PeriodEnd          string            `json:"period_end"`
-	TotalBDTSubunits   int64             `json:"total_bdt_subunits"`
+	TotalBDTSubunits   int64             `json:"total_bdt_subunits,string"`
 	LineItems          []lineItemWire    `json:"line_items"`
 	GeneratedAt        time.Time         `json:"generated_at"`
 }
@@ -76,7 +83,7 @@ type invoiceWire struct {
 type lineItemWire struct {
 	ModelID      string `json:"model_id"`
 	RequestCount int64  `json:"request_count"`
-	BDTSubunits  int64  `json:"bdt_subunits"`
+	BDTSubunits  int64  `json:"bdt_subunits,string"`
 }
 
 func toInvoiceWire(inv Invoice) invoiceWire {

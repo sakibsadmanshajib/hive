@@ -12,12 +12,28 @@ interface InvoiceRowProps {
   invoice: InvoiceRecord;
 }
 
-function subunitsToTakaDisplay(subunits: number): string {
-  if (!Number.isFinite(subunits) || subunits < 0) return "৳0.00";
-  const integer = Math.floor(subunits / 100);
-  const fraction = subunits % 100;
+function subunitsToTakaDisplay(subunits: string): string {
+  // BigInt math — wire shape arrives as a JSON string (Go `,string` tag) so
+  // totals beyond Number.MAX_SAFE_INTEGER (2^53−1) preserve full BIGINT
+  // precision. The original Number-based path silently rounded for very
+  // large monthly totals; BigInt removes the precision risk entirely.
+  let n: bigint;
+  try {
+    n = BigInt(subunits);
+  } catch {
+    return "৳0.00";
+  }
+  if (n < 0n) return "৳0.00";
+  const integer = n / 100n;
+  const fraction = n % 100n;
   // Bangla taka glyph (৳) — regulatory rule: BDT only, no $/USD anywhere.
-  return `৳${integer.toLocaleString("en-BD")}.${String(fraction).padStart(2, "0")}`;
+  // Format the integer part with locale grouping for values up to
+  // Number.MAX_SAFE_INTEGER, fall back to plain digits beyond that.
+  const integerDisplay =
+    integer <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(integer).toLocaleString("en-BD")
+      : integer.toString();
+  return `৳${integerDisplay}.${fraction.toString().padStart(2, "0")}`;
 }
 
 export function InvoiceRow({ invoice }: InvoiceRowProps) {
