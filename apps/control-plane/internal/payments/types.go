@@ -78,7 +78,7 @@ type PaymentIntent struct {
 	AmountUSD        int64          `json:"-"`
 	AmountLocal      int64          `json:"amount_local"`
 	LocalCurrency    string         `json:"local_currency"`
-	FXSnapshotID     *uuid.UUID     `json:"fx_snapshot_id,omitempty"`
+	FXSnapshotID     *uuid.UUID     `json:"fx_snapshot_id,omitempty"` // PHASE-17-INTERNAL-ONLY: PaymentIntent is the internal state record; customer-facing checkout/invoice DTOs (FX-17-01..04) omit this field. Audit attestation: never serialised onto a customer wire surface.
 	ProviderIntentID string         `json:"provider_intent_id"`
 	RedirectURL      string         `json:"redirect_url"`
 	TaxTreatment     string         `json:"tax_treatment"`
@@ -130,7 +130,7 @@ type InitiateInput struct {
 	PaymentIntentID uuid.UUID `json:"payment_intent_id"`
 	AccountID       uuid.UUID `json:"account_id"`
 	Credits         int64     `json:"credits"`
-	AmountUSD       int64     `json:"amount_usd"`
+	AmountUSD       int64     `json:"amount_usd"` // PHASE-17-INTERNAL-ONLY: server→PaymentRail (Stripe USD) RPC; never reaches customer wire. Audit attestation FX-17-01: customer InitiateCheckoutResponse is amount_local_subunits-only.
 	AmountLocal     int64     `json:"amount_local"`
 	Currency        string    `json:"currency"`
 	CallbackBaseURL string    `json:"callback_base_url"`
