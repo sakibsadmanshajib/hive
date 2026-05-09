@@ -59,9 +59,49 @@ v1.1.0 tag is **blocked** until this phase closes.
 |---|---|---|
 | `apps/control-plane/internal/payments/invoices/pdf.go` | 192, 194 | Banned-key blocklist (already excludes `amount_usd`/`price_per_credit_usd` from PDF render) — keep; verify integration test |
 
-### A.5 — chat-app (Phase 19 fork) — pending audit
+### A.5 — chat-app (Phase 19 fork) — closed (FX-17-05, 2026-05-09)
 
-Phase 19 forked LibreChat with `interface.showCost: false` + `interface.showTokens: false`. Needs grep sweep over `apps/chat-app/` for any remaining USD/FX surface (top-up flow, billing surface, error messages).
+Sweep complete. Evidence: `evidence/FX-17-05.md`. Worktree HEAD at audit: `2530fd6`.
+
+#### A.5.1 — Primary banned-key grep (`apps/chat-app/client/src` + `apps/chat-app/api/server`)
+
+```
+grep -RnE 'amount_usd|usd_[A-Za-z0-9_]*|fx_[A-Za-z0-9_]*|price_per_credit_usd|exchange_rate' \
+  apps/chat-app/client/src apps/chat-app/api/server 2>/dev/null \
+  | grep -vE 'showCost: false|showTokens: false'
+```
+
+Exit 1 (no match). Verdict: CLEAN.
+
+#### A.5.2 — Locale USD prose grep
+
+| File | Line | Hit | Action |
+|---|---|---|---|
+| `apps/chat-app/client/src/locales/en/translation.json` | 396 | `com_nav_info_balance` example `$0.001 USD` | STRIPPED to `"Balance shows how many token credits you have left to use."` |
+| `apps/chat-app/client/src/locales/bn-BD/translation.json` | 396 | same upstream example `$0.001 USD` | STRIPPED + Bengali rewrite `"ব্যালেন্স দেখায় আপনার কতগুলি টোকেন ক্রেডিট ব্যবহারের জন্য বাকি আছে।"` |
+| `apps/chat-app/client/src/locales/et/translation.json` | 374 | upstream USD example | DEFERRED → HANDOFF-17-02 (non-BD locale; Phase 23 i18n replaces wholesale) |
+| `apps/chat-app/client/src/locales/de/translation.json` | 395 | upstream USD example | DEFERRED → HANDOFF-17-02 |
+| `apps/chat-app/client/src/locales/lv/translation.json` | 393 | upstream USD example | DEFERRED → HANDOFF-17-02 |
+| `apps/chat-app/client/src/locales/he/translation.json` | 393 | upstream USD example | DEFERRED → HANDOFF-17-02 |
+
+Post-strip BD-locale re-grep on `en/` + `bn-BD/`: exit 1 (CLEAN).
+
+#### A.5.3 — `librechat.yaml` verdict
+
+```
+apps/chat-app/librechat.yaml:16:  showCost: false
+apps/chat-app/librechat.yaml:17:  showTokens: false
+```
+
+Pinned with Phase 19 defensive comment block (lines 8-14). PASS. No edit.
+
+#### A.5.4 — Component surface
+
+`com_nav_info_balance` consumed only by `apps/chat-app/client/src/components/Nav/SettingsTabs/Balance/TokenCreditsItem.tsx:18` (rendered inside `Balance.tsx`, which is gated by `startupConfig?.balance?.enabled` and the LibreChat-wide `interface.showCost: false`). Strip is defence-in-depth. No top-up / billing / payment customer-rendered USD strings discovered in `apps/chat-app/client/src/components`.
+
+#### A.5.5 — Hand-off
+
+HANDOFF-17-02 inherits the four non-BD-locale upstream USD strings (`et`, `de`, `lv`, `he`). Phase 23 i18n bundle work replaces upstream locales wholesale; Phase 25 re-audits to confirm zero residual USD prose pre-launch.
 
 ## Section B — CI Lint Coverage Gap
 
