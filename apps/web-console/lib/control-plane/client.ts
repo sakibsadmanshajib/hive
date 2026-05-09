@@ -389,6 +389,23 @@ async function readResponseError(response: Response, fallback: string): Promise<
   return readErrorMessage(payload) ?? `${fallback}: ${response.status}`;
 }
 
+// ControlPlaneError carries the upstream HTTP status so Next.js proxy routes
+// can forward it instead of collapsing every failure to 500. Use this for
+// any client function whose proxy route must preserve 4xx semantics
+// (permission denied, validation error, not found).
+export class ControlPlaneError extends Error {
+  public readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ControlPlaneError";
+    this.status = status;
+  }
+}
+
+async function throwControlPlaneError(response: Response, fallback: string): Promise<never> {
+  throw new ControlPlaneError(response.status, await readResponseError(response, fallback));
+}
+
 export async function getViewer(): Promise<Viewer> {
   const { baseUrl, headers } = await getRequestContext();
 
