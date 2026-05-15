@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — deferred scope
-status: executing
-stopped_at: "Phase 18 Wave 3 complete — Plan 04 wire flip landed: viewer.permissions[] in, gates.* out"
-last_updated: "2026-05-15T02:56:00.000Z"
+status: phase_closed
+stopped_at: "Phase 18 (RBAC Matrix) — verification PASSED, ship-gate flipped, ready for PR"
+last_updated: "2026-05-15T03:07:46.066Z"
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 0
-  completed_plans: 7
+  completed_plans: 4
 ---
 
 # Project State
@@ -23,8 +23,8 @@ See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 
 ## Current Position
 
-Phase: 18 (RBAC Matrix) — EXECUTING
-Plan: 3 of 7
+Phase: 18 (RBAC Matrix) — CLOSED 2026-05-14
+Plan: 7 of 7 (complete)
 
 ## Performance Metrics
 
@@ -208,9 +208,15 @@ Recent decisions affecting current work:
 - [Phase 10-11]: Runtime Dockerfiles copy packages/storage because go.work declares it as a workspace module — live compose images now build the same storage code the toolchain tests exercised.
 - [Phase 10-11]: Live smoke request failures now surface honestly, and the remaining chat blocker is the current upstream provider key quota rather than a routing, storage, or batch-contract regression.
 
+### v1.1 Ship Gate
+
+| Gate | Status | Closed |
+|------|--------|--------|
+| rbac_matrix | true | Phase 18 — closed 2026-05-14 — PR #TBD-Phase-18 |
+
 ### Pending Todos
 
-- Design RBAC authorization model (`.planning/todos/pending/2026-04-22-design-rbac-authorization-model.md`)
+- (none — Design RBAC authorization model resolved to `.planning/todos/done/` by Phase 18)
 
 ### Blockers/Concerns
 
@@ -220,6 +226,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T02:56:00.000Z
-Stopped at: Phase 18 Wave 3 complete — Plan 04 wire flip landed: viewer.permissions[] in, gates.* out
-Resume file: .planning/phases/18-rbac-matrix/SUMMARY-PLAN-04.md
+Last session: 2026-05-15T03:07:46.060Z
+Stopped at: Phase 18 Wave 4 complete — FE migration + CI wiring landed (Plans 05-06)
+Resume file: None
