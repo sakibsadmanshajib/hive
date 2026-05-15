@@ -1,22 +1,12 @@
-export interface ViewerGates {
-  can_invite_members: boolean;
-  can_manage_api_keys: boolean;
+import { type Permission, PERMISSIONS } from "./control-plane/permissions.generated";
+
+export type { Permission };
+export { PERMISSIONS };
+
+export interface ViewerWithPermissions {
+  permissions: string[];
 }
 
-export interface ViewerForGates {
-  gates: ViewerGates;
+export function can(viewer: ViewerWithPermissions, perm: Permission): boolean {
+  return new Set(viewer.permissions).has(perm);
 }
-
-export function canInviteMembers(viewer: ViewerForGates): boolean {
-  return viewer.gates.can_invite_members;
-}
-
-export function canManageApiKeys(viewer: ViewerForGates): boolean {
-  return viewer.gates.can_manage_api_keys;
-}
-
-export const allowedUnverifiedRoutes: string[] = [
-  "/console",
-  "/console/setup",
-  "/console/settings/profile",
-];

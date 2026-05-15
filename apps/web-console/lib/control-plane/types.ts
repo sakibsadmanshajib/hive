@@ -13,13 +13,14 @@
 // See `.planning/phases/13-console-integration-fixes/13-AUDIT.md` Section B
 // for the type-sync gap analysis (zero gaps found at audit time).
 
+export type { Permission } from "./permissions.generated";
+
 export type {
   // Account / viewer surface
   Viewer,
   ViewerAccount,
   ViewerMembership,
   ViewerUser,
-  ViewerGates,
   AccountProfile,
   UpdateAccountProfileInput,
   BillingProfile,
