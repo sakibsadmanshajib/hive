@@ -317,3 +317,90 @@ test("TS: readonly + whitelist still exempts the line", () => {
     assert.equal(r.status, 0, `whitelist must still apply; stderr=${r.stderr}`);
   });
 });
+
+// ─── PR #137 second-pass review — TS class-member modifier coverage ──────────
+//
+// A class field can stack TS member modifiers (`public`, `private`,
+// `protected`, `static`, `override`, `abstract`, `declare`) before
+// `readonly`. The single-`readonly` prefix that closed the first bypass
+// does NOT match `public readonly amount_usd` or `private static fx_*`.
+// Each case below MUST fail the lint.
+
+test("TS: public amount_usd class field is flagged", () => {
+  withTempFile("cls1.ts", `export class Receipt {
+  public amount_usd: number = 0;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `public modifier must NOT bypass; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: public readonly amount_usd class field is flagged", () => {
+  withTempFile("cls2.ts", `export class Receipt {
+  public readonly amount_usd: number = 0;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `public+readonly must NOT bypass; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: private static fx_basis class field is flagged", () => {
+  withTempFile("cls3.ts", `export class Quote {
+  private static fx_basis: string = "";
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /fx_basis/);
+  });
+});
+
+test("TS: protected override readonly amount_usd is flagged", () => {
+  withTempFile("cls4.ts", `export class Bill extends Base {
+  protected override readonly amount_usd: number = 0;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: declare amount_usd ambient field is flagged", () => {
+  withTempFile("cls5.ts", `declare class Adapter {
+  declare amount_usd: number;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: class field modifiers + whitelist still exempts", () => {
+  withTempFile("cls_ok.ts", `export class StripeBridge {
+  public readonly amount_usd: number = 0; // PHASE-17-INTERNAL-ONLY: server-side Stripe, never customer-facing
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `class+whitelist must still apply; stderr=${r.stderr}`);
+  });
+});
+
+test("TS: unrelated word prefix does NOT trigger a match (no over-match)", () => {
+  // The modifier list is closed; arbitrary words must not match. A line
+  // starting with e.g. `something amount_usd` should NOT be flagged
+  // (and is not valid TS in any case).
+  withTempFile("noise.ts", `export interface Wallet {
+  amount_bdt_subunits: string;
+}
+// random_keyword amount_usd: number; // not a field — line is a comment
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `arbitrary prefix must not match; stderr=${r.stderr}`);
+  });
+});

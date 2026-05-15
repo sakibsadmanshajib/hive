@@ -131,11 +131,20 @@ type TaxResult struct {
 }
 
 // InitiateInput is passed to a PaymentRail to start a payment.
+//
+// PHASE-17-INTERNAL-ONLY: this struct is constructed server-side and passed
+// in-process to rail implementations. It is never marshaled onto a customer
+// HTTP response. The `AmountUSD` field stays in the struct because the
+// Stripe rail consumes it directly, but the JSON tag is `-` so any future
+// accidental marshal (debug endpoint, admin panel, audit log) cannot leak
+// it on a customer wire.
 type InitiateInput struct {
 	PaymentIntentID uuid.UUID `json:"payment_intent_id"`
 	AccountID       uuid.UUID `json:"account_id"`
 	Credits         int64     `json:"credits"`
-	AmountUSD       int64     `json:"amount_usd"` // PHASE-17-INTERNAL-ONLY: server→PaymentRail (Stripe USD) RPC; never reaches customer wire. Audit attestation FX-17-01: customer InitiateCheckoutResponse is amount_local_subunits-only.
+	// AmountUSD: PHASE-17-INTERNAL-ONLY — Stripe USD RPC reads this via the
+	// Go struct, never JSON. `json:"-"` is defense-in-depth (FX-17 review).
+	AmountUSD       int64     `json:"-"`
 	AmountLocal     int64     `json:"amount_local"`
 	Currency        string    `json:"currency"`
 	CallbackBaseURL string    `json:"callback_base_url"`

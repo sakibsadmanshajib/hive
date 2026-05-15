@@ -1078,9 +1078,15 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   const pricePerBlockMinor = readNumberField(payload, "price_per_block_minor");
   const creditBlockSize = readNumberField(payload, "credit_block_size");
   const currency = readStringField(payload, "currency");
+  // FX-17 review-pass: reject NaN / Infinity in addition to null / non-positive.
+  // `readNumberField` only checks `typeof === "number"`, which is true for NaN,
+  // and `creditBlockSize <= 0` is false for NaN — so without isFinite() a
+  // pathological payload could reach the modal and render as NaN currency.
   if (
     pricePerBlockMinor === null ||
+    !Number.isFinite(pricePerBlockMinor) ||
     creditBlockSize === null ||
+    !Number.isFinite(creditBlockSize) ||
     creditBlockSize <= 0 ||
     !currency
   ) {

@@ -110,7 +110,17 @@ export function CheckoutModal({
   // well inside Number.MAX_SAFE_INTEGER (9.0e15), so plain Number math
   // is safe — no BigInt needed.
   function computeAmountMinor(): number {
-    if (!options || options.credit_block_size <= 0) return 0;
+    // FX-17 review-pass: reject NaN/Infinity in addition to null/non-positive
+    // block size. NaN comparisons return false for `<= 0`, so a pathological
+    // upstream value would otherwise reach the division and render as NaN.
+    if (
+      !options ||
+      !Number.isFinite(options.credit_block_size) ||
+      options.credit_block_size <= 0 ||
+      !Number.isFinite(options.price_per_block_minor)
+    ) {
+      return 0;
+    }
     return Math.floor(
       (creditAmount * options.price_per_block_minor) / options.credit_block_size,
     );

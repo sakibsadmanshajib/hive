@@ -50,16 +50,27 @@ const YAML_KEY_PATTERN = new RegExp(`^(\\s*-?\\s*)${BANNED_KEY}\\s*:`, "gm");
 // Go: struct field tag `json:"<key>..."` — ignore lines tagged json:"-".
 const GO_TAG_PATTERN = new RegExp(`\`json:"${BANNED_KEY}[^"]*"`, "g");
 
-// TS/TSX: interface / type field declaration at start-of-line.
+// TS/TSX: interface / type / class field declaration at start-of-line.
 //   amount_usd: number
 //   amount_usd?: number
-//   readonly amount_usd: number              (FX-17 review)
-//   readonly amount_usd?: number             (FX-17 review)
+//   readonly amount_usd: number
+//   readonly amount_usd?: number
+//   public readonly amount_usd: number
+//   private static amount_usd: number
+//   protected override amount_usd: number
+//   declare amount_usd: number
 //   "amount_usd": number                     (optional-quote form)
-// The optional `readonly\s+` prefix closes the lint bypass codex/coderabbit
-// flagged on PR #137 where a `readonly` keyword skipped the scanner.
+//
+// We allow zero-or-more TS member-modifier tokens before the optional
+// `readonly` and the (optionally quoted) field name. This closes the
+// bypass cluster typescript-reviewer flagged on PR #137 second-pass:
+// `readonly` alone was caught by the prior fix; `public readonly`,
+// `private`, `protected`, `static`, `override`, `abstract`, `declare`
+// were not. The full token-list is fixed so unrelated words at line
+// start cannot match.
+const TS_MEMBER_MODIFIER = "(?:public|private|protected|static|readonly|override|abstract|declare)";
 const TS_FIELD_PATTERN = new RegExp(
-  `^\\s*(?:readonly\\s+)?"?${BANNED_KEY}"?\\s*\\??\\s*:`,
+  `^\\s*(?:${TS_MEMBER_MODIFIER}\\s+)*"?${BANNED_KEY}"?\\s*\\??\\s*:`,
   "gm",
 );
 

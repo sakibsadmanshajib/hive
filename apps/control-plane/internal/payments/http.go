@@ -94,7 +94,14 @@ func (h *Handler) handleGetRails(w http.ResponseWriter, r *http.Request) {
 
 	opts, err := h.svc.GetCheckoutOptions(r.Context(), accountID)
 	if err != nil {
-		writePaymentJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to get checkout options: %v", err)})
+		// FX-17 review-pass (P0 regulatory): never include the raw error
+		// message on a BD-eligible customer surface — internal errors such
+		// as `payments: invalid effective rate "115.500000"` would leak the
+		// FX rate value. Log internally; return an opaque static body.
+		log.Printf("payments: GetCheckoutOptions error (account=%s): %v", accountID, err)
+		writePaymentJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "checkout temporarily unavailable",
+		})
 		return
 	}
 
@@ -186,14 +193,13 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 			})
 			return
 		}
-		// Check for ValidationError (credits multiple/positive validation from service layer)
-		var errMsg string
-		if strings.Contains(err.Error(), "payments:") {
-			errMsg = err.Error()
-		} else {
-			errMsg = fmt.Sprintf("checkout failed: %v", err)
-		}
-		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": errMsg})
+		// FX-17 review-pass (P0 regulatory): the legacy passthrough emitted
+		// `payments: invalid effective rate "<value>"` and similar internal
+		// strings on the customer wire. We now categorize errors and return
+		// opaque, BDT-only, non-FX-bearing messages; details go to the log.
+		log.Printf("payments: InitiateCheckout error (account=%s, rail=%s): %v", accountID, req.Rail, err)
+		status, errMsg := classifyInitiateError(err)
+		writePaymentJSON(w, status, map[string]string{"error": errMsg})
 		return
 	}
 
@@ -273,4 +279,40 @@ func writePaymentJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
+}
+
+// classifyInitiateError maps a service-layer error into an HTTP status +
+// customer-safe message. FX-17 review-pass (P0): the prior implementation
+// passed the raw `err.Error()` through to the customer when it started
+// with "payments:", which leaked internal FX-rate values like
+// `payments: invalid effective rate "115.500000"` onto a BD customer wire.
+// We now categorize on sentinel errors / known prefixes and return opaque
+// messages. The detailed error is logged separately at the call site.
+func classifyInitiateError(err error) (int, string) {
+	if err == nil {
+		return http.StatusInternalServerError, "checkout failed"
+	}
+	// Sentinel-error categories — safe to surface their fixed strings.
+	if errors.Is(err, ErrBillingProfileRequired) {
+		return http.StatusBadRequest, "Complete billing profile required before first purchase"
+	}
+	if errors.Is(err, ErrFXUnavailable) {
+		// Never name "FX" on a BD customer surface.
+		return http.StatusServiceUnavailable, "payment service temporarily unavailable"
+	}
+	// Validation errors carry the customer-provided value only (credit
+	// count). The substrings below are safe — they do not echo FX rates,
+	// USD amounts, or any internal accounting detail.
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "credits must be positive"):
+		return http.StatusBadRequest, "credits must be positive"
+	case strings.Contains(msg, "credits must be a multiple of 1000"):
+		return http.StatusBadRequest, "credits must be a multiple of 1000"
+	case strings.Contains(msg, "rail") && strings.Contains(msg, "not available"):
+		return http.StatusBadRequest, "selected payment rail is not available for this account"
+	}
+	// Default: opaque message. Any internal "payments: invalid effective
+	// rate ..." or similar string MUST NOT reach this point as wire bytes.
+	return http.StatusBadRequest, "checkout failed"
 }
