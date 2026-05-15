@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — deferred scope
 status: executing
-stopped_at: "Phase 18 Wave 2 complete — Plans 02-03 backend handler migration landed"
-last_updated: "2026-05-15T03:15:00.000Z"
+stopped_at: "Phase 18 Wave 3 complete — Plan 04 wire flip landed: viewer.permissions[] in, gates.* out"
+last_updated: "2026-05-15T02:56:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 0
-  completed_plans: 6
+  completed_plans: 7
 ---
 
 # Project State
@@ -220,6 +220,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T03:15:00.000Z
-Stopped at: Phase 18 Wave 2 complete — Plans 02-03 backend handler migration landed
-Resume file: .planning/phases/18-rbac-matrix/SUMMARY-PLAN-03.md
+Last session: 2026-05-15T02:56:00.000Z
+Stopped at: Phase 18 Wave 3 complete — Plan 04 wire flip landed: viewer.permissions[] in, gates.* out
+Resume file: .planning/phases/18-rbac-matrix/SUMMARY-PLAN-04.md
