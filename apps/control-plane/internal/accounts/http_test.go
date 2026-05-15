@@ -204,8 +204,9 @@ func TestInvitationHandler_UnverifiedReturns403(t *testing.T) {
 
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
-	if resp["code"] != "email_verification_required" {
-		t.Errorf("expected code=email_verification_required, got %v", resp["code"])
+	// Phase 18: error code is now permission_denied (policy.Can gate replaced the bare EmailVerified check).
+	if resp["code"] != "permission_denied" {
+		t.Errorf("expected code=permission_denied, got %v", resp["code"])
 	}
 }
 

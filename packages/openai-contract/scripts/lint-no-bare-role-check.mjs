@@ -48,6 +48,11 @@ const ALLOWLIST_DIRS = [
   resolve(REPO_ROOT, "apps/control-plane/internal/authz"),
   resolve(REPO_ROOT, "apps/control-plane/internal/platform/role.go"),
   resolve(REPO_ROOT, "apps/control-plane/internal/platform/role_pgx.go"),
+  // Phase 18: actor_resolver.go reads chosen.Role to BUILD the Actor (not to gate).
+  // accounts/service.go uses chosen.Role only to populate the wire DTO Role field.
+  // Both are legitimate adapter sites, not authz gates.
+  resolve(REPO_ROOT, "apps/control-plane/internal/accounts/actor_resolver.go"),
+  resolve(REPO_ROOT, "apps/control-plane/internal/accounts/service.go"),
 ];
 
 function isAllowlisted(absPath) {

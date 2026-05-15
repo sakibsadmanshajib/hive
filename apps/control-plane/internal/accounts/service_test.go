@@ -247,8 +247,10 @@ func TestInvitationRequiresVerifiedEmail(t *testing.T) {
 	if !accounts.AsGateError(err, &gateErr) {
 		t.Fatalf("expected GateError, got %T: %v", err, err)
 	}
-	if gateErr.Code != "email_verification_required" {
-		t.Errorf("expected code email_verification_required, got %q", gateErr.Code)
+	// Phase 18: error code migrated from email_verification_required to
+	// permission_denied — the policy.Can check is now the single gate.
+	if gateErr.Code != "permission_denied" {
+		t.Errorf("expected code permission_denied, got %q", gateErr.Code)
 	}
 }
 

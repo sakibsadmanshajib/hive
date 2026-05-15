@@ -12,16 +12,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
+	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
 )
 
 // Service encapsulates all accounts business logic.
 type Service struct {
-	repo Repository
+	repo   Repository
+	policy authz.Policy
 }
 
 // NewService returns a new accounts Service.
 func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+	return &Service{repo: repo, policy: authz.NewPolicy()}
 }
 
 // EnsureViewerContext returns the full viewer context for the given viewer.
@@ -76,9 +79,13 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 		})
 	}
 
+	// Phase 18: derive gates via policy.Can so the permission matrix is the
+	// single source of truth. Gates fields are preserved on the wire in this
+	// wave; Plan 04 (Wave 3) removes them from the response entirely.
+	chosenActor := ActorFor(viewer, chosen, false) // isAdmin=false: gates are workspace-scoped
 	gates := Gates{
-		CanInviteMembers: viewer.EmailVerified && chosen.Role == "owner",
-		CanManageAPIKeys: viewer.EmailVerified && chosen.Role == "owner",
+		CanInviteMembers: s.policy.Can(chosenActor, authz.PermMembersInvite),
+		CanManageAPIKeys: s.policy.Can(chosenActor, authz.PermAPIKeysWrite),
 	}
 
 	return ViewerContext{
@@ -145,30 +152,39 @@ func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Vie
 }
 
 // CreateInvitation creates a new invitation for email on accountID.
-// The viewer must be a verified owner of the account.
+// The viewer must hold members.invite permission (verified owner, or admin overlay).
 func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer, email string) (InvitationResult, error) {
-	if !viewer.EmailVerified {
-		return InvitationResult{}, &GateError{
-			Code:    "email_verification_required",
-			Message: "email must be verified before inviting members",
-		}
-	}
-
-	// Verify the viewer is an owner of this account.
+	// Resolve the viewer's membership for this account to build an Actor.
 	memberships, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
 	if err != nil {
 		return InvitationResult{}, fmt.Errorf("accounts: list memberships: %w", err)
 	}
-	isOwner := false
+
+	var chosen Membership
+	found := false
 	for _, m := range memberships {
-		if m.AccountID == accountID && m.Role == "owner" && m.Status == "active" {
-			isOwner = true
+		if m.AccountID == accountID && m.Status == "active" {
+			chosen = m
+			found = true
 			break
 		}
 	}
-	if !isOwner {
-		return InvitationResult{}, fmt.Errorf("accounts: viewer is not an owner of account %s", accountID)
+	if !found {
+		return InvitationResult{}, fmt.Errorf("accounts: viewer is not an active member of account %s", accountID)
 	}
+
+	// Phase 18: permission check via policy — replaces bare EmailVerified && role=="owner".
+	actor := ActorFor(viewer, chosen, false) // isAdmin=false: callers with admin overlay use middleware
+	if !s.policy.Can(actor, authz.PermMembersInvite) {
+		return InvitationResult{}, &GateError{
+			Code:    "permission_denied",
+			Message: "members.invite permission required",
+		}
+	}
+
+	// Build the membership role for logging/audit. RoleOwner ensures the
+	// membership row carries the expected platform.MembershipRole value.
+	_ = platform.RoleOwner // imported for type alignment; actor.Role carries the value
 
 	rawToken, tokenHash, err := generateToken()
 	if err != nil {

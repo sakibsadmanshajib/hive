@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 )
 
 // newTestHandler builds a Handler backed by a stub repo and a test viewerContext override.
@@ -45,10 +46,27 @@ func decodeBody(t *testing.T, rr *httptest.ResponseRecorder) map[string]interfac
 }
 
 func ownerVC() accounts.ViewerContext {
+	// Phase 18: Gates removed from test fixture. The handler now derives authz
+	// via policy.Can(actor, PermAPIKeysWrite) — owner+verified passes automatically.
 	return accounts.ViewerContext{
 		User:           accounts.ViewerUser{ID: uuid.New(), Email: "test@hive.com", EmailVerified: true},
 		CurrentAccount: accounts.AccountSummary{ID: uuid.New(), Role: "owner"},
-		Gates:          accounts.Gates{CanManageAPIKeys: true},
+	}
+}
+
+// memberVC returns a ViewerContext for an unverified member (should be denied PermAPIKeysWrite).
+func memberVC() accounts.ViewerContext {
+	return accounts.ViewerContext{
+		User:           accounts.ViewerUser{ID: uuid.New(), Email: "member@hive.com", EmailVerified: false},
+		CurrentAccount: accounts.AccountSummary{ID: uuid.New(), Role: "member"},
+	}
+}
+
+// unverifiedOwnerVC returns a ViewerContext for an unverified owner (should be denied PermAPIKeysWrite).
+func unverifiedOwnerVC() accounts.ViewerContext {
+	return accounts.ViewerContext{
+		User:           accounts.ViewerUser{ID: uuid.New(), Email: "owner@hive.com", EmailVerified: false},
+		CurrentAccount: accounts.AccountSummary{ID: uuid.New(), Role: "owner"},
 	}
 }
 
@@ -287,10 +305,11 @@ func TestDisableAndEnableKeyRoutes(t *testing.T) {
 }
 
 func TestAPIKeyRoutesRequireVerifiedOwner(t *testing.T) {
+	// Phase 18: Gates field removed — policy.Can(actor, PermAPIKeysWrite) now gates access.
+	// member+verified → PermAPIKeysWrite denied (owner-only permission).
 	vc := accounts.ViewerContext{
 		User:           accounts.ViewerUser{ID: uuid.New(), Email: "test@hive.com", EmailVerified: true},
 		CurrentAccount: accounts.AccountSummary{ID: uuid.New(), Role: "member"},
-		Gates:          accounts.Gates{CanManageAPIKeys: false},
 	}
 	h, _ := newTestHandler(vc)
 	base := "/api/v1/accounts/current/api-keys"
@@ -357,5 +376,63 @@ func TestInternalResolveRouteIncludesSeparateRatePolicyFields(t *testing.T) {
 	}
 	if _, ok := body["key_rate_policy"].(map[string]interface{}); !ok {
 		t.Fatalf("expected key_rate_policy map, got %#v", body["key_rate_policy"])
+	}
+}
+
+// TestHandler_AuthzMatrix verifies that the api_keys handler correctly enforces
+// the PermAPIKeysWrite permission across the role × verified × isAdmin matrix.
+// Phase 18: replaces Gates.CanManageAPIKeys fixture checks.
+func TestHandler_AuthzMatrix(t *testing.T) {
+	base := "/api/v1/accounts/current/api-keys"
+	payload := map[string]string{"nickname": "matrix-key"}
+
+	cases := []struct {
+		name       string
+		vc         accounts.ViewerContext
+		actor      *authz.Actor // nil = derive from vc
+		wantStatus int
+	}{
+		{
+			name:       "owner+verified → 201 (PermAPIKeysWrite granted)",
+			vc:         ownerVC(),
+			wantStatus: http.StatusCreated,
+		},
+		{
+			name:       "owner+unverified → 403 (RequiresVerified=true)",
+			vc:         unverifiedOwnerVC(),
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "member+unverified → 403",
+			vc:         memberVC(),
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "admin overlay → 201 (IsAdmin bypasses verification gate)",
+			vc:   unverifiedOwnerVC(),
+			actor: func() *authz.Actor {
+				a := authz.Actor{
+					UserID:   uuid.New(),
+					Verified: false, // would normally block
+					IsAdmin:  true,
+				}
+				return &a
+			}(),
+			wantStatus: http.StatusCreated,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubRepo()
+			svc := NewService(repo)
+			vc := tc.vc
+			h := &Handler{svc: svc, testVC: &vc, testActor: tc.actor, policy: authz.NewPolicy()}
+
+			rr := doRequest(t, h, http.MethodPost, base, payload)
+			if rr.Code != tc.wantStatus {
+				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }

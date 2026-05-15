@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 )
 
 func errIs(err, target error) bool { return errors.Is(err, target) }
@@ -36,12 +37,14 @@ func limitsResponse(l KeyLimits) map[string]interface{} {
 type Handler struct {
 	svc        *Service
 	accountSvc *accounts.Service
+	policy     authz.Policy
 	testVC     *accounts.ViewerContext // non-nil in tests to bypass real accounts service
+	testActor  *authz.Actor            // non-nil in tests to supply a canned Actor
 }
 
 // NewHandler returns a new Handler.
 func NewHandler(svc *Service, accountSvc *accounts.Service) *Handler {
-	return &Handler{svc: svc, accountSvc: accountSvc}
+	return &Handler{svc: svc, accountSvc: accountSvc, policy: authz.NewPolicy()}
 }
 
 // ServeHTTP dispatches requests to the appropriate sub-handler.
@@ -98,11 +101,28 @@ func (h *Handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveViewerContext extracts the authenticated viewer and resolves the
-// current account, enforcing the CanManageAPIKeys gate.
+// current account, enforcing the api_keys.write permission gate via policy.Can.
 func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (accounts.ViewerContext, bool) {
 	// Test override — bypasses real accounts service in unit tests.
 	if h.testVC != nil {
-		if !h.testVC.Gates.CanManageAPIKeys {
+		// Build an Actor from the test ViewerContext and check the policy.
+		actor := h.testActor
+		if actor == nil {
+			a := accounts.ActorFor(
+				// Reconstruct a minimal auth.Viewer from testVC fields.
+				// Tests that need IsAdmin=true should set testActor directly.
+				authFromVC(h.testVC),
+				accounts.Membership{
+					AccountID: h.testVC.CurrentAccount.ID,
+					UserID:    h.testVC.User.ID,
+					Role:      h.testVC.CurrentAccount.Role,
+					Status:    "active",
+				},
+				false,
+			)
+			actor = &a
+		}
+		if !h.policy.Can(*actor, authz.PermAPIKeysWrite) {
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "verified account owner required",
 				"code":  "api_key_management_forbidden",
@@ -125,7 +145,14 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 		return accounts.ViewerContext{}, false
 	}
 
-	if !vc.Gates.CanManageAPIKeys {
+	// Phase 18: replace Gates.CanManageAPIKeys with policy.Can(actor, PermAPIKeysWrite).
+	actor := accounts.ActorFor(viewer, accounts.Membership{
+		AccountID: vc.CurrentAccount.ID,
+		UserID:    viewer.UserID,
+		Role:      vc.CurrentAccount.Role,
+		Status:    "active",
+	}, false)
+	if !h.policy.Can(actor, authz.PermAPIKeysWrite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "verified account owner required",
 			"code":  "api_key_management_forbidden",
@@ -135,6 +162,17 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 
 	return vc, true
 }
+
+// authFromVC reconstructs a minimal auth.Viewer from a ViewerContext for test
+// Actor construction. Does not include FullName (unused by ActorFor).
+func authFromVC(vc *accounts.ViewerContext) auth.Viewer {
+	return auth.Viewer{
+		UserID:        vc.User.ID,
+		Email:         vc.User.Email,
+		EmailVerified: vc.User.EmailVerified,
+	}
+}
+
 
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 	vc, ok := h.resolveViewerContext(w, r)
