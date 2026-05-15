@@ -158,6 +158,22 @@ remains **Pending** until the target phase produces an evidence file.
 | PAY-14-11 | 14 | Satisfied | [evidence/PAY-14-11.md](phases/14-payments-budget-grant/evidence/PAY-14-11.md) |
 | PAY-14-12 | 14 | Satisfied | [evidence/PAY-14-12.md](phases/14-payments-budget-grant/evidence/PAY-14-12.md) |
 
+### RBAC Matrix (Phase 18)
+
+| ID | Phase | Status | Evidence |
+|----|-------|--------|----------|
+| RBAC-18-01 | 18 | Satisfied | [evidence/RBAC-18-01.md](phases/18-rbac-matrix/evidence/RBAC-18-01.md) |
+| RBAC-18-02 | 18 | Satisfied | [evidence/RBAC-18-02.md](phases/18-rbac-matrix/evidence/RBAC-18-02.md) |
+| RBAC-18-03 | 18 | Satisfied | [evidence/RBAC-18-03.md](phases/18-rbac-matrix/evidence/RBAC-18-03.md) |
+| RBAC-18-04 | 18 | Satisfied | [evidence/RBAC-18-04.md](phases/18-rbac-matrix/evidence/RBAC-18-04.md) |
+| RBAC-18-05 | 18 | Satisfied | [evidence/RBAC-18-05.md](phases/18-rbac-matrix/evidence/RBAC-18-05.md) |
+| RBAC-18-06 | 18 | Satisfied | [evidence/RBAC-18-06.md](phases/18-rbac-matrix/evidence/RBAC-18-06.md) |
+| RBAC-18-07 | 18 | Satisfied | [evidence/RBAC-18-07.md](phases/18-rbac-matrix/evidence/RBAC-18-07.md) |
+| RBAC-18-08 | 18 | Satisfied | [evidence/RBAC-18-08.md](phases/18-rbac-matrix/evidence/RBAC-18-08.md) |
+| RBAC-18-09 | 18 | Satisfied | [evidence/RBAC-18-09.md](phases/18-rbac-matrix/evidence/RBAC-18-09.md) |
+| RBAC-18-10 | 18 | Satisfied | [evidence/RBAC-18-10.md](phases/18-rbac-matrix/evidence/RBAC-18-10.md) |
+| RBAC-18-11 | 18 | Satisfied | [evidence/RBAC-18-11.md](phases/18-rbac-matrix/evidence/RBAC-18-11.md) |
+
 CAP-16-01 closes the v1.0 latent bug formerly recorded in `CLAUDE.md` Known
 Issues §1 (`ensureCapabilityColumns` targeting `route_capabilities` instead
 of `provider_capabilities`). The bug was eliminated by Phase 14's
