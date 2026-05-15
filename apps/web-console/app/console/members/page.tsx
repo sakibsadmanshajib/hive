@@ -8,7 +8,7 @@ import {
   getViewer,
   type AccountMember,
 } from "@/lib/control-plane/client";
-import { canInviteMembers } from "@/lib/viewer-gates";
+import { can } from "@/lib/viewer-gates";
 import { createClient } from "@/lib/supabase/server";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { Badge } from "@/components/ui/badge";
@@ -58,7 +58,7 @@ export default async function MembersPage() {
   if (viewer.user.email_verified === false) {
     redirect("/console/settings/profile");
   }
-  const canInvite = canInviteMembers(viewer);
+  const canInvite = can(viewer, "members.invite");
 
   const [members, profile] = await Promise.all([
     session ? getMembers(session.access_token) : Promise.resolve([]),
