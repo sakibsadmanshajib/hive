@@ -40,7 +40,7 @@ Full breakdown: `.planning/milestones/v1.0-ROADMAP.md`
 - [x] **Phase 15: Batch Local Executor** — Local fan-out batch executor in control-plane to settle success-path terminal state for OpenRouter/Groq (no native batch API). Closes deferred tech-debt item #5. Known caveat #2 (resume sentinel) inherited by Phase 18-batch follow-up.
 - [x] **Phase 16: Capability Columns Fix** — Remove dead `ensureCapabilityColumns` DDL path in `routing/repository.go` (targeted wrong table); migration `20260414_01_provider_capabilities_media_columns.sql` is authoritative; regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence.
 - [x] **Phase 17: FX/USD Zero-Leak** — Strip `amount_usd` / FX rate / provider hints from all customer-bound surfaces (payments DTOs, ledger invoice rows, web-console types, PDF rendering, post-purchase grant metadata). Adversarial walk of every `map[string]any` customer wire. CI-blocking lint `lint-no-customer-usd.mjs`. Closes BD regulatory gap. PR #137 ready-for-review 2026-05-09.
-- [ ] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (guest/unverified/member/owner/platform_admin) × scopes (workspace/platform) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` replacement) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate.
+- [ ] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (member/owner/platform_admin) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*, grants.create, ledger.view, platform.admin) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` overlay) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate.
 
 Plus four tech-debt items from v1.0 (see `.planning/v1.1-DEFERRED-SCOPE.md`):
 
@@ -116,19 +116,27 @@ Plans: 0 plans
 
 ### Phase 18: RBAC Matrix
 
-**Goal:** Replace ad hoc workspace-role + `is_platform_admin` + `CanInviteMembers` / `CanManageAPIKeys` derived booleans with a reusable, verification-aware authorization model (roles × scopes × named permissions) enforced authoritatively in the control-plane and mirrored in the web-console route/nav gating layer.
+**Goal:** Replace ad hoc workspace-role + `is_platform_admin` + `CanInviteMembers` / `CanManageAPIKeys` derived booleans with a reusable, verification-aware authorization model (roles × named permissions) enforced authoritatively in the control-plane and mirrored in the web-console route/nav gating layer.
 **Depends on:** Phases 2 (identity), 5 (API keys), 9 (console), 13 (viewer-gates seed), 14 (`platform.IsWorkspaceOwner` / `IsPlatformAdmin` Phase 14 stub), 17 (HANDOFF-17-01).
-**Requirements:** [RBAC-18-01..NN — TBD in REQUIREMENTS.md]
+**Requirements:** [RBAC-18-01, RBAC-18-02, RBAC-18-03, RBAC-18-04, RBAC-18-05, RBAC-18-06, RBAC-18-07, RBAC-18-08, RBAC-18-09, RBAC-18-10, RBAC-18-11]
 **Gap Closure:** Closes v1.1 ship-gate item `rbac_matrix`. Replaces the latent gap surfaced in v1.1-DEFERRED-SCOPE.md item #8 (authorization is limited to workspace membership roles plus feature-specific booleans). Inherits HANDOFF-17-01 — `is_platform_admin` becomes a derived attribute of the new model rather than a free-standing flag.
 **Success Criteria** (what must be TRUE):
-  1. A single Go authz package defines an explicit `Role` enum (`guest`, `unverified`, `member`, `owner`, `platform_admin`), an explicit `Permission` enum (billing.view, billing.write, api_keys.read, api_keys.manage, analytics.view, members.invite, members.manage, workspace.settings, platform.admin), and a `Policy.Can(actor, scope, permission)` decision function.
-  2. Every control-plane handler that today checks `viewer.EmailVerified && chosen.Role == "owner"` or `IsPlatformAdmin` (or equivalent ad hoc) routes through the policy package — no direct role/flag comparison in business code.
-  3. `apps/web-console/lib/viewer-gates.ts` exports a single `can(viewer, permission)` helper derived from the same matrix; `canInviteMembers` / `canManageApiKeys` / `allowedUnverifiedRoutes` are reimplemented as thin wrappers or removed; consumers (sidebar nav, route guards) use the new helper.
-  4. Regression coverage: Go integration tests assert that an unverified actor cannot access billing, api_keys, analytics, members, or workspace.settings handlers; a verified member can access member-scoped reads but not owner-only writes; an owner can access workspace-scoped surfaces; a platform_admin can access platform-scoped surfaces.
-  5. Web-console: vitest unit tests assert `can()` returns the same decisions for every (role, perm) pair as the Go matrix; one Playwright spec covers the unverified flow on `/billing` and `/keys` (must redirect or block).
+  1. A single Go authz package defines an explicit `MembershipRole` (`member`, `owner`) + `IsAdmin` overlay, an explicit `Permission` enum (billing.view, billing.write, api_keys.read, api_keys.write, analytics.view, members.invite, members.manage, workspace.settings, grants.create, ledger.view, platform.admin), and a `Policy.Can(actor, permission)` decision function with per-permission `RequiresVerified` flag.
+  2. Every control-plane handler that today checks `viewer.EmailVerified && chosen.Role == "owner"` or `IsPlatformAdmin` (or equivalent ad hoc) routes through the policy package — no direct role/flag comparison in business code (CI lint enforces).
+  3. `apps/web-console/lib/viewer-gates.ts` exports a single `can(viewer, permission)` helper derived from the same matrix via codegen'd `Permission` union type; `canInviteMembers` / `canManageApiKeys` / `allowedUnverifiedRoutes` are **removed** (not aliased); consumers (sidebar nav, route guards) use the new helper.
+  4. Regression coverage: Go integration tests assert that an unverified actor cannot access billing, api_keys, analytics, members, or workspace.settings handlers; a verified member can access member-scoped reads (analytics.view, ledger.view) but not owner-only writes; an owner can access workspace-scoped surfaces; a platform_admin can access platform-scoped surfaces.
+  5. Web-console: vitest unit tests assert `can()` returns the same decisions for every (role, verified, perm) tuple as the Go matrix; one Playwright spec covers the unverified flow on `/console/billing` and `/console/api-keys` (must redirect or block).
   6. STATE.md `v1_1_ship_gate.rbac_matrix` flipped to `true`. Pending todo `2026-04-22-design-rbac-authorization-model.md` resolved to `done`.
 
-Plans: 0 plans
+Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
+
+- [ ] Plan 01 (Wave 1) — authz package + matrix test + codegen + lint scaffolds [RBAC-18-01, RBAC-18-04, RBAC-18-07]
+- [ ] Plan 02 (Wave 2) — wire authz middleware in main.go + ActorResolver [RBAC-18-01, RBAC-18-02]
+- [ ] Plan 03 (Wave 2) — backend handler migration across 8 modules [RBAC-18-02, RBAC-18-08]
+- [ ] Plan 04 (Wave 3) — viewer wire flip (drop gates, emit permissions:[]) [RBAC-18-03]
+- [ ] Plan 05 (Wave 4) — viewer-gates.ts rewrite + 4 FE consumers + parity vitest [RBAC-18-05, RBAC-18-06, RBAC-18-09]
+- [ ] Plan 06 (Wave 4) — Playwright unverified spec + CI lint/codegen wiring [RBAC-18-07, RBAC-18-10]
+- [ ] Plan 07 (Wave 5) — REQUIREMENTS rows, evidence files, VERIFICATION.md, STATE flip, todo resolve [RBAC-18-11]
 
 ## Progress
 
@@ -151,8 +159,8 @@ Plans: 0 plans
 | 15. Batch Local Executor | v1.1 | n/a | Complete | 2026-04-?? |
 | 16. Capability Columns Fix | v1.1 | n/a | Complete | 2026-04-25 |
 | 17. FX/USD Zero-Leak | v1.1 | n/a | Complete | 2026-05-09 (PR #137) |
-| 18. RBAC Matrix | v1.1 | 0/0 | Planned | - |
+| 18. RBAC Matrix | v1.1 | 0/7 | Planned | - |
 
 ---
 
-*Last updated: 2026-05-14 — added Phase 18 (RBAC) entry; backfilled Phases 15/16/17 to reflect on-disk state. Phase 17 PR #137 ready-for-review.*
+*Last updated: 2026-05-14 — Phase 18 plan committed (7 plans across 5 waves, RBAC-18-01..11 minted). Backfilled Phases 15/16/17.*
