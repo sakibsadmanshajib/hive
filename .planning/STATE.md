@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — deferred scope
 status: executing
-stopped_at: "Phase 18 Wave 1 complete — Plan 01 authz foundations landed"
-last_updated: "2026-05-15T02:30:00.000Z"
+stopped_at: "Phase 18 Wave 2 complete — Plans 02-03 backend handler migration landed"
+last_updated: "2026-05-15T03:15:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 0
   total_plans: 0
-  completed_plans: 4
+  completed_plans: 6
 ---
 
 # Project State
@@ -24,7 +24,7 @@ See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 ## Current Position
 
 Phase: 18 (RBAC Matrix) — EXECUTING
-Plan: 1 of 7
+Plan: 3 of 7
 
 ## Performance Metrics
 
@@ -159,6 +159,11 @@ Recent decisions affecting current work:
 - [Phase 08]: [08-02]: SSLCommerz ProcessEvent returns sessionkey as ProviderIntentID (not tran_id) — ensures GetPaymentIntentByProviderID lookup matches what Initiate stored
 - [Phase 08]: PaymentService and AccountResolver interfaces defined in http.go — accept-interfaces pattern enables stub-based testing without importing full service
 - [Phase 08]: accountsResolverAdapter bridges 3-arg accounts.Service.EnsureViewerContext to narrow 1-arg payments.AccountResolver interface — isolates payments from accounts internals
+- [Phase 18-02]: ActorFor is a pure stateless mapping (no DB) — all handler-level authz builds Actor inline then calls policy.Can, keeping the decision function side-effect-free.
+- [Phase 18-02]: NewActorResolver closure calls IsPlatformAdmin via *platform.RoleService — direct type avoids unnecessary interface indirection at the single call site.
+- [Phase 18-03]: billing.view has RequiresVerified=false — unverified workspace owners can view their own budget; old blanket EmailVerified gate was stricter than necessary.
+- [Phase 18-03]: CreateInvitation gate code changed from email_verification_required to permission_denied — canonical authz error code for all policy.Can failures.
+- [Phase 18-03]: analytics.view and ledger.view grant any verified actor (owner OR member) — mirrors pre-Phase-18 behavior (EmailVerified only, no role check).
 
 - [09-04]: ExternalMux pattern: RouterConfig.Mux field lets main.go pre-create *http.ServeMux so filestore.RegisterRoutes works after NewRouter returns http.Handler
 - [09-04]: NewRouter returns http.Handler (not *http.ServeMux) — Plan 01 Wave 2 depends on this changed signature
@@ -215,6 +220,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T01:39:47.057Z
-Stopped at: Phase 18 (RBAC Matrix) context gathered
-Resume file: .planning/phases/18-rbac-matrix/18-CONTEXT.md
+Last session: 2026-05-15T03:15:00.000Z
+Stopped at: Phase 18 Wave 2 complete — Plans 02-03 backend handler migration landed
+Resume file: .planning/phases/18-rbac-matrix/SUMMARY-PLAN-03.md
