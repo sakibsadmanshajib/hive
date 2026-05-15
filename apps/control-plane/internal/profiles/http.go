@@ -8,17 +8,19 @@ import (
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 )
 
 // Handler handles all profile-related HTTP routes.
 type Handler struct {
 	svc         *Service
 	accountsSvc *accounts.Service
+	policy      authz.Policy
 }
 
 // NewHandler returns a new profiles Handler.
 func NewHandler(svc *Service, accountsSvc *accounts.Service) *Handler {
-	return &Handler{svc: svc, accountsSvc: accountsSvc}
+	return &Handler{svc: svc, accountsSvc: accountsSvc, policy: authz.NewPolicy()}
 }
 
 // ServeHTTP dispatches requests to the appropriate sub-handler.
@@ -124,7 +126,23 @@ func (h *Handler) resolveVerifiedCurrentAccountID(w http.ResponseWriter, r *http
 		return uuid.Nil, false
 	}
 
-	if !viewerContext.User.EmailVerified {
+	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	// Actor is built from the already-resolved viewer context fields.
+	actor := accounts.ActorFor(
+		auth.Viewer{
+			UserID:        viewerContext.User.ID,
+			Email:         viewerContext.User.Email,
+			EmailVerified: viewerContext.User.EmailVerified,
+		},
+		accounts.Membership{
+			AccountID: viewerContext.CurrentAccount.ID,
+			UserID:    viewerContext.User.ID,
+			Role:      viewerContext.CurrentAccount.Role,
+			Status:    "active",
+		},
+		false,
+	)
+	if !h.policy.Can(actor, authz.PermWorkspaceSettings) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing billing",
 			"code":  "email_verification_required",

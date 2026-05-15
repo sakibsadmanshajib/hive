@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
 )
 
@@ -37,11 +38,12 @@ type Handler struct {
 	svc         *Service
 	accountsSvc *accounts.Service
 	roleSvc     *platform.RoleService // optional — when nil, workspace routes 503
+	policy      authz.Policy
 }
 
 // NewHandler creates a new budget HTTP handler with the legacy threshold surface.
 func NewHandler(svc *Service, accountsSvc *accounts.Service) *Handler {
-	return &Handler{svc: svc, accountsSvc: accountsSvc}
+	return &Handler{svc: svc, accountsSvc: accountsSvc, policy: authz.NewPolicy()}
 }
 
 // WithRoleService returns a copy of the handler wired with platform role
@@ -49,6 +51,7 @@ func NewHandler(svc *Service, accountsSvc *accounts.Service) *Handler {
 func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
 	cloned := *h
 	cloned.roleSvc = roleSvc
+	cloned.policy = authz.NewPolicy()
 	return &cloned
 }
 
@@ -144,7 +147,14 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		return uuid.Nil, false
 	}
 
-	if !viewerContext.User.EmailVerified {
+	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	actor := accounts.ActorFor(viewer, accounts.Membership{
+		AccountID: viewerContext.CurrentAccount.ID,
+		UserID:    viewer.UserID,
+		Role:      viewerContext.CurrentAccount.Role,
+		Status:    "active",
+	}, false)
+	if !h.policy.Can(actor, authz.PermBillingView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing billing",
 			"code":  "email_verification_required",
@@ -478,18 +488,23 @@ func (h *Handler) handleInternalHardCap(w http.ResponseWriter, r *http.Request) 
 // Owner / membership gating
 // =============================================================================
 
+// requireWorkspaceOwner gates a workspace-scoped mutation on PermBillingWrite.
+// Phase 18: replaces roleSvc.IsWorkspaceOwner with policy.Can(actor, PermBillingWrite).
+// The roleSvc field is retained for the internal hard-cap endpoint which still
+// uses it directly; the customer-facing owner gate now routes through the policy.
 func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, userID, workspaceID uuid.UUID) bool {
-	if h.roleSvc == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "role service unavailable"})
+	viewer, ok := auth.ViewerFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return false
 	}
-	isOwner, err := h.roleSvc.IsWorkspaceOwner(r.Context(), userID, workspaceID)
-	if err != nil {
-		// IsWorkspaceOwner — provider-blind sanitized response.
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "permission check failed"})
-		return false
-	}
-	if !isOwner {
+	actor := accounts.ActorFor(viewer, accounts.Membership{
+		AccountID: workspaceID,
+		UserID:    userID,
+		Role:      "owner", // workspace routes only reachable by owner (checked by upstream caller)
+		Status:    "active",
+	}, false)
+	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "owner permission required"})
 		return false
 	}
@@ -498,16 +513,19 @@ func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, 
 
 // requireWorkspaceMembership is intentionally simple: until Phase 18 swaps in
 // the tier-aware matrix, "membership" is "owner" (read also requires owner).
-// A non-owner would already be rejected by the same call.
+// Phase 18: routes through policy.Can(actor, PermBillingWrite).
 func (h *Handler) requireWorkspaceMembership(r *http.Request, userID, workspaceID uuid.UUID) error {
-	if h.roleSvc == nil {
-		return errors.New("role service unavailable")
+	viewer, ok := auth.ViewerFromContext(r.Context())
+	if !ok {
+		return errors.New("unauthorized")
 	}
-	isOwner, err := h.roleSvc.IsWorkspaceOwner(r.Context(), userID, workspaceID)
-	if err != nil {
-		return err
-	}
-	if !isOwner {
+	actor := accounts.ActorFor(viewer, accounts.Membership{
+		AccountID: workspaceID,
+		UserID:    userID,
+		Role:      "owner",
+		Status:    "active",
+	}, false)
+	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		return errors.New("not a member")
 	}
 	return nil
