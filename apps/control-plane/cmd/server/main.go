@@ -30,6 +30,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices"
 	sslcommerzRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/sslcommerz"
 	stripeRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/stripe"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
 	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
@@ -175,6 +176,7 @@ func main() {
 	var invoicesHandler *invoices.Handler
 	var grantsHandler *grants.Handler
 	var roleSvc *platform.RoleService
+	var authzMW authz.Middleware // Phase 18: set after roleSvc+accountsSvc are ready
 	var catalogHandler *catalog.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
@@ -280,6 +282,12 @@ func main() {
 		// guards mutations at schema level). RoleService gates the admin
 		// surface; the self-list surface uses plain auth middleware only.
 		roleSvc = platform.NewRoleService(platform.NewPgxRoleStore(pool))
+
+		// Phase 18 — authz middleware: resolves Actor from request context and
+		// enforces Permission-level gates. Constructed once and shared by all
+		// handler wiring below that needs permission checks.
+		actorResolver := accounts.NewActorResolver(accountsSvc, roleSvc)
+		authzMW = authz.NewMiddleware(actorResolver)
 
 		// Phase 14 — wire role service into the budgets handler so owner-gated
 		// workspace routes (PUT/DELETE /api/v1/budgets/{ws}, /api/v1/spend-alerts)
@@ -483,7 +491,7 @@ func main() {
 	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
 	// surface gated via plain auth middleware.
 	if grantsHandler != nil && roleSvc != nil {
-		adminGate := roleSvc.RequirePlatformAdmin(grantsHandler.AdminMux())
+		adminGate := authzMW.RequirePermission(authz.PermPlatformAdmin)(grantsHandler.AdminMux())
 		protectedAdminGrants := authMiddleware.Require(adminGate)
 		routerMux.Handle("/v1/admin/credit-grants", protectedAdminGrants)
 		routerMux.Handle("/v1/admin/credit-grants/", protectedAdminGrants)
