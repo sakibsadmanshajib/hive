@@ -158,7 +158,7 @@ func TestEnsureDefaultAccount_FallbackDisplayNameFromEmail(t *testing.T) {
 	}
 }
 
-func TestEnsureDefaultAccount_UnverifiedGatesAreFalse(t *testing.T) {
+func TestEnsureDefaultAccount_UnverifiedPermissionsEmpty(t *testing.T) {
 	repo := newStubRepo()
 	svc := accounts.NewService(repo)
 
@@ -174,15 +174,15 @@ func TestEnsureDefaultAccount_UnverifiedGatesAreFalse(t *testing.T) {
 		t.Fatalf("EnsureViewerContext error: %v", err)
 	}
 
-	if vc.Gates.CanInviteMembers {
-		t.Error("expected can_invite_members=false for unverified user")
-	}
-	if vc.Gates.CanManageAPIKeys {
-		t.Error("expected can_manage_api_keys=false for unverified user")
+	// Unverified actor: permissions requiring verification must be absent.
+	for _, perm := range vc.Permissions {
+		if perm == "members.invite" || perm == "api_keys.write" {
+			t.Errorf("expected %q absent for unverified user, but found it in Permissions", perm)
+		}
 	}
 }
 
-func TestEnsureDefaultAccount_VerifiedOwnerGatesAreTrue(t *testing.T) {
+func TestEnsureDefaultAccount_VerifiedOwnerHasKeyPermissions(t *testing.T) {
 	repo := newStubRepo()
 	svc := accounts.NewService(repo)
 
@@ -198,11 +198,20 @@ func TestEnsureDefaultAccount_VerifiedOwnerGatesAreTrue(t *testing.T) {
 		t.Fatalf("EnsureViewerContext error: %v", err)
 	}
 
-	if !vc.Gates.CanInviteMembers {
-		t.Error("expected can_invite_members=true for verified owner")
+	// Verified owner must hold members.invite and api_keys.write permissions.
+	contains := func(perms []string, target string) bool {
+		for _, p := range perms {
+			if p == target {
+				return true
+			}
+		}
+		return false
 	}
-	if !vc.Gates.CanManageAPIKeys {
-		t.Error("expected can_manage_api_keys=true for verified owner")
+	if !contains(vc.Permissions, "members.invite") {
+		t.Error("expected members.invite in Permissions for verified owner")
+	}
+	if !contains(vc.Permissions, "api_keys.write") {
+		t.Error("expected api_keys.write in Permissions for verified owner")
 	}
 }
 

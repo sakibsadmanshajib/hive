@@ -79,13 +79,12 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 		})
 	}
 
-	// Phase 18: derive gates via policy.Can so the permission matrix is the
-	// single source of truth. Gates fields are preserved on the wire in this
-	// wave; Plan 04 (Wave 3) removes them from the response entirely.
-	chosenActor := ActorFor(viewer, chosen, false) // isAdmin=false: gates are workspace-scoped
-	gates := Gates{
-		CanInviteMembers: s.policy.Can(chosenActor, authz.PermMembersInvite),
-		CanManageAPIKeys: s.policy.Can(chosenActor, authz.PermAPIKeysWrite),
+	// Phase 18 Plan 04: emit permissions[] — the full granted-permission set for
+	// the chosen workspace actor. Gates fields removed from response wire shape.
+	chosenActor := ActorFor(viewer, chosen, false) // isAdmin=false: workspace-scoped
+	permissions := s.policy.AllGranted(chosenActor)
+	if permissions == nil {
+		permissions = []string{}
 	}
 
 	return ViewerContext{
@@ -101,7 +100,7 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 			Role:        chosen.Role,
 		},
 		Memberships: summaries,
-		Gates:       gates,
+		Permissions: permissions,
 	}, nil
 }
 

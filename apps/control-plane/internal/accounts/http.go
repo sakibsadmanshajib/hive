@@ -226,9 +226,11 @@ func viewerContextResponse(vc ViewerContext) map[string]interface{} {
 			"role":         vc.CurrentAccount.Role,
 		},
 		"memberships": memberships,
-		"gates": map[string]interface{}{
-			"can_invite_members": vc.Gates.CanInviteMembers,
-			"can_manage_api_keys": vc.Gates.CanManageAPIKeys,
-		},
+		"permissions": func() []string {
+			if vc.Permissions == nil {
+				return []string{}
+			}
+			return vc.Permissions
+		}(),
 	}
 }

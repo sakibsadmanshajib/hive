@@ -145,7 +145,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 		return accounts.ViewerContext{}, false
 	}
 
-	// Phase 18: replace Gates.CanManageAPIKeys with policy.Can(actor, PermAPIKeysWrite).
+	// Phase 18: authz via policy.Can(actor, PermAPIKeysWrite).
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
