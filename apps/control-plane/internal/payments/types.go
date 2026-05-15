@@ -78,7 +78,12 @@ type PaymentIntent struct {
 	AmountUSD        int64          `json:"-"`
 	AmountLocal      int64          `json:"amount_local"`
 	LocalCurrency    string         `json:"local_currency"`
-	FXSnapshotID     *uuid.UUID     `json:"fx_snapshot_id,omitempty"` // PHASE-17-INTERNAL-ONLY: PaymentIntent is the internal state record; customer-facing checkout/invoice DTOs (FX-17-01..04) omit this field. Audit attestation: never serialised onto a customer wire surface.
+	// FXSnapshotID — internal-only audit handle. PHASE-17-INTERNAL-ONLY:
+	// PaymentIntent is the internal state record; customer-facing checkout/
+	// invoice DTOs (FX-17-01..04) omit FX/USD entirely. `json:"-"` guarantees
+	// the field never serialises onto a customer wire surface even if the
+	// PaymentIntent struct itself is marshaled by mistake.
+	FXSnapshotID     *uuid.UUID     `json:"-"`
 	ProviderIntentID string         `json:"provider_intent_id"`
 	RedirectURL      string         `json:"redirect_url"`
 	TaxTreatment     string         `json:"tax_treatment"`

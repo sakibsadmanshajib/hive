@@ -5,11 +5,11 @@ milestone_name: deferred-scope
 previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
-current_phase: null
+current_phase: 17
 current_plan: null
-status: milestone_shipped_awaiting_next
-stopped_at: "v1.0 shipped 2026-04-21 — next action /gsd:new-milestone for v1.1 scope"
-last_updated: "2026-04-21T23:00:00.000Z"
+status: phase_closed
+stopped_at: "Phase 17 — FX/USD Zero-Leak — closed 2026-05-09 — PR #137 ready-for-review; review-pass fixes (per-block pricing rename, FXSnapshotID hard-off, lint readonly hardening, E2E positive-shape asserts) applied 2026-05-14"
+last_updated: "2026-05-14T21:00:00.000Z"
 progress:
   total_phases_v1_0: 10
   completed_phases_v1_0: 10

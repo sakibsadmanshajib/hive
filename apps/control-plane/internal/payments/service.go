@@ -330,13 +330,17 @@ func (s *Service) ConfirmPendingBDPayments(ctx context.Context) (int, error) {
 func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) error {
 	idempotencyKey := fmt.Sprintf("payment:purchase:%s", intent.ID)
 
+	// Customer-visible ledger metadata. PHASE-17-INTERNAL-ONLY note: keys here
+	// land on `GET /api/v1/accounts/current/ledger/entries` for the account.
+	// `payment_intent_id` is sufficient audit linkage to reconstruct the FX
+	// snapshot internally (payment_intents.fx_snapshot_id is server-side
+	// only), so we MUST NOT propagate `fx_snapshot_id` here — that would
+	// leak an `fx_*` key onto a BD customer surface and violate the FX/USD
+	// zero-leak contract (FX-17 adversarial-review finding, 2026-05-14).
 	metadata := map[string]any{
 		"payment_intent_id": intent.ID.String(),
 		"rail":              string(intent.Rail),
 		"tax_treatment":     intent.TaxTreatment,
-	}
-	if intent.FXSnapshotID != nil {
-		metadata["fx_snapshot_id"] = intent.FXSnapshotID.String()
 	}
 
 	_, err := s.ledger.GrantCredits(ctx, intent.AccountID, idempotencyKey, intent.Credits, metadata)
@@ -353,23 +357,27 @@ func (s *Service) PostPurchaseGrant(ctx context.Context, intent PaymentIntent) e
 // CheckoutOptions holds available rails and predefined tiers for a checkout session.
 //
 // Phase 17 FX/USD zero-leak (FX-17-03): per-country pricing primitive.
-//   - PricePerCreditMinor: minor units of resolved currency per
-//     `CreditsPerUSD` credits (i.e. per 1 USD-equivalent block of credits —
-//     paisa for BDT, cents for USD). Front-end multiplies by the user's
-//     credit-tier choice (also expressed in `CreditsPerUSD` blocks via
-//     `PredefinedTiers / CreditsPerUSD`) to render a localised total.
+//   - PricePerBlockMinor: minor units of resolved currency per
+//     `CreditBlockSize` credits (paisa for BDT, cents for USD).
+//   - CreditBlockSize: number of credits that one block of `PricePerBlockMinor`
+//     pays for. Mirrors `CreditsPerUSD` (100,000 credits = 1 USD-equivalent).
 //   - Currency: ISO 4217 code of the resolved currency. "BDT" for BD
 //     accounts, "USD" otherwise.
+//
+// Front-end renders a localised total using integer arithmetic:
+//
+//	total_minor = floor(credits * PricePerBlockMinor / CreditBlockSize)
 //
 // FX rate is NEVER exposed in the response. The server resolves USD →
 // local-currency minor units via `math/big` against the latest FX
 // snapshot mid-rate (with the standard fee markup) and returns only the
 // resolved scalar.
 type CheckoutOptions struct {
-	Rails               []RailOption `json:"rails"`
-	PredefinedTiers     []int64      `json:"predefined_tiers"`
-	PricePerCreditMinor int64        `json:"price_per_credit_minor"`
-	Currency            string       `json:"currency"`
+	Rails              []RailOption `json:"rails"`
+	PredefinedTiers    []int64      `json:"predefined_tiers"`
+	PricePerBlockMinor int64        `json:"price_per_block_minor"`
+	CreditBlockSize    int64        `json:"credit_block_size"`
+	Currency           string       `json:"currency"`
 }
 
 // RailOption describes a single payment rail with its credit limits.
@@ -384,11 +392,11 @@ type RailOption struct {
 //
 // Branching:
 //   - BD accounts → resolve via FX snapshot to BDT paisa using `math/big`.
-//     `PricePerCreditMinor = effectiveRate * 100` paisa per
-//     `CreditsPerUSD` credits (i.e. per 1 USD-equivalent block).
-//   - non-BD accounts → 100 cents per `CreditsPerUSD` credits (1 USD = 100
-//     cents, computed via `math/big` for parity with the BD path — no
-//     `float64` arithmetic on the resolved value).
+//     `PricePerBlockMinor = effectiveRate * 100` paisa per
+//     `CreditBlockSize` (= `CreditsPerUSD`) credits.
+//   - non-BD accounts → 100 cents per `CreditBlockSize` (= `CreditsPerUSD`)
+//     credits (1 USD = 100 cents, computed via `math/big` for parity with
+//     the BD path — no `float64` arithmetic on the resolved value).
 //
 // FX rate is computed server-side only and never returned. If FX is
 // unavailable for a BD account, the FX provider error surfaces.
@@ -415,10 +423,11 @@ func (s *Service) GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (
 	}
 
 	return &CheckoutOptions{
-		Rails:               railOptions,
-		PredefinedTiers:     PredefinedTiers,
-		PricePerCreditMinor: priceMinor,
-		Currency:            currency,
+		Rails:              railOptions,
+		PredefinedTiers:    PredefinedTiers,
+		PricePerBlockMinor: priceMinor,
+		CreditBlockSize:    CreditsPerUSD,
+		Currency:           currency,
 	}, nil
 }
 

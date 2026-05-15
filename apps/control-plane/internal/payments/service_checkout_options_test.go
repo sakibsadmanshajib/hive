@@ -54,8 +54,11 @@ func TestGetCheckoutOptions_BDAccount_BDTPaisa(t *testing.T) {
 		t.Errorf("expected Currency=BDT for BD account, got %q", opts.Currency)
 	}
 	const wantPaisa int64 = 11550
-	if opts.PricePerCreditMinor != wantPaisa {
-		t.Errorf("expected PricePerCreditMinor=%d (paisa per USD-block), got %d", wantPaisa, opts.PricePerCreditMinor)
+	if opts.PricePerBlockMinor != wantPaisa {
+		t.Errorf("expected PricePerBlockMinor=%d (paisa per USD-block), got %d", wantPaisa, opts.PricePerBlockMinor)
+	}
+	if opts.CreditBlockSize != CreditsPerUSD {
+		t.Errorf("expected CreditBlockSize=%d, got %d", CreditsPerUSD, opts.CreditBlockSize)
 	}
 
 	// Wire-shape check: marshalled JSON must NOT leak FX rate or USD keys.
@@ -99,8 +102,8 @@ func TestGetCheckoutOptions_BDAccount_TruncatesViaMathBig(t *testing.T) {
 		t.Fatalf("GetCheckoutOptions: %v", err)
 	}
 	const wantPaisa int64 = 11555
-	if opts.PricePerCreditMinor != wantPaisa {
-		t.Errorf("expected PricePerCreditMinor=%d (truncated paisa), got %d", wantPaisa, opts.PricePerCreditMinor)
+	if opts.PricePerBlockMinor != wantPaisa {
+		t.Errorf("expected PricePerBlockMinor=%d (truncated paisa), got %d", wantPaisa, opts.PricePerBlockMinor)
 	}
 }
 
@@ -124,8 +127,11 @@ func TestGetCheckoutOptions_NonBDAccount_USDCents(t *testing.T) {
 	if opts.Currency != "USD" {
 		t.Errorf("expected Currency=USD for non-BD account, got %q", opts.Currency)
 	}
-	if opts.PricePerCreditMinor != 100 {
-		t.Errorf("expected PricePerCreditMinor=100 cents per USD-block, got %d", opts.PricePerCreditMinor)
+	if opts.PricePerBlockMinor != 100 {
+		t.Errorf("expected PricePerBlockMinor=100 cents per USD-block, got %d", opts.PricePerBlockMinor)
+	}
+	if opts.CreditBlockSize != CreditsPerUSD {
+		t.Errorf("expected CreditBlockSize=%d, got %d", CreditsPerUSD, opts.CreditBlockSize)
 	}
 }
 
@@ -166,6 +172,8 @@ func TestGetCheckoutOptions_WireShape_NoUSDLeak(t *testing.T) {
 		"effective_rate",
 		"mid_rate",
 		"fee_rate",
+		"fx_",
+		"usd_",
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -194,8 +202,11 @@ func TestGetCheckoutOptions_WireShape_NoUSDLeak(t *testing.T) {
 			if !strings.Contains(string(raw), `"currency"`) {
 				t.Errorf("[%s] CheckoutOptions wire missing required key %q", tc.name, "currency")
 			}
-			if !strings.Contains(string(raw), `"price_per_credit_minor"`) {
-				t.Errorf("[%s] CheckoutOptions wire missing required key %q", tc.name, "price_per_credit_minor")
+			if !strings.Contains(string(raw), `"price_per_block_minor"`) {
+				t.Errorf("[%s] CheckoutOptions wire missing required key %q", tc.name, "price_per_block_minor")
+			}
+			if !strings.Contains(string(raw), `"credit_block_size"`) {
+				t.Errorf("[%s] CheckoutOptions wire missing required key %q", tc.name, "credit_block_size")
 			}
 		})
 	}

@@ -283,3 +283,37 @@ export interface Wallet {
     assert.equal(r.status, 0, `expected TS prose to pass; stderr=${r.stderr}`);
   });
 });
+
+// ─── PR #137 review hardening — readonly bypass (codex / coderabbit) ─────────
+
+test("TS: readonly amount_usd field is flagged (post-PR-#137 review fix)", () => {
+  withTempFile("readonly.ts", `export interface Leak {
+  readonly amount_usd?: number;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `readonly amount_usd MUST be flagged; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: readonly fx_-prefixed field is flagged", () => {
+  withTempFile("readonly2.ts", `export interface Quote {
+  readonly fx_basis: string;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /fx_basis/);
+  });
+});
+
+test("TS: readonly + whitelist still exempts the line", () => {
+  withTempFile("readonly_ok.ts", `export interface StripeIntent {
+  readonly amount_usd: number; // PHASE-17-INTERNAL-ONLY: server-side Stripe, not exposed
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `whitelist must still apply; stderr=${r.stderr}`);
+  });
+});

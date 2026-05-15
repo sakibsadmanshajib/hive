@@ -18,7 +18,8 @@ import (
 // non-BD account fixtures. Asserts:
 //   1. Response bytes contain NONE of the FX-tripwire keys.
 //   2. Wire shape carries the per-country pricing primitive
-//      (`price_per_credit_minor` int + `currency` string).
+//      (`price_per_block_minor` int + `credit_block_size` int +
+//      `currency` string).
 //   3. BD account → Currency == "BDT".
 //   4. Non-BD account → Currency == "USD".
 //
@@ -53,9 +54,10 @@ func TestIntegration_GetRails_BDAccount_NoUSDLeak(t *testing.T) {
 				{Rail: payments.RailBkash, MinCredits: payments.MinPurchaseCredits, MaxCredits: payments.MaxPurchaseCreditsBkash},
 				{Rail: payments.RailSSLCommerz, MinCredits: payments.MinPurchaseCredits, MaxCredits: payments.MaxPurchaseCreditsSSLCommerz},
 			},
-			PredefinedTiers:     payments.PredefinedTiers,
-			PricePerCreditMinor: 12_000, // 120 BDT per CreditsPerUSD block, in paisa
-			Currency:            "BDT",
+			PredefinedTiers:    payments.PredefinedTiers,
+			PricePerBlockMinor: 12_000, // 120 BDT per CreditsPerUSD block, in paisa
+			CreditBlockSize:    payments.CreditsPerUSD,
+			Currency:           "BDT",
 		},
 	}
 	resolver := &stubAccountResolver{accountID: uuid.New()}
@@ -87,12 +89,16 @@ func TestIntegration_GetRails_BDAccount_NoUSDLeak(t *testing.T) {
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	priceMinor, ok := decoded["price_per_credit_minor"].(float64) // JSON numbers
+	priceMinor, ok := decoded["price_per_block_minor"].(float64) // JSON numbers
 	if !ok {
-		t.Fatalf("price_per_credit_minor missing or not a number: %v", decoded["price_per_credit_minor"])
+		t.Fatalf("price_per_block_minor missing or not a number: %v", decoded["price_per_block_minor"])
 	}
 	if int64(priceMinor) <= 0 {
-		t.Errorf("expected positive price_per_credit_minor, got %v", priceMinor)
+		t.Errorf("expected positive price_per_block_minor, got %v", priceMinor)
+	}
+	blockSize, ok := decoded["credit_block_size"].(float64)
+	if !ok || int64(blockSize) != payments.CreditsPerUSD {
+		t.Errorf("expected credit_block_size=%d, got %v", payments.CreditsPerUSD, decoded["credit_block_size"])
 	}
 	if currency, _ := decoded["currency"].(string); currency != "BDT" {
 		t.Errorf("expected currency=BDT for BD account, got %q", currency)
@@ -107,9 +113,10 @@ func TestIntegration_GetRails_NonBDAccount_NoUSDLeak(t *testing.T) {
 			Rails: []payments.RailOption{
 				{Rail: payments.RailStripe, MinCredits: payments.MinPurchaseCredits, MaxCredits: payments.MaxPurchaseCreditsStripe},
 			},
-			PredefinedTiers:     payments.PredefinedTiers,
-			PricePerCreditMinor: 100, // 100 cents = $1 per CreditsPerUSD block
-			Currency:            "USD",
+			PredefinedTiers:    payments.PredefinedTiers,
+			PricePerBlockMinor: 100, // 100 cents = $1 per CreditsPerUSD block
+			CreditBlockSize:    payments.CreditsPerUSD,
+			Currency:           "USD",
 		},
 	}
 	resolver := &stubAccountResolver{accountID: uuid.New()}
@@ -125,15 +132,18 @@ func TestIntegration_GetRails_NonBDAccount_NoUSDLeak(t *testing.T) {
 
 	raw := rr.Body.Bytes()
 
-	// Banned-key sweep — `usd_` substring is forbidden in JSON KEY position
-	// (e.g. `amount_usd`, `usd_cents`). The currency *value* "USD" is allowed
-	// here because non-BD accounts do see USD as their billing currency; that
-	// is structurally distinct from leaking USD as a JSON key on a BD-eligible
-	// surface. We assert key-position leaks only.
+	// Banned-key sweep on JSON-KEY positions. The currency *value* "USD" is
+	// allowed here because non-BD accounts do see USD as their billing
+	// currency; that is structurally distinct from leaking USD as a JSON
+	// key on a BD-eligible surface. We assert key-position leaks via both
+	// exact-match keys and `"usd_`/`"fx_` prefix substrings to catch
+	// future regressions like `"usd_balance"` or `"fx_rate_basis"`.
 	keyPosBanned := []string{
 		`"amount_usd"`,
 		`"price_per_credit_usd"`,
 		`"exchange_rate"`,
+		`"usd_`,
+		`"fx_`,
 	}
 	for _, key := range keyPosBanned {
 		key := key
@@ -145,7 +155,7 @@ func TestIntegration_GetRails_NonBDAccount_NoUSDLeak(t *testing.T) {
 		})
 	}
 
-	// Positive-shape: USD currency + non-zero minor units.
+	// Positive-shape: USD currency + non-zero minor units + block size.
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
@@ -153,9 +163,13 @@ func TestIntegration_GetRails_NonBDAccount_NoUSDLeak(t *testing.T) {
 	if currency, _ := decoded["currency"].(string); currency != "USD" {
 		t.Errorf("expected currency=USD for non-BD account, got %q", currency)
 	}
-	priceMinor, ok := decoded["price_per_credit_minor"].(float64)
+	priceMinor, ok := decoded["price_per_block_minor"].(float64)
 	if !ok || int64(priceMinor) <= 0 {
-		t.Errorf("expected positive price_per_credit_minor, got %v", decoded["price_per_credit_minor"])
+		t.Errorf("expected positive price_per_block_minor, got %v", decoded["price_per_block_minor"])
+	}
+	blockSize, ok := decoded["credit_block_size"].(float64)
+	if !ok || int64(blockSize) != payments.CreditsPerUSD {
+		t.Errorf("expected credit_block_size=%d, got %v", payments.CreditsPerUSD, decoded["credit_block_size"])
 	}
 }
 

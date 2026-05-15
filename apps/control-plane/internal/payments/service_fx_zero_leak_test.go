@@ -63,17 +63,18 @@ func TestPaymentIntentWireShape_FXZeroLeak(t *testing.T) {
 	}
 }
 
-// FX-17-03 RED: payments.CheckoutOptions currently exposes
+// FX-17-03 RED → GREEN: payments.CheckoutOptions previously exposed
 // `PricePerCreditUSD float64 \`json:"price_per_credit_usd"\``
-// (service.go around CheckoutOptions). Task 4 replaces with
-// `PricePerCreditMinor int64` + `Currency string`.
+// (service.go around CheckoutOptions). Task 4 replaced with
+// `PricePerBlockMinor int64` + `CreditBlockSize int64` + `Currency string`.
 //
-// NOTE: at b87fa24 the struct does not yet carry PricePerCreditUSD —
-// audit found the leak inferred from web-console client.ts. We assert the
-// wire shape regardless: any future regression that adds the USD key will
-// flip this subtest red. Today the test FAILS only if the field exists.
-// To make this RED-on-b87fa24, we additionally marshal a synthetic struct
-// that mirrors the CURRENT documented public shape per PLAN Task 4.
+// The original RED comment is preserved below for archaeology — at b87fa24
+// the struct did not yet carry PricePerCreditUSD; the leak was inferred
+// from web-console client.ts. We assert the wire shape regardless: any
+// future regression that re-introduces a USD wire key will flip this
+// subtest red. Post-rename (review feedback): the test now asserts the
+// honest per-block primitive name + block-size, not the misleading
+// "per_credit" name that was patched in Phase 17's review pass.
 func TestCheckoutOptionsWireShape_FXZeroLeak(t *testing.T) {
 	opts := payments.CheckoutOptions{
 		Rails: []payments.RailOption{
@@ -98,16 +99,17 @@ func TestCheckoutOptionsWireShape_FXZeroLeak(t *testing.T) {
 		})
 	}
 
-	// Subtest 2: assert per-country primitive landed (Task 4 acceptance).
-	// At b87fa24 the struct has no `currency` or `price_per_credit_minor`
-	// field, so this subtest FAILS RED today. Task 4 turns it GREEN by
-	// adding those fields.
+	// Subtest 2: assert per-country primitive landed (Task 4 acceptance,
+	// post-review rename to per-block semantics).
 	t.Run("has_per_country_primitive", func(t *testing.T) {
 		if !bytes.Contains(raw, []byte(`"currency"`)) {
 			t.Errorf("CheckoutOptions wire shape missing required key \"currency\"\npayload: %s", raw)
 		}
-		if !bytes.Contains(raw, []byte(`"price_per_credit_minor"`)) {
-			t.Errorf("CheckoutOptions wire shape missing required key \"price_per_credit_minor\"\npayload: %s", raw)
+		if !bytes.Contains(raw, []byte(`"price_per_block_minor"`)) {
+			t.Errorf("CheckoutOptions wire shape missing required key \"price_per_block_minor\"\npayload: %s", raw)
+		}
+		if !bytes.Contains(raw, []byte(`"credit_block_size"`)) {
+			t.Errorf("CheckoutOptions wire shape missing required key \"credit_block_size\"\npayload: %s", raw)
 		}
 	})
 }

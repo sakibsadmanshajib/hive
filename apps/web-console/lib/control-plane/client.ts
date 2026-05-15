@@ -639,10 +639,12 @@ export interface CheckoutOptions {
   min_credits: number;
   max_credits: number;
   // Per-country pricing primitive in minor units of the resolved currency
-  // (paisa for BDT, cents for USD). Mirrors the control-plane Go int64
-  // wire field. Replaces the FX-leaking legacy primitive removed in
-  // Phase 17 / FX-17-03..04 (regulatory).
-  price_per_credit_minor: number;
+  // (paisa for BDT, cents for USD), priced per `credit_block_size` credits.
+  // Mirrors the control-plane Go int64 wire field. Replaces the FX-leaking
+  // legacy primitive removed in Phase 17 / FX-17-03..04 (regulatory).
+  // Display total: floor(credits * price_per_block_minor / credit_block_size).
+  price_per_block_minor: number;
+  credit_block_size: number;
   currency: string;
 }
 
@@ -1070,12 +1072,18 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   const minCredits = readNumberField(payload, "min_credits") ?? 1000;
   const maxCredits = readNumberField(payload, "max_credits") ?? 100000;
   // FX-17-04 regulatory: pricing primitive must be in minor units of a
-  // declared currency. Reject payload without these fields rather than
-  // defaulting to a USD assumption (mirrors the local_currency check
-  // pattern in initiateCheckout below).
-  const pricePerCreditMinor = readNumberField(payload, "price_per_credit_minor");
+  // declared currency, priced per `credit_block_size` credits. Reject
+  // payload without these fields rather than defaulting to a USD
+  // assumption (mirrors the local_currency check in initiateCheckout).
+  const pricePerBlockMinor = readNumberField(payload, "price_per_block_minor");
+  const creditBlockSize = readNumberField(payload, "credit_block_size");
   const currency = readStringField(payload, "currency");
-  if (pricePerCreditMinor === null || !currency) {
+  if (
+    pricePerBlockMinor === null ||
+    creditBlockSize === null ||
+    creditBlockSize <= 0 ||
+    !currency
+  ) {
     throw new Error("Failed to parse checkout rails response");
   }
   return {
@@ -1083,7 +1091,8 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
     credit_increment: creditIncrement,
     min_credits: minCredits,
     max_credits: maxCredits,
-    price_per_credit_minor: pricePerCreditMinor,
+    price_per_block_minor: pricePerBlockMinor,
+    credit_block_size: creditBlockSize,
     currency,
   };
 }

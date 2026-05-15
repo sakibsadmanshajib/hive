@@ -60,18 +60,42 @@ test.describe("billing FX/USD zero-leak (FX-17-08)", () => {
       timeout: 15_000,
     });
 
-    const responseBody: string = await page.evaluate(async () => {
+    // FX-17-08 (post-review hardening): assert (a) the fetch actually
+    // succeeded — 200 + application/json — so we are not silently
+    // passing on a redirected sign-in HTML page that happens to contain
+    // none of the banned tokens, and (b) the positive contract shape
+    // (`currency` + `price_per_block_minor`) is present. Without these
+    // anchors the forbidden-pattern sweep below would green on any
+    // unauthenticated error body.
+    const rails = await page.evaluate(async () => {
       const response = await fetch(
         "/api/v1/accounts/current/checkout/rails",
         { credentials: "include" },
       );
-      return await response.text();
+      return {
+        ok: response.ok,
+        status: response.status,
+        contentType: response.headers.get("content-type") ?? "",
+        body: await response.text(),
+      };
     });
 
+    expect(rails.ok, "checkout rails fetch failed").toBeTruthy();
+    expect(rails.status, "checkout rails status must be 200").toBe(200);
+    expect(rails.contentType.toLowerCase()).toContain("application/json");
+
+    const responseBody = rails.body;
     expect(
       responseBody.length,
       "checkout rails response empty — auth session likely not propagated",
     ).toBeGreaterThan(0);
+
+    // Positive-shape: the per-country pricing primitive must be present.
+    // These guarantee we are looking at a real CheckoutOptions payload
+    // before asserting the banned-token absence.
+    expect(responseBody).toContain('"currency"');
+    expect(responseBody).toContain('"price_per_block_minor"');
+    expect(responseBody).toContain('"credit_block_size"');
 
     for (const pattern of FX_FORBIDDEN) {
       expect(

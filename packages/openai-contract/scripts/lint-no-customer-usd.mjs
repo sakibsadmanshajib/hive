@@ -53,8 +53,15 @@ const GO_TAG_PATTERN = new RegExp(`\`json:"${BANNED_KEY}[^"]*"`, "g");
 // TS/TSX: interface / type field declaration at start-of-line.
 //   amount_usd: number
 //   amount_usd?: number
-//   "amount_usd": number   (covered by trimming the optional quote)
-const TS_FIELD_PATTERN = new RegExp(`^\\s*"?${BANNED_KEY}"?\\s*\\??\\s*:`, "gm");
+//   readonly amount_usd: number              (FX-17 review)
+//   readonly amount_usd?: number             (FX-17 review)
+//   "amount_usd": number                     (optional-quote form)
+// The optional `readonly\s+` prefix closes the lint bypass codex/coderabbit
+// flagged on PR #137 where a `readonly` keyword skipped the scanner.
+const TS_FIELD_PATTERN = new RegExp(
+  `^\\s*(?:readonly\\s+)?"?${BANNED_KEY}"?\\s*\\??\\s*:`,
+  "gm",
+);
 
 const WHITELIST_MARKER = "PHASE-17-INTERNAL-ONLY";
 

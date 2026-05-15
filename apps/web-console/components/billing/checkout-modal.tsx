@@ -99,12 +99,21 @@ export function CheckoutModal({
   // estimate is rendered in the resolved options.currency.
   const isBdAccount = accountCountryCode === "BD";
 
-  // FX-17-04: pricing primitive is already in minor units of
-  // options.currency (paisa for BDT, cents for USD), so the credit
-  // count multiplies directly with no float scaling.
+  // FX-17-04 (post-review): the server prices in minor units per
+  // `credit_block_size` credits (= CreditsPerUSD = 100,000). To get the
+  // localised total for an arbitrary credit count we integer-divide by
+  // the block size. Order of operations is `(credits * price) / size`
+  // so the multiplication happens at full int64 precision before the
+  // truncating division, matching the server-side math/big truncation.
+  //
+  // Worst-case magnitude: 500_000_000 credits * ~15_000 paisa ≈ 7.5e12,
+  // well inside Number.MAX_SAFE_INTEGER (9.0e15), so plain Number math
+  // is safe — no BigInt needed.
   function computeAmountMinor(): number {
-    if (!options) return 0;
-    return creditAmount * options.price_per_credit_minor;
+    if (!options || options.credit_block_size <= 0) return 0;
+    return Math.floor(
+      (creditAmount * options.price_per_block_minor) / options.credit_block_size,
+    );
   }
 
   async function handleCheckout() {
