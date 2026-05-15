@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — deferred scope
-status: phase_closed
-stopped_at: "Phase 18 (RBAC Matrix) — verification PASSED, ship-gate flipped, ready for PR"
-last_updated: "2026-05-15T03:07:46.066Z"
+status: unknown
+stopped_at: Phase 18 Wave 4 complete — FE migration + CI wiring landed (Plans 05-06)
+last_updated: "2026-05-15T03:25:16.486Z"
 progress:
   total_phases: 7
   completed_phases: 0

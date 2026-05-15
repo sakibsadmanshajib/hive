@@ -40,7 +40,7 @@ Full breakdown: `.planning/milestones/v1.0-ROADMAP.md`
 - [x] **Phase 15: Batch Local Executor** — Local fan-out batch executor in control-plane to settle success-path terminal state for OpenRouter/Groq (no native batch API). Closes deferred tech-debt item #5. Known caveat #2 (resume sentinel) inherited by Phase 18-batch follow-up.
 - [x] **Phase 16: Capability Columns Fix** — Remove dead `ensureCapabilityColumns` DDL path in `routing/repository.go` (targeted wrong table); migration `20260414_01_provider_capabilities_media_columns.sql` is authoritative; regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence.
 - [x] **Phase 17: FX/USD Zero-Leak** — Strip `amount_usd` / FX rate / provider hints from all customer-bound surfaces (payments DTOs, ledger invoice rows, web-console types, PDF rendering, post-purchase grant metadata). Adversarial walk of every `map[string]any` customer wire. CI-blocking lint `lint-no-customer-usd.mjs`. Closes BD regulatory gap. PR #137 ready-for-review 2026-05-09.
-- [ ] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (member/owner/platform_admin) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*, grants.create, ledger.view, platform.admin) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` overlay) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate.
+- [x] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (member/owner/platform_admin) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*, grants.create, ledger.view, platform.admin) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` overlay) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate. (completed 2026-05-15)
 
 Plus four tech-debt items from v1.0 (see `.planning/v1.1-DEFERRED-SCOPE.md`):
 
@@ -159,7 +159,7 @@ Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
 | 15. Batch Local Executor | v1.1 | n/a | Complete | 2026-04-?? |
 | 16. Capability Columns Fix | v1.1 | n/a | Complete | 2026-04-25 |
 | 17. FX/USD Zero-Leak | v1.1 | n/a | Complete | 2026-05-09 (PR #137) |
-| 18. RBAC Matrix | v1.1 | 0/7 | Planned | - |
+| 18. RBAC Matrix | v1.1 | Complete    | 2026-05-15 | - |
 
 ---
 
