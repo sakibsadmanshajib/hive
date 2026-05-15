@@ -2,11 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.1
 milestone_name: — deferred scope
-current_phase: —
-current_plan: —
-status: completed
-stopped_at: Phase 18 (RBAC Matrix) context gathered
-last_updated: "2026-05-15T01:39:47.061Z"
+status: executing
+stopped_at: "Phase 18 Wave 1 complete — Plan 01 authz foundations landed"
+last_updated: "2026-05-15T02:30:00.000Z"
 progress:
   total_phases: 7
   completed_phases: 0
@@ -21,16 +19,12 @@ progress:
 See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** v1.0 shipped 2026-04-21. Planning next milestone — run `/gsd:new-milestone` to scope v1.1 (compliance cleanup + hot-path rate limiting + console integration + invoicing/budget). Deferred-scope reference at `.planning/v1.1-DEFERRED-SCOPE.md`.
+**Current focus:** Phase 18 — RBAC Matrix
 
 ## Current Position
 
-**Milestone:** v1.0 SHIPPED — awaiting v1.1 scope definition.
-**Current Phase:** —
-**Current Plan:** —
-**Status:** Milestone complete, archived, tagged.
-
-v1.0 developer-api-core shipped 2026-04-21 with phases 1–10 (49/49 plans). All archive artifacts in `.planning/milestones/`. Git tag `v1.0` created. Next action: `/gsd:new-milestone` to scope v1.1.
+Phase: 18 (RBAC Matrix) — EXECUTING
+Plan: 1 of 7
 
 ## Performance Metrics
 
