@@ -24,16 +24,11 @@ export interface ViewerUser {
   email_verified: boolean;
 }
 
-export interface ViewerGates {
-  can_invite_members: boolean;
-  can_manage_api_keys: boolean;
-}
-
 export interface Viewer {
   user: ViewerUser;
   current_account: ViewerAccount;
   memberships: ViewerMembership[];
-  gates: ViewerGates;
+  permissions: string[];
 }
 
 export interface AccountProfile {
@@ -101,7 +96,7 @@ interface ViewerResponse {
     role: string;
     status: string;
   }>;
-  gates: ViewerGates;
+  permissions: string[];
 }
 
 type JsonPrimitive = string | number | boolean | null;
@@ -183,13 +178,24 @@ function readArrayField(source: JsonObject, key: string): JsonArray | null {
   return Array.isArray(value) ? value : null;
 }
 
+function readStringArrayField(source: JsonObject, key: string): string[] {
+  const arr = readArrayField(source, key);
+  if (!arr) return [];
+  const result: string[] = [];
+  for (const item of arr) {
+    if (typeof item === "string") {
+      result.push(item);
+    }
+  }
+  return result;
+}
+
 function decodeViewerResponse(payload: JsonObject): ViewerResponse | null {
   const user = readObjectField(payload, "user");
   const currentAccount = readObjectField(payload, "current_account");
-  const gates = readObjectField(payload, "gates");
   const membershipsValue = readArrayField(payload, "memberships");
 
-  if (!user || !currentAccount || !gates || !membershipsValue) {
+  if (!user || !currentAccount || !membershipsValue) {
     return null;
   }
 
@@ -200,8 +206,7 @@ function decodeViewerResponse(payload: JsonObject): ViewerResponse | null {
   const currentAccountDisplayName = readStringField(currentAccount, "display_name");
   const currentAccountType = readStringField(currentAccount, "account_type");
   const currentAccountRole = readStringField(currentAccount, "role");
-  const canInviteMembers = readBooleanField(gates, "can_invite_members");
-  const canManageApiKeys = readBooleanField(gates, "can_manage_api_keys");
+  const permissions = readStringArrayField(payload, "permissions");
 
   if (
     !userId ||
@@ -210,9 +215,7 @@ function decodeViewerResponse(payload: JsonObject): ViewerResponse | null {
     !currentAccountId ||
     !currentAccountDisplayName ||
     !currentAccountType ||
-    !currentAccountRole ||
-    canInviteMembers === null ||
-    canManageApiKeys === null
+    !currentAccountRole
   ) {
     return null;
   }
@@ -253,10 +256,7 @@ function decodeViewerResponse(payload: JsonObject): ViewerResponse | null {
       role: currentAccountRole,
     },
     memberships,
-    gates: {
-      can_invite_members: canInviteMembers,
-      can_manage_api_keys: canManageApiKeys,
-    },
+    permissions,
   };
 }
 
@@ -445,7 +445,7 @@ export async function getViewer(): Promise<Viewer> {
       role: membership.role,
       status: membership.status,
     })),
-    gates: rawViewer.gates,
+    permissions: Array.isArray(rawViewer.permissions) ? rawViewer.permissions : [],
   };
 }
 
