@@ -158,6 +158,30 @@ remains **Pending** until the target phase produces an evidence file.
 | PAY-14-11 | 14 | Satisfied | [evidence/PAY-14-11.md](phases/14-payments-budget-grant/evidence/PAY-14-11.md) |
 | PAY-14-12 | 14 | Satisfied | [evidence/PAY-14-12.md](phases/14-payments-budget-grant/evidence/PAY-14-12.md) |
 
+### FX/USD Zero-Leak (Phase 17)
+
+| ID | Phase | Status | Evidence |
+|----|-------|--------|----------|
+| FX-17-01 | 17 | Satisfied | [evidence/FX-17-01.md](phases/17-fx-usd-zero-leak/evidence/FX-17-01.md) |
+| FX-17-02 | 17 | Satisfied | [evidence/FX-17-02.md](phases/17-fx-usd-zero-leak/evidence/FX-17-02.md) |
+| FX-17-03 | 17 | Satisfied | [evidence/FX-17-03.md](phases/17-fx-usd-zero-leak/evidence/FX-17-03.md) |
+| FX-17-04 | 17 | Satisfied | [evidence/FX-17-04.md](phases/17-fx-usd-zero-leak/evidence/FX-17-04.md) |
+| FX-17-05 | 17 | Satisfied | [evidence/FX-17-05.md](phases/17-fx-usd-zero-leak/evidence/FX-17-05.md) |
+| FX-17-06 | 17 | Satisfied | [evidence/FX-17-06.md](phases/17-fx-usd-zero-leak/evidence/FX-17-06.md) |
+| FX-17-07 | 17 | Satisfied | [evidence/FX-17-07.md](phases/17-fx-usd-zero-leak/evidence/FX-17-07.md) |
+| FX-17-08 | 17 | Satisfied | [evidence/FX-17-08.md](phases/17-fx-usd-zero-leak/evidence/FX-17-08.md) |
+| FX-17-09 | 17 | Satisfied | [evidence/FX-17-09.md](phases/17-fx-usd-zero-leak/evidence/FX-17-09.md) |
+| FX-17-10 | 17 | Satisfied | [evidence/FX-17-10.md](phases/17-fx-usd-zero-leak/evidence/FX-17-10.md) |
+
+Phase 17 closes the v1.1.0 BD regulatory blocker. Customer surfaces
+across control-plane HTTP, ledger wire DTOs, web-console DOM, invoice
+PDF, and chat-app rendered strings carry zero customer-USD/FX keys.
+Internal accounting USD path (DB columns + server→Stripe payload)
+preserved. Lint `packages/openai-contract/scripts/lint-no-customer-usd.mjs --all`
+walks Go + TS + chat-app sources and is wired into CI as a blocking
+step. Hand-offs emitted to Phase 18 (HANDOFF-17-01 — RBAC matrix) and
+Phase 25 (HANDOFF-17-02 — chat-app re-audit post-Phase-23 i18n bundles).
+
 CAP-16-01 closes the v1.0 latent bug formerly recorded in `CLAUDE.md` Known
 Issues §1 (`ensureCapabilityColumns` targeting `route_capabilities` instead
 of `provider_capabilities`). The bug was eliminated by Phase 14's

@@ -5,11 +5,11 @@ milestone_name: deferred-scope
 previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
-current_phase: null
+current_phase: 17
 current_plan: null
-status: milestone_shipped_awaiting_next
-stopped_at: "v1.0 shipped 2026-04-21 — next action /gsd:new-milestone for v1.1 scope"
-last_updated: "2026-04-21T23:00:00.000Z"
+status: phase_closed
+stopped_at: "Phase 17 — FX/USD Zero-Leak — closed 2026-05-09 — PR #137 ready-for-review; review-pass fixes (per-block pricing rename, FXSnapshotID hard-off, lint readonly hardening, E2E positive-shape asserts) applied 2026-05-14"
+last_updated: "2026-05-14T21:00:00.000Z"
 progress:
   total_phases_v1_0: 10
   completed_phases_v1_0: 10
@@ -22,8 +22,18 @@ deferred:
   known_issues:
     - batch-success-path-terminal-settlement
     - ensure-capability-columns-wrong-table
-    - amount-usd-on-bd-checkout
+    - amount-usd-on-bd-checkout-RESOLVED-PHASE-17
     - formal-verification-phase-2-3
+v1_1_phase_status:
+  phase_12: complete
+  phase_13: complete
+  phase_14: complete
+  phase_16: complete
+  phase_17: complete
+v1_1_ship_gate:
+  fx_usd_zero_leak: true   # Phase 17 — closed 2026-05-09 — PR #137
+  rbac_matrix: false       # Phase 18 — pending (HANDOFF-17-01)
+  chat_app_reaudit: false  # Phase 25 — pending (HANDOFF-17-02)
 archive:
   roadmap: .planning/milestones/v1.0-ROADMAP.md
   requirements: .planning/milestones/v1.0-REQUIREMENTS.md
@@ -239,6 +249,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-04-21T01:42:08.000Z
-Stopped at: Completed 10-11-PLAN.md
+Last session: 2026-05-09T00:00:00.000Z
+Stopped at: Phase 17 — FX/USD Zero-Leak — CLOSED. PR #137 out of draft.
 Resume file: None
+
+## v1.1.0 ship-gate checkboxes
+
+- [x] **Phase 17 — FX/USD Zero-Leak.** Closed 2026-05-09. PR #137. Evidence FX-17-01..10. BD regulatory surface clean.
+- [ ] Phase 18 — RBAC matrix (HANDOFF-17-01 inherits `is_platform_admin` replacement).
+- [ ] Phase 25 — Chat-app re-audit (HANDOFF-17-02 inherits non-BD locale upstream USD prose).
