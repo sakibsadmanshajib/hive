@@ -1,35 +1,17 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: deferred-scope
-previous_milestone: v1.0
-previous_milestone_shipped: "2026-04-21"
-previous_milestone_name: developer-api-core
-current_phase: null
-current_plan: null
-status: milestone_shipped_awaiting_next
-stopped_at: "v1.0 shipped 2026-04-21 — next action /gsd:new-milestone for v1.1 scope"
-last_updated: "2026-04-21T23:00:00.000Z"
+milestone_name: — deferred scope
+current_phase: —
+current_plan: —
+status: completed
+stopped_at: Phase 18 (RBAC Matrix) context gathered
+last_updated: "2026-05-15T01:39:47.061Z"
 progress:
-  total_phases_v1_0: 10
-  completed_phases_v1_0: 10
-  total_plans_v1_0: 49
-  completed_plans_v1_0: 49
-deferred:
-  target_milestone: v1.1
-  doc: .planning/v1.1-DEFERRED-SCOPE.md
-  phases: [11, 12, 13, 14]
-  known_issues:
-    - batch-success-path-terminal-settlement
-    - ensure-capability-columns-wrong-table
-    - amount-usd-on-bd-checkout
-    - formal-verification-phase-2-3
-archive:
-  roadmap: .planning/milestones/v1.0-ROADMAP.md
-  requirements: .planning/milestones/v1.0-REQUIREMENTS.md
-  audit: .planning/milestones/v1.0-MILESTONE-AUDIT.md
-  integration_check: .planning/milestones/v1.0-INTEGRATION-CHECK.md
-  tag: v1.0
+  total_phases: 7
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 4
 ---
 
 # Project State
@@ -239,6 +221,6 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-04-21T01:42:08.000Z
-Stopped at: Completed 10-11-PLAN.md
-Resume file: None
+Last session: 2026-05-15T01:39:47.057Z
+Stopped at: Phase 18 (RBAC Matrix) context gathered
+Resume file: .planning/phases/18-rbac-matrix/18-CONTEXT.md
