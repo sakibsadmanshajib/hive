@@ -296,6 +296,36 @@ func TestUnknownPermissionRequiresVerified(t *testing.T) {
 	}
 }
 
+// TestPolicyCanDefaultDeny asserts that Policy.Can returns false for any
+// Permission not present in the registry, even for the most privileged actor.
+// Guards against silent fail-open behaviour when typos slip through or when
+// a new Permission constant is added without a matching switch case.
+func TestPolicyCanDefaultDeny(t *testing.T) {
+	t.Parallel()
+	pol := NewPolicy()
+	unknown := Permission("not.a.real.perm")
+	actors := []struct {
+		name  string
+		actor Actor
+	}{
+		{"owner+verified", Actor{Role: platform.RoleOwner, Verified: true}},
+		{"owner+unverified", Actor{Role: platform.RoleOwner, Verified: false}},
+		{"member+verified", Actor{Role: platform.RoleMember, Verified: true}},
+		{"member+unverified", Actor{Role: platform.RoleMember, Verified: false}},
+		{"admin+verified", Actor{Role: platform.RoleOwner, Verified: true, IsAdmin: true}},
+		{"admin+unverified", Actor{IsAdmin: true}},
+	}
+	for _, tc := range actors {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if pol.Can(tc.actor, unknown) {
+				t.Errorf("Policy.Can returned true for unknown perm with actor %+v; want default-deny", tc.actor)
+			}
+		})
+	}
+}
+
 // TestRequirePermissionMiddlewareResolverError covers non-ErrNoViewer resolver errors.
 func TestRequirePermissionMiddlewareResolverError(t *testing.T) {
 	t.Parallel()

@@ -489,19 +489,37 @@ func (h *Handler) handleInternalHardCap(w http.ResponseWriter, r *http.Request) 
 // =============================================================================
 
 // requireWorkspaceOwner gates a workspace-scoped mutation on PermBillingWrite.
-// Phase 18: replaces roleSvc.IsWorkspaceOwner with policy.Can(actor, PermBillingWrite).
-// The roleSvc field is retained for the internal hard-cap endpoint which still
-// uses it directly; the customer-facing owner gate now routes through the policy.
+// Phase 18: resolves the caller's true workspace role via
+// roleSvc.IsWorkspaceOwner (no longer trusts a URL-supplied workspaceID), then
+// routes the decision through policy.Can(actor, PermBillingWrite).
+//
+// Without the membership lookup, any authenticated+verified user could mint
+// an actor with Role="owner" for an arbitrary workspaceID from the URL and
+// satisfy the policy gate — a cross-workspace authorization bypass on
+// PUT/DELETE /api/v1/budgets/{ws} and POST/PATCH/DELETE /api/v1/spend-alerts/{ws}.
 func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, userID, workspaceID uuid.UUID) bool {
 	viewer, ok := auth.ViewerFromContext(r.Context())
 	if !ok {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 		return false
 	}
+	if h.roleSvc == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "workspace owner gate unavailable"})
+		return false
+	}
+	isOwner, err := h.roleSvc.IsWorkspaceOwner(r.Context(), userID, workspaceID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "membership lookup failed"})
+		return false
+	}
+	role := string(platform.RoleMember)
+	if isOwner {
+		role = string(platform.RoleOwner)
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: workspaceID,
 		UserID:    userID,
-		Role:      "owner", // workspace routes only reachable by owner (checked by upstream caller)
+		Role:      role,
 		Status:    "active",
 	}, false)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
@@ -511,18 +529,31 @@ func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
-// requireWorkspaceMembership is intentionally simple: until Phase 18 swaps in
-// the tier-aware matrix, "membership" is "owner" (read also requires owner).
-// Phase 18: routes through policy.Can(actor, PermBillingWrite).
+// requireWorkspaceMembership resolves the caller's true workspace role via
+// roleSvc.IsWorkspaceOwner and gates through policy.Can(actor, PermBillingWrite).
+// Identical structure to requireWorkspaceOwner — until the policy splits
+// read/write capability for workspace budgets, both read and mutation paths
+// require ownership.
 func (h *Handler) requireWorkspaceMembership(r *http.Request, userID, workspaceID uuid.UUID) error {
 	viewer, ok := auth.ViewerFromContext(r.Context())
 	if !ok {
 		return errors.New("unauthorized")
 	}
+	if h.roleSvc == nil {
+		return errors.New("workspace membership gate unavailable")
+	}
+	isOwner, err := h.roleSvc.IsWorkspaceOwner(r.Context(), userID, workspaceID)
+	if err != nil {
+		return errors.New("membership lookup failed")
+	}
+	role := string(platform.RoleMember)
+	if isOwner {
+		role = string(platform.RoleOwner)
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: workspaceID,
 		UserID:    userID,
-		Role:      "owner",
+		Role:      role,
 		Status:    "active",
 	}, false)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {

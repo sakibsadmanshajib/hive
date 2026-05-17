@@ -71,10 +71,19 @@ type PaymentIntent struct {
 	Rail             Rail           `json:"rail"`
 	Status           IntentStatus   `json:"status"`
 	Credits          int64          `json:"credits"`
-	AmountUSD        int64          `json:"amount_usd"`
+	// AmountUSD is internal accounting only — never serialised to customer
+	// surface. Phase 17 FX/USD zero-leak (FX-17-01). Server→Stripe USD
+	// payload (apps/control-plane/internal/payments/stripe/rail.go) reads
+	// this field via the Go struct, NOT via JSON.
+	AmountUSD        int64          `json:"-"`
 	AmountLocal      int64          `json:"amount_local"`
 	LocalCurrency    string         `json:"local_currency"`
-	FXSnapshotID     *uuid.UUID     `json:"fx_snapshot_id,omitempty"`
+	// FXSnapshotID — internal-only audit handle. PHASE-17-INTERNAL-ONLY:
+	// PaymentIntent is the internal state record; customer-facing checkout/
+	// invoice DTOs (FX-17-01..04) omit FX/USD entirely. `json:"-"` guarantees
+	// the field never serialises onto a customer wire surface even if the
+	// PaymentIntent struct itself is marshaled by mistake.
+	FXSnapshotID     *uuid.UUID     `json:"-"`
 	ProviderIntentID string         `json:"provider_intent_id"`
 	RedirectURL      string         `json:"redirect_url"`
 	TaxTreatment     string         `json:"tax_treatment"`
@@ -122,11 +131,20 @@ type TaxResult struct {
 }
 
 // InitiateInput is passed to a PaymentRail to start a payment.
+//
+// PHASE-17-INTERNAL-ONLY: this struct is constructed server-side and passed
+// in-process to rail implementations. It is never marshaled onto a customer
+// HTTP response. The `AmountUSD` field stays in the struct because the
+// Stripe rail consumes it directly, but the JSON tag is `-` so any future
+// accidental marshal (debug endpoint, admin panel, audit log) cannot leak
+// it on a customer wire.
 type InitiateInput struct {
 	PaymentIntentID uuid.UUID `json:"payment_intent_id"`
 	AccountID       uuid.UUID `json:"account_id"`
 	Credits         int64     `json:"credits"`
-	AmountUSD       int64     `json:"amount_usd"`
+	// AmountUSD: PHASE-17-INTERNAL-ONLY — Stripe USD RPC reads this via the
+	// Go struct, never JSON. `json:"-"` is defense-in-depth (FX-17 review).
+	AmountUSD       int64     `json:"-"`
 	AmountLocal     int64     `json:"amount_local"`
 	Currency        string    `json:"currency"`
 	CallbackBaseURL string    `json:"callback_base_url"`

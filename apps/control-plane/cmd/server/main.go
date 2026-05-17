@@ -295,6 +295,13 @@ func main() {
 		// returns 503 "role service unavailable" on every mutating request.
 		budgetsHandler = budgetsHandler.WithRoleService(roleSvc)
 
+		// Phase 18 — wire role service into the apikeys handler so the admin
+		// overlay is reflected in Actor.IsAdmin during PermAPIKeysWrite checks.
+		// Without it, platform admins are silently denied by policy.Can.
+		if apikeysHandler != nil {
+			apikeysHandler = apikeysHandler.WithRoleService(roleSvc)
+		}
+
 		grantsRepo := grants.NewPgxRepository(pool)
 		grantsSvc := grants.NewService(grantsRepo, roleSvc)
 		grantsHandler = grants.NewHandler(grantsSvc)
@@ -490,7 +497,7 @@ func main() {
 	// Phase 14 — register credit grant routes. Admin surface gated via
 	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
 	// surface gated via plain auth middleware.
-	if grantsHandler != nil && roleSvc != nil {
+	if grantsHandler != nil && roleSvc != nil && authzMW.Initialized() {
 		adminGate := authzMW.RequirePermission(authz.PermPlatformAdmin)(grantsHandler.AdminMux())
 		protectedAdminGrants := authMiddleware.Require(adminGate)
 		routerMux.Handle("/v1/admin/credit-grants", protectedAdminGrants)

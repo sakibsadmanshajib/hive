@@ -153,12 +153,105 @@ describe("MATRIX fixture size guard", () => {
 // Parity: 5 actor states × 11 permissions = 55 cells
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// EXPECTED table — independent ground truth derived directly from the Go
+// matrix in policy_test.go. Defined separately from `actor.granted` so that a
+// drift between the granted array (input to can()) and the expected decision
+// surfaces as a test failure rather than a vacuous tautology.
+//
+// Layout: EXPECTED[actor.label][perm] === true iff the Go matrix grants perm
+// to that actor state.
+// ---------------------------------------------------------------------------
+
+type ExpectedMatrix = Record<string, Record<Permission, boolean>>;
+
+const EXPECTED: ExpectedMatrix = {
+  "owner+verified": {
+    "analytics.view": true,
+    "api_keys.read": true,
+    "api_keys.write": true,
+    "billing.view": true,
+    "billing.write": true,
+    "grants.create": false,
+    "ledger.view": true,
+    "members.invite": true,
+    "members.manage": true,
+    "platform.admin": false,
+    "workspace.settings": true,
+  },
+  "owner+unverified": {
+    "analytics.view": false,
+    "api_keys.read": true,
+    "api_keys.write": false,
+    "billing.view": true,
+    "billing.write": false,
+    "grants.create": false,
+    "ledger.view": false,
+    "members.invite": false,
+    "members.manage": false,
+    "platform.admin": false,
+    "workspace.settings": false,
+  },
+  "member+verified": {
+    "analytics.view": true,
+    "api_keys.read": false,
+    "api_keys.write": false,
+    "billing.view": false,
+    "billing.write": false,
+    "grants.create": false,
+    "ledger.view": true,
+    "members.invite": false,
+    "members.manage": false,
+    "platform.admin": false,
+    "workspace.settings": false,
+  },
+  "member+unverified": {
+    "analytics.view": false,
+    "api_keys.read": false,
+    "api_keys.write": false,
+    "billing.view": false,
+    "billing.write": false,
+    "grants.create": false,
+    "ledger.view": false,
+    "members.invite": false,
+    "members.manage": false,
+    "platform.admin": false,
+    "workspace.settings": false,
+  },
+  admin: {
+    "analytics.view": true,
+    "api_keys.read": true,
+    "api_keys.write": true,
+    "billing.view": true,
+    "billing.write": true,
+    "grants.create": true,
+    "ledger.view": true,
+    "members.invite": true,
+    "members.manage": true,
+    "platform.admin": true,
+    "workspace.settings": true,
+  },
+};
+
+describe("MATRIX.granted matches EXPECTED table", () => {
+  for (const actor of MATRIX) {
+    it(`${actor.label} granted set equals EXPECTED truthy keys`, () => {
+      const grantedFromExpected = (Object.entries(EXPECTED[actor.label]) as Array<
+        [Permission, boolean]
+      >)
+        .filter(([, allowed]) => allowed)
+        .map(([perm]) => perm)
+        .sort();
+      const grantedFromFixture = [...actor.granted].sort();
+      expect(grantedFromFixture).toEqual(grantedFromExpected);
+    });
+  }
+});
+
 describe("can() parity with Go authz.Policy.Can — 55 cells", () => {
   for (const actor of MATRIX) {
-    const grantedSet = new Set<string>(actor.granted);
-
     for (const perm of PERMISSIONS) {
-      const want = grantedSet.has(perm);
+      const want = EXPECTED[actor.label][perm];
       it(`${actor.label} [role=${actor.role || "any"} verified=${actor.verified} isAdmin=${actor.isAdmin}] can(${perm}) === ${want}`, () => {
         const viewer = { permissions: actor.granted };
         expect(can(viewer, perm)).toBe(want);

@@ -26,10 +26,26 @@ BEGIN
      AND tu.status  = 'ACTIVE'
      AND t.archived_at IS NULL;
 
+  -- raw_user_meta_data is user-mutable, so it cannot be trusted as the
+  -- source of the tenant_id authorization claim. Only honor the candidate
+  -- if the user currently has an active membership for it; otherwise fall
+  -- back to the first active tenant.
   SELECT (raw_user_meta_data->>'selected_tenant_id')::uuid
     INTO selected
     FROM auth.users
    WHERE id = uid;
+
+  IF selected IS NOT NULL AND NOT EXISTS (
+    SELECT 1
+      FROM public.tenant_users tu
+      JOIN public.tenants t ON t.id = tu.tenant_id
+     WHERE tu.user_id   = uid
+       AND tu.tenant_id = selected
+       AND tu.status    = 'ACTIVE'
+       AND t.archived_at IS NULL
+  ) THEN
+    selected := NULL;
+  END IF;
 
   IF selected IS NULL AND tenant_list IS NOT NULL
      AND jsonb_array_length(tenant_list) > 0 THEN

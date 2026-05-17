@@ -181,9 +181,10 @@ type ledgerCall struct {
 	accountID      uuid.UUID
 	idempotencyKey string
 	credits        int64
+	metadata       map[string]any
 }
 
-func (l *stubLedger) GrantCredits(_ context.Context, accountID uuid.UUID, idempotencyKey string, credits int64, _ map[string]any) (ledger.LedgerEntry, error) {
+func (l *stubLedger) GrantCredits(_ context.Context, accountID uuid.UUID, idempotencyKey string, credits int64, metadata map[string]any) (ledger.LedgerEntry, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	// Simulate idempotency: if same key already seen, return without appending.
@@ -192,7 +193,12 @@ func (l *stubLedger) GrantCredits(_ context.Context, accountID uuid.UUID, idempo
 			return ledger.LedgerEntry{}, l.returnErr
 		}
 	}
-	l.calls = append(l.calls, ledgerCall{accountID: accountID, idempotencyKey: idempotencyKey, credits: credits})
+	l.calls = append(l.calls, ledgerCall{
+		accountID:      accountID,
+		idempotencyKey: idempotencyKey,
+		credits:        credits,
+		metadata:       metadata,
+	})
 	return ledger.LedgerEntry{}, l.returnErr
 }
 

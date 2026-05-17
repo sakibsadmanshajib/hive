@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
+	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
 )
 
 func errIs(err, target error) bool { return errors.Is(err, target) }
@@ -37,6 +39,7 @@ func limitsResponse(l KeyLimits) map[string]interface{} {
 type Handler struct {
 	svc        *Service
 	accountSvc *accounts.Service
+	roleSvc    *platform.RoleService // optional — used to populate Actor.IsAdmin via IsPlatformAdmin
 	policy     authz.Policy
 	testVC     *accounts.ViewerContext // non-nil in tests to bypass real accounts service
 	testActor  *authz.Actor            // non-nil in tests to supply a canned Actor
@@ -45,6 +48,16 @@ type Handler struct {
 // NewHandler returns a new Handler.
 func NewHandler(svc *Service, accountSvc *accounts.Service) *Handler {
 	return &Handler{svc: svc, accountSvc: accountSvc, policy: authz.NewPolicy()}
+}
+
+// WithRoleService returns a copy of the handler wired with the platform role
+// service so the admin overlay is enabled for Actor construction. Without it,
+// Actor.IsAdmin is always false and platform admins cannot manage API keys via
+// this handler.
+func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
+	cloned := *h
+	cloned.roleSvc = roleSvc
+	return &cloned
 }
 
 // ServeHTTP dispatches requests to the appropriate sub-handler.
@@ -146,12 +159,27 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 	}
 
 	// Phase 18: authz via policy.Can(actor, PermAPIKeysWrite).
+	// Admin overlay must be reflected in Actor.IsAdmin so platform admins
+	// can manage keys regardless of workspace role; hardcoding false would
+	// silently deny admin flows.
+	isAdmin := false
+	if h.roleSvc != nil {
+		admin, err := h.roleSvc.IsPlatformAdmin(r.Context(), viewer.UserID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "apikeys: platform-admin lookup failed",
+				slog.String("user_id", viewer.UserID.String()),
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization unavailable"})
+			return accounts.ViewerContext{}, false
+		}
+		isAdmin = admin
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      vc.CurrentAccount.Role,
 		Status:    "active",
-	}, false)
+	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermAPIKeysWrite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "verified account owner required",

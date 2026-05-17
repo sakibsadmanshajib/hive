@@ -3,7 +3,7 @@ package authz
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 
@@ -38,14 +38,23 @@ func NewPolicy() Policy { return Policy{} }
 // Can reports whether actor holds permission perm.
 //
 // Decision order (first matching rule wins):
-//  1. perm == PermPlatformAdmin or PermGrantsCreate -> only IsAdmin actors.
-//  2. IsAdmin overlay -> grants all remaining permissions regardless of role/verified.
-//  3. RequiresVerified(perm) && !actor.Verified -> deny.
-//  4. billing.view, api_keys.read -> owner only (RequiresVerified=false, owner-scoped).
-//  5. analytics.view, ledger.view -> any verified actor (owner OR member).
-//  6. All other owner perms -> owner only (already passed verification gate).
-//  7. Default -> deny.
+//  1. perm not in registry -> deny (default-deny: typos / newly-declared
+//     permissions without an explicit handler are rejected).
+//  2. perm == PermPlatformAdmin or PermGrantsCreate -> only IsAdmin actors.
+//  3. IsAdmin overlay -> grants all remaining permissions regardless of role/verified.
+//  4. RequiresVerified(perm) && !actor.Verified -> deny.
+//  5. billing.view, api_keys.read -> owner only (RequiresVerified=false, owner-scoped).
+//  6. analytics.view, ledger.view -> any verified actor (owner OR member).
+//  7. billing.write, api_keys.write, members.invite, members.manage,
+//     workspace.settings -> owner only (verification gate already passed).
+//  8. Default -> deny (any registry entry not explicitly handled above).
 func (p Policy) Can(actor Actor, perm Permission) bool {
+	// Default-deny for unknown permissions: anything not in the registry
+	// (typos, perms declared without an explicit Can() case) is denied.
+	if _, ok := registry[perm]; !ok {
+		return false
+	}
+
 	// Platform-only perms: granted only to the admin overlay.
 	if perm == PermPlatformAdmin || perm == PermGrantsCreate {
 		return actor.IsAdmin
@@ -71,10 +80,16 @@ func (p Policy) Can(actor Actor, perm Permission) bool {
 		// all gate on !EmailVerified only — no role check. Any verified actor may view.
 		return actor.Role == platform.RoleOwner || actor.Role == platform.RoleMember
 
-	default:
-		// Remaining write perms (billing.write, api_keys.write, members.invite,
-		// members.manage, workspace.settings): owner only.
+	case PermBillingWrite, PermAPIKeysWrite, PermMembersInvite,
+		PermMembersManage, PermWorkspaceSettings:
+		// Owner-only write perms (verification gate already passed above).
 		return actor.Role == platform.RoleOwner
+
+	default:
+		// Exhaustive switch: any registry entry not enumerated above is
+		// denied. Adding a new Permission to the registry without a matching
+		// case here will surface as a deny rather than a silent owner-grant.
+		return false
 	}
 }
 
@@ -107,6 +122,13 @@ func NewMiddleware(resolver ActorResolver) Middleware {
 	return Middleware{resolver: resolver}
 }
 
+// Initialized reports whether the Middleware has an ActorResolver wired.
+// A zero-value Middleware would panic when its handler is invoked, so callers
+// gating dependent routes on conditional initialisation should use this
+// predicate to avoid registering routes that backed by an uninitialised
+// middleware.
+func (m Middleware) Initialized() bool { return m.resolver != nil }
+
 // RequirePermission returns an http.Handler middleware that gates access to
 // next based on whether the resolved Actor holds perm.
 //
@@ -125,8 +147,13 @@ func (m Middleware) RequirePermission(perm Permission) func(http.Handler) http.H
 					writeAuthzError(w, http.StatusUnauthorized, "authentication required")
 					return
 				}
-				writeAuthzError(w, http.StatusInternalServerError,
-					fmt.Sprintf("authz: actor resolution failed: %s", err.Error()))
+				// Log the underlying error for diagnostics but return a
+				// provider-blind 500 — actor resolution failures originate
+				// from the DB / auth providers and must not leak verbatim.
+				slog.ErrorContext(r.Context(), "authz: actor resolution failed",
+					slog.String("perm", string(perm)),
+					slog.String("err", err.Error()))
+				writeAuthzError(w, http.StatusInternalServerError, "authorization unavailable")
 				return
 			}
 			pol := Policy{}

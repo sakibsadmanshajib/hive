@@ -48,12 +48,35 @@ CREATE POLICY tenant_settings_isolation ON public.tenant_settings
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.tenant_settings TO authenticated;
 
--- Notify channel for in-process cache invalidation.
+-- Notify channel for in-process cache invalidation. The trigger fires for
+-- INSERT, UPDATE, and DELETE; on DELETE the NEW record is not populated so
+-- the payload must be sourced from OLD instead.
 CREATE OR REPLACE FUNCTION public.notify_tenant_settings_changed()
 RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+  payload_tenant_id uuid;
+  payload_key       public.tenant_setting_key;
 BEGIN
-  PERFORM pg_notify('tenant_settings_changed',
-    json_build_object('tenant_id', NEW.tenant_id, 'key', NEW.key)::text);
+  IF TG_OP = 'DELETE' THEN
+    payload_tenant_id := OLD.tenant_id;
+    payload_key       := OLD.key;
+  ELSE
+    payload_tenant_id := NEW.tenant_id;
+    payload_key       := NEW.key;
+  END IF;
+
+  PERFORM pg_notify(
+    'tenant_settings_changed',
+    json_build_object(
+      'tenant_id', payload_tenant_id,
+      'key',       payload_key,
+      'op',        TG_OP
+    )::text
+  );
+
+  IF TG_OP = 'DELETE' THEN
+    RETURN OLD;
+  END IF;
   RETURN NEW;
 END;
 $$;

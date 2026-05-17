@@ -58,6 +58,10 @@ CREATE INDEX audit_log_2026_06_seq_idx ON public.audit_log_2026_06 (seq);
 
 REVOKE ALL ON public.audit_log FROM PUBLIC;
 GRANT INSERT, SELECT ON public.audit_log TO hive_app;
+-- `id` is bigserial; nextval() requires USAGE on the backing sequence in
+-- addition to INSERT on the table, otherwise hive_app inserts fail with
+-- "permission denied for sequence audit_log_id_seq".
+GRANT USAGE, SELECT ON SEQUENCE public.audit_log_id_seq TO hive_app;
 GRANT SELECT ON public.audit_log TO auditor_ro;
 GRANT USAGE ON SCHEMA public TO auditor_ro;
 

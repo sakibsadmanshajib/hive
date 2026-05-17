@@ -56,6 +56,29 @@ jobs:
         working-directory: ${{ matrix.path }}
         run: go test -count=1 -short -race -timeout 5m ./...
 
+  # ------------------------------------------------------------------
+  # FX/USD zero-leak lint — repo-wide blocking guard (Phase 17, FX-17-07).
+  # Scans Go struct tags, TS/TSX interface fields, OpenAPI YAML, and
+  # chat-app sources for any banned customer-USD JSON key
+  # (amount_usd, usd_*, fx_*, price_per_credit_usd, exchange_rate).
+  # BD regulatory rule: BDT-only on every wire shape consumed by a
+  # Bangladesh customer. Required for PR merges.
+  # ------------------------------------------------------------------
+
+  fx-usd-zero-leak:
+    name: FX/USD zero-leak lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run repo-wide customer-USD lint
+        run: node packages/openai-contract/scripts/lint-no-customer-usd.mjs --all
+
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
