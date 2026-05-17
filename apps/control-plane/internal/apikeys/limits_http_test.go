@@ -8,13 +8,13 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 )
 
-// nonOwnerVC returns a viewer context whose CanManageAPIKeys gate is closed —
+// nonOwnerVC returns a viewer context with no api_keys.write permission —
 // matches a workspace member without owner role.
 func nonOwnerVC(accountID uuid.UUID) accounts.ViewerContext {
 	return accounts.ViewerContext{
 		User:           accounts.ViewerUser{ID: uuid.New(), Email: "member@hive.com", EmailVerified: true},
 		CurrentAccount: accounts.AccountSummary{ID: accountID, Role: "member"},
-		Gates:          accounts.Gates{CanManageAPIKeys: false},
+		Permissions:    []string{},
 	}
 }
 

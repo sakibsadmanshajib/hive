@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
 )
 
@@ -415,4 +416,61 @@ func newReleaseHandler(t *testing.T) (*accountsRepoStub, *repoStub, http.Handler
 
 func ledgerBalance(available int64) ledger.BalanceSummary {
 	return ledger.BalanceSummary{AvailableCredits: available}
+}
+
+// TestHandler_AuthzMatrix verifies that the analytics/credits endpoints enforce
+// authz.PermAnalyticsView (RequiresVerified=true, any verified actor).
+func TestHandler_AuthzMatrix(t *testing.T) {
+	_ = authz.PermAnalyticsView // confirm the permission constant is imported
+
+	cases := []struct {
+		name       string
+		role       string
+		verified   bool
+		wantStatus int
+	}{
+		{"owner+verified → 200", "owner", true, http.StatusOK},
+		{"owner+unverified → 403", "owner", false, http.StatusForbidden},
+		{"member+verified → 200 (analytics.view: any verified)", "member", true, http.StatusOK},
+		{"member+unverified → 403", "member", false, http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			accountRepo := newAccountsRepoStub()
+			accountingRepo := newRepoStub()
+			ledgerSvc := &ledgerStub{balance: ledgerBalance(500)}
+			usageSvc := &usageStub{}
+
+			userID := uuid.New()
+			accountID := uuid.New()
+			accountRepo.accountsMap[accountID] = &accounts.Account{
+				ID:          accountID,
+				Slug:        "ws",
+				DisplayName: "WS",
+				AccountType: "personal",
+				OwnerUserID: userID,
+			}
+			accountRepo.memberships = []accounts.Membership{
+				{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: tc.role, Status: "active"},
+			}
+
+			handler := newHTTPHandler(accountRepo, accountingRepo, ledgerSvc, usageSvc)
+			viewer := auth.Viewer{UserID: userID, Email: "u@example.com", EmailVerified: tc.verified}
+
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/credits/reservations", bytes.NewBufferString(`{
+				"request_id":"r1","attempt_number":1,"api_key_id":"00000000-0000-0000-0000-000000000001",
+				"endpoint":"/v1/chat/completions","model_alias":"gpt-4","estimated_credits":10,
+				"policy_mode":"strict","customer_tags":{}
+			}`))
+			req.Header.Set("Content-Type", "application/json")
+			req = req.WithContext(auth.WithViewer(req.Context(), viewer))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
+			}
+		})
+	}
 }

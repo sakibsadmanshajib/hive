@@ -6,6 +6,7 @@ import {
   getApiKeys,
   getViewer,
 } from "@/lib/control-plane/client";
+import { can } from "@/lib/viewer-gates";
 import { ApiKeyCreateForm } from "@/components/api-keys/api-key-create-form";
 import { ApiKeyList } from "@/components/api-keys/api-key-list";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
@@ -14,7 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 
 export default async function ApiKeysPage() {
   const viewer = await getViewer();
-  const canManage = viewer.gates.can_manage_api_keys;
+  const canManage = can(viewer, "api_keys.write");
   if (!canManage) {
     redirect("/console/settings/profile");
   }

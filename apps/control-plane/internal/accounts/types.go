@@ -70,7 +70,7 @@ type ViewerContext struct {
 	User           ViewerUser
 	CurrentAccount AccountSummary
 	Memberships    []MembershipSummary
-	Gates          Gates
+	Permissions    []string
 }
 
 // ViewerUser is the user portion of the viewer context.
@@ -94,12 +94,6 @@ type MembershipSummary struct {
 	DisplayName string
 	Role        string
 	Status      string
-}
-
-// Gates holds the capability flags computed for the viewer.
-type Gates struct {
-	CanInviteMembers bool
-	CanManageAPIKeys bool
 }
 
 // GateError is returned when a policy gate blocks an operation.

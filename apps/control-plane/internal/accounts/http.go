@@ -6,16 +6,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 )
 
 // Handler handles all accounts-related HTTP routes.
 type Handler struct {
-	svc *Service
+	svc    *Service
+	policy authz.Policy
 }
 
 // NewHandler returns a new accounts Handler.
 func NewHandler(svc *Service) *Handler {
-	return &Handler{svc: svc}
+	return &Handler{svc: svc, policy: authz.NewPolicy()}
 }
 
 // ServeHTTP dispatches requests to the appropriate sub-handler.
@@ -69,7 +71,14 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !vc.User.EmailVerified {
+	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	actor := ActorFor(viewer, Membership{
+		AccountID: vc.CurrentAccount.ID,
+		UserID:    viewer.UserID,
+		Role:      vc.CurrentAccount.Role,
+		Status:    "active",
+	}, false)
+	if !h.policy.Can(actor, authz.PermMembersInvite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing members",
 			"code":  "email_verification_required",
@@ -217,9 +226,11 @@ func viewerContextResponse(vc ViewerContext) map[string]interface{} {
 			"role":         vc.CurrentAccount.Role,
 		},
 		"memberships": memberships,
-		"gates": map[string]interface{}{
-			"can_invite_members": vc.Gates.CanInviteMembers,
-			"can_manage_api_keys": vc.Gates.CanManageAPIKeys,
-		},
+		"permissions": func() []string {
+			if vc.Permissions == nil {
+				return []string{}
+			}
+			return vc.Permissions
+		}(),
 	}
 }

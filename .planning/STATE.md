@@ -5,12 +5,16 @@ milestone_name: deferred-scope
 previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
-current_phase: 17
+current_phase: 18
 current_plan: null
 status: phase_closed
-stopped_at: "Phase 17 — FX/USD Zero-Leak — closed 2026-05-09 — PR #137 ready-for-review; review-pass fixes (per-block pricing rename, FXSnapshotID hard-off, lint readonly hardening, E2E positive-shape asserts) applied 2026-05-14"
-last_updated: "2026-05-14T21:00:00.000Z"
+stopped_at: "Phase 18 — RBAC Matrix — closed 2026-05-14 — PR #138 in review; codegen + default-deny review-pass fixes applied 2026-05-16"
+last_updated: "2026-05-16T22:20:00.000Z"
 progress:
+  total_phases: 7
+  completed_phases: 1
+  total_plans: 7
+  completed_plans: 7
   total_phases_v1_0: 10
   completed_phases_v1_0: 10
   total_plans_v1_0: 49
@@ -30,9 +34,10 @@ v1_1_phase_status:
   phase_14: complete
   phase_16: complete
   phase_17: complete
+  phase_18: complete
 v1_1_ship_gate:
   fx_usd_zero_leak: true   # Phase 17 — closed 2026-05-09 — PR #137
-  rbac_matrix: false       # Phase 18 — pending (HANDOFF-17-01)
+  rbac_matrix: true        # Phase 18 — closed 2026-05-14 — PR #138
   chat_app_reaudit: false  # Phase 25 — pending (HANDOFF-17-02)
 archive:
   roadmap: .planning/milestones/v1.0-ROADMAP.md
@@ -49,16 +54,12 @@ archive:
 See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** v1.0 shipped 2026-04-21. Planning next milestone — run `/gsd:new-milestone` to scope v1.1 (compliance cleanup + hot-path rate limiting + console integration + invoicing/budget). Deferred-scope reference at `.planning/v1.1-DEFERRED-SCOPE.md`.
+**Current focus:** Phase 18 — RBAC Matrix
 
 ## Current Position
 
-**Milestone:** v1.0 SHIPPED — awaiting v1.1 scope definition.
-**Current Phase:** —
-**Current Plan:** —
-**Status:** Milestone complete, archived, tagged.
-
-v1.0 developer-api-core shipped 2026-04-21 with phases 1–10 (49/49 plans). All archive artifacts in `.planning/milestones/`. Git tag `v1.0` created. Next action: `/gsd:new-milestone` to scope v1.1.
+Phase: 18 (RBAC Matrix) — CLOSED 2026-05-14
+Plan: 7 of 7 (complete)
 
 ## Performance Metrics
 
@@ -193,6 +194,11 @@ Recent decisions affecting current work:
 - [Phase 08]: [08-02]: SSLCommerz ProcessEvent returns sessionkey as ProviderIntentID (not tran_id) — ensures GetPaymentIntentByProviderID lookup matches what Initiate stored
 - [Phase 08]: PaymentService and AccountResolver interfaces defined in http.go — accept-interfaces pattern enables stub-based testing without importing full service
 - [Phase 08]: accountsResolverAdapter bridges 3-arg accounts.Service.EnsureViewerContext to narrow 1-arg payments.AccountResolver interface — isolates payments from accounts internals
+- [Phase 18-02]: ActorFor is a pure stateless mapping (no DB) — all handler-level authz builds Actor inline then calls policy.Can, keeping the decision function side-effect-free.
+- [Phase 18-02]: NewActorResolver closure calls IsPlatformAdmin via *platform.RoleService — direct type avoids unnecessary interface indirection at the single call site.
+- [Phase 18-03]: billing.view has RequiresVerified=false — unverified workspace owners can view their own budget; old blanket EmailVerified gate was stricter than necessary.
+- [Phase 18-03]: CreateInvitation gate code changed from email_verification_required to permission_denied — canonical authz error code for all policy.Can failures.
+- [Phase 18-03]: analytics.view and ledger.view grant any verified actor (owner OR member) — mirrors pre-Phase-18 behavior (EmailVerified only, no role check).
 
 - [09-04]: ExternalMux pattern: RouterConfig.Mux field lets main.go pre-create *http.ServeMux so filestore.RegisterRoutes works after NewRouter returns http.Handler
 - [09-04]: NewRouter returns http.Handler (not *http.ServeMux) — Plan 01 Wave 2 depends on this changed signature
@@ -237,9 +243,15 @@ Recent decisions affecting current work:
 - [Phase 10-11]: Runtime Dockerfiles copy packages/storage because go.work declares it as a workspace module — live compose images now build the same storage code the toolchain tests exercised.
 - [Phase 10-11]: Live smoke request failures now surface honestly, and the remaining chat blocker is the current upstream provider key quota rather than a routing, storage, or batch-contract regression.
 
+### v1.1 Ship Gate
+
+| Gate | Status | Closed |
+|------|--------|--------|
+| rbac_matrix | true | Phase 18 — closed 2026-05-14 — PR #TBD-Phase-18 |
+
 ### Pending Todos
 
-- Design RBAC authorization model (`.planning/todos/pending/2026-04-22-design-rbac-authorization-model.md`)
+- (none — Design RBAC authorization model resolved to `.planning/todos/done/` by Phase 18)
 
 ### Blockers/Concerns
 
@@ -249,12 +261,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-09T00:00:00.000Z
-Stopped at: Phase 17 — FX/USD Zero-Leak — CLOSED. PR #137 out of draft.
+Last session: 2026-05-16T22:20:00.000Z
+Stopped at: Phase 18 — RBAC Matrix — closed 2026-05-14, PR #138 review-pass fixes applied 2026-05-16
 Resume file: None
 
 ## v1.1.0 ship-gate checkboxes
 
 - [x] **Phase 17 — FX/USD Zero-Leak.** Closed 2026-05-09. PR #137. Evidence FX-17-01..10. BD regulatory surface clean.
-- [ ] Phase 18 — RBAC matrix (HANDOFF-17-01 inherits `is_platform_admin` replacement).
+- [x] **Phase 18 — RBAC matrix.** Closed 2026-05-14. PR #138. Evidence RBAC-18-01..11. HANDOFF-17-01 `is_platform_admin` replacement landed.
 - [ ] Phase 25 — Chat-app re-audit (HANDOFF-17-02 inherits non-BD locale upstream USD prose).

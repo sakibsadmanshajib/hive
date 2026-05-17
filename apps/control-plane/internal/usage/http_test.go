@@ -371,3 +371,51 @@ func TestAnalyticsUsageRejectsUnverifiedViewer(t *testing.T) {
 		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestHandler_UsageAuthzMatrix verifies the Phase 18 permission matrix for
+// analytics/usage endpoints: analytics.view requires verified owner or verified member.
+func TestHandler_UsageAuthzMatrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		role       string
+		verified   bool
+		wantStatus int
+	}{
+		{"owner verified", "owner", true, http.StatusOK},
+		{"owner unverified", "owner", false, http.StatusForbidden},
+		{"member verified", "member", true, http.StatusOK},
+		{"member unverified", "member", false, http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubRepo()
+			userID := uuid.New()
+			accountID := uuid.New()
+
+			repo.accountsMap[accountID] = &accounts.Account{
+				ID:          accountID,
+				Slug:        "ws",
+				DisplayName: "WS",
+				AccountType: "personal",
+				OwnerUserID: userID,
+			}
+			repo.memberships = []accounts.Membership{
+				{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: tc.role, Status: "active"},
+			}
+
+			handler := newHTTPHandler(repo)
+			viewer := auth.Viewer{UserID: userID, Email: "u@example.com", EmailVerified: tc.verified}
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/usage-events", nil)
+			req = req.WithContext(viewerCtx(viewer))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}

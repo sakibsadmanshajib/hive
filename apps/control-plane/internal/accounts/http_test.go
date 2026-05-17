@@ -59,8 +59,11 @@ func TestViewerHandler_ReturnsViewerContext(t *testing.T) {
 	if _, ok := resp["current_account"]; !ok {
 		t.Error("response missing 'current_account' field")
 	}
-	if _, ok := resp["gates"]; !ok {
-		t.Error("response missing 'gates' field")
+	if _, ok := resp["permissions"]; !ok {
+		t.Error("response missing 'permissions' field")
+	}
+	if _, ok := resp["gates"]; ok {
+		t.Error("response must NOT contain 'gates' field")
 	}
 }
 
@@ -204,8 +207,9 @@ func TestInvitationHandler_UnverifiedReturns403(t *testing.T) {
 
 	var resp map[string]interface{}
 	_ = json.Unmarshal(rr.Body.Bytes(), &resp)
-	if resp["code"] != "email_verification_required" {
-		t.Errorf("expected code=email_verification_required, got %v", resp["code"])
+	// Phase 18: error code is now permission_denied (policy.Can gate replaced the bare EmailVerified check).
+	if resp["code"] != "permission_denied" {
+		t.Errorf("expected code=permission_denied, got %v", resp["code"])
 	}
 }
 
@@ -292,6 +296,64 @@ func TestMembersHandler_UnverifiedReturns403(t *testing.T) {
 }
 
 // --- POST /api/v1/invitations/accept ---
+
+// TestViewerEndpoint_OmitsGatesKey is a wire-shape regression guard.
+// It verifies that GET /api/v1/viewer never emits a "gates" key and always
+// emits a "permissions" array of strings — regardless of internal refactors.
+func TestViewerEndpoint_OmitsGatesKey(t *testing.T) {
+	repo := newStubRepo()
+	h := newHandler(repo)
+
+	viewer := auth.Viewer{
+		UserID:        uuid.New(),
+		Email:         "guard@example.com",
+		EmailVerified: true,
+		FullName:      "Guard User",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/viewer", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// "gates" must be absent.
+	if _, ok := resp["gates"]; ok {
+		t.Error("wire-shape violation: 'gates' key must not appear in viewer response")
+	}
+
+	// "permissions" must be a JSON array of strings.
+	rawPerms, ok := resp["permissions"]
+	if !ok {
+		t.Fatal("wire-shape violation: 'permissions' key missing from viewer response")
+	}
+	perms, ok := rawPerms.([]interface{})
+	if !ok {
+		t.Fatalf("wire-shape violation: 'permissions' must be an array, got %T", rawPerms)
+	}
+	for i, p := range perms {
+		if _, ok := p.(string); !ok {
+			t.Errorf("wire-shape violation: permissions[%d] is not a string: %v", i, p)
+		}
+	}
+
+	// Walk all nested objects — verify "gates", "can_invite_members",
+	// "can_manage_api_keys" do not appear at any level.
+	bodyStr := rr.Body.String()
+	for _, banned := range []string{"gates", "can_invite_members", "can_manage_api_keys", "allowedUnverifiedRoutes"} {
+		if strings.Contains(bodyStr, banned) {
+			t.Errorf("wire-shape violation: banned key %q found in viewer response body", banned)
+		}
+	}
+}
 
 func TestAcceptInvitationHandler(t *testing.T) {
 	repo := newStubRepo()

@@ -1,6 +1,7 @@
 import type { ReactElement } from "react";
 import { redirect, notFound } from "next/navigation";
 import { getViewer } from "@/lib/control-plane/client";
+import { can } from "@/lib/viewer-gates";
 import {
   getKeyLimits,
   type ApiKeysClient,
@@ -33,8 +34,8 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
     redirect("/console/settings/profile");
   }
 
-  // Owner-gate: members without can_manage_api_keys see read-only.
-  const canEdit = viewer.gates.can_manage_api_keys;
+  // Owner-gate: members without api_keys.write see read-only.
+  const canEdit = can(viewer, "api_keys.write");
 
   let limits: KeyLimits;
   try {

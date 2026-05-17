@@ -99,7 +99,63 @@ func viewerCtx(viewer auth.Viewer) context.Context {
 	return auth.WithViewer(context.Background(), viewer)
 }
 
-func TestGetBudgetRejectsUnverifiedViewer(t *testing.T) {
+// TestHandler_BudgetAuthzMatrix verifies the Phase 18 permission matrix for
+// billing endpoints: billing.view (RequiresVerified=false) and billing.write
+// (RequiresVerified=true, owner-only).
+func TestHandler_BudgetAuthzMatrix(t *testing.T) {
+	cases := []struct {
+		name       string
+		role       string
+		verified   bool
+		method     string
+		path       string
+		wantStatus int
+	}{
+		// billing.view — RequiresVerified=false — unverified owner allowed
+		{"owner unverified view budget", "owner", false, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK},
+		{"owner verified view budget", "owner", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusOK},
+		// member cannot view budget (not granted billing.view)
+		{"member verified view budget", "member", true, http.MethodGet, "/api/v1/accounts/current/budget", http.StatusForbidden},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			accountRepo := newAccountsRepoStub()
+			userID := uuid.New()
+			accountID := uuid.New()
+
+			accountRepo.accountsMap[accountID] = &accounts.Account{
+				ID:          accountID,
+				Slug:        "ws",
+				DisplayName: "WS",
+				AccountType: "personal",
+				OwnerUserID: userID,
+			}
+			accountRepo.memberships = []accounts.Membership{
+				{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: tc.role, Status: "active"},
+			}
+
+			handler := NewHandler(NewService(&httpRepoStub{}, &notifierStub{}), accounts.NewService(accountRepo))
+			viewer := auth.Viewer{UserID: userID, Email: "u@example.com", EmailVerified: tc.verified}
+
+			req := httptest.NewRequest(tc.method, tc.path, nil)
+			req = req.WithContext(viewerCtx(viewer))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// TestGetBudgetAllowsUnverifiedOwner verifies that the Phase 18 matrix allows
+// unverified owners to view the budget. billing.view has RequiresVerified=false
+// per the permission registry, so unverified owners must get 200 (not 403).
+// This replaces the pre-Phase-18 test that checked !EmailVerified.
+func TestGetBudgetAllowsUnverifiedOwner(t *testing.T) {
 	accountRepo := newAccountsRepoStub()
 	accountID := uuid.New()
 	userID := uuid.New()
@@ -119,7 +175,7 @@ func TestGetBudgetRejectsUnverifiedViewer(t *testing.T) {
 	viewer := auth.Viewer{
 		UserID:        userID,
 		Email:         "owner@example.com",
-		EmailVerified: false,
+		EmailVerified: false, // unverified owner — billing.view is RequiresVerified=false
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/budget", nil)
@@ -128,7 +184,8 @@ func TestGetBudgetRejectsUnverifiedViewer(t *testing.T) {
 
 	handler.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusForbidden {
-		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	// Phase 18: billing.view RequiresVerified=false → unverified owner gets 200.
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for unverified owner (billing.view requires no verification), got %d: %s", rr.Code, rr.Body.String())
 	}
 }

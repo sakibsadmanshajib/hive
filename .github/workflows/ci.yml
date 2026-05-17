@@ -109,6 +109,16 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
 
+      - name: Lint — no bare role checks outside authz package
+        working-directory: .
+        run: node packages/openai-contract/scripts/lint-no-bare-role-check.mjs apps/control-plane/internal
+
+      - name: Codegen drift — permissions.generated.ts
+        working-directory: .
+        run: |
+          make gen-permissions
+          git diff --exit-code apps/web-console/lib/control-plane/permissions.generated.ts
+
   # ------------------------------------------------------------------
   # Docker build validation — fork PRs only.
   # Same-repo PRs get this implicitly via the live-integration job

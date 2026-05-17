@@ -2,6 +2,10 @@
 created: 2026-04-22T01:43:51.823Z
 title: Design RBAC authorization model
 area: planning
+status: done
+resolved_at: 2026-05-14
+resolved_by: phase-18-rbac-matrix
+resolved_evidence: .planning/phases/18-rbac-matrix/18-VERIFICATION.md
 files:
   - .planning/PROJECT.md
   - .planning/v1.1-DEFERRED-SCOPE.md
@@ -28,3 +32,5 @@ Design a verification-aware RBAC model for the next milestone before more permis
 - keep server enforcement authoritative in control-plane handlers
 - keep web-console route and navigation gating derived from the same permission model rather than hard-coded page checks
 - include regression coverage for both verified and unverified flows
+
+Resolved by Phase 18 RBAC Matrix — see 18-VERIFICATION.md.

@@ -9,11 +9,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
+	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
 )
 
 type Handler struct {
 	svc         *Service
 	accountsSvc *accounts.Service
+	policy      authz.Policy
 }
 
 type createReservationRequest struct {
@@ -45,7 +47,7 @@ type releaseReservationRequest struct {
 }
 
 func NewHandler(svc *Service, accountsSvc *accounts.Service) *Handler {
-	return &Handler{svc: svc, accountsSvc: accountsSvc}
+	return &Handler{svc: svc, accountsSvc: accountsSvc, policy: authz.NewPolicy()}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -344,7 +346,14 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		return uuid.Nil, false
 	}
 
-	if !viewerContext.User.EmailVerified {
+	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	actor := accounts.ActorFor(viewer, accounts.Membership{
+		AccountID: viewerContext.CurrentAccount.ID,
+		UserID:    viewer.UserID,
+		Role:      viewerContext.CurrentAccount.Role,
+		Status:    "active",
+	}, false)
+	if !h.policy.Can(actor, authz.PermAnalyticsView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing credits",
 			"code":  "email_verification_required",
