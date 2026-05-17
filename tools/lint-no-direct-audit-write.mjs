@@ -1,0 +1,50 @@
+// tools/lint-no-direct-audit-write.mjs
+// Block direct INSERT/UPDATE/DELETE against public.audit_log outside the
+// internal/audit package. SELECTs are allowed (auditor queries).
+
+import { readFileSync } from 'node:fs';
+import { execSync } from 'node:child_process';
+
+const ALLOWLIST_DIRS = [
+  'apps/control-plane/internal/audit/',
+  'supabase/migrations/',
+  'tools/lint-no-direct-audit-write.mjs',
+];
+
+const FORBIDDEN = [
+  /insert\s+into\s+public\.audit_log\b/i,
+  /update\s+public\.audit_log\b/i,
+  /delete\s+from\s+public\.audit_log\b/i,
+  /\bINSERT\s+INTO\s+audit_log\b/i,
+];
+
+const DIR_RE = /^(apps|packages|deploy|tools|supabase)\//;
+const EXT_RE = /\.(go|tsx?|jsx?|mjs|cjs|sql|ya?ml)$/;
+
+const files = execSync('git ls-files', { encoding: 'utf8' })
+  .split('\n')
+  .filter(Boolean)
+  .filter(f => DIR_RE.test(f) && EXT_RE.test(f));
+
+let violations = 0;
+for (const file of files) {
+  if (ALLOWLIST_DIRS.some(p => file.startsWith(p))) continue;
+  const text = readFileSync(file, 'utf8');
+  for (const re of FORBIDDEN) {
+    if (re.test(text)) {
+      const lines = text.split('\n');
+      lines.forEach((line, i) => {
+        if (re.test(line)) {
+          console.error(`${file}:${i + 1}: forbidden direct write to audit_log — use internal/audit.Log`);
+          violations++;
+        }
+      });
+    }
+  }
+}
+
+if (violations > 0) {
+  console.error(`\n${violations} audit-write lint violation(s).`);
+  process.exit(1);
+}
+console.log('lint-no-direct-audit-write: PASS');
