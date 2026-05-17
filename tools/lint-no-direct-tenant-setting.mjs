@@ -22,4 +22,3 @@ if (violations.length > 0) {
 } else {
   console.log('✓ lint-no-direct-tenant-setting: PASS');
 }
-EOFMJS 2>&1
