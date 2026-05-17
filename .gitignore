@@ -70,3 +70,15 @@ hs_err_pid*.log
 
 # Admin-only local scripts — never deployed, never shared.
 /scripts/admin/
+
+# Local developer tooling caches and artefacts (graphify, gh CLI cache,
+# node compile cache, root-level Go build binary, agent worktrees, skill lock).
+.claude/worktrees/
+.graphifyignore
+graphify-out/
+.graphify_*
+.graphify_python
+gh-cli-cache/
+node-compile-cache/
+/server
+skills-lock.json
