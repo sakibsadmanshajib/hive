@@ -1,0 +1,10 @@
+{
+  "name": "hive",
+  "version": "1.0.0",
+  "description": "OpenAI-compatible API gateway for Bangladesh market",
+  "private": true,
+  "scripts": {
+    "lint:audit-write": "node tools/lint-no-direct-audit-write.mjs",
+    "lint:tenant-setting": "node tools/lint-no-direct-tenant-setting.mjs"
+  }
+}

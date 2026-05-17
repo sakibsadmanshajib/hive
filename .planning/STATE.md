@@ -5,15 +5,15 @@ milestone_name: deferred-scope
 previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
-current_phase: 18
-current_plan: null
-status: phase_closed
-stopped_at: "Phase 18 — RBAC Matrix — closed 2026-05-14 — PR #138 in review; codegen + default-deny review-pass fixes applied 2026-05-16"
-last_updated: "2026-05-16T22:20:00.000Z"
+current_phase: 19
+current_plan: 19-01
+status: phase_in_progress
+stopped_at: "Phase 19 — Foundation Slice — Plan 01 (data foundation + SOC 2 audit primitive) in review on PR #139"
+last_updated: "2026-05-17T03:00:00.000Z"
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 1
-  total_plans: 7
+  total_plans: 11
   completed_plans: 7
   total_phases_v1_0: 10
   completed_phases_v1_0: 10
@@ -35,6 +35,7 @@ v1_1_phase_status:
   phase_16: complete
   phase_17: complete
   phase_18: complete
+  phase_19: in_progress
 v1_1_ship_gate:
   fx_usd_zero_leak: true   # Phase 17 — closed 2026-05-09 — PR #137
   rbac_matrix: true        # Phase 18 — closed 2026-05-14 — PR #138
@@ -261,8 +262,8 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-16T22:20:00.000Z
-Stopped at: Phase 18 — RBAC Matrix — closed 2026-05-14, PR #138 review-pass fixes applied 2026-05-16
+Last session: 2026-05-17T03:00:00.000Z
+Stopped at: Phase 19 Plan 01 — data foundation + audit primitive — on PR #139 (review-pass: 3 Codex P0/P1 fixes applied)
 Resume file: None
 
 ## v1.1.0 ship-gate checkboxes
