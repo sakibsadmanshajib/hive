@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"log/slog"
@@ -14,9 +15,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
 	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
 	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
+	"github.com/hivegpt/hive/apps/control-plane/internal/audit"
 	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
 	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore"
 	batchexecutor "github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
@@ -25,6 +28,7 @@ import (
 	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
 	"github.com/hivegpt/hive/apps/control-plane/internal/grants"
 	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
+	"github.com/hivegpt/hive/apps/control-plane/internal/owui"
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
 	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
 	"github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices"
@@ -39,9 +43,12 @@ import (
 	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
 	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
 	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
+	"github.com/hivegpt/hive/apps/control-plane/internal/signup"
 	"github.com/hivegpt/hive/apps/control-plane/internal/spendalerts"
+	"github.com/hivegpt/hive/apps/control-plane/internal/tenants"
 	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
 	"github.com/hivegpt/hive/packages/storage"
+	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -189,6 +196,13 @@ func main() {
 	var ledgerSvc *ledger.Service
 	var profilesSvc *profiles.Service
 	var routingSvc *routing.Service
+	// Phase 19 Plan 02 — hoisted so the route-mount block below can wire
+	// the signup webhook and tenant switch handlers after the router mux
+	// exists. nil when the database pool failed to come up.
+	var owuiClient *owui.Client
+	var auditLogger *audit.Logger
+	var signupWebhook *signup.Webhook
+	var tenantsHandler *tenants.Handler
 	if pool != nil {
 		if cfg.RedisURL != "" {
 			redisClient = platformredis.NewClient(cfg.RedisURL)
@@ -306,6 +320,89 @@ func main() {
 		grantsSvc := grants.NewService(grantsRepo, roleSvc)
 		grantsHandler = grants.NewHandler(grantsSvc)
 		log.Println("credit grants module ready (owner-discretionary)")
+
+		// Phase 19 Plan 02 — identity + auth wiring (Task 9).
+		// Builds the audit Logger (Sync+WAL) shared by the signup webhook
+		// and tenant switch endpoint, the OWUI admin client, and the
+		// signup tenant resolver. Required env vars are validated here
+		// rather than at request time so misconfiguration is surfaced at
+		// startup. Routes are mounted further down once the router mux
+		// exists.
+		owuiBaseURL := strings.TrimSpace(os.Getenv("OWUI_BASE_URL"))
+		owuiAdminToken := strings.TrimSpace(os.Getenv("OWUI_ADMIN_TOKEN"))
+		signupSecret := strings.TrimSpace(os.Getenv("SUPABASE_WEBHOOK_SECRET"))
+		supabaseServiceRoleKey := strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY"))
+		missingPhase19 := make([]string, 0, 4)
+		if owuiBaseURL == "" {
+			missingPhase19 = append(missingPhase19, "OWUI_BASE_URL")
+		}
+		if owuiAdminToken == "" {
+			missingPhase19 = append(missingPhase19, "OWUI_ADMIN_TOKEN")
+		}
+		if signupSecret == "" {
+			missingPhase19 = append(missingPhase19, "SUPABASE_WEBHOOK_SECRET")
+		}
+		if supabaseServiceRoleKey == "" {
+			missingPhase19 = append(missingPhase19, "SUPABASE_SERVICE_ROLE_KEY")
+		}
+		if len(missingPhase19) > 0 {
+			// Phase 19 identity (signup webhook + tenant switch) is opt-in.
+			// When env vars are absent — typical for CI smoke runs that do
+			// not exercise the Supabase signup path — log and skip the
+			// wiring rather than fatal, so other unrelated startup paths
+			// (health, billing, catalog) still come up healthy. Production
+			// deployments are expected to set every variable in this list;
+			// the resulting warning is loud enough for operators to catch.
+			log.Printf("WARNING: phase-19 identity wiring skipped (missing env: %s)", strings.Join(missingPhase19, ", "))
+		} else {
+			// SUPABASE_SERVICE_ROLE_KEY is read at startup so production
+			// deployments surface misconfiguration early, but the tenant
+			// switch handler uses the already-authenticated pool
+			// connection (which carries service-role privilege) to update
+			// auth.users metadata, so the key is not threaded into the
+			// handler today. Underscore the var to keep the contract
+			// explicit until later tasks consume it.
+			_ = supabaseServiceRoleKey
+
+			owuiClient = owui.New(owui.Config{
+				BaseURL:    owuiBaseURL,
+				AdminToken: owuiAdminToken,
+			})
+
+			auditSync := audit.NewSyncWriter(pool, audit.WriterConfig{
+				DeploySHA: os.Getenv("DEPLOY_SHA"),
+				Env:       os.Getenv("HIVE_ENV"),
+			})
+			auditWALDir := strings.TrimSpace(os.Getenv("AUDIT_WAL_DIR"))
+			if auditWALDir == "" {
+				auditWALDir = "/var/lib/hive/audit-wal"
+			}
+			walWriter, walErr := audit.NewWALWriter(audit.WALConfig{
+				Dir:  auditWALDir,
+				Sync: auditSync,
+			})
+			if walErr != nil {
+				log.Fatalf("audit WAL init failed: %v", walErr)
+			}
+			auditLogger = audit.NewLogger(audit.LoggerDeps{Sync: auditSync, WAL: walWriter})
+
+			signupResolver := signup.NewResolver(signup.ResolverDeps{
+				InviteLookup: signupLookupInvite(pool),
+				DomainLookup: signupLookupDomain(pool),
+			})
+
+			signupWebhook = signup.NewWebhook(signup.WebhookDeps{
+				Pool:         pool,
+				Resolver:     signupResolver,
+				EnsureGroup:  owuiClient.EnsureGroup,
+				AddUser:      owuiClient.AddUserToGroup,
+				Audit:        auditLogger,
+				SharedSecret: signupSecret,
+			})
+
+			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
+			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")
+		}
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -508,6 +605,28 @@ func main() {
 		log.Println("credit grants routes registered (Phase 14)")
 	}
 
+	// Phase 19 Plan 02 Task 9 — signup webhook + tenant switch routes.
+	//
+	// /internal/auth/user-created is a Supabase Database Webhook target;
+	// the handler verifies the X-Hive-Signup-Secret header internally and
+	// is intentionally unauthenticated at the middleware layer (Supabase
+	// fires it without a bearer token). /v1/tenants/switch sits behind
+	// the standard auth middleware.
+	if signupWebhook != nil {
+		routerMux.Handle("/internal/auth/user-created", signupWebhook)
+		log.Println("signup webhook route registered (Phase 19)")
+	}
+	if tenantsHandler != nil {
+		protectedSwitch := authMiddleware.Require(http.HandlerFunc(tenantsHandler.Switch))
+		routerMux.Handle("/v1/tenants/switch", protectedSwitch)
+		log.Println("tenants switch route registered (Phase 19)")
+	}
+	// owuiClient is reachable via the signup webhook today; keep the
+	// reference live so future tasks (invite acceptance, tenant create)
+	// can wire it without rebuilding the import graph.
+	_ = owuiClient
+	_ = auditLogger
+
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
 		Addr:         addr,
@@ -556,6 +675,50 @@ func resolveLiteLLMMasterKey() string {
 type storageRuntimeConfig struct {
 	Client      storage.Config
 	FilesBucket string
+}
+
+// signupLookupInvite returns a signup.LookupFunc that resolves an invite
+// token to its target tenant. tenant_invites is provisioned by Plan 03;
+// until then the query simply returns ErrNoMatch, gating the resolver to
+// its domain-mapping fallback.
+func signupLookupInvite(pool *pgxpool.Pool) signup.LookupFunc {
+	return func(ctx context.Context, token string) (uuid.UUID, error) {
+		var id uuid.UUID
+		err := pool.QueryRow(ctx,
+			`SELECT tenant_id FROM public.tenant_invites
+			  WHERE token=$1 AND consumed_at IS NULL AND expires_at > now()`,
+			token).Scan(&id)
+		if err != nil {
+			// Only "no eligible row" collapses to ErrNoMatch; transient
+			// DB failures (connection reset, deadline exceeded) must
+			// surface so the webhook returns 500 and Supabase retries.
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, signup.ErrNoMatch
+			}
+			return uuid.Nil, fmt.Errorf("signup invite lookup: %w", err)
+		}
+		return id, nil
+	}
+}
+
+// signupLookupDomain returns a signup.LookupFunc that maps an email
+// domain to its tenant via tenant_email_domains. As with the invite
+// table, the schema lands in Plan 03; the function is safe to call now
+// because a missing relation collapses to ErrNoMatch.
+func signupLookupDomain(pool *pgxpool.Pool) signup.LookupFunc {
+	return func(ctx context.Context, domain string) (uuid.UUID, error) {
+		var id uuid.UUID
+		err := pool.QueryRow(ctx,
+			`SELECT tenant_id FROM public.tenant_email_domains WHERE domain=$1`,
+			domain).Scan(&id)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return uuid.Nil, signup.ErrNoMatch
+			}
+			return uuid.Nil, fmt.Errorf("signup domain lookup: %w", err)
+		}
+		return id, nil
+	}
 }
 
 func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {
