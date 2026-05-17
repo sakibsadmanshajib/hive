@@ -1,7 +1,7 @@
 > ⚠️ **DEPRECATED — DO NOT FOLLOW THIS DOCUMENT FOR EXECUTION.**
 >
 > Phase 19 was pivoted from Lobe Chat to **LibreChat (MIT)** on 2026-04-25 per
-> [`../../v1.1-chatapp/LICENSE-DECISION.md`](../../v1.1-chatapp/LICENSE-DECISION.md).
+> [`../../v1.1-chatapp/LICENSE-DECISION.DEPRECATED.md`](../../v1.1-chatapp/LICENSE-DECISION.DEPRECATED.md).
 > The active research artifact is **[RESEARCH-LIBRECHAT.md](RESEARCH-LIBRECHAT.md)**;
 > the executable plan is **[PLAN.md](PLAN.md)**.
 >
@@ -121,7 +121,7 @@ Verbatim from `https://github.com/lobehub/lobehub/blob/v1.143.3/LICENSE`:
 2. **Alternative: stay below the derivative-work line.** Run upstream container `lobehub/lobe-chat` unmodified, pass all customization via env vars (`OPENAI_PROXY_URL`, `OPENAI_MODEL_LIST`, `CUSTOM_MODELS`, `KEY_VAULTS_SECRET`, theming via existing settings). This severely constrains the language-picker + strip-providers goals — most of those need source edits.
 3. **Alternative: adopt fully Apache-2.0/MIT chat-UI.** Candidates: LibreChat (MIT), Chatbot UI (MIT), Open WebUI (BSD-3-clause variant — verify), big-AGI (MIT). Eliminates licensing block entirely. Master plan Track B would need re-grounding.
 
-**This decision must be made before Phase 19 PLAN.md is written.** Recording in `.planning/v1.1-chatapp/LICENSE-DECISION.md` recommended.
+**This decision must be made before Phase 19 PLAN.md is written.** Recording in `.planning/v1.1-chatapp/LICENSE-DECISION.DEPRECATED.md` recommended.
 
 ### Attribution requirements (if commercial license obtained)
 - Apache-2.0 §4: preserve `LICENSE`, `NOTICE`, copyright notices in distributed source.
@@ -625,7 +625,7 @@ export const filterEnabledModels = (...) => DEFAULT_MODEL_PROVIDER_LIST;
 - [ ] `supabase/migrations/2026XXXX_01_chat_app_baseline.sql` — generated post-fork
 - [ ] `.planning/v1.1-chatapp/LOBE-VERSION.md` — record commit SHA
 - [ ] `.planning/v1.1-chatapp/LOBE-UPGRADE-PLAYBOOK.md` — new
-- [ ] `.planning/v1.1-chatapp/LICENSE-DECISION.md` — document outcome of LobeHub LLC contact
+- [ ] `.planning/v1.1-chatapp/LICENSE-DECISION.DEPRECATED.md` — document outcome of LobeHub LLC contact
 
 ---
 
