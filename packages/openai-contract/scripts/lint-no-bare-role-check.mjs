@@ -162,6 +162,11 @@ function main() {
   process.exit(1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Detect "run directly" vs imported by normalising both sides of the
+// comparison. import.meta.url is a file:// URL; process.argv[1] is often a
+// relative path. Mismatched representations would silently skip main().
+const __entry = fileURLToPath(import.meta.url);
+const __invoked = process.argv[1] ? resolve(process.argv[1]) : "";
+if (__entry === __invoked) {
   main();
 }

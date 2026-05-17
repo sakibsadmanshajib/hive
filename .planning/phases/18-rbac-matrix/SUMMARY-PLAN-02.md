@@ -54,6 +54,7 @@ metrics:
 - Hoisted var authzMW authz.Middleware before if pool != nil block.
 - Inside pool: actorResolver := accounts.NewActorResolver(accountsSvc, roleSvc); authzMW = authz.NewMiddleware(actorResolver).
 - Replaced roleSvc.RequirePlatformAdmin(grantsHandler.AdminMux()) with authzMW.RequirePermission(authz.PermPlatformAdmin)(grantsHandler.AdminMux()).
+- PR #138 review pass (2026-05-16): added authz.Middleware.Initialized() predicate and extended the grants admin guard to `grantsHandler != nil && roleSvc != nil && authzMW.Initialized()`, eliminating the latent nil-resolver risk on a zero-value authzMW.
 
 ## Deviations from Plan
 

@@ -169,7 +169,12 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 		}
 	}
 	if !found {
-		return InvitationResult{}, fmt.Errorf("accounts: viewer is not an active member of account %s", accountID)
+		// Non-member invitation attempts are an authorization failure, not a
+		// server error. Surface a GateError so the HTTP layer maps to 403.
+		return InvitationResult{}, &GateError{
+			Code:    "permission_denied",
+			Message: fmt.Sprintf("viewer is not an active member of account %s", accountID),
+		}
 	}
 
 	// Phase 18: permission check via policy — replaces bare EmailVerified && role=="owner".

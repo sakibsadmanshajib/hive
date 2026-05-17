@@ -3,7 +3,7 @@ package authz
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 
@@ -122,6 +122,13 @@ func NewMiddleware(resolver ActorResolver) Middleware {
 	return Middleware{resolver: resolver}
 }
 
+// Initialized reports whether the Middleware has an ActorResolver wired.
+// A zero-value Middleware would panic when its handler is invoked, so callers
+// gating dependent routes on conditional initialisation should use this
+// predicate to avoid registering routes that backed by an uninitialised
+// middleware.
+func (m Middleware) Initialized() bool { return m.resolver != nil }
+
 // RequirePermission returns an http.Handler middleware that gates access to
 // next based on whether the resolved Actor holds perm.
 //
@@ -140,8 +147,13 @@ func (m Middleware) RequirePermission(perm Permission) func(http.Handler) http.H
 					writeAuthzError(w, http.StatusUnauthorized, "authentication required")
 					return
 				}
-				writeAuthzError(w, http.StatusInternalServerError,
-					fmt.Sprintf("authz: actor resolution failed: %s", err.Error()))
+				// Log the underlying error for diagnostics but return a
+				// provider-blind 500 — actor resolution failures originate
+				// from the DB / auth providers and must not leak verbatim.
+				slog.ErrorContext(r.Context(), "authz: actor resolution failed",
+					slog.String("perm", string(perm)),
+					slog.String("err", err.Error()))
+				writeAuthzError(w, http.StatusInternalServerError, "authorization unavailable")
 				return
 			}
 			pol := Policy{}
