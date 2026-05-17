@@ -36,6 +36,11 @@ CREATE TABLE public.audit_log (
   seq               bigint NOT NULL,
   prev_hash         bytea NOT NULL,
   row_hash          bytea NOT NULL,
+  -- The tamper-evident chain is SHA-256 so the digests must be exactly
+  -- 32 bytes. A length CHECK at the table catches malformed writes
+  -- before they enter the chain.
+  CONSTRAINT audit_log_prev_hash_len CHECK (octet_length(prev_hash) = 32),
+  CONSTRAINT audit_log_row_hash_len  CHECK (octet_length(row_hash) = 32),
   PRIMARY KEY (ts, id)
 ) PARTITION BY RANGE (ts);
 
@@ -52,9 +57,12 @@ CREATE TABLE public.audit_log_2026_06 PARTITION OF public.audit_log
   FOR VALUES FROM ('2026-06-01') TO ('2026-07-01');
 
 -- Per-partition seq must be monotonic. The Go helper enforces this by
--- selecting MAX(seq) for the partition under SERIALIZABLE.
-CREATE INDEX audit_log_2026_05_seq_idx ON public.audit_log_2026_05 (seq);
-CREATE INDEX audit_log_2026_06_seq_idx ON public.audit_log_2026_06 (seq);
+-- selecting MAX(seq) for the partition under SERIALIZABLE; the UNIQUE
+-- constraint here adds defense-in-depth so manual inserts or future
+-- application bugs cannot create duplicate seq values that would break
+-- the hash chain.
+CREATE UNIQUE INDEX audit_log_2026_05_seq_uidx ON public.audit_log_2026_05 (seq);
+CREATE UNIQUE INDEX audit_log_2026_06_seq_uidx ON public.audit_log_2026_06 (seq);
 
 REVOKE ALL ON public.audit_log FROM PUBLIC;
 GRANT INSERT, SELECT ON public.audit_log TO hive_app;

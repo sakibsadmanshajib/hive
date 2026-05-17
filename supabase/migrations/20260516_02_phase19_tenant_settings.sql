@@ -41,10 +41,43 @@ CREATE INDEX tenant_settings_key_enabled_idx
 
 ALTER TABLE public.tenant_settings ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_settings_isolation ON public.tenant_settings
-  FOR ALL
+-- SELECT: any member of the tenant may read feature flags so the UI can
+-- gate functionality.
+CREATE POLICY tenant_settings_select_members ON public.tenant_settings
+  FOR SELECT
   TO authenticated
   USING (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+
+-- Writes are sensitive (toggling billing, SSO, audit sinks etc.) and
+-- must be limited to tenant admins. Service-role / control-plane code
+-- runs with bypass-RLS and is unaffected.
+CREATE POLICY tenant_settings_insert_admins ON public.tenant_settings
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  );
+
+CREATE POLICY tenant_settings_update_admins ON public.tenant_settings
+  FOR UPDATE
+  TO authenticated
+  USING (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  )
+  WITH CHECK (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  );
+
+CREATE POLICY tenant_settings_delete_admins ON public.tenant_settings
+  FOR DELETE
+  TO authenticated
+  USING (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  );
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.tenant_settings TO authenticated;
 

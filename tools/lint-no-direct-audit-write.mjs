@@ -12,10 +12,14 @@ const ALLOWLIST_DIRS = [
 ];
 
 const FORBIDDEN = [
-  /insert\s+into\s+public\.audit_log\b/i,
-  /update\s+public\.audit_log\b/i,
-  /delete\s+from\s+public\.audit_log\b/i,
-  /\bINSERT\s+INTO\s+audit_log\b/i,
+  // schema-qualified
+  /\binsert\s+into\s+public\.audit_log\b/i,
+  /\bupdate\s+public\.audit_log\b/i,
+  /\bdelete\s+from\s+public\.audit_log\b/i,
+  // unqualified — search_path could resolve these to public.audit_log
+  /\binsert\s+into\s+audit_log\b/i,
+  /\bupdate\s+audit_log\b/i,
+  /\bdelete\s+from\s+audit_log\b/i,
 ];
 
 const DIR_RE = /^(apps|packages|deploy|tools|supabase)\//;

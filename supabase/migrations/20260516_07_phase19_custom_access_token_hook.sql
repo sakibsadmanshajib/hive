@@ -4,21 +4,42 @@
 
 BEGIN;
 
+-- The hook reads public.tenant_users / public.tenants, which are RLS-
+-- protected and key off auth.jwt()->>'tenant_id'. During token issuance
+-- the JWT claims do not yet exist, so RLS would deny the lookup and the
+-- function would silently return empty memberships. SECURITY DEFINER
+-- runs the function with the owner's privileges so the RLS predicates
+-- are bypassed; SET search_path = '' is the standard guard against
+-- privilege escalation via mutable schema resolution.
 CREATE OR REPLACE FUNCTION public.custom_access_token_hook(event jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql STABLE
+SECURITY DEFINER
+SET search_path = ''
 AS $$
 DECLARE
-  claims        jsonb;
-  uid           uuid;
-  tenant_list   jsonb;
-  selected      uuid;
-  user_role     text;
+  claims          jsonb;
+  uid             uuid;
+  tenant_list     jsonb;
+  selected        uuid;
+  selected_raw    text;
+  user_role       text;
+  -- RFC-4122 UUID format. Used to validate user-mutable
+  -- raw_user_meta_data.selected_tenant_id before casting, so a
+  -- malformed value cannot raise 22P02 and block token issuance.
+  uuid_regex CONSTANT text :=
+    '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$';
 BEGIN
   uid := (event->>'user_id')::uuid;
   claims := event->'claims';
 
-  SELECT jsonb_agg(jsonb_build_object('id', t.id, 'role', tu.role))
+  -- Deterministic ordering on the membership list so the fallback
+  -- (tenant_list->0) is stable across token issuances for users with
+  -- multiple active memberships.
+  SELECT jsonb_agg(
+           jsonb_build_object('id', t.id, 'role', tu.role)
+           ORDER BY tu.joined_at ASC, t.id ASC
+         )
     INTO tenant_list
     FROM public.tenant_users tu
     JOIN public.tenants t ON t.id = tu.tenant_id
@@ -27,13 +48,20 @@ BEGIN
      AND t.archived_at IS NULL;
 
   -- raw_user_meta_data is user-mutable, so it cannot be trusted as the
-  -- source of the tenant_id authorization claim. Only honor the candidate
-  -- if the user currently has an active membership for it; otherwise fall
-  -- back to the first active tenant.
-  SELECT (raw_user_meta_data->>'selected_tenant_id')::uuid
-    INTO selected
+  -- source of the tenant_id authorization claim. Read as text, validate
+  -- it parses as a uuid, then verify the user currently has an active
+  -- membership for it; otherwise null it out and fall back to the
+  -- first active tenant.
+  SELECT raw_user_meta_data->>'selected_tenant_id'
+    INTO selected_raw
     FROM auth.users
    WHERE id = uid;
+
+  IF selected_raw IS NOT NULL AND selected_raw ~* uuid_regex THEN
+    selected := selected_raw::uuid;
+  ELSE
+    selected := NULL;
+  END IF;
 
   IF selected IS NOT NULL AND NOT EXISTS (
     SELECT 1
@@ -65,6 +93,7 @@ BEGIN
 END;
 $$;
 
+REVOKE EXECUTE ON FUNCTION public.custom_access_token_hook FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.custom_access_token_hook TO supabase_auth_admin;
 
 COMMIT;

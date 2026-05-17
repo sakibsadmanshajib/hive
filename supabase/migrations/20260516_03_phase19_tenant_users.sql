@@ -18,10 +18,45 @@ CREATE INDEX tenant_users_status_idx ON public.tenant_users(tenant_id, status);
 
 ALTER TABLE public.tenant_users ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY tenant_users_isolation ON public.tenant_users
-  FOR ALL
+-- SELECT: any active member of the tenant may read membership rows for
+-- that tenant. Cross-tenant reads are blocked by the tenant_id check.
+CREATE POLICY tenant_users_select_isolation ON public.tenant_users
+  FOR SELECT
   TO authenticated
   USING (tenant_id = (auth.jwt() ->> 'tenant_id')::uuid);
+
+-- INSERT / UPDATE / DELETE: restricted to OWNER and ADMIN of the same
+-- tenant. The role claim is injected by the custom_access_token_hook
+-- and matches the actor's role in the *currently selected* tenant.
+-- Without this, any authenticated member could escalate privilege by
+-- modifying another member's role or status.
+CREATE POLICY tenant_users_insert_admins ON public.tenant_users
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  );
+
+CREATE POLICY tenant_users_update_admins ON public.tenant_users
+  FOR UPDATE
+  TO authenticated
+  USING (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  )
+  WITH CHECK (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  );
+
+CREATE POLICY tenant_users_delete_admins ON public.tenant_users
+  FOR DELETE
+  TO authenticated
+  USING (
+    tenant_id = (auth.jwt() ->> 'tenant_id')::uuid
+    AND (auth.jwt() ->> 'role') IN ('OWNER','ADMIN')
+  );
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.tenant_users TO authenticated;
 

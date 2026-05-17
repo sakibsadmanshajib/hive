@@ -51,15 +51,30 @@ func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	ts := time.Now().UTC()
-	partitionName := fmt.Sprintf("public.audit_log_%04d_%02d", ts.Year(), int(ts.Month()))
+	// Read MAX(seq) + last row_hash through the partitioned parent table
+	// with a ts-range filter. Postgres routes the scan to the active
+	// monthly partition automatically, so we no longer hard-fail with
+	// `relation does not exist` when the daily partition cron has not
+	// yet created next month's partition. The (tenant_id, ts DESC) and
+	// per-partition seq indexes keep this O(1) inside the partition.
+	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthEnd := monthStart.AddDate(0, 1, 0)
 
 	var maxSeq int64
 	var prevHash []byte
-	err = tx.QueryRow(ctx,
-		fmt.Sprintf(`SELECT COALESCE(MAX(seq), 0), COALESCE(
-			(SELECT row_hash FROM %s ORDER BY seq DESC LIMIT 1),
-			decode(repeat('00', 32), 'hex')
-		) FROM %s`, partitionName, partitionName)).Scan(&maxSeq, &prevHash)
+	err = tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(seq), 0),
+		       COALESCE(
+		         (SELECT row_hash
+		            FROM public.audit_log
+		           WHERE ts >= $1 AND ts < $2
+		           ORDER BY seq DESC
+		           LIMIT 1),
+		         decode(repeat('00', 32), 'hex')
+		       )
+		  FROM public.audit_log
+		 WHERE ts >= $1 AND ts < $2
+	`, monthStart, monthEnd).Scan(&maxSeq, &prevHash)
 	if err != nil {
 		return fmt.Errorf("audit: read prev hash: %w", err)
 	}

@@ -12,11 +12,17 @@ const ALLOWLIST_DIRS = [
   'tools/lint-no-direct-tenant-setting.mjs',
 ];
 
+// Narrow to actual SQL access patterns so the lint blocks real direct
+// reads/writes and ignores comments, docs, identifier mentions, channel
+// names (`tenant_settings_changed`), and unrelated symbols.
 const FORBIDDEN = [
-  /tenant_settings\b/i,
-  /public\.tenant_settings\b/i,
-  /from\s+tenant_settings\b/i,
-  /into\s+tenant_settings\b/i,
+  /\bfrom\s+(public\.)?tenant_settings\b/i,
+  /\binto\s+(public\.)?tenant_settings\b/i,
+  /\bupdate\s+(public\.)?tenant_settings\b/i,
+  /\bdelete\s+from\s+(public\.)?tenant_settings\b/i,
+  /\bjoin\s+(public\.)?tenant_settings\b/i,
+  /\busing\s+(public\.)?tenant_settings\b/i,
+  /\breferences\s+(public\.)?tenant_settings\b/i,
 ];
 
 const DIR_RE = /^(apps|packages|deploy|tools|supabase)\//;
