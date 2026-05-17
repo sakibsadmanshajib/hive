@@ -173,6 +173,20 @@ remains **Pending** until the target phase produces an evidence file.
 | RBAC-18-09 | 18 | Satisfied | [evidence/RBAC-18-09.md](phases/18-rbac-matrix/evidence/RBAC-18-09.md) |
 | RBAC-18-10 | 18 | Satisfied | [evidence/RBAC-18-10.md](phases/18-rbac-matrix/evidence/RBAC-18-10.md) |
 | RBAC-18-11 | 18 | Satisfied | [evidence/RBAC-18-11.md](phases/18-rbac-matrix/evidence/RBAC-18-11.md) |
+
+### Web Search Tool (Phase 26)
+
+| ID | Phase | Status | Evidence |
+|----|-------|--------|----------|
+| SEARCH-26-01 | 26 | Pending | Phase 26 (planned) — self-hosted SearXNG available only on the internal network |
+| SEARCH-26-02 | 26 | Pending | Phase 26 (planned) — `POST /v1/tools/web_search` validates input and normalises results |
+| SEARCH-26-03 | 26 | Pending | Phase 26 (planned) — `GET /v1/tools` advertises `web_search` as an OpenAI-compatible function tool |
+| SEARCH-26-04 | 26 | Pending | Phase 26 (planned) — guest/unverified users blocked at OWUI and edge-api boundaries |
+| SEARCH-26-05 | 26 | Pending | Phase 26 (planned) — verified quota and credited BDT debit paths settle through the prepaid ledger |
+| SEARCH-26-06 | 26 | Pending | Phase 26 (planned) — provider-blind errors expose no SearXNG, engine, or internal network detail |
+| SEARCH-26-07 | 26 | Pending | Phase 26 (planned) — SDK function-tool roundtrip covered against the real Hive stack |
+| SEARCH-26-08 | 26 | Pending | Phase 26 (planned) — EnterpriseEdge packaging includes or explicitly excludes SearXNG |
+
 ### FX/USD Zero-Leak (Phase 17)
 
 | ID | Phase | Status | Evidence |

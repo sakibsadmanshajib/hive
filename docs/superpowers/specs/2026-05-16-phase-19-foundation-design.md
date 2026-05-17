@@ -84,6 +84,7 @@ ONE codebase, ONE compose stack. The same image runs both products. Behaviour di
 | Phase 23 | Admin console pages (audit viewer, tenant settings UI, user / role management, credit grants, provider mgmt). |
 | Phase 24 | Self-host packaging for EnterpriseEdge (bootstrap script, docs, single-tenant defaults). |
 | Phase 25 | Payments tenant-gating (existing Stripe / bKash / SSLCommerz gated behind `ENABLE_PUBLIC_BILLING`). |
+| Phase 26 | Web search tool (self-host SearXNG, Edge `/v1/tools/web_search`, OWUI native web-search wiring). |
 
 The deferred credit-shape decision direction is the Anthropic Teams model (tenant pool with per-user soft cap, monthly auto-grant, optional extra-usage top-up). Phase 19 ships only a placeholder ledger-attribution row in `llm_traces`; the real engine lands in Phase 21.
 
@@ -677,7 +678,9 @@ services:
       ENABLE_MODEL_FILTER: "true"
       ENABLE_EVALUATION_ARENA_MODELS: "false"
 
-      WEBUI_NAME: "Hive Chat"
+      # Override Open WebUI branding to `Hive` (LICENSE-DECISION.md: latest OWUI image, branding overridden, upstream license risk accepted)
+      # chooses a compliant branding path.
+      WEBUI_NAME: "Hive"
       WEBUI_URL: "${HIVE_CHAT_URL}"
       DEFAULT_LOCALE: "en"
 
@@ -1049,6 +1052,7 @@ These are tracked here rather than answered now. The implementation plan that fo
 | 23 | Admin console pages | Audit viewer, tenant settings UI, users / roles, credit grants, provider mgmt. |
 | 24 | Self-host packaging | EnterpriseEdge bootstrap script, single-tenant defaults, docs. |
 | 25 | Payments tenant-gating | Existing Stripe / bKash / SSLCommerz gated behind `ENABLE_PUBLIC_BILLING`. Hive Cloud cutover. |
+| 26 | Web search tool | Append-numbered scope addition. Execute after Phase 21 and before Phase 24/25 if included in v1.1 launch scope. |
 
 Each phase ships an independently testable slice. Each phase wires its events through the Phase 19 audit helper and exposes any new tenant-toggleable behaviour through the Phase 19 settings resolver. GSD ceremony is skipped per project decision; specs live under `docs/superpowers/specs/` and the implementation plans under `docs/superpowers/plans/`.
 

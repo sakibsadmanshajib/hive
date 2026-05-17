@@ -3,13 +3,14 @@
 ## Milestones
 
 - ✅ **v1.0 developer-api-core** — Phases 1–10 (shipped 2026-04-21) — see `.planning/milestones/v1.0-ROADMAP.md`
-- 🚧 **v1.1 — deferred scope** — Phases 11–18 + 4 tech-debt items (planned) — see `.planning/v1.1-DEFERRED-SCOPE.md`
+- 🚧 **v1.1 — deferred scope + Hive Chat** — Phases 11–26 (planned) — see `.planning/v1.1-DEFERRED-SCOPE.md` and `.planning/v1.1-chatapp/V1.1-MASTER-PLAN.md`
 
 ## Overview
 
 Hive v1.0 shipped the developer-API core: OpenAI contract fidelity, prepaid billing
 correctness, and provider abstraction. v1.1 closes the regulatory, hot-path-rate-limit,
-console-integration, and invoice-row gaps surfaced during v1.0 stabilization.
+console-integration, and invoice-row gaps surfaced during v1.0 stabilization, then
+layers the Open WebUI-based Hive Chat track on top.
 
 ## Phases
 
@@ -41,6 +42,14 @@ Full breakdown: `.planning/milestones/v1.0-ROADMAP.md`
 - [x] **Phase 16: Capability Columns Fix** — Remove dead `ensureCapabilityColumns` DDL path in `routing/repository.go` (targeted wrong table); migration `20260414_01_provider_capabilities_media_columns.sql` is authoritative; regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence.
 - [x] **Phase 17: FX/USD Zero-Leak** — Strip `amount_usd` / FX rate / provider hints from all customer-bound surfaces (payments DTOs, ledger invoice rows, web-console types, PDF rendering, post-purchase grant metadata). Adversarial walk of every `map[string]any` customer wire. CI-blocking lint `lint-no-customer-usd.mjs`. Closes BD regulatory gap. PR #137 ready-for-review 2026-05-09.
 - [x] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (member/owner/platform_admin) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*, grants.create, ledger.view, platform.admin) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` overlay) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate. (completed 2026-05-15)
+- [ ] **Phase 19: Foundation Slice** — Tenant settings, identity bridge, Open WebUI compose, Caddy admin strip, chat happy path, SOC 2 audit primitive, and Open WebUI nightly/dev-time E2E. Plans 19-01 and 19-02 have merged; 19-03/19-04 remain active.
+- [ ] **Phase 20: Provider Catalog** — Stock providers seeded, custom providers DB-managed, LiteLLM YAML regenerated/reloaded, model visibility tied to tenant policy.
+- [ ] **Phase 21: Credit and Quota Engine** — Tenant pool, per-user soft caps, monthly grants, owner top-ups, extra-usage top-ups, and bucket rate limits.
+- [ ] **Phase 22: Shared Knowledge-Base RAG** — Admin-managed tenant KB ingestion, embeddings through LiteLLM, and edge-api retrieval injection.
+- [ ] **Phase 23: Admin Console Pages** — Tenant settings, provider management, audit viewer, users/roles, and credit controls in web-console.
+- [ ] **Phase 24: EnterpriseEdge Self-Host Packaging** — Bootstrap script, single-tenant defaults, docs, backup/restore, and optional SearXNG inclusion if Phase 26 is kept in v1.1.
+- [ ] **Phase 25: Payments Tenant-Gating and Hive Cloud Cutover** — Gate Stripe/bKash/SSLCommerz behind tenant settings and re-audit billing/chat surfaces before cutover.
+- [ ] **Phase 26: Web Search Tool** — Append-numbered scope addition. Self-host SearXNG plus `/v1/tools/web_search` and OWUI native web-search. Execute after Phase 21 and before Phase 24/25 if included in v1.1 launch scope.
 
 Plus four tech-debt items from v1.0 (see `.planning/v1.1-DEFERRED-SCOPE.md`):
 
@@ -160,7 +169,15 @@ Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
 | 16. Capability Columns Fix | v1.1 | n/a | Complete | 2026-04-25 |
 | 17. FX/USD Zero-Leak | v1.1 | n/a | Complete | 2026-05-09 (PR #137) |
 | 18. RBAC Matrix | v1.1 | Complete    | 2026-05-15 | - |
+| 19. Foundation Slice | v1.1 | 2/4 | In Progress | - |
+| 20. Provider Catalog | v1.1 | TBD | Planned | - |
+| 21. Credit and Quota Engine | v1.1 | TBD | Planned | - |
+| 22. Shared Knowledge-Base RAG | v1.1 | TBD | Planned | - |
+| 23. Admin Console Pages | v1.1 | TBD | Planned | - |
+| 24. EnterpriseEdge Self-Host Packaging | v1.1 | TBD | Planned | - |
+| 25. Payments Tenant-Gating and Hive Cloud Cutover | v1.1 | TBD | Planned | - |
+| 26. Web Search Tool | v1.1 | scaffold | Drafted | - |
 
 ---
 
-*Last updated: 2026-05-14 — Phase 18 plan committed (7 plans across 5 waves, RBAC-18-01..11 minted). Backfilled Phases 15/16/17.*
+*Last updated: 2026-05-17 — Phase 26 web-search scope added to v1.1 sequence; Open WebUI pivot is authoritative in `.planning/v1.1-chatapp/V1.1-MASTER-PLAN.md`.*

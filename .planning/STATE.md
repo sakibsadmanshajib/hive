@@ -6,13 +6,13 @@ previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
 current_phase: 19
-current_plan: 19-01
+current_plan: 19-03
 status: phase_in_progress
-stopped_at: "Phase 19 — Foundation Slice — Plan 01 (data foundation + SOC 2 audit primitive) in review on PR #139"
-last_updated: "2026-05-17T03:00:00.000Z"
+stopped_at: "Phase 19 — Foundation Slice — Plan 03 (Open WebUI deploy + chat happy path) pending after PR #140"
+last_updated: "2026-05-17T17:55:00.000Z"
 progress:
-  total_phases: 8
-  completed_phases: 1
+  total_phases: 16
+  completed_phases: 7
   total_plans: 11
   completed_plans: 7
   total_phases_v1_0: 10
@@ -32,14 +32,23 @@ v1_1_phase_status:
   phase_12: complete
   phase_13: complete
   phase_14: complete
+  phase_15: complete
   phase_16: complete
   phase_17: complete
   phase_18: complete
   phase_19: in_progress
+  phase_20: pending
+  phase_21: pending
+  phase_22: pending
+  phase_23: pending
+  phase_24: pending
+  phase_25: pending
+  phase_26: drafted
 v1_1_ship_gate:
   fx_usd_zero_leak: true   # Phase 17 — closed 2026-05-09 — PR #137
   rbac_matrix: true        # Phase 18 — closed 2026-05-14 — PR #138
   chat_app_reaudit: false  # Phase 25 — pending (HANDOFF-17-02)
+  web_search_tool: conditional # Phase 26 — include before packaging/cutover if kept in v1.1 scope
 archive:
   roadmap: .planning/milestones/v1.0-ROADMAP.md
   requirements: .planning/milestones/v1.0-REQUIREMENTS.md
@@ -55,12 +64,12 @@ archive:
 See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 
 **Core value:** Developers can switch from OpenAI to Hive with only a base URL and API key change, while keeping predictable prepaid billing and provider-agnostic operations.
-**Current focus:** Phase 18 — RBAC Matrix
+**Current focus:** Phase 19 — Foundation Slice
 
 ## Current Position
 
-Phase: 18 (RBAC Matrix) — CLOSED 2026-05-14
-Plan: 7 of 7 (complete)
+Phase: 19 (Foundation Slice) — IN PROGRESS
+Plan: 19-03 (Open WebUI deploy + chat happy path) pending after Plan 02 merged in PR #140
 
 ## Performance Metrics
 
@@ -263,7 +272,7 @@ Recent decisions affecting current work:
 ## Session Continuity
 
 Last session: 2026-05-17T03:00:00.000Z
-Stopped at: Phase 19 Plan 01 — data foundation + audit primitive — on PR #139 (review-pass: 3 Codex P0/P1 fixes applied)
+Stopped at: Phase 19 Plan 03 — Open WebUI deploy + chat happy path — after Plan 02 merged in PR #140
 Resume file: None
 
 ## v1.1.0 ship-gate checkboxes
@@ -271,3 +280,4 @@ Resume file: None
 - [x] **Phase 17 — FX/USD Zero-Leak.** Closed 2026-05-09. PR #137. Evidence FX-17-01..10. BD regulatory surface clean.
 - [x] **Phase 18 — RBAC matrix.** Closed 2026-05-14. PR #138. Evidence RBAC-18-01..11. HANDOFF-17-01 `is_platform_admin` replacement landed.
 - [ ] Phase 25 — Chat-app re-audit (HANDOFF-17-02 inherits non-BD locale upstream USD prose).
+- [ ] Phase 26 — Web search tool, if kept in v1.1 launch scope, executes after Phase 21 and before Phase 24/25 packaging/cutover.
