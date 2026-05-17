@@ -47,7 +47,7 @@ Ship a self-hosted SearXNG search engine plus an **OpenAI-function-tool-compatib
 
 ## Architecture
 
-```
+```text
                        ┌─────────────────────────────────────────────────┐
                        │                       hive                       │
                        │                                                  │

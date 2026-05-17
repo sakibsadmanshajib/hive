@@ -175,8 +175,10 @@ Inside the `services:` block, alongside `edge-api`, `control-plane`, `litellm`, 
       ENABLE_COMMUNITY_SHARING: "false"
       ENABLE_MODEL_FILTER: "true"
       ENABLE_EVALUATION_ARENA_MODELS: "false"
-      # Preserve Open WebUI branding until LICENSE-DECISION.md chooses a compliant path.
-      WEBUI_NAME: "Open WebUI for Hive"
+      # Hive product branding. LICENSE-DECISION.md: latest Open WebUI image with
+      # WEBUI_NAME and visible surfaces overridden to "Hive"; upstream Open WebUI
+      # branding-preservation license risk is accepted by the project owner.
+      WEBUI_NAME: "Hive"
       WEBUI_URL: "${HIVE_CHAT_URL:-http://localhost:3002}"
       DEFAULT_LOCALE: "en"
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"

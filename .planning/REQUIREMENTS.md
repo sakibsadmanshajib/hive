@@ -186,6 +186,7 @@ remains **Pending** until the target phase produces an evidence file.
 | SEARCH-26-06 | 26 | Pending | Phase 26 (planned) — provider-blind errors expose no SearXNG, engine, or internal network detail |
 | SEARCH-26-07 | 26 | Pending | Phase 26 (planned) — SDK function-tool roundtrip covered against the real Hive stack |
 | SEARCH-26-08 | 26 | Pending | Phase 26 (planned) — EnterpriseEdge packaging includes or explicitly excludes SearXNG |
+
 ### FX/USD Zero-Leak (Phase 17)
 
 | ID | Phase | Status | Evidence |

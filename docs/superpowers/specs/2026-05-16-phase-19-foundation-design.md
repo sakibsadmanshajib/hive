@@ -678,9 +678,9 @@ services:
       ENABLE_MODEL_FILTER: "true"
       ENABLE_EVALUATION_ARENA_MODELS: "false"
 
-      # Preserve Open WebUI branding until `.planning/v1.1-chatapp/LICENSE-DECISION.md`
+      # Override Open WebUI branding to `Hive` (LICENSE-DECISION.md: latest OWUI image, branding overridden, upstream license risk accepted)
       # chooses a compliant branding path.
-      WEBUI_NAME: "Open WebUI for Hive"
+      WEBUI_NAME: "Hive"
       WEBUI_URL: "${HIVE_CHAT_URL}"
       DEFAULT_LOCALE: "en"
 

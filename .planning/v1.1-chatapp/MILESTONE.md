@@ -3,7 +3,7 @@ milestone: v1.1
 status: planning
 created: 2026-04-25
 revised: 2026-05-17 (v4 - Open WebUI pivot; Phase 26 web search added)
-scope: dev-api-hardening + Hive Chat product wedge
+scope: dev-api-hardening + Hive chat product wedge
 geo: BD soft launch
 locales: bn-BD (default), en-US
 ---
@@ -20,7 +20,7 @@ Single milestone, two tracks shipped together.
 | Item | Choice |
 |------|--------|
 | Chat base | **Open WebUI upstream image**, pinned by digest. No fork. |
-| License/branding gate | Current Open WebUI releases carry branding-preservation terms. Phase 19 must preserve Open WebUI branding, use a BSD-3-Clause-only pin, or get written permission before full Hive rebranding. |
+| License risk note | Resolved: Phase 19 ships the latest Open WebUI image with `WEBUI_NAME=Hive` and Hive branding on all visible surfaces. Upstream Open WebUI branding-preservation risk is accepted (see `LICENSE-DECISION.md`). |
 | Customisation | Environment, Supabase OIDC, OWUI pipeline filters, Caddy path blocking, and Hive Go services. |
 | Deprecated base | LibreChat fork plan is superseded; active files are pointers/decisions and legacy details live in `.DEPRECATED.md` files. |
 | Free tier | No auto-grant on signup. Verified users get bounded free usage. Credits are issued through tenant/admin controls and Phase 21 rules. |
@@ -33,7 +33,7 @@ Single milestone, two tracks shipped together.
 
 ## Architecture (Track B)
 
-```
+```text
 Open WebUI
   -> Supabase OIDC
   -> OWUI pipeline filter forwards JWT
@@ -96,4 +96,4 @@ Phase 26 is append-numbered to avoid renumbering existing Phase 23-25 references
 
 ## Next Step
 
-Finish Phase 19 Plan 03/04 on the Open WebUI foundation path, including the license/branding gate in `LICENSE-DECISION.md`, then plan Phase 20 and Phase 21 before any Phase 26 implementation starts.
+Finish Phase 19 Plan 03/04 on the Open WebUI foundation path, including the license risk note in `LICENSE-DECISION.md`, then plan Phase 20 and Phase 21 before any Phase 26 implementation starts.
