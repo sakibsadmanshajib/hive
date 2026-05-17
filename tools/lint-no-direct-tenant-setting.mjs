@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execSync } from 'child_process';
+import { readFileSync } from 'fs';
 
 const DIR_RE = /^(apps|packages|deploy|tools|supabase)\//;
 const EXT_RE = /\.(go|tsx?|jsx?|mjs|cjs|sql|ya?ml)$/;
@@ -11,7 +12,16 @@ const files = execSync('git ls-files', { encoding: 'utf8' })
   .filter(f => DIR_RE.test(f) && EXT_RE.test(f));
 
 const violations = files.filter(f => {
-  const content = execSync(`git show HEAD:${f}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+  let content;
+  try {
+    content = execSync(`git show HEAD:${f}`, { encoding: 'utf8' });
+  } catch {
+    try {
+      content = readFileSync(f, 'utf8');
+    } catch {
+      return false;
+    }
+  }
   return /tenant_settings/.test(content);
 });
 
