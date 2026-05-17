@@ -70,7 +70,7 @@ type InvoiceRow struct {
 	InvoiceNumber   string         `json:"invoice_number"`
 	Status          string         `json:"status"`
 	Credits         int64          `json:"credits"`
-	AmountUSD       int64          `json:"amount_usd"`
+	AmountUSD       int64          `json:"-"`
 	AmountLocal     int64          `json:"amount_local"`
 	LocalCurrency   string         `json:"local_currency"`
 	TaxTreatment    string         `json:"tax_treatment"`

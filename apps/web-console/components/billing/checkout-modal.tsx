@@ -91,17 +91,39 @@ export function CheckoutModal({
     (r) => r.rail === selectedRail,
   );
 
-  // Whether to render the pre-checkout USD estimate. BD accounts must
-  // never see USD or any FX conversion language (regulatory rule); the
-  // hosted checkout page (Stripe / bKash / SSLCommerz) is the only
-  // place a BD user sees the BDT total, computed server-side at
-  // initiate time. For non-BD accounts USD is the rail currency, so an
-  // estimate is fine.
+  // Whether to render a pre-checkout estimate. BD accounts must never
+  // see any FX conversion language or non-local currency total
+  // (regulatory rule); the hosted checkout page (Stripe / bKash /
+  // SSLCommerz) is the only place a BD user sees the BDT total,
+  // computed server-side at initiate time. For non-BD accounts the
+  // estimate is rendered in the resolved options.currency.
   const isBdAccount = accountCountryCode === "BD";
 
-  function computeAmountUsdCents(): number {
-    if (!options) return 0;
-    return Math.round(creditAmount * options.price_per_credit_usd * 100);
+  // FX-17-04 (post-review): the server prices in minor units per
+  // `credit_block_size` credits (= CreditsPerUSD = 100,000). To get the
+  // localised total for an arbitrary credit count we integer-divide by
+  // the block size. Order of operations is `(credits * price) / size`
+  // so the multiplication happens at full int64 precision before the
+  // truncating division, matching the server-side math/big truncation.
+  //
+  // Worst-case magnitude: 500_000_000 credits * ~15_000 paisa ≈ 7.5e12,
+  // well inside Number.MAX_SAFE_INTEGER (9.0e15), so plain Number math
+  // is safe — no BigInt needed.
+  function computeAmountMinor(): number {
+    // FX-17 review-pass: reject NaN/Infinity in addition to null/non-positive
+    // block size. NaN comparisons return false for `<= 0`, so a pathological
+    // upstream value would otherwise reach the division and render as NaN.
+    if (
+      !options ||
+      !Number.isFinite(options.credit_block_size) ||
+      options.credit_block_size <= 0 ||
+      !Number.isFinite(options.price_per_block_minor)
+    ) {
+      return 0;
+    }
+    return Math.floor(
+      (creditAmount * options.price_per_block_minor) / options.credit_block_size,
+    );
   }
 
   async function handleCheckout() {
@@ -305,7 +327,7 @@ export function CheckoutModal({
                     className="font-display text-lg tabular-nums text-[var(--color-ink)]"
                     data-numeric
                   >
-                    {formatPrice(computeAmountUsdCents(), "USD")}
+                    {formatPrice(computeAmountMinor(), options.currency)}
                   </span>
                 )}
               </div>

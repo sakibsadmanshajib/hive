@@ -156,3 +156,251 @@ test("default Phase 14 path files lint clean", () => {
   const r = runLint([]);
   assert.equal(r.status, 0, `expected default Phase 14 paths to be clean; stderr=${r.stderr}`);
 });
+
+// ─── Phase 17 (FX-17-06) — Go + TS + whitelist coverage ──────────────────────
+
+function withTempFile(name, body, fn) {
+  const dir = mkdtempSync(join(tmpdir(), "lint-fx-"));
+  try {
+    const file = join(dir, name);
+    writeFileSync(file, body, "utf8");
+    return fn(file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("Go: struct field tag json:\"amount_usd\" is flagged", () => {
+  withTempFile("dto.go", `package payments
+type Invoice struct {
+\tAmountUSD string \`json:"amount_usd"\`
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `expected Go LEAK to fail; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("Go: json:\"-\" tag (internal-only) is clean", () => {
+  withTempFile("internal.go", `package payments
+type Invoice struct {
+\tAmountUSD string \`json:"-"\`
+\tAmountBDTSubunits string \`json:"amount_bdt_subunits"\`
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `expected Go internal-only to pass; stderr=${r.stderr}`);
+  });
+});
+
+test("Go: usd_-prefixed json tag is flagged", () => {
+  withTempFile("wallet.go", `package wallet
+type Wallet struct {
+\tUSDBalance string \`json:"usd_balance"\`
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /usd_balance/);
+  });
+});
+
+test("Go: fx_-prefixed json tag is flagged", () => {
+  withTempFile("quote.go", `package quote
+type Quote struct {
+\tFXRateBasis string \`json:"fx_rate_basis"\`
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /fx_rate_basis/);
+  });
+});
+
+test("Go: PHASE-17-INTERNAL-ONLY whitelist comment exempts the line", () => {
+  withTempFile("stripe.go", `package payments
+type StripeIntent struct {
+\tAmountUSD string \`json:"amount_usd"\` // PHASE-17-INTERNAL-ONLY: server→Stripe payload, never customer-facing
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `expected whitelist to pass; stderr=${r.stderr}`);
+  });
+});
+
+test("TS: interface field price_per_credit_usd is flagged", () => {
+  withTempFile("pricing.ts", `export interface Pricing {
+  price_per_credit_usd: number;
+  amount_bdt_subunits: string;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `expected TS LEAK to fail; stderr=${r.stderr}`);
+    assert.match(r.stderr, /price_per_credit_usd/);
+  });
+});
+
+test("TS: clean BDT-only interface is clean", () => {
+  withTempFile("clean.ts", `export interface Wallet {
+  amount_bdt_subunits: string;
+  currency: "BDT";
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `expected TS clean to pass; stderr=${r.stderr}`);
+  });
+});
+
+test("TS: optional amount_usd? field is flagged", () => {
+  withTempFile("opt.tsx", `export interface Receipt {
+  amount_usd?: string;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: PHASE-17-INTERNAL-ONLY whitelist comment exempts the line", () => {
+  withTempFile("internal.ts", `export interface StripeIntent {
+  amount_usd: number; // PHASE-17-INTERNAL-ONLY: server-side Stripe call, not exposed
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `expected TS whitelist to pass; stderr=${r.stderr}`);
+  });
+});
+
+test("TS: prose mention of amount_usd in a comment does not trip the lint", () => {
+  withTempFile("prose.ts", `// Note: legacy amount_usd was removed in Phase 14.
+export interface Wallet {
+  amount_bdt_subunits: string;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `expected TS prose to pass; stderr=${r.stderr}`);
+  });
+});
+
+// ─── PR #137 review hardening — readonly bypass (codex / coderabbit) ─────────
+
+test("TS: readonly amount_usd field is flagged (post-PR-#137 review fix)", () => {
+  withTempFile("readonly.ts", `export interface Leak {
+  readonly amount_usd?: number;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `readonly amount_usd MUST be flagged; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: readonly fx_-prefixed field is flagged", () => {
+  withTempFile("readonly2.ts", `export interface Quote {
+  readonly fx_basis: string;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /fx_basis/);
+  });
+});
+
+test("TS: readonly + whitelist still exempts the line", () => {
+  withTempFile("readonly_ok.ts", `export interface StripeIntent {
+  readonly amount_usd: number; // PHASE-17-INTERNAL-ONLY: server-side Stripe, not exposed
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `whitelist must still apply; stderr=${r.stderr}`);
+  });
+});
+
+// ─── PR #137 second-pass review — TS class-member modifier coverage ──────────
+//
+// A class field can stack TS member modifiers (`public`, `private`,
+// `protected`, `static`, `override`, `abstract`, `declare`) before
+// `readonly`. The single-`readonly` prefix that closed the first bypass
+// does NOT match `public readonly amount_usd` or `private static fx_*`.
+// Each case below MUST fail the lint.
+
+test("TS: public amount_usd class field is flagged", () => {
+  withTempFile("cls1.ts", `export class Receipt {
+  public amount_usd: number = 0;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `public modifier must NOT bypass; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: public readonly amount_usd class field is flagged", () => {
+  withTempFile("cls2.ts", `export class Receipt {
+  public readonly amount_usd: number = 0;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1, `public+readonly must NOT bypass; stderr=${r.stderr}`);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: private static fx_basis class field is flagged", () => {
+  withTempFile("cls3.ts", `export class Quote {
+  private static fx_basis: string = "";
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /fx_basis/);
+  });
+});
+
+test("TS: protected override readonly amount_usd is flagged", () => {
+  withTempFile("cls4.ts", `export class Bill extends Base {
+  protected override readonly amount_usd: number = 0;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: declare amount_usd ambient field is flagged", () => {
+  withTempFile("cls5.ts", `declare class Adapter {
+  declare amount_usd: number;
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /amount_usd/);
+  });
+});
+
+test("TS: class field modifiers + whitelist still exempts", () => {
+  withTempFile("cls_ok.ts", `export class StripeBridge {
+  public readonly amount_usd: number = 0; // PHASE-17-INTERNAL-ONLY: server-side Stripe, never customer-facing
+}
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `class+whitelist must still apply; stderr=${r.stderr}`);
+  });
+});
+
+test("TS: unrelated word prefix does NOT trigger a match (no over-match)", () => {
+  // The modifier list is closed; arbitrary words must not match. A line
+  // starting with e.g. `something amount_usd` should NOT be flagged
+  // (and is not valid TS in any case).
+  withTempFile("noise.ts", `export interface Wallet {
+  amount_bdt_subunits: string;
+}
+// random_keyword amount_usd: number; // not a field — line is a comment
+`, (file) => {
+    const r = runLint([file]);
+    assert.equal(r.status, 0, `arbitrary prefix must not match; stderr=${r.stderr}`);
+  });
+});
