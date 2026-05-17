@@ -372,7 +372,7 @@ files_modified:
   </files>
   <behavior>
     - permissions.go declares exactly 11 `Permission` consts (PermBillingView, PermBillingWrite, PermAPIKeysRead, PermAPIKeysWrite, PermAnalyticsView, PermMembersInvite, PermMembersManage, PermWorkspaceSettings, PermGrantsCreate, PermLedgerView, PermPlatformAdmin) with the exact wire strings shown in the interfaces block.
-    - Each Permission has a registry entry with `RequiresVerified: true` per the §"Registry RequiresVerified flags" table above.
+    - Each Permission has a registry entry whose `RequiresVerified` flag matches the §"Registry RequiresVerified flags" table above — 9 perms set to `true`, plus `billing.view` and `api_keys.read` set to `false` per the audit-truth in RESEARCH §4 (no existing handler gates these on `!EmailVerified`).
     - `AllPermissions() []Permission` returns the 11 permissions in lexically-sorted-by-wire-string order (stable for codegen).
     - `RequiresVerified(perm Permission) bool` returns the registry value; returns `false` for unknown permissions.
     - policy.go declares `Actor{UserID, WorkspaceID uuid.UUID, Role platform.MembershipRole, Verified bool, IsAdmin bool}` exactly.
@@ -381,7 +381,7 @@ files_modified:
     - `RequirePermission(perm Permission)` middleware resolves the Actor via an injected `ActorResolver`, calls Can, returns 401 unauthenticated / 403 denied / next.ServeHTTP. Mirror provider-blind error shape of `platform.RequirePlatformAdmin`.
   </behavior>
   <action>
-    Create `apps/control-plane/internal/authz/permissions.go` with package `authz`, import `sort`. Declare the 11 `Permission` typed-string constants verbatim. Declare unexported `entry struct { RequiresVerified bool }` and `var registry = map[Permission]entry{...}` with all 11 entries set to `{RequiresVerified: true}`. Implement `AllPermissions() []Permission` returning a sorted slice of registry keys. Implement `RequiresVerified(perm Permission) bool` returning `registry[perm].RequiresVerified` (ok-guarded; `false` for unknown).
+    Create `apps/control-plane/internal/authz/permissions.go` with package `authz`, import `sort`. Declare the 11 `Permission` typed-string constants verbatim. Declare unexported `entry struct { RequiresVerified bool }` and `var registry = map[Permission]entry{...}` with the per-permission flags taken from the audit truth in RESEARCH §4: 9 entries set to `{RequiresVerified: true}` and 2 (`PermBillingView`, `PermAPIKeysRead`) set to `{RequiresVerified: false}` because the prior handler audit shows no existing `!EmailVerified` gate on those read-only views. Implement `AllPermissions() []Permission` returning a sorted slice of registry keys. Implement `RequiresVerified(perm Permission) bool` returning `registry[perm].RequiresVerified` (ok-guarded; `false` for unknown).
 
     Create `apps/control-plane/internal/authz/policy.go` with imports `context, encoding/json, errors, net/http, github.com/google/uuid, github.com/hivegpt/hive/apps/control-plane/internal/auth, github.com/hivegpt/hive/apps/control-plane/internal/platform`. Declare `Actor` struct verbatim. Declare `type Policy struct{}` and `func NewPolicy() Policy { return Policy{} }`. Implement `(p Policy) Can(actor Actor, perm Permission) bool` with the decision rules. Implement `(p Policy) AllGranted(actor Actor) []string` iterating sorted `AllPermissions()` and emitting wire strings for permitted perms.
 
@@ -395,7 +395,7 @@ files_modified:
   <acceptance_criteria>
     - `go build ./apps/control-plane/internal/authz/...` exits 0.
     - `grep -c "Permission = " apps/control-plane/internal/authz/permissions.go` returns 11.
-    - `grep -c "RequiresVerified: true" apps/control-plane/internal/authz/permissions.go` returns 11.
+    - `grep -c "RequiresVerified: true" apps/control-plane/internal/authz/permissions.go` returns 9 (the 2 read-only views — billing.view, api_keys.read — are `RequiresVerified: false` per RESEARCH §4 audit truth).
     - `grep "func (p Policy) Can(actor Actor, perm Permission) bool" apps/control-plane/internal/authz/policy.go` matches.
     - `grep "func (p Policy) AllGranted(actor Actor) \[\]string" apps/control-plane/internal/authz/policy.go` matches.
     - `grep "ErrNoViewer" apps/control-plane/internal/authz/policy.go` matches.

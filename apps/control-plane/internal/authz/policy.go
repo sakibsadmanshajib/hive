@@ -38,14 +38,23 @@ func NewPolicy() Policy { return Policy{} }
 // Can reports whether actor holds permission perm.
 //
 // Decision order (first matching rule wins):
-//  1. perm == PermPlatformAdmin or PermGrantsCreate -> only IsAdmin actors.
-//  2. IsAdmin overlay -> grants all remaining permissions regardless of role/verified.
-//  3. RequiresVerified(perm) && !actor.Verified -> deny.
-//  4. billing.view, api_keys.read -> owner only (RequiresVerified=false, owner-scoped).
-//  5. analytics.view, ledger.view -> any verified actor (owner OR member).
-//  6. All other owner perms -> owner only (already passed verification gate).
-//  7. Default -> deny.
+//  1. perm not in registry -> deny (default-deny: typos / newly-declared
+//     permissions without an explicit handler are rejected).
+//  2. perm == PermPlatformAdmin or PermGrantsCreate -> only IsAdmin actors.
+//  3. IsAdmin overlay -> grants all remaining permissions regardless of role/verified.
+//  4. RequiresVerified(perm) && !actor.Verified -> deny.
+//  5. billing.view, api_keys.read -> owner only (RequiresVerified=false, owner-scoped).
+//  6. analytics.view, ledger.view -> any verified actor (owner OR member).
+//  7. billing.write, api_keys.write, members.invite, members.manage,
+//     workspace.settings -> owner only (verification gate already passed).
+//  8. Default -> deny (any registry entry not explicitly handled above).
 func (p Policy) Can(actor Actor, perm Permission) bool {
+	// Default-deny for unknown permissions: anything not in the registry
+	// (typos, perms declared without an explicit Can() case) is denied.
+	if _, ok := registry[perm]; !ok {
+		return false
+	}
+
 	// Platform-only perms: granted only to the admin overlay.
 	if perm == PermPlatformAdmin || perm == PermGrantsCreate {
 		return actor.IsAdmin
@@ -71,10 +80,16 @@ func (p Policy) Can(actor Actor, perm Permission) bool {
 		// all gate on !EmailVerified only — no role check. Any verified actor may view.
 		return actor.Role == platform.RoleOwner || actor.Role == platform.RoleMember
 
-	default:
-		// Remaining write perms (billing.write, api_keys.write, members.invite,
-		// members.manage, workspace.settings): owner only.
+	case PermBillingWrite, PermAPIKeysWrite, PermMembersInvite,
+		PermMembersManage, PermWorkspaceSettings:
+		// Owner-only write perms (verification gate already passed above).
 		return actor.Role == platform.RoleOwner
+
+	default:
+		// Exhaustive switch: any registry entry not enumerated above is
+		// denied. Adding a new Permission to the registry without a matching
+		// case here will surface as a deny rather than a silent owner-grant.
+		return false
 	}
 }
 

@@ -1,25 +1,20 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.1
-milestone_name: — deferred scope
-status: unknown
-stopped_at: Phase 18 Wave 4 complete — FE migration + CI wiring landed (Plans 05-06)
-last_updated: "2026-05-15T03:25:16.486Z"
-progress:
-  total_phases: 7
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 4
 milestone_name: deferred-scope
 previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
-current_phase: 17
+current_phase: 18
 current_plan: null
 status: phase_closed
-stopped_at: "Phase 17 — FX/USD Zero-Leak — closed 2026-05-09 — PR #137 ready-for-review; review-pass fixes (per-block pricing rename, FXSnapshotID hard-off, lint readonly hardening, E2E positive-shape asserts) applied 2026-05-14"
-last_updated: "2026-05-14T21:00:00.000Z"
+stopped_at: "Phase 18 — RBAC Matrix — closed 2026-05-14 — PR #138 in review; codegen + default-deny review-pass fixes applied 2026-05-16"
+last_updated: "2026-05-16T22:20:00.000Z"
 progress:
+  total_phases: 7
+  completed_phases: 1
+  total_plans: 7
+  completed_plans: 7
   total_phases_v1_0: 10
   completed_phases_v1_0: 10
   total_plans_v1_0: 49
@@ -39,9 +34,10 @@ v1_1_phase_status:
   phase_14: complete
   phase_16: complete
   phase_17: complete
+  phase_18: complete
 v1_1_ship_gate:
   fx_usd_zero_leak: true   # Phase 17 — closed 2026-05-09 — PR #137
-  rbac_matrix: false       # Phase 18 — pending (HANDOFF-17-01)
+  rbac_matrix: true        # Phase 18 — closed 2026-05-14 — PR #138
   chat_app_reaudit: false  # Phase 25 — pending (HANDOFF-17-02)
 archive:
   roadmap: .planning/milestones/v1.0-ROADMAP.md
@@ -265,12 +261,12 @@ Recent decisions affecting current work:
 
 ## Session Continuity
 
-Last session: 2026-05-15T03:07:46.060Z
-Stopped at: Phase 18 Wave 4 complete — FE migration + CI wiring landed (Plans 05-06)
+Last session: 2026-05-16T22:20:00.000Z
+Stopped at: Phase 18 — RBAC Matrix — closed 2026-05-14, PR #138 review-pass fixes applied 2026-05-16
 Resume file: None
 
 ## v1.1.0 ship-gate checkboxes
 
 - [x] **Phase 17 — FX/USD Zero-Leak.** Closed 2026-05-09. PR #137. Evidence FX-17-01..10. BD regulatory surface clean.
-- [ ] Phase 18 — RBAC matrix (HANDOFF-17-01 inherits `is_platform_admin` replacement).
+- [x] **Phase 18 — RBAC matrix.** Closed 2026-05-14. PR #138. Evidence RBAC-18-01..11. HANDOFF-17-01 `is_platform_admin` replacement landed.
 - [ ] Phase 25 — Chat-app re-audit (HANDOFF-17-02 inherits non-BD locale upstream USD prose).
