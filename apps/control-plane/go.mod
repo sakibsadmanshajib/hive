@@ -14,6 +14,8 @@ require (
 	github.com/stripe/stripe-go/v84 v84.4.1
 )
 
+require github.com/stretchr/testify v1.11.1 // indirect
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.5 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
