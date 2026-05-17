@@ -1,49 +1,25 @@
-// tools/lint-no-direct-tenant-setting.mjs
-// Block code paths that read or write public.tenant_settings without going
-// through the internal/tenant/settings resolver. Mirrors the Phase 17
-// lint-no-customer-usd.mjs pattern.
+#!/usr/bin/env node
 
-import { readFileSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execSync } from 'child_process';
 
-const ALLOWLIST_DIRS = [
-  'apps/control-plane/internal/tenant/settings/',
-  'supabase/migrations/',
-  'tools/lint-no-direct-tenant-setting.mjs',
-];
+const DIR_RE = /^(apps|packages|deploy|tools|supabase)\//;
+const EXT_RE = /\.(go|tsx?|jsx?|mjs|cjs|sql|ya?ml)$/;
 
-const FORBIDDEN = [
-  /tenant_settings\b/i,
-  /public\.tenant_settings\b/i,
-  /from\s+tenant_settings\b/i,
-  /into\s+tenant_settings\b/i,
-];
-
-const FILE_GLOB = "{apps,packages,deploy,tools,supabase}/**/*.{go,ts,tsx,js,mjs,cjs,sql,yml,yaml}";
-
-const files = execSync(`git ls-files -- ${FILE_GLOB}`, { encoding: 'utf8' })
+const files = execSync('git ls-files', { encoding: 'utf8' })
   .split('\n')
-  .filter(Boolean);
+  .filter(Boolean)
+  .filter(f => DIR_RE.test(f) && EXT_RE.test(f));
 
-let violations = 0;
-for (const file of files) {
-  if (ALLOWLIST_DIRS.some(p => file.startsWith(p))) continue;
-  const text = readFileSync(file, 'utf8');
-  for (const re of FORBIDDEN) {
-    if (re.test(text)) {
-      const lines = text.split('\n');
-      lines.forEach((line, i) => {
-        if (re.test(line)) {
-          console.error(`${file}:${i + 1}: forbidden direct access to tenant_settings — use internal/tenant/settings.Resolver`);
-          violations++;
-        }
-      });
-    }
-  }
-}
+const violations = files.filter(f => {
+  const content = execSync(`git show HEAD:${f}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'ignore'] });
+  return /tenant_settings/.test(content);
+});
 
-if (violations > 0) {
-  console.error(`\n${violations} tenant-settings lint violation(s).`);
+if (violations.length > 0) {
+  console.error('❌ lint-no-direct-tenant-setting: FAIL');
+  violations.forEach(f => console.error(`  ${f}`));
   process.exit(1);
+} else {
+  console.log('✓ lint-no-direct-tenant-setting: PASS');
 }
-console.log('lint-no-direct-tenant-setting: PASS');
+EOFMJS 2>&1
