@@ -1,0 +1,15 @@
+# GitGuardian config — false-positive allowlist
+#
+# The matches below are synthetic test fixtures used to exercise auth
+# code paths. They are NOT real credentials and carry no entropy.
+
+version: 2
+
+secret:
+  ignored-matches:
+    - name: edge-api auth selector test fixture (hk_live_abc123)
+      match: hk_live_abc123
+    - name: edge-api auth selector test fixture (hk_test_abc123)
+      match: hk_test_abc123
+    - name: edge-api auth client test fixture (hk_test_secret)
+      match: hk_test_secret

@@ -5,6 +5,7 @@
   "private": true,
   "scripts": {
     "lint:audit-write": "node tools/lint-no-direct-audit-write.mjs",
-    "lint:tenant-setting": "node tools/lint-no-direct-tenant-setting.mjs"
+    "lint:tenant-setting": "node tools/lint-no-direct-tenant-setting.mjs",
+    "lint:tenant-id": "node tools/lint-no-direct-tenant-id.mjs"
   }
 }

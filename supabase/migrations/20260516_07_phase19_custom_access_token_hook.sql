@@ -33,25 +33,10 @@ BEGIN
   uid := (event->>'user_id')::uuid;
   claims := event->'claims';
 
-  -- Deterministic ordering on the membership list so the fallback
-  -- (tenant_list->0) is stable across token issuances for users with
-  -- multiple active memberships.
-  SELECT jsonb_agg(
-           jsonb_build_object('id', t.id, 'role', tu.role)
-           ORDER BY tu.joined_at ASC, t.id ASC
-         )
-    INTO tenant_list
-    FROM public.tenant_users tu
-    JOIN public.tenants t ON t.id = tu.tenant_id
-   WHERE tu.user_id = uid
-     AND tu.status  = 'ACTIVE'
-     AND t.archived_at IS NULL;
-
   -- raw_user_meta_data is user-mutable, so it cannot be trusted as the
   -- source of the tenant_id authorization claim. Read as text, validate
-  -- it parses as a uuid, then verify the user currently has an active
-  -- membership for it; otherwise null it out and fall back to the
-  -- first active tenant.
+  -- it parses as a uuid; existence + activeness is verified against the
+  -- snapshot below.
   SELECT raw_user_meta_data->>'selected_tenant_id'
     INTO selected_raw
     FROM auth.users
@@ -63,26 +48,54 @@ BEGIN
     selected := NULL;
   END IF;
 
-  IF selected IS NOT NULL AND NOT EXISTS (
-    SELECT 1
+  -- Single snapshot of (membership × tenant) read once and reused for
+  -- tenant_list, selected validation, and user_role. Splitting the
+  -- read across three SELECTs in READ COMMITTED let a concurrent
+  -- archive/revoke produce inconsistent claims (e.g. selected tenant
+  -- still in tenants[] but role NULL); pulling them from one CTE
+  -- materialised per-call closes that window.
+  WITH active_memberships AS (
+    SELECT tu.tenant_id, tu.role, tu.joined_at
       FROM public.tenant_users tu
       JOIN public.tenants t ON t.id = tu.tenant_id
-     WHERE tu.user_id   = uid
-       AND tu.tenant_id = selected
-       AND tu.status    = 'ACTIVE'
+     WHERE tu.user_id     = uid
+       AND tu.status      = 'ACTIVE'
        AND t.archived_at IS NULL
-  ) THEN
-    selected := NULL;
-  END IF;
+  )
+  SELECT
+    -- Deterministic ordering so the fallback (tenant_list->0) is stable
+    -- across token issuances for users with multiple active memberships.
+    (SELECT jsonb_agg(
+              jsonb_build_object('id', am.tenant_id, 'role', am.role)
+              ORDER BY am.joined_at ASC, am.tenant_id ASC
+            ) FROM active_memberships am),
+    -- selected_tenant_id is only trusted when it appears in the snapshot.
+    (SELECT am.tenant_id FROM active_memberships am
+      WHERE am.tenant_id = selected LIMIT 1),
+    -- role lookup pinned to the same snapshot — guarantees the role
+    -- claim is sourced from a row that was still active at snapshot time.
+    (SELECT am.role FROM active_memberships am
+      WHERE am.tenant_id = selected LIMIT 1)
+    INTO tenant_list, selected, user_role;
 
+  -- Fallback: if the user-supplied selection didn't match an active
+  -- membership, pin to the first active membership (deterministic order)
+  -- and re-derive the role from the same snapshot.
   IF selected IS NULL AND tenant_list IS NOT NULL
      AND jsonb_array_length(tenant_list) > 0 THEN
-    selected := (tenant_list->0->>'id')::uuid;
+    selected  := (tenant_list->0->>'id')::uuid;
+    user_role := tenant_list->0->>'role';
   END IF;
 
-  SELECT role INTO user_role
-    FROM public.tenant_users
-   WHERE user_id = uid AND tenant_id = selected;
+  -- Zero-membership users (brand-new signup before the webhook fires,
+  -- or every membership archived/revoked) must NOT receive a token
+  -- with a NULL tenant_id claim — downstream callers would then run
+  -- against a partially-bound principal. Abort issuance instead; the
+  -- caller sees the standard Supabase Auth error and can retry once
+  -- provisioning completes.
+  IF selected IS NULL THEN
+    RAISE EXCEPTION 'no_active_membership';
+  END IF;
 
   claims := claims
     || jsonb_build_object('tenant_id', selected)

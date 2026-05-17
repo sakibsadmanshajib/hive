@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/hivegpt/hive/apps/edge-api/docs"
 	"github.com/hivegpt/hive/apps/edge-api/internal/audio"
+	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
 	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	"github.com/hivegpt/hive/apps/edge-api/internal/batches"
 	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
@@ -25,6 +29,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+// jwtAuthEnv collects the Supabase JWT validator configuration sourced
+// from the runtime environment. All three values are required so the
+// edge-api fails fast when JWT routing is mis-deployed.
+type jwtAuthEnv struct {
+	Issuer   string
+	Audience string
+	JWKSURL  string
+}
+
 type storageConfig struct {
 	Endpoint     string
 	AccessKey    string
@@ -35,6 +48,14 @@ type storageConfig struct {
 }
 
 func main() {
+	// Root context cancels on SIGINT/SIGTERM so background goroutines
+	// rooted here (notably the jwx JWKS auto-refresher) exit cleanly
+	// instead of leaking through process shutdown — passing
+	// context.Background() to NewSupabaseJWTValidator would orphan
+	// the refresh loop.
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -159,9 +180,54 @@ func main() {
 		log.Fatalf("failed to initialize budget gate: %v", err)
 	}
 
+	// Phase 19 — Supabase JWT validator + Authorization selector.
+	//
+	// The selector inspects the Authorization header: requests bearing the
+	// canonical "Bearer hk_" API-key prefix flow to the existing API-key
+	// path (unchanged); everything else is routed through the Supabase JWT
+	// middleware which validates the token, populates the request context
+	// via auth.WithUser, and emits OpenAI-shaped UNAUTHORIZED errors on
+	// failure. The API-key handler remains responsible for its own
+	// per-route authz (`handleModels`, `authorizeAliasRequest`, etc.).
+	// Phase 19 JWT validation is opt-in: when the Supabase env vars are
+	// absent (CI smoke runs, single-tenant API-key-only deployments) we
+	// log and skip the selector + JWT middleware wiring so non-hk_ bearer
+	// tokens continue to be rejected by the existing API-key handler
+	// rather than crashing the process. Production deployments are
+	// expected to provide every variable; the warning here is loud enough
+	// for operators to catch.
+	jwtCfg, jwtCfgErr := loadJWTAuthEnv()
+	var jwtMW func(http.Handler) http.Handler
+	if jwtCfgErr != nil {
+		log.Printf("WARNING: phase-19 JWT auth wiring skipped (%v)", jwtCfgErr)
+	} else {
+		jwtValidator, err := auth.NewSupabaseJWTValidator(rootCtx, auth.SupabaseJWTConfig{
+			Issuer:      jwtCfg.Issuer,
+			JWKSURL:     jwtCfg.JWKSURL,
+			JWTAudience: jwtCfg.Audience,
+		})
+		if err != nil {
+			log.Fatalf("failed to initialize Supabase JWT validator: %v", err)
+		}
+		jwtMW = auth.JWTMiddleware(jwtValidator, jwtAuditLogger())
+	}
+
 	var handler http.Handler = mux
 	handler = middleware.UnsupportedEndpointMiddleware(m)(handler)
+	// TODO(phase-19-plan-03): budgetGate still resolves the workspace
+	// identity from the API-key bearer token via authzClient.Resolve.
+	// Non-hk_ Bearer JWTs do not map there today, so quota enforcement is
+	// inert for JWT-authenticated traffic — the JWT path remains
+	// pre-billing in Plan 02 by design. Plan 03 will introduce a
+	// ctx-aware budget resolver that reads auth.UserFrom before falling
+	// back to the API-key path.
 	handler = budgetGate.Wrap(handler)
+	if jwtMW != nil {
+		// Auth selector sits inside metrics/CompatHeaders so 401s are still
+		// observed and CORS headers still apply, but outside budget/route
+		// middleware so unauthenticated traffic never reaches accounting.
+		handler = authSelectorMiddleware(jwtMW, handler)
+	}
 	handler = proxy.InstrumentHandler(edgeMetrics, handler)
 	handler = middleware.CompatHeaders()(handler)
 
@@ -370,6 +436,79 @@ func buildBudgetGate(authzClient *authz.Client) (*limits.BudgetGate, error) {
 		// control-plane spendalerts cron. Phase 18 may surface a thin
 		// internal endpoint for inline soft-cap checks if hot-path needs it.
 		SoftCapResolver: nil,
+	})
+}
+
+// loadJWTAuthEnv reads the Supabase JWT validator configuration from the
+// environment. Returns a non-nil error when any required variable is
+// missing; callers decide whether to fatal or skip the JWT path. Phase
+// 19 deployments that serve chat-app traffic MUST set every variable —
+// the caller's warning + skip is intended only for CI smoke runs and
+// single-tenant API-key-only deployments where JWT validation is moot.
+func loadJWTAuthEnv() (jwtAuthEnv, error) {
+	issuer := strings.TrimSpace(os.Getenv("SUPABASE_JWT_ISSUER"))
+	audience := strings.TrimSpace(os.Getenv("SUPABASE_JWT_AUDIENCE"))
+	jwksURL := strings.TrimSpace(os.Getenv("SUPABASE_JWKS_URL"))
+
+	var missing []string
+	if issuer == "" {
+		missing = append(missing, "SUPABASE_JWT_ISSUER")
+	}
+	if audience == "" {
+		missing = append(missing, "SUPABASE_JWT_AUDIENCE")
+	}
+	if jwksURL == "" {
+		missing = append(missing, "SUPABASE_JWKS_URL")
+	}
+	if len(missing) > 0 {
+		return jwtAuthEnv{}, fmt.Errorf("Supabase JWT config missing required env vars: %s", strings.Join(missing, ", "))
+	}
+
+	// Enforce HTTPS for JWKS. An http:// URL would let an on-path
+	// attacker substitute the JWKS document and forge arbitrary JWTs
+	// that the validator would accept as legitimate Supabase tokens.
+	if !strings.HasPrefix(strings.ToLower(jwksURL), "https://") {
+		return jwtAuthEnv{}, fmt.Errorf("SUPABASE_JWKS_URL must be https (got %q)", jwksURL)
+	}
+
+	return jwtAuthEnv{Issuer: issuer, Audience: audience, JWKSURL: jwksURL}, nil
+}
+
+// jwtAuditLogger returns the audit hook handed to the JWT middleware. For
+// now this is a thin log.Printf shim — the dedicated edge-api audit.Logger
+// is wired in a follow-up so we do not introduce that import here. The
+// shape (`action, reason, ip`) matches the canonical control-plane audit
+// signature so swapping in the real logger is mechanical.
+func jwtAuditLogger() auth.AuditFailFunc {
+	return func(action, reason, ip string) {
+		log.Printf("auth.jwt.failure action=%s ip=%s reason=%s", action, ip, reason)
+	}
+}
+
+// authSelectorMiddleware routes only Hive-versioned `/v1/*` traffic through
+// the auth Selector. Infrastructure endpoints (/health, /metrics, /docs/,
+// /catalog/models) bypass authentication so probes and the Swagger UI keep
+// working. Within /v1, the Selector forwards "Bearer hk_" credentials to
+// the existing API-key path (the inner handler / authorizer pair) and
+// everything else through the JWT middleware.
+//
+// TODO(phase-19-plan-03): downstream handlers (handleModels,
+// inferenceHandler, images/audio/files/batches) still authorize via the
+// API-key authorizer.Authorize path. A successful JWT request passes
+// through the middleware with auth.WithUser populated, then 401s at the
+// handler because no API-key snapshot resolves. Plan 03 introduces a
+// shared authorizer-from-ctx adapter (`authz.FromUserContext`) so JWT
+// principals reach the existing handlers without a parallel route tree.
+// Plan 02 ships the JWT validator + selector wiring only.
+func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Handler) http.Handler {
+	jwtPath := jwtMW(next)
+	selector := auth.Selector(jwtPath, next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/v1/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		selector.ServeHTTP(w, r)
 	})
 }
 
