@@ -20,6 +20,12 @@ type Logger struct {
 }
 
 func NewLogger(deps LoggerDeps) *Logger {
+	if deps.Sync == nil {
+		panic("audit.NewLogger: Sync writer required")
+	}
+	if deps.WAL == nil {
+		panic("audit.NewLogger: WAL writer required")
+	}
 	return &Logger{deps: deps}
 }
 
