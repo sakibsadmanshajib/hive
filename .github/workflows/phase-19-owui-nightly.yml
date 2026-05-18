@@ -1,0 +1,68 @@
+name: phase-19-owui-nightly
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  pull_request:
+    types: [labeled]
+
+concurrency:
+  group: phase-19-owui-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  owui-e2e:
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:e2e-owui')) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    env:
+      HIVE_TEST_DB_URL: ${{ secrets.HIVE_TEST_DB_URL }}
+      OWUI_URL: http://localhost:3003
+      OWUI_E2E_EMAIL: ${{ secrets.OWUI_E2E_EMAIL }}
+      OWUI_E2E_PASSWORD: ${{ secrets.OWUI_E2E_PASSWORD }}
+      OWUI_E2E_MAX_USD_PER_RUN: '1'
+      OWUI_E2E_MODE: 'true'
+      LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
+      LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+      LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Boot stack with test-owui + observability-langfuse profiles
+        run: |
+          cd deploy/docker
+          docker compose --env-file ../../.env.ci \
+            --profile local --profile test --profile test-owui --profile observability-langfuse \
+            up -d --build
+          for i in $(seq 1 60); do
+            curl -fsSL http://localhost:3003/health && break
+            sleep 2
+          done
+      - name: Run OWUI Playwright suite
+        run: |
+          npm i -g pnpm@9
+          cd apps/web-console
+          pnpm install
+          pnpm exec playwright install --with-deps chromium
+          pnpm e2e:owui
+          pnpm e2e:owui:perf
+      - name: SOC2 coverage report
+        if: always()
+        run: |
+          npm i --no-save yaml pg
+          node tools/soc2-coverage-report.mjs || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: owui-playwright-report
+          path: apps/web-console/playwright-report-owui
+      - name: Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsSL -X POST -H 'Content-Type: application/json' \
+            -d '{"text":"phase-19-owui-nightly red — see GHA run"}' \
+            "$SLACK_WEBHOOK_URL"
