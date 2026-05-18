@@ -40,7 +40,11 @@ services:
   control-plane:
     image: ${IMAGE_PREFIX:-ghcr.io/sakibsadmanshajib/hive}/control-plane:${IMAGE_TAG:-main}
     build: !reset null
-    volumes: !reset []
+    # Persist the audit-WAL across container recreates so any DLQ
+    # envelopes written while Postgres was unreachable survive a
+    # `docker compose up -d` and can be drained on the next boot.
+    volumes: !override
+      - audit-wal:/var/lib/hive/audit-wal
     depends_on: !reset []
     ports: !override
       - "127.0.0.1:8081:8081"
@@ -62,3 +66,5 @@ services:
 volumes:
   gomodcache: !reset null
   gobuildcache: !reset null
+  audit-wal:
+    driver: local

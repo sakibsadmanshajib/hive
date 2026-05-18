@@ -235,6 +235,28 @@ jobs:
           docker logout ghcr.io
           SH
 
+      - name: Dump container logs on failure
+        if: failure()
+        # When a container fails its healthcheck, `docker compose up` exits 1
+        # without surfacing any container output, leaving the workflow log
+        # showing only "is unhealthy". Pull the last 200 lines from each
+        # service and the compose ps state so the failure is diagnosable
+        # without manually SSHing into the VM.
+        run: |
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=accept-new \
+            deploy@${{ secrets.STAGING_HOST }} 'bash -s' <<'SH' || true
+          set +e
+          cd /opt/hive/deploy/docker
+          echo "::group::docker compose ps"
+          docker compose -f docker-compose.yml -f docker-compose.staging.yml ps
+          echo "::endgroup::"
+          for svc in control-plane edge-api litellm; do
+            echo "::group::logs ($svc)"
+            docker compose -f docker-compose.yml -f docker-compose.staging.yml logs --tail=200 --no-color "$svc" 2>&1 || true
+            echo "::endgroup::"
+          done
+          SH
+
       - name: Smoke test
         run: |
           for i in $(seq 1 12); do
