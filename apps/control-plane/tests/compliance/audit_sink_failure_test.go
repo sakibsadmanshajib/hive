@@ -57,12 +57,20 @@ func TestAuditSink_FailureDoesNotBlockChat(t *testing.T) {
 
 	go worker.Run(ctx)
 
+	// Shared CI partitions may already contain prior fail-sink DLQ rows.
+	// Capture a baseline and assert this run's enqueue lands a strictly
+	// greater count, so we don't false-pass on pre-existing data.
+	var baseline int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*)::int FROM public.audit_outbox_dlq WHERE sink = 'fail-sink'`,
+	).Scan(&baseline))
+
 	require.Eventually(t, func() bool {
 		var n int
-		_ = pool.QueryRow(ctx,
+		err := pool.QueryRow(ctx,
 			`SELECT count(*)::int FROM public.audit_outbox_dlq WHERE sink = 'fail-sink'`,
 		).Scan(&n)
-		return n > 0
+		return err == nil && n > baseline
 	}, 10*time.Second, 200*time.Millisecond, "DLQ row must appear after retry budget")
 }
 

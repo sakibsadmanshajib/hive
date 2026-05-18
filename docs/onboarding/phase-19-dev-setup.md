@@ -61,6 +61,8 @@ cd deploy/docker
 docker compose --env-file ../../.env --profile local up -d --build
 
 # Wait until edge-api + control-plane + Open WebUI are healthy, then:
+curl -fsSL http://localhost:8080/health   # edge-api
+curl -fsSL http://localhost:8081/health   # control-plane
 curl -fsSL http://localhost:3003/health   # OWUI via Caddy
 
 cd ../../apps/web-console

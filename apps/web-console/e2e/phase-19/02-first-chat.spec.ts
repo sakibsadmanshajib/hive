@@ -1,5 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { Client } from "pg";
 
 test.use({ storageState: "e2e/phase-19/.auth/user-a.json" });
 
@@ -19,7 +18,11 @@ test("first chat streams response and writes llm_traces + CHAT_REQUEST", async (
     { timeout: 30_000 },
   );
 
-  const db = new Client({ connectionString: DB_URL });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pgMod: any = await import("pg").catch(() => null);
+  if (!pgMod) test.skip(true, "pg module not installed");
+
+  const db = new pgMod.Client({ connectionString: DB_URL });
   await db.connect();
   try {
     const traces = await db.query(

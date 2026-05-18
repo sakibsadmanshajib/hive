@@ -20,6 +20,11 @@ const DB_URL = process.env.HIVE_TEST_DB_URL || process.env.SUPABASE_DB_URL;
 const MODE = process.argv.includes('--check') ? 'check' : 'report';
 const OUTPUT_PATH = 'docs/compliance/SOC2-LOG-COVERAGE.md';
 
+if (!Number.isFinite(SINCE_MIN) || SINCE_MIN <= 0) {
+  console.error('SOC2: SOC2_SINCE_MIN must be a positive finite number');
+  process.exit(2);
+}
+
 if (!DB_URL) {
   console.error('SOC2: HIVE_TEST_DB_URL or SUPABASE_DB_URL required');
   process.exit(2);
@@ -28,16 +33,19 @@ if (!DB_URL) {
 const map = parseYAML(readFileSync('tools/soc2-control-map.yaml', 'utf8'));
 
 const client = new pg.Client({ connectionString: DB_URL });
-await client.connect();
-
-const since = `now() - interval '${SINCE_MIN} minutes'`;
-const res = await client.query(
-  `SELECT action, count(*)::int AS n
-     FROM public.audit_log
-    WHERE ts >= ${since}
-    GROUP BY action`,
-);
-await client.end();
+let res;
+try {
+  await client.connect();
+  const since = `now() - interval '${SINCE_MIN} minutes'`;
+  res = await client.query(
+    `SELECT action, count(*)::int AS n
+       FROM public.audit_log
+      WHERE ts >= ${since}
+      GROUP BY action`,
+  );
+} finally {
+  await client.end();
+}
 
 const counts = Object.fromEntries(res.rows.map((r) => [r.action, r.n]));
 

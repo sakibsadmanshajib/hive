@@ -44,16 +44,17 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
-      - name: Apply Phase 19 migrations
+      - name: Apply migrations
         run: |
-          if compgen -G "supabase/migrations/20260516_*.sql" > /dev/null; then
-            for f in supabase/migrations/20260516_*.sql; do
-              psql "$HIVE_TEST_DB_URL" -f "$f"
-            done
-          fi
-          if compgen -G "supabase/migrations/20260518_*.sql" > /dev/null; then
-            for f in supabase/migrations/20260518_*.sql; do
-              psql "$HIVE_TEST_DB_URL" -f "$f"
+          # Apply every migration in filename-sort order so Phase 19 tables
+          # have all their dependencies (auth.users, hive_app role, etc.)
+          # in place. Filtering by date prefix produced cascading "current
+          # transaction aborted" errors when an earlier-than-Phase-19
+          # migration was missing.
+          set -e
+          if compgen -G "supabase/migrations/*.sql" > /dev/null; then
+            for f in $(ls -1 supabase/migrations/*.sql | sort); do
+              psql "$HIVE_TEST_DB_URL" -v ON_ERROR_STOP=1 -f "$f"
             done
           fi
       - name: Run Go tests
@@ -116,19 +117,30 @@ jobs:
         run: |
           cd deploy/docker
           docker compose --env-file ../../.env.ci --profile local --profile test up -d --build
+          healthy=0
           for i in $(seq 1 60); do
             if curl -fsSL http://localhost:8080/health \
                && curl -fsSL http://localhost:8081/health \
                && curl -fsSL http://localhost:3003/health; then
+              healthy=1
               break
             fi
             sleep 2
           done
+          if [ "$healthy" -ne 1 ]; then
+            echo "stack failed to become healthy within 120s"
+            docker compose ps
+            exit 1
+          fi
       - name: Install pnpm + Playwright
         run: |
           npm i -g pnpm@9
           cd apps/web-console
           pnpm install
+          # pg is a soft-runtime dep used only by specs that assert on
+          # audit_log rows; keep it out of package.json so the workspace
+          # build doesn't carry a postgres driver.
+          pnpm add --save-dev --ignore-workspace pg
           pnpm exec playwright install --with-deps chromium
       - name: Run Phase 19 Playwright
         run: |

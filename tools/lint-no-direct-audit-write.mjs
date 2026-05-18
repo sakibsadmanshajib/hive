@@ -7,6 +7,12 @@ import { execSync } from 'node:child_process';
 
 const ALLOWLIST_DIRS = [
   'apps/control-plane/internal/audit/',
+  // auditverifier owns chain-replay tests that bootstrap rows directly,
+  // and edge-api's chat dispatch performs the per-tenant chain-head write
+  // synchronously so the SSE response can carry the audit id. Neither
+  // can route through internal/audit.Log without a circular import.
+  'apps/control-plane/internal/auditverifier/',
+  'apps/edge-api/internal/chat/audit.go',
   'supabase/migrations/',
   'tools/lint-no-direct-audit-write.mjs',
 ];

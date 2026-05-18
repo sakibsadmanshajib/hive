@@ -27,8 +27,18 @@ func TestAuditCoverage_AllControlsHaveEvents(t *testing.T) {
 	cmd := exec.Command("node", "tools/soc2-coverage-report.mjs", "--check")
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()
-	_ = err // advisory in Phase 19; do not fail the test
 	t.Logf("soc2 coverage report output:\n%s", string(out))
+	if err != nil {
+		// Exit code 1 is the documented "missing controls" advisory in
+		// Phase 19; later phases (KB upload, backups, key rotation) fill
+		// those rows. Anything else (tooling crash, node missing) should
+		// fail the test loudly.
+		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+			t.Log("soc2 coverage check is advisory in Phase 19 (missing controls)")
+			return
+		}
+		t.Fatalf("failed to execute soc2 coverage checker: %v", err)
+	}
 }
 
 // repoRootFromCaller resolves the repository root by walking up from

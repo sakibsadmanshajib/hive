@@ -36,15 +36,26 @@ jobs:
           docker compose --env-file ../../.env.ci \
             --profile local --profile test --profile test-owui --profile observability-langfuse \
             up -d --build
+          healthy=0
           for i in $(seq 1 60); do
-            curl -fsSL http://localhost:3003/health && break
+            if curl -fsSL http://localhost:3003/health; then
+              healthy=1
+              break
+            fi
             sleep 2
           done
+          if [ "$healthy" -ne 1 ]; then
+            echo "OWUI failed to become healthy within 120s"
+            docker compose ps
+            exit 1
+          fi
       - name: Run OWUI Playwright suite
         run: |
           npm i -g pnpm@9
           cd apps/web-console
           pnpm install
+          # See phase-19.yml for the rationale on the runtime-only pg dep.
+          pnpm add --save-dev --ignore-workspace pg
           pnpm exec playwright install --with-deps chromium
           pnpm e2e:owui
           pnpm e2e:owui:perf
