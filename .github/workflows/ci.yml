@@ -79,6 +79,33 @@ jobs:
       - name: Run repo-wide customer-USD lint
         run: node packages/openai-contract/scripts/lint-no-customer-usd.mjs --all
 
+  # ------------------------------------------------------------------
+  # Repo-policy lints — tenancy + audit guards that apply across the
+  # whole tree. Each script lives under tools/ and is the source of
+  # truth for which packages are allowed to write the protected
+  # surfaces (audit_log, tenant_settings, raw tenant_id). Previously
+  # only fired in the phase-19 workflow; promoted here so every PR
+  # benefits regardless of which area it touches.
+  # ------------------------------------------------------------------
+
+  repo-policy-lints:
+    name: Repo policy lints (tenant + audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install repo-level dev deps
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
+
+      - run: npm run lint:tenant-setting
+      - run: npm run lint:tenant-id
+      - run: npm run lint:audit-write
+
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest

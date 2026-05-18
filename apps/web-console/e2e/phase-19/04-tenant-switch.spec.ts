@@ -14,6 +14,9 @@ test("switch to second tenant updates metadata and audits TENANT_SWITCH", async 
     test.skip(true, "E2E_USER_A_SECOND_TENANT_ID or HIVE_TEST_DB_URL not set");
   }
 
+  // Anchor the audit-log scan to the request boundary so unrelated CI
+  // TENANT_SWITCH rows can't satisfy the assertion.
+  const startedAt = new Date();
   const resp = await request.post(
     `${CONTROL_PLANE_URL}/v1/tenants/switch`,
     { data: { tenant_id: tenantBID } },
@@ -28,8 +31,11 @@ test("switch to second tenant updates metadata and audits TENANT_SWITCH", async 
   await db.connect();
   try {
     const audits = await db.query(
-      `SELECT action FROM public.audit_log
-        WHERE ts > now() - interval '2 minutes' AND action = 'TENANT_SWITCH'`,
+      `SELECT action
+         FROM public.audit_log
+        WHERE ts >= $1
+          AND action = 'TENANT_SWITCH'`,
+      [startedAt],
     );
     expect(audits.rowCount).toBeGreaterThan(0);
   } finally {

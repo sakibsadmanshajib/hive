@@ -16,13 +16,20 @@ test("first-token latency under budget", async ({ page }) => {
   const budget = budgetMs("OWUI_TTFB_BUDGET_MS", 8000);
   await page.goto("/");
   await page.getByPlaceholder(/message/i).fill("one word.");
+
+  // Bind the response wait to the specific request triggered by this
+  // Enter keystroke. The previous URL+ok() predicate could latch onto
+  // an unrelated /v1/chat/completions completion from a different
+  // workspace tab and report a falsely low TTFB.
+  const reqPromise = page.waitForRequest(
+    (r) =>
+      r.url().includes("/v1/chat/completions") && r.method() === "POST",
+  );
   const start = Date.now();
-  await Promise.all([
-    page.waitForResponse(
-      (r) => r.url().includes("/v1/chat/completions") && r.ok(),
-    ),
-    page.keyboard.press("Enter"),
-  ]);
+  await page.keyboard.press("Enter");
+  const req = await reqPromise;
+  const resp = await page.waitForResponse((r) => r.request() === req);
+  expect(resp.ok()).toBe(true);
   const ttfb = Date.now() - start;
   // eslint-disable-next-line no-console
   console.log(`ttfb_ms=${ttfb}`);

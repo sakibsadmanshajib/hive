@@ -23,6 +23,14 @@ func TestAuditChainIntegrity_AcrossPartition(t *testing.T) {
 	pool := newPool(t, ctx)
 	t.Cleanup(func() { pool.Close() })
 
+	// Capture the partition's mismatch baseline BEFORE the burst so the
+	// final assertion measures the burst's contribution, not the verifier's
+	// own determinism. CI runs share a fresh-but-not-pristine partition;
+	// asserting absolute zero would flap on prior tests' residue.
+	v := auditverifier.New(pool)
+	baseline, err := v.VerifyPartition(ctx, time.Now())
+	require.NoError(t, err)
+
 	w := audit.NewSyncWriter(pool, audit.WriterConfig{DeploySHA: "ci", Env: "ci"})
 	for i := 0; i < 120; i++ {
 		require.NoError(t, w.Write(ctx, audit.Event{
@@ -31,14 +39,6 @@ func TestAuditChainIntegrity_AcrossPartition(t *testing.T) {
 			Actor:    audit.Actor{Type: audit.ActorUser},
 		}))
 	}
-
-	// CI runs share a fresh-but-not-pristine partition. Assert that our
-	// 120-row burst introduces no NEW mismatches, not that the partition
-	// is mismatch-free overall — that absolute claim is the Plan 04 chain
-	// verifier's job, not this regression test.
-	v := auditverifier.New(pool)
-	baseline, err := v.VerifyPartition(ctx, time.Now())
-	require.NoError(t, err)
 
 	after, err := v.VerifyPartition(ctx, time.Now())
 	require.NoError(t, err)

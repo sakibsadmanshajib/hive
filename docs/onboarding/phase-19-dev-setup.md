@@ -11,8 +11,7 @@ configuration, and environment variable wiring for Phase 19 E2E runs.
   - `https://<project>.supabase.co/auth/v1/callback`
   - `http://localhost:3002/oauth/Hive/callback` (Open WebUI direct)
   - `http://localhost:3000/auth/callback` (web-console)
-* Apply migrations from `supabase/migrations/20260516_*.sql` and
-  `supabase/migrations/20260518_*.sql` in filename order.
+* Apply all migrations from `supabase/migrations/*.sql` in filename order.
 * In **Auth → Hooks → Custom Access Token**, set the function to
   `public.custom_access_token_hook` and enable it.
 
