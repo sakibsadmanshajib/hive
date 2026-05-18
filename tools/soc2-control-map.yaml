@@ -1,0 +1,82 @@
+# tools/soc2-control-map.yaml
+#
+# Map each Trust Service Criteria control to the audit actions that
+# satisfy it. CI fails if any control has zero matching audit rows
+# from the most recent E2E run (when `--check` is passed).
+#
+# Phase 19 only emits a subset of the actions below; later phases
+# (credits, RAG, backups, key rotation) fill the rest. Adding a new
+# action that satisfies an existing control means appending the
+# action to the relevant list in this file.
+
+controls:
+  CC6_1_LOGICAL_ACCESS:
+    description: "Logical access — successful and failed authentication."
+    actions:
+      - AUTH_SIGNIN_SUCCESS
+      - AUTH_SIGNIN_FAILURE
+      - AUTH_SIGNUP_SUCCESS
+
+  CC6_2_SESSION_LIFECYCLE:
+    description: "Session creation, refresh, and revocation."
+    actions:
+      - AUTH_JWT_INVALID
+      - AUTH_JWT_EXPIRED
+      - AUTH_SESSION_REVOKED
+
+  CC6_3_AUTHORIZATION:
+    description: "Role assignment and authorization decisions."
+    actions:
+      - RBAC_GRANT
+      - RBAC_REVOKE
+      - RBAC_DENY
+      - AUTH_ROLE_CHANGE
+      - TENANT_SETTING_UPDATE
+      - CROSS_TENANT_ATTEMPT
+
+  CC6_7_DATA_ACCESS:
+    description: "Read and modification of customer / PII data."
+    actions:
+      - KB_PERSONAL_DOC_UPLOAD
+      - KB_PERSONAL_DOC_DELETE
+      - RAG_PERSONAL_RETRIEVAL
+      - LLM_TRACE_CONTENT_ACCESS
+
+  CC7_1_SEC_OPS:
+    description: "Security operations — rate limits, webhook integrity."
+    actions:
+      - RATE_LIMIT_BREACH
+      - WEBHOOK_SIGNATURE_FAIL
+
+  CC7_2_CHANGE_INTEGRITY:
+    description: "Server panics and audit chain integrity."
+    actions:
+      - SERVER_PANIC
+      - AUDIT_CHAIN_VERIFY_FAIL
+
+  CC7_5_CHANGE_MGMT:
+    description: "Deploys, migrations, tenant changes."
+    actions:
+      - DEPLOY_PUSH
+      - MIGRATION_APPLY
+      - TENANT_SWITCH
+      - TENANT_USER_ADD
+      - TENANT_USER_REMOVE
+      - OWUI_GROUP_CREATE_SUCCESS
+      - OWUI_GROUP_CREATE_FAILURE
+      - OWUI_GROUP_ADD_SUCCESS
+      - OWUI_GROUP_ADD_FAILURE
+
+  A1_1_AVAILABILITY:
+    description: "Backups + health."
+    actions:
+      - BACKUP_COMPLETE
+      - BACKUP_INTEGRITY_FAIL
+      - HEALTHCHECK_FAIL_SUSTAINED
+
+  C1_1_CONFIDENTIALITY:
+    description: "Crypto key + TLS lifecycle."
+    actions:
+      - CRYPTO_KEY_ROTATE
+      - TLS_CERT_ROTATE
+      - JWKS_FETCH_FAILURE

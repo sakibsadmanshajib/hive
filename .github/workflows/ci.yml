@@ -57,16 +57,16 @@ jobs:
         run: go test -count=1 -short -race -timeout 5m ./...
 
   # ------------------------------------------------------------------
-  # FX/USD zero-leak lint — repo-wide blocking guard (Phase 17, FX-17-07).
-  # Scans Go struct tags, TS/TSX interface fields, OpenAPI YAML, and
-  # chat-app sources for any banned customer-USD JSON key
-  # (amount_usd, usd_*, fx_*, price_per_credit_usd, exchange_rate).
-  # BD regulatory rule: BDT-only on every wire shape consumed by a
-  # Bangladesh customer. Required for PR merges.
+  # Repo-policy lints — tenancy + audit guards that apply across the
+  # whole tree. Each script lives under tools/ and is the source of
+  # truth for which packages are allowed to write the protected
+  # surfaces (audit_log, tenant_settings, raw tenant_id). Previously
+  # only fired in the phase-19 workflow; promoted here so every PR
+  # benefits regardless of which area it touches.
   # ------------------------------------------------------------------
 
-  fx-usd-zero-leak:
-    name: FX/USD zero-leak lint
+  repo-policy-lints:
+    name: Repo policy lints (tenant + audit)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -76,8 +76,12 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Run repo-wide customer-USD lint
-        run: node packages/openai-contract/scripts/lint-no-customer-usd.mjs --all
+      - name: Install repo-level dev deps
+        run: npm ci --ignore-scripts || npm install --ignore-scripts
+
+      - run: npm run lint:tenant-setting
+      - run: npm run lint:tenant-id
+      - run: npm run lint:audit-write
 
   web-unit:
     name: Web console (type + unit + build)

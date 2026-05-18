@@ -10,7 +10,10 @@
     "deploy:cf": "opennextjs-cloudflare deploy",
     "start": "next start",
     "test:unit": "vitest run",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "e2e:phase-19": "playwright test --project=phase-19",
+    "e2e:owui": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui",
+    "e2e:owui:perf": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui-perf"
   },
   "dependencies": {
     "@opennextjs/cloudflare": "~1.19.0",

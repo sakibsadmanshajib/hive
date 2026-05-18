@@ -6,6 +6,12 @@
   "scripts": {
     "lint:audit-write": "node tools/lint-no-direct-audit-write.mjs",
     "lint:tenant-setting": "node tools/lint-no-direct-tenant-setting.mjs",
-    "lint:tenant-id": "node tools/lint-no-direct-tenant-id.mjs"
+    "lint:tenant-id": "node tools/lint-no-direct-tenant-id.mjs",
+    "soc2:report": "node tools/soc2-coverage-report.mjs",
+    "soc2:check": "node tools/soc2-coverage-report.mjs --check"
+  },
+  "devDependencies": {
+    "pg": "^8.11.0",
+    "yaml": "^2.4.0"
   }
 }
