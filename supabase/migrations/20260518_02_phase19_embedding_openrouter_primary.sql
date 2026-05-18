@@ -16,6 +16,28 @@
 
 BEGIN;
 
+-- 0. Widen the provider_routes.health_state CHECK constraint BEFORE the
+--    UPDATE below sets health_state = 'eol'. The original constraint
+--    only allowed {'healthy', 'degraded', 'unhealthy'}; updating to 'eol'
+--    inside the same transaction would otherwise violate the check and
+--    roll the entire migration back, leaving the alias policy half-
+--    rewritten (and starving control-plane on startup migrations).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conrelid = 'public.provider_routes'::regclass
+           AND conname  = 'provider_routes_health_state_check'
+    ) THEN
+        ALTER TABLE public.provider_routes
+          DROP CONSTRAINT provider_routes_health_state_check;
+        ALTER TABLE public.provider_routes
+          ADD CONSTRAINT provider_routes_health_state_check
+          CHECK (health_state IN ('healthy', 'degraded', 'disabled', 'eol'));
+    END IF;
+END $$;
+
 -- 1. Register the new OpenRouter fallback route.
 INSERT INTO public.provider_routes (
     route_id,
@@ -82,24 +104,5 @@ UPDATE public.provider_routes
 UPDATE public.alias_route_policies
    SET fallback_order = '["route-openrouter-embedding","route-openrouter-embedding-fallback"]'::jsonb
  WHERE alias_id = 'hive-embedding-default';
-
--- 5. Allow `eol` in the provider_routes.health_state CHECK constraint if
---    one exists. The constraint shape is project-dependent; skip cleanly
---    when absent.
-DO $$
-BEGIN
-    IF EXISTS (
-        SELECT 1
-          FROM pg_constraint
-         WHERE conrelid = 'public.provider_routes'::regclass
-           AND conname  = 'provider_routes_health_state_check'
-    ) THEN
-        ALTER TABLE public.provider_routes
-          DROP CONSTRAINT provider_routes_health_state_check;
-        ALTER TABLE public.provider_routes
-          ADD CONSTRAINT provider_routes_health_state_check
-          CHECK (health_state IN ('healthy', 'degraded', 'unhealthy', 'eol'));
-    END IF;
-END $$;
 
 COMMIT;
