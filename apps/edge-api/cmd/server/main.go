@@ -17,6 +17,7 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
 	"github.com/hivegpt/hive/apps/edge-api/internal/batches"
 	"github.com/hivegpt/hive/apps/edge-api/internal/catalog"
+	"github.com/hivegpt/hive/apps/edge-api/internal/chat"
 	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
 	"github.com/hivegpt/hive/apps/edge-api/internal/files"
 	"github.com/hivegpt/hive/apps/edge-api/internal/images"
@@ -26,6 +27,7 @@ import (
 	"github.com/hivegpt/hive/apps/edge-api/internal/middleware"
 	"github.com/hivegpt/hive/apps/edge-api/internal/proxy"
 	"github.com/hivegpt/hive/packages/storage"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -72,6 +74,10 @@ func main() {
 	log.Printf("Loaded support matrix: %d endpoints", len(m.Endpoints))
 
 	catalogClient := catalog.NewClient(resolveControlPlaneBaseURL())
+	dbPool := openOptionalDBPool(rootCtx)
+	if dbPool != nil {
+		defer dbPool.Close()
+	}
 
 	// Initialize authz
 	authzClient, err := authz.NewClient(resolveControlPlaneBaseURL(), resolveRedisURL())
@@ -106,8 +112,15 @@ func main() {
 	litellmClient := inference.NewLiteLLMClient(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
 	orchestrator := inference.NewOrchestrator(authorizer, routingClient, accountingClient, litellmClient)
 	inferenceHandler := inference.NewHandler(orchestrator)
+	chatDispatchHandler := chat.NewDispatch(chat.Deps{
+		Pool:       dbPool,
+		LiteLLMURL: resolveLiteLLMBaseURL(),
+		LiteLLMKey: resolveLiteLLMMasterKey(),
+		DeploySHA:  os.Getenv("DEPLOY_SHA"),
+		Env:        os.Getenv("HIVE_ENV"),
+	})
 
-	mux.Handle("/v1/chat/completions", inferenceHandler)
+	mux.Handle("/v1/chat/completions", jwtAwareChatHandler(chatDispatchHandler, inferenceHandler))
 	mux.Handle("/v1/completions", inferenceHandler)
 	mux.Handle("/v1/responses", inferenceHandler)
 	mux.Handle("/v1/embeddings", inferenceHandler)
@@ -237,6 +250,20 @@ func main() {
 	}
 }
 
+func openOptionalDBPool(ctx context.Context) *pgxpool.Pool {
+	dsn := strings.TrimSpace(os.Getenv("SUPABASE_DB_URL"))
+	if dsn == "" {
+		log.Printf("WARNING: edge-api DB pool unavailable (SUPABASE_DB_URL missing); JWT chat trace/audit writes disabled")
+		return nil
+	}
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		log.Printf("WARNING: edge-api DB pool unavailable: %v", err)
+		return nil
+	}
+	return pool
+}
+
 func handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -300,6 +327,16 @@ func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandle
 	mux.Handle("/v1/uploads/", filesHandler)
 	mux.Handle("/v1/batches", batchesHandler)
 	mux.Handle("/v1/batches/", batchesHandler)
+}
+
+func jwtAwareChatHandler(jwtHandler, apiKeyHandler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if user, ok := auth.UserFrom(r.Context()); ok && user != nil {
+			jwtHandler.ServeHTTP(w, r)
+			return
+		}
+		apiKeyHandler.ServeHTTP(w, r)
+	})
 }
 
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
