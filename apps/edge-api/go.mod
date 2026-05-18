@@ -8,6 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/prometheus/client_golang v1.23.2
+	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -53,3 +54,5 @@ require (
 )
 
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
+
+replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical

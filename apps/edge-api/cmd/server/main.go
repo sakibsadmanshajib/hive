@@ -525,21 +525,22 @@ func jwtAuditLogger() auth.AuditFailFunc {
 // authSelectorMiddleware routes only Hive-versioned `/v1/*` traffic through
 // the auth Selector. Infrastructure endpoints (/health, /metrics, /docs/,
 // /catalog/models) bypass authentication so probes and the Swagger UI keep
-// working. Within /v1, the Selector forwards "Bearer hk_" credentials to
-// the existing API-key path (the inner handler / authorizer pair) and
-// everything else through the JWT middleware.
+// working. Within /v1, an OWUI body-metadata unwrap runs first so requests
+// arriving from Open WebUI (which sets the static shim key in Authorization
+// because OWUI does not let pipelines override that header) are rewritten
+// to carry the signed-in user's JWT before the Selector picks JWT vs
+// API-key. Then the Selector forwards "Bearer hk_" credentials to the
+// existing API-key path and everything else through the JWT middleware.
 //
-// TODO(phase-19-plan-03): downstream handlers (handleModels,
-// inferenceHandler, images/audio/files/batches) still authorize via the
-// API-key authorizer.Authorize path. A successful JWT request passes
-// through the middleware with auth.WithUser populated, then 401s at the
-// handler because no API-key snapshot resolves. Plan 03 introduces a
-// shared authorizer-from-ctx adapter (`authz.FromUserContext`) so JWT
-// principals reach the existing handlers without a parallel route tree.
-// Plan 02 ships the JWT validator + selector wiring only.
+// The OWUI shim key is read from `OWUI_SHIM_KEY`. If unset the unwrap
+// middleware is a no-op, preserving existing API-key-only deployments.
 func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Handler) http.Handler {
 	jwtPath := jwtMW(next)
 	selector := auth.Selector(jwtPath, next)
+	owuiUnwrap := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{
+		ShimKey: strings.TrimSpace(os.Getenv("OWUI_SHIM_KEY")),
+	})
+	selector = owuiUnwrap(selector)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.HasPrefix(r.URL.Path, "/v1/") {
 			next.ServeHTTP(w, r)

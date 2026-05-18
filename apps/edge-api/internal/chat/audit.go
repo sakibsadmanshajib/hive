@@ -1,16 +1,15 @@
 package chat
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
 
 type auditEvent struct {
@@ -27,11 +26,20 @@ type auditEvent struct {
 	ResourceID   string
 }
 
+// insertAuditEvent writes one audit row from the edge-api hot path,
+// chained per-tenant. The chain semantics, canonical byte string, and
+// timestamp format are owned by packages/audit-canonical so the
+// control-plane SyncWriter and this writer cannot drift apart silently.
+//
+// Cross-partition stitching: if no row exists in the current month for
+// this tenant, the prev_hash query falls back to the most recent row
+// for the same tenant across ALL partitions. Same behaviour as
+// SyncWriter; the verifier mirrors it.
 func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent) error {
 	if pool == nil {
 		return nil
 	}
-	after, err := stableJSON(event.After)
+	after, err := canonical.StableJSON(event.After)
 	if err != nil {
 		return err
 	}
@@ -42,16 +50,22 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	ts := time.Now().UTC()
+	// Truncate to microseconds so the canonical hash, the canonical
+	// timestamp string, and the value Postgres stores are all the
+	// same. RFC3339Nano emitted 9 digits while Postgres timestamptz
+	// keeps 6 — the verifier re-canonicalisation would then mismatch.
+	ts := canonical.TruncateTS(time.Now())
 	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, 0)
 
 	tenantArg := nullableUUID(event.TenantID)
 
-	// Two locks. The first is partition-wide and serialises every writer in
-	// the month so the partition-global MAX(seq) read+insert cannot race —
-	// this is required because the audit_log_YYYY_MM tables enforce a
-	// UNIQUE(seq) index over the entire partition (not per tenant).
+	// Partition-wide advisory lock serialises writers in the same
+	// month so the partition-global MAX(seq) read + INSERT cannot
+	// race. The audit_log_YYYY_MM tables enforce UNIQUE(seq) per
+	// partition; without this lock concurrent writers could collide.
+	// The per-tenant chain is enforced separately by the prev_hash
+	// read below.
 	if _, err := tx.Exec(
 		ctx,
 		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::int)`,
@@ -60,11 +74,10 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		return err
 	}
 
-	// seq is partition-global so that the existing UNIQUE(seq) index holds.
-	// The hash chain itself remains per-tenant: prev_hash is read from the
-	// most recent row for THIS tenant, so cross-tenant rows never link into
-	// the same chain and the verifier can recompute each tenant's chain
-	// independently in ORDER BY tenant_id, seq.
+	// seq is partition-global so UNIQUE(seq) per partition holds.
+	// prev_hash is per-tenant — read the most recent row_hash for
+	// THIS tenant, falling back across partition boundaries if the
+	// current month has no rows for the tenant.
 	var maxSeq int64
 	var prevHash []byte
 	if err := tx.QueryRow(ctx, `
@@ -72,8 +85,7 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		       COALESCE(
 		         (SELECT row_hash
 		            FROM public.audit_log
-		           WHERE ts >= $2 AND ts < $3
-		             AND tenant_id IS NOT DISTINCT FROM $1
+		           WHERE tenant_id IS NOT DISTINCT FROM $1
 		           ORDER BY seq DESC
 		           LIMIT 1),
 		         decode(repeat('00', 32), 'hex')
@@ -125,107 +137,24 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 	return tx.Commit(ctx)
 }
 
-type canonicalAuditRow struct {
-	TenantID        string          `json:"tenant_id,omitempty"`
-	ActorID         string          `json:"actor_id,omitempty"`
-	ActorType       string          `json:"actor_type"`
-	Action          string          `json:"action"`
-	ResourceType    string          `json:"resource_type,omitempty"`
-	ResourceID      string          `json:"resource_id,omitempty"`
-	Severity        string          `json:"severity"`
-	BeforeJSON      json.RawMessage `json:"before_json,omitempty"`
-	AfterJSON       json.RawMessage `json:"after_json,omitempty"`
-	RequestID       string          `json:"request_id,omitempty"`
-	SourceIP        string          `json:"source_ip,omitempty"`
-	UserAgent       string          `json:"user_agent,omitempty"`
-	JWTClaimsDigest string          `json:"jwt_claims_digest,omitempty"`
-	DeploySHA       string          `json:"deploy_sha"`
-	Env             string          `json:"env"`
-	TS              string          `json:"ts"`
-}
-
 func canonicalAudit(event auditEvent, ts time.Time, before, after json.RawMessage) ([]byte, error) {
-	row := canonicalAuditRow{
-		ActorType:    "USER",
-		Action:       event.Action,
-		ResourceType: event.ResourceType,
-		ResourceID:   event.ResourceID,
-		Severity:     event.Severity,
-		BeforeJSON:   before,
-		AfterJSON:    after,
-		UserAgent:    event.UserAgent,
-		DeploySHA:    event.DeploySHA,
-		Env:          event.Environment,
-		TS:           ts.UTC().Format(time.RFC3339Nano),
+	row := canonical.Row{
+		ActorType:  "USER",
+		Action:     event.Action,
+		Severity:   event.Severity,
+		BeforeJSON: before,
+		AfterJSON:  after,
+		UserAgent:  event.UserAgent,
+		DeploySHA:  event.DeploySHA,
+		Env:        event.Environment,
+		TS:         canonical.FormatTS(ts),
 	}
-	if event.TenantID != uuid.Nil {
-		row.TenantID = event.TenantID.String()
-	}
-	if event.ActorID != uuid.Nil {
-		row.ActorID = event.ActorID.String()
-	}
-	if event.RequestID != uuid.Nil {
-		row.RequestID = event.RequestID.String()
-	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(row); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-func stableJSON(value any) (json.RawMessage, error) {
-	if value == nil {
-		return nil, nil
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return raw, nil
-	}
-	return marshalSorted(decoded), nil
-}
-
-func marshalSorted(value any) json.RawMessage {
-	switch typed := value.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		var buf bytes.Buffer
-		buf.WriteByte('{')
-		for index, key := range keys {
-			if index > 0 {
-				buf.WriteByte(',')
-			}
-			keyBytes, _ := json.Marshal(key)
-			buf.Write(keyBytes)
-			buf.WriteByte(':')
-			buf.Write(marshalSorted(typed[key]))
-		}
-		buf.WriteByte('}')
-		return buf.Bytes()
-	case []any:
-		var buf bytes.Buffer
-		buf.WriteByte('[')
-		for index, item := range typed {
-			if index > 0 {
-				buf.WriteByte(',')
-			}
-			buf.Write(marshalSorted(item))
-		}
-		buf.WriteByte(']')
-		return buf.Bytes()
-	default:
-		raw, _ := json.Marshal(value)
-		return raw
-	}
+	row.ResourceType = event.ResourceType
+	row.ResourceID = event.ResourceID
+	(canonical.Identity{
+		TenantID:  event.TenantID,
+		ActorID:   event.ActorID,
+		RequestID: event.RequestID,
+	}).Apply(&row)
+	return row.Marshal()
 }
