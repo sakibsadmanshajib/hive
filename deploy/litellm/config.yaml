@@ -73,24 +73,30 @@ model_list:
   # Embedding routes. Both primary and fallback ride OpenRouter after NVIDIA
   # retired its retrieval-line NIM models in bulk on 2026-05-18 (both the
   # 300m-embed and nv-embedqa-1b-v2 returned HTTP 410 on the same day).
-  # OpenRouter's `/embeddings` endpoint is reachable through LiteLLM when
-  # the request resolves to a model whose underlying provider actually
-  # implements embeddings — Nemotron-Embed VL and Qwen3 Embedding both do.
+  #
+  # LiteLLM's native `openrouter/` provider does NOT map the `/embeddings`
+  # endpoint, so we route through the OpenAI-compatible adapter pointing
+  # at OpenRouter's base URL (`https://openrouter.ai/api/v1`). The
+  # `openai/` prefix is what tells LiteLLM to use the generic adapter,
+  # and `api_base` redirects it at OpenRouter. The model id is the
+  # OpenRouter slug *without* the `openrouter/` prefix.
   #
   # Primary: NVIDIA Nemotron-Embed VL 1B (multimodal text+image embeddings)
   # via OpenRouter's `:free` pool.
-  # Fallback: Qwen3 Embedding 8B via OpenRouter (paid, but cheap and
-  # higher quality on long text). Triggered by litellm_settings.fallbacks
-  # after the primary's retries exhaust.
+  # Fallback: Qwen3 Embedding 8B via OpenRouter (paid, larger context).
+  # Triggered by litellm_settings.fallbacks after the primary's retries
+  # exhaust.
   - model_name: route-openrouter-embedding
     litellm_params:
-      model: os.environ/OPENROUTER_EMBEDDING_MODEL
+      model: openai/nvidia/llama-nemotron-embed-vl-1b-v2:free
+      api_base: https://openrouter.ai/api/v1
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       mode: embedding
   - model_name: route-openrouter-embedding-fallback
     litellm_params:
-      model: os.environ/OPENROUTER_EMBEDDING_FALLBACK_MODEL
+      model: openai/qwen/qwen3-embedding-8b
+      api_base: https://openrouter.ai/api/v1
       api_key: os.environ/OPENROUTER_API_KEY
     model_info:
       mode: embedding
