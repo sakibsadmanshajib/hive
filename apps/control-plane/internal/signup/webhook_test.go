@@ -14,8 +14,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/audit"
-	"github.com/hivegpt/hive/apps/control-plane/internal/signup"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 )
 
 func TestWebhook_HappyPath_InsertsMembershipAndAudits(t *testing.T) {

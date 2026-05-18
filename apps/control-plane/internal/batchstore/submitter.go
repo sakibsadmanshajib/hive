@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
-	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
-	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 )
 
 type BatchFileStore interface {

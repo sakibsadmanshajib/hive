@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/audit"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
 )
 
 func TestWAL_WriteThenDrain(t *testing.T) {

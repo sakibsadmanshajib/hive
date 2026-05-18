@@ -17,7 +17,7 @@ provides:
 affects: [edge-api, files, uploads, batches, images, audio, storage]
 
 tech-stack:
-  added: [github.com/hivegpt/hive/packages/storage]
+  added: [github.com/sakibsadmanshajib/hive/packages/storage]
   patterns: [fail-fast storage config, route-registration helper, shared storage part alias, local module replace]
 
 key-files:
@@ -85,7 +85,7 @@ Each task was committed atomically, with a RED test commit for the Task 2 TDD cy
 - `apps/edge-api/cmd/server/main_test.go` - Compile-time contract test that the shared S3 client satisfies the file handler storage backend.
 - `apps/edge-api/internal/files/types.go` - Aliases `CompletePart` to `packages/storage.CompletePart`.
 - `apps/edge-api/internal/batches/storage_adapter.go` - Keeps the batches adapter on a narrow downloader interface without naming the old file storage client.
-- `apps/edge-api/go.mod` - Requires `github.com/hivegpt/hive/packages/storage` and records the local workspace replace.
+- `apps/edge-api/go.mod` - Requires `github.com/sakibsadmanshajib/hive/packages/storage` and records the local workspace replace.
 - `apps/edge-api/go.sum` - Tidy-managed checksum cleanup after removing the old dependency graph.
 - `apps/edge-api/internal/files/storage.go` - Deleted legacy edge storage client.
 
@@ -108,7 +108,7 @@ Each task was committed atomically, with a RED test commit for the Task 2 TDD cy
 - Edge storage config validates all required env vars before route registration. Bucket names no longer default in `main.go`; missing buckets are startup errors.
 - `registerMediaFileBatchRoutes` is the single route registration point for public media, file, upload, and batch paths in the server package.
 - `files.CompletePart` is a type alias, not a copy, so handler tests and the shared storage client compile against the same multipart completion type.
-- Edge API uses the same local `replace github.com/hivegpt/hive/packages/storage => ../../packages/storage` pattern as control-plane for Docker-only module tidying.
+- Edge API uses the same local `replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage` pattern as control-plane for Docker-only module tidying.
 
 ## Deviations from Plan
 
@@ -132,7 +132,7 @@ Each task was committed atomically, with a RED test commit for the Task 2 TDD cy
 
 **3. [Rule 3 - Blocking] Added local replace for shared storage module**
 - **Found during:** Task 3
-- **Issue:** `go mod tidy` inside `apps/edge-api` tried to fetch `github.com/hivegpt/hive/packages/storage` from private GitHub without a local module replace.
+- **Issue:** `go mod tidy` inside `apps/edge-api` tried to fetch `github.com/sakibsadmanshajib/hive/packages/storage` from private GitHub without a local module replace.
 - **Fix:** Added the edge-api local replace for `../../packages/storage`, matching the control-plane module pattern.
 - **Files modified:** `apps/edge-api/go.mod`
 - **Verification:** `go mod tidy` exited 0 and the final edge/storage Go suite passed.

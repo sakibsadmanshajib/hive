@@ -47,7 +47,7 @@ Go + TS + chat-app sources and is wired into CI as a blocking step.
 - **Files:** `apps/control-plane/internal/payments/types.go`,
   `apps/control-plane/internal/payments/http.go`
 - **Command:** `go test -buildvcs=false -count=1 -race ./apps/control-plane/internal/payments/...`
-- **Tail:** `ok  github.com/hivegpt/hive/apps/control-plane/internal/payments`
+- **Tail:** `ok  github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments`
 - **Evidence:** `evidence/FX-17-01.md`
 
 ### Task 3 — Split ledger InvoiceRow wire DTO (FX-17-02)

@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/owui"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 )
 
 func TestClient_AddUserToGroup_PostsExpectedShape(t *testing.T) {

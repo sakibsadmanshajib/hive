@@ -8,9 +8,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
-	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
 )
 
 type Handler struct {

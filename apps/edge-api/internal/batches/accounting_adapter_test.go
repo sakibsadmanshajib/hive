@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 func TestAccountingAdapterCreateReservationUsesStrictPolicyAndModelAlias(t *testing.T) {

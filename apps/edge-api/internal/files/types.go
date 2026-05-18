@@ -3,7 +3,7 @@ package files
 import (
 	"errors"
 
-	sharedstorage "github.com/hivegpt/hive/packages/storage"
+	sharedstorage "github.com/sakibsadmanshajib/hive/packages/storage"
 )
 
 // ErrNotFound is returned when a file or upload resource does not exist for the given account.

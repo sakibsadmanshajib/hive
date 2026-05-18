@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
-	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 )
 
 // ---------------------------------------------------------------------------

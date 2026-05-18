@@ -74,8 +74,8 @@ metrics:
 ## Test summary
 
 ```
-ok  github.com/hivegpt/hive/apps/edge-api/internal/authz       0.022s   (incl. tier + tier-scope tests)
-ok  github.com/hivegpt/hive/apps/control-plane/internal/apikeys  0.010s (incl. limits CRUD + repo tests)
+ok  github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz       0.022s   (incl. tier + tier-scope tests)
+ok  github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys  0.010s (incl. limits CRUD + repo tests)
    full edge-api + control-plane suite: 24 packages OK
    web-console vitest: 9/9 passing
    promtool check rules: SUCCESS: 2 rules found

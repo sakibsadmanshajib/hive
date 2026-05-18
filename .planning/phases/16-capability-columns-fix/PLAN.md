@@ -229,7 +229,7 @@ Phase-level verification commands (run after all tasks complete):
 6. `git diff --name-only` reports zero changes under `apps/`, `packages/`, `supabase/`, `deploy/`, `scripts/`.
 
 Expected outputs:
-- (1) Go test summary `ok  github.com/hivegpt/hive/apps/control-plane/internal/routing`.
+- (1) Go test summary `ok  github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing`.
 - (4) Validator prints `OK: N evidence files validated` where N >= 7 (Phase 11 baseline + CAP-16-01).
 - (6) prints empty (no production code changes).
 </verification>

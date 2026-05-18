@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // bannedFXKeys is the canonical list of customer-surface keys forbidden by

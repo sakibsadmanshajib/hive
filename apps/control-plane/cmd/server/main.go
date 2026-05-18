@@ -15,39 +15,43 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditverifier"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore"
+	batchexecutor "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	bkashRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/bkash"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/invoices"
+	sslcommerzRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/sslcommerz"
+	stripeRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/stripe"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/config"
+	platformdb "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
+	platformhttp "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/http"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
+	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
+	"github.com/sakibsadmanshajib/hive/packages/storage"
 	"github.com/jackc/pgx/v5"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
-	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
-	"github.com/hivegpt/hive/apps/control-plane/internal/audit"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
-	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore"
-	batchexecutor "github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
-	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
-	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
-	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
-	"github.com/hivegpt/hive/apps/control-plane/internal/grants"
-	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
-	"github.com/hivegpt/hive/apps/control-plane/internal/owui"
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
-	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices"
-	sslcommerzRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/sslcommerz"
-	stripeRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/stripe"
-	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
-	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
-	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
-	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
-	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
-	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
-	"github.com/hivegpt/hive/apps/control-plane/internal/signup"
-	"github.com/hivegpt/hive/apps/control-plane/internal/spendalerts"
-	"github.com/hivegpt/hive/apps/control-plane/internal/tenants"
-	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
-	"github.com/hivegpt/hive/packages/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -160,6 +164,13 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// runCtx is the process-lifetime context for background goroutines
+	// (audit sink worker, WAL drainer, hash-chain verifier). It is cancelled
+	// on shutdown so those goroutines unwind cleanly instead of being killed
+	// mid-write, which would risk partial WAL flushes and orphan outbox rows.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+
 	// Open the database pool. A missing SUPABASE_DB_URL is treated as a
 	// non-fatal warning at startup so the service can still respond to /health
 	// in environments where the DB URL is not yet provisioned.
@@ -201,6 +212,7 @@ func main() {
 	// exists. nil when the database pool failed to come up.
 	var owuiClient *owui.Client
 	var auditLogger *audit.Logger
+	var auditWAL *audit.FileWALWriter
 	var signupWebhook *signup.Webhook
 	var tenantsHandler *tenants.Handler
 	if pool != nil {
@@ -332,6 +344,26 @@ func main() {
 		owuiAdminToken := strings.TrimSpace(os.Getenv("OWUI_ADMIN_TOKEN"))
 		signupSecret := strings.TrimSpace(os.Getenv("SUPABASE_WEBHOOK_SECRET"))
 		supabaseServiceRoleKey := strings.TrimSpace(os.Getenv("SUPABASE_SERVICE_ROLE_KEY"))
+
+		auditSync := audit.NewSyncWriter(pool, audit.WriterConfig{
+			DeploySHA: os.Getenv("DEPLOY_SHA"),
+			Env:       os.Getenv("HIVE_ENV"),
+		})
+		auditWALDir := strings.TrimSpace(os.Getenv("AUDIT_WAL_DIR"))
+		if auditWALDir == "" {
+			auditWALDir = "/var/lib/hive/audit-wal"
+		}
+		walWriter, walErr := audit.NewWALWriter(audit.WALConfig{
+			Dir:  auditWALDir,
+			Sync: auditSync,
+		})
+		if walErr != nil {
+			log.Fatalf("audit WAL init failed: %v", walErr)
+		}
+		auditWAL = walWriter
+		auditLogger = audit.NewLogger(audit.LoggerDeps{Sync: auditSync, WAL: walWriter})
+		log.Println("phase-19 audit logger ready")
+
 		missingPhase19 := make([]string, 0, 4)
 		if owuiBaseURL == "" {
 			missingPhase19 = append(missingPhase19, "OWUI_BASE_URL")
@@ -369,23 +401,6 @@ func main() {
 				AdminToken: owuiAdminToken,
 			})
 
-			auditSync := audit.NewSyncWriter(pool, audit.WriterConfig{
-				DeploySHA: os.Getenv("DEPLOY_SHA"),
-				Env:       os.Getenv("HIVE_ENV"),
-			})
-			auditWALDir := strings.TrimSpace(os.Getenv("AUDIT_WAL_DIR"))
-			if auditWALDir == "" {
-				auditWALDir = "/var/lib/hive/audit-wal"
-			}
-			walWriter, walErr := audit.NewWALWriter(audit.WALConfig{
-				Dir:  auditWALDir,
-				Sync: auditSync,
-			})
-			if walErr != nil {
-				log.Fatalf("audit WAL init failed: %v", walErr)
-			}
-			auditLogger = audit.NewLogger(audit.LoggerDeps{Sync: auditSync, WAL: walWriter})
-
 			signupResolver := signup.NewResolver(signup.ResolverDeps{
 				InviteLookup: signupLookupInvite(pool),
 				DomainLookup: signupLookupDomain(pool),
@@ -403,6 +418,67 @@ func main() {
 			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
 			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")
 		}
+
+		configuredSinks := configuredAuditSinks()
+		if len(configuredSinks) == 0 {
+			log.Println("phase-19 audit sink worker idle (no optional sinks configured)")
+		} else {
+			worker := auditworker.New(auditworker.Config{Pool: pool, Sinks: configuredSinks})
+			go worker.Run(runCtx)
+			log.Printf("phase-19 audit sink worker started (sinks=%d)", len(configuredSinks))
+		}
+
+		if auditWAL != nil {
+			go waldrainer.Run(runCtx, auditWAL, 30*time.Second)
+			log.Println("phase-19 audit WAL drainer started")
+		}
+
+		verifier := auditverifier.New(pool)
+		runVerify := func() {
+			mismatches, err := verifier.VerifyPartition(runCtx, time.Now())
+			if err != nil {
+				log.Printf("audit chain verifier failed: %v", err)
+				if auditLogger != nil {
+					if logErr := auditLogger.Log(runCtx, audit.Event{
+						Action:   "AUDIT_VERIFY_ERROR",
+						Severity: audit.SeverityError,
+						Actor:    audit.Actor{Type: audit.ActorSystem},
+						Before:   map[string]string{"error": err.Error()},
+					}); logErr != nil {
+						log.Printf("audit_verify_error log emit failed: %v", logErr)
+					}
+				}
+				return
+			}
+			if mismatches > 0 && auditLogger != nil {
+				if logErr := auditLogger.Log(runCtx, audit.Event{
+					Action:   "AUDIT_CHAIN_VERIFY_FAIL",
+					Severity: audit.SeverityCritical,
+					Actor:    audit.Actor{Type: audit.ActorSystem},
+					Before:   map[string]int{"mismatches": mismatches},
+				}); logErr != nil {
+					log.Printf("audit_chain_verify_fail log emit failed: %v", logErr)
+				}
+			}
+		}
+		go func() {
+			// Run one verification pass at startup. Pods restart more
+			// frequently than the 24h ticker fires, so without this
+			// chain corruption could go undetected for an arbitrary
+			// number of deploys before the daily check.
+			runVerify()
+			ticker := time.NewTicker(24 * time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+					runVerify()
+				}
+			}
+		}()
+		log.Println("phase-19 audit chain verifier scheduled (initial pass at startup, then daily)")
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -650,6 +726,10 @@ func main() {
 	<-quit
 	log.Println("shutting down control-plane...")
 
+	// Signal Plan 19 audit workers, WAL drainer, and verifier loop to unwind
+	// before HTTP shutdown closes the DB pool out from under them.
+	runCancel()
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -719,6 +799,42 @@ func signupLookupDomain(pool *pgxpool.Pool) signup.LookupFunc {
 		}
 		return id, nil
 	}
+}
+
+func configuredAuditSinks() []auditworker.Sink {
+	configured := make([]auditworker.Sink, 0, 6)
+	if url := strings.TrimSpace(os.Getenv("AUDIT_SINK_ELK_URL")); url != "" {
+		configured = append(configured, sinks.NewELK(sinks.ELKConfig{
+			URL:    url,
+			APIKey: strings.TrimSpace(os.Getenv("AUDIT_SINK_ELK_API_KEY")),
+		}))
+	}
+	if url := strings.TrimSpace(os.Getenv("AUDIT_SINK_LOKI_URL")); url != "" {
+		configured = append(configured, sinks.NewLoki(sinks.LokiConfig{URL: url}))
+	}
+	if key := strings.TrimSpace(os.Getenv("AUDIT_SINK_DATADOG_API_KEY")); key != "" {
+		configured = append(configured, sinks.NewDatadog(sinks.DatadogConfig{
+			APIKey: key,
+			Site:   strings.TrimSpace(os.Getenv("AUDIT_SINK_DATADOG_SITE")),
+		}))
+	}
+	if url := strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_URL")); url != "" {
+		configured = append(configured, sinks.NewSplunk(sinks.SplunkConfig{
+			URL:   url,
+			Token: strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_TOKEN")),
+		}))
+	}
+	if dsn := strings.TrimSpace(os.Getenv("SENTRY_DSN")); dsn != "" {
+		configured = append(configured, sinks.NewSentry(sinks.SentryConfig{DSN: dsn}))
+	}
+	if host := strings.TrimSpace(os.Getenv("LANGFUSE_HOST")); host != "" {
+		configured = append(configured, sinks.NewLangfuse(sinks.LangfuseConfig{
+			Host:      host,
+			PublicKey: strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY")),
+			SecretKey: strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY")),
+		}))
+	}
+	return configured
 }
 
 func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {

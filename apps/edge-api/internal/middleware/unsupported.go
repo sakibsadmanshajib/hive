@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
-	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
 )
 
 // UnsupportedEndpointMiddleware returns middleware that rejects requests to

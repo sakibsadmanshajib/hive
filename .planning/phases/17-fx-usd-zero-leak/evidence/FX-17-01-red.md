@@ -58,7 +58,7 @@ All four subtests carry `--- FAIL` lines in the run log.
     --- PASS: TestInvoiceWireShape_FXZeroLeak/no_price_per_credit_usd (0.00s)
     --- PASS: TestInvoiceWireShape_FXZeroLeak/no_exchange_rate (0.00s)
 FAIL
-FAIL	github.com/hivegpt/hive/apps/control-plane/internal/ledger	0.004s
+FAIL	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger	0.004s
 FAIL
 GO_EXIT=1
 ```

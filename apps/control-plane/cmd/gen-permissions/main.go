@@ -12,7 +12,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
 )
 
 const header = "// AUTO-GENERATED — do not edit. Run `make gen-permissions` to regenerate.\n// Source: apps/control-plane/internal/authz/permissions.go\n\n"

@@ -3,7 +3,7 @@ package payments
 import (
 	"testing"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 )
 
 func TestCalculateTax_NonBDReturnsNoTax(t *testing.T) {

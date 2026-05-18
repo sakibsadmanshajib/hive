@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
-	edgecatalog "github.com/hivegpt/hive/apps/edge-api/internal/catalog"
-	"github.com/hivegpt/hive/apps/edge-api/internal/files"
-	"github.com/hivegpt/hive/packages/storage"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
+	edgecatalog "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
+	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
 
 func TestResolveSpecPathDefaultsToGeneratedHiveContract(t *testing.T) {

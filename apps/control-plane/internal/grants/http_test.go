@@ -13,8 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
-	"github.com/hivegpt/hive/apps/control-plane/internal/grants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
 )
 
 // =============================================================================

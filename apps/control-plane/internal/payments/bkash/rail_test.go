@@ -12,8 +12,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
-	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	bkashRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/bkash"
 )
 
 // bkashServer sets up an httptest.Server that handles the three bKash endpoints.

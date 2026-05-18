@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )

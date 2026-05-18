@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 )
 
 // FX-17-03 — Phase 17 per-country pricing primitive on CheckoutOptions.

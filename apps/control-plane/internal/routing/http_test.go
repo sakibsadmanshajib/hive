@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 func TestSelectRouteHandlerReturnsRouteAndFallbacks(t *testing.T) {

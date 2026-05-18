@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // responsesEventTranslator tracks state for translating chat-completions SSE chunks

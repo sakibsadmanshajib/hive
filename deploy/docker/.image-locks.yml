@@ -1,0 +1,15 @@
+# Production deploys MUST consume the digests here, not floating tags.
+# Bumping a digest is an explicit PR. Nightly canaries may probe floating
+# tags and warn on integration drift, but they must not silently change
+# production images.
+
+images:
+  open-webui:
+    repository: ghcr.io/open-webui/open-webui
+    tag: main
+    digest: sha256:74093dadc9c6aabc23987a74fd8c2fb8d995b1a5b22e83b0036fb9d6af590e8c
+
+  caddy:
+    repository: caddy
+    tag: 2-alpine
+    digest: sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794

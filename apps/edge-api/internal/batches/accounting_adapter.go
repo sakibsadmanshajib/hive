@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 // AccountingAdapter adapts *inference.AccountingClient to the batches.AccountingBackend interface.

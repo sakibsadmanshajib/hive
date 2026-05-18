@@ -3,7 +3,7 @@ package batches
 import (
 	"context"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/files"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
 )
 
 // FilestoreAdapter adapts *files.FilestoreClient to the batches.FileClientBackend interface.

@@ -1,0 +1,17 @@
+:80 {
+  # Defence-in-depth admin block. Open WebUI's env flags can regress across
+  # releases (admin panel re-enabled by a misconfigured chart), so the proxy
+  # answers 404 on every variant of the admin and signup paths regardless of
+  # casing or trailing slashes. 404 (not 403) avoids confirming the path
+  # exists at all.
+  @blocked {
+    path_regexp blocked (?i)^/(admin|api/v[0-9]+/admin|signup|auth/signup|auths/signup|api/v[0-9]+/signup)(/.*)?$
+  }
+  respond @blocked 404
+
+  reverse_proxy open-webui:8080 {
+    transport http {
+      response_header_timeout 60s
+    }
+  }
+}

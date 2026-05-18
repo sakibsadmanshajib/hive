@@ -46,8 +46,8 @@ Per-key `tier_overrides` JSONB takes precedence — tested in `ratelimit_tier_te
 ## Test results
 
 ```
-ok  github.com/hivegpt/hive/apps/edge-api/internal/authz       0.022s
-ok  github.com/hivegpt/hive/apps/control-plane/internal/apikeys  0.010s
+ok  github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz       0.022s
+ok  github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys  0.010s
    (full edge-api + control-plane suite: 24 packages OK)
 
 web-console vitest:

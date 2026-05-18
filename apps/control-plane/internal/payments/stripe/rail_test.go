@@ -10,8 +10,8 @@ import (
 	stripego "github.com/stripe/stripe-go/v84"
 	"github.com/stripe/stripe-go/v84/webhook"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
-	stripeRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/stripe"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	stripeRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/stripe"
 )
 
 // buildSignedPayload creates a signed Stripe webhook payload for testing.

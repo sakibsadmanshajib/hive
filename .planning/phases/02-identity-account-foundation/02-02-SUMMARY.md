@@ -107,7 +107,7 @@ The hosted Supabase-backed identity layer for the Hive control plane:
 - Invitation acceptance creates active member membership, returns account_id
 - Email mismatch on accept is rejected
 
-All 16 tests pass: `ok github.com/hivegpt/hive/apps/control-plane/internal/accounts 0.006s`
+All 16 tests pass: `ok github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts 0.006s`
 
 ## Deviations from Plan
 

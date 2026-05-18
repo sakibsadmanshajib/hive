@@ -8,7 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 // matrixCase is one cell in the permission decision matrix.

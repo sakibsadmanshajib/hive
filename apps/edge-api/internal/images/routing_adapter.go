@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 // RoutingAdapter adapts *inference.RoutingClient to the images.RoutingInterface.
