@@ -434,7 +434,39 @@ func main() {
 		}
 
 		verifier := auditverifier.New(pool)
+		runVerify := func() {
+			mismatches, err := verifier.VerifyPartition(runCtx, time.Now())
+			if err != nil {
+				log.Printf("audit chain verifier failed: %v", err)
+				if auditLogger != nil {
+					if logErr := auditLogger.Log(runCtx, audit.Event{
+						Action:   "AUDIT_VERIFY_ERROR",
+						Severity: audit.SeverityError,
+						Actor:    audit.Actor{Type: audit.ActorSystem},
+						Before:   map[string]string{"error": err.Error()},
+					}); logErr != nil {
+						log.Printf("audit_verify_error log emit failed: %v", logErr)
+					}
+				}
+				return
+			}
+			if mismatches > 0 && auditLogger != nil {
+				if logErr := auditLogger.Log(runCtx, audit.Event{
+					Action:   "AUDIT_CHAIN_VERIFY_FAIL",
+					Severity: audit.SeverityCritical,
+					Actor:    audit.Actor{Type: audit.ActorSystem},
+					Before:   map[string]int{"mismatches": mismatches},
+				}); logErr != nil {
+					log.Printf("audit_chain_verify_fail log emit failed: %v", logErr)
+				}
+			}
+		}
 		go func() {
+			// Run one verification pass at startup. Pods restart more
+			// frequently than the 24h ticker fires, so without this
+			// chain corruption could go undetected for an arbitrary
+			// number of deploys before the daily check.
+			runVerify()
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
 			for {
@@ -442,35 +474,11 @@ func main() {
 				case <-runCtx.Done():
 					return
 				case <-ticker.C:
-				}
-				mismatches, err := verifier.VerifyPartition(runCtx, time.Now())
-				if err != nil {
-					log.Printf("audit chain verifier failed: %v", err)
-					if auditLogger != nil {
-						if logErr := auditLogger.Log(runCtx, audit.Event{
-							Action:   "AUDIT_VERIFY_ERROR",
-							Severity: audit.SeverityError,
-							Actor:    audit.Actor{Type: audit.ActorSystem},
-							Before:   map[string]string{"error": err.Error()},
-						}); logErr != nil {
-							log.Printf("audit_verify_error log emit failed: %v", logErr)
-						}
-					}
-					continue
-				}
-				if mismatches > 0 && auditLogger != nil {
-					if logErr := auditLogger.Log(runCtx, audit.Event{
-						Action:   "AUDIT_CHAIN_VERIFY_FAIL",
-						Severity: audit.SeverityCritical,
-						Actor:    audit.Actor{Type: audit.ActorSystem},
-						Before:   map[string]int{"mismatches": mismatches},
-					}); logErr != nil {
-						log.Printf("audit_chain_verify_fail log emit failed: %v", logErr)
-					}
+					runVerify()
 				}
 			}
 		}()
-		log.Println("phase-19 audit chain verifier scheduled")
+		log.Println("phase-19 audit chain verifier scheduled (initial pass at startup, then daily)")
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}

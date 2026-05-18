@@ -174,6 +174,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// If the SSE scanner errored mid-stream (upstream drop, token larger
+	// than the 4 MiB buffer, etc.) we have already shipped a partial
+	// response to the client. The HTTP status is committed at the
+	// StatusOK above, so we cannot rewrite it — but the trace and audit
+	// rows must reflect the abort instead of claiming a normal
+	// completion. The finish_reason becomes "stream_error" and the warning
+	// log preserves the underlying cause for operators.
+	streamErr := scanner.Err()
+	if streamErr != nil {
+		slog.Warn("dispatch SSE stream aborted",
+			"err", streamErr, "request_id", requestID, "model", parsed.Model)
+		finishReason = "stream_error"
+	}
+
 	latency := int(time.Since(started).Milliseconds())
 	provider := guessProvider(parsed.Model)
 	costCredits := int64(totalTokens)

@@ -48,18 +48,23 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 
 	tenantArg := nullableUUID(event.TenantID)
 
-	// Per-tenant-per-month advisory lock: serialises seq+prev_hash reads with
-	// the matching insert so concurrent writers in the same partition cannot
-	// observe the same MAX(seq) and produce a forked chain.
+	// Two locks. The first is partition-wide and serialises every writer in
+	// the month so the partition-global MAX(seq) read+insert cannot race —
+	// this is required because the audit_log_YYYY_MM tables enforce a
+	// UNIQUE(seq) index over the entire partition (not per tenant).
 	if _, err := tx.Exec(
 		ctx,
-		`SELECT pg_advisory_xact_lock(hashtext($1::text), extract(epoch from date_trunc('month', $2::timestamptz))::int)`,
-		event.TenantID.String(),
+		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::int)`,
 		ts,
 	); err != nil {
 		return err
 	}
 
+	// seq is partition-global so that the existing UNIQUE(seq) index holds.
+	// The hash chain itself remains per-tenant: prev_hash is read from the
+	// most recent row for THIS tenant, so cross-tenant rows never link into
+	// the same chain and the verifier can recompute each tenant's chain
+	// independently in ORDER BY tenant_id, seq.
 	var maxSeq int64
 	var prevHash []byte
 	if err := tx.QueryRow(ctx, `
@@ -74,8 +79,7 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		         decode(repeat('00', 32), 'hex')
 		       )
 		  FROM public.audit_log
-		 WHERE ts >= $2 AND ts < $3
-		   AND tenant_id IS NOT DISTINCT FROM $1`,
+		 WHERE ts >= $2 AND ts < $3`,
 		tenantArg,
 		monthStart,
 		monthEnd,

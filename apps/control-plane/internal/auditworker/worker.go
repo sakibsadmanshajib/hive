@@ -3,7 +3,9 @@ package auditworker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -20,6 +22,14 @@ type Config struct {
 	BackoffStart time.Duration
 	BackoffMax   time.Duration
 	PollInterval time.Duration
+	// LeaseTTL controls how long a claimed row is reserved for the worker
+	// that picked it. After the TTL elapses without a delivery or failure
+	// update, the row becomes claimable again so a crashed worker does not
+	// pin its in-flight rows indefinitely.
+	LeaseTTL time.Duration
+	// WorkerID is recorded in audit_outbox.claimed_by for traceability.
+	// Defaults to hostname-pid.
+	WorkerID string
 }
 
 type Worker struct {
@@ -39,6 +49,13 @@ func New(cfg Config) *Worker {
 	}
 	if cfg.BackoffMax == 0 {
 		cfg.BackoffMax = 5 * time.Minute
+	}
+	if cfg.LeaseTTL == 0 {
+		cfg.LeaseTTL = 2 * time.Minute
+	}
+	if cfg.WorkerID == "" {
+		host, _ := os.Hostname()
+		cfg.WorkerID = fmt.Sprintf("%s-%d", host, os.Getpid())
 	}
 	bySink := make(map[string]Sink, len(cfg.Sinks))
 	for _, sink := range cfg.Sinks {
@@ -71,13 +88,33 @@ type outboxJob struct {
 	attempts int
 }
 
+// drainOnce claims a batch of eligible outbox rows atomically using
+// `FOR UPDATE SKIP LOCKED` plus a persistent claimed_at lease, then
+// processes them outside the claiming transaction. This pattern is safe
+// for multiple worker replicas: a row is invisible to other workers from
+// the moment it is claimed until either it is marked delivered or its
+// lease expires.
 func (w *Worker) drainOnce(ctx context.Context) error {
 	rows, err := w.cfg.Pool.Query(ctx, `
-		SELECT id, audit_id, audit_ts, sink, attempts
-		  FROM public.audit_outbox
-		 WHERE delivered_at IS NULL
-		 ORDER BY created_at
-		 LIMIT 50`)
+		WITH eligible AS (
+			SELECT id
+			  FROM public.audit_outbox
+			 WHERE delivered_at IS NULL
+			   AND (next_retry_at IS NULL OR next_retry_at <= now())
+			   AND (claimed_at   IS NULL OR claimed_at + $1::interval <= now())
+			 ORDER BY next_retry_at NULLS FIRST, created_at
+			 LIMIT 50
+			 FOR UPDATE SKIP LOCKED
+		)
+		UPDATE public.audit_outbox o
+		   SET claimed_at = now(),
+		       claimed_by = $2
+		  FROM eligible
+		 WHERE o.id = eligible.id
+		RETURNING o.id, o.audit_id, o.audit_ts, o.sink, o.attempts`,
+		w.cfg.LeaseTTL.String(),
+		w.cfg.WorkerID,
+	)
 	if err != nil {
 		return err
 	}
@@ -99,7 +136,7 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 		sink, ok := w.bySink[j.sink]
 		if !ok {
 			// Sink was removed from configuration after the row was enqueued.
-			// Bump attempts so the row eventually moves to DLQ instead of
+			// Treat as failure so the row eventually reaches DLQ instead of
 			// pinning audit_outbox forever.
 			slog.Warn("auditworker unknown sink — routing to DLQ on max attempts", "sink", j.sink, "outbox_id", j.id)
 			w.handleFailure(ctx, j, errSinkNotConfigured)
@@ -115,10 +152,14 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 			w.handleFailure(ctx, j, err)
 			continue
 		}
-		_, _ = w.cfg.Pool.Exec(ctx,
-			`UPDATE public.audit_outbox SET delivered_at=now() WHERE id=$1`,
-			j.id,
-		)
+		if err := w.markDelivered(ctx, j.id); err != nil {
+			// The sink already accepted the event but we failed to record
+			// delivery — the lease will expire and another worker will
+			// retry, producing a duplicate. Log loudly so operators can
+			// catch a runaway Postgres before duplicate volume grows.
+			slog.Error("auditworker mark-delivered failed; row may be redelivered after lease",
+				"err", err, "outbox_id", j.id, "sink", j.sink)
+		}
 	}
 	return nil
 }
@@ -175,26 +216,67 @@ func (w *Worker) loadPayload(ctx context.Context, auditID int64, auditTS time.Ti
 	return payload, nil
 }
 
+func (w *Worker) markDelivered(ctx context.Context, id int64) error {
+	_, err := w.cfg.Pool.Exec(ctx,
+		`UPDATE public.audit_outbox
+		    SET delivered_at = now(),
+		        claimed_at   = NULL,
+		        claimed_by   = NULL
+		  WHERE id = $1`,
+		id,
+	)
+	return err
+}
+
 func (w *Worker) handleFailure(ctx context.Context, j outboxJob, err error) {
 	nextAttempts := j.attempts + 1
 	if nextAttempts >= w.cfg.MaxAttempts {
 		w.toDLQ(ctx, j.id, nextAttempts, err.Error())
 		return
 	}
-	w.markFailed(ctx, j.id, nextAttempts, err.Error())
+	delay := w.backoff(nextAttempts)
+	w.markFailed(ctx, j.id, nextAttempts, err.Error(), delay)
 }
 
-func (w *Worker) markFailed(ctx context.Context, id int64, attempts int, msg string) {
-	_, _ = w.cfg.Pool.Exec(ctx,
-		`UPDATE public.audit_outbox SET attempts=$1, last_error=$2 WHERE id=$3`,
+// backoff returns the delay until the next retry attempt for a row that has
+// just failed for the Nth time. The first failure waits BackoffStart and
+// each subsequent failure doubles up to BackoffMax. This keeps transient
+// sink outages out of DLQ until at least
+// BackoffStart * (2^(MaxAttempts-1)) of cumulative wall-clock time.
+func (w *Worker) backoff(attempts int) time.Duration {
+	d := w.cfg.BackoffStart
+	for i := 1; i < attempts; i++ {
+		d *= 2
+		if d >= w.cfg.BackoffMax {
+			return w.cfg.BackoffMax
+		}
+	}
+	return d
+}
+
+func (w *Worker) markFailed(ctx context.Context, id int64, attempts int, msg string, delay time.Duration) {
+	if _, err := w.cfg.Pool.Exec(ctx,
+		`UPDATE public.audit_outbox
+		    SET attempts      = $1,
+		        last_error    = $2,
+		        next_retry_at = now() + $3::interval,
+		        claimed_at    = NULL,
+		        claimed_by    = NULL
+		  WHERE id = $4`,
 		attempts,
 		trimError(msg),
+		delay.String(),
 		id,
-	)
+	); err != nil {
+		// Failure to record the failure: log and let the lease expire so
+		// the row is retried (correct behaviour: another attempt is
+		// preferable to a silent retry-counter desync).
+		slog.Warn("auditworker mark-failed failed", "err", err, "outbox_id", id)
+	}
 }
 
 func (w *Worker) toDLQ(ctx context.Context, id int64, attempts int, msg string) {
-	_, _ = w.cfg.Pool.Exec(ctx, `
+	if _, err := w.cfg.Pool.Exec(ctx, `
 		WITH del AS (
 			DELETE FROM public.audit_outbox
 			 WHERE id=$1
@@ -207,7 +289,9 @@ func (w *Worker) toDLQ(ctx context.Context, id int64, attempts int, msg string) 
 		id,
 		attempts,
 		trimError(msg),
-	)
+	); err != nil {
+		slog.Warn("auditworker DLQ insert failed", "err", err, "outbox_id", id)
+	}
 }
 
 func trimError(msg string) string {

@@ -46,12 +46,36 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 	}
 	defer rows.Close()
 
+	// expectedPrev tracks the row_hash of the previous row IN THE SAME
+	// tenant chain. Self-consistent rows whose prev_hash does not match
+	// the actual previous row_hash indicate a broken link — a missing,
+	// reordered, or deleted row — and must be flagged independently of
+	// the internal hash check.
 	mismatches := 0
+	expectedPrev := map[string][]byte{}
+	zeroHash := make([]byte, 32)
 	for rows.Next() {
 		row, err := scanRow(rows)
 		if err != nil {
 			return mismatches, err
 		}
+		tenantKey := ""
+		if row.tenantID.Valid {
+			tenantKey = row.tenantID.String
+		}
+		want, seen := expectedPrev[tenantKey]
+		if !seen {
+			// First row of this tenant's chain in the partition must
+			// link to the all-zero sentinel (no previous row).
+			want = zeroHash
+		}
+		if !bytes.Equal(row.prevHash, want) {
+			mismatches++
+			slog.Warn("audit chain link broken",
+				"id", row.id, "seq", row.seq, "tenant_id", tenantKey,
+				"reason", "prev_hash does not match previous row in tenant chain")
+		}
+
 		canon, err := row.canonical()
 		if err != nil {
 			return mismatches, err
@@ -59,14 +83,18 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		sum := sha256.New()
 		sum.Write(row.prevHash)
 		sum.Write(canon)
-		if !bytes.Equal(sum.Sum(nil), row.rowHash) {
+		recomputed := sum.Sum(nil)
+		if !bytes.Equal(recomputed, row.rowHash) {
 			mismatches++
-			tenant := ""
-			if row.tenantID.Valid {
-				tenant = row.tenantID.String
-			}
-			slog.Warn("audit chain mismatch", "id", row.id, "seq", row.seq, "tenant_id", tenant)
+			slog.Warn("audit chain mismatch",
+				"id", row.id, "seq", row.seq, "tenant_id", tenantKey,
+				"reason", "row_hash does not match sha256(prev_hash||canonical_row)")
 		}
+		// Even on mismatch, advance the chain using the stored row_hash so
+		// subsequent links are evaluated against what the writer actually
+		// committed. This surfaces every broken link instead of cascading
+		// one fault into all subsequent mismatches.
+		expectedPrev[tenantKey] = row.rowHash
 	}
 	if err := rows.Err(); err != nil {
 		return mismatches, err
