@@ -125,10 +125,13 @@ func TestDispatchUpstreamErrorIsProviderBlind(t *testing.T) {
 		Env:        "test",
 	})
 
+	// Mock upstream — no real LiteLLM/OpenRouter call is made. Request body
+	// uses the project's default Groq alias so the test never references the
+	// live billing route, even in logs.
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/v1/chat/completions",
-		strings.NewReader(`{"model":"openrouter/auto","messages":[{"role":"user","content":"hi"}]}`),
+		strings.NewReader(`{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"hi"}]}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
