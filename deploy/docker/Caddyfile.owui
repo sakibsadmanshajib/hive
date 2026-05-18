@@ -4,14 +4,28 @@
   # answers 404 on every variant of the admin and signup paths regardless of
   # casing or trailing slashes. 404 (not 403) avoids confirming the path
   # exists at all.
+  # Path-level admin/signup block. Caddy's path_regexp is anchored at
+  # the start; the trailing `/?` + `(?:/.*)?` arms tolerate any
+  # combination of trailing slash, query string, or sub-paths. The
+  # leading `/+` collapses path-traversal variants like `//admin`.
   @blocked {
-    path_regexp blocked (?i)^/(admin|api/v[0-9]+/admin|signup|auth/signup|auths/signup|api/v[0-9]+/signup)(/.*)?$
+    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|api(?:/v[0-9]+)?/(?:admin|signup|users/admin|users/new|register|invite))/?(?:/.*)?$
   }
   respond @blocked 404
+
+  # Method-level block on admin-only endpoints that OWUI exposes under
+  # /api/v1/configs/*. Even if a future regression re-exposes the
+  # admin panel under a non-blocked path, mutation verbs are dropped.
+  @adminMutation {
+    method PUT POST PATCH DELETE
+    path /api/v*/configs* /api/v*/admin* /api/v*/users/* /api/v*/groups* /api/v*/roles*
+  }
+  respond @adminMutation 404
 
   reverse_proxy open-webui:8080 {
     transport http {
       response_header_timeout 60s
+      dial_timeout 5s
     }
   }
 }

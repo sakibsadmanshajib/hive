@@ -273,7 +273,9 @@ func main() {
 			Interval: 60 * time.Second,
 			Logger:   slog.Default(),
 		})
-		alertRunner.Start(context.Background())
+		// M2: bind to runCtx so the cron stops cleanly on shutdown
+		// instead of being orphaned with context.Background().
+		alertRunner.Start(runCtx)
 		defer alertRunner.Stop()
 		log.Println("spend-alert cron runner started (interval=60s)")
 
@@ -299,7 +301,9 @@ func main() {
 			Logger:   slog.Default(),
 			Interval: time.Hour,
 		})
-		invoicesCron.Start(context.Background())
+		// M2: bind to runCtx so the monthly invoice cron stops with
+		// the server, not with context.Background().
+		invoicesCron.Start(runCtx)
 		defer invoicesCron.Stop()
 		log.Println("invoice monthly cron started (window=day-1 02:00 UTC)")
 
@@ -515,21 +519,23 @@ func main() {
 		paymentsSvc := payments.NewService(paymentsRepo, ledgerSvc, profilesSvc, fxSvc, rails)
 		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
 
-		// Background goroutine: confirm pending BD payments every 60 seconds.
-		// BD rails require a 3-minute confirming delay before ledger grant.
+		// M1: BD-payments confirmation loop. Bound to runCtx so it
+		// runs for the lifetime of the server, not the 10s startup
+		// ctx. Each tick also uses runCtx so a graceful shutdown
+		// aborts an in-flight rail call instead of letting it linger.
 		go func() {
 			ticker := time.NewTicker(60 * time.Second)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-ticker.C:
-					confirmed, err := paymentsSvc.ConfirmPendingBDPayments(context.Background())
+					confirmed, err := paymentsSvc.ConfirmPendingBDPayments(runCtx)
 					if err != nil {
 						log.Printf("payments: error confirming BD payments: %v", err)
 					} else if confirmed > 0 {
 						log.Printf("payments: confirmed %d pending BD payment(s)", confirmed)
 					}
-				case <-ctx.Done():
+				case <-runCtx.Done():
 					return
 				}
 			}

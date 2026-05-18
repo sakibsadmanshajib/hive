@@ -23,10 +23,17 @@ const (
 )
 
 var stableErrorLeakPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(openai|anthropic|openrouter|groq|ollama|vllm|sglang|nim|aura|litellm)\b`),
+	// Provider names — extended to cover Google/Gemini/Mistral/Cohere/
+	// Cerebras/DeepSeek/xAI which OpenRouter routes through.
+	regexp.MustCompile(`(?i)\b(openai|anthropic|openrouter|groq|ollama|vllm|sglang|nim|aura|litellm|google|gemini|vertex(?:[-_]?ai)?|mistral|cohere|cerebras|deepseek|xai|together|fireworks|replicate|perplexity)\b`),
 	regexp.MustCompile(`https?://[^\s"'<>]+`),
 	regexp.MustCompile(`/v[0-9]+/[^\s"'<>]+`),
+	// Currency / cost leak — prefix ($1.23) AND postfix (1.23 USD).
+	// The original regex only matched the prefix form so OpenRouter
+	// 402 errors with the postfix shape (e.g. "costs 0.002 USD")
+	// slipped past untouched.
 	regexp.MustCompile(`\$\d+(?:\.\d+)?`),
+	regexp.MustCompile(`(?i)\b\d+(?:\.\d+)?\s*(USD|EUR|GBP|JPY|CNY|INR|AUD|CAD|BDT|SGD|HKD|KRW|TRY)\b`),
 	regexp.MustCompile(`(?i)\b(upstream|provider|backend)\b`),
 }
 

@@ -7,11 +7,19 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// fanoutParallelism caps the per-batch goroutine pool that dispatches
+// outbox rows to sinks. With LeaseTTL of 2 minutes and a per-sink 5 s
+// timeout, processing 50 rows serially could exceed the lease window
+// (50×5s = 250s ≫ 120s). Concurrent fanout keeps total wall-clock
+// well under the TTL even at worst case.
+const fanoutParallelism = 16
 
 type Sink = sinks.Sink
 
@@ -90,10 +98,16 @@ type outboxJob struct {
 
 // drainOnce claims a batch of eligible outbox rows atomically using
 // `FOR UPDATE SKIP LOCKED` plus a persistent claimed_at lease, then
-// processes them outside the claiming transaction. This pattern is safe
-// for multiple worker replicas: a row is invisible to other workers from
-// the moment it is claimed until either it is marked delivered or its
-// lease expires.
+// dispatches them concurrently to their sinks. Concurrent fanout is
+// essential: with the previous serial loop a batch of 50 × 5 s per
+// sink (250 s) easily exceeded the 2-min lease TTL and other workers
+// would reclaim mid-batch, producing duplicate deliveries.
+//
+// The lease interval is passed via `make_interval(secs => $1::numeric)`
+// instead of `LeaseTTL.String()` because Go's Duration.String() emits
+// values like "2m0s" or "1h30m" that Postgres ::interval does not
+// always parse cleanly across versions. make_interval is a typed
+// constructor with no format-string surprises.
 func (w *Worker) drainOnce(ctx context.Context) error {
 	rows, err := w.cfg.Pool.Query(ctx, `
 		WITH eligible AS (
@@ -101,7 +115,7 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 			  FROM public.audit_outbox
 			 WHERE delivered_at IS NULL
 			   AND (next_retry_at IS NULL OR next_retry_at <= now())
-			   AND (claimed_at   IS NULL OR claimed_at + $1::interval <= now())
+			   AND (claimed_at   IS NULL OR claimed_at + make_interval(secs => $1::numeric) <= now())
 			 ORDER BY next_retry_at NULLS FIRST, created_at
 			 LIMIT 50
 			 FOR UPDATE SKIP LOCKED
@@ -112,7 +126,7 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 		  FROM eligible
 		 WHERE o.id = eligible.id
 		RETURNING o.id, o.audit_id, o.audit_ts, o.sink, o.attempts`,
-		w.cfg.LeaseTTL.String(),
+		w.cfg.LeaseTTL.Seconds(),
 		w.cfg.WorkerID,
 	)
 	if err != nil {
@@ -132,36 +146,54 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 		return err
 	}
 
+	// Bounded concurrent fanout. A semaphore channel of capacity
+	// fanoutParallelism keeps memory + connection pressure predictable
+	// while letting slow sinks not block fast ones.
+	sem := make(chan struct{}, fanoutParallelism)
+	var wg sync.WaitGroup
 	for _, j := range jobs {
-		sink, ok := w.bySink[j.sink]
-		if !ok {
-			// Sink was removed from configuration after the row was enqueued.
-			// Treat as failure so the row eventually reaches DLQ instead of
-			// pinning audit_outbox forever.
-			slog.Warn("auditworker unknown sink — routing to DLQ on max attempts", "sink", j.sink, "outbox_id", j.id)
-			w.handleFailure(ctx, j, errSinkNotConfigured)
-			continue
-		}
-
-		payload, err := w.loadPayload(ctx, j.auditID, j.auditTS)
-		if err != nil {
-			w.handleFailure(ctx, j, err)
-			continue
-		}
-		if err := sink.Send(ctx, payload); err != nil {
-			w.handleFailure(ctx, j, err)
-			continue
-		}
-		if err := w.markDelivered(ctx, j.id); err != nil {
-			// The sink already accepted the event but we failed to record
-			// delivery — the lease will expire and another worker will
-			// retry, producing a duplicate. Log loudly so operators can
-			// catch a runaway Postgres before duplicate volume grows.
-			slog.Error("auditworker mark-delivered failed; row may be redelivered after lease",
-				"err", err, "outbox_id", j.id, "sink", j.sink)
-		}
+		j := j
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			w.processJob(ctx, j)
+		}()
 	}
+	wg.Wait()
 	return nil
+}
+
+// processJob handles a single claimed outbox row end-to-end. Errors
+// are routed through handleFailure (markFailed or toDLQ) so a sink
+// outage retries with exponential backoff and the row eventually
+// settles to DLQ rather than pinning audit_outbox forever.
+func (w *Worker) processJob(ctx context.Context, j outboxJob) {
+	sink, ok := w.bySink[j.sink]
+	if !ok {
+		slog.Warn("auditworker unknown sink — routing to DLQ on max attempts",
+			"sink", j.sink, "outbox_id", j.id)
+		w.handleFailure(ctx, j, errSinkNotConfigured)
+		return
+	}
+	payload, err := w.loadPayload(ctx, j.auditID, j.auditTS)
+	if err != nil {
+		w.handleFailure(ctx, j, err)
+		return
+	}
+	if err := sink.Send(ctx, payload); err != nil {
+		w.handleFailure(ctx, j, err)
+		return
+	}
+	if err := w.markDelivered(ctx, j.id); err != nil {
+		// The sink already accepted the event but we failed to record
+		// delivery — the lease will expire and another worker will
+		// retry, producing a duplicate. Log loudly so operators can
+		// catch a runaway Postgres before duplicate volume grows.
+		slog.Error("auditworker mark-delivered failed; row may be redelivered after lease",
+			"err", err, "outbox_id", j.id, "sink", j.sink)
+	}
 }
 
 // errSinkNotConfigured is set on audit_outbox.last_error when an enqueued
@@ -259,13 +291,13 @@ func (w *Worker) markFailed(ctx context.Context, id int64, attempts int, msg str
 		`UPDATE public.audit_outbox
 		    SET attempts      = $1,
 		        last_error    = $2,
-		        next_retry_at = now() + $3::interval,
+		        next_retry_at = now() + make_interval(secs => $3::numeric),
 		        claimed_at    = NULL,
 		        claimed_by    = NULL
 		  WHERE id = $4`,
 		attempts,
 		trimError(msg),
-		delay.String(),
+		delay.Seconds(),
 		id,
 	); err != nil {
 		// Failure to record the failure: log and let the lease expire so
