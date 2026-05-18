@@ -44,6 +44,13 @@ jobs:
         with:
           go-version: '1.24'
           cache: true
+      - name: Bootstrap Supabase-managed objects
+        run: |
+          # The pgvector service image is plain Postgres — it does not
+          # ship the Supabase-managed `auth` schema/roles. Stub them so
+          # the migrations can run unmodified.
+          psql "$HIVE_TEST_DB_URL" -v ON_ERROR_STOP=1 \
+            -f .github/workflows/scripts/phase-19-ci-bootstrap.sql
       - name: Apply migrations
         run: |
           # Apply every migration in filename-sort order so Phase 19 tables
