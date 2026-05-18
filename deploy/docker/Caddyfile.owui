@@ -1,0 +1,15 @@
+:80 {
+  @blocked {
+    path /admin/*
+    path /api/v1/admin/*
+    path /signup
+    path /auths/signup
+  }
+  respond @blocked 404
+
+  reverse_proxy open-webui:8080 {
+    transport http {
+      response_header_timeout 60s
+    }
+  }
+}
