@@ -4,13 +4,17 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
+
+const maxSerializationRetries = 3
 
 type auditEvent struct {
 	TenantID     uuid.UUID
@@ -43,41 +47,51 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 	if err != nil {
 		return err
 	}
+	for attempt := 0; ; attempt++ {
+		err := insertAuditEventOnce(ctx, pool, event, after)
+		if err == nil {
+			return nil
+		}
+		if !isSerializationFailure(err) || attempt >= maxSerializationRetries {
+			return err
+		}
+	}
+}
 
+func insertAuditEventOnce(ctx context.Context, pool *pgxpool.Pool, event auditEvent, after json.RawMessage) error {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Truncate to microseconds so the canonical hash, the canonical
-	// timestamp string, and the value Postgres stores are all the
-	// same. RFC3339Nano emitted 9 digits while Postgres timestamptz
-	// keeps 6 — the verifier re-canonicalisation would then mismatch.
+	// Truncate to microseconds so the canonical hash, the timestamp
+	// string in the hash, and the value Postgres stores all match.
+	// Re-captured per attempt so a retried row's `ts` reflects its
+	// real commit time.
 	ts := canonical.TruncateTS(time.Now())
-	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
-	monthEnd := monthStart.AddDate(0, 1, 0)
 
-	tenantArg := nullableUUID(event.TenantID)
-
-	// Partition-wide advisory lock serialises writers in the same
-	// month so the partition-global MAX(seq) read + INSERT cannot
-	// race. The audit_log_YYYY_MM tables enforce UNIQUE(seq) per
-	// partition; without this lock concurrent writers could collide.
-	// The per-tenant chain is enforced separately by the prev_hash
-	// read below.
+	// Advisory lock keyed on the month's epoch as bigint. ::int was
+	// 32-bit and would overflow in 2038; ::bigint matches the
+	// pg_advisory_xact_lock(bigint) overload so the namespace is
+	// unambiguous.
 	if _, err := tx.Exec(
 		ctx,
-		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::int)`,
+		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::bigint)`,
 		ts,
 	); err != nil {
 		return err
 	}
 
-	// seq is partition-global so UNIQUE(seq) per partition holds.
-	// prev_hash is per-tenant — read the most recent row_hash for
-	// THIS tenant, falling back across partition boundaries if the
-	// current month has no rows for the tenant.
+	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	tenantArg := nullableUUID(event.TenantID)
+
+	// seq is partition-global (UNIQUE(seq) per partition); prev_hash
+	// is per-tenant. The prev_hash fallback orders by ts DESC, seq
+	// DESC, id DESC — NOT raw seq — because seq counters restart per
+	// partition: a June seq=100 row is older than July seq=1 but
+	// would be returned by `ORDER BY seq DESC`, breaking the chain.
 	var maxSeq int64
 	var prevHash []byte
 	if err := tx.QueryRow(ctx, `
@@ -86,7 +100,7 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		         (SELECT row_hash
 		            FROM public.audit_log
 		           WHERE tenant_id IS NOT DISTINCT FROM $1
-		           ORDER BY seq DESC
+		           ORDER BY ts DESC, seq DESC, id DESC
 		           LIMIT 1),
 		         decode(repeat('00', 32), 'hex')
 		       )
@@ -135,6 +149,16 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// isSerializationFailure reports whether err is a Postgres
+// serialisation_failure (40001), the only error class we retry.
+func isSerializationFailure(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == pgerrcode.SerializationFailure
+	}
+	return false
 }
 
 func canonicalAudit(event auditEvent, ts time.Time, before, after json.RawMessage) ([]byte, error) {

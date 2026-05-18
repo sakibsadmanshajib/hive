@@ -10,28 +10,63 @@
 -- under Phase 19 follow-up) but a DEFAULT partition is the unconditional
 -- backstop so a missed cron is recoverable rather than catastrophic.
 --
--- A DEFAULT partition is intentionally allowed to hold rows that "leak past"
--- the schedule; the monthly maintenance task will detach + reattach those
--- rows into a freshly-created proper partition. Reads of the chain remain
--- correct because the verifier orders by (tenant_id, seq) within the same
--- ts window, and INSERTs into the DEFAULT partition still acquire the same
--- per-partition seq locks via the partitioned table.
+-- ROW-MOVE CONTRACT (do NOT use DETACH on the DEFAULT partition).
+-- The monthly maintenance job must:
+--   1. CREATE the next named partition (e.g. audit_log_2026_07).
+--   2. In ONE transaction: INSERT … SELECT into the new partition + DELETE
+--      from public.audit_log where ts falls in the new month. Postgres
+--      routes the INSERT to the new partition and DELETE removes rows
+--      currently sitting in DEFAULT.
+-- DO NOT `ALTER TABLE audit_log DETACH PARTITION audit_log_default` —
+-- detach-then-create fails if DEFAULT holds any row whose ts falls in the
+-- new partition's range. The row-move pattern above is the only safe path.
 --
--- Constraints carried into the DEFAULT partition mirror the explicit ones:
---   - octet_length(prev_hash) = 32 and octet_length(row_hash) = 32 inherit
---     from the parent table CHECKs automatically — no re-declaration.
---   - The UNIQUE INDEX on seq is per-partition; we add it to the DEFAULT
---     so that two writes that fall into the default cannot collide on seq.
+-- UNIQUENESS CONTRACT for audit_log_default:
+--   The named per-month partitions enforce `UNIQUE (seq)` because seq is
+--   assigned partition-globally (writer reads `MAX(seq) WHERE ts >=
+--   monthStart AND ts < monthEnd`). If DEFAULT ever holds rows from two
+--   different months simultaneously (e.g. June rolled over before the
+--   July partition was created, then July also rolled past creation),
+--   each month's seq series independently restarts at 1 and a plain
+--   `UNIQUE (seq)` would collide. The DEFAULT partition therefore uses
+--   `UNIQUE (date_trunc('month', ts), seq)` to scope uniqueness per
+--   month — matches the writer's per-month MAX(seq) read.
+--
+-- Constraints carried by inheritance (NOT re-declared):
+--   `octet_length(prev_hash) = 32` and `octet_length(row_hash) = 32`
+--   inherit from the audit_log parent's CHECKs automatically.
+--   The llm_traces parent has no `seq` column and no hash chain, so the
+--   uniqueness reasoning above does NOT apply to llm_traces_default.
+--
+-- GRANT inheritance: Postgres does NOT cascade table-level GRANTs to
+-- partition child tables created AFTER the grant was made. Explicit
+-- GRANT/REVOKE on the DEFAULT partitions is mandatory.
 
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.audit_log_default
   PARTITION OF public.audit_log DEFAULT;
 
-CREATE UNIQUE INDEX IF NOT EXISTS audit_log_default_seq_uidx
-  ON public.audit_log_default (seq);
+-- Per-month seq uniqueness inside the DEFAULT partition. Plain
+-- UNIQUE(seq) would collide if two months land in DEFAULT
+-- simultaneously (both restart seq at 1 inside their own month).
+CREATE UNIQUE INDEX IF NOT EXISTS audit_log_default_month_seq_uidx
+  ON public.audit_log_default (date_trunc('month', ts), seq);
+
+REVOKE ALL ON public.audit_log_default FROM PUBLIC;
+GRANT INSERT, SELECT ON public.audit_log_default TO hive_app;
+GRANT SELECT ON public.audit_log_default TO auditor_ro;
 
 CREATE TABLE IF NOT EXISTS public.llm_traces_default
   PARTITION OF public.llm_traces DEFAULT;
+
+-- llm_traces was missing a REVOKE PUBLIC in the original migration;
+-- close that gap on the parent AND apply explicit grants to the new
+-- DEFAULT partition (parent grants do not cascade to child partitions
+-- created later).
+REVOKE ALL ON public.llm_traces FROM PUBLIC;
+REVOKE ALL ON public.llm_traces_default FROM PUBLIC;
+GRANT INSERT, SELECT ON public.llm_traces_default TO hive_app;
+GRANT SELECT ON public.llm_traces_default TO auditor_ro;
 
 COMMIT;

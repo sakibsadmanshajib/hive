@@ -7,10 +7,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
+
+// maxSerializationRetries bounds the SERIALIZABLE retry loop so a
+// pathological hot-spot cannot live-lock a writer. Three attempts is
+// the conventional default — Postgres rarely needs more than one
+// retry to break a serialisation conflict.
+const maxSerializationRetries = 3
 
 type WriterConfig struct {
 	DeploySHA string
@@ -29,26 +36,25 @@ func NewSyncWriter(pool *pgxpool.Pool, cfg WriterConfig) *SyncWriter {
 // Write inserts a single audit row and chains it off the last row in
 // the same tenant's chain under SERIALIZABLE isolation.
 //
-// The chain semantics are scoped per tenant: prev_hash is the row_hash
-// of the most recent row IN THE SAME TENANT, not the most recent row
-// in the partition. The previous implementation read the partition-
-// global MAX(seq) and prev_hash without a tenant filter, which linked
-// rows from different tenants into the same chain and made the
-// verifier flag every cross-tenant boundary as a chain break.
+// Chain semantics are per tenant — prev_hash links the most recent
+// row IN THE SAME TENANT regardless of month. seq is partition-
+// global; UNIQUE(seq) per-partition catches concurrent same-month
+// duplicates. The advisory lock on a per-month bigint key serialises
+// writers in the same month so the MAX(seq) read + INSERT is atomic.
 //
-// seq remains partition-global so the UNIQUE(seq) per-partition index
-// catches duplicate writes; the chain integrity is per-tenant via
-// prev_hash. Both writers (this and edge-api chat/audit) agree on this
-// model.
+// Cross-partition stitching: the prev_hash lookup falls back across
+// all partitions when no row exists in the current month for this
+// tenant. The lookup orders by (ts DESC, seq DESC, id DESC) — NOT
+// raw seq — because seq counters restart per partition: June seq=100
+// is chronologically before July seq=1, but `ORDER BY seq DESC`
+// would return June's row as "latest" and break the July chain.
+// `ts` is the canonical ordering of when a row was committed.
 //
-// Cross-partition stitching: if no row exists in the current month for
-// this tenant, the query falls back to the most recent row for the
-// same tenant ACROSS ALL PARTITIONS. The verifier mirrors this so the
-// first row of each new month for a tenant links to that tenant's
-// last row from the previous month rather than the all-zero sentinel.
-// Without this, a tampered or deleted row on a month boundary would
-// be either falsely flagged or silently accepted depending on which
-// side it landed on.
+// SERIALIZABLE + retry: under contention Postgres can abort COMMIT
+// with serialisation_failure (40001). We retry the entire transaction
+// up to maxSerializationRetries because each attempt is short and
+// retrying with a fresh `ts` keeps the row attributable to its true
+// commit time, not its first attempt.
 func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 	if e.Action == "" {
 		return errors.New("audit: action required")
@@ -66,37 +72,45 @@ func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 		return fmt.Errorf("audit: marshal after: %w", err)
 	}
 
+	for attempt := 0; ; attempt++ {
+		err := w.writeOnce(ctx, e, before, after)
+		if err == nil {
+			return nil
+		}
+		if !isSerializationFailure(err) || attempt >= maxSerializationRetries {
+			return err
+		}
+	}
+}
+
+func (w *SyncWriter) writeOnce(ctx context.Context, e Event, before, after []byte) error {
 	tx, err := w.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return fmt.Errorf("audit: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Truncate to microseconds so the canonical hash, the timestamp
-	// string embedded in the hash, and the Postgres timestamptz column
-	// all carry exactly the same value. RFC3339Nano + clock_timestamp()
-	// down-rounding was the original source of the canonical-hash
-	// divergence the post-merge review flagged.
+	// Truncate to microseconds so the canonical hash, the canonical
+	// timestamp string, and the value Postgres stores are identical.
+	// Re-captured per attempt so a retried row carries its actual
+	// commit time, not the first attempt's stale time.
 	ts := canonical.TruncateTS(time.Now())
-	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
-	monthEnd := monthStart.AddDate(0, 1, 0)
 
-	tenantArg := nullableUUID(e.TenantID)
-
-	// Partition-wide advisory lock — serialises every writer in the
-	// month so the partition-global MAX(seq) read + INSERT cannot
-	// race. The audit_log_YYYY_MM tables enforce UNIQUE(seq) per
-	// partition, so without this lock two concurrent writers could
-	// both pick seq = N+1 and one would crash on duplicate-key. The
-	// per-tenant chain is enforced separately by the prev_hash read
-	// below.
+	// Advisory lock keyed on the month's epoch as bigint. ::int was
+	// 32-bit and would silently overflow in January 2038; ::bigint is
+	// 64-bit and matches pg_advisory_xact_lock(bigint) so the lock
+	// namespace is unambiguous.
 	if _, err := tx.Exec(
 		ctx,
-		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::int)`,
+		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::bigint)`,
 		ts,
 	); err != nil {
 		return fmt.Errorf("audit: advisory lock: %w", err)
 	}
+
+	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	tenantArg := nullableUUID(e.TenantID)
 
 	var maxSeq int64
 	var prevHash []byte
@@ -106,7 +120,7 @@ func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 		         (SELECT row_hash
 		            FROM public.audit_log
 		           WHERE tenant_id IS NOT DISTINCT FROM $1
-		           ORDER BY seq DESC
+		           ORDER BY ts DESC, seq DESC, id DESC
 		           LIMIT 1),
 		         decode(repeat('00', 32), 'hex')
 		       )
@@ -148,4 +162,16 @@ func (w *SyncWriter) Write(ctx context.Context, e Event) error {
 		return fmt.Errorf("audit: commit: %w", err)
 	}
 	return nil
+}
+
+// isSerializationFailure reports whether err is a Postgres
+// serialisation_failure (40001), the only error class we retry. Any
+// other SQLSTATE is a real bug or hard schema violation and must
+// surface to the caller.
+func isSerializationFailure(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == pgerrcode.SerializationFailure
+	}
+	return false
 }

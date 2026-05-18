@@ -91,6 +91,7 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 				"reason", "prev_hash does not match previous row in tenant chain")
 		}
 
+		// Canonical bytes per current 6-digit microsecond format.
 		canon, err := row.canonical()
 		if err != nil {
 			return mismatches, err
@@ -100,6 +101,23 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		sum.Write(canon)
 		recomputed := sum.Sum(nil)
 		if !bytes.Equal(recomputed, row.rowHash) {
+			// Legacy fallback: rows written before the canonical
+			// epoch (commit 40e8484 + this commit) used
+			// time.RFC3339Nano for the canonical `ts` field. A
+			// pure-fmt change cannot retroactively rehash those
+			// rows, so try the legacy format before flagging a
+			// mismatch. New rows from this commit forward only ever
+			// hash with the fixed microsecond format above.
+			legacyCanon, legacyErr := row.canonicalLegacy()
+			if legacyErr == nil {
+				legacySum := sha256.New()
+				legacySum.Write(row.prevHash)
+				legacySum.Write(legacyCanon)
+				if bytes.Equal(legacySum.Sum(nil), row.rowHash) {
+					expectedPrev[tenantKey] = row.rowHash
+					continue
+				}
+			}
 			mismatches++
 			slog.Warn("audit chain mismatch",
 				"id", row.id, "seq", row.seq, "tenant_id", tenantKey,
@@ -119,20 +137,26 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 // bootstrapExpectedPrev returns, for every tenant_id with at least one
 // audit row strictly before partitionStart, the row_hash of that
 // tenant's most recent row before the partition. The NULL tenant key
-// is represented by the empty string to match the in-walk encoding.
+// is the empty string to match the in-walk encoding.
+//
+// Ordering is `ts DESC, seq DESC, id DESC` — NOT raw seq — because
+// seq counters restart per partition. A previous-partition June
+// seq=100 is older than a current-partition July seq=1 but raw seq
+// ordering would prefer June=100, breaking the verifier's chain
+// bootstrap. The (tenant_id, ts DESC) index covers this efficiently
+// for the prior-partition window.
 //
 // We do not pre-filter to "tenants present in this partition" because
-// that would require two scans and Postgres handles the broader query
-// cheaply via the (tenant_id, ts DESC) index. Tenants that never
-// appear in the current partition contribute unused map entries which
-// the walk simply ignores.
+// that would require two scans and Postgres handles the broader
+// query cheaply via the (tenant_id, ts DESC) index. Tenants absent
+// from the current partition just contribute unused map entries.
 func (v *Verifier) bootstrapExpectedPrev(ctx context.Context, partitionStart time.Time) (map[string][]byte, error) {
 	rows, err := v.pool.Query(ctx, `
 		SELECT DISTINCT ON (tenant_id)
 		       tenant_id::text, row_hash
 		  FROM public.audit_log
 		 WHERE ts < $1
-		 ORDER BY tenant_id NULLS FIRST, seq DESC`,
+		 ORDER BY tenant_id NULLS FIRST, ts DESC, seq DESC, id DESC`,
 		partitionStart,
 	)
 	if err != nil {
@@ -253,8 +277,14 @@ func (r auditRow) canonical() ([]byte, error) {
 
 // normalizeJSONB decodes jsonb bytes from Postgres and re-serialises
 // them through the canonical sorted-keys path so the round-trip is
-// stable. Postgres has its own jsonb key ordering and we cannot
-// depend on that ordering matching the writer's at-rest sorted form.
+// stable. Postgres jsonb has its own internal key ordering and we
+// cannot depend on it matching the writer's stable form. NOTE: if
+// the audit_log schema ever changes these columns from `jsonb` to
+// `json` (text), Postgres would preserve insertion order rather than
+// applying its own — and the writer's sort would already match —
+// making the re-sort here cause false mismatches for legacy rows.
+// The current schema uses `jsonb` (see 20260516_04_phase19_audit_log.sql);
+// any migration away from that needs verifier coordination.
 func normalizeJSONB(raw []byte) (json.RawMessage, error) {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, nil
@@ -264,4 +294,62 @@ func normalizeJSONB(raw []byte) (json.RawMessage, error) {
 		return nil, err
 	}
 	return canonical.StableJSON(decoded)
+}
+
+// canonicalLegacy reproduces the pre-epoch canonical bytes a writer
+// would have produced when the codebase still used
+// time.RFC3339Nano. Returns the byte string suitable for re-hashing
+// historical rows during the verifier's chain walk.
+//
+// This function exists ONLY to grandfather rows written before the
+// canonical 6-digit microsecond format landed. Do not extend it for
+// new fields; every future shape change must bump a chain epoch
+// stored alongside the row, not silently widen the fallback path.
+func (r auditRow) canonicalLegacy() ([]byte, error) {
+	before, err := normalizeJSONB(r.beforeJSON)
+	if err != nil {
+		return nil, err
+	}
+	after, err := normalizeJSONB(r.afterJSON)
+	if err != nil {
+		return nil, err
+	}
+	row := canonical.Row{
+		ActorType:  r.actorType,
+		Action:     r.action,
+		Severity:   r.severity,
+		BeforeJSON: before,
+		AfterJSON:  after,
+		DeploySHA:  r.deploySHA,
+		Env:        r.env,
+		// Legacy writers used time.RFC3339Nano which strips trailing
+		// zeros from the fractional component. After Postgres rounds
+		// to microseconds the readback may have fewer than 6 digits.
+		TS: r.ts.UTC().Format(time.RFC3339Nano),
+	}
+	if r.tenantID.Valid {
+		row.TenantID = r.tenantID.String
+	}
+	if r.actorID.Valid {
+		row.ActorID = r.actorID.String
+	}
+	if r.resourceType.Valid {
+		row.ResourceType = r.resourceType.String
+	}
+	if r.resourceID.Valid {
+		row.ResourceID = r.resourceID.String
+	}
+	if r.requestID.Valid {
+		row.RequestID = r.requestID.String
+	}
+	if r.sourceIP.Valid {
+		row.SourceIP = r.sourceIP.String
+	}
+	if r.userAgent.Valid {
+		row.UserAgent = r.userAgent.String
+	}
+	if r.jwtClaimsDigest.Valid {
+		row.JWTClaimsDigest = r.jwtClaimsDigest.String
+	}
+	return row.Marshal()
 }

@@ -18,7 +18,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -27,6 +30,14 @@ import (
 // ceiling is well past the largest realistic prompt + attachments
 // without giving an attacker a memory-amplification primitive.
 const maxOWUIUnwrapBody = 2 << 20 // 2 MiB
+
+// maxOWUIBearerToken caps the token length extracted from
+// `__metadata.upstream_auth`. A Supabase JWT is typically ~1 KB; 8 KiB
+// is a generous ceiling that still prevents header-amplification
+// attacks via a crafted body. RFC 7230 §3.2.5 leaves header length to
+// servers; downstream JWKS validation would reject anything insane
+// anyway but failing early here keeps the JWT path cheap.
+const maxOWUIBearerToken = 8 << 10 // 8 KiB
 
 // OWUIUnwrapConfig configures the OWUI body-metadata Authorization
 // rewrite. ShimKey is the static OPENAI_API_KEY value Open WebUI sends
@@ -42,24 +53,35 @@ type OWUIUnwrapConfig struct {
 }
 
 // OWUIUnwrap returns middleware that, when the request Authorization
-// header carries the OWUI shim key, extracts `__metadata.upstream_auth`
-// from the JSON body, replaces Authorization with that token, and
-// strips the metadata from the forwarded body so it never reaches the
-// chat handler or any sink/log.
+// header carries the OWUI shim key AND the Content-Type is JSON,
+// extracts `__metadata.upstream_auth` from the JSON body, replaces
+// Authorization with that token, and strips the entire `__metadata`
+// object from the forwarded body so it never reaches the chat handler,
+// audit log, or any sink.
 //
 // Behaviour matrix:
 //
 //   - Authorization != shim key                                → pass through unchanged.
 //   - ShimKey == "" (disabled)                                 → pass through unchanged.
-//   - Body unreadable / not JSON / no __metadata.upstream_auth → pass through with shim Authorization
-//     intact; the selector will route it to the API-key path
-//     and authz will reject the shim key as a real credential.
-//   - Body > maxOWUIUnwrapBody                                 → 413 Payload Too Large.
+//   - Content-Type not application/json (multipart, audio,
+//     image, etc.) → pass through unchanged; the body is opaque
+//     to this layer so we cannot rewrite it. Such requests
+//     legitimately reach the API-key path with the shim key,
+//     where the per-user JWT must travel by some other means
+//     (e.g. a future header convention).
+//   - Body unreadable                                          → 400 (fail closed).
+//   - Body > maxOWUIUnwrapBody                                 → 413.
+//   - Body is JSON but missing __metadata.upstream_auth        → pass through
+//     with shim Authorization intact; emit a structured warn
+//     log so a regression in the OWUI pipeline is visible
+//     instead of degrading silently to a 401 cascade.
+//   - upstream_auth present but token longer than
+//     maxOWUIBearerToken                                       → 401.
 //
-// We intentionally only rewrite when the inbound credential is exactly
-// the shim key. Any other Bearer value (a real hk_* API key, a real
-// Supabase JWT) flows through untouched so this middleware cannot be
-// used to override an already-authenticated request.
+// We only rewrite when the inbound credential is EXACTLY the shim key.
+// Any other Bearer value (a real hk_* API key, a real Supabase JWT)
+// flows through untouched so this middleware cannot be used to
+// override an already-authenticated request.
 func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 	shimKey := strings.TrimSpace(cfg.ShimKey)
 	return func(next http.Handler) http.Handler {
@@ -71,7 +93,9 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if r.Body == nil {
+			if r.Body == nil || !isJSONContent(r.Header.Get("Content-Type")) {
+				// Non-JSON shim requests (multipart uploads for audio
+				// or images) cannot carry __metadata; pass through.
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -92,10 +116,23 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				writeAuthError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "request body too large")
 				return
 			}
-			rewritten, token := unwrapOWUIBody(raw)
+			rewritten, token, status := unwrapOWUIBody(raw)
+			switch status {
+			case unwrapTokenTooLong:
+				writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
+				return
+			case unwrapNoMetadata:
+				// Body restored from raw bytes; shim key remains on
+				// Authorization. Surface this so an OWUI pipeline
+				// regression that stops injecting the JWT is loud,
+				// not silently 401-cascading.
+				slog.Warn("owui shim request missing upstream_auth metadata",
+					"path", r.URL.Path,
+					"content_length", len(raw))
+			}
 			r.Body = io.NopCloser(bytes.NewReader(rewritten))
 			r.ContentLength = int64(len(rewritten))
-			r.Header.Set("Content-Length", itoa(len(rewritten)))
+			r.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
 			if token != "" {
 				r.Header.Set("Authorization", "Bearer "+token)
 			}
@@ -119,79 +156,87 @@ func hasShimAuthorization(header, shimKey string) bool {
 	return rest == shimKey
 }
 
-// unwrapOWUIBody parses raw JSON, removes `__metadata.upstream_auth` if
-// present, removes an empty `__metadata` object after extraction, and
-// returns the rewritten body plus the bearer token (without the
-// "Bearer " prefix). On any parse failure or missing metadata it
-// returns the input body unchanged and an empty token so the caller
-// can fall through to the API-key path.
-func unwrapOWUIBody(raw []byte) (rewritten []byte, token string) {
+// isJSONContent reports whether the Content-Type media type is
+// application/json (with or without parameters). mime.ParseMediaType
+// strips parameters and lowercases the type so a Content-Type like
+// `application/json; charset=utf-8` is correctly classified.
+func isJSONContent(contentType string) bool {
+	if contentType == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json"
+}
+
+type unwrapStatus int
+
+const (
+	unwrapOK unwrapStatus = iota
+	unwrapNoMetadata
+	unwrapTokenTooLong
+)
+
+// unwrapOWUIBody parses raw JSON, removes the entire `__metadata` object,
+// and returns (rewritten body, bearer token without scheme, status).
+//
+// We strip the WHOLE `__metadata` object — not just `upstream_auth` —
+// because forwarding OWUI-internal fields to downstream handlers and
+// audit sinks would leak information about the proxy layer to LLM
+// providers and into the audit chain. The pipeline owns __metadata
+// end-to-end; nothing past the unwrap should ever see it.
+//
+// On parse failure or missing __metadata.upstream_auth the input body
+// is returned unchanged with status unwrapNoMetadata so the caller can
+// fall through to the API-key path (which will reject the shim key).
+func unwrapOWUIBody(raw []byte) (rewritten []byte, token string, status unwrapStatus) {
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return raw, ""
+		return raw, "", unwrapNoMetadata
 	}
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &body); err != nil {
-		return raw, ""
+		return raw, "", unwrapNoMetadata
 	}
 	metaRaw, ok := body["__metadata"]
 	if !ok {
-		return raw, ""
+		return raw, "", unwrapNoMetadata
 	}
 	var meta map[string]json.RawMessage
 	if err := json.Unmarshal(metaRaw, &meta); err != nil {
-		return raw, ""
+		// Malformed __metadata — strip it anyway and continue without
+		// a token. Defence in depth: never forward an unparseable
+		// __metadata that the pipeline may not have written.
+		delete(body, "__metadata")
+		out, mErr := json.Marshal(body)
+		if mErr != nil {
+			return raw, "", unwrapNoMetadata
+		}
+		return out, "", unwrapNoMetadata
 	}
-	authRaw, ok := meta["upstream_auth"]
-	if !ok {
-		return raw, ""
+	authRaw, hasAuth := meta["upstream_auth"]
+	delete(body, "__metadata") // Always strip — never forward.
+	out, err := json.Marshal(body)
+	if err != nil {
+		return raw, "", unwrapNoMetadata
+	}
+	if !hasAuth {
+		return out, "", unwrapNoMetadata
 	}
 	var authStr string
 	if err := json.Unmarshal(authRaw, &authStr); err != nil {
-		return raw, ""
+		return out, "", unwrapNoMetadata
 	}
 	authStr = strings.TrimSpace(authStr)
-	delete(meta, "upstream_auth")
-	if len(meta) == 0 {
-		delete(body, "__metadata")
-	} else {
-		metaBytes, err := json.Marshal(meta)
-		if err != nil {
-			return raw, ""
-		}
-		body["__metadata"] = metaBytes
-	}
-	out, err := json.Marshal(body)
-	if err != nil {
-		return raw, ""
+	if len(authStr) > maxOWUIBearerToken {
+		return out, "", unwrapTokenTooLong
 	}
 	scheme, tokenPart, hasSpace := strings.Cut(authStr, " ")
 	if hasSpace && strings.EqualFold(scheme, "Bearer") {
-		return out, strings.TrimSpace(tokenPart)
+		return out, strings.TrimSpace(tokenPart), unwrapOK
 	}
 	// Tolerate raw token (no scheme word). The pipeline writes
 	// "Bearer <jwt>" today but a future revision may drop the prefix.
-	return out, authStr
-}
-
-// itoa avoids importing strconv for a single Content-Length write.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	return out, authStr, unwrapOK
 }

@@ -16,6 +16,7 @@ require (
 )
 
 require (
+	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
