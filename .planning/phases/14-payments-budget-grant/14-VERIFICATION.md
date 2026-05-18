@@ -44,7 +44,7 @@ Result:
 --- PASS: TestRequirePlatformAdmin_UnauthenticatedGets401 (0.00s)
 --- PASS: TestRequirePlatformAdmin_StoreErrorReturns500 (0.00s)
 PASS
-ok      github.com/hivegpt/hive/apps/control-plane/internal/platform    0.007s
+ok      github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform    0.007s
 ```
 
 Total: **12/12 tests pass**.
@@ -152,8 +152,8 @@ docker compose --profile tools --profile local run --rm toolchain "cd /workspace
 Output:
 
 ```
-ok  	github.com/hivegpt/hive/apps/control-plane/internal/spendalerts	0.085s
-ok  	github.com/hivegpt/hive/apps/edge-api/internal/limits	0.005s
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts	0.085s
+ok  	github.com/sakibsadmanshajib/hive/apps/edge-api/internal/limits	0.005s
 ```
 
 ### Bench (BudgetGate p99 added)
@@ -216,7 +216,7 @@ Both pushed. Branch `a/phase-14-payments-budget-grant` HEAD = `8ee4fad`.
 $ cd deploy/docker && docker compose --env-file ../../.env --profile tools --profile local run --rm toolchain \
     "cd /workspace && go build -buildvcs=false ./apps/control-plane/... \
        && go test -buildvcs=false ./apps/control-plane/internal/payments/invoices/... -count=1 -short"
-ok   github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices  0.006s
+ok   github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/invoices  0.006s
 ```
 
 Wider sanity (vet + budgets + platform tests):
@@ -337,7 +337,7 @@ ledger credit, admin UI pages, grantee lookup).
 
 ```text
 $ go test -buildvcs=false ./apps/control-plane/internal/grants/... -count=1 -short
-ok  	github.com/hivegpt/hive/apps/control-plane/internal/grants	0.004s
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants	0.004s
 
 # Tests proving owner-gate (subset):
 TestCreate_NonAdminGetsForbidden            — service rejects with ErrForbidden
@@ -379,10 +379,10 @@ EXIT=0
 
 ```text
 $ go test -buildvcs=false ./apps/control-plane/internal/grants/... -count=1 -short
-ok  	github.com/hivegpt/hive/apps/control-plane/internal/grants	0.004s
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants	0.004s
 
 $ go test -buildvcs=false ./apps/control-plane/internal/platform/... -count=1 -short
-ok  	github.com/hivegpt/hive/apps/control-plane/internal/platform	0.004s
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform	0.004s
 ```
 
 ### Routes registered

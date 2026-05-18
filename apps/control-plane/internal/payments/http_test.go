@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
-	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	platformhttp "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/http"
 )
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
 )
 
 func TestNewRegistry(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 )
 
 // FX-17-02 RED: ledger.InvoiceRow at b87fa24 carries

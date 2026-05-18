@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/signup"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 )
 
 func TestResolver_InviteTokenWins(t *testing.T) {

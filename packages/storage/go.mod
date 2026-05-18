@@ -1,4 +1,4 @@
-module github.com/hivegpt/hive/packages/storage
+module github.com/sakibsadmanshajib/hive/packages/storage
 
 go 1.24.0
 

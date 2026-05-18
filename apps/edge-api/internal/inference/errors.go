@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {

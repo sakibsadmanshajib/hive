@@ -7,7 +7,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 )
 
 // fakeHandler records the number of times it is invoked and emits a

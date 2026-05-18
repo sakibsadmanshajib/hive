@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
 var (

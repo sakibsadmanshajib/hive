@@ -3,7 +3,7 @@ package payments
 import (
 	"strconv"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 )
 
 // CalculateTax determines the tax treatment for a billing profile.

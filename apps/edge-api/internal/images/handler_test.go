@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/images"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/images"
 )
 
 // --- Test doubles ---

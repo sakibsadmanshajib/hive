@@ -5,14 +5,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
-	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
-	apierr "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
+	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -176,7 +177,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	latency := int(time.Since(started).Milliseconds())
 	provider := guessProvider(parsed.Model)
 	costCredits := int64(totalTokens)
-	_ = InsertTrace(r.Context(), h.deps.Pool, TraceRow{
+	if traceErr := InsertTrace(r.Context(), h.deps.Pool, TraceRow{
 		TenantID:       user.TenantID,
 		UserID:         user.ID,
 		RequestID:      requestID,
@@ -189,8 +190,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		FinishReason:   finishReason,
 		PromptHash:     hashString(string(raw)),
 		CompletionHash: hashString(completion.String()),
-	})
-	_ = insertAuditEvent(r.Context(), h.deps.Pool, auditEvent{
+	}); traceErr != nil {
+		slog.Warn("llm_traces write failed", "err", traceErr, "request_id", requestID)
+	}
+	// Provider name is internal only — never written to audit_log.after_json,
+	// which fans out to third-party sinks (Datadog, Sentry, ELK, etc.).
+	if auditErr := insertAuditEvent(r.Context(), h.deps.Pool, auditEvent{
 		TenantID:    user.TenantID,
 		ActorID:     user.ID,
 		Action:      "CHAT_REQUEST",
@@ -201,14 +206,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Environment: h.deps.Env,
 		After: map[string]any{
 			"model":         parsed.Model,
-			"provider":      provider,
 			"in_tokens":     inTokens,
 			"out_tokens":    outTokens,
 			"latency_ms":    latency,
 			"cost_credits":  costCredits,
 			"finish_reason": finishReason,
 		},
-	})
+	}); auditErr != nil {
+		slog.Warn("audit_log write failed", "err", auditErr, "request_id", requestID)
+	}
 }
 
 func flush(flusher http.Flusher) {

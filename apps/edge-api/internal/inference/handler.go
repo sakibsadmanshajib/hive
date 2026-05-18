@@ -3,7 +3,7 @@ package inference
 import (
 	"net/http"
 
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // Handler routes inference requests to the appropriate endpoint handler.

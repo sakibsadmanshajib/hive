@@ -16,7 +16,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 )
 
 // TestJWTMiddleware_NilValidator_FailsClosed_503 verifies that a nil

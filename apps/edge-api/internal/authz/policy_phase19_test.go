@@ -14,7 +14,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 )
 
 // TestPolicy_Phase19_Permissions enumerates every (role, perm) cell defined

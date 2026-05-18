@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 )
 
 // AuthorizerAdapter adapts authz.Authorizer to the files.Authorizer interface.

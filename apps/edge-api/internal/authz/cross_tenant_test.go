@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
-	"github.com/hivegpt/hive/apps/edge-api/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 )
 
 func TestRequireOwnTenant_SameTenant_NilError(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/auditworker/sinks"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -63,6 +63,14 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
+type outboxJob struct {
+	id       int64
+	auditID  int64
+	auditTS  time.Time
+	sink     string
+	attempts int
+}
+
 func (w *Worker) drainOnce(ctx context.Context) error {
 	rows, err := w.cfg.Pool.Query(ctx, `
 		SELECT id, audit_id, audit_ts, sink, attempts
@@ -75,16 +83,9 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 	}
 	defer rows.Close()
 
-	type job struct {
-		id       int64
-		auditID  int64
-		auditTS  time.Time
-		sink     string
-		attempts int
-	}
-	jobs := make([]job, 0, 50)
+	jobs := make([]outboxJob, 0, 50)
 	for rows.Next() {
-		var j job
+		var j outboxJob
 		if err := rows.Scan(&j.id, &j.auditID, &j.auditTS, &j.sink, &j.attempts); err != nil {
 			return err
 		}
@@ -97,6 +98,11 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 	for _, j := range jobs {
 		sink, ok := w.bySink[j.sink]
 		if !ok {
+			// Sink was removed from configuration after the row was enqueued.
+			// Bump attempts so the row eventually moves to DLQ instead of
+			// pinning audit_outbox forever.
+			slog.Warn("auditworker unknown sink — routing to DLQ on max attempts", "sink", j.sink, "outbox_id", j.id)
+			w.handleFailure(ctx, j, errSinkNotConfigured)
 			continue
 		}
 
@@ -117,12 +123,45 @@ func (w *Worker) drainOnce(ctx context.Context) error {
 	return nil
 }
 
+// errSinkNotConfigured is set on audit_outbox.last_error when an enqueued
+// row references a sink name that is no longer present in the worker's
+// configured sink set. The row is retried up to MaxAttempts and then moved
+// to the DLQ — never silently dropped.
+type sinkNotConfiguredError struct{}
+
+func (sinkNotConfiguredError) Error() string { return "sink not configured" }
+
+var errSinkNotConfigured = sinkNotConfiguredError{}
+
 func (w *Worker) loadPayload(ctx context.Context, auditID int64, auditTS time.Time) (map[string]any, error) {
+	// Explicit column projection. The integrity-chain columns row_hash and
+	// prev_hash and the fingerprintable jwt_claims_digest must never leave
+	// Postgres for third-party sinks (ELK, Datadog, Splunk, Langfuse,
+	// Sentry, Loki). Tamper-evidence depends on the chain remaining
+	// internal-only.
 	var raw []byte
 	err := w.cfg.Pool.QueryRow(ctx, `
-		SELECT row_to_json(a)
+		SELECT json_build_object(
+		         'id',            a.id,
+		         'ts',            a.ts,
+		         'tenant_id',     a.tenant_id,
+		         'actor_id',      a.actor_id,
+		         'actor_type',    a.actor_type,
+		         'action',        a.action,
+		         'resource_type', a.resource_type,
+		         'resource_id',   a.resource_id,
+		         'severity',      a.severity,
+		         'before_json',   a.before_json,
+		         'after_json',    a.after_json,
+		         'request_id',    a.request_id,
+		         'source_ip',     a.source_ip,
+		         'user_agent',    a.user_agent,
+		         'deploy_sha',    a.deploy_sha,
+		         'env',           a.env,
+		         'seq',           a.seq
+		       )
 		  FROM public.audit_log a
-		 WHERE id=$1 AND ts=$2`,
+		 WHERE a.id=$1 AND a.ts=$2`,
 		auditID,
 		auditTS,
 	).Scan(&raw)
@@ -136,13 +175,7 @@ func (w *Worker) loadPayload(ctx context.Context, auditID int64, auditTS time.Ti
 	return payload, nil
 }
 
-func (w *Worker) handleFailure(ctx context.Context, j struct {
-	id       int64
-	auditID  int64
-	auditTS  time.Time
-	sink     string
-	attempts int
-}, err error) {
+func (w *Worker) handleFailure(ctx context.Context, j outboxJob, err error) {
 	nextAttempts := j.attempts + 1
 	if nextAttempts >= w.cfg.MaxAttempts {
 		w.toDLQ(ctx, j.id, nextAttempts, err.Error())

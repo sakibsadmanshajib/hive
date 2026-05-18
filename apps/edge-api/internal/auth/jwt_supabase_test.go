@@ -17,7 +17,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwt"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 )
 
 func TestJWTValidator_ValidToken_PopulatesContext(t *testing.T) {

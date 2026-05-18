@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/google/uuid"
 )
 

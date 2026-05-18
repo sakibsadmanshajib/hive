@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/auditworker/sinks"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
 	"github.com/stretchr/testify/require"
 )
 

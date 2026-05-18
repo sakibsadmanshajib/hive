@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/tenant/settings"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
 )
 
 func TestResolver_IsEnabled_UnsetReturnsFalse(t *testing.T) {

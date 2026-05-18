@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -43,10 +44,28 @@ func (s *Loki) Send(ctx context.Context, row map[string]any) error {
 					"service":  "hive",
 				},
 				"values": [][]string{
-					{time.Now().Format("20060102150405"), string(line)},
+					{lokiTimestamp(row), string(line)},
 				},
 			},
 		},
 	}
 	return postJSON(ctx, s.cfg.HTTP, s.cfg.URL, body, nil)
+}
+
+// lokiTimestamp returns a Unix-nanosecond decimal string — the only timestamp
+// format the Loki push API accepts. Prefer the event ts (column on
+// audit_log) over time.Now() so disk-buffered drains preserve the original
+// event time rather than the sink-receive time.
+func lokiTimestamp(row map[string]any) string {
+	if rawTs, ok := row["ts"]; ok {
+		switch typed := rawTs.(type) {
+		case string:
+			if parsed, err := time.Parse(time.RFC3339Nano, typed); err == nil {
+				return strconv.FormatInt(parsed.UnixNano(), 10)
+			}
+		case time.Time:
+			return strconv.FormatInt(typed.UnixNano(), 10)
+		}
+	}
+	return strconv.FormatInt(time.Now().UnixNano(), 10)
 }

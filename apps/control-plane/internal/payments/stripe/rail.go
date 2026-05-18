@@ -11,7 +11,7 @@ import (
 	"github.com/stripe/stripe-go/v84/paymentintent"
 	"github.com/stripe/stripe-go/v84/webhook"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // Rail implements the payments.PaymentRail interface for Stripe.

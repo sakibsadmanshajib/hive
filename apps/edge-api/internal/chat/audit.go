@@ -46,6 +46,20 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
 	monthEnd := monthStart.AddDate(0, 1, 0)
 
+	tenantArg := nullableUUID(event.TenantID)
+
+	// Per-tenant-per-month advisory lock: serialises seq+prev_hash reads with
+	// the matching insert so concurrent writers in the same partition cannot
+	// observe the same MAX(seq) and produce a forked chain.
+	if _, err := tx.Exec(
+		ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1::text), extract(epoch from date_trunc('month', $2::timestamptz))::int)`,
+		event.TenantID.String(),
+		ts,
+	); err != nil {
+		return err
+	}
+
 	var maxSeq int64
 	var prevHash []byte
 	if err := tx.QueryRow(ctx, `
@@ -53,13 +67,16 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		       COALESCE(
 		         (SELECT row_hash
 		            FROM public.audit_log
-		           WHERE ts >= $1 AND ts < $2
+		           WHERE ts >= $2 AND ts < $3
+		             AND tenant_id IS NOT DISTINCT FROM $1
 		           ORDER BY seq DESC
 		           LIMIT 1),
 		         decode(repeat('00', 32), 'hex')
 		       )
 		  FROM public.audit_log
-		 WHERE ts >= $1 AND ts < $2`,
+		 WHERE ts >= $2 AND ts < $3
+		   AND tenant_id IS NOT DISTINCT FROM $1`,
+		tenantArg,
 		monthStart,
 		monthEnd,
 	).Scan(&maxSeq, &prevHash); err != nil {

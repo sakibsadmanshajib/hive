@@ -97,7 +97,7 @@ $ docker run --rm --entrypoint sh -v $PWD:/workspace -w /workspace hive-toolchai
 === RUN   TestListRouteCandidatesSelectsMediaColumns
 --- PASS: TestListRouteCandidatesSelectsMediaColumns (0.00s)
 PASS
-ok  	github.com/hivegpt/hive/apps/control-plane/internal/routing	0.005s
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing	0.005s
 ```
 
 Note on `compose run` invocation: `deploy/docker/docker-compose.yml` defines
@@ -118,7 +118,7 @@ Full routing-package suite + validator after evidence was committed:
 ```
 $ docker run --rm --entrypoint sh -v $PWD:/workspace -w /workspace hive-toolchain:latest \
     -c "go test ./apps/control-plane/internal/routing/... -count=1 -short"
-ok  	github.com/hivegpt/hive/apps/control-plane/internal/routing	0.006s
+ok  	github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing	0.006s
 
 $ bash scripts/verify-requirements-matrix.sh
 OK: 7 evidence files validated

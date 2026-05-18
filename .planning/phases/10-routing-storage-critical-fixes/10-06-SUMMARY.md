@@ -16,7 +16,7 @@ affects: [edge-api, files, uploads, batches, storage]
 
 # Tech tracking
 tech-stack:
-  added: [github.com/hivegpt/hive/packages/storage]
+  added: [github.com/sakibsadmanshajib/hive/packages/storage]
   patterns: [internal response metadata serialization, allowlist SQL updates, fail-fast storage startup config, narrow worker interfaces]
 
 key-files:
@@ -134,8 +134,8 @@ Each task was committed atomically:
 
 **3. [Rule 3 - Blocking] Added local storage module replace for Docker tidy**
 - **Found during:** Task 3 (`go mod tidy`)
-- **Issue:** `go mod tidy` in `apps/control-plane` attempted to fetch `github.com/hivegpt/hive/packages/storage` from private GitHub instead of resolving the workspace module.
-- **Fix:** Added `require github.com/hivegpt/hive/packages/storage v0.0.0` and `replace github.com/hivegpt/hive/packages/storage => ../../packages/storage`.
+- **Issue:** `go mod tidy` in `apps/control-plane` attempted to fetch `github.com/sakibsadmanshajib/hive/packages/storage` from private GitHub instead of resolving the workspace module.
+- **Fix:** Added `require github.com/sakibsadmanshajib/hive/packages/storage v0.0.0` and `replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage`.
 - **Files modified:** `apps/control-plane/go.mod`, `apps/control-plane/go.sum`
 - **Verification:** `go mod tidy -v` and the final control-plane test command exited 0.
 - **Committed in:** `edde3d0`

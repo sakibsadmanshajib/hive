@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/waldrainer"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
 	"github.com/stretchr/testify/require"
 )
 

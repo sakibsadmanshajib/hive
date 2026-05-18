@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 )
 
 // Rail implements the payments.PaymentRail interface for bKash Tokenized Checkout.

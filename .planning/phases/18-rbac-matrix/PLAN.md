@@ -383,7 +383,7 @@ files_modified:
   <action>
     Create `apps/control-plane/internal/authz/permissions.go` with package `authz`, import `sort`. Declare the 11 `Permission` typed-string constants verbatim. Declare unexported `entry struct { RequiresVerified bool }` and `var registry = map[Permission]entry{...}` with the per-permission flags taken from the audit truth in RESEARCH §4: 9 entries set to `{RequiresVerified: true}` and 2 (`PermBillingView`, `PermAPIKeysRead`) set to `{RequiresVerified: false}` because the prior handler audit shows no existing `!EmailVerified` gate on those read-only views. Implement `AllPermissions() []Permission` returning a sorted slice of registry keys. Implement `RequiresVerified(perm Permission) bool` returning `registry[perm].RequiresVerified` (ok-guarded; `false` for unknown).
 
-    Create `apps/control-plane/internal/authz/policy.go` with imports `context, encoding/json, errors, net/http, github.com/google/uuid, github.com/hivegpt/hive/apps/control-plane/internal/auth, github.com/hivegpt/hive/apps/control-plane/internal/platform`. Declare `Actor` struct verbatim. Declare `type Policy struct{}` and `func NewPolicy() Policy { return Policy{} }`. Implement `(p Policy) Can(actor Actor, perm Permission) bool` with the decision rules. Implement `(p Policy) AllGranted(actor Actor) []string` iterating sorted `AllPermissions()` and emitting wire strings for permitted perms.
+    Create `apps/control-plane/internal/authz/policy.go` with imports `context, encoding/json, errors, net/http, github.com/google/uuid, github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth, github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform`. Declare `Actor` struct verbatim. Declare `type Policy struct{}` and `func NewPolicy() Policy { return Policy{} }`. Implement `(p Policy) Can(actor Actor, perm Permission) bool` with the decision rules. Implement `(p Policy) AllGranted(actor Actor) []string` iterating sorted `AllPermissions()` and emitting wire strings for permitted perms.
 
     Declare `type ActorResolver func(r *http.Request) (Actor, error)`. Add `type Middleware struct { resolver ActorResolver }`, `func NewMiddleware(resolver ActorResolver) Middleware`, and `func (m Middleware) RequirePermission(perm Permission) func(http.Handler) http.Handler`. Middleware writes provider-blind JSON `{"error":"permission denied"}` on deny / `{"error":"authentication required"}` on `errors.Is(err, ErrNoViewer)`. Define `var ErrNoViewer = errors.New("authz: no viewer in context")`.
 
@@ -478,7 +478,7 @@ files_modified:
         "fmt"
         "os"
         "strings"
-        "github.com/hivegpt/hive/apps/control-plane/internal/authz"
+        "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
     )
 
     const header = "// AUTO-GENERATED — do not edit. Run `make gen-permissions` to regenerate.\n// Source: apps/control-plane/internal/authz/permissions.go\n\n"
@@ -636,7 +636,7 @@ files_modified:
     - Build + vet pass.
   </behavior>
   <action>
-    Edit `apps/control-plane/cmd/server/main.go`. Locate the block where `roleSvc` is constructed (around lines 195-220 per audit). Immediately below, add the three lines above. Locate the `RequirePlatformAdmin` call near line 485 and swap as specified. Add import `github.com/hivegpt/hive/apps/control-plane/internal/authz` if not present.
+    Edit `apps/control-plane/cmd/server/main.go`. Locate the block where `roleSvc` is constructed (around lines 195-220 per audit). Immediately below, add the three lines above. Locate the `RequirePlatformAdmin` call near line 485 and swap as specified. Add import `github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz` if not present.
 
     Confirm `go build ./apps/control-plane/cmd/server/...` succeeds and `go vet ./apps/control-plane/...` is clean.
   </action>

@@ -49,4 +49,13 @@ class Pipeline:
         return body
 
     async def outlet(self, body: Any, user: dict[str, Any] | None = None) -> Any:
+        # Strip the upstream auth header so the bearer token does not survive
+        # into Open WebUI's response-side logging or get echoed back to the
+        # browser. The inlet injects it; the outlet erases it.
+        if isinstance(body, dict):
+            metadata = body.get("__metadata")
+            if isinstance(metadata, dict):
+                metadata.pop("upstream_auth", None)
+                if not metadata:
+                    body.pop("__metadata", None)
         return body

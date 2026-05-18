@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/audio"
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // --- Test doubles ---

@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"strings"
 
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // Authorizer is the interface used by Handler to validate API keys and extract account context.

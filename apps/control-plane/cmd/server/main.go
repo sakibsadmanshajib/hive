@@ -15,42 +15,42 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounts"
-	"github.com/hivegpt/hive/apps/control-plane/internal/apikeys"
-	"github.com/hivegpt/hive/apps/control-plane/internal/audit"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auditverifier"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auditworker"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auditworker/sinks"
-	"github.com/hivegpt/hive/apps/control-plane/internal/auth"
-	"github.com/hivegpt/hive/apps/control-plane/internal/authz"
-	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore"
-	batchexecutor "github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
-	"github.com/hivegpt/hive/apps/control-plane/internal/budgets"
-	"github.com/hivegpt/hive/apps/control-plane/internal/catalog"
-	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
-	"github.com/hivegpt/hive/apps/control-plane/internal/grants"
-	"github.com/hivegpt/hive/apps/control-plane/internal/ledger"
-	"github.com/hivegpt/hive/apps/control-plane/internal/owui"
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
-	bkashRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/bkash"
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments/invoices"
-	sslcommerzRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/sslcommerz"
-	stripeRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/stripe"
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform"
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform/config"
-	platformdb "github.com/hivegpt/hive/apps/control-plane/internal/platform/db"
-	platformhttp "github.com/hivegpt/hive/apps/control-plane/internal/platform/http"
-	"github.com/hivegpt/hive/apps/control-plane/internal/platform/metrics"
-	platformredis "github.com/hivegpt/hive/apps/control-plane/internal/platform/redis"
-	"github.com/hivegpt/hive/apps/control-plane/internal/profiles"
-	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
-	"github.com/hivegpt/hive/apps/control-plane/internal/signup"
-	"github.com/hivegpt/hive/apps/control-plane/internal/spendalerts"
-	"github.com/hivegpt/hive/apps/control-plane/internal/tenants"
-	"github.com/hivegpt/hive/apps/control-plane/internal/usage"
-	"github.com/hivegpt/hive/apps/control-plane/internal/waldrainer"
-	"github.com/hivegpt/hive/packages/storage"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditverifier"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore"
+	batchexecutor "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	bkashRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/bkash"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/invoices"
+	sslcommerzRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/sslcommerz"
+	stripeRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/stripe"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/config"
+	platformdb "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
+	platformhttp "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/http"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
+	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
+	"github.com/sakibsadmanshajib/hive/packages/storage"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
@@ -163,6 +163,13 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	// runCtx is the process-lifetime context for background goroutines
+	// (audit sink worker, WAL drainer, hash-chain verifier). It is cancelled
+	// on shutdown so those goroutines unwind cleanly instead of being killed
+	// mid-write, which would risk partial WAL flushes and orphan outbox rows.
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
 
 	// Open the database pool. A missing SUPABASE_DB_URL is treated as a
 	// non-fatal warning at startup so the service can still respond to /health
@@ -417,12 +424,12 @@ func main() {
 			log.Println("phase-19 audit sink worker idle (no optional sinks configured)")
 		} else {
 			worker := auditworker.New(auditworker.Config{Pool: pool, Sinks: configuredSinks})
-			go worker.Run(context.Background())
+			go worker.Run(runCtx)
 			log.Printf("phase-19 audit sink worker started (sinks=%d)", len(configuredSinks))
 		}
 
 		if auditWAL != nil {
-			go waldrainer.Run(context.Background(), auditWAL, 30*time.Second)
+			go waldrainer.Run(runCtx, auditWAL, 30*time.Second)
 			log.Println("phase-19 audit WAL drainer started")
 		}
 
@@ -430,19 +437,36 @@ func main() {
 		go func() {
 			ticker := time.NewTicker(24 * time.Hour)
 			defer ticker.Stop()
-			for range ticker.C {
-				mismatches, err := verifier.VerifyPartition(context.Background(), time.Now())
+			for {
+				select {
+				case <-runCtx.Done():
+					return
+				case <-ticker.C:
+				}
+				mismatches, err := verifier.VerifyPartition(runCtx, time.Now())
 				if err != nil {
 					log.Printf("audit chain verifier failed: %v", err)
+					if auditLogger != nil {
+						if logErr := auditLogger.Log(runCtx, audit.Event{
+							Action:   "AUDIT_VERIFY_ERROR",
+							Severity: audit.SeverityError,
+							Actor:    audit.Actor{Type: audit.ActorSystem},
+							Before:   map[string]string{"error": err.Error()},
+						}); logErr != nil {
+							log.Printf("audit_verify_error log emit failed: %v", logErr)
+						}
+					}
 					continue
 				}
 				if mismatches > 0 && auditLogger != nil {
-					_ = auditLogger.Log(context.Background(), audit.Event{
+					if logErr := auditLogger.Log(runCtx, audit.Event{
 						Action:   "AUDIT_CHAIN_VERIFY_FAIL",
 						Severity: audit.SeverityCritical,
 						Actor:    audit.Actor{Type: audit.ActorSystem},
 						Before:   map[string]int{"mismatches": mismatches},
-					})
+					}); logErr != nil {
+						log.Printf("audit_chain_verify_fail log emit failed: %v", logErr)
+					}
 				}
 			}
 		}()
@@ -693,6 +717,10 @@ func main() {
 
 	<-quit
 	log.Println("shutting down control-plane...")
+
+	// Signal Plan 19 audit workers, WAL drainer, and verifier loop to unwind
+	// before HTTP shutdown closes the DB pool out from under them.
+	runCancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()

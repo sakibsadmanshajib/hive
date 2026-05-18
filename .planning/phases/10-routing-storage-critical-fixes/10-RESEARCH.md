@@ -133,7 +133,7 @@ There is one important hidden dependency chain for API-07: wiring storage is nec
 
 ```bash
 docker compose -f deploy/docker/docker-compose.yml run --rm toolchain sh -lc 'cd /workspace && mkdir -p packages/storage && go work use ./packages/storage'
-docker compose -f deploy/docker/docker-compose.yml run --rm toolchain sh -lc 'cd /workspace/packages/storage && go mod init github.com/hivegpt/hive/packages/storage && go get github.com/aws/aws-sdk-go-v2@v1.41.5'
+docker compose -f deploy/docker/docker-compose.yml run --rm toolchain sh -lc 'cd /workspace/packages/storage && go mod init github.com/sakibsadmanshajib/hive/packages/storage && go get github.com/aws/aws-sdk-go-v2@v1.41.5'
 docker compose -f deploy/docker/docker-compose.yml run --rm toolchain sh -lc 'cd /workspace/apps/edge-api && go mod tidy'
 docker compose -f deploy/docker/docker-compose.yml run --rm toolchain sh -lc 'cd /workspace/apps/control-plane && go mod tidy'
 ```

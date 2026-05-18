@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 func TestAccountingAdapterCreateReservationUsesStrictPolicy(t *testing.T) {

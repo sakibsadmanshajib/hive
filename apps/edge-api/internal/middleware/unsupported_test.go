@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	apierrors "github.com/hivegpt/hive/apps/edge-api/internal/errors"
-	"github.com/hivegpt/hive/apps/edge-api/internal/matrix"
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
 )
 
 const testMatrixJSON = `{

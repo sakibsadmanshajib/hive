@@ -13,10 +13,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/hivegpt/hive/apps/control-plane/internal/accounting"
-	"github.com/hivegpt/hive/apps/control-plane/internal/batchstore/executor"
-	"github.com/hivegpt/hive/apps/control-plane/internal/filestore"
-	"github.com/hivegpt/hive/apps/control-plane/internal/routing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 )
 
 // stubRoutingProvider always returns the configured provider + model.

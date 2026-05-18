@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/hivegpt/hive/apps/edge-api/internal/auth"
-	"github.com/hivegpt/hive/apps/edge-api/internal/chat"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/chat"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/require"
 )
@@ -104,6 +104,48 @@ func TestDispatchNoTenantReturnsNoTenant(t *testing.T) {
 	}
 	require.NoError(t, json.NewDecoder(io.NopCloser(bytes.NewReader(rec.Body.Bytes()))).Decode(&errBody))
 	require.Equal(t, "NO_TENANT", errBody.Error.Code)
+}
+
+// TestDispatchUpstreamErrorIsProviderBlind covers the regulated path where
+// the upstream returns a 4xx/5xx body containing provider names. The
+// customer-visible response must not contain any provider identifier
+// (openrouter, groq, openai, anthropic) or route slug — the BD market
+// regulatory guarantee requires every wire-format error to be
+// provider-blind.
+func TestDispatchUpstreamErrorIsProviderBlind(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"route-groq-fast hit groq rate limits via openrouter/auto"}}`))
+	}))
+	defer upstream.Close()
+
+	handler := chat.NewDispatch(chat.Deps{
+		LiteLLMURL: upstream.URL,
+		DeploySHA:  "test",
+		Env:        "test",
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"openrouter/auto","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
+		ID:       uuid.New(),
+		TenantID: uuid.New(),
+		Role:     "member",
+		Email:    "x@y.example",
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+
+	body := strings.ToLower(rec.Body.String())
+	for _, leak := range []string{"openrouter", "groq", "openai", "anthropic", "route-"} {
+		require.NotContains(t, body, leak, "provider-blind violation: %q leaked through dispatch", leak)
+	}
 }
 
 func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {

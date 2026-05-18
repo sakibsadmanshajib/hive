@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hivegpt/hive/apps/edge-api/internal/batches"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/batches"
 )
 
 // --- Mock authorizer ---

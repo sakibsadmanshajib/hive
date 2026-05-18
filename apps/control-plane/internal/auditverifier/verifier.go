@@ -21,6 +21,13 @@ func New(pool *pgxpool.Pool) *Verifier {
 	return &Verifier{pool: pool}
 }
 
+// VerifyPartition walks each tenant's chain independently for the month
+// containing t. The hash chain is partitioned by (tenant_id, month) — see
+// writer in apps/edge-api/internal/chat/audit.go — so verification MUST
+// group rows by tenant_id and walk strict seq order within each group;
+// otherwise the recomputed sha256(prev_hash||canon) will not match the
+// stored row_hash because adjacent rows in the global seq order may belong
+// to different tenant chains.
 func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error) {
 	rows, err := v.pool.Query(ctx, `
 		SELECT id, ts,
@@ -31,7 +38,7 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		  FROM public.audit_log
 		 WHERE ts >= date_trunc('month', $1::timestamptz)
 		   AND ts <  date_trunc('month', $1::timestamptz) + interval '1 month'
-		 ORDER BY seq`,
+		 ORDER BY tenant_id NULLS FIRST, seq`,
 		t,
 	)
 	if err != nil {
@@ -54,7 +61,11 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		sum.Write(canon)
 		if !bytes.Equal(sum.Sum(nil), row.rowHash) {
 			mismatches++
-			slog.Warn("audit chain mismatch", "id", row.id, "seq", row.seq)
+			tenant := ""
+			if row.tenantID.Valid {
+				tenant = row.tenantID.String
+			}
+			slog.Warn("audit chain mismatch", "id", row.id, "seq", row.seq, "tenant_id", tenant)
 		}
 	}
 	if err := rows.Err(); err != nil {

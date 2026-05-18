@@ -13,8 +13,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/hivegpt/hive/apps/control-plane/internal/payments"
-	sslRail "github.com/hivegpt/hive/apps/control-plane/internal/payments/sslcommerz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
+	sslRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/sslcommerz"
 )
 
 // sslServer sets up an httptest.Server that handles SSLCommerz initiation and validation endpoints.
