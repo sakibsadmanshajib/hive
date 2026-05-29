@@ -122,6 +122,7 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 - **Immutability**: New objects, never mutate existing. Ledger append-only.
 - **Commits**: `<type>: <description>` — types: feat, fix, refactor, docs, test, chore, perf, ci
 - **No hardcoded secrets**: Env vars only. Never commit `.env`.
+- **Merge policy** (`main`, enforced by GitHub branch protection incl. admins): a PR is **not mergeable** while it has any failed/missing required test or any unresolved review comment. See `.github/MERGE-POLICY.md`; config in `.github/branch-protection-main.json`. Always resolve every review thread before merging.
 - **Provider-blind errors**: Sanitize at both control-plane + edge boundaries. Provider names never leak to customers.
 - **math/big for FX**: All financial calcs use `math/big` to prevent float64 corruption.
 - **Storage backend**: Supabase Storage only object storage backend. `edge-api` + `control-plane` fail fast unless required S3 env vars present, and `hive-files` + `hive-images` must exist before startup.
