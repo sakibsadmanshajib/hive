@@ -5,11 +5,11 @@ milestone_name: deferred-scope
 previous_milestone: v1.0
 previous_milestone_shipped: "2026-04-21"
 previous_milestone_name: developer-api-core
-current_phase: 19
-current_plan: 19-03
-status: phase_in_progress
-stopped_at: "Phase 19 — Foundation Slice — Plan 03 (Open WebUI deploy + chat happy path) pending after PR #140"
-last_updated: "2026-05-17T17:55:00.000Z"
+current_phase: 20
+current_plan: null
+status: phase_complete
+stopped_at: "Phase 19 — Foundation Slice — COMPLETE. Plans 01-04 + post-merge remediation merged (PRs #140, #143, #144, #146). PR #146 (critical C1-C4 + adversarial review + Docker go.work fix + 6 review threads) merged to main 2026-05-29; all CI green. Minor items deferred (H6/H9/H10/M4/M12/M13 + L-items) per 19-REMEDIATION-RESUME.md. Next: Phase 20 Provider Catalog."
+last_updated: "2026-05-29T05:35:00.000Z"
 progress:
   total_phases: 16
   completed_phases: 7
@@ -36,7 +36,7 @@ v1_1_phase_status:
   phase_16: complete
   phase_17: complete
   phase_18: complete
-  phase_19: in_progress
+  phase_19: complete
   phase_20: pending
   phase_21: pending
   phase_22: pending
