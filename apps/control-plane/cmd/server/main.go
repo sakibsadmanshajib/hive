@@ -257,7 +257,12 @@ func main() {
 		apikeysHandler = apikeys.NewHandler(apikeysSvc, accountsSvc)
 
 		accountingRepo := accounting.NewPgxRepository(pool)
-		accountingSvc = accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc)
+		// Postgres advisory locker serializes the credit-reservation critical
+		// section across all control-plane instances, preventing the TOCTOU
+		// credit double-spend (issue #106). Single-instance in-process locking
+		// is the NewService default; this upgrades it to be cross-process safe.
+		accountingSvc = accounting.NewService(accountingRepo, ledgerSvc, usageSvc, apikeysSvc).
+			WithAccountLocker(accounting.NewPgxAccountLocker(pool))
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
 		budgetsRepo := budgets.NewPgxRepository(pool)

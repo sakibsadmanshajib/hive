@@ -37,6 +37,7 @@ type Service struct {
 	ledgerSvc ledgerService
 	usageSvc  usageService
 	apiKeySvc apiKeyService
+	locker    AccountLocker
 }
 
 func NewService(repo Repository, ledgerSvc ledgerService, usageSvc usageService, apiKeySvcs ...apiKeyService) *Service {
@@ -44,7 +45,20 @@ func NewService(repo Repository, ledgerSvc ledgerService, usageSvc usageService,
 	if len(apiKeySvcs) > 0 {
 		apiKeySvc = apiKeySvcs[0]
 	}
-	return &Service{repo: repo, ledgerSvc: ledgerSvc, usageSvc: usageSvc, apiKeySvc: apiKeySvc}
+	// Default to in-process serialization. Multi-instance deployments override
+	// this with a cross-process locker via WithAccountLocker (see main.go).
+	return &Service{repo: repo, ledgerSvc: ledgerSvc, usageSvc: usageSvc, apiKeySvc: apiKeySvc, locker: NewProcessAccountLocker()}
+}
+
+// WithAccountLocker overrides the per-account reservation locker. Returns the
+// service for chaining. Used in production wiring to install the Postgres
+// advisory locker so the credit-reservation critical section is serialized
+// across all control-plane instances (issue #106).
+func (s *Service) WithAccountLocker(locker AccountLocker) *Service {
+	if locker != nil {
+		s.locker = locker
+	}
+	return s
 }
 
 func (s *Service) CreateReservation(ctx context.Context, input CreateReservationInput) (Reservation, error) {
@@ -60,78 +74,89 @@ func (s *Service) CreateReservation(ctx context.Context, input CreateReservation
 		return Reservation{}, err
 	}
 
-	balance, err := s.ledgerSvc.GetBalance(ctx, input.AccountID)
-	if err != nil {
-		return Reservation{}, fmt.Errorf("accounting: get balance: %w", err)
-	}
-	if err := enforcePolicy(input.PolicyMode, balance.AvailableCredits, input.EstimatedCredits); err != nil {
-		return Reservation{}, err
-	}
-
-	attempt, err := s.usageSvc.StartAttempt(ctx, usage.StartAttemptInput{
-		AccountID:     input.AccountID,
-		RequestID:     input.RequestID,
-		AttemptNumber: input.AttemptNumber,
-		APIKeyID:      input.APIKeyID,
-		Endpoint:      input.Endpoint,
-		ModelAlias:    input.ModelAlias,
-		Status:        usage.AttemptStatusAccepted,
-		CustomerTags:  input.CustomerTags,
-	})
-	if err != nil {
-		return Reservation{}, fmt.Errorf("accounting: start attempt: %w", err)
-	}
-
-	reservation, err := s.repo.CreateReservation(ctx, Reservation{
-		ID:               uuid.New(),
-		AccountID:        input.AccountID,
-		RequestAttemptID: attempt.ID,
-		ReservationKey:   buildReservationKey(input.AccountID, input.RequestID, input.AttemptNumber),
-		RequestID:        input.RequestID,
-		AttemptNumber:    input.AttemptNumber,
-		Endpoint:         input.Endpoint,
-		ModelAlias:       input.ModelAlias,
-		CustomerTags:     input.CustomerTags,
-		PolicyMode:       input.PolicyMode,
-		Status:           ReservationStatusActive,
-		ReservedCredits:  input.EstimatedCredits,
-	}, "reserved")
-	if err != nil {
-		return Reservation{}, fmt.Errorf("accounting: create reservation: %w", err)
-	}
-
-	if _, err := s.ledgerSvc.ReserveCredits(ctx, input.AccountID, input.RequestID, &attempt.ID, &reservation.ID, s.idempotencyKey(reservation.ID, "reserve"), input.EstimatedCredits, map[string]any{
-		"policy_mode": input.PolicyMode,
-		"endpoint":    input.Endpoint,
-		"model_alias": input.ModelAlias,
-	}); err != nil {
-		return Reservation{}, fmt.Errorf("accounting: reserve credits: %w", err)
-	}
-
-	if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{
-		AccountID:        input.AccountID,
-		RequestAttemptID: attempt.ID,
-		APIKeyID:         input.APIKeyID,
-		RequestID:        input.RequestID,
-		EventType:        usage.UsageEventReservationCreated,
-		Endpoint:         input.Endpoint,
-		ModelAlias:       input.ModelAlias,
-		Status:           string(attempt.Status),
-		CustomerTags:     input.CustomerTags,
-		InternalMetadata: map[string]any{
-			"reservation_id":    reservation.ID.String(),
-			"reservation_key":   reservation.ReservationKey,
-			"estimated_credits": input.EstimatedCredits,
-			"policy_mode":       input.PolicyMode,
-		},
-	}); err != nil {
-		return Reservation{}, fmt.Errorf("accounting: record reservation event: %w", err)
-	}
-
-	if input.APIKeyID != nil && s.apiKeySvc != nil {
-		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *input.APIKeyID, input.EstimatedCredits, 0, time.Now().UTC()); err != nil {
-			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
+	// Serialize the balance read → policy check → reservation hold per account.
+	// Concurrent requests for the same account would otherwise all observe the
+	// same available balance and each reserve up to the full amount, allowing a
+	// TOCTOU credit double-spend (issue #106).
+	var reservation Reservation
+	if lockErr := s.locker.WithAccountLock(ctx, input.AccountID, func(ctx context.Context) error {
+		balance, err := s.ledgerSvc.GetBalance(ctx, input.AccountID)
+		if err != nil {
+			return fmt.Errorf("accounting: get balance: %w", err)
 		}
+		if err := enforcePolicy(input.PolicyMode, balance.AvailableCredits, input.EstimatedCredits); err != nil {
+			return err
+		}
+
+		attempt, err := s.usageSvc.StartAttempt(ctx, usage.StartAttemptInput{
+			AccountID:     input.AccountID,
+			RequestID:     input.RequestID,
+			AttemptNumber: input.AttemptNumber,
+			APIKeyID:      input.APIKeyID,
+			Endpoint:      input.Endpoint,
+			ModelAlias:    input.ModelAlias,
+			Status:        usage.AttemptStatusAccepted,
+			CustomerTags:  input.CustomerTags,
+		})
+		if err != nil {
+			return fmt.Errorf("accounting: start attempt: %w", err)
+		}
+
+		reservation, err = s.repo.CreateReservation(ctx, Reservation{
+			ID:               uuid.New(),
+			AccountID:        input.AccountID,
+			RequestAttemptID: attempt.ID,
+			ReservationKey:   buildReservationKey(input.AccountID, input.RequestID, input.AttemptNumber),
+			RequestID:        input.RequestID,
+			AttemptNumber:    input.AttemptNumber,
+			Endpoint:         input.Endpoint,
+			ModelAlias:       input.ModelAlias,
+			CustomerTags:     input.CustomerTags,
+			PolicyMode:       input.PolicyMode,
+			Status:           ReservationStatusActive,
+			ReservedCredits:  input.EstimatedCredits,
+		}, "reserved")
+		if err != nil {
+			return fmt.Errorf("accounting: create reservation: %w", err)
+		}
+
+		if _, err := s.ledgerSvc.ReserveCredits(ctx, input.AccountID, input.RequestID, &attempt.ID, &reservation.ID, s.idempotencyKey(reservation.ID, "reserve"), input.EstimatedCredits, map[string]any{
+			"policy_mode": input.PolicyMode,
+			"endpoint":    input.Endpoint,
+			"model_alias": input.ModelAlias,
+		}); err != nil {
+			return fmt.Errorf("accounting: reserve credits: %w", err)
+		}
+
+		if _, err := s.usageSvc.RecordEvent(ctx, usage.RecordEventInput{
+			AccountID:        input.AccountID,
+			RequestAttemptID: attempt.ID,
+			APIKeyID:         input.APIKeyID,
+			RequestID:        input.RequestID,
+			EventType:        usage.UsageEventReservationCreated,
+			Endpoint:         input.Endpoint,
+			ModelAlias:       input.ModelAlias,
+			Status:           string(attempt.Status),
+			CustomerTags:     input.CustomerTags,
+			InternalMetadata: map[string]any{
+				"reservation_id":    reservation.ID.String(),
+				"reservation_key":   reservation.ReservationKey,
+				"estimated_credits": input.EstimatedCredits,
+				"policy_mode":       input.PolicyMode,
+			},
+		}); err != nil {
+			return fmt.Errorf("accounting: record reservation event: %w", err)
+		}
+
+		if input.APIKeyID != nil && s.apiKeySvc != nil {
+			if err := s.apiKeySvc.ApplyReservationDelta(ctx, *input.APIKeyID, input.EstimatedCredits, 0, time.Now().UTC()); err != nil {
+				return fmt.Errorf("accounting: apply reservation delta: %w", err)
+			}
+		}
+
+		return nil
+	}); lockErr != nil {
+		return Reservation{}, lockErr
 	}
 
 	return reservation, nil
@@ -145,44 +170,55 @@ func (s *Service) ExpandReservation(ctx context.Context, input ExpandReservation
 		return Reservation{}, &ValidationError{Field: "additional_credits", Message: "additional_credits must be greater than zero"}
 	}
 
-	reservation, err := s.repo.GetReservation(ctx, input.AccountID, input.ReservationID)
-	if err != nil {
-		return Reservation{}, fmt.Errorf("accounting: get reservation: %w", err)
-	}
-	if reservation.Status == ReservationStatusFinalized || reservation.Status == ReservationStatusReleased {
-		return Reservation{}, &PolicyError{Message: "reservation cannot be expanded after settlement"}
-	}
-
-	balance, err := s.ledgerSvc.GetBalance(ctx, input.AccountID)
-	if err != nil {
-		return Reservation{}, fmt.Errorf("accounting: get balance: %w", err)
-	}
-
-	currentHeld := remainingHeldCredits(reservation)
-	if err := enforcePolicy(reservation.PolicyMode, balance.AvailableCredits+currentHeld, currentHeld+input.AdditionalCredits); err != nil {
-		return Reservation{}, err
-	}
-
-	reservation, err = s.repo.ExpandReservation(ctx, input.AccountID, input.ReservationID, input.AdditionalCredits, "expanded")
-	if err != nil {
-		return Reservation{}, fmt.Errorf("accounting: expand reservation: %w", err)
-	}
-
-	if _, err := s.ledgerSvc.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("expand-%d", input.AdditionalCredits)), input.AdditionalCredits, map[string]any{
-		"endpoint":           reservation.Endpoint,
-		"model_alias":        reservation.ModelAlias,
-		"additional_credits": input.AdditionalCredits,
-		"policy_mode":        reservation.PolicyMode,
-	}); err != nil {
-		return Reservation{}, fmt.Errorf("accounting: reserve expanded credits: %w", err)
-	}
-
-	if attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID); err != nil {
-		return Reservation{}, err
-	} else if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
-		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, input.AdditionalCredits, 0, time.Now().UTC()); err != nil {
-			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
+	// Same per-account serialization as CreateReservation: an expansion also
+	// reads the balance before posting an additional hold, so concurrent
+	// expansions (or a create racing an expand) must not double-spend (#106).
+	var reservation Reservation
+	if lockErr := s.locker.WithAccountLock(ctx, input.AccountID, func(ctx context.Context) error {
+		var err error
+		reservation, err = s.repo.GetReservation(ctx, input.AccountID, input.ReservationID)
+		if err != nil {
+			return fmt.Errorf("accounting: get reservation: %w", err)
 		}
+		if reservation.Status == ReservationStatusFinalized || reservation.Status == ReservationStatusReleased {
+			return &PolicyError{Message: "reservation cannot be expanded after settlement"}
+		}
+
+		balance, err := s.ledgerSvc.GetBalance(ctx, input.AccountID)
+		if err != nil {
+			return fmt.Errorf("accounting: get balance: %w", err)
+		}
+
+		currentHeld := remainingHeldCredits(reservation)
+		if err := enforcePolicy(reservation.PolicyMode, balance.AvailableCredits+currentHeld, currentHeld+input.AdditionalCredits); err != nil {
+			return err
+		}
+
+		reservation, err = s.repo.ExpandReservation(ctx, input.AccountID, input.ReservationID, input.AdditionalCredits, "expanded")
+		if err != nil {
+			return fmt.Errorf("accounting: expand reservation: %w", err)
+		}
+
+		if _, err := s.ledgerSvc.ReserveCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("expand-%d", input.AdditionalCredits)), input.AdditionalCredits, map[string]any{
+			"endpoint":           reservation.Endpoint,
+			"model_alias":        reservation.ModelAlias,
+			"additional_credits": input.AdditionalCredits,
+			"policy_mode":        reservation.PolicyMode,
+		}); err != nil {
+			return fmt.Errorf("accounting: reserve expanded credits: %w", err)
+		}
+
+		if attempt, err := s.findAttempt(ctx, reservation.AccountID, reservation.RequestID, reservation.RequestAttemptID); err != nil {
+			return err
+		} else if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
+			if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, input.AdditionalCredits, 0, time.Now().UTC()); err != nil {
+				return fmt.Errorf("accounting: apply reservation delta: %w", err)
+			}
+		}
+
+		return nil
+	}); lockErr != nil {
+		return Reservation{}, lockErr
 	}
 
 	return reservation, nil

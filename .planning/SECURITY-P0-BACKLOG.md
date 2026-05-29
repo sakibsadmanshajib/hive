@@ -15,7 +15,7 @@ these block any real launch of the metered-inference reselling product.
 | #117 | No email-verify gate on API key creation | ✅ already fixed (Phase 18 RBAC) | closed, no code change |
 | #119 | getSession() server-side auth (3 sites) | ✅ fixed | PR #151 |
 | #120 | Email-verify only in layout, not middleware | ✅ fixed | PR #151 |
-| #106 | Credit reservation TOCTOU double-spend | ⏳ TODO | see below |
+| #106 | Credit reservation TOCTOU double-spend | ✅ fixed | branch `fix/106-credit-toctou-race` — per-account advisory lock |
 | #107 | No RLS on tenant tables | ⏳ TODO | see below |
 | #108 | /internal/* control-plane endpoints unauth | ⏳ TODO | see below |
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
@@ -25,12 +25,13 @@ these block any real launch of the metered-inference reselling product.
 
 ## Remaining — implementation notes (pre-investigated)
 
-### #106 Credit TOCTOU (HIGHEST severity — financial)
-- File: `apps/control-plane/internal/accounting/service.go` `CreateReservation` (L50–110).
-- Bug: `GetBalance` (L63) and `repo.CreateReservation` (L85) run in separate txns; N concurrent requests read same balance, all pass `enforcePolicy` (L426) → N× over-reserve.
-- Fix: single txn with `pg_advisory_xact_lock(hashtext(account_id::text))` (or `SELECT ... FOR UPDATE` on an account lock row) around balance-read + policy + insert. Add a ledger CHECK / partial-sum constraint as defence in depth.
-- Needs: repo transactional path (check `repository.go` for tx support), and a `-race` + ~100-RPS single-account smoke test (acceptance: balance=1000, reserve=50 → ≤20 succeed).
-- Do on its own branch; no file conflicts with #150/#151.
+### #106 Credit TOCTOU (HIGHEST severity — financial) — ✅ FIXED
+- File: `apps/control-plane/internal/accounting/service.go` `CreateReservation` + `ExpandReservation` (both were vulnerable).
+- Bug: `GetBalance` and the `ReserveCredits` hold ran in separate txns; N concurrent requests read the same balance, all pass `enforcePolicy` → N× over-reserve.
+- Fix shipped: new `AccountLocker` abstraction (`lock.go`, `pglock.go`). The balance-read → policy → reservation-hold critical section now runs inside `WithAccountLock` for both `CreateReservation` and `ExpandReservation`. Production wiring (`cmd/server/main.go`) installs `PgxAccountLocker` = `pg_advisory_lock(hashtext(account_id)::int8)` on a dedicated pooled conn, held across the section, always released — cross-process safe. `NewService` defaults to an in-process locker for single-instance/tests.
+- **Deliberately NOT added** the ledger non-negative CHECK/trigger the issue suggested: `PolicyModeTemporaryOverage` intentionally lets available balance go negative within a buffer, so a hard DB constraint would break the overage policy. Policy stays in Go where the buffer logic lives; the advisory lock is the correctness mechanism.
+- Tests: `service_concurrency_test.go` — `TestCreateReservationSerializesConcurrentReservations` (acceptance: balance=1000, reserve=50, 100 concurrent → ≤20 succeed, balance never negative), `TestCreateReservationAcquiresAccountLock` (deterministic: lock taken exactly once, keyed on account), `TestNoopLockerOverReserves` (discrimination). Verified: `go build` + `go vet` + `go test -race` (full control-plane suite) → exit 0.
+- Follow-up (v1.1 hardening, optional): live ~100-RPS smoke against a real DB to exercise `PgxAccountLocker` end-to-end (unit suite covers the serialization logic via the in-process locker).
 
 ### #107 RLS on tenant tables (largest surface)
 - No `ENABLE ROW LEVEL SECURITY` on any customer table across 21 migrations.
@@ -62,10 +63,11 @@ these block any real launch of the metered-inference reselling product.
 - Larger, multi-surface; needs product input on free-credit policy.
 
 ## Recommended next order
-1. Merge #150 + #151.
-2. #106 (TOCTOU) — own branch, financial-critical, needs DB race test.
-3. #107 (RLS) — own branch, big migration.
-4. #108 (internal auth) — after #150 merged (main.go).
-5. #111 (URL leak) — after #151 merged (members/page.tsx).
+1. ✅ Merge #150 + #151 + #152 + #153 (done).
+2. ✅ #106 (TOCTOU) — done, branch `fix/106-credit-toctou-race` (PR pending).
+3. #107 (RLS) — own branch, big migration. **NEXT.**
+4. #108 (internal auth) — main.go now merged, unblocked.
+5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx).
 6. #112 (service-role) — after #108.
 7. #113 (revoked cache), #116 (abuse).
+8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.
