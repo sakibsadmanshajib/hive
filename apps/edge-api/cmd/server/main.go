@@ -245,14 +245,16 @@ func main() {
 	handler = proxy.InstrumentHandler(edgeMetrics, handler)
 	handler = middleware.CompatHeaders()(handler)
 
-	// Wrap the whole mux in a global request-body cap (100 MiB) as an
-	// OOM/slow-upload backstop. The chat hot path keeps its tighter
-	// per-route limits (4 MiB in dispatch, 2 MiB in the OWUI unwrap);
-	// MaxBytesHandler only bounds the inbound request body, so SSE
-	// streaming responses are unaffected.
+	// Wrap the whole mux in a global request-body cap as an OOM/slow-upload
+	// backstop. The cap must be at least the largest body any route legitimately
+	// accepts — files.MaxFileSize (512 MiB) for POST /v1/files — otherwise valid
+	// uploads between the cap and MaxFileSize fail before reaching the handler.
+	// Tighter per-route limits still apply where they matter (4 MiB in chat
+	// dispatch, 2 MiB in the OWUI unwrap). MaxBytesHandler only bounds the
+	// inbound request body, so SSE streaming responses are unaffected.
 	srv := &http.Server{
 		Addr:    ":" + port,
-		Handler: http.MaxBytesHandler(handler, 100<<20),
+		Handler: http.MaxBytesHandler(handler, files.MaxFileSize),
 		// ReadHeaderTimeout is the slowloris defence — a client dribbling
 		// request headers is cut after this deadline. Safe for every route.
 		ReadHeaderTimeout: 10 * time.Second,
