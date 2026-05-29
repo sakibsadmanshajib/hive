@@ -1,38 +1,20 @@
 package audit
 
 import (
-	"bytes"
 	"encoding/json"
-	"sort"
 	"time"
 
-	"github.com/google/uuid"
+	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
 
-// canonicalRow is the deterministic JSON shape over which row_hash is taken.
-// It excludes hash-related columns (seq, prev_hash, row_hash) so the hash
-// covers payload plus identity, not the chain link itself.
-type canonicalRow struct {
-	TenantID        string          `json:"tenant_id,omitempty"`
-	ActorID         string          `json:"actor_id,omitempty"`
-	ActorType       string          `json:"actor_type"`
-	Action          string          `json:"action"`
-	ResourceType    string          `json:"resource_type,omitempty"`
-	ResourceID      string          `json:"resource_id,omitempty"`
-	Severity        string          `json:"severity"`
-	BeforeJSON      json.RawMessage `json:"before_json,omitempty"`
-	AfterJSON       json.RawMessage `json:"after_json,omitempty"`
-	RequestID       string          `json:"request_id,omitempty"`
-	SourceIP        string          `json:"source_ip,omitempty"`
-	UserAgent       string          `json:"user_agent,omitempty"`
-	JWTClaimsDigest string          `json:"jwt_claims_digest,omitempty"`
-	DeploySHA       string          `json:"deploy_sha"`
-	Env             string          `json:"env"`
-	TS              string          `json:"ts"`
-}
-
+// canonicalize produces the deterministic byte string the row_hash is
+// computed over. It delegates row shape, timestamp format, and JSON
+// encoding rules to packages/audit-canonical so the edge-api hot path
+// (chat/audit.go) and the verifier remain byte-identical for the same
+// logical event. See packages/audit-canonical/canonical.go for the
+// shape and round-trip rules.
 func canonicalize(e Event, deploySHA, env string, ts time.Time, before, after json.RawMessage) ([]byte, error) {
-	row := canonicalRow{
+	row := canonical.Row{
 		ActorType:       string(e.Actor.Type),
 		Action:          e.Action,
 		ResourceType:    e.ResourceType,
@@ -45,78 +27,20 @@ func canonicalize(e Event, deploySHA, env string, ts time.Time, before, after js
 		JWTClaimsDigest: e.JWTClaimsDigest,
 		DeploySHA:       deploySHA,
 		Env:             env,
-		TS:              ts.UTC().Format(time.RFC3339Nano),
+		TS:              canonical.FormatTS(ts),
 	}
-	if e.TenantID != uuid.Nil {
-		row.TenantID = e.TenantID.String()
-	}
-	if e.Actor.ID != uuid.Nil {
-		row.ActorID = e.Actor.ID.String()
-	}
-	if e.RequestID != uuid.Nil {
-		row.RequestID = e.RequestID.String()
-	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(row); err != nil {
-		return nil, err
-	}
-	out := bytes.TrimRight(buf.Bytes(), "\n")
-	return out, nil
+	(canonical.Identity{
+		TenantID:  e.TenantID,
+		ActorID:   e.Actor.ID,
+		RequestID: e.RequestID,
+	}).Apply(&row)
+	return row.Marshal()
 }
 
-// stableJSON marshals an arbitrary value with sorted map keys for hash stability.
+// stableJSON wraps the shared StableJSON helper so callers do not need
+// to import the audit-canonical package directly. The implementation
+// is identical — keys are sorted lexicographically at every level so
+// the verifier reproduces the same bytes after a jsonb round-trip.
 func stableJSON(v any) (json.RawMessage, error) {
-	if v == nil {
-		return nil, nil
-	}
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	var m any
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return raw, nil
-	}
-	return marshalSorted(m), nil
-}
-
-func marshalSorted(v any) json.RawMessage {
-	switch x := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(x))
-		for k := range x {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		var buf bytes.Buffer
-		buf.WriteByte('{')
-		for i, k := range keys {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			kb, _ := json.Marshal(k)
-			buf.Write(kb)
-			buf.WriteByte(':')
-			buf.Write(marshalSorted(x[k]))
-		}
-		buf.WriteByte('}')
-		return buf.Bytes()
-	case []any:
-		var buf bytes.Buffer
-		buf.WriteByte('[')
-		for i, e := range x {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			buf.Write(marshalSorted(e))
-		}
-		buf.WriteByte(']')
-		return buf.Bytes()
-	default:
-		raw, _ := json.Marshal(v)
-		return raw
-	}
+	return canonical.StableJSON(v)
 }

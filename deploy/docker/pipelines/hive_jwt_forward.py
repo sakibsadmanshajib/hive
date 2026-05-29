@@ -31,11 +31,20 @@ class Pipeline:
         if not isinstance(body, dict):
             return body
 
+        # Forward ONLY the access_token. The previous code fell back to
+        # id_token, which carries different `aud` and lifetime semantics
+        # than an access_token and is intended for OIDC identity
+        # assertions — not resource-server authorization. Using id_token
+        # for API calls invites confused-deputy / audience-mismatch
+        # attacks. If no access_token is available we leave the body
+        # untouched; edge-api's OWUI unwrap then logs a warning and the
+        # selector routes the shim-key Authorization to the API-key
+        # path, which 401s loudly.
         token = None
         if user is not None:
             oauth = user.get("oauth_sub") or {}
             if isinstance(oauth, dict):
-                token = oauth.get("access_token") or oauth.get("id_token")
+                token = oauth.get("access_token")
             token = token or user.get("token")
 
         metadata = body.setdefault("__metadata", {})

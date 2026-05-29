@@ -1,17 +1,20 @@
 package chat
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"sort"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
+
+const maxSerializationRetries = 3
 
 type auditEvent struct {
 	TenantID     uuid.UUID
@@ -27,44 +30,68 @@ type auditEvent struct {
 	ResourceID   string
 }
 
+// insertAuditEvent writes one audit row from the edge-api hot path,
+// chained per-tenant. The chain semantics, canonical byte string, and
+// timestamp format are owned by packages/audit-canonical so the
+// control-plane SyncWriter and this writer cannot drift apart silently.
+//
+// Cross-partition stitching: if no row exists in the current month for
+// this tenant, the prev_hash query falls back to the most recent row
+// for the same tenant across ALL partitions. Same behaviour as
+// SyncWriter; the verifier mirrors it.
 func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent) error {
 	if pool == nil {
 		return nil
 	}
-	after, err := stableJSON(event.After)
+	after, err := canonical.StableJSON(event.After)
 	if err != nil {
 		return err
 	}
+	for attempt := 0; ; attempt++ {
+		err := insertAuditEventOnce(ctx, pool, event, after)
+		if err == nil {
+			return nil
+		}
+		if !isSerializationFailure(err) || attempt >= maxSerializationRetries {
+			return err
+		}
+	}
+}
 
+func insertAuditEventOnce(ctx context.Context, pool *pgxpool.Pool, event auditEvent, after json.RawMessage) error {
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable})
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	ts := time.Now().UTC()
-	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
-	monthEnd := monthStart.AddDate(0, 1, 0)
+	// Truncate to microseconds so the canonical hash, the timestamp
+	// string in the hash, and the value Postgres stores all match.
+	// Re-captured per attempt so a retried row's `ts` reflects its
+	// real commit time.
+	ts := canonical.TruncateTS(time.Now())
 
-	tenantArg := nullableUUID(event.TenantID)
-
-	// Two locks. The first is partition-wide and serialises every writer in
-	// the month so the partition-global MAX(seq) read+insert cannot race —
-	// this is required because the audit_log_YYYY_MM tables enforce a
-	// UNIQUE(seq) index over the entire partition (not per tenant).
+	// Advisory lock keyed on the month's epoch as bigint. ::int was
+	// 32-bit and would overflow in 2038; ::bigint matches the
+	// pg_advisory_xact_lock(bigint) overload so the namespace is
+	// unambiguous.
 	if _, err := tx.Exec(
 		ctx,
-		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::int)`,
+		`SELECT pg_advisory_xact_lock(extract(epoch from date_trunc('month', $1::timestamptz))::bigint)`,
 		ts,
 	); err != nil {
 		return err
 	}
 
-	// seq is partition-global so that the existing UNIQUE(seq) index holds.
-	// The hash chain itself remains per-tenant: prev_hash is read from the
-	// most recent row for THIS tenant, so cross-tenant rows never link into
-	// the same chain and the verifier can recompute each tenant's chain
-	// independently in ORDER BY tenant_id, seq.
+	monthStart := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
+	monthEnd := monthStart.AddDate(0, 1, 0)
+	tenantArg := nullableUUID(event.TenantID)
+
+	// seq is partition-global (UNIQUE(seq) per partition); prev_hash
+	// is per-tenant. The prev_hash fallback orders by ts DESC, seq
+	// DESC, id DESC — NOT raw seq — because seq counters restart per
+	// partition: a June seq=100 row is older than July seq=1 but
+	// would be returned by `ORDER BY seq DESC`, breaking the chain.
 	var maxSeq int64
 	var prevHash []byte
 	if err := tx.QueryRow(ctx, `
@@ -72,9 +99,8 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 		       COALESCE(
 		         (SELECT row_hash
 		            FROM public.audit_log
-		           WHERE ts >= $2 AND ts < $3
-		             AND tenant_id IS NOT DISTINCT FROM $1
-		           ORDER BY seq DESC
+		           WHERE tenant_id IS NOT DISTINCT FROM $1
+		           ORDER BY ts DESC, seq DESC, id DESC
 		           LIMIT 1),
 		         decode(repeat('00', 32), 'hex')
 		       )
@@ -125,107 +151,34 @@ func insertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event auditEvent)
 	return tx.Commit(ctx)
 }
 
-type canonicalAuditRow struct {
-	TenantID        string          `json:"tenant_id,omitempty"`
-	ActorID         string          `json:"actor_id,omitempty"`
-	ActorType       string          `json:"actor_type"`
-	Action          string          `json:"action"`
-	ResourceType    string          `json:"resource_type,omitempty"`
-	ResourceID      string          `json:"resource_id,omitempty"`
-	Severity        string          `json:"severity"`
-	BeforeJSON      json.RawMessage `json:"before_json,omitempty"`
-	AfterJSON       json.RawMessage `json:"after_json,omitempty"`
-	RequestID       string          `json:"request_id,omitempty"`
-	SourceIP        string          `json:"source_ip,omitempty"`
-	UserAgent       string          `json:"user_agent,omitempty"`
-	JWTClaimsDigest string          `json:"jwt_claims_digest,omitempty"`
-	DeploySHA       string          `json:"deploy_sha"`
-	Env             string          `json:"env"`
-	TS              string          `json:"ts"`
+// isSerializationFailure reports whether err is a Postgres
+// serialisation_failure (40001), the only error class we retry.
+func isSerializationFailure(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if errors.As(err, &pgErr) {
+		return pgErr.SQLState() == pgerrcode.SerializationFailure
+	}
+	return false
 }
 
 func canonicalAudit(event auditEvent, ts time.Time, before, after json.RawMessage) ([]byte, error) {
-	row := canonicalAuditRow{
-		ActorType:    "USER",
-		Action:       event.Action,
-		ResourceType: event.ResourceType,
-		ResourceID:   event.ResourceID,
-		Severity:     event.Severity,
-		BeforeJSON:   before,
-		AfterJSON:    after,
-		UserAgent:    event.UserAgent,
-		DeploySHA:    event.DeploySHA,
-		Env:          event.Environment,
-		TS:           ts.UTC().Format(time.RFC3339Nano),
+	row := canonical.Row{
+		ActorType:  "USER",
+		Action:     event.Action,
+		Severity:   event.Severity,
+		BeforeJSON: before,
+		AfterJSON:  after,
+		UserAgent:  event.UserAgent,
+		DeploySHA:  event.DeploySHA,
+		Env:        event.Environment,
+		TS:         canonical.FormatTS(ts),
 	}
-	if event.TenantID != uuid.Nil {
-		row.TenantID = event.TenantID.String()
-	}
-	if event.ActorID != uuid.Nil {
-		row.ActorID = event.ActorID.String()
-	}
-	if event.RequestID != uuid.Nil {
-		row.RequestID = event.RequestID.String()
-	}
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(row); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
-}
-
-func stableJSON(value any) (json.RawMessage, error) {
-	if value == nil {
-		return nil, nil
-	}
-	raw, err := json.Marshal(value)
-	if err != nil {
-		return nil, err
-	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return raw, nil
-	}
-	return marshalSorted(decoded), nil
-}
-
-func marshalSorted(value any) json.RawMessage {
-	switch typed := value.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		var buf bytes.Buffer
-		buf.WriteByte('{')
-		for index, key := range keys {
-			if index > 0 {
-				buf.WriteByte(',')
-			}
-			keyBytes, _ := json.Marshal(key)
-			buf.Write(keyBytes)
-			buf.WriteByte(':')
-			buf.Write(marshalSorted(typed[key]))
-		}
-		buf.WriteByte('}')
-		return buf.Bytes()
-	case []any:
-		var buf bytes.Buffer
-		buf.WriteByte('[')
-		for index, item := range typed {
-			if index > 0 {
-				buf.WriteByte(',')
-			}
-			buf.Write(marshalSorted(item))
-		}
-		buf.WriteByte(']')
-		return buf.Bytes()
-	default:
-		raw, _ := json.Marshal(value)
-		return raw
-	}
+	row.ResourceType = event.ResourceType
+	row.ResourceID = event.ResourceID
+	(canonical.Identity{
+		TenantID:  event.TenantID,
+		ActorID:   event.ActorID,
+		RequestID: event.RequestID,
+	}).Apply(&row)
+	return row.Marshal()
 }

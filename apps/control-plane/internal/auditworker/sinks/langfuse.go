@@ -35,10 +35,26 @@ func (s *Langfuse) Send(ctx context.Context, row map[string]any) error {
 	}
 
 	after, _ := row["after_json"].(map[string]any)
+	// Allowlist non-PII metadata fields. The previous code forwarded
+	// `after` as-is which leaked prompt/completion content into
+	// Langfuse even when LANGFUSE_INCLUDE_CONTENT was unset. Mirror
+	// the Sentry sink's allowlist approach: pass only fields that are
+	// dimensions/costs/IDs, never user-generated text.
+	allowedMetadataKeys := []string{
+		"model", "provider", "in_tokens", "out_tokens",
+		"latency_ms", "cost_credits", "finish_reason", "request_id",
+		"retrieval_doc_ids", "stream",
+	}
+	safeMetadata := make(map[string]any, len(allowedMetadataKeys))
+	for _, k := range allowedMetadataKeys {
+		if v, ok := after[k]; ok {
+			safeMetadata[k] = v
+		}
+	}
 	generationBody := map[string]any{
 		"name":      "chat.completions",
 		"model":     after["model"],
-		"metadata":  after,
+		"metadata":  safeMetadata,
 		"traceId":   row["request_id"],
 		"startTime": row["ts"],
 	}

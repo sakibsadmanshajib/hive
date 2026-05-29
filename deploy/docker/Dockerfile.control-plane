@@ -13,10 +13,12 @@ COPY go.work go.work.sum* ./
 COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
 COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
 COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
+COPY packages/audit-canonical/go.mod packages/audit-canonical/go.sum* ./packages/audit-canonical/
 RUN cd apps/control-plane && go mod download
 
 COPY apps/control-plane/ ./apps/control-plane/
 COPY packages/storage/ ./packages/storage/
+COPY packages/audit-canonical/ ./packages/audit-canonical/
 
 EXPOSE 8081
 

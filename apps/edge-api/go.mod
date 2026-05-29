@@ -8,6 +8,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/lestrrat-go/jwx/v2 v2.1.6
 	github.com/prometheus/client_golang v1.23.2
+	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
 	github.com/stretchr/testify v1.11.1
 )
 
@@ -18,6 +19,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/goccy/go-json v0.10.3 // indirect
+	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
@@ -53,3 +55,5 @@ require (
 )
 
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
+
+replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical

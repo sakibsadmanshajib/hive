@@ -7,28 +7,79 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
-	"sort"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
+
+// defaultCanonicalEpoch is the UTC instant at/after which every audit row
+// MUST hash with the fixed-width microsecond canonical format introduced
+// by the Phase 19 remediation. It defaults to the remediation cutover
+// date; operators MUST override it via AUDIT_CANONICAL_EPOCH with the
+// actual instant the canonical-writer build went live in their
+// environment.
+const defaultCanonicalEpoch = "2026-05-29T00:00:00Z"
 
 type Verifier struct {
 	pool *pgxpool.Pool
+	// legacyCutoff bounds the legacy (RFC3339Nano) hash fallback to rows
+	// written strictly before this instant. A hash mismatch on a row at
+	// or after the cutoff is a genuine writer regression and is reported
+	// — never silently absorbed by the legacy re-canonicalisation.
+	legacyCutoff time.Time
 }
 
 func New(pool *pgxpool.Pool) *Verifier {
-	return &Verifier{pool: pool}
+	return &Verifier{pool: pool, legacyCutoff: canonicalEpoch()}
 }
 
-// VerifyPartition walks each tenant's chain independently for the month
-// containing t. The hash chain is partitioned by (tenant_id, month) — see
-// writer in apps/edge-api/internal/chat/audit.go — so verification MUST
-// group rows by tenant_id and walk strict seq order within each group;
-// otherwise the recomputed sha256(prev_hash||canon) will not match the
-// stored row_hash because adjacent rows in the global seq order may belong
-// to different tenant chains.
+// canonicalEpoch resolves the legacy-fallback cutoff from
+// AUDIT_CANONICAL_EPOCH (RFC3339), falling back to defaultCanonicalEpoch
+// if unset or unparseable.
+func canonicalEpoch() time.Time {
+	if raw := os.Getenv("AUDIT_CANONICAL_EPOCH"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			return t.UTC()
+		}
+		slog.Warn("invalid AUDIT_CANONICAL_EPOCH; using default",
+			"value", raw, "default", defaultCanonicalEpoch)
+	}
+	t, _ := time.Parse(time.RFC3339, defaultCanonicalEpoch)
+	return t.UTC()
+}
+
+// VerifyPartition walks each tenant's chain independently for the
+// month containing t. The hash chain is per-tenant (prev_hash links
+// the previous row in the same tenant's chain, regardless of month);
+// the partition table layout exists for storage and retention, not for
+// chain semantics. Verification therefore:
+//
+//  1. Loads the prior-month link for every tenant present in this
+//     partition (cross-partition stitching). Without this, the first
+//     row of each new month was previously verified against the
+//     all-zero sentinel — a tampered or missing month-boundary row
+//     would be silently accepted or falsely flagged.
+//  2. Groups rows by tenant_id, walks strict seq order within each
+//     group, and recomputes sha256(prev_hash||canonical) for each row.
+//
+// The byte string that gets hashed is produced by the shared
+// packages/audit-canonical package, which both writers also use, so
+// every row produced anywhere in the system is re-verifiable here.
 func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error) {
+	partitionStart := time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	// Cross-partition stitching: pull the most-recent row_hash per
+	// tenant from any earlier partition. We seed expectedPrev with
+	// those so the first row of this partition's chain links to the
+	// previous month's last row, not the all-zero sentinel.
+	expectedPrev, err := v.bootstrapExpectedPrev(ctx, partitionStart)
+	if err != nil {
+		return 0, err
+	}
+	zeroHash := make([]byte, 32)
+
 	rows, err := v.pool.Query(ctx, `
 		SELECT id, ts,
 		       tenant_id::text, actor_id::text, actor_type, action,
@@ -46,14 +97,7 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 	}
 	defer rows.Close()
 
-	// expectedPrev tracks the row_hash of the previous row IN THE SAME
-	// tenant chain. Self-consistent rows whose prev_hash does not match
-	// the actual previous row_hash indicate a broken link — a missing,
-	// reordered, or deleted row — and must be flagged independently of
-	// the internal hash check.
 	mismatches := 0
-	expectedPrev := map[string][]byte{}
-	zeroHash := make([]byte, 32)
 	for rows.Next() {
 		row, err := scanRow(rows)
 		if err != nil {
@@ -65,8 +109,8 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		}
 		want, seen := expectedPrev[tenantKey]
 		if !seen {
-			// First row of this tenant's chain in the partition must
-			// link to the all-zero sentinel (no previous row).
+			// No prior-partition row for this tenant either — first
+			// row in this tenant's chain ever.
 			want = zeroHash
 		}
 		if !bytes.Equal(row.prevHash, want) {
@@ -76,6 +120,7 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 				"reason", "prev_hash does not match previous row in tenant chain")
 		}
 
+		// Canonical bytes per current 6-digit microsecond format.
 		canon, err := row.canonical()
 		if err != nil {
 			return mismatches, err
@@ -85,21 +130,88 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		sum.Write(canon)
 		recomputed := sum.Sum(nil)
 		if !bytes.Equal(recomputed, row.rowHash) {
+			// Legacy fallback: rows written before the canonical epoch
+			// used time.RFC3339Nano for the canonical `ts` field. A
+			// pure-fmt change cannot retroactively rehash those rows, so
+			// try the legacy format before flagging a mismatch — but
+			// ONLY for rows written strictly before the cutover. A row at
+			// or after the epoch that fails the primary check is a real
+			// post-cutover writer regression; absorbing it via the legacy
+			// path would mask exactly the drift this verifier exists to
+			// detect, so such rows fall straight through to a mismatch.
+			if row.ts.Before(v.legacyCutoff) {
+				legacyCanon, legacyErr := row.canonicalLegacy()
+				if legacyErr == nil {
+					legacySum := sha256.New()
+					legacySum.Write(row.prevHash)
+					legacySum.Write(legacyCanon)
+					if bytes.Equal(legacySum.Sum(nil), row.rowHash) {
+						expectedPrev[tenantKey] = row.rowHash
+						continue
+					}
+				}
+			}
 			mismatches++
 			slog.Warn("audit chain mismatch",
 				"id", row.id, "seq", row.seq, "tenant_id", tenantKey,
 				"reason", "row_hash does not match sha256(prev_hash||canonical_row)")
 		}
-		// Even on mismatch, advance the chain using the stored row_hash so
-		// subsequent links are evaluated against what the writer actually
-		// committed. This surfaces every broken link instead of cascading
-		// one fault into all subsequent mismatches.
+		// Always advance using the stored row_hash so subsequent links
+		// are evaluated against what the writer actually committed —
+		// surfaces every broken link instead of cascading.
 		expectedPrev[tenantKey] = row.rowHash
 	}
 	if err := rows.Err(); err != nil {
 		return mismatches, err
 	}
 	return mismatches, nil
+}
+
+// bootstrapExpectedPrev returns, for every tenant_id with at least one
+// audit row strictly before partitionStart, the row_hash of that
+// tenant's most recent row before the partition. The NULL tenant key
+// is the empty string to match the in-walk encoding.
+//
+// Ordering is `ts DESC, seq DESC, id DESC` — NOT raw seq — because
+// seq counters restart per partition. A previous-partition June
+// seq=100 is older than a current-partition July seq=1 but raw seq
+// ordering would prefer June=100, breaking the verifier's chain
+// bootstrap. The (tenant_id, ts DESC) index covers this efficiently
+// for the prior-partition window.
+//
+// We do not pre-filter to "tenants present in this partition" because
+// that would require two scans and Postgres handles the broader
+// query cheaply via the (tenant_id, ts DESC) index. Tenants absent
+// from the current partition just contribute unused map entries.
+func (v *Verifier) bootstrapExpectedPrev(ctx context.Context, partitionStart time.Time) (map[string][]byte, error) {
+	rows, err := v.pool.Query(ctx, `
+		SELECT DISTINCT ON (tenant_id)
+		       tenant_id::text, row_hash
+		  FROM public.audit_log
+		 WHERE ts < $1
+		 ORDER BY tenant_id NULLS FIRST, ts DESC, seq DESC, id DESC`,
+		partitionStart,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string][]byte)
+	for rows.Next() {
+		var (
+			tenant sql.NullString
+			hash   []byte
+		)
+		if err := rows.Scan(&tenant, &hash); err != nil {
+			return nil, err
+		}
+		key := ""
+		if tenant.Valid {
+			key = tenant.String
+		}
+		out[key] = hash
+	}
+	return out, rows.Err()
 }
 
 type scanner interface {
@@ -140,25 +252,9 @@ func scanRow(s scanner) (auditRow, error) {
 	return row, err
 }
 
-type canonicalRow struct {
-	TenantID        string          `json:"tenant_id,omitempty"`
-	ActorID         string          `json:"actor_id,omitempty"`
-	ActorType       string          `json:"actor_type"`
-	Action          string          `json:"action"`
-	ResourceType    string          `json:"resource_type,omitempty"`
-	ResourceID      string          `json:"resource_id,omitempty"`
-	Severity        string          `json:"severity"`
-	BeforeJSON      json.RawMessage `json:"before_json,omitempty"`
-	AfterJSON       json.RawMessage `json:"after_json,omitempty"`
-	RequestID       string          `json:"request_id,omitempty"`
-	SourceIP        string          `json:"source_ip,omitempty"`
-	UserAgent       string          `json:"user_agent,omitempty"`
-	JWTClaimsDigest string          `json:"jwt_claims_digest,omitempty"`
-	DeploySHA       string          `json:"deploy_sha"`
-	Env             string          `json:"env"`
-	TS              string          `json:"ts"`
-}
-
+// canonical produces the deterministic byte string that row_hash was
+// computed over. Field order, json tags, and timestamp format match
+// the writers via the shared packages/audit-canonical package.
 func (r auditRow) canonical() ([]byte, error) {
 	before, err := normalizeJSONB(r.beforeJSON)
 	if err != nil {
@@ -169,7 +265,7 @@ func (r auditRow) canonical() ([]byte, error) {
 		return nil, err
 	}
 
-	row := canonicalRow{
+	row := canonical.Row{
 		ActorType:  r.actorType,
 		Action:     r.action,
 		Severity:   r.severity,
@@ -177,7 +273,12 @@ func (r auditRow) canonical() ([]byte, error) {
 		AfterJSON:  after,
 		DeploySHA:  r.deploySHA,
 		Env:        r.env,
-		TS:         r.ts.UTC().Format(time.RFC3339Nano),
+		// Re-format from the timestamptz Postgres handed us. Even if a
+		// writer regression formatted with RFC3339Nano, the verifier
+		// normalises to the canonical 6-digit microsecond form so the
+		// hash check uses the same string the row was actually
+		// committed with.
+		TS: canonical.FormatTS(r.ts),
 	}
 	if r.tenantID.Valid {
 		row.TenantID = r.tenantID.String
@@ -204,60 +305,86 @@ func (r auditRow) canonical() ([]byte, error) {
 		row.JWTClaimsDigest = r.jwtClaimsDigest.String
 	}
 
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(row); err != nil {
-		return nil, err
-	}
-	return bytes.TrimRight(buf.Bytes(), "\n"), nil
+	return row.Marshal()
 }
 
+// normalizeJSONB decodes jsonb bytes from Postgres and re-serialises
+// them through the canonical sorted-keys path so the round-trip is
+// stable. Postgres jsonb has its own internal key ordering and we
+// cannot depend on it matching the writer's stable form. NOTE: if
+// the audit_log schema ever changes these columns from `jsonb` to
+// `json` (text), Postgres would preserve insertion order rather than
+// applying its own — and the writer's sort would already match —
+// making the re-sort here cause false mismatches for legacy rows.
+// The current schema uses `jsonb` (see 20260516_04_phase19_audit_log.sql);
+// any migration away from that needs verifier coordination.
 func normalizeJSONB(raw []byte) (json.RawMessage, error) {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, nil
 	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, err
-	}
-	return marshalSorted(decoded), nil
+	// Pass the raw jsonb bytes straight through StableJSON, which decodes
+	// with UseNumber so numeric literals keep their exact text. Pre-
+	// unmarshalling into `any` here would coerce every JSON number to
+	// float64 and lose precision on large ints / decimals (token counts,
+	// cost micro-amounts), producing canonical bytes that diverge from
+	// the writer's StableJSON output — a false tamper alert.
+	return canonical.StableJSON(json.RawMessage(raw))
 }
 
-func marshalSorted(v any) json.RawMessage {
-	switch typed := v.(type) {
-	case map[string]any:
-		keys := make([]string, 0, len(typed))
-		for key := range typed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		var buf bytes.Buffer
-		buf.WriteByte('{')
-		for i, key := range keys {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			keyBytes, _ := json.Marshal(key)
-			buf.Write(keyBytes)
-			buf.WriteByte(':')
-			buf.Write(marshalSorted(typed[key]))
-		}
-		buf.WriteByte('}')
-		return buf.Bytes()
-	case []any:
-		var buf bytes.Buffer
-		buf.WriteByte('[')
-		for i, item := range typed {
-			if i > 0 {
-				buf.WriteByte(',')
-			}
-			buf.Write(marshalSorted(item))
-		}
-		buf.WriteByte(']')
-		return buf.Bytes()
-	default:
-		raw, _ := json.Marshal(v)
-		return raw
+// canonicalLegacy reproduces the pre-epoch canonical bytes a writer
+// would have produced when the codebase still used
+// time.RFC3339Nano. Returns the byte string suitable for re-hashing
+// historical rows during the verifier's chain walk.
+//
+// This function exists ONLY to grandfather rows written before the
+// canonical 6-digit microsecond format landed. Do not extend it for
+// new fields; every future shape change must bump a chain epoch
+// stored alongside the row, not silently widen the fallback path.
+func (r auditRow) canonicalLegacy() ([]byte, error) {
+	before, err := normalizeJSONB(r.beforeJSON)
+	if err != nil {
+		return nil, err
 	}
+	after, err := normalizeJSONB(r.afterJSON)
+	if err != nil {
+		return nil, err
+	}
+	row := canonical.Row{
+		ActorType:  r.actorType,
+		Action:     r.action,
+		Severity:   r.severity,
+		BeforeJSON: before,
+		AfterJSON:  after,
+		DeploySHA:  r.deploySHA,
+		Env:        r.env,
+		// Legacy writers used time.RFC3339Nano which strips trailing
+		// zeros from the fractional component. After Postgres rounds
+		// to microseconds the readback may have fewer than 6 digits.
+		TS: r.ts.UTC().Format(time.RFC3339Nano),
+	}
+	if r.tenantID.Valid {
+		row.TenantID = r.tenantID.String
+	}
+	if r.actorID.Valid {
+		row.ActorID = r.actorID.String
+	}
+	if r.resourceType.Valid {
+		row.ResourceType = r.resourceType.String
+	}
+	if r.resourceID.Valid {
+		row.ResourceID = r.resourceID.String
+	}
+	if r.requestID.Valid {
+		row.RequestID = r.requestID.String
+	}
+	if r.sourceIP.Valid {
+		row.SourceIP = r.sourceIP.String
+	}
+	if r.userAgent.Valid {
+		row.UserAgent = r.userAgent.String
+	}
+	if r.jwtClaimsDigest.Valid {
+		row.JWTClaimsDigest = r.jwtClaimsDigest.String
+	}
+	return row.Marshal()
 }

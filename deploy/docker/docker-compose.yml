@@ -30,6 +30,7 @@ services:
       SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-}
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-}
+      OWUI_SHIM_KEY: ${OWUI_SHIM_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 5s
@@ -232,12 +233,16 @@ services:
       WEBUI_URL: ${HIVE_CHAT_URL:-http://localhost:3003}
       DEFAULT_LOCALE: "en"
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
-      OPENAI_API_KEY: "owui-shim-key"
+      # OWUI_SHIM_KEY MUST be set when the open-webui profile is active. The
+      # edge-api OWUI unwrap middleware only fires when this value matches
+      # exactly; an empty/unset value disables the middleware and OWUI
+      # traffic will 401. Generate: openssl rand -base64 32
+      OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
       RAG_EMBEDDING_ENGINE: "openai"
       RAG_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
-      RAG_OPENAI_API_KEY: "owui-shim-key"
+      RAG_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       RAG_EMBEDDING_MODEL: "text-embedding-3-small"
       VECTOR_DB: "pgvector"
       PGVECTOR_DB_URL: ${SUPABASE_DB_URL:-}
@@ -257,6 +262,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    # M10: bounded resources so a runaway pipeline / RAG batch cannot
+    # starve the rest of the local stack. Numbers picked from observed
+    # peak under a 10-user soak; revisit if Phase 24 packaging shifts.
+    mem_limit: 2g
+    cpus: 2.0
     restart: unless-stopped
 
   caddy-owui:

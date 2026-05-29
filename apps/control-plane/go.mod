@@ -10,11 +10,13 @@ require (
 	github.com/jackc/pgx/v5 v5.7.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.18.0
+	github.com/sakibsadmanshajib/hive/packages/audit-canonical v0.0.0
 	github.com/sakibsadmanshajib/hive/packages/storage v0.0.0
 	github.com/stripe/stripe-go/v84 v84.4.1
 )
 
 require (
+	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.10 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 )
@@ -52,3 +54,5 @@ require (
 )
 
 replace github.com/sakibsadmanshajib/hive/packages/storage => ../../packages/storage
+
+replace github.com/sakibsadmanshajib/hive/packages/audit-canonical => ../../packages/audit-canonical

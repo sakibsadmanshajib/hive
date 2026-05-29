@@ -7,3 +7,5 @@ use ./apps/edge-api
 use ./apps/control-plane
 
 use ./packages/storage
+
+use ./packages/audit-canonical
