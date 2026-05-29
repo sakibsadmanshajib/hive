@@ -44,6 +44,22 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(signInUrl);
   }
 
+  // Email-verification gate, enforced server-side on every console route.
+  // Previously only the console layout component checked verification, so
+  // a direct fetch / curl with a valid session cookie could still reach
+  // gated pages (e.g. /console/api-keys). Unverified users are redirected
+  // to the profile page — the app's verification surface — which is
+  // exempted here to avoid a redirect loop.
+  if (
+    pathname.startsWith("/console") &&
+    user &&
+    !user.email_confirmed_at &&
+    pathname !== "/console/settings/profile"
+  ) {
+    const verifyUrl = new URL("/console/settings/profile", request.url);
+    return NextResponse.redirect(verifyUrl);
+  }
+
   // Redirect authenticated users from root to /console
   if (pathname === "/" && user) {
     const consoleUrl = new URL("/console", request.url);
