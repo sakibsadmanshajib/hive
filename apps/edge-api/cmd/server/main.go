@@ -245,14 +245,18 @@ func main() {
 	handler = proxy.InstrumentHandler(edgeMetrics, handler)
 	handler = middleware.CompatHeaders()(handler)
 
-	// Wrap the whole mux in a global request-body cap (100 MiB) as an
-	// OOM/slow-upload backstop. The chat hot path keeps its tighter
-	// per-route limits (4 MiB in dispatch, 2 MiB in the OWUI unwrap);
-	// MaxBytesHandler only bounds the inbound request body, so SSE
-	// streaming responses are unaffected.
+	// Global request-body cap (outermost) sized for the largest legitimate
+	// body: a /v1/files multipart upload carrying a files.MaxFileSize (512 MiB)
+	// payload plus multipart boundaries + form fields (globalMaxBody adds
+	// multipartOverhead headroom). Smaller media endpoints (/v1/images/*,
+	// /v1/audio/*) are wrapped with tighter per-route caps in
+	// registerMediaFileBatchRoutes — http.MaxBytesHandler nests and the smaller
+	// inner limit takes effect first. Chat keeps its own 4 MiB internal limit.
+	// MaxBytesHandler only bounds the inbound request body, so SSE streaming
+	// responses are unaffected.
 	srv := &http.Server{
 		Addr:    ":" + port,
-		Handler: http.MaxBytesHandler(handler, 100<<20),
+		Handler: http.MaxBytesHandler(handler, globalMaxBody),
 		// ReadHeaderTimeout is the slowloris defence — a client dribbling
 		// request headers is cut after this deadline. Safe for every route.
 		ReadHeaderTimeout: 10 * time.Second,
@@ -335,13 +339,30 @@ func requireStorageEnv(name string) (string, error) {
 	return value, nil
 }
 
+// Per-route request-body caps. The global cap (globalMaxBody) is sized for
+// 512 MiB file uploads, but the image/audio handlers forward multipart parts
+// to LiteLLM without their own size check, so without tighter caps an
+// authenticated caller could push hundreds of MiB through them. These mirror
+// the providers' documented limits with a little headroom.
+const (
+	// multipartOverhead leaves room for multipart boundaries + form fields
+	// (e.g. the "purpose" field) on top of a maximal files.MaxFileSize file
+	// payload, so a valid near-512 MiB upload is not rejected at the body cap.
+	multipartOverhead = 16 << 20
+	globalMaxBody     = files.MaxFileSize + multipartOverhead // ~528 MiB
+	imagesMaxBody     = 50 << 20                              // image edits/variations uploads
+	audioMaxBody      = 26 << 20                              // transcription/translation audio (~25 MiB)
+)
+
 func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandler, filesHandler, batchesHandler http.Handler) {
-	mux.Handle("/v1/images/generations", imagesHandler)
-	mux.Handle("/v1/images/edits", imagesHandler)
-	mux.Handle("/v1/images/variations", imagesHandler)
-	mux.Handle("/v1/audio/speech", audioHandler)
-	mux.Handle("/v1/audio/transcriptions", audioHandler)
-	mux.Handle("/v1/audio/translations", audioHandler)
+	images := http.MaxBytesHandler(imagesHandler, imagesMaxBody)
+	audio := http.MaxBytesHandler(audioHandler, audioMaxBody)
+	mux.Handle("/v1/images/generations", images)
+	mux.Handle("/v1/images/edits", images)
+	mux.Handle("/v1/images/variations", images)
+	mux.Handle("/v1/audio/speech", audio)
+	mux.Handle("/v1/audio/transcriptions", audio)
+	mux.Handle("/v1/audio/translations", audio)
 	mux.Handle("/v1/files", filesHandler)
 	mux.Handle("/v1/files/", filesHandler)
 	mux.Handle("/v1/uploads", filesHandler)
