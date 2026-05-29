@@ -7,18 +7,47 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	canonical "github.com/sakibsadmanshajib/hive/packages/audit-canonical"
 )
 
+// defaultCanonicalEpoch is the UTC instant at/after which every audit row
+// MUST hash with the fixed-width microsecond canonical format introduced
+// by the Phase 19 remediation. It defaults to the remediation cutover
+// date; operators MUST override it via AUDIT_CANONICAL_EPOCH with the
+// actual instant the canonical-writer build went live in their
+// environment.
+const defaultCanonicalEpoch = "2026-05-29T00:00:00Z"
+
 type Verifier struct {
 	pool *pgxpool.Pool
+	// legacyCutoff bounds the legacy (RFC3339Nano) hash fallback to rows
+	// written strictly before this instant. A hash mismatch on a row at
+	// or after the cutoff is a genuine writer regression and is reported
+	// — never silently absorbed by the legacy re-canonicalisation.
+	legacyCutoff time.Time
 }
 
 func New(pool *pgxpool.Pool) *Verifier {
-	return &Verifier{pool: pool}
+	return &Verifier{pool: pool, legacyCutoff: canonicalEpoch()}
+}
+
+// canonicalEpoch resolves the legacy-fallback cutoff from
+// AUDIT_CANONICAL_EPOCH (RFC3339), falling back to defaultCanonicalEpoch
+// if unset or unparseable.
+func canonicalEpoch() time.Time {
+	if raw := os.Getenv("AUDIT_CANONICAL_EPOCH"); raw != "" {
+		if t, err := time.Parse(time.RFC3339, raw); err == nil {
+			return t.UTC()
+		}
+		slog.Warn("invalid AUDIT_CANONICAL_EPOCH; using default",
+			"value", raw, "default", defaultCanonicalEpoch)
+	}
+	t, _ := time.Parse(time.RFC3339, defaultCanonicalEpoch)
+	return t.UTC()
 }
 
 // VerifyPartition walks each tenant's chain independently for the
@@ -101,21 +130,25 @@ func (v *Verifier) VerifyPartition(ctx context.Context, t time.Time) (int, error
 		sum.Write(canon)
 		recomputed := sum.Sum(nil)
 		if !bytes.Equal(recomputed, row.rowHash) {
-			// Legacy fallback: rows written before the canonical
-			// epoch (commit 40e8484 + this commit) used
-			// time.RFC3339Nano for the canonical `ts` field. A
-			// pure-fmt change cannot retroactively rehash those
-			// rows, so try the legacy format before flagging a
-			// mismatch. New rows from this commit forward only ever
-			// hash with the fixed microsecond format above.
-			legacyCanon, legacyErr := row.canonicalLegacy()
-			if legacyErr == nil {
-				legacySum := sha256.New()
-				legacySum.Write(row.prevHash)
-				legacySum.Write(legacyCanon)
-				if bytes.Equal(legacySum.Sum(nil), row.rowHash) {
-					expectedPrev[tenantKey] = row.rowHash
-					continue
+			// Legacy fallback: rows written before the canonical epoch
+			// used time.RFC3339Nano for the canonical `ts` field. A
+			// pure-fmt change cannot retroactively rehash those rows, so
+			// try the legacy format before flagging a mismatch — but
+			// ONLY for rows written strictly before the cutover. A row at
+			// or after the epoch that fails the primary check is a real
+			// post-cutover writer regression; absorbing it via the legacy
+			// path would mask exactly the drift this verifier exists to
+			// detect, so such rows fall straight through to a mismatch.
+			if row.ts.Before(v.legacyCutoff) {
+				legacyCanon, legacyErr := row.canonicalLegacy()
+				if legacyErr == nil {
+					legacySum := sha256.New()
+					legacySum.Write(row.prevHash)
+					legacySum.Write(legacyCanon)
+					if bytes.Equal(legacySum.Sum(nil), row.rowHash) {
+						expectedPrev[tenantKey] = row.rowHash
+						continue
+					}
 				}
 			}
 			mismatches++
@@ -289,11 +322,13 @@ func normalizeJSONB(raw []byte) (json.RawMessage, error) {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return nil, nil
 	}
-	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return nil, err
-	}
-	return canonical.StableJSON(decoded)
+	// Pass the raw jsonb bytes straight through StableJSON, which decodes
+	// with UseNumber so numeric literals keep their exact text. Pre-
+	// unmarshalling into `any` here would coerce every JSON number to
+	// float64 and lose precision on large ints / decimals (token counts,
+	// cost micro-amounts), producing canonical bytes that diverge from
+	// the writer's StableJSON output — a false tamper alert.
+	return canonical.StableJSON(json.RawMessage(raw))
 }
 
 // canonicalLegacy reproduces the pre-epoch canonical bytes a writer

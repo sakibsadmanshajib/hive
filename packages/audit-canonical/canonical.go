@@ -143,8 +143,19 @@ func StableJSON(v any) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Decode with UseNumber so JSON numbers are preserved as their exact
+	// literal text (json.Number) rather than being coerced to float64.
+	// float64 coercion loses precision on large integers (e.g. token
+	// counts, cost micro-amounts) and rewrites the representation
+	// (1e+09, dropped trailing zeros), which would make the canonical
+	// bytes we hash diverge from the value the verifier re-reads — a
+	// false tamper alert. json.Marshal emits a json.Number as a raw
+	// numeric literal, so marshalSorted's default branch round-trips it
+	// unchanged.
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
 	var decoded any
-	if err := json.Unmarshal(raw, &decoded); err != nil {
+	if err := dec.Decode(&decoded); err != nil {
 		// Already a JSON primitive (string, number, bool) — return as-is.
 		return raw, nil
 	}

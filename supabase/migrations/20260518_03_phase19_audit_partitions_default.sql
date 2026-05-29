@@ -29,8 +29,15 @@
 --   July partition was created, then July also rolled past creation),
 --   each month's seq series independently restarts at 1 and a plain
 --   `UNIQUE (seq)` would collide. The DEFAULT partition therefore uses
---   `UNIQUE (date_trunc('month', ts), seq)` to scope uniqueness per
---   month — matches the writer's per-month MAX(seq) read.
+--   `UNIQUE (date_trunc('month', ts AT TIME ZONE 'UTC'), seq)` to scope
+--   uniqueness per month — matches the writer's per-month MAX(seq) read.
+--   The `AT TIME ZONE 'UTC'` cast is mandatory: date_trunc on a bare
+--   timestamptz is only STABLE (its month boundary depends on the
+--   session TimeZone), and Postgres rejects non-IMMUTABLE expressions in
+--   index definitions ("functions in index expression must be marked
+--   IMMUTABLE"). Casting to a fixed UTC wall-clock timestamp makes the
+--   expression immutable and buckets by the same UTC calendar month the
+--   writer uses (canonical timestamps are always UTC).
 --
 -- Constraints carried by inheritance (NOT re-declared):
 --   `octet_length(prev_hash) = 32` and `octet_length(row_hash) = 32`
@@ -51,7 +58,7 @@ CREATE TABLE IF NOT EXISTS public.audit_log_default
 -- UNIQUE(seq) would collide if two months land in DEFAULT
 -- simultaneously (both restart seq at 1 inside their own month).
 CREATE UNIQUE INDEX IF NOT EXISTS audit_log_default_month_seq_uidx
-  ON public.audit_log_default (date_trunc('month', ts), seq);
+  ON public.audit_log_default (date_trunc('month', ts AT TIME ZONE 'UTC'), seq);
 
 REVOKE ALL ON public.audit_log_default FROM PUBLIC;
 GRANT INSERT, SELECT ON public.audit_log_default TO hive_app;

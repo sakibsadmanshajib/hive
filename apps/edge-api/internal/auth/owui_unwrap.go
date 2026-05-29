@@ -130,13 +130,18 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 					"path", r.URL.Path,
 					"content_length", len(raw))
 			}
-			r.Body = io.NopCloser(bytes.NewReader(rewritten))
-			r.ContentLength = int64(len(rewritten))
-			r.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
+			// Forward a clone rather than mutating the inbound request
+			// in place — keeps this middleware side-effect free for any
+			// handler or middleware that retains a reference to the
+			// original *http.Request. r.Clone deep-copies the header map.
+			r2 := r.Clone(r.Context())
+			r2.Body = io.NopCloser(bytes.NewReader(rewritten))
+			r2.ContentLength = int64(len(rewritten))
+			r2.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
 			if token != "" {
-				r.Header.Set("Authorization", "Bearer "+token)
+				r2.Header.Set("Authorization", "Bearer "+token)
 			}
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(w, r2)
 		})
 	}
 }

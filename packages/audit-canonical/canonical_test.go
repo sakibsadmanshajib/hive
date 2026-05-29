@@ -109,6 +109,23 @@ func TestStableJSON_KeysSorted(t *testing.T) {
 	}
 }
 
+func TestStableJSON_PreservesNumberLiterals(t *testing.T) {
+	// Numbers that float64 cannot represent exactly (2^53+1) or that it
+	// would reformat (1e+09, dropped trailing zeros) must survive the
+	// canonical round-trip unchanged — otherwise writer and verifier
+	// hash different bytes for the same payload. Feeding raw jsonb bytes
+	// exercises the verifier's normalizeJSONB path.
+	raw := json.RawMessage(`{"cost":0.000123,"big":9007199254740993,"count":1000000000,"z":10}`)
+	got, err := canonical.StableJSON(raw)
+	if err != nil {
+		t.Fatalf("StableJSON: %v", err)
+	}
+	want := `{"big":9007199254740993,"cost":0.000123,"count":1000000000,"z":10}`
+	if string(got) != want {
+		t.Fatalf("number precision/format lost:\n got %s\nwant %s", got, want)
+	}
+}
+
 func TestStableJSON_NilReturnsNil(t *testing.T) {
 	out, err := canonical.StableJSON(nil)
 	if err != nil || out != nil {
