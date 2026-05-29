@@ -5,8 +5,10 @@ const mockRedirect = vi.fn(() => {
   throw redirectError;
 });
 const mockGetSession = vi.fn();
+const mockGetUser = vi.fn();
 const mockCreateClient = vi.fn(() => ({
   auth: {
+    getUser: mockGetUser,
     getSession: mockGetSession,
   },
 }));
@@ -29,6 +31,12 @@ describe("app/invitations/accept/page.tsx", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.CONTROL_PLANE_BASE_URL = "http://localhost:8081";
+    mockGetUser.mockResolvedValue({
+      data: {
+        user: { id: "test-user", email: "test@hive.com" },
+      },
+      error: null,
+    });
     mockGetSession.mockResolvedValue({
       data: {
         session: {

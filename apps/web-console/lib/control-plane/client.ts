@@ -115,6 +115,17 @@ async function getRequestContext(): Promise<RequestContext> {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
 
+  // Validate the JWT against Supabase (getUser does a server round-trip
+  // and rejects revoked tokens) before trusting the session. getSession
+  // only reads the cookie and would accept a revoked token.
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user) {
+    throw new Error("No active session");
+  }
+
   const {
     data: { session },
   } = await supabase.auth.getSession();

@@ -33,6 +33,16 @@ export default async function AcceptInvitationPage({
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
 
+  // Validate the JWT against Supabase (getUser round-trips and rejects
+  // revoked tokens) before trusting the session for the bearer token.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    redirect("/auth/sign-in?next=/invitations/accept");
+  }
+
   const {
     data: { session },
   } = await supabase.auth.getSession();

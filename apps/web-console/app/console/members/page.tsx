@@ -50,6 +50,15 @@ function statusTone(status: string): { label: string; tone: ToneName } {
 export default async function MembersPage() {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
+  // Validate the JWT server-side (getUser round-trips to Supabase and
+  // rejects revoked tokens); getSession alone only reads the cookie.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) {
+    redirect("/auth/sign-in");
+  }
+
   const {
     data: { session },
   } = await supabase.auth.getSession();
