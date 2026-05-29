@@ -67,11 +67,21 @@ CREATE POLICY audit_outbox_service_role_all
   USING (true)
   WITH CHECK (true);
 
--- M6: include claimed_at in the partial-index predicate so the
--- drainOnce eligibility filter is index-only. The existing index is
--- WHERE delivered_at IS NULL but the query also filters by
--- `claimed_at IS NULL OR claimed_at + lease <= now()`. Without
--- claimed_at in the predicate, Postgres falls back to a heap fetch.
+-- M6: keep the drainOnce hot path on an index scan. The query is:
+--   WHERE delivered_at IS NULL
+--     AND (next_retry_at IS NULL OR next_retry_at <= now())
+--     AND (claimed_at   IS NULL OR claimed_at + lease <= now())
+--   ORDER BY next_retry_at NULLS FIRST, created_at
+--   LIMIT 50
+-- The two lease/retry conditions both reference now(), which is only
+-- STABLE — Postgres rejects non-IMMUTABLE expressions in a partial-index
+-- predicate ("functions in index predicate must be marked IMMUTABLE"),
+-- so claimed_at / next_retry_at CANNOT be added to the WHERE clause here.
+-- Instead we predicate on the immutable `delivered_at IS NULL` (which
+-- narrows to the small undelivered hot set) and lead with the ORDER BY
+-- columns so the planner satisfies the sort + LIMIT 50 directly from the
+-- index; the cheap now()-based lease/retry checks are then applied as
+-- in-scan filters over that already-tiny, already-ordered candidate set.
 DROP INDEX IF EXISTS audit_outbox_eligible;
 CREATE INDEX audit_outbox_eligible
   ON public.audit_outbox (next_retry_at NULLS FIRST, created_at)
