@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
@@ -244,8 +245,28 @@ func main() {
 	handler = proxy.InstrumentHandler(edgeMetrics, handler)
 	handler = middleware.CompatHeaders()(handler)
 
+	// Wrap the whole mux in a global request-body cap (100 MiB) as an
+	// OOM/slow-upload backstop. The chat hot path keeps its tighter
+	// per-route limits (4 MiB in dispatch, 2 MiB in the OWUI unwrap);
+	// MaxBytesHandler only bounds the inbound request body, so SSE
+	// streaming responses are unaffected.
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: http.MaxBytesHandler(handler, 100<<20),
+		// ReadHeaderTimeout is the slowloris defence — a client dribbling
+		// request headers is cut after this deadline. Safe for every route.
+		ReadHeaderTimeout: 10 * time.Second,
+		// IdleTimeout bounds keep-alive connections sitting idle between
+		// requests so they cannot accumulate and exhaust file descriptors.
+		IdleTimeout: 120 * time.Second,
+		// ReadTimeout / WriteTimeout are intentionally left at zero:
+		// WriteTimeout would abort long-lived SSE chat streams, and
+		// ReadTimeout would cut slow large multipart uploads to
+		// /v1/uploads. Slowloris is covered by ReadHeaderTimeout; body
+		// size is bounded by MaxBytesHandler above.
+	}
 	log.Printf("edge-api listening on :%s", port)
-	if err := http.ListenAndServe(":"+port, handler); err != nil {
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
@@ -425,10 +446,14 @@ func resolveLiteLLMBaseURL() string {
 }
 
 func resolveLiteLLMMasterKey() string {
-	if k := os.Getenv("LITELLM_MASTER_KEY"); k != "" {
-		return k
+	k := strings.TrimSpace(os.Getenv("LITELLM_MASTER_KEY"))
+	if k == "" {
+		// No dev fallback: a blank master key would let anyone who can
+		// reach LiteLLM call upstream models unbilled. Fail fast at
+		// startup instead of silently shipping a free-inference path.
+		log.Fatal("LITELLM_MASTER_KEY is required and must be non-empty")
 	}
-	return "litellm-dev-key"
+	return k
 }
 
 // buildBudgetGate constructs the Phase 14 BudgetGate middleware. The gate
