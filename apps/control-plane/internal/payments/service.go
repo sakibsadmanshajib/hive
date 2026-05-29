@@ -123,17 +123,10 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		fxSnapshotID = &snapID
 		localCurrency = "BDT"
 
-		// amountLocal (paisa) = (amountUSD cents / 100) * effectiveRate * 100
-		// = amountUSD * effectiveRate
-		effectiveRat := new(big.Rat)
-		if _, ok := effectiveRat.SetString(snap.EffectiveRate); !ok {
-			return nil, fmt.Errorf("payments: invalid effective rate %q", snap.EffectiveRate)
+		amountLocal, err = usdCentsToLocalPaisa(amountUSD, snap.EffectiveRate)
+		if err != nil {
+			return nil, fmt.Errorf("payments: %w", err)
 		}
-		amountUSDRat := new(big.Rat).SetInt64(amountUSD)
-		// cents to dollars then multiply by rate then to paisa: amountUSD/100 * rate * 100 = amountUSD * rate
-		localRat := new(big.Rat).Mul(amountUSDRat, effectiveRat)
-		localFloat, _ := localRat.Float64()
-		amountLocal = int64(localFloat)
 	}
 
 	taxAmountLocal := ApplyTax(amountLocal, taxResult)
@@ -493,4 +486,24 @@ func localCurrencyFor(r Rail) string {
 		return "BDT"
 	}
 	return "USD"
+}
+
+// usdCentsToLocalPaisa converts a USD-cent amount to integer BDT paisa
+// using the effective FX rate, entirely in exact rational arithmetic.
+//
+// amountPaisa = amountUSDcents/100 (dollars) * rate (BDT/USD) * 100 (paisa)
+//             = amountUSDcents * rate
+//
+// The result is truncated to an integer via big.Int division on the
+// numerator/denominator (truncates toward zero — correct for the
+// non-negative amounts handled here). No float64 ever appears: routing
+// the value through Float64() would reintroduce the binary-fraction error
+// that the math/big FX invariant (CLAUDE.md) exists to prevent.
+func usdCentsToLocalPaisa(amountUSDCents int64, effectiveRate string) (int64, error) {
+	rateRat, ok := new(big.Rat).SetString(effectiveRate)
+	if !ok {
+		return 0, fmt.Errorf("invalid effective rate %q", effectiveRate)
+	}
+	localRat := new(big.Rat).Mul(new(big.Rat).SetInt64(amountUSDCents), rateRat)
+	return new(big.Int).Quo(localRat.Num(), localRat.Denom()).Int64(), nil
 }

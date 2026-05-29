@@ -182,9 +182,11 @@ func (f *FXService) CreateSnapshot(ctx context.Context, repo Repository, account
 	feeMultiplier := big.NewRat(105, 100)
 	effectiveRat := new(big.Rat).Mul(midRat, feeMultiplier)
 
-	// Format to 6 decimal places.
-	effectiveFloat, _ := effectiveRat.Float64()
-	effectiveRate := fmt.Sprintf("%.6f", effectiveFloat)
+	// Format to 6 decimal places directly from the exact rational.
+	// Going through Float64() would reintroduce the binary-fraction error
+	// that math/big exists to avoid (CLAUDE.md FX invariant); FloatString
+	// rounds the exact value to the requested precision with no float cast.
+	effectiveRate := effectiveRat.FloatString(6)
 
 	now := time.Now().UTC()
 	snap := FXSnapshot{
