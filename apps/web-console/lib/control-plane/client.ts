@@ -535,6 +535,34 @@ export async function updateAccountProfile(
   return profile;
 }
 
+// createInvitation sends a workspace invite for the given email. It runs only
+// server-side (Route Handler) so the internal CONTROL_PLANE_BASE_URL is never
+// rendered into client HTML (issue #111). Throws ControlPlaneError so the route
+// can map the upstream status (403 no-permission, 409 already-member, etc.) to a
+// generic, customer-safe message instead of collapsing everything to 500.
+//
+// The control-plane returns the raw acceptance token in its 201 body. We return
+// it here so a server-side caller (e.g. an invite mailer) can use it, but it is
+// deliberately NOT surfaced in any client-facing redirect/URL — the token is
+// bearer-equivalent and must not leak into browser history or logs.
+export async function createInvitation(email: string): Promise<{ token: string | null }> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/invitations`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify({ email }),
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to send invitation");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  const token = isJsonObject(payload) ? readStringField(payload, "token") : null;
+  return { token };
+}
+
 export async function getBillingProfile(): Promise<BillingProfile> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/billing-profile`, {

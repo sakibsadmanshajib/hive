@@ -16,9 +16,9 @@ these block any real launch of the metered-inference reselling product.
 | #119 | getSession() server-side auth (3 sites) | ✅ fixed | PR #151 |
 | #120 | Email-verify only in layout, not middleware | ✅ fixed | PR #151 |
 | #106 | Credit reservation TOCTOU double-spend | ✅ merged | PR #154 |
-| #107 | No RLS on tenant tables | ✅ PR open | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
-| #108 | /internal/* control-plane endpoints unauth | ✅ PR open | branch `fix/108-internal-endpoint-auth` — X-Internal-Token shared-secret middleware |
-| #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
+| #107 | No RLS on tenant tables | ✅ merged | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
+| #108 | /internal/* control-plane endpoints unauth | ✅ merged | PR #156 — X-Internal-Token shared-secret middleware (fails closed) |
+| #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ✅ FIXED | PR open — server-side Route Handler proxy; form action now relative |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
 | #113 | Auth snapshot 1hr cache lets revoked keys work | ⏳ TODO | see below |
 | #116 | Free-tier abuse (CAPTCHA / IP limit / disposable email) | ⏳ TODO | needs Turnstile infra |
@@ -54,9 +54,10 @@ these block any real launch of the metered-inference reselling product.
 - `apps/web-console/app/auth/callback/route.ts:61-78` — guarded admin write silently skips on Workers when binding missing → users stuck unverified.
 - Fix: move admin write to control-plane `POST /internal/users/finalize-signup` (depends on #108 internal-auth being in place); edge only forwards session. Fail loud on control-plane if service-role key absent.
 
-### #111 CONTROL_PLANE_BASE_URL in HTML
-- `apps/web-console/app/console/members/page.tsx:126` — invite `<form action="${CONTROL_PLANE_BASE_URL}/...">` inlines internal URL.
-- Fix: Next.js Route Handler `app/api/console/members/route.ts` proxying server-side (mirrors other mutations). ⚠️ same file as PR #151 — do after #151 merges.
+### #111 CONTROL_PLANE_BASE_URL in HTML — ✅ FIXED (PR #157)
+- Was: `apps/web-console/app/console/members/page.tsx` invite `<form action="${CONTROL_PLANE_BASE_URL}/...">` inlined the internal URL into rendered HTML and POSTed cross-origin without the session bearer.
+- Fixed by server-side Route Handler `app/api/console/members/route.ts` (auth-check → `createInvitation()` helper attaches bearer + base URL server-only → 303 redirect). Form action is now relative `/api/console/members`. Errors map to generic status-class messages (no raw upstream text in URL); redirect resolves against canonical origin (`lib/http/origin.ts`).
+- Follow-up (separate): no invite mailer exists in repo — the acceptance token returned by the control-plane is not yet delivered to invitees. Tracked outside #111 (security scope).
 
 ### #116 free-tier abuse
 - Cloudflare Turnstile on sign-up/sign-in (CLOUDFLARE_API_TOKEN already present), Supabase per-IP signup limit, disposable-domain blocklist, gmail +tag normalization, cap free credits per verified identity.
@@ -67,7 +68,7 @@ these block any real launch of the metered-inference reselling product.
 2. ✅ #106 (TOCTOU) — MERGED (PR #154).
 3. ✅ #107 (RLS) — PR #155 open (CI green, threads resolved).
 4. ✅ #108 (internal auth) — PR open (`fix/108-internal-endpoint-auth`).
-5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx). **NEXT.**
-6. #112 (service-role) — after #108.
+5. ✅ #111 (URL leak) — FIXED (server-side Route Handler proxy `app/api/console/members/route.ts`).
+6. #112 (service-role) — after #108 (now merged). **NEXT.**
 7. #113 (revoked cache), #116 (abuse).
 8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.
