@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
@@ -105,6 +106,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) (AuthResult, bool) {
 	result, err := h.authorizer.AuthorizeRequest(r)
 	if err != nil {
+		if ae, ok := authz.AsAuthzError(err); ok {
+			apierrors.WriteAuthFailure(w, ae.OpenAIErr, ae.Headers)
+			return AuthResult{}, false
+		}
 		code := "invalid_api_key"
 		apierrors.WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Invalid API key.", &code)
 		return AuthResult{}, false

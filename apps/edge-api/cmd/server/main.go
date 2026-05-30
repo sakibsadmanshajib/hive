@@ -89,7 +89,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to initialize authz limiter: %v", err)
 	}
-	authorizer := authz.NewAuthorizer(authzClient, limiter)
+	failOpen := resolveRateLimitFailOpen()
+	if failOpen {
+		log.Printf("authz: WARNING rate limiter is in FAIL-OPEN mode (RATE_LIMIT_FAIL_OPEN) — Redis outages will NOT enforce limits; do not use in production")
+	}
+	authorizer := authz.NewAuthorizer(authzClient, limiter, authz.WithFailOpen(failOpen))
 
 	// Initialize Prometheus metrics registry for edge-api.
 	edgeMetrics, promRegistry := proxy.NewEdgeMetrics()
@@ -459,6 +463,20 @@ func resolveRedisURL() string {
 	return "redis://redis:6379/0"
 }
 
+// resolveRateLimitFailOpen reports whether the edge limiter should fail OPEN
+// (admit traffic) when the Redis backend cannot be evaluated. Default is fail
+// CLOSED (#51): a backend outage must not silently disable abuse controls.
+// Set RATE_LIMIT_FAIL_OPEN=true only in dev/local where availability beats
+// metering.
+func resolveRateLimitFailOpen() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("RATE_LIMIT_FAIL_OPEN"))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
 func resolveLiteLLMBaseURL() string {
 	if u := os.Getenv("LITELLM_BASE_URL"); u != "" {
 		return u
@@ -603,17 +621,7 @@ func authorizeAliasRequest(w http.ResponseWriter, r *http.Request, authorizer *a
 	authHeader := r.Header.Get("Authorization")
 	snapshot, headers, authErr := authorizer.Authorize(r.Context(), authHeader, aliasID, estimatedCredits, billableTokens, freeTokens)
 	if authErr != nil {
-		status := http.StatusUnauthorized
-		if authErr.Error.Type == "insufficient_quota" {
-			status = http.StatusTooManyRequests
-		} else if authErr.Error.Code != nil && *authErr.Error.Code == "model_not_found" {
-			status = http.StatusNotFound
-		}
-		if authErr.Error.Code != nil && *authErr.Error.Code == "rate_limit_exceeded" {
-			apierrors.WriteRateLimitError(w, authErr.Error.Message, authErr.Error.Code, headers)
-			return snapshot, false
-		}
-		apierrors.WriteError(w, status, authErr.Error.Type, authErr.Error.Message, authErr.Error.Code)
+		apierrors.WriteAuthFailure(w, authErr, headers)
 		return snapshot, false
 	}
 	return snapshot, true
