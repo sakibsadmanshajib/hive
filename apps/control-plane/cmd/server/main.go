@@ -563,9 +563,12 @@ func main() {
 	// Identity: finalize email verification for the authenticated caller (#112).
 	// The privileged write lives here (the pool carries service-role DB
 	// privilege) instead of in the web-console edge route, and only flips the
-	// flag when Supabase has already confirmed the email. A nil pool leaves the
-	// handler unwired so the route returns a loud 500 rather than silently
-	// succeeding.
+	// flag when Supabase has already confirmed the email. When pool is nil the
+	// handler is left unwired and the route is not registered (the request 404s
+	// at the mux) — the control-plane does not run a real identity flow without
+	// a database anyway. The handler's own nil-dependency guard returns a loud
+	// 500 for the wired-but-misconfigured case (a future caller that constructs
+	// it without FinalizeEmailVerified).
 	var identityHandler *identity.Handler
 	if pool != nil {
 		p := pool

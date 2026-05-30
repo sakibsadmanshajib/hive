@@ -74,6 +74,11 @@ export async function GET(request: NextRequest) {
                   "Content-Type": "application/json",
                 },
                 cache: "no-store",
+                // This step is best-effort and sits on the sign-in redirect
+                // path, so it must never make sign-in latency hostage to
+                // control-plane responsiveness. Hard-cap it; a timeout throws
+                // and is handled by the catch below (logged, redirect proceeds).
+                signal: AbortSignal.timeout(3000),
               },
             );
             if (!resp.ok) {

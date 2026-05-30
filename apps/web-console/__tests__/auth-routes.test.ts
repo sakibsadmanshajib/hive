@@ -209,6 +209,9 @@ describe("app/auth/callback/route.ts", () => {
     );
     await mod.GET(req);
 
+    // Non-vacuous: a regression that stops calling the control-plane entirely
+    // must fail this test, so assert at least one request was made.
+    expect(fetchMock).toHaveBeenCalled();
     for (const [url, init] of fetchMock.mock.calls) {
       expect(String(url)).not.toContain("/auth/v1/admin/users");
       const auth = (init?.headers?.Authorization as string) ?? "";
