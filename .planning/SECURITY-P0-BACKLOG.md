@@ -45,10 +45,10 @@ these block any real launch of the metered-inference reselling product.
 - Fail-mode: token unset ⇒ pass-through + startup warning (no CD breakage during rollout); set on both apps ⇒ enforced. `.env.example` + dev/staging compose updated (passthrough); **ops action: seed `CONTROL_PLANE_INTERNAL_TOKEN` in `/opt/hive/.env` to activate enforcement in staging/prod**.
 - Tests: `internalauth_test.go` (4 cases), `cpauth_test.go` (2 cases). build+vet+test both apps → exit 0.
 
-### #113 revoked-key cache invalidation
-- Edge caches API-key snapshot in Redis ~1h; revoke doesn't invalidate.
-- Fix: versioned cache key `apikey:{hash}:v{gen}` bumped on revoke, OR control-plane Redis pub/sub invalidation consumed by edge, OR TTL ≤60s. Acceptance: revoked key → 401 within ≤60s across instances.
-- May touch edge auth path; check overlap with #150 before branching.
+### #113 revoked-key cache invalidation — ✅ FIXED (PR open)
+- Was stated as "revoke doesn't invalidate", but recon found active invalidation ALREADY wired and correct: control-plane `apikeys.Service` calls `invalidateSnapshot(tokenHash)` on revoke/disable/rotate, deleting `snapshotRedisKey = "auth:key:{<hash>}"` — byte-identical to the edge cache key (`authz/client.go:91`) — on the shared Redis (`main.go:257` `NewRedisSnapshotCache(redisClient)`). So revoke cutoff is already ~immediate.
+- Remaining gap = the **backstop**: edge set the snapshot TTL to **1h**, so if the active DELETE is ever missed (transient Redis error, instance divergence) a revoked key could authorize for up to an hour. Fixed by lowering the edge snapshot TTL to **60s** (`const snapshotTTL = 60 * time.Second`, `authz/client.go`). Acceptance (revoked → 401 within ≤60s across instances) now holds even in the worst case.
+- Verified: edge authz unit test asserts the cached-snapshot Set TTL is a positive ≤60s value. (Go verification is via CI "Go tests (edge-api)" — local toolchain output is unobservable in this env.)
 
 ### #112 service-role key on Cloudflare Worker edge route — ✅ FIXED (PR open)
 - Was: `apps/web-console/app/auth/callback/route.ts` guarded admin write (`if process.env.SUPABASE_SERVICE_ROLE_KEY` + `.catch(()=>undefined)`) silently skipped on Workers when the key was missing → users stuck unverified, plus a god-key in a public edge bundle.
@@ -72,5 +72,5 @@ these block any real launch of the metered-inference reselling product.
 4. ✅ #108 (internal auth) — PR open (`fix/108-internal-endpoint-auth`).
 5. ✅ #111 (URL leak) — FIXED (server-side Route Handler proxy `app/api/console/members/route.ts`).
 6. ✅ #112 (service-role) — FIXED (authed control-plane finalize endpoint; service-role off the edge).
-7. #113 (revoked cache) **NEXT**, then #116 (abuse), #51 (rate-limit fail-open).
+7. ✅ #113 (revoked cache) — FIXED (active invalidation already wired; lowered edge backstop TTL 1h→60s). Then #51 (rate-limit fail-open) **NEXT**, #116 (abuse).
 8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.

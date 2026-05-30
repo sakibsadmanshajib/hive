@@ -50,6 +50,13 @@ func HashBearerToken(authHeader string) string {
 	return strings.ToLower(hex.EncodeToString(h[:]))
 }
 
+// snapshotTTL bounds how long the edge will honor a cached auth snapshot when
+// active control-plane invalidation is missed. The control-plane DELETEs the
+// snapshot key on revoke/disable/rotate (primary path); this TTL is the
+// revocation backstop and is kept ≤60s so a revoked key cannot keep
+// authorizing beyond the SLA in the worst case (issue #113).
+const snapshotTTL = 60 * time.Second
+
 // Client orchestrates reading AuthSnapshots from Redis with fallback to the control plane.
 type Client struct {
 	cache      snapshotStore
@@ -139,10 +146,14 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 	}
 
 	// 3. Cache in Redis (fire and forget).
-	// We use an arbitrary TTL here, though Plan 05-03 might change this to
-	// rely on explicit invalidation from the control plane. Set to 1 hour for now.
+	// Primary invalidation is active: the control-plane DELETEs this exact key
+	// (auth:key:{hash}) on revoke/disable/rotate. snapshotTTL is the backstop —
+	// if that DELETE is ever missed (transient Redis error, instance
+	// divergence), the TTL still bounds how long a revoked key keeps
+	// authorizing. Kept ≤60s so revocation takes effect within the SLA even in
+	// the worst case (issue #113).
 	if c.cache != nil {
-		_ = c.cache.Set(ctx, redisKey, string(respBytes), time.Hour)
+		_ = c.cache.Set(ctx, redisKey, string(respBytes), snapshotTTL)
 	}
 
 	return snap, nil
