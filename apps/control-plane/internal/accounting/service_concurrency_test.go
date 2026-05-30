@@ -198,3 +198,52 @@ func TestCreateReservationAcquiresAccountLock(t *testing.T) {
 		t.Fatalf("expected the reserve hold to be posted inside the lock, got %d reserve calls", len(ledgerSvc.reserveCalls))
 	}
 }
+
+// TestBalanceAffectingPathsAcquireAccountLock proves Finalize and Release —
+// which post charge/release ledger entries that change available balance — also
+// run inside the per-account lock, closing the double-spend window against a
+// concurrent create (issue #106 follow-up review).
+func TestBalanceAffectingPathsAcquireAccountLock(t *testing.T) {
+	accountID := uuid.New()
+
+	for _, tc := range []struct {
+		name string
+		run  func(svc *Service, reservationID uuid.UUID) error
+	}{
+		{"finalize", func(svc *Service, id uuid.UUID) error {
+			_, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+				AccountID: accountID, ReservationID: id, ActualCredits: 40,
+				TerminalUsageConfirmed: true, Status: string(usage.AttemptStatusCompleted),
+			})
+			return err
+		}},
+		{"release", func(svc *Service, id uuid.UUID) error {
+			_, err := svc.ReleaseReservation(context.Background(), ReleaseReservationInput{
+				AccountID: accountID, ReservationID: id, Reason: "cancelled",
+			})
+			return err
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newRepoStub()
+			reservationID := uuid.New()
+			repo.reservations[reservationID] = Reservation{
+				ID: reservationID, AccountID: accountID, RequestAttemptID: uuid.New(),
+				ReservationKey: "k:1", PolicyMode: PolicyModeStrict,
+				Status: ReservationStatusActive, ReservedCredits: 100,
+			}
+			locker := &countingLocker{}
+			svc := NewService(repo, &ledgerStub{}, &usageStub{}).WithAccountLocker(locker)
+
+			if err := tc.run(svc, reservationID); err != nil {
+				t.Fatalf("%s returned error: %v", tc.name, err)
+			}
+			if locker.calls != 1 {
+				t.Fatalf("expected %s to acquire the account lock exactly once, got %d", tc.name, locker.calls)
+			}
+			if len(locker.accounts) != 1 || locker.accounts[0] != accountID {
+				t.Fatalf("expected %s lock keyed on account %s, got %#v", tc.name, accountID, locker.accounts)
+			}
+		})
+	}
+}

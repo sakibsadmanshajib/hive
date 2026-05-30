@@ -236,6 +236,23 @@ func (s *Service) FinalizeReservation(ctx context.Context, input FinalizeReserva
 		return Reservation{}, &ValidationError{Field: "actual_credits", Message: "actual_credits must not be negative"}
 	}
 
+	// Finalization posts charge/release ledger entries, which change the
+	// account's available balance, so it must take the same per-account lock as
+	// create/expand. Otherwise a concurrent reservation could read the
+	// pre-charge balance and reserve credits that finalization then consumes,
+	// overdrawing the account (issue #106).
+	var reservation Reservation
+	if lockErr := s.locker.WithAccountLock(ctx, input.AccountID, func(ctx context.Context) error {
+		var err error
+		reservation, err = s.finalizeLocked(ctx, input, status, completedAt)
+		return err
+	}); lockErr != nil {
+		return Reservation{}, lockErr
+	}
+	return reservation, nil
+}
+
+func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationInput, status usage.AttemptStatus, completedAt *time.Time) (Reservation, error) {
 	reservation, err := s.repo.GetReservation(ctx, input.AccountID, input.ReservationID)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: get reservation: %w", err)
@@ -348,6 +365,20 @@ func (s *Service) ReleaseReservation(ctx context.Context, input ReleaseReservati
 		return Reservation{}, &ValidationError{Field: "reason", Message: "reason is required"}
 	}
 
+	// Release returns held credits to the available balance, so it serializes
+	// under the same per-account lock as create/expand/finalize (issue #106).
+	var reservation Reservation
+	if lockErr := s.locker.WithAccountLock(ctx, input.AccountID, func(ctx context.Context) error {
+		var err error
+		reservation, err = s.releaseLocked(ctx, input)
+		return err
+	}); lockErr != nil {
+		return Reservation{}, lockErr
+	}
+	return reservation, nil
+}
+
+func (s *Service) releaseLocked(ctx context.Context, input ReleaseReservationInput) (Reservation, error) {
 	reservation, err := s.repo.GetReservation(ctx, input.AccountID, input.ReservationID)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: get reservation: %w", err)
