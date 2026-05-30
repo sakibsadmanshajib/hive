@@ -21,6 +21,7 @@ these block any real launch of the metered-inference reselling product.
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ✅ FIXED | PR open — server-side Route Handler proxy; form action now relative |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ✅ FIXED | PR open — authed control-plane `POST /api/v1/.../email-verification/finalize`; edge forwards session bearer only, service-role key off the edge |
 | #113 | Auth snapshot 1hr cache lets revoked keys work | ⏳ TODO | see below |
+| #51 | Redis rate-limit fail-open bypass | ✅ FIXED | PR #160 — fail-closed default + explicit `RATE_LIMIT_FAIL_OPEN` opt-in + structured degraded log |
 | #116 | Free-tier abuse (CAPTCHA / IP limit / disposable email) | ⏳ TODO | needs Turnstile infra |
 
 ## Remaining — implementation notes (pre-investigated)
@@ -72,5 +73,11 @@ these block any real launch of the metered-inference reselling product.
 4. ✅ #108 (internal auth) — PR open (`fix/108-internal-endpoint-auth`).
 5. ✅ #111 (URL leak) — FIXED (server-side Route Handler proxy `app/api/console/members/route.ts`).
 6. ✅ #112 (service-role) — FIXED (authed control-plane finalize endpoint; service-role off the edge).
-7. ✅ #113 (revoked cache) — FIXED (active invalidation already wired; lowered edge backstop TTL 1h→60s). Then #51 (rate-limit fail-open) **NEXT**, #116 (abuse).
-8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.
+7. ✅ #113 (revoked cache) — FIXED (active invalidation already wired; lowered edge backstop TTL 1h→60s).
+8. ✅ #51 (P0) — Redis rate-limit fail-open bypass — FIXED (PR #160). Then #116 (abuse) **NEXT**.
+
+### #51 rate-limit fail-open — ✅ FIXED (PR #160)
+- Was: `apps/edge-api/internal/authz/authorizer.go` Authorize() limiter-error branch was **empty** → any Redis error (outage/connection/auth) silently bypassed ALL rate + fraud-window (5h/weekly) enforcement, no request-boundary signal. (Issue cited pre-rewrite TS `redis-rate-limiter.ts`; live Go path had the identical bug.)
+- Fixed: default **fail CLOSED** (deny with retryable 429 `rate_limit_error`/`rate_limit_exceeded` + retry-after; provider-blind message). Explicit `RATE_LIMIT_FAIL_OPEN=true` opt-in for dev/local (loud startup warning). Structured `authz: rate limiter degraded … fail_open=…` log at the boundary on every backend error. `NewAuthorizer` gained variadic `WithFailOpen` option (all 2-arg callers unchanged, default closed).
+- Tests: `TestAuthorizeFailsClosedWhenLimiterErrors`, `TestAuthorizeFailsOpenWhenExplicitlyEnabled` (`authorizer_test.go`). Go verification via CI "Go tests (edge-api)" (local toolchain unobservable).
+- Ops: leave `RATE_LIMIT_FAIL_OPEN` unset (fail closed) in staging + prod.
