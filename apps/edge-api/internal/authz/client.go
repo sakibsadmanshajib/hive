@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 type snapshotStore interface {
@@ -114,6 +115,7 @@ func (c *Client) Resolve(ctx context.Context, rawToken string) (AuthSnapshot, er
 		return AuthSnapshot{}, fmt.Errorf("authz: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

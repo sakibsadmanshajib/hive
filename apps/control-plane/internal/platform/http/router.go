@@ -54,6 +54,12 @@ type RouterConfig struct {
 	// registered on it (enabling callers to add routes after NewRouter returns).
 	// When nil, a new ServeMux is created internally.
 	Mux *http.ServeMux
+
+	// InternalToken is the shared secret guarding the /internal/* service-to-service
+	// routes (issue #108). When empty, those routes are left unauthenticated and the
+	// control-plane logs a startup warning; when set, callers must present a matching
+	// X-Internal-Token header.
+	InternalToken string
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -76,25 +82,30 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux.Handle("/metrics", promhttp.HandlerFor(cfg.PrometheusRegistry, promhttp.HandlerOpts{}))
 	}
 
+	// internal wraps a service-to-service handler with the shared-secret guard.
+	internal := func(h http.Handler) http.Handler {
+		return RequireInternalToken(cfg.InternalToken, h)
+	}
+
 	if cfg.CatalogHandler != nil {
-		mux.Handle("/internal/catalog/snapshot", cfg.CatalogHandler)
+		mux.Handle("/internal/catalog/snapshot", internal(cfg.CatalogHandler))
 		// Public catalog endpoint — unauthenticated; customer-safe model list.
 		mux.Handle("/api/v1/catalog/models", cfg.CatalogHandler)
 	}
 
 	if cfg.RoutingHandler != nil {
-		mux.Handle("/internal/routing/select", cfg.RoutingHandler)
+		mux.Handle("/internal/routing/select", internal(cfg.RoutingHandler))
 	}
 
 	if cfg.AccountingHandler != nil {
-		mux.Handle("/internal/accounting/reservations", cfg.AccountingHandler)
-		mux.Handle("/internal/accounting/reservations/finalize", cfg.AccountingHandler)
-		mux.Handle("/internal/accounting/reservations/release", cfg.AccountingHandler)
+		mux.Handle("/internal/accounting/reservations", internal(cfg.AccountingHandler))
+		mux.Handle("/internal/accounting/reservations/finalize", internal(cfg.AccountingHandler))
+		mux.Handle("/internal/accounting/reservations/release", internal(cfg.AccountingHandler))
 	}
 
 	if cfg.UsageHandler != nil {
-		mux.Handle("/internal/usage/attempts", cfg.UsageHandler)
-		mux.Handle("/internal/usage/events", cfg.UsageHandler)
+		mux.Handle("/internal/usage/attempts", internal(cfg.UsageHandler))
+		mux.Handle("/internal/usage/events", internal(cfg.UsageHandler))
 	}
 
 	if cfg.ProfilesHandler != nil && cfg.AuthMiddleware != nil {
@@ -138,8 +149,8 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		protectedAPIKeys := cfg.AuthMiddleware.Require(cfg.APIKeysHandler)
 		mux.Handle("/api/v1/accounts/current/api-keys", protectedAPIKeys)
 		mux.Handle("/api/v1/accounts/current/api-keys/", protectedAPIKeys)
-		// Internal service-to-service route — no auth middleware.
-		mux.Handle("/internal/apikeys/resolve", cfg.APIKeysHandler)
+		// Internal service-to-service route — guarded by the shared-secret token.
+		mux.Handle("/internal/apikeys/resolve", internal(cfg.APIKeysHandler))
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {

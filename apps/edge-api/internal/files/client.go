@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 // FilestoreClient calls the control-plane internal filestore and upload HTTP endpoints.
@@ -116,6 +118,7 @@ func (c *FilestoreClient) DeleteFile(ctx context.Context, id, accountID string) 
 	if err != nil {
 		return fmt.Errorf("filestore: delete file: build request: %w", err)
 	}
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -346,6 +349,7 @@ func (c *FilestoreClient) post(ctx context.Context, path string, input any, outp
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -376,6 +380,7 @@ func (c *FilestoreClient) get(ctx context.Context, pathAndQuery string, output a
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
