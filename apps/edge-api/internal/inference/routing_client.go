@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 // SelectRouteInput mirrors the control-plane routing.SelectionInput.
@@ -63,6 +65,7 @@ func (c *RoutingClient) SelectRoute(ctx context.Context, input SelectRouteInput)
 		return SelectRouteResult{}, fmt.Errorf("routing: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

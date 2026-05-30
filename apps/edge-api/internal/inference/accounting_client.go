@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 // AccountingClient calls the control-plane internal accounting and usage endpoints.
@@ -155,6 +157,7 @@ func (c *AccountingClient) post(ctx context.Context, path string, input any, out
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

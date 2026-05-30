@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 type Model struct {
@@ -58,6 +60,7 @@ func (c *Client) FetchSnapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("catalog client: build snapshot request: %w", err)
 	}
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

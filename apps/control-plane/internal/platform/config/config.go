@@ -14,6 +14,11 @@ type Config struct {
 	SupabaseDBURL   string
 	RedisURL        string
 
+	// InternalToken is the shared secret required on /internal/* service-to-service
+	// requests (issue #108). Empty leaves those endpoints unauthenticated (dev only);
+	// the control-plane logs a warning at startup in that case.
+	InternalToken string
+
 	// Phase 15 — local batch executor knobs.
 	BatchExecutorConcurrency  int
 	BatchExecutorMaxRetries   int
@@ -43,6 +48,7 @@ func Load() (*Config, error) {
 		SupabaseAnonKey:            os.Getenv("SUPABASE_ANON_KEY"),
 		SupabaseDBURL:              os.Getenv("SUPABASE_DB_URL"),
 		RedisURL:                   os.Getenv("REDIS_URL"),
+		InternalToken:              os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"),
 		BatchExecutorConcurrency:   intEnv("BATCH_EXECUTOR_CONCURRENCY", 8),
 		BatchExecutorMaxRetries:    intEnv("BATCH_EXECUTOR_MAX_RETRIES", 3),
 		BatchExecutorLineTimeoutMs: intEnv("BATCH_EXECUTOR_LINE_TIMEOUT_MS", 60000),

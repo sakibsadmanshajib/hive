@@ -17,7 +17,7 @@ these block any real launch of the metered-inference reselling product.
 | #120 | Email-verify only in layout, not middleware | ✅ fixed | PR #151 |
 | #106 | Credit reservation TOCTOU double-spend | ✅ merged | PR #154 |
 | #107 | No RLS on tenant tables | ✅ PR open | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
-| #108 | /internal/* control-plane endpoints unauth | ⏳ TODO | see below |
+| #108 | /internal/* control-plane endpoints unauth | ✅ PR open | branch `fix/108-internal-endpoint-auth` — X-Internal-Token shared-secret middleware |
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
 | #113 | Auth snapshot 1hr cache lets revoked keys work | ⏳ TODO | see below |
@@ -39,10 +39,11 @@ these block any real launch of the metered-inference reselling product.
 - **Mechanism (final, after review)**: each table gets `ENABLE`+`FORCE` RLS + `CREATE POLICY <t>_service_role_all FOR ALL TO hive_app USING(true) WITH CHECK(true)` — mirrors the Phase 19 audit RLS. The app connects as the **non-BYPASSRLS `hive_app`** role (documented in 20260518_04), so the explicit hive_app policy is REQUIRED; a postgres pooler role would also bypass. NO `authenticated` SELECT policy (web-console has zero direct PostgREST reads; a member SELECT would leak `api_keys.token_hash` since RLS is row- not column-level). ⇒ anon/authenticated read 0 rows on every tenant table.
 - Acceptance SQL (run post-deploy as anon): `select count(*) from public.credit_ledger_entries;` → 0; control-plane (hive_app) reads/writes unaffected.
 
-### #108 /internal/* shared-secret auth
-- Routes (`POST /internal/apikeys/resolve`, `/internal/accounting/reservations`, etc.) have no middleware.
-- Fix: `X-Internal-Token` header middleware on all `/internal/*`; new `CONTROL_PLANE_INTERNAL_TOKEN` env. Edge-api sets it on outgoing calls (`apps/edge-api/internal/authz/client.go`, `authz.go`).
-- ⚠️ Edge-api `cmd/server/main.go` wiring CONFLICTS with PR #150 — do after #150 merges.
+### #108 /internal/* shared-secret auth — ✅ PR open
+- Control-plane: new `RequireInternalToken` middleware (`internal/platform/http/internalauth.go`, `crypto/subtle` constant-time compare of `X-Internal-Token`). Wired in `router.go` over every `/internal/*` route (catalog/routing/accounting/usage/apikeys) and in `filestore.RegisterRoutes` (files/uploads/batches — now takes a `gate` wrapper). Config: `CONTROL_PLANE_INTERNAL_TOKEN` (`config.go`); `main.go` logs a loud warning when unset.
+- Edge-api: new `internal/cpauth` helper (`SetHeader`) attaches `X-Internal-Token` from `CONTROL_PLANE_INTERNAL_TOKEN`; applied to ALL 7 control-plane callers (authz client + resolver, routing, accounting, catalog, files×3, batches×2).
+- Fail-mode: token unset ⇒ pass-through + startup warning (no CD breakage during rollout); set on both apps ⇒ enforced. `.env.example` + dev/staging compose updated (passthrough); **ops action: seed `CONTROL_PLANE_INTERNAL_TOKEN` in `/opt/hive/.env` to activate enforcement in staging/prod**.
+- Tests: `internalauth_test.go` (4 cases), `cpauth_test.go` (2 cases). build+vet+test both apps → exit 0.
 
 ### #113 revoked-key cache invalidation
 - Edge caches API-key snapshot in Redis ~1h; revoke doesn't invalidate.
@@ -65,8 +66,8 @@ these block any real launch of the metered-inference reselling product.
 1. ✅ Merge #150 + #151 + #152 + #153 (done).
 2. ✅ #106 (TOCTOU) — MERGED (PR #154).
 3. ✅ #107 (RLS) — PR #155 open (CI green, threads resolved).
-4. #108 (internal auth) — main.go now merged, unblocked. **NEXT.**
-5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx).
+4. ✅ #108 (internal auth) — PR open (`fix/108-internal-endpoint-auth`).
+5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx). **NEXT.**
 6. #112 (service-role) — after #108.
 7. #113 (revoked cache), #116 (abuse).
 8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.

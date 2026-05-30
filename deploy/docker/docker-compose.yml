@@ -16,6 +16,7 @@ services:
       - gobuildcache:/root/.cache/go-build
     environment:
       EDGE_CONTROL_PLANE_BASE_URL: ${EDGE_CONTROL_PLANE_BASE_URL:-http://control-plane:8081}
+      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-hive-local-internal-token}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -136,6 +137,7 @@ services:
       S3_REGION: ${S3_REGION}
       S3_BUCKET_FILES: ${S3_BUCKET_FILES:-hive-files}
       CONTROL_PLANE_PORT: ${CONTROL_PLANE_PORT:-8081}
+      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-hive-local-internal-token}
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       BKASH_APP_KEY: ${BKASH_APP_KEY:-}

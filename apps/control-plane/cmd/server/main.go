@@ -555,6 +555,10 @@ func main() {
 	// can register routes on it before the instrumentation wrapper is applied.
 	routerMux := http.NewServeMux()
 
+	if cfg.InternalToken == "" {
+		slog.Warn("CONTROL_PLANE_INTERNAL_TOKEN is not set; /internal/* service-to-service endpoints are UNAUTHENTICATED. Set it (and the matching value on edge-api) in any non-local deployment.")
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:     authMiddleware,
 		AccountsHandler:    accountsHandler,
@@ -570,6 +574,7 @@ func main() {
 		MetricsRegistry:    metricsRegistry,
 		PrometheusRegistry: promRegistry,
 		Mux:                routerMux,
+		InternalToken:      cfg.InternalToken,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
@@ -663,7 +668,9 @@ func main() {
 				}
 			}
 
-			filestore.RegisterRoutes(routerMux, filestoreSvc, batchSubmitter)
+			filestore.RegisterRoutes(routerMux, filestoreSvc, batchSubmitter, func(h http.Handler) http.Handler {
+				return platformhttp.RequireInternalToken(cfg.InternalToken, h)
+			})
 			log.Println("filestore routes registered")
 		}
 	}

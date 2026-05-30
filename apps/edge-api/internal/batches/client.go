@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 // ErrNotFound is returned when a batch resource does not exist for the given account.
@@ -179,6 +181,7 @@ func (c *BatchClient) post(ctx context.Context, path string, input any, output a
 		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -209,6 +212,7 @@ func (c *BatchClient) get(ctx context.Context, pathAndQuery string, output any) 
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
+	cpauth.SetHeader(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 // AuthSnapshot is the edge-side representation of the control-plane-projected
@@ -72,6 +74,7 @@ func (r *Resolver) Resolve(ctx context.Context, tokenHash string) (AuthSnapshot,
 		return AuthSnapshot{}, fmt.Errorf("authz: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	cpauth.SetHeader(req)
 
 	resp, err := r.httpClient.Do(req)
 	if err != nil {

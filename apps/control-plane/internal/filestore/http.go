@@ -9,29 +9,35 @@ import (
 	"strings"
 )
 
-// RegisterRoutes registers all internal filestore HTTP endpoints on mux.
-func RegisterRoutes(mux *http.ServeMux, svc *Service, submitter BatchSubmitter) {
+// RegisterRoutes registers all internal filestore HTTP endpoints on mux. These
+// are /internal/* service-to-service routes, so gate wraps each handler with the
+// shared-secret guard (issue #108). A nil gate registers the handler directly.
+func RegisterRoutes(mux *http.ServeMux, svc *Service, submitter BatchSubmitter, gate func(http.Handler) http.Handler) {
 	h := &handler{svc: svc, submitter: submitter}
+	if gate == nil {
+		gate = func(next http.Handler) http.Handler { return next }
+	}
+	guarded := gate(h)
 
 	// File endpoints
-	mux.Handle("/internal/files/create", h)
-	mux.Handle("/internal/files/get", h)
-	mux.Handle("/internal/files/list", h)
-	mux.Handle("/internal/files/delete", h)
+	mux.Handle("/internal/files/create", guarded)
+	mux.Handle("/internal/files/get", guarded)
+	mux.Handle("/internal/files/list", guarded)
+	mux.Handle("/internal/files/delete", guarded)
 
 	// Upload endpoints
-	mux.Handle("/internal/uploads/create", h)
-	mux.Handle("/internal/uploads/get", h)
-	mux.Handle("/internal/uploads/add-part", h)
-	mux.Handle("/internal/uploads/complete", h)
-	mux.Handle("/internal/uploads/cancel", h)
+	mux.Handle("/internal/uploads/create", guarded)
+	mux.Handle("/internal/uploads/get", guarded)
+	mux.Handle("/internal/uploads/add-part", guarded)
+	mux.Handle("/internal/uploads/complete", guarded)
+	mux.Handle("/internal/uploads/cancel", guarded)
 
 	// Batch endpoints
-	mux.Handle("/internal/batches/create", h)
-	mux.Handle("/internal/batches/get", h)
-	mux.Handle("/internal/batches/list", h)
-	mux.Handle("/internal/batches/cancel", h)
-	mux.Handle("/internal/batches/update-status", h)
+	mux.Handle("/internal/batches/create", guarded)
+	mux.Handle("/internal/batches/get", guarded)
+	mux.Handle("/internal/batches/list", guarded)
+	mux.Handle("/internal/batches/cancel", guarded)
+	mux.Handle("/internal/batches/update-status", guarded)
 }
 
 type handler struct {
