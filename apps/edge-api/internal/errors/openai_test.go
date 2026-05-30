@@ -153,6 +153,67 @@ func TestNewError(t *testing.T) {
 	}
 }
 
+func TestWriteAuthFailureMapsStatusAndPreservesRetryHeaders(t *testing.T) {
+	tests := []struct {
+		name       string
+		errType    string
+		code       *string
+		headers    map[string]string
+		wantStatus int
+		wantRetry  string
+	}{
+		{
+			name:       "degraded-limiter rate_limit_exceeded -> 429 retryable",
+			errType:    "rate_limit_error",
+			code:       ptrStr("rate_limit_exceeded"),
+			headers:    map[string]string{"retry-after": "5"},
+			wantStatus: http.StatusTooManyRequests,
+			wantRetry:  "5",
+		},
+		{
+			name:       "insufficient_quota -> 429",
+			errType:    "insufficient_quota",
+			code:       ptrStr("insufficient_quota"),
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name:       "model_not_found -> 404",
+			errType:    "invalid_request_error",
+			code:       ptrStr("model_not_found"),
+			wantStatus: http.StatusNotFound,
+		},
+		{
+			name:       "invalid key -> 401",
+			errType:    "invalid_request_error",
+			code:       ptrStr("invalid_api_key"),
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			oerr := NewError(tt.errType, "msg", tt.code)
+			WriteAuthFailure(w, &oerr, tt.headers)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tt.wantStatus)
+			}
+			if got := w.Header().Get("retry-after"); got != tt.wantRetry {
+				t.Fatalf("retry-after = %q, want %q", got, tt.wantRetry)
+			}
+		})
+	}
+}
+
+func TestWriteAuthFailureNilFallsBackTo401(t *testing.T) {
+	w := httptest.NewRecorder()
+	WriteAuthFailure(w, nil, nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("nil error status = %d, want 401", w.Code)
+	}
+}
+
 func TestPermanentFailuresOmitRetryHeaders(t *testing.T) {
 	w := httptest.NewRecorder()
 	code := ptrStr("invalid_api_key")

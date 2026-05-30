@@ -2,6 +2,7 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strconv"
@@ -45,6 +46,32 @@ func NewAuthorizer(client *Client, limiter *Limiter, opts ...AuthorizerOption) *
 func newErr(errType string, message string, code *string) *apierrors.OpenAIError {
 	e := apierrors.NewError(errType, message, code)
 	return &e
+}
+
+// AuthzError carries a structured authorization failure (the OpenAI error
+// envelope plus any rate-metadata headers) through adapter boundaries that
+// would otherwise flatten it to a generic error. Handlers type-assert this to
+// preserve the correct status — notably a retryable degraded-limiter 429 with
+// retry-after rather than a non-retryable 401 (#51).
+type AuthzError struct {
+	OpenAIErr *apierrors.OpenAIError
+	Headers   map[string]string
+}
+
+func (e *AuthzError) Error() string {
+	if e == nil || e.OpenAIErr == nil {
+		return "authz: unauthorized"
+	}
+	return e.OpenAIErr.Error.Message
+}
+
+// AsAuthzError reports whether err is an *AuthzError and returns it.
+func AsAuthzError(err error) (*AuthzError, bool) {
+	var ae *AuthzError
+	if errors.As(err, &ae) {
+		return ae, true
+	}
+	return nil, false
 }
 
 // Authorize validates a request against the AuthSnapshot system.

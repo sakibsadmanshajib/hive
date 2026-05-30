@@ -1,7 +1,6 @@
 package files
 
 import (
-	"fmt"
 	"net/http"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
@@ -22,9 +21,9 @@ func NewAuthorizerAdapter(inner *authz.Authorizer) *AuthorizerAdapter {
 // AuthorizeRequest extracts the Authorization header and delegates to the inner authorizer.
 func (a *AuthorizerAdapter) AuthorizeRequest(r *http.Request) (AuthResult, error) {
 	authHeader := r.Header.Get("Authorization")
-	snapshot, _, authErr := a.inner.Authorize(r.Context(), authHeader, "", 0, 0, 0)
+	snapshot, headers, authErr := a.inner.Authorize(r.Context(), authHeader, "", 0, 0, 0)
 	if authErr != nil {
-		return AuthResult{}, fmt.Errorf("unauthorized: %s", authErr.Error.Message)
+		return AuthResult{}, &authz.AuthzError{OpenAIErr: authErr, Headers: headers}
 	}
 	return AuthResult{
 		AccountID: snapshot.AccountID,

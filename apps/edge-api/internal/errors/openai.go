@@ -49,3 +49,29 @@ func WriteRateLimitError(w http.ResponseWriter, message string, code *string, he
 	}
 	WriteError(w, http.StatusTooManyRequests, "rate_limit_error", message, code)
 }
+
+// WriteAuthFailure writes the OpenAI-compatible response for an authorization
+// failure, mapping the error to the correct HTTP status and preserving rate
+// metadata headers. It is the single source of truth for translating an
+// authz failure into a wire response — the inference hot-path and every media/
+// file/batch handler route through it so a degraded-limiter 429 (retryable,
+// with retry-after) is never collapsed into a non-retryable 401 (#51).
+func WriteAuthFailure(w http.ResponseWriter, oerr *OpenAIError, headers map[string]string) {
+	if oerr == nil {
+		code := "invalid_api_key"
+		WriteError(w, http.StatusUnauthorized, "invalid_request_error", "Invalid API key.", &code)
+		return
+	}
+	if oerr.Error.Code != nil && *oerr.Error.Code == "rate_limit_exceeded" {
+		WriteRateLimitError(w, oerr.Error.Message, oerr.Error.Code, headers)
+		return
+	}
+	status := http.StatusUnauthorized
+	switch {
+	case oerr.Error.Type == "insufficient_quota":
+		status = http.StatusTooManyRequests
+	case oerr.Error.Code != nil && *oerr.Error.Code == "model_not_found":
+		status = http.StatusNotFound
+	}
+	WriteError(w, status, oerr.Error.Type, oerr.Error.Message, oerr.Error.Code)
+}

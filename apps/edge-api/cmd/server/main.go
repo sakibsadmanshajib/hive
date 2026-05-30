@@ -621,17 +621,7 @@ func authorizeAliasRequest(w http.ResponseWriter, r *http.Request, authorizer *a
 	authHeader := r.Header.Get("Authorization")
 	snapshot, headers, authErr := authorizer.Authorize(r.Context(), authHeader, aliasID, estimatedCredits, billableTokens, freeTokens)
 	if authErr != nil {
-		status := http.StatusUnauthorized
-		if authErr.Error.Type == "insufficient_quota" {
-			status = http.StatusTooManyRequests
-		} else if authErr.Error.Code != nil && *authErr.Error.Code == "model_not_found" {
-			status = http.StatusNotFound
-		}
-		if authErr.Error.Code != nil && *authErr.Error.Code == "rate_limit_exceeded" {
-			apierrors.WriteRateLimitError(w, authErr.Error.Message, authErr.Error.Code, headers)
-			return snapshot, false
-		}
-		apierrors.WriteError(w, status, authErr.Error.Type, authErr.Error.Message, authErr.Error.Code)
+		apierrors.WriteAuthFailure(w, authErr, headers)
 		return snapshot, false
 	}
 	return snapshot, true
