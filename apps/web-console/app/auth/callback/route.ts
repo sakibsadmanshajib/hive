@@ -50,30 +50,51 @@ export async function GET(request: NextRequest) {
 
     if (!error) {
       if (hiveVerify) {
-        const userId = data?.user?.id ?? data?.session?.user?.id;
-        const appMetadata =
-          data?.user?.app_metadata ??
-          data?.session?.user?.app_metadata ??
-          {};
-
-        if (userId && process.env.SUPABASE_SERVICE_ROLE_KEY) {
-          await fetch(
-            new URL(`/auth/v1/admin/users/${userId}`, process.env.NEXT_PUBLIC_SUPABASE_URL!),
-            {
-              method: "PUT",
-              headers: {
-                Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY}`,
-                apikey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                app_metadata: {
-                  ...appMetadata,
-                  hive_email_verified: true,
+        // Finalize email verification via the control-plane (#112). The
+        // privileged auth.users write used to happen here with
+        // SUPABASE_SERVICE_ROLE_KEY — a god-key in a public edge bundle that
+        // also failed *silently* when the key was unset. We now forward only
+        // the user's session bearer; the control-plane (which holds the
+        // service-role DB pool) flips hive_email_verified, and only when
+        // Supabase has already confirmed the email. No service-role key or
+        // internal token lives on the edge.
+        const accessToken = data?.session?.access_token;
+        const controlPlaneBaseUrl = process.env.CONTROL_PLANE_BASE_URL;
+        if (accessToken && controlPlaneBaseUrl) {
+          try {
+            const resp = await fetch(
+              new URL(
+                "/api/v1/accounts/current/email-verification/finalize",
+                controlPlaneBaseUrl,
+              ),
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  "Content-Type": "application/json",
                 },
-              }),
+                cache: "no-store",
+                // This step is best-effort and sits on the sign-in redirect
+                // path, so it must never make sign-in latency hostage to
+                // control-plane responsiveness. Hard-cap it; a timeout throws
+                // and is handled by the catch below (logged, redirect proceeds).
+                signal: AbortSignal.timeout(3000),
+              },
+            );
+            if (!resp.ok) {
+              // Loud but non-fatal to the redirect: surface in server logs so a
+              // failure is observable rather than silently dropped.
+              console.error(
+                `auth/callback: email verification finalize failed (status ${resp.status})`,
+              );
             }
-          ).catch(() => undefined);
+          } catch (err) {
+            console.error("auth/callback: email verification finalize error", err);
+          }
+        } else {
+          console.error(
+            "auth/callback: cannot finalize email verification (missing session token or CONTROL_PLANE_BASE_URL)",
+          );
         }
       }
 

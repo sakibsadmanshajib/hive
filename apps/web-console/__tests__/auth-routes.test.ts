@@ -164,6 +164,63 @@ describe("app/auth/callback/route.ts", () => {
       expect.objectContaining({ href: expect.stringContaining("/console") })
     );
   });
+
+  it("finalizes email verification via the control-plane with the session bearer (#112)", async () => {
+    const { NextRequest } = await import("next/server");
+    mockExchangeCodeForSession.mockResolvedValueOnce({
+      error: null,
+      data: { session: { access_token: "sess-token-xyz" } },
+    });
+    process.env.CONTROL_PLANE_BASE_URL = "http://control-plane:8081";
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("../app/auth/callback/route");
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      "http://localhost:3000/auth/callback?code=abc&hive_verify=1"
+    );
+    await mod.GET(req);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [calledUrl, init] = fetchMock.mock.calls[0];
+    expect(String(calledUrl)).toContain(
+      "/api/v1/accounts/current/email-verification/finalize"
+    );
+    expect(init.method).toBe("POST");
+    expect(init.headers.Authorization).toBe("Bearer sess-token-xyz");
+    vi.unstubAllGlobals();
+  });
+
+  it("never calls the Supabase admin API or uses a service-role key (#112)", async () => {
+    const { NextRequest } = await import("next/server");
+    mockExchangeCodeForSession.mockResolvedValueOnce({
+      error: null,
+      data: { session: { access_token: "sess-token-xyz" } },
+    });
+    process.env.CONTROL_PLANE_BASE_URL = "http://control-plane:8081";
+    // If the route still reached for the service-role admin write, the URL
+    // would contain /auth/v1/admin/users — assert it never does.
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const mod = await import("../app/auth/callback/route");
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      "http://localhost:3000/auth/callback?code=abc&hive_verify=1"
+    );
+    await mod.GET(req);
+
+    // Non-vacuous: a regression that stops calling the control-plane entirely
+    // must fail this test, so assert at least one request was made.
+    expect(fetchMock).toHaveBeenCalled();
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(String(url)).not.toContain("/auth/v1/admin/users");
+      const auth = (init?.headers?.Authorization as string) ?? "";
+      // The forwarded credential is the short user session token, never the
+      // long service-role key.
+      expect(auth).toBe("Bearer sess-token-xyz");
+    }
+    vi.unstubAllGlobals();
+  });
 });
 
 describe("app/auth/sign-in/page.tsx", () => {
