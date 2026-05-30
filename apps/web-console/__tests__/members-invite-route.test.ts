@@ -73,4 +73,34 @@ describe("app/api/console/members/route.ts POST", () => {
     expect(res.status).toBe(400);
     expect(mockCreateInvitation).not.toHaveBeenCalled();
   });
+
+  it("maps a ControlPlaneError to a generic status message and never leaks upstream text", async () => {
+    const { ControlPlaneError } = await import("../lib/control-plane/client");
+    mockCreateInvitation.mockRejectedValue(
+      new ControlPlaneError(403, "internal: provider acme rejected db row 42"),
+    );
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(formRequest("teammate@example.com"));
+
+    expect(res.status).toBe(303);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/console/members");
+    expect(location).toContain("permission");
+    // Raw upstream/internal text must never reach the browser-visible URL.
+    expect(location).not.toContain("provider");
+    expect(location).not.toContain("db");
+  });
+
+  it("collapses a non-ControlPlaneError to the generic message (no internal config text)", async () => {
+    mockCreateInvitation.mockRejectedValue(
+      new Error("CONTROL_PLANE_BASE_URL is not configured"),
+    );
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(formRequest("teammate@example.com"));
+
+    expect(res.status).toBe(303);
+    const location = res.headers.get("location") ?? "";
+    expect(location).not.toContain("CONTROL_PLANE");
+    expect(location.toLowerCase()).toContain("could+not");
+  });
 });
