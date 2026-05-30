@@ -19,7 +19,7 @@ these block any real launch of the metered-inference reselling product.
 | #107 | No RLS on tenant tables | ✅ merged | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
 | #108 | /internal/* control-plane endpoints unauth | ✅ merged | PR #156 — X-Internal-Token shared-secret middleware (fails closed) |
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ✅ FIXED | PR open — server-side Route Handler proxy; form action now relative |
-| #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
+| #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ✅ FIXED | PR open — authed control-plane `POST /api/v1/.../email-verification/finalize`; edge forwards session bearer only, service-role key off the edge |
 | #113 | Auth snapshot 1hr cache lets revoked keys work | ⏳ TODO | see below |
 | #116 | Free-tier abuse (CAPTCHA / IP limit / disposable email) | ⏳ TODO | needs Turnstile infra |
 
@@ -50,9 +50,11 @@ these block any real launch of the metered-inference reselling product.
 - Fix: versioned cache key `apikey:{hash}:v{gen}` bumped on revoke, OR control-plane Redis pub/sub invalidation consumed by edge, OR TTL ≤60s. Acceptance: revoked key → 401 within ≤60s across instances.
 - May touch edge auth path; check overlap with #150 before branching.
 
-### #112 service-role key on Cloudflare Worker edge route
-- `apps/web-console/app/auth/callback/route.ts:61-78` — guarded admin write silently skips on Workers when binding missing → users stuck unverified.
-- Fix: move admin write to control-plane `POST /internal/users/finalize-signup` (depends on #108 internal-auth being in place); edge only forwards session. Fail loud on control-plane if service-role key absent.
+### #112 service-role key on Cloudflare Worker edge route — ✅ FIXED (PR open)
+- Was: `apps/web-console/app/auth/callback/route.ts` guarded admin write (`if process.env.SUPABASE_SERVICE_ROLE_KEY` + `.catch(()=>undefined)`) silently skipped on Workers when the key was missing → users stuck unverified, plus a god-key in a public edge bundle.
+- Fixed by an **authenticated** control-plane endpoint `POST /api/v1/accounts/current/email-verification/finalize` (`internal/identity`). Edge forwards only the user session bearer (no service-role key, no internal token on the edge). The control-plane flips `hive_email_verified` via its service-role DB pool and **only when `email_confirmed_at IS NOT NULL`** (Supabase already confirmed) — a caller cannot self-verify an unconfirmed address. Write errors are loud 500 (never a silent no-op); 0 rows → 409.
+- Deviation from original plan (internal `finalize-signup` endpoint): chose an authed `/api/v1` endpoint instead, so the edge holds neither the service-role key nor the #108 internal token — strictly less privilege on the public edge. The session bearer is itself the proof of email ownership (issued post code-exchange).
+- Ops: remove `SUPABASE_SERVICE_ROLE_KEY` from the web-console/Cloudflare env; ensure `CONTROL_PLANE_BASE_URL` points at the public control-plane URL there.
 
 ### #111 CONTROL_PLANE_BASE_URL in HTML — ✅ FIXED (PR #157)
 - Was: `apps/web-console/app/console/members/page.tsx` invite `<form action="${CONTROL_PLANE_BASE_URL}/...">` inlined the internal URL into rendered HTML and POSTed cross-origin without the session bearer.
@@ -69,6 +71,6 @@ these block any real launch of the metered-inference reselling product.
 3. ✅ #107 (RLS) — PR #155 open (CI green, threads resolved).
 4. ✅ #108 (internal auth) — PR open (`fix/108-internal-endpoint-auth`).
 5. ✅ #111 (URL leak) — FIXED (server-side Route Handler proxy `app/api/console/members/route.ts`).
-6. #112 (service-role) — after #108 (now merged). **NEXT.**
-7. #113 (revoked cache), #116 (abuse).
+6. ✅ #112 (service-role) — FIXED (authed control-plane finalize endpoint; service-role off the edge).
+7. #113 (revoked cache) **NEXT**, then #116 (abuse), #51 (rate-limit fail-open).
 8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.

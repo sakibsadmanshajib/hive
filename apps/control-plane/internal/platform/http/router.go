@@ -13,6 +13,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
@@ -38,6 +39,10 @@ type RouterConfig struct {
 	ProfilesHandler   *profiles.Handler
 	RoutingHandler    *routing.Handler
 	UsageHandler      *usage.Handler
+
+	// IdentityHandler finalizes email verification for the authenticated caller
+	// (issue #112). Registered under /api/v1 behind the auth middleware.
+	IdentityHandler *identity.Handler
 
 	// MetricsRegistry provides Prometheus counters/histograms for HTTP instrumentation.
 	// When non-nil, all requests are counted and timed via InstrumentHandler middleware.
@@ -151,6 +156,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux.Handle("/api/v1/accounts/current/api-keys/", protectedAPIKeys)
 		// Internal service-to-service route — guarded by the shared-secret token.
 		mux.Handle("/internal/apikeys/resolve", internal(cfg.APIKeysHandler))
+	}
+
+	// Authenticated email-verification finalize (issue #112). Registered before
+	// the /api/v1/ catch-all; ServeMux longest-prefix match routes this exact
+	// path here. The edge forwards only the user's session bearer.
+	if cfg.IdentityHandler != nil && cfg.AuthMiddleware != nil {
+		mux.Handle("/api/v1/accounts/current/email-verification/finalize",
+			cfg.AuthMiddleware.Require(cfg.IdentityHandler))
 	}
 
 	if cfg.AccountsHandler != nil && cfg.AuthMiddleware != nil {

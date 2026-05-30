@@ -30,6 +30,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
@@ -559,9 +560,36 @@ func main() {
 		slog.Warn("CONTROL_PLANE_INTERNAL_TOKEN is not set; /internal/* service-to-service endpoints are UNAUTHENTICATED. Set it (and the matching value on edge-api) in any non-local deployment.")
 	}
 
+	// Identity: finalize email verification for the authenticated caller (#112).
+	// The privileged write lives here (the pool carries service-role DB
+	// privilege) instead of in the web-console edge route, and only flips the
+	// flag when Supabase has already confirmed the email. A nil pool leaves the
+	// handler unwired so the route returns a loud 500 rather than silently
+	// succeeding.
+	var identityHandler *identity.Handler
+	if pool != nil {
+		p := pool
+		identityHandler = identity.NewHandler(identity.Deps{
+			Audit: auditLogger,
+			FinalizeEmailVerified: func(ctx context.Context, userID uuid.UUID) (int64, error) {
+				tag, err := p.Exec(ctx,
+					`UPDATE auth.users
+					    SET raw_app_meta_data = COALESCE(raw_app_meta_data, '{}'::jsonb)
+					      || jsonb_build_object('hive_email_verified', true)
+					  WHERE id = $1
+					    AND email_confirmed_at IS NOT NULL`, userID)
+				if err != nil {
+					return 0, err
+				}
+				return tag.RowsAffected(), nil
+			},
+		})
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:     authMiddleware,
 		AccountsHandler:    accountsHandler,
+		IdentityHandler:    identityHandler,
 		AccountingHandler:  accountingHandler,
 		APIKeysHandler:     apikeysHandler,
 		BudgetsHandler:     budgetsHandler,
