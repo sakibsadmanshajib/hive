@@ -14,11 +14,32 @@ import (
 type Authorizer struct {
 	client  *Client
 	limiter *Limiter
+
+	// failOpen controls behavior when the rate limiter backend (Redis) cannot
+	// be evaluated. Default false = fail closed (deny with a retryable 429) so a
+	// backend outage cannot silently disable abuse controls (#51). An operator
+	// may opt into fail-open for dev/local via WithFailOpen.
+	failOpen bool
 }
 
-// NewAuthorizer creates a new Authorizer.
-func NewAuthorizer(client *Client, limiter *Limiter) *Authorizer {
-	return &Authorizer{client: client, limiter: limiter}
+// AuthorizerOption configures an Authorizer.
+type AuthorizerOption func(*Authorizer)
+
+// WithFailOpen sets the limiter-degraded policy. failOpen=true admits requests
+// when the limiter backend errors (dev/local only); the production default is
+// fail closed. See #51.
+func WithFailOpen(failOpen bool) AuthorizerOption {
+	return func(a *Authorizer) { a.failOpen = failOpen }
+}
+
+// NewAuthorizer creates a new Authorizer. The default limiter-degraded policy
+// is fail closed; pass WithFailOpen(true) to opt into fail-open.
+func NewAuthorizer(client *Client, limiter *Limiter, opts ...AuthorizerOption) *Authorizer {
+	a := &Authorizer{client: client, limiter: limiter}
+	for _, opt := range opts {
+		opt(a)
+	}
+	return a
 }
 
 func newErr(errType string, message string, code *string) *apierrors.OpenAIError {
@@ -89,7 +110,24 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 	if a.limiter != nil {
 		limitResult, err := a.limiter.Check(ctx, snapshot, aliasID, estimatedCredits, billableTokens, freeTokens)
 		if err != nil {
-			// On limiter failure, fail open to avoid turning transient Redis problems into hard outages.
+			// #51: the limiter backend (Redis) could not be evaluated. Emit a
+			// structured, operator-visible signal at the request boundary so a
+			// degraded limiter is never silent.
+			log.Printf("authz: rate limiter degraded account=%q key=%q fail_open=%v err=%v",
+				snapshot.AccountID, snapshot.KeyID, a.failOpen, err)
+			if !a.failOpen {
+				// Fail closed (production default): deny with a retryable 429
+				// rather than admit unmetered traffic. Message is provider-blind
+				// — no backend/internal detail leaks to the customer.
+				code := "rate_limit_exceeded"
+				return AuthSnapshot{}, map[string]string{"retry-after": "5"}, newErr(
+					"rate_limit_error",
+					"Rate limiting is temporarily unavailable. Please retry in a few seconds.",
+					&code,
+				)
+			}
+			// Fail open: explicitly enabled by operator (dev/local). Admit
+			// despite the degraded limiter.
 		} else if !limitResult.Allowed {
 			code := "rate_limit_exceeded"
 			return AuthSnapshot{}, rateLimitHeaders(limitResult), newErr(
