@@ -47,13 +47,24 @@ func TestRequireInternalTokenAcceptsCorrectToken(t *testing.T) {
 	}
 }
 
-// When no token is configured the middleware is a pass-through so local/dev and
-// existing tests keep working; control-plane logs a startup warning instead.
-func TestRequireInternalTokenNoopWhenUnconfigured(t *testing.T) {
+// Fail closed: when no token is configured, every internal request is rejected
+// (even one with an empty header) rather than leaving the endpoints open.
+func TestRequireInternalTokenFailsClosedWhenUnconfigured(t *testing.T) {
 	h := RequireInternalToken("", okHandler())
+
+	// No header.
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/internal/apikeys/resolve", nil))
-	if rr.Code != http.StatusOK || rr.Body.String() != "reached" {
-		t.Fatalf("expected pass-through when token unconfigured, got %d", rr.Code)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 (fail closed) when token unconfigured, got %d", rr.Code)
+	}
+
+	// Empty header must not match an empty configured token.
+	req := httptest.NewRequest(http.MethodPost, "/internal/apikeys/resolve", nil)
+	req.Header.Set("X-Internal-Token", "")
+	rr2 := httptest.NewRecorder()
+	h.ServeHTTP(rr2, req)
+	if rr2.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for empty header vs empty token, got %d", rr2.Code)
 	}
 }

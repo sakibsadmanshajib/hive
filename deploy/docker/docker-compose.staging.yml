@@ -31,10 +31,11 @@ services:
     mem_reservation: 120m
     environment:
       EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
-      # Set CONTROL_PLANE_INTERNAL_TOKEN in /opt/hive/.env to activate #108
-      # enforcement (must match the control-plane value). Empty = unauthenticated
-      # /internal/* with a startup warning (no CD breakage during rollout).
-      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-}
+      # #108: control-plane /internal/* fails closed, so this token is REQUIRED
+      # and MUST match the control-plane value. Seed CONTROL_PLANE_INTERNAL_TOKEN
+      # in /opt/hive/.env; an unset value fails the deploy fast (rather than
+      # silently 401-ing every edge->control-plane call at runtime).
+      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:?CONTROL_PLANE_INTERNAL_TOKEN required (seed /opt/hive/.env) — must match control-plane}
       LITELLM_BASE_URL: http://litellm:4000
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?LITELLM_MASTER_KEY required (seed /opt/hive/.env)}
       REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
@@ -57,7 +58,7 @@ services:
     mem_reservation: 120m
     environment:
       REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
-      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-}
+      CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:?CONTROL_PLANE_INTERNAL_TOKEN required (seed /opt/hive/.env) — must match edge-api}
       CONTROL_PLANE_PUBLIC_URL: https://cp-hive.scubed.co
       LOG_LEVEL: info
 
