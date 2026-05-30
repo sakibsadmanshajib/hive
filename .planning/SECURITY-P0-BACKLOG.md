@@ -15,8 +15,8 @@ these block any real launch of the metered-inference reselling product.
 | #117 | No email-verify gate on API key creation | ✅ already fixed (Phase 18 RBAC) | closed, no code change |
 | #119 | getSession() server-side auth (3 sites) | ✅ fixed | PR #151 |
 | #120 | Email-verify only in layout, not middleware | ✅ fixed | PR #151 |
-| #106 | Credit reservation TOCTOU double-spend | ⏳ TODO | see below |
-| #107 | No RLS on tenant tables | ✅ migration written | branch `fix/107-rls-tenant-tables` — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
+| #106 | Credit reservation TOCTOU double-spend | ✅ merged | PR #154 |
+| #107 | No RLS on tenant tables | ✅ PR open | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
 | #108 | /internal/* control-plane endpoints unauth | ⏳ TODO | see below |
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
@@ -25,23 +25,19 @@ these block any real launch of the metered-inference reselling product.
 
 ## Remaining — implementation notes (pre-investigated)
 
-### #106 Credit TOCTOU (HIGHEST severity — financial)
-- File: `apps/control-plane/internal/accounting/service.go` `CreateReservation` (L50–110).
-- Bug: `GetBalance` (L63) and `repo.CreateReservation` (L85) run in separate txns; N concurrent requests read same balance, all pass `enforcePolicy` (L426) → N× over-reserve.
-- Fix: single txn with `pg_advisory_xact_lock(hashtext(account_id::text))` (or `SELECT ... FOR UPDATE` on an account lock row) around balance-read + policy + insert. Add a ledger CHECK / partial-sum constraint as defence in depth.
-- Needs: repo transactional path (check `repository.go` for tx support), and a `-race` + ~100-RPS single-account smoke test (acceptance: balance=1000, reserve=50 → ≤20 succeed).
-- Do on its own branch; no file conflicts with #150/#151.
+### #106 Credit TOCTOU (HIGHEST severity — financial) — ✅ FIXED
+- File: `apps/control-plane/internal/accounting/service.go` `CreateReservation` + `ExpandReservation` (both were vulnerable).
+- Bug: `GetBalance` and the `ReserveCredits` hold ran in separate txns; N concurrent requests read the same balance, all pass `enforcePolicy` → N× over-reserve.
+- Fix shipped: new `AccountLocker` abstraction (`lock.go`, `pglock.go`). The balance-read → policy → reservation-hold critical section now runs inside `WithAccountLock` for both `CreateReservation` and `ExpandReservation`. Production wiring (`cmd/server/main.go`) installs `PgxAccountLocker` = `pg_advisory_lock(hashtext(account_id)::int8)` on a dedicated pooled conn, held across the section, always released — cross-process safe. `NewService` defaults to an in-process locker for single-instance/tests.
+- **Deliberately NOT added** the ledger non-negative CHECK/trigger the issue suggested: `PolicyModeTemporaryOverage` intentionally lets available balance go negative within a buffer, so a hard DB constraint would break the overage policy. Policy stays in Go where the buffer logic lives; the advisory lock is the correctness mechanism.
+- Tests: `service_concurrency_test.go` — `TestCreateReservationSerializesConcurrentReservations` (acceptance: balance=1000, reserve=50, 100 concurrent → ≤20 succeed, balance never negative), `TestCreateReservationAcquiresAccountLock` (deterministic: lock taken exactly once, keyed on account), `TestNoopLockerOverReserves` (discrimination). Verified: `go build` + `go vet` + `go test -race` (full control-plane suite) → exit 0.
+- Follow-up (v1.1 hardening, optional): live ~100-RPS smoke against a real DB to exercise `PgxAccountLocker` end-to-end (unit suite covers the serialization logic via the in-process locker).
 
-### #107 RLS on tenant tables (largest surface)
-- No `ENABLE ROW LEVEL SECURITY` on any customer table across 21 migrations.
-- Tables: accounts, account_profiles, account_memberships, api_keys, api_key_policies, credits_ledger, credit_reservations, payment_intents, invoices, budget_thresholds, usage_*, files, uploads, upload_parts, batches.
-- Pattern: enable+force RLS; policy `auth.uid()` joined through `account_memberships`; service-role bypass for control-plane writes. Wrap `auth.uid()`/`auth.jwt()` in `(SELECT ...)` per-row-perf (learned in Phase 19 M5).
-- Acceptance: published anon key `select * from credits_ledger` → 0 rows unauth; control-plane writes still succeed.
-- New migration `supabase/migrations/20260529_01_rls_tenant_tables.sql`. No code conflicts. ✅ DONE (PR pending).
-- **Schema is bifurcated**: Phase 19 `tenant_*` already had RLS (20260518_04). This migration covers the LEGACY `account_*` family (33 tables: accounts, account_*, api_key*, credit_*, payment_*, invoices/budgets/spend_alerts (keyed `workspace_id`), request_attempts, usage_events, files/uploads/upload_parts/batches/batch_lines (account_id is `text`)).
-- **Mechanism**: control-plane connects as Supabase `postgres` role (has BYPASSRLS — confirmed) ⇒ unaffected by ENABLE+FORCE RLS. PostgREST anon/authenticated have no BYPASSRLS ⇒ blocked. Customers only get a membership-scoped SELECT policy (via `public.hive_current_account_ids()` SECURITY DEFINER helper); NO write policies (writes flow through control-plane).
-- **Assumptions to confirm at deploy**: (a) `workspace_id` on invoices/budgets/spend_alerts maps to an `account_memberships.account_id`; (b) `account_id text` on files/uploads/batches holds the account UUID string. Both validated mechanically against the migration schema; semantic check on live data.
-- Acceptance SQL (run post-deploy as anon): `select count(*) from public.credit_ledger_entries;` → 0.
+### #107 RLS on tenant tables (largest surface) — ✅ PR #155
+- Migration `supabase/migrations/20260529_01_rls_tenant_tables.sql`.
+- **Schema is bifurcated**: Phase 19 `tenant_*` already had RLS (20260518_04). This migration covers the LEGACY `account_*` family — 34 tables incl `accounts`, `account_*`, `api_key*`, `credit_*`, `payment_*`, `invoices`, `budgets`, `spend_alerts`, `request_attempts`, `usage_events`, `fx_snapshots`, `files`/`uploads`/`upload_parts`/`batches`/`batch_lines`.
+- **Mechanism (final, after review)**: each table gets `ENABLE`+`FORCE` RLS + `CREATE POLICY <t>_service_role_all FOR ALL TO hive_app USING(true) WITH CHECK(true)` — mirrors the Phase 19 audit RLS. The app connects as the **non-BYPASSRLS `hive_app`** role (documented in 20260518_04), so the explicit hive_app policy is REQUIRED; a postgres pooler role would also bypass. NO `authenticated` SELECT policy (web-console has zero direct PostgREST reads; a member SELECT would leak `api_keys.token_hash` since RLS is row- not column-level). ⇒ anon/authenticated read 0 rows on every tenant table.
+- Acceptance SQL (run post-deploy as anon): `select count(*) from public.credit_ledger_entries;` → 0; control-plane (hive_app) reads/writes unaffected.
 
 ### #108 /internal/* shared-secret auth
 - Routes (`POST /internal/apikeys/resolve`, `/internal/accounting/reservations`, etc.) have no middleware.
@@ -66,10 +62,11 @@ these block any real launch of the metered-inference reselling product.
 - Larger, multi-surface; needs product input on free-credit policy.
 
 ## Recommended next order
-1. Merge #150 + #151.
-2. #106 (TOCTOU) — own branch, financial-critical, needs DB race test.
-3. #107 (RLS) — own branch, big migration.
-4. #108 (internal auth) — after #150 merged (main.go).
-5. #111 (URL leak) — after #151 merged (members/page.tsx).
+1. ✅ Merge #150 + #151 + #152 + #153 (done).
+2. ✅ #106 (TOCTOU) — MERGED (PR #154).
+3. ✅ #107 (RLS) — PR #155 open (CI green, threads resolved).
+4. #108 (internal auth) — main.go now merged, unblocked. **NEXT.**
+5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx).
 6. #112 (service-role) — after #108.
 7. #113 (revoked cache), #116 (abuse).
+8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.
