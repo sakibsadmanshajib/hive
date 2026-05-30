@@ -132,7 +132,7 @@ export default async function MembersPage() {
             {canInvite ? (
               <form
                 method="POST"
-                action={`${process.env.CONTROL_PLANE_BASE_URL}/api/v1/accounts/current/invitations`}
+                action="/api/console/members"
                 className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end"
               >
                 <Field label="Email" htmlFor="invite-email" required>

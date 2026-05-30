@@ -535,6 +535,25 @@ export async function updateAccountProfile(
   return profile;
 }
 
+// createInvitation sends a workspace invite for the given email. It runs only
+// server-side (Route Handler) so the internal CONTROL_PLANE_BASE_URL is never
+// rendered into client HTML (issue #111). Throws ControlPlaneError so the route
+// can forward the upstream status (403 no-permission, 409 already-member, etc.)
+// instead of collapsing everything to 500.
+export async function createInvitation(email: string): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/invitations`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify({ email }),
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to send invitation");
+  }
+}
+
 export async function getBillingProfile(): Promise<BillingProfile> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/billing-profile`, {

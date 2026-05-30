@@ -18,7 +18,7 @@ these block any real launch of the metered-inference reselling product.
 | #106 | Credit reservation TOCTOU double-spend | ✅ merged | PR #154 |
 | #107 | No RLS on tenant tables | ✅ PR open | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
 | #108 | /internal/* control-plane endpoints unauth | ✅ PR open | branch `fix/108-internal-endpoint-auth` — X-Internal-Token shared-secret middleware |
-| #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
+| #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ✅ FIXED | PR open — server-side Route Handler proxy; form action now relative |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
 | #113 | Auth snapshot 1hr cache lets revoked keys work | ⏳ TODO | see below |
 | #116 | Free-tier abuse (CAPTCHA / IP limit / disposable email) | ⏳ TODO | needs Turnstile infra |
@@ -67,7 +67,7 @@ these block any real launch of the metered-inference reselling product.
 2. ✅ #106 (TOCTOU) — MERGED (PR #154).
 3. ✅ #107 (RLS) — PR #155 open (CI green, threads resolved).
 4. ✅ #108 (internal auth) — PR open (`fix/108-internal-endpoint-auth`).
-5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx). **NEXT.**
-6. #112 (service-role) — after #108.
+5. ✅ #111 (URL leak) — FIXED (server-side Route Handler proxy `app/api/console/members/route.ts`).
+6. #112 (service-role) — after #108 (now merged). **NEXT.**
 7. #113 (revoked cache), #116 (abuse).
 8. NEW: #51 (P0) — Redis rate-limit fail-open bypass — not in original #106–#120 sweep; triage with this batch.
