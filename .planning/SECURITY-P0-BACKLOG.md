@@ -16,7 +16,7 @@ these block any real launch of the metered-inference reselling product.
 | #119 | getSession() server-side auth (3 sites) | ✅ fixed | PR #151 |
 | #120 | Email-verify only in layout, not middleware | ✅ fixed | PR #151 |
 | #106 | Credit reservation TOCTOU double-spend | ⏳ TODO | see below |
-| #107 | No RLS on tenant tables | ⏳ TODO | see below |
+| #107 | No RLS on tenant tables | ✅ migration written | branch `fix/107-rls-tenant-tables` — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
 | #108 | /internal/* control-plane endpoints unauth | ⏳ TODO | see below |
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
@@ -37,7 +37,11 @@ these block any real launch of the metered-inference reselling product.
 - Tables: accounts, account_profiles, account_memberships, api_keys, api_key_policies, credits_ledger, credit_reservations, payment_intents, invoices, budget_thresholds, usage_*, files, uploads, upload_parts, batches.
 - Pattern: enable+force RLS; policy `auth.uid()` joined through `account_memberships`; service-role bypass for control-plane writes. Wrap `auth.uid()`/`auth.jwt()` in `(SELECT ...)` per-row-perf (learned in Phase 19 M5).
 - Acceptance: published anon key `select * from credits_ledger` → 0 rows unauth; control-plane writes still succeed.
-- New migration `supabase/migrations/<date>_rls_tenant_tables.sql`. No code conflicts.
+- New migration `supabase/migrations/20260529_01_rls_tenant_tables.sql`. No code conflicts. ✅ DONE (PR pending).
+- **Schema is bifurcated**: Phase 19 `tenant_*` already had RLS (20260518_04). This migration covers the LEGACY `account_*` family (33 tables: accounts, account_*, api_key*, credit_*, payment_*, invoices/budgets/spend_alerts (keyed `workspace_id`), request_attempts, usage_events, files/uploads/upload_parts/batches/batch_lines (account_id is `text`)).
+- **Mechanism**: control-plane connects as Supabase `postgres` role (has BYPASSRLS — confirmed) ⇒ unaffected by ENABLE+FORCE RLS. PostgREST anon/authenticated have no BYPASSRLS ⇒ blocked. Customers only get a membership-scoped SELECT policy (via `public.hive_current_account_ids()` SECURITY DEFINER helper); NO write policies (writes flow through control-plane).
+- **Assumptions to confirm at deploy**: (a) `workspace_id` on invoices/budgets/spend_alerts maps to an `account_memberships.account_id`; (b) `account_id text` on files/uploads/batches holds the account UUID string. Both validated mechanically against the migration schema; semantic check on live data.
+- Acceptance SQL (run post-deploy as anon): `select count(*) from public.credit_ledger_entries;` → 0.
 
 ### #108 /internal/* shared-secret auth
 - Routes (`POST /internal/apikeys/resolve`, `/internal/accounting/reservations`, etc.) have no middleware.
