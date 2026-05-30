@@ -16,6 +16,7 @@ type fakeSnapshotStore struct {
 	values  map[string]string
 	getKeys []string
 	setKeys []string
+	setTTLs []time.Duration
 }
 
 func (s *fakeSnapshotStore) Get(_ context.Context, key string) (string, error) {
@@ -30,11 +31,12 @@ func (s *fakeSnapshotStore) Get(_ context.Context, key string) (string, error) {
 	return value, nil
 }
 
-func (s *fakeSnapshotStore) Set(_ context.Context, key string, value string, _ time.Duration) error {
+func (s *fakeSnapshotStore) Set(_ context.Context, key string, value string, ttl time.Duration) error {
 	if s.values == nil {
 		s.values = make(map[string]string)
 	}
 	s.setKeys = append(s.setKeys, key)
+	s.setTTLs = append(s.setTTLs, ttl)
 	s.values[key] = value
 	return nil
 }
@@ -91,6 +93,17 @@ func TestResolveHydratesRedisFromControlPlane(t *testing.T) {
 	cacheKey := "auth:key:{" + tokenHash + "}"
 	if len(cache.setKeys) != 1 || cache.setKeys[0] != cacheKey {
 		t.Fatalf("expected one cache write for %s, got %#v", cacheKey, cache.setKeys)
+	}
+
+	// #113: the snapshot TTL is a revocation backstop. Control-plane actively
+	// DELETEs this exact key on revoke/disable/rotate, but if that invalidation
+	// is ever missed (transient Redis error, instance divergence) the TTL must
+	// still bound how long a revoked key keeps authorizing. Acceptance: ≤60s.
+	if len(cache.setTTLs) != 1 {
+		t.Fatalf("expected one TTL recorded, got %#v", cache.setTTLs)
+	}
+	if cache.setTTLs[0] <= 0 || cache.setTTLs[0] > 60*time.Second {
+		t.Fatalf("snapshot TTL must be a positive ≤60s revocation backstop, got %s", cache.setTTLs[0])
 	}
 
 	var cached AuthSnapshot
