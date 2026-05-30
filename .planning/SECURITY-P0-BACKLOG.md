@@ -15,8 +15,8 @@ these block any real launch of the metered-inference reselling product.
 | #117 | No email-verify gate on API key creation | ✅ already fixed (Phase 18 RBAC) | closed, no code change |
 | #119 | getSession() server-side auth (3 sites) | ✅ fixed | PR #151 |
 | #120 | Email-verify only in layout, not middleware | ✅ fixed | PR #151 |
-| #106 | Credit reservation TOCTOU double-spend | ✅ fixed | branch `fix/106-credit-toctou-race` — per-account advisory lock |
-| #107 | No RLS on tenant tables | ⏳ TODO | see below |
+| #106 | Credit reservation TOCTOU double-spend | ✅ merged | PR #154 |
+| #107 | No RLS on tenant tables | ✅ PR open | PR #155 — `20260529_01_rls_tenant_tables.sql`; live anon→0 verify at deploy |
 | #108 | /internal/* control-plane endpoints unauth | ⏳ TODO | see below |
 | #111 | CONTROL_PLANE_BASE_URL leaked into HTML | ⏳ TODO | conflicts w/ #151 members/page — do after #151 merges |
 | #112 | SUPABASE_SERVICE_ROLE_KEY silent failure on edge | ⏳ TODO | cross-service (move admin write to control-plane) |
@@ -33,12 +33,11 @@ these block any real launch of the metered-inference reselling product.
 - Tests: `service_concurrency_test.go` — `TestCreateReservationSerializesConcurrentReservations` (acceptance: balance=1000, reserve=50, 100 concurrent → ≤20 succeed, balance never negative), `TestCreateReservationAcquiresAccountLock` (deterministic: lock taken exactly once, keyed on account), `TestNoopLockerOverReserves` (discrimination). Verified: `go build` + `go vet` + `go test -race` (full control-plane suite) → exit 0.
 - Follow-up (v1.1 hardening, optional): live ~100-RPS smoke against a real DB to exercise `PgxAccountLocker` end-to-end (unit suite covers the serialization logic via the in-process locker).
 
-### #107 RLS on tenant tables (largest surface)
-- No `ENABLE ROW LEVEL SECURITY` on any customer table across 21 migrations.
-- Tables: accounts, account_profiles, account_memberships, api_keys, api_key_policies, credits_ledger, credit_reservations, payment_intents, invoices, budget_thresholds, usage_*, files, uploads, upload_parts, batches.
-- Pattern: enable+force RLS; policy `auth.uid()` joined through `account_memberships`; service-role bypass for control-plane writes. Wrap `auth.uid()`/`auth.jwt()` in `(SELECT ...)` per-row-perf (learned in Phase 19 M5).
-- Acceptance: published anon key `select * from credits_ledger` → 0 rows unauth; control-plane writes still succeed.
-- New migration `supabase/migrations/<date>_rls_tenant_tables.sql`. No code conflicts.
+### #107 RLS on tenant tables (largest surface) — ✅ PR #155
+- Migration `supabase/migrations/20260529_01_rls_tenant_tables.sql`.
+- **Schema is bifurcated**: Phase 19 `tenant_*` already had RLS (20260518_04). This migration covers the LEGACY `account_*` family — 34 tables incl `accounts`, `account_*`, `api_key*`, `credit_*`, `payment_*`, `invoices`, `budgets`, `spend_alerts`, `request_attempts`, `usage_events`, `fx_snapshots`, `files`/`uploads`/`upload_parts`/`batches`/`batch_lines`.
+- **Mechanism (final, after review)**: each table gets `ENABLE`+`FORCE` RLS + `CREATE POLICY <t>_service_role_all FOR ALL TO hive_app USING(true) WITH CHECK(true)` — mirrors the Phase 19 audit RLS. The app connects as the **non-BYPASSRLS `hive_app`** role (documented in 20260518_04), so the explicit hive_app policy is REQUIRED; a postgres pooler role would also bypass. NO `authenticated` SELECT policy (web-console has zero direct PostgREST reads; a member SELECT would leak `api_keys.token_hash` since RLS is row- not column-level). ⇒ anon/authenticated read 0 rows on every tenant table.
+- Acceptance SQL (run post-deploy as anon): `select count(*) from public.credit_ledger_entries;` → 0; control-plane (hive_app) reads/writes unaffected.
 
 ### #108 /internal/* shared-secret auth
 - Routes (`POST /internal/apikeys/resolve`, `/internal/accounting/reservations`, etc.) have no middleware.
@@ -64,9 +63,9 @@ these block any real launch of the metered-inference reselling product.
 
 ## Recommended next order
 1. ✅ Merge #150 + #151 + #152 + #153 (done).
-2. ✅ #106 (TOCTOU) — done, branch `fix/106-credit-toctou-race` (PR pending).
-3. #107 (RLS) — own branch, big migration. **NEXT.**
-4. #108 (internal auth) — main.go now merged, unblocked.
+2. ✅ #106 (TOCTOU) — MERGED (PR #154).
+3. ✅ #107 (RLS) — PR #155 open (CI green, threads resolved).
+4. #108 (internal auth) — main.go now merged, unblocked. **NEXT.**
 5. #111 (URL leak) — #151 merged, unblocked (members/page.tsx).
 6. #112 (service-role) — after #108.
 7. #113 (revoked cache), #116 (abuse).
