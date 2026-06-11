@@ -31,6 +31,18 @@ Filter the public catalog endpoint so each tenant sees only the model aliases th
 - Open WebUI: `ENABLE_MODEL_FILTER` + `MODEL_FILTER_LIST` are deprecated/removed. Current mechanism: per-model `access_control` objects via admin API `POST/GET /api/v1/models/` with `{read: {group_ids: [...], user_ids: [...]}, write: {...}}`. `null` means public.
 - `apps/control-plane/internal/owui/client.go` already has `EnsureGroup` and `AddUserToGroup`. This plan adds model upsert with `access_control` keyed by tenant group ID.
 
+> **Schema prerequisite:** The `model_aliases.visibility` CHECK currently allows only `public`, `preview`, and `internal` (see `supabase/migrations/20260331_01_model_catalog.sql`). The `"restricted"` value used in the filtering rules below does not yet exist. The phase-20 migration (Plan 20-01 or a dedicated migration step) **must** add `'restricted'` to that CHECK before this service code is deployed:
+>
+> ```sql
+> ALTER TABLE public.model_aliases
+>   DROP CONSTRAINT IF EXISTS model_aliases_visibility_check;
+> ALTER TABLE public.model_aliases
+>   ADD CONSTRAINT model_aliases_visibility_check
+>     CHECK (visibility IN ('public', 'preview', 'internal', 'restricted'));
+> ```
+>
+> Add this DDL to `YYYYMMDD_01_phase20_provider_catalog_schema.sql` (Plan 20-01 Task 1.5) and add the acceptance criterion: `model_aliases.visibility` CHECK accepts `'restricted'`.
+
 ---
 
 ## Tasks
@@ -151,6 +163,7 @@ Write service tests against a mock repository (interface). Write OWUI client tes
 
 ## Acceptance Criteria
 
+- [ ] `model_aliases.visibility` CHECK constraint extended to include `'restricted'` (prerequisite migration).
 - [ ] `GET /api/v1/catalog/models` returns only visibility-permitted aliases for the authenticated tenant.
 - [ ] `visibility=public` aliases visible by default unless explicitly blocked by `visible=false` row.
 - [ ] `visibility=restricted` aliases hidden unless `visible=true` row exists for tenant.

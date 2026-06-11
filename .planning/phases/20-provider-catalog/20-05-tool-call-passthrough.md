@@ -11,7 +11,8 @@ track: A
 files_modified:
   - apps/edge-api/internal/inference/chat_completions.go
   - apps/edge-api/internal/inference/errors.go
-  - apps/edge-api/internal/routing/selector.go
+  - apps/control-plane/internal/routing/service.go
+  - apps/control-plane/internal/routing/types.go
   - packages/openai-contract/support-matrix.md
   - packages/sdk-tests/tool_call_test.js        (new or existing test file)
 autonomous: true
@@ -28,7 +29,7 @@ Allow `tools`, `tool_choice`, and `response_format` to pass through the edge-api
 ## Context (Verified Facts)
 
 - **Rejection point:** `apps/edge-api/internal/inference/errors.go` `writeUnsupportedParamError`, called from the guard in `chat_completions.go`.
-- **Capability columns:** `provider_capabilities` table with tool/vision flags added in Phase 16. These columns are already available.
+- **Capability columns:** `provider_capabilities` table exists from Phase 16, but repo-wide search confirms it does NOT yet include a `tools_supported` column (Phase 16 added `responses`, `chat_completions`, `embeddings`, `streaming`, `reasoning`, `cache`, `media`, `batch` only). This plan must add `tools_supported` via a migration step before any code can gate on it.
 - **Routing selection:** `routing.SelectionInput` carries `AllowedProviders` and `AllowedAliases` plus capability flags (Phase 10 baseline). The selector must be told to restrict to tool-capable routes.
 - **Current behaviour:** Any request carrying `tools` or `tool_choice` hits `writeUnsupportedParamError` unconditionally.
 - **Target behaviour (MVP gate):** Gate 400 on alias capability. If at least one route for the alias has `tools_supported = true` in `provider_capabilities`, pass through the parameter and constrain routing to capable routes only.
@@ -37,11 +38,34 @@ Allow `tools`, `tool_choice`, and `response_format` to pass through the edge-api
 
 ## Tasks
 
+### Task 0: Add tools_supported column to provider_capabilities
+
+**File:** `supabase/migrations/YYYYMMDD_01_phase20_provider_catalog_schema.sql` (append to the phase-20 migration)
+
+```sql
+ALTER TABLE public.provider_capabilities
+  ADD COLUMN IF NOT EXISTS tools_supported BOOLEAN NOT NULL DEFAULT false;
+```
+
+Seed known capable providers (update after verifying actual provider capability):
+
+```sql
+UPDATE public.provider_capabilities
+SET tools_supported = true
+WHERE provider IN ('openrouter', 'groq');
+```
+
+**Acceptance:** `\d provider_capabilities` shows `tools_supported boolean not null default false`.
+
+---
+
 ### Task 1: Extend SelectionInput with capability constraint
 
-**File:** `apps/edge-api/internal/routing/selector.go`
+**File:** `apps/control-plane/internal/routing/service.go` (or `types.go` — verify the exact struct location before editing; route selection lives in the control-plane, not the edge-api)
 
-Read the existing file before editing. Add to `SelectionInput`:
+> **Correction:** There is no `apps/edge-api/internal/routing/selector.go`. Route selection lives in `apps/control-plane/internal/routing/{types,service}.go`. The edge-api only holds the HTTP mirror in `apps/edge-api/internal/inference/routing_client.go`. All selector changes go to the control-plane package.
+
+Read `apps/control-plane/internal/routing/types.go` and `service.go` before editing. Add to `SelectionInput` (or the equivalent capability-filter struct):
 
 ```go
 // RequireToolCapable, when true, restricts route selection to routes where
@@ -49,7 +73,7 @@ Read the existing file before editing. Add to `SelectionInput`:
 RequireToolCapable bool
 ```
 
-Update the route selection logic: when `RequireToolCapable` is true, filter `AllowedProviders` to those with `tools_supported = true` in `provider_capabilities`. If filtering produces an empty set, return a typed error `ErrNoCapableRoute` (new sentinel).
+Update the route selection logic: when `RequireToolCapable` is true, filter `AllowedProviders` to those with `tools_supported = true` in `provider_capabilities`. If filtering produces an empty set, return a typed error `ErrNoCapableRoute` (new sentinel, declared in the control-plane routing package).
 
 ---
 
@@ -122,7 +146,7 @@ Test case 3: Send `response_format: {type: "json_object"}` to a tool-capable ali
 
 ### Task 6: Routing unit tests
 
-**File:** `apps/edge-api/internal/routing/selector_test.go` (existing file — extend)
+**File:** `apps/control-plane/internal/routing/service_test.go` (or `selector_test.go` — verify existing test file name before editing)
 
 Read the existing file before editing. Add:
 
@@ -142,7 +166,8 @@ The `ErrNoCapableRoute` sentinel should be declared in `selector.go` and tested 
 
 ## Acceptance Criteria
 
-- [ ] `SelectionInput.RequireToolCapable = true` restricts to `tools_supported = true` routes; returns `ErrNoCapableRoute` on empty result.
+- [ ] `tools_supported` column added to `provider_capabilities` via migration.
+- [ ] `SelectionInput.RequireToolCapable = true` in control-plane routing restricts to `tools_supported = true` routes; returns `ErrNoCapableRoute` on empty result.
 - [ ] Request with `tools` to a tool-capable alias returns 200; tools + tool_choice + response_format passed downstream unchanged.
 - [ ] Request with `tools` to an incapable alias returns 400 with `code: "unsupported_parameter"` and `param: "tools"`.
 - [ ] `writeUnsupportedParamError` includes `param` field in JSON body.
@@ -151,4 +176,5 @@ The `ErrNoCapableRoute` sentinel should be declared in `selector.go` and tested 
 - [ ] SDK test case 2 (negative) passes unconditionally.
 - [ ] Selector unit tests (3 cases) pass.
 - [ ] `go vet ./apps/edge-api/...` clean.
+- [ ] `go vet ./apps/control-plane/...` clean.
 - [ ] Existing `chat_completions.go` tests (no tools params) still pass — zero regressions.

@@ -88,7 +88,7 @@ ON CONFLICT (slug) DO NOTHING;
 CREATE TABLE IF NOT EXISTS public.tenant_model_visibility (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   tenant_id    UUID        NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
-  alias_id     UUID        NOT NULL REFERENCES public.model_aliases(id) ON DELETE CASCADE,
+  alias_id     TEXT        NOT NULL REFERENCES public.model_aliases(alias_id) ON DELETE CASCADE,
   visible      BOOLEAN     NOT NULL DEFAULT true,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -141,6 +141,11 @@ DO $$ BEGIN
       WITH CHECK (true);
   END IF;
 END $$;
+
+-- Grant table privileges so hive_app can actually read/write the rows.
+-- RLS policies do not imply DML privileges; both are required.
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.custom_providers TO hive_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.tenant_model_visibility TO hive_app;
 ```
 
 ---
@@ -181,6 +186,7 @@ Write a SQL migration test (same pattern as existing `*_test.sql` files in `/tmp
 - [ ] Seed rows for `openrouter` and `groq` present (idempotent).
 - [ ] `tenant_model_visibility` table exists with `UNIQUE(tenant_id, alias_id)`.
 - [ ] Both tables have RLS enabled + forced; `hive_app` service-role policy (idempotent DO $$) present.
+- [ ] `GRANT SELECT, INSERT, UPDATE, DELETE ON ... TO hive_app` present for both tables.
 - [ ] `updated_at` triggers fire on both tables.
 - [ ] Migration file named `YYYYMMDD_01_phase20_provider_catalog_schema.sql` following project convention.
 - [ ] `supabase db push` (or `apply_migration`) applies cleanly with no errors.

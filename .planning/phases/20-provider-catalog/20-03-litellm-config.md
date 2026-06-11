@@ -76,6 +76,14 @@ general_settings:
   master_key: <cfg.GeneralSettings.MasterKey>
 ```
 
+> **Config preservation (critical):** `WriteAndRestart` must NOT blindly overwrite `deploy/litellm/config.yaml`. The existing file contains `litellm_settings` (fallbacks, retry, drop_params), per-model `model_info`, provider `extra_body`, and `files_settings` blocks that are not captured in `[]ModelEntry`. The write strategy must:
+> 1. Parse the existing YAML file (if present) into a `map[string]interface{}`.
+> 2. Replace only the `model_list` key with the newly generated entries.
+> 3. Merge `general_settings` (update `master_key`; preserve all other keys).
+> 4. Marshal the merged map back to YAML and write atomically (write to a temp file, then `os.Rename`).
+>
+> The `Config` struct must carry an `ExistingConfigPath string` field so `WriteAndRestart` can locate the file to merge from. If the file does not exist, write from scratch (first-run case).
+
 Use `gopkg.in/yaml.v3` (already present in the module or add it — check `go.mod`).
 
 ---
@@ -89,17 +97,36 @@ type Restarter interface {
     Restart(ctx context.Context) error
 }
 
-// DockerRestarter signals a LiteLLM container restart via the Docker socket.
-// It calls `docker restart <containerName>` using exec.CommandContext.
-// containerName read from env var LITELLM_CONTAINER_NAME (default: "litellm").
+// DockerRestarter signals a LiteLLM container restart via the Docker socket HTTP API.
+// It sends POST /containers/<containerName>/restart to the Unix socket at
+// /var/run/docker.sock using a net/http transport — no `docker` CLI binary required.
+// containerName is read from env var LITELLM_CONTAINER_NAME (default: "litellm").
+//
+// Implementation sketch:
+//   transport := &http.Transport{
+//       DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+//           return (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
+//       },
+//   }
+//   client := &http.Client{Transport: transport}
+//   req, _ := http.NewRequestWithContext(ctx,
+//       http.MethodPost,
+//       "http://localhost/containers/"+r.ContainerName+"/restart?t=10",
+//       nil)
+//   resp, err := client.Do(req)
+//
+// This avoids needing the `docker` CLI binary installed in the control-plane image.
+// Only /var/run/docker.sock must be mounted (read-write).
 type DockerRestarter struct { ContainerName string }
 
 func (r DockerRestarter) Restart(ctx context.Context) error
 ```
 
-The control-plane container must have access to the Docker socket. This is wired via compose volume mount (Task 5 below).
+The control-plane container must have access to the Docker socket. This is wired via compose volume mount (Task 5 below). Mount must be **read-write** (not `:ro`) because the restart API requires write access to the socket.
 
-**Timeout:** wrap the `docker restart` call in a 30-second context deadline. Log outcome at INFO level (success) or ERROR level (failure). On failure, return the error to the caller; the caller is responsible for alerting.
+> **No docker binary needed:** the implementation calls the Docker Engine HTTP API directly over the Unix socket via `net/http`. Do NOT install the `docker` CLI in `deploy/docker/Dockerfile.control-plane`; the socket mount alone is sufficient.
+
+**Timeout:** wrap the restart HTTP call in a 30-second context deadline. Log outcome at INFO level (success) or ERROR level (failure). On failure, return the error to the caller; the caller is responsible for alerting.
 
 **Alternative path (document, do not implement unless executor decides):** If the operator sets `LITELLM_CONFIG_MODE=db` in the environment, the subsystem should instead call `POST /model/new` (and `/update`, `/delete`) on the LiteLLM admin API using the `LITELLM_MASTER_KEY`. Document this path in a `// TODO(litellm-db-mode)` comment block in `restart.go` with the required env vars and API contract. The executor must re-confirm the exact `/model/*` API shape via Context7 at build time before implementing.
 
@@ -191,9 +218,11 @@ Generator is pure (no I/O) and trivially unit-testable. Restarter interface deco
 
 - [ ] `Generate` produces valid LiteLLM YAML for any non-empty `[]ModelEntry`.
 - [ ] `WriteAndRestart` calls `Restarter.Restart` after successful write; skips on generate failure.
-- [ ] `DockerRestarter.Restart` calls `docker restart <name>` with 30-second timeout.
+- [ ] `WriteAndRestart` merges new `model_list` into existing config YAML, preserving `litellm_settings` and all non-generated keys.
+- [ ] `DockerRestarter.Restart` uses Docker socket HTTP API (no `docker` binary dependency); socket mount is read-write.
+- [ ] `DockerRestarter.Restart` calls Docker Engine API `POST /containers/<name>/restart` over Unix socket with 30-second timeout.
 - [ ] `POST /internal/litellm/sync` returns 200 and the LiteLLM container restarts within 35 seconds.
-- [ ] Docker socket mounted read-only into control-plane container in compose.
+- [ ] Docker socket mounted read-write (not `:ro`) into control-plane container in compose.
 - [ ] Shared `litellm-config` volume wired between control-plane and litellm containers.
 - [ ] `.env.example` documents all new env vars including the `LITELLM_CONFIG_MODE=db` alternative.
 - [ ] All 5 generator unit tests + 2 restart unit tests pass.
