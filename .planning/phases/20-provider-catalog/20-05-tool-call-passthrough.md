@@ -30,7 +30,7 @@ Allow `tools`, `tool_choice`, and `response_format` to pass through the edge-api
 
 - **Rejection point:** `apps/edge-api/internal/inference/errors.go` `writeUnsupportedParamError`, called from the guard in `chat_completions.go`.
 - **Capability columns:** `provider_capabilities` table exists from Phase 16, but repo-wide search confirms it does NOT yet include a `tools_supported` column (Phase 16 added `responses`, `chat_completions`, `embeddings`, `streaming`, `reasoning`, `cache`, `media`, `batch` only). This plan must add `tools_supported` via a migration step before any code can gate on it.
-- **Routing selection:** `routing.SelectionInput` carries `AllowedProviders` and `AllowedAliases` plus capability flags (Phase 10 baseline). The selector must be told to restrict to tool-capable routes.
+- **Routing selection:** `routing.SelectionInput` carries `AllowedProviders` and `AllowedAliases` plus capability flags (Phase 10 baseline). The selector must be told to restrict to tool-capable routes. Filtering must operate at individual route granularity, not provider-slug granularity, because one provider can have mixed-capability routes for the same alias.
 - **Current behaviour:** Any request carrying `tools` or `tool_choice` hits `writeUnsupportedParamError` unconditionally.
 - **Target behaviour (MVP gate):** Gate 400 on alias capability. If at least one route for the alias has `tools_supported = true` in `provider_capabilities`, pass through the parameter and constrain routing to capable routes only.
 
@@ -73,7 +73,7 @@ Read `apps/control-plane/internal/routing/types.go` and `service.go` before edit
 RequireToolCapable bool
 ```
 
-Update the route selection logic: when `RequireToolCapable` is true, filter `AllowedProviders` to those with `tools_supported = true` in `provider_capabilities`. If filtering produces an empty set, return a typed error `ErrNoCapableRoute` (new sentinel, declared in the control-plane routing package).
+Update the route selection logic: when `RequireToolCapable` is true, filter the candidate **routes** (not just provider slugs) to those where the route's provider has `tools_supported = true` in `provider_capabilities`. Filtering at the provider-slug level is insufficient because the same provider may have both tool-capable and non-tool-capable routes for a given alias (e.g. a vision-only route and a chat+tools route registered under the same provider slug). The filter must operate on individual route entries so that a non-capable route for a capable provider is still excluded. If filtering produces an empty route set, return a typed error `ErrNoCapableRoute` (new sentinel, declared in the control-plane routing package).
 
 ---
 
@@ -152,7 +152,8 @@ Read the existing file before editing. Add:
 
 1. `RequireToolCapable=true` with a provider that has `tools_supported=true` returns that provider.
 2. `RequireToolCapable=true` with all providers having `tools_supported=false` returns `ErrNoCapableRoute`.
-3. `RequireToolCapable=false` (default) with mixed capability returns any provider (existing behaviour preserved).
+3. `RequireToolCapable=false` (default) with mixed capability returns any route (existing behaviour preserved).
+4. `RequireToolCapable=true` with a provider that has one capable and one non-capable route returns only the capable route (not the whole provider).
 
 ---
 
@@ -167,7 +168,8 @@ The `ErrNoCapableRoute` sentinel should be declared in `selector.go` and tested 
 ## Acceptance Criteria
 
 - [ ] `tools_supported` column added to `provider_capabilities` via migration.
-- [ ] `SelectionInput.RequireToolCapable = true` in control-plane routing restricts to `tools_supported = true` routes; returns `ErrNoCapableRoute` on empty result.
+- [ ] `SelectionInput.RequireToolCapable = true` in control-plane routing restricts to individual routes where the provider has `tools_supported = true`; returns `ErrNoCapableRoute` when no such route exists.
+- [ ] A provider with mixed-capability routes (some capable, some not) does not pass a non-capable route through when `RequireToolCapable=true`.
 - [ ] Request with `tools` to a tool-capable alias returns 200; tools + tool_choice + response_format passed downstream unchanged.
 - [ ] Request with `tools` to an incapable alias returns 400 with `code: "unsupported_parameter"` and `param: "tools"`.
 - [ ] `writeUnsupportedParamError` includes `param` field in JSON body.

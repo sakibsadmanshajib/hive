@@ -87,7 +87,7 @@ ON CONFLICT (slug) DO NOTHING;
 ```sql
 CREATE TABLE IF NOT EXISTS public.tenant_model_visibility (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-  tenant_id    UUID        NOT NULL REFERENCES public.accounts(id) ON DELETE CASCADE,
+  tenant_id    UUID        NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
   alias_id     TEXT        NOT NULL REFERENCES public.model_aliases(alias_id) ON DELETE CASCADE,
   visible      BOOLEAN     NOT NULL DEFAULT true,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -184,7 +184,7 @@ Write a SQL migration test (same pattern as existing `*_test.sql` files in `/tmp
 - [ ] `provider_routes` CHECK constraint no longer enumerates `openrouter`/`groq`; any non-empty string is accepted.
 - [ ] `custom_providers` table exists with `slug UNIQUE`, `enabled`, `litellm_prefix` columns.
 - [ ] Seed rows for `openrouter` and `groq` present (idempotent).
-- [ ] `tenant_model_visibility` table exists with `UNIQUE(tenant_id, alias_id)`.
+- [ ] `tenant_model_visibility` table exists with `UNIQUE(tenant_id, alias_id)`; `tenant_id` references `public.tenants(id)` (not `accounts`).
 - [ ] Both tables have RLS enabled + forced; `hive_app` service-role policy (idempotent DO $$) present.
 - [ ] `GRANT SELECT, INSERT, UPDATE, DELETE ON ... TO hive_app` present for both tables.
 - [ ] `updated_at` triggers fire on both tables.

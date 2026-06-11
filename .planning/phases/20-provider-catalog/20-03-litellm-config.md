@@ -138,7 +138,7 @@ The control-plane container must have access to the Docker socket. This is wired
 
 Expose a `SyncService` that:
 
-1. Queries `custom_providers` (enabled only) and `provider_routes` from the DB.
+1. Queries `custom_providers` (enabled only) and `provider_routes` from the DB, filtering to active routes only (`health_state NOT IN ('eol', 'disabled')` or whatever the current active-state predicate is — verify the exact column and values in `supabase/migrations/20260331_02_routing_policy.sql` before implementing). Routes retained for history with `health_state='eol'` or disabled must not appear in the generated `model_list`.
 2. Builds `[]ModelEntry` by joining routes with their provider's `base_url`, `api_key_env`, `litellm_prefix`.
 3. Calls `Generate` to produce YAML bytes.
 4. Calls `WriteAndRestart`.
@@ -217,6 +217,7 @@ Generator is pure (no I/O) and trivially unit-testable. Restarter interface deco
 ## Acceptance Criteria
 
 - [ ] `Generate` produces valid LiteLLM YAML for any non-empty `[]ModelEntry`.
+- [ ] `SyncService` excludes inactive/EOL routes from the generated `model_list`; only active routes are emitted.
 - [ ] `WriteAndRestart` calls `Restarter.Restart` after successful write; skips on generate failure.
 - [ ] `WriteAndRestart` merges new `model_list` into existing config YAML, preserving `litellm_settings` and all non-generated keys.
 - [ ] `DockerRestarter.Restart` uses Docker socket HTTP API (no `docker` binary dependency); socket mount is read-write.

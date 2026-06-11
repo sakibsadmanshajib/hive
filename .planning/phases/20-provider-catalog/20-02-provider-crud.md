@@ -35,7 +35,7 @@ PUT    /internal/providers/{id}     update provider
 DELETE /internal/providers/{id}     delete provider (soft: sets enabled=false)
 ```
 
-Auth: shared-secret header `X-Internal-Secret: <INTERNAL_SECRET>` (same mechanism as `platform/http/internalauth.go`). Platform admins (`platform.RequirePlatformAdmin`) may also access these routes via the standard JWT path.
+Auth: shared-secret header `X-Internal-Token: <INTERNAL_SECRET>` via `internalauth.RequireInternalToken` middleware (the actual middleware name in `apps/control-plane/internal/internalauth/internalauth.go`; the header is `X-Internal-Token`, not `X-Internal-Secret`). Platform admins (`platform.RequirePlatformAdmin`) may also access these routes via the standard JWT path.
 
 ---
 

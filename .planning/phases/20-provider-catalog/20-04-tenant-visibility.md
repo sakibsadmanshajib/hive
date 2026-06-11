@@ -82,6 +82,8 @@ Read the existing file before editing. Update the `GET /api/v1/catalog/models` h
 
 Unauthenticated requests (public API key context with no tenant) fall back to returning only `visibility = 'public'` aliases with no tenant-specific overrides.
 
+> **Auth middleware prerequisite:** `GET /api/v1/catalog/models` is currently mounted without authentication middleware in the router. Before this handler change can safely read tenant claims, the route must be wrapped with the JWT auth middleware (the same middleware used on `/v1/...` inference routes). Read `apps/control-plane/platform/http/router.go` to find the exact mount point and apply the middleware there. If the route is intentionally unauthenticated for public catalog browsing, add an explicit claim-presence check: when no tenant claim is present, use the unauthenticated fallback path; when a claim is present but invalid, return 401.
+
 ---
 
 ### Task 3: Tenant visibility admin endpoint
@@ -107,29 +109,34 @@ After any PUT/DELETE, trigger an OWUI sync for the affected alias (Task 4).
 Read the existing file before editing. Extend the client with:
 
 ```go
-// UpsertModelAccessControl creates or updates the model entry in OWUI and sets
-// access_control so only members of groupID can read it.
-// Passing groupID = "" sets access_control to null (public).
-func (c *Client) UpsertModelAccessControl(ctx context.Context, modelID string, groupID string) error
+// SyncModelAccessControl fetches the current access_control for modelID from OWUI,
+// merges the provided allowedGroupIDs into the read.group_ids list, and writes it back.
+// Passing an empty allowedGroupIDs slice sets access_control to null (public).
+// This function replaces the original single-groupID design to support multi-tenant grants:
+// granting alias X to tenant B must not revoke tenant A's existing grant.
+func (c *Client) SyncModelAccessControl(ctx context.Context, modelID string, allowedGroupIDs []string) error
 ```
 
 Implementation:
 
-1. `POST /api/v1/models/` with body:
+1. `GET /api/v1/models/<modelID>` to fetch current `access_control` (if the model does not exist in OWUI, treat current `read.group_ids` as empty).
+2. Build the new `read.group_ids` as the caller-supplied `allowedGroupIDs` (the caller is responsible for computing the full desired set from `tenant_model_visibility`; this function does not query the DB).
+3. `POST /api/v1/models/` with body:
    ```json
    {
      "id": "<modelID>",
      "access_control": {
-       "read":  {"group_ids": ["<groupID>"], "user_ids": []},
-       "write": {"group_ids": [],            "user_ids": []}
+       "read":  {"group_ids": <allowedGroupIDs>, "user_ids": []},
+       "write": {"group_ids": [],                "user_ids": []}
      }
    }
    ```
-   If `groupID` is empty, send `"access_control": null`.
-2. Auth header: `Authorization: Bearer <OWUI_ADMIN_TOKEN>` (existing pattern in the client).
-3. On 404 (model not yet in OWUI), attempt `POST` to create; on 200/existing, use `POST` (OWUI upserts on model ID).
+   If `allowedGroupIDs` is empty or nil, send `"access_control": null`.
+4. Auth header: `Authorization: Bearer <OWUI_ADMIN_TOKEN>` (existing pattern in the client).
 
-Wire `UpsertModelAccessControl` into the visibility admin endpoint: after writing to `tenant_model_visibility`, call `UpsertModelAccessControl(ctx, alias.ExternalModelID, tenantGroupID)`. The tenant's OWUI group ID is resolved via `EnsureGroup(ctx, tenantID.String())` (already exists).
+> **Caller responsibility:** the visibility admin endpoint (Task 3) must compute the full current allowlist before calling `SyncModelAccessControl`. After any PUT/DELETE on `tenant_model_visibility`, query all `visible=true` rows for the affected alias, resolve each tenant's OWUI group ID (`"tenant_"+tenantID.String()`), and pass the complete resulting `[]string` to `SyncModelAccessControl`. This ensures grants are additive and revocations are precise.
+
+Wire `UpsertModelAccessControl` into the visibility admin endpoint: after writing to `tenant_model_visibility`, call `UpsertModelAccessControl(ctx, alias.ExternalModelID, tenantGroupID)`. The tenant's OWUI group ID is resolved via `EnsureGroup(ctx, "tenant_"+tenantID.String())` — note the `tenant_` prefix, which matches the naming convention used by the signup provisioning code when creating OWUI groups. Using bare `tenantID.String()` targets a different (empty) group and would silently grant access to nobody.
 
 ---
 
@@ -147,9 +154,10 @@ TDD cases:
 
 **File:** `apps/control-plane/internal/owui/client_test.go`
 
-1. `UpsertModelAccessControl` with a non-empty groupID sends `access_control` JSON with that group ID.
-2. `UpsertModelAccessControl` with empty groupID sends `access_control: null`.
-3. HTTP 401 from OWUI returns a typed error.
+1. `SyncModelAccessControl` with a non-empty `allowedGroupIDs` slice sends correct `access_control` JSON.
+2. `SyncModelAccessControl` with empty/nil `allowedGroupIDs` sends `access_control: null`.
+3. `SyncModelAccessControl` performs a GET before the POST to confirm merge semantics (mock returns existing groups; verify new call includes all groups).
+4. HTTP 401 from OWUI returns a typed error.
 
 Use `httptest.NewServer` to mock the OWUI API in tests.
 
@@ -168,6 +176,9 @@ Write service tests against a mock repository (interface). Write OWUI client tes
 - [ ] `visibility=public` aliases visible by default unless explicitly blocked by `visible=false` row.
 - [ ] `visibility=restricted` aliases hidden unless `visible=true` row exists for tenant.
 - [ ] Visibility admin endpoints (`/internal/catalog/visibility/...`) write to `tenant_model_visibility` and trigger OWUI sync.
-- [ ] `UpsertModelAccessControl` sets `access_control.read.group_ids` to the tenant's OWUI group ID; empty groupID sends null (public).
-- [ ] All 5 catalog service tests + 3 OWUI client tests pass.
+- [ ] `SyncModelAccessControl` sets `access_control.read.group_ids` to the full computed allowlist; nil/empty sends null (public).
+- [ ] Multi-tenant grant does not revoke prior tenant's access (second PUT extends the allowlist).
+- [ ] OWUI group resolved as `"tenant_"+tenantID.String()` matching signup provisioning convention.
+- [ ] `GET /api/v1/catalog/models` route wrapped in JWT auth middleware before handler extracts claims.
+- [ ] All 5 catalog service tests + 4 OWUI client tests pass.
 - [ ] `go vet ./apps/control-plane/...` clean.
