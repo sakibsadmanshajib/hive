@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
     paths:
       - 'apps/**'
       - 'packages/**'
@@ -223,7 +224,7 @@ jobs:
       OPENROUTER_DEFAULT_MODEL: >-
         ${{ (github.event_name == 'schedule' || github.event_name == 'push')
             && vars.OPENROUTER_DEFAULT_MODEL
-            || 'mistralai/mistral-7b-instruct:free' }}
+            || 'openrouter/mistralai/mistral-7b-instruct:free' }}
       HIVE_TEST_MODEL: >-
         ${{ (github.event_name == 'schedule' || github.event_name == 'push')
             && 'hive-default'
