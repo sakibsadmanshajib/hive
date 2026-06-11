@@ -123,11 +123,17 @@ services:
       dockerfile: deploy/docker/Dockerfile.control-plane
     ports:
       - "8081:8081"
-    # Note: no depends_on redis here. The `local` and `enterprise` profiles
-    # include in-stack redis which starts independently; the `cloud` profile
-    # uses managed Upstash Redis via REDIS_URL and has no in-stack redis
-    # service. The application itself connects via REDIS_URL and fails fast
-    # on misconfiguration — no compose-level ordering needed.
+    # `required: false` makes the redis dependency optional at the Compose
+    # level. When the `local` or `enterprise` profile is active the in-stack
+    # redis service exists and control-plane waits for it to be healthy before
+    # starting, preventing a race where control-plane pings Redis once at boot
+    # and permanently marks redisClient=nil on a miss. When the `cloud` profile
+    # is active there is no in-stack redis service, so Compose skips the
+    # dependency entirely and control-plane connects via the managed REDIS_URL.
+    depends_on:
+      redis:
+        condition: service_healthy
+        required: false
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
@@ -181,8 +187,12 @@ services:
       - local
       - test
       - enterprise
+    # Bind to loopback only. Local devs can still reach redis on 127.0.0.1:6379
+    # for debugging. Enterprise deployments do not expose Redis on all host
+    # interfaces; no TLS or password is configured on this service, so a
+    # network-reachable port would be an unauthenticated attack surface.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -215,8 +225,10 @@ services:
       - local
       - enterprise
       - chat
-    ports:
-      - "3002:8080"
+    # No direct host-port binding. All external access goes through caddy-owui
+    # on port 3003, which enforces admin/signup/mutation guards defined in
+    # Caddyfile.owui. Exposing port 3002 directly would bypass those defences
+    # on enterprise and cloud deployments.
     depends_on:
       edge-api:
         condition: service_healthy
@@ -317,14 +329,18 @@ services:
     image: ollama/ollama:latest
     profiles:
       - enterprise
-    ports:
-      - "11434:11434"
+    # No host-port binding. LiteLLM reaches Ollama over the internal Compose
+    # network at http://ollama:11434. Exposing 11434 on the host would allow
+    # unauthenticated inference calls that bypass Edge and LiteLLM auth.
     volumes:
       - ollama-models:/root/.ollama
     environment:
       OLLAMA_HOST: "0.0.0.0"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsSL http://localhost:11434/api/tags || exit 1"]
+      # ollama/ollama image ships with the ollama binary but not curl.
+      # `ollama list` exits 0 when the daemon is ready and returns the
+      # loaded model catalogue; it is the canonical in-image liveness probe.
+      test: ["CMD", "ollama", "list"]
       interval: 15s
       timeout: 5s
       retries: 5

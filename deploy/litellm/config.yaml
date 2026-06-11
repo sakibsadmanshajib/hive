@@ -127,17 +127,25 @@ files_settings:
     api_key: os.environ/OPENROUTER_API_KEY
 
 # ─── EnterpriseEdge: Ollama local inference (optional) ───────────────────────
-# Uncomment the block below when running the `enterprise` compose profile with
-# the in-stack Ollama service. Set OLLAMA_BASE_URL=http://ollama:11434 in your
-# .env (the litellm service receives it via the OLLAMA_BASE_URL env passthrough
-# in docker-compose.yml).
+# To activate local Ollama models, append entries to the model_list above
+# (do NOT add a second top-level `model_list:` key — YAML parsers do not merge
+# duplicate keys; a second key would silently drop all OpenRouter/Groq routes).
 #
-# Add one entry per model you want to expose. The model_name is the slug
-# clients send in the `model` field; the litellm_params.model value must match
-# a model already pulled into Ollama (run `docker exec -it hive-ollama-1
-# ollama pull llama3` after the stack is up).
+# Steps:
+#   1. Set OLLAMA_BASE_URL=http://ollama:11434 in .env.
+#   2. Cut the commented entries below and paste them at the end of the
+#      `model_list:` block above (before the `litellm_settings:` line),
+#      removing the leading `#` from each line.
+#   3. Restart LiteLLM: docker compose --profile enterprise restart litellm
+#   4. Pull the model inside the Ollama container:
+#        docker exec -it hive-ollama-1 ollama pull llama3
 #
-# model_list:
+# NOTE: These entries only wire LiteLLM. Routing requests through the Hive
+# edge-api (SelectRoute) also requires provider_capabilities rows and route
+# aliases in the database. That wiring is planned for a future phase; until
+# it ships, direct LiteLLM calls work but edge-api routing to these model
+# aliases will return 404.
+#
 #   - model_name: ollama/llama3
 #     litellm_params:
 #       model: ollama_chat/llama3
@@ -148,6 +156,4 @@ files_settings:
 #       model: ollama_chat/mistral
 #       api_base: os.environ/OLLAMA_BASE_URL
 #
-# After adding entries here, restart LiteLLM:
-#   docker compose --profile enterprise restart litellm
 # ─────────────────────────────────────────────────────────────────────────────
