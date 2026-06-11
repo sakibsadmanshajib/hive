@@ -153,6 +153,7 @@ jobs:
         env:
           STAGING_ENV: ${{ secrets.STAGING_ENV }}
           STAGING_REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+          STAGING_INTERNAL_TOKEN: ${{ secrets.STAGING_INTERNAL_TOKEN }}
         run: |
           printf '%s' "$STAGING_ENV" > /tmp/hive.env
           chmod 600 /tmp/hive.env
@@ -170,6 +171,20 @@ jobs:
           grep -vE '^REDIS_URL=' /tmp/hive.env > /tmp/hive.env.tmp || true
           mv /tmp/hive.env.tmp /tmp/hive.env
           printf 'REDIS_URL=%s\n' "$STAGING_REDIS_URL" >> /tmp/hive.env
+          chmod 600 /tmp/hive.env
+
+          # CONTROL_PLANE_INTERNAL_TOKEN is sourced from a dedicated secret so
+          # it can be rotated independently of the full STAGING_ENV blob.
+          # docker-compose.staging.yml uses :? (required) for this var since
+          # PR #156 added the /internal/* shared-secret guard.
+          if [ -z "${STAGING_INTERNAL_TOKEN:-}" ]; then
+            echo "FATAL: STAGING_INTERNAL_TOKEN secret is empty or unset." >&2
+            rm -f /tmp/hive.env
+            exit 1
+          fi
+          grep -vE '^CONTROL_PLANE_INTERNAL_TOKEN=' /tmp/hive.env > /tmp/hive.env.tmp || true
+          mv /tmp/hive.env.tmp /tmp/hive.env
+          printf 'CONTROL_PLANE_INTERNAL_TOKEN=%s\n' "$STAGING_INTERNAL_TOKEN" >> /tmp/hive.env
           chmod 600 /tmp/hive.env
 
           # Defensive: staging must use a managed Redis (Upstash, Redis
