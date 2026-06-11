@@ -53,6 +53,7 @@ type ChatCompletionRequest struct {
 	TopLogprobs         *int            `json:"top_logprobs,omitempty"`
 	Seed                *int            `json:"seed,omitempty"`
 	User                *string         `json:"user,omitempty"`
+	ParallelToolCalls   *bool           `json:"parallel_tool_calls,omitempty"`
 	Functions           json.RawMessage `json:"functions,omitempty"`
 	FunctionCall        json.RawMessage `json:"function_call,omitempty"`
 }
