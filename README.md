@@ -101,8 +101,8 @@ docker compose --env-file ../../.env --profile monitoring up -d --build
 | Control Plane | http://localhost:8081 | `GET /health` |
 | Web Console | http://localhost:3000 | — |
 | LiteLLM | http://localhost:4000 | — |
-| Open WebUI | http://localhost:3003 | `--profile chat` |
-| Caddy (OWUI proxy) | http://localhost:8090 | `--profile chat` |
+| Open WebUI (direct) | http://localhost:3002 | `--profile local` |
+| Caddy (OWUI proxy) | http://localhost:3003 | `--profile local` |
 | Prometheus | http://localhost:9090 | `--profile monitoring` |
 | Grafana | http://localhost:3001 (`admin/admin`) | `--profile monitoring` |
 
