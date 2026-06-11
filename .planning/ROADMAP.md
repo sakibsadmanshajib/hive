@@ -62,10 +62,12 @@ Plus four tech-debt items from v1.0 (see `.planning/v1.1-DEFERRED-SCOPE.md`):
 
 ### Phase 11: Compliance, Verification & Artifact Cleanup
 
+**Status:** Undecided, 0 plans drafted, needs owner decision: execute or drop. Flagged 2026-06-10.
+
 **Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
 **Depends on:** Phases 2, 3, 5, 8
 **Requirements:** [AUTH-01, AUTH-02, AUTH-03, AUTH-04, BILL-01, BILL-02, PRIV-01, BILL-04, CONS-03, OPS-01]
-**Gap Closure:** Closes integration gaps #4 (amount_usd exposed) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Live-verifies analytics and monitoring. Updates stale planning artifacts.
+**Gap Closure:** Closes integration gaps #4 (amount_usd exposed, resolved Phase 17) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Live-verifies analytics and monitoring. Updates stale planning artifacts.
 **Success Criteria** (what must be TRUE):
   1. BD checkout responses never include `amount_usd` or any field exposing FX rates.
   2. ViewerAccount.slug is populated from control-plane viewer endpoint.

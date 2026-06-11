@@ -36,7 +36,7 @@ test.beforeEach(async () => {
   try {
     execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
       cwd: process.cwd(),
-      env: process.env,
+      env: { ...process.env, NODE_OPTIONS: "" },
       stdio: "pipe",
     });
   } catch (err: unknown) {

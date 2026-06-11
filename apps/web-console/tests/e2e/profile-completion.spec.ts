@@ -6,6 +6,7 @@ import {
   E2E_UNVERIFIED_EMAIL as UNVERIFIED_EMAIL,
   E2E_UNVERIFIED_PASSWORD as UNVERIFIED_PASSWORD,
 } from "./support/e2e-auth-creds";
+import { resetProfileBetweenSpecs } from "./support/reset-profile";
 
 async function signIn(
   page: import("@playwright/test").Page,
@@ -32,7 +33,7 @@ test.beforeEach(async () => {
   try {
     execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
       cwd: process.cwd(),
-      env: process.env,
+      env: { ...process.env, NODE_OPTIONS: "" },
       stdio: "pipe",
     });
   } catch (err: unknown) {
@@ -67,6 +68,13 @@ test.describe("profile completion", () => {
 
   test.describe("dashboard shows setup reminder instead of forcing setup after completion", () => {
     test.skip(!VERIFIED_EMAIL || !VERIFIED_PASSWORD, "E2E verified credentials not set");
+
+    // The preceding "setup saves profile" test sets profile_setup_complete=true.
+    // Reset it before this test so the dashboard renders the "Complete setup" CTA.
+    // resetProfileBetweenSpecs is a no-op when E2E_FIXTURE_URL/SECRET are absent.
+    test.beforeEach(async () => {
+      await resetProfileBetweenSpecs({ email: VERIFIED_EMAIL });
+    });
 
     test("dashboard shows setup reminder instead of forcing setup after completion", async ({
       page,
