@@ -125,3 +125,29 @@ litellm_settings:
 files_settings:
   - custom_llm_provider: openrouter
     api_key: os.environ/OPENROUTER_API_KEY
+
+# ─── EnterpriseEdge: Ollama local inference (optional) ───────────────────────
+# Uncomment the block below when running the `enterprise` compose profile with
+# the in-stack Ollama service. Set OLLAMA_BASE_URL=http://ollama:11434 in your
+# .env (the litellm service receives it via the OLLAMA_BASE_URL env passthrough
+# in docker-compose.yml).
+#
+# Add one entry per model you want to expose. The model_name is the slug
+# clients send in the `model` field; the litellm_params.model value must match
+# a model already pulled into Ollama (run `docker exec -it hive-ollama-1
+# ollama pull llama3` after the stack is up).
+#
+# model_list:
+#   - model_name: ollama/llama3
+#     litellm_params:
+#       model: ollama_chat/llama3
+#       api_base: os.environ/OLLAMA_BASE_URL
+#
+#   - model_name: ollama/mistral
+#     litellm_params:
+#       model: ollama_chat/mistral
+#       api_base: os.environ/OLLAMA_BASE_URL
+#
+# After adding entries here, restart LiteLLM:
+#   docker compose --profile enterprise restart litellm
+# ─────────────────────────────────────────────────────────────────────────────
