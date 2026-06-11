@@ -6,7 +6,7 @@ import {
   E2E_UNVERIFIED_EMAIL as UNVERIFIED_EMAIL,
   E2E_UNVERIFIED_PASSWORD as UNVERIFIED_PASSWORD,
 } from "./support/e2e-auth-creds";
-import { resetProfileBetweenSpecs } from "./support/e2e-auth-fixtures.mjs";
+import { resetProfileBetweenSpecs } from "./support/reset-profile";
 
 async function signIn(
   page: import("@playwright/test").Page,
