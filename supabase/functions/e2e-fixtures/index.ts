@@ -366,7 +366,7 @@ Deno.serve(async (req) => {
     // empty body allowed — default to reset
   }
   const action = body.action ?? "reset";
-  if (action !== "reset") {
+  if (action !== "reset" && action !== "reset-profile") {
     return jsonResponse({ error: `unknown action: ${action}` }, 400);
   }
 
@@ -382,6 +382,62 @@ Deno.serve(async (req) => {
   const admin = createClient(supabaseUrl, serviceRoleKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
+
+  if (action === "reset-profile") {
+    const targetEmail: string =
+      (body as { email?: string }).email ??
+      (Deno.env.get("E2E_DEFAULT_VERIFIED_EMAIL") ?? DEFAULTS.verifiedEmail);
+
+    const { data: userList, error: listErr } =
+      await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (listErr) {
+      return jsonResponse(
+        { error: `listUsers failed: ${listErr.message}` },
+        500,
+      );
+    }
+    const targetUser = userList.users.find(
+      (u: any) => u.email?.toLowerCase() === targetEmail.toLowerCase(),
+    );
+    if (!targetUser) {
+      return jsonResponse(
+        { error: `user not found for email: ${targetEmail}` },
+        404,
+      );
+    }
+
+    const { data: membership, error: memErr } = await admin
+      .from("account_memberships")
+      .select("account_id")
+      .eq("user_id", targetUser.id)
+      .eq("role", "owner")
+      .maybeSingle();
+    if (memErr) {
+      return jsonResponse(
+        { error: `membership lookup failed: ${memErr.message}` },
+        500,
+      );
+    }
+    if (!membership) {
+      return jsonResponse(
+        { error: `no owner membership found for user: ${targetEmail}` },
+        404,
+      );
+    }
+
+    const { error: profErr } = await admin
+      .from("account_profiles")
+      .update({ profile_setup_complete: false })
+      .eq("account_id", membership.account_id);
+    if (profErr) {
+      return jsonResponse(
+        { error: `profile reset failed: ${profErr.message}` },
+        500,
+      );
+    }
+
+    return jsonResponse({ ok: true, email: targetEmail, account_id: membership.account_id });
+  }
 
   const verifiedEmail =
     Deno.env.get("E2E_DEFAULT_VERIFIED_EMAIL") ?? DEFAULTS.verifiedEmail;
