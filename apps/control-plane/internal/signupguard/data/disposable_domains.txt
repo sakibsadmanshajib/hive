@@ -1,0 +1,107 @@
+# Disposable / throwaway email domains blocklist.
+#
+# Source attribution:
+#   Curated subset derived from the public-domain / MIT-licensed list
+#   maintained at https://github.com/disposable-email-domains/disposable-email-domains
+#   (file: disposable_email_blocklist.conf). Vendored here as a Go embed file so
+#   the control-plane has zero network dependency at signup time.
+#
+# Format: one lowercase domain per line. Blank lines and lines starting with
+# '#' are ignored. Matching is exact on the lowercased email domain; no
+# wildcard / suffix matching is applied.
+#
+# This is a deliberately curated subset covering the highest-volume throwaway
+# providers seen in abuse traffic, not the full multi-thousand-entry upstream
+# list. Refresh by re-vendoring from upstream and re-running the parser test.
+0-mail.com
+0clickemail.com
+10minutemail.com
+10minutemail.net
+20minutemail.com
+33mail.com
+guerrillamail.com
+guerrillamail.net
+guerrillamail.org
+guerrillamail.biz
+guerrillamailblock.com
+sharklasers.com
+grr.la
+mailinator.com
+mailinator.net
+mailinator2.com
+mailnesia.com
+mailtothis.com
+trashmail.com
+trashmail.net
+trashmail.me
+trash-mail.com
+tempmail.com
+tempmail.net
+temp-mail.org
+temp-mail.io
+tempmailo.com
+tempr.email
+getnada.com
+nada.email
+dispostable.com
+fakeinbox.com
+yopmail.com
+yopmail.net
+yopmail.fr
+maildrop.cc
+mailcatch.com
+spam4.me
+throwawaymail.com
+throwam.com
+emailondeck.com
+mohmal.com
+mintemail.com
+mytemp.email
+moakt.com
+inboxbear.com
+tempinbox.com
+discard.email
+discardmail.com
+mailexpire.com
+spamgourmet.com
+incognitomail.com
+jetable.org
+spambox.us
+mailnull.com
+deadaddress.com
+mt2015.com
+mt2014.com
+fakemailgenerator.com
+emailfake.com
+email-fake.com
+fakemail.net
+burnermail.io
+mailsac.com
+harakirimail.com
+guerrillamail.de
+spambog.com
+spambog.de
+spambog.ru
+mailmetrash.com
+trbvm.com
+mvrht.net
+mailde.de
+mailde.info
+1secmail.com
+1secmail.net
+1secmail.org
+wwjmp.com
+esiix.com
+xojxe.com
+varicss.com
+zudpck.com
+luxusmail.org
+crazymailing.com
+einrot.com
+tempmailaddress.com
+mail-temp.com
+emltmp.com
+mailpoof.com
+inboxkitten.com
+disposablemail.com
+mailtemp.info

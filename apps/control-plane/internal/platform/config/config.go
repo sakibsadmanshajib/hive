@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // Config holds all environment-sourced configuration for the control-plane.
@@ -24,6 +26,21 @@ type Config struct {
 	BatchExecutorMaxRetries   int
 	BatchExecutorLineTimeoutMs int
 	BatchExecutorKind         string // "auto" | "local" | "upstream"
+
+	// Signup abuse-prevention knobs (issue #116).
+	//
+	// SignupRateLimitPerWindow is the max signups allowed per client IP per
+	// window (<=0 disables the IP limiter). SignupRateLimitWindow is the window
+	// length. SignupRateLimitFailOpen mirrors the edge #51 policy: when the
+	// Redis backend is unreachable the limiter denies by default (fail closed);
+	// set RATE_LIMIT_FAIL_OPEN=true in dev only to admit instead.
+	//
+	// TurnstileSecretKey enables server-side Cloudflare Turnstile verification
+	// when non-empty; empty disables CAPTCHA with a startup warning.
+	SignupRateLimitPerWindow int
+	SignupRateLimitWindow    time.Duration
+	SignupRateLimitFailOpen  bool
+	TurnstileSecretKey       string
 }
 
 // Load reads configuration from environment variables and returns a validated Config.
@@ -53,6 +70,10 @@ func Load() (*Config, error) {
 		BatchExecutorMaxRetries:    intEnv("BATCH_EXECUTOR_MAX_RETRIES", 3),
 		BatchExecutorLineTimeoutMs: intEnv("BATCH_EXECUTOR_LINE_TIMEOUT_MS", 60000),
 		BatchExecutorKind:          stringEnv("BATCH_EXECUTOR_KIND", "auto"),
+		SignupRateLimitPerWindow:   intEnv("SIGNUP_RATE_LIMIT_PER_WINDOW", 5),
+		SignupRateLimitWindow:      time.Duration(intEnv("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", 3600)) * time.Second,
+		SignupRateLimitFailOpen:    boolEnv("RATE_LIMIT_FAIL_OPEN", false),
+		TurnstileSecretKey:         os.Getenv("TURNSTILE_SECRET_KEY"),
 	}, nil
 }
 
@@ -74,4 +95,16 @@ func stringEnv(key, def string) string {
 		return def
 	}
 	return v
+}
+
+func boolEnv(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return b
 }

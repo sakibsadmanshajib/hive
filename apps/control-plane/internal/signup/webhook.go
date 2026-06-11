@@ -35,16 +35,27 @@ type EnsureGroupFunc func(ctx context.Context, name string) (string, error)
 // AddUserFunc adds the given email to the given OWUI group id.
 type AddUserFunc func(ctx context.Context, groupID, email string) error
 
+// DisposableCheckFunc reports whether the given email belongs to a disposable
+// (throwaway) provider. It is the server-side backstop for issue #116: the
+// public web-console precheck is the first line of defence, but a scripted
+// signup can write auth.users directly via the Supabase API and trigger this
+// webhook without ever calling the precheck. Returning true stops provisioning
+// (so no tenant membership and no free-credit grant is created) before any
+// database write. Optional; nil disables the backstop.
+type DisposableCheckFunc func(email string) (bool, error)
+
 // WebhookDeps wires the handler to its collaborators. SharedSecret is
 // required; the rest are validated at request time so an unauthorized
 // caller is rejected before any nil-pointer panics.
 type WebhookDeps struct {
-	Pool         *pgxpool.Pool
-	Resolver     *Resolver
-	EnsureGroup  EnsureGroupFunc
-	AddUser      AddUserFunc
-	Audit        *audit.Logger
-	SharedSecret string
+	Pool        *pgxpool.Pool
+	Resolver    *Resolver
+	EnsureGroup EnsureGroupFunc
+	AddUser     AddUserFunc
+	Audit       *audit.Logger
+	// DisposableCheck is an optional disposable-domain backstop (issue #116).
+	DisposableCheck DisposableCheckFunc
+	SharedSecret    string
 }
 
 // Webhook implements http.Handler for POST /internal/auth/user-created.
@@ -79,10 +90,6 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
 		return
 	}
-	if h.deps.Pool == nil || h.deps.Resolver == nil || h.deps.Audit == nil {
-		http.Error(w, `{"error":"misconfigured"}`, http.StatusInternalServerError)
-		return
-	}
 
 	var body webhookBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -95,6 +102,36 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// Disposable-domain backstop (issue #116). Runs before any DB write so a
+	// throwaway signup never reaches tenant provisioning or a free-credit grant.
+	// Reply 204 (terminal) so Supabase does not retry — the address will not
+	// become eligible on a later attempt. The audit detail carries a fixed
+	// classification only, never the raw email/domain. A check error is treated
+	// as "not disposable" and logged, so a bug in the list never blocks all
+	// signups (availability over a soft abuse signal at this backstop layer).
+	if h.deps.DisposableCheck != nil {
+		blocked, checkErr := h.deps.DisposableCheck(body.Email)
+		if checkErr != nil {
+			log.Printf("signup: disposable check error user=%s: %v", body.UserID, checkErr)
+		} else if blocked {
+			if h.deps.Audit != nil {
+				_ = h.deps.Audit.Log(ctx, audit.Event{
+					Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
+					Action:   "AUTH_SIGNUP_DISPOSABLE_BLOCKED",
+					Severity: audit.SeverityWarning,
+					Before:   map[string]string{"stage": "disposable"},
+				})
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	if h.deps.Pool == nil || h.deps.Resolver == nil || h.deps.Audit == nil {
+		http.Error(w, `{"error":"misconfigured"}`, http.StatusInternalServerError)
+		return
+	}
 	// TODO(phase-19-plan-03): persist delivery idempotency key (Supabase
 	// webhook id header) so retries cannot double-provision tenant_users.
 	tenantID, err := h.deps.Resolver.Resolve(ctx, Input{Email: body.Email, InviteToken: body.InviteToken})
