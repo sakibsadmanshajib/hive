@@ -48,61 +48,64 @@ describe("Chat Completions", () => {
     ).rejects.toMatchObject({ status: 404 });
   });
 
-  it("supports tool calling", async () => {
-    const response = await client.chat.completions.create({
-      model: MODEL,
-      messages: [
-        { role: "user", content: "What is the weather like in London?" },
-      ],
-      max_tokens: 256,
-      tools: [
-        {
-          type: "function",
-          function: {
-            name: "get_weather",
-            description: "Get the current weather for a location",
-            parameters: {
-              type: "object",
-              properties: {
-                location: {
-                  type: "string",
-                  description: "The city to get weather for",
+  it("rejects tools with 400 unsupported_parameter", async () => {
+    // The edge explicitly rejects tool calling until full support ships (#118).
+    await expect(
+      client.chat.completions.create({
+        model: MODEL,
+        messages: [
+          { role: "user", content: "What is the weather like in London?" },
+        ],
+        max_tokens: 256,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "get_weather",
+              description: "Get the current weather for a location",
+              parameters: {
+                type: "object",
+                properties: {
+                  location: {
+                    type: "string",
+                    description: "The city to get weather for",
+                  },
                 },
+                required: ["location"],
               },
-              required: ["location"],
             },
           },
-        },
-      ],
+        ],
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        code: "unsupported_parameter",
+      },
     });
-
-    // Response should complete without error — tool may or may not be called.
-    expect(response.choices.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("supports response_format json_object", async () => {
-    const response = await client.chat.completions.create({
-      model: MODEL,
-      messages: [
-        {
-          role: "user",
-          content: 'Return a JSON object with a single key "status" set to "ok".',
-        },
-      ],
-      max_tokens: 256,
-      response_format: { type: "json_object" },
+  it("rejects response_format with 400 unsupported_parameter", async () => {
+    // The edge explicitly rejects response_format until full support ships (#118).
+    await expect(
+      client.chat.completions.create({
+        model: MODEL,
+        messages: [
+          {
+            role: "user",
+            content: 'Return a JSON object with a single key "status" set to "ok".',
+          },
+        ],
+        max_tokens: 256,
+        response_format: { type: "json_object" },
+      }),
+    ).rejects.toMatchObject({
+      status: 400,
+      error: {
+        type: "invalid_request_error",
+        code: "unsupported_parameter",
+      },
     });
-
-    expect(response.choices.length).toBeGreaterThanOrEqual(1);
-    // response_format json_object is a best-effort provider hint. Upstream
-    // providers may return null content with completion_tokens=0 (finish
-    // reason "stop") when the schema constraint can't be satisfied. Verify
-    // the request reached the provider (prompt billed) and, when content is
-    // present, parses as valid JSON.
-    expect(response.usage?.prompt_tokens ?? 0).toBeGreaterThan(0);
-    const content = response.choices[0].message.content;
-    if (content) {
-      expect(() => JSON.parse(content)).not.toThrow();
-    }
   });
 });
