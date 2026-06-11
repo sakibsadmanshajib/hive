@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   owui-e2e:
-    if: ${{ github.event_name == 'schedule' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:e2e-owui')) }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-owui-e2e')) }}
     runs-on: ubuntu-22.04
     timeout-minutes: 30
     env:

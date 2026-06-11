@@ -3,6 +3,28 @@ name: CI
 on:
   pull_request:
     branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'deploy/**'
+      - 'supabase/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - '.github/workflows/ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'deploy/**'
+      - 'supabase/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - '.github/workflows/ci.yml'
+  schedule:
+    # Daily fidelity run on main: exercises paid hive-default model to catch
+    # provider regressions that a free-tier model might silently swallow.
+    - cron: '0 4 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -159,9 +181,19 @@ jobs:
     name: Live integration (SDK tests + smoke)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Run on push to main (post-merge gate) or on PRs that carry the
+    # run-live-integration label. The label gate lets contributors
+    # explicitly opt in without running paid completions on every PR.
+    # The daily cron variant (schedule) also runs here to exercise the
+    # paid hive-default model for fidelity checks.
+    # Fork PRs are excluded: GitHub does not expose secrets to fork
+    # runners on pull_request events, so no secret can leak.
     if: >-
       github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      github.event_name == 'schedule' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'run-live-integration'))
     needs: [go-tests, web-unit]
     # Job-level env: docker compose will interpolate ${VAR} from process env,
     # so we skip the fragile .env heredoc entirely.
@@ -183,7 +215,19 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-      OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
+      # Routine PR runs use a free OpenRouter model to avoid per-token
+      # charges on every merge-gate check. The daily cron run (schedule)
+      # and post-merge push runs use the paid hive-default model for
+      # full fidelity. HIVE_TEST_MODEL propagates into sdk-tests
+      # containers via docker compose env interpolation.
+      OPENROUTER_DEFAULT_MODEL: >-
+        ${{ (github.event_name == 'schedule' || github.event_name == 'push')
+            && vars.OPENROUTER_DEFAULT_MODEL
+            || 'mistralai/mistral-7b-instruct:free' }}
+      HIVE_TEST_MODEL: >-
+        ${{ (github.event_name == 'schedule' || github.event_name == 'push')
+            && 'hive-default'
+            || 'hive-default' }}
       OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
       OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
       OPENROUTER_EMBEDDING_MODEL: ${{ vars.OPENROUTER_EMBEDDING_MODEL }}
@@ -409,9 +453,14 @@ jobs:
       CONTROL_PLANE_BASE_URL: http://localhost:8081
       EDGE_CONTROL_PLANE_BASE_URL: http://control-plane:8081
       LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      # Live provider keys are NOT supplied to web-e2e. The Playwright
+      # specs run here (unauth, auth-shell, profile-completion) exercise
+      # only the UI layer and Supabase auth flows; they make no LLM
+      # completion calls. Stub values satisfy LiteLLM startup validation
+      # without exposing paid API keys to a job that never needs them.
+      OPENROUTER_API_KEY: 'ci-stub-not-used'
+      GROQ_API_KEY: 'ci-stub-not-used'
+      NVIDIA_NIM_API_KEY: 'ci-stub-not-used'
       OPENROUTER_DEFAULT_MODEL: ${{ vars.OPENROUTER_DEFAULT_MODEL }}
       OPENROUTER_AUTO_MODEL: ${{ vars.OPENROUTER_AUTO_MODEL }}
       OPENROUTER_FAST_FALLBACK_MODEL: ${{ vars.OPENROUTER_FAST_FALLBACK_MODEL }}
