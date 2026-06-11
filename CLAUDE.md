@@ -62,12 +62,22 @@ Supabase Storage only object storage backend. Enable S3 protocol in Supabase Sto
 ```bash
 cd deploy/docker
 
-# Core stack (edge-api + control-plane + redis + litellm + web-console).
-# `--profile local` activates the in-stack docker redis. Staging + prod
-# do not carry that profile — they use managed Upstash Redis via REDIS_URL.
+# Local dev: core stack with in-stack Redis.
 docker compose --env-file ../../.env --profile local up --build
 
-# With monitoring (adds Prometheus, Grafana, Alertmanager)
+# Hive Cloud (hosted SaaS): core services expecting managed Upstash Redis.
+# Set REDIS_URL=rediss://... in .env before running.
+docker compose --env-file ../../.env --profile cloud up --build
+
+# Hive Cloud with chat front-end (Open WebUI + Caddy on top of cloud):
+docker compose --env-file ../../.env --profile cloud --profile chat up --build
+
+# Hive EnterpriseEdge (self-hosted single box): core + in-stack Redis + OWUI + Caddy.
+# Optional Ollama: set OLLAMA_BASE_URL=http://ollama:11434 in .env and
+# uncomment the ollama model entries in deploy/litellm/config.yaml.
+docker compose --env-file ../../.env --profile enterprise up --build
+
+# Add monitoring to any profile (Prometheus, Grafana, Alertmanager):
 docker compose --env-file ../../.env --profile local --profile monitoring up --build
 ```
 

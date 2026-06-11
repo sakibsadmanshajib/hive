@@ -66,6 +66,10 @@ services:
       GROQ_REASONING_MODEL: ${GROQ_REASONING_MODEL}
       NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY}
       NVIDIA_NIM_EMBEDDING_MODEL: ${NVIDIA_NIM_EMBEDDING_MODEL}
+      # EnterpriseEdge: set to http://ollama:11434 when using the enterprise
+      # profile with the in-stack Ollama service. Consumed by the commented
+      # ollama_chat/ model entries in deploy/litellm/config.yaml.
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
     volumes:
       - ../../deploy/litellm/config.yaml:/app/config.yaml
     command: ["--config=/app/config.yaml"]
@@ -119,9 +123,17 @@ services:
       dockerfile: deploy/docker/Dockerfile.control-plane
     ports:
       - "8081:8081"
+    # `required: false` makes the redis dependency optional at the Compose
+    # level. When the `local` or `enterprise` profile is active the in-stack
+    # redis service exists and control-plane waits for it to be healthy before
+    # starting, preventing a race where control-plane pings Redis once at boot
+    # and permanently marks redisClient=nil on a miss. When the `cloud` profile
+    # is active there is no in-stack redis service, so Compose skips the
+    # dependency entirely and control-plane connects via the managed REDIS_URL.
     depends_on:
       redis:
         condition: service_healthy
+        required: false
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
@@ -162,19 +174,25 @@ services:
       retries: 5
       start_period: 120s
 
-  # Local-dev Redis only. Staging + production use Upstash via REDIS_URL.
-  # Gated to `local` and `test` profiles so a bare `docker compose up`
-  # (or any deploy that doesn't opt in) never starts a docker redis. Local
-  # dev: `docker compose --profile local up`. SDK tests: also activate
-  # `--profile test` so the redis dependency resolves for sdk-tests-*
-  # services.
+  # In-stack Redis. Active for local dev, SDK tests, and self-hosted
+  # enterprise deployments. Cloud deployments use managed Upstash via
+  # REDIS_URL and do NOT activate this service.
+  # Profiles:
+  #   local      - in-stack dev redis. Run: docker compose --profile local up
+  #   test       - SDK integration tests need the redis dependency resolved.
+  #   enterprise - Hive EnterpriseEdge self-hosted box includes in-stack redis.
   redis:
     image: redis:8.4-alpine
     profiles:
       - local
       - test
+      - enterprise
+    # Bind to loopback only. Local devs can still reach redis on 127.0.0.1:6379
+    # for debugging. Enterprise deployments do not expose Redis on all host
+    # interfaces; no TLS or password is configured on this service, so a
+    # network-reachable port would be an unauthenticated attack surface.
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -196,13 +214,21 @@ services:
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
 
-  # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge users.
+  # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge and cloud chat users.
+  # Profiles:
+  #   local      - developer laptop with in-stack redis.
+  #   enterprise - Hive EnterpriseEdge self-hosted box (includes in-stack redis + Ollama).
+  #   chat       - compose on top of cloud profile for a hosted chat front-end.
   open-webui:
     image: ghcr.io/open-webui/open-webui:main@sha256:74093dadc9c6aabc23987a74fd8c2fb8d995b1a5b22e83b0036fb9d6af590e8c
     profiles:
       - local
-    ports:
-      - "3002:8080"
+      - enterprise
+      - chat
+    # No direct host-port binding. All external access goes through caddy-owui
+    # on port 3003, which enforces admin/signup/mutation guards defined in
+    # Caddyfile.owui. Exposing port 3002 directly would bypass those defences
+    # on enterprise and cloud deployments.
     depends_on:
       edge-api:
         condition: service_healthy
@@ -275,6 +301,8 @@ services:
     image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
     profiles:
       - local
+      - enterprise
+      - chat
     ports:
       - "3003:80"
     depends_on:
@@ -284,6 +312,39 @@ services:
       - ./Caddyfile.owui:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    restart: unless-stopped
+
+  # Hive EnterpriseEdge — optional local Ollama inference backend.
+  # Active only under the `enterprise` profile. Serves keyless local models
+  # (e.g. llama3, mistral) via the Ollama HTTP API on port 11434.
+  # OLLAMA_BASE_URL is passed to LiteLLM via the environment so the
+  # ollama_chat/ model entries in deploy/litellm/config.yaml resolve
+  # correctly. See the commented example block in config.yaml for how to
+  # wire a local model into the LiteLLM model_list.
+  # GPU passthrough: add a `deploy.resources.reservations.devices` block
+  # to this service definition for NVIDIA GPU access (see Docker Compose
+  # GPU docs). Not enabled here because the investor-demo box may be
+  # CPU-only; add it after hardware is confirmed.
+  ollama:
+    image: ollama/ollama:latest
+    profiles:
+      - enterprise
+    # No host-port binding. LiteLLM reaches Ollama over the internal Compose
+    # network at http://ollama:11434. Exposing 11434 on the host would allow
+    # unauthenticated inference calls that bypass Edge and LiteLLM auth.
+    volumes:
+      - ollama-models:/root/.ollama
+    environment:
+      OLLAMA_HOST: "0.0.0.0"
+    healthcheck:
+      # ollama/ollama image ships with the ollama binary but not curl.
+      # `ollama list` exits 0 when the daemon is ready and returns the
+      # loaded model catalogue; it is the canonical in-image liveness probe.
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
 
   prometheus:
@@ -342,3 +403,6 @@ volumes:
   owui-data:
   caddy-data:
   caddy-config:
+  # ollama-models persists pulled model weights across container recreates.
+  # Active only when the `enterprise` profile is used.
+  ollama-models:
