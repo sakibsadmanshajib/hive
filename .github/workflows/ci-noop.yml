@@ -1,0 +1,64 @@
+# Companion no-op workflow for ci.yml
+#
+# GitHub Actions leaves required status checks in "Pending" when a workflow is
+# skipped due to path filtering, which blocks merging. This workflow fires on
+# the INVERSE path set (docs-only / config-only PRs that ci.yml ignores) and
+# reports success for every required check so those PRs can merge.
+#
+# The job names here MUST match the required check names in
+# .github/branch-protection-main.json exactly, including the matrix-expanded
+# names produced by ci.yml.
+#
+# Doc citation (June 2026):
+#   https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/
+#   collaborating-on-repositories-with-code-quality-features/
+#   troubleshooting-required-status-checks
+#   Section: "Handling skipped but required checks" --
+#   A workflow skipped due to path filtering leaves required checks in Pending
+#   state and blocks merging.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - 'apps/**'
+      - 'packages/**'
+      - 'deploy/**'
+      - 'supabase/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  go-tests:
+    name: Go tests (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: edge-api
+          - module: control-plane
+          - module: storage
+    steps:
+      - run: echo "Skipped (docs-only change)"
+
+  repo-policy-lints:
+    name: Repo policy lints (tenant + audit)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Skipped (docs-only change)"
+
+  web-console:
+    name: Web console (type + unit + build)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Skipped (docs-only change)"
+
+  web-e2e:
+    name: Web E2E (full stack)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Skipped (docs-only change)"
