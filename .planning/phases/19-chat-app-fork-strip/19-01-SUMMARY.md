@@ -3,6 +3,13 @@ phase: 19-chat-app-fork-strip
 plan: 01
 type: execute
 status: complete
+deprecated: true
+deprecation_note: |
+  The LibreChat fork track (apps/chat-app/) delivered by this plan was superseded
+  by the Open WebUI compose track shipped in Phase 19 Plan 03 (PR #146, merged
+  2026-05-29). apps/chat-app/ remains vendored in the repo as a historical
+  artefact but is not the active chat surface. Phase 20 onwards builds on the
+  Open WebUI integration, not this LibreChat fork.
 milestone: v1.1
 track: B
 branch: b/phase-19-chat-app-fork-strip

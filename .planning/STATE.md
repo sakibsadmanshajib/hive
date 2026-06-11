@@ -22,11 +22,9 @@ progress:
 deferred:
   target_milestone: v1.1
   doc: .planning/v1.1-DEFERRED-SCOPE.md
-  phases: [11, 12, 13, 14]
+  phases: [11]
   known_issues:
     - batch-success-path-terminal-settlement
-    - ensure-capability-columns-wrong-table
-    - amount-usd-on-bd-checkout-RESOLVED-PHASE-17
     - formal-verification-phase-2-3
 v1_1_phase_status:
   phase_12: complete

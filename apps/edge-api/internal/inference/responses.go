@@ -131,6 +131,9 @@ func translateResponsesToChatCompletions(req ResponsesRequest) ([]byte, error) {
 	}
 
 	// tools: translate from Responses API format to chat/completions format.
+	// NOTE: tool forwarding here is intentional — the Responses API supports tools
+	// natively. The chat/completions guard in rejectUnsupportedChatParams does NOT
+	// apply to this path.
 	if len(req.Tools) > 0 && string(req.Tools) != "null" {
 		translated, err := translateToolsToChat(req.Tools)
 		if err == nil {

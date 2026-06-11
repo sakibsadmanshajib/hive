@@ -108,6 +108,50 @@ func TestWebhook_BadSecret_401(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 }
 
+// TestWebhook_DisposableBackstop_NoProvision verifies the webhook honours the
+// optional disposable-domain backstop: when DisposableCheck reports a throwaway
+// address it stops before any tenant provisioning (so no DB pool is required)
+// and returns 204 so Supabase does not retry. This guards the path where a
+// scripted signup bypasses the web-console precheck and writes auth.users
+// directly via the Supabase API.
+func TestWebhook_DisposableBackstop_NoProvision(t *testing.T) {
+	var checkedEmail string
+	called := false
+	provisionEnsure := func(context.Context, string) (string, error) {
+		called = true
+		return "", nil
+	}
+	h := signup.NewWebhook(signup.WebhookDeps{
+		// Pool/Resolver/Audit intentionally non-nil only where the blocked path
+		// touches them. The blocked path must not reach provisioning, so the
+		// group-ensure closure should never run.
+		Resolver: signup.NewResolver(signup.ResolverDeps{}),
+		// Warning-severity, non-security audit routes to the (noop) WAL tier, so
+		// the SyncWriter's nil pool is never dereferenced in this DB-free test.
+		Audit:        audit.NewLogger(audit.LoggerDeps{Sync: audit.NewSyncWriter(nil, audit.WriterConfig{}), WAL: &noopWAL{}}),
+		EnsureGroup:  provisionEnsure,
+		SharedSecret: "shh",
+		DisposableCheck: func(email string) (bool, error) {
+			checkedEmail = email
+			return true, nil
+		},
+	})
+
+	body, _ := json.Marshal(map[string]any{
+		"user_id": uuid.New(),
+		"email":   "abuser@mailinator.com",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/internal/auth/user-created", bytes.NewReader(body))
+	req.Header.Set("X-Hive-Signup-Secret", "shh")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusNoContent, rec.Code)
+	require.Equal(t, "abuser@mailinator.com", checkedEmail)
+	require.False(t, called, "provisioning must not run for a disposable signup")
+}
+
 type noopWAL struct{}
 
 func (noopWAL) Write(ctx context.Context, e audit.Event) error { return nil }

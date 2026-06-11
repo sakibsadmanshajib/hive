@@ -42,7 +42,7 @@ Full breakdown: `.planning/milestones/v1.0-ROADMAP.md`
 - [x] **Phase 16: Capability Columns Fix** — Remove dead `ensureCapabilityColumns` DDL path in `routing/repository.go` (targeted wrong table); migration `20260414_01_provider_capabilities_media_columns.sql` is authoritative; regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence.
 - [x] **Phase 17: FX/USD Zero-Leak** — Strip `amount_usd` / FX rate / provider hints from all customer-bound surfaces (payments DTOs, ledger invoice rows, web-console types, PDF rendering, post-purchase grant metadata). Adversarial walk of every `map[string]any` customer wire. CI-blocking lint `lint-no-customer-usd.mjs`. Closes BD regulatory gap. PR #137 ready-for-review 2026-05-09.
 - [x] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (member/owner/platform_admin) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*, grants.create, ledger.view, platform.admin) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` overlay) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate. (completed 2026-05-15)
-- [ ] **Phase 19: Foundation Slice** — Tenant settings, identity bridge, Open WebUI compose, Caddy admin strip, chat happy path, SOC 2 audit primitive, and Open WebUI nightly/dev-time E2E. Plans 19-01 and 19-02 have merged; 19-03/19-04 remain active.
+- [x] **Phase 19: Foundation Slice** — Tenant settings, identity bridge, Open WebUI compose, Caddy admin strip, chat happy path, SOC 2 audit primitive, and Open WebUI nightly/dev-time E2E. Plans 19-01, 19-02, and 19-03 merged (PR #146 merged 2026-05-29). Remaining: M12 (CI live-integration OWUI+Caddy, infra decision pending) and C4 live JWT curl verification (needs running stack) — deferred to Phase 20 kickoff.
 - [ ] **Phase 20: Provider Catalog** — Stock providers seeded, custom providers DB-managed, LiteLLM YAML regenerated/reloaded, model visibility tied to tenant policy.
 - [ ] **Phase 21: Credit and Quota Engine** — Tenant pool, per-user soft caps, monthly grants, owner top-ups, extra-usage top-ups, and bucket rate limits.
 - [ ] **Phase 22: Shared Knowledge-Base RAG** — Admin-managed tenant KB ingestion, embeddings through LiteLLM, and edge-api retrieval injection.
@@ -62,10 +62,12 @@ Plus four tech-debt items from v1.0 (see `.planning/v1.1-DEFERRED-SCOPE.md`):
 
 ### Phase 11: Compliance, Verification & Artifact Cleanup
 
+**Status:** Undecided, 0 plans drafted, needs owner decision: execute or drop. Flagged 2026-06-10.
+
 **Goal:** Close the regulatory gap in BD checkout responses, formally verify orphaned Phase 2-3 requirements, and update stale planning artifacts.
 **Depends on:** Phases 2, 3, 5, 8
 **Requirements:** [AUTH-01, AUTH-02, AUTH-03, AUTH-04, BILL-01, BILL-02, PRIV-01, BILL-04, CONS-03, OPS-01]
-**Gap Closure:** Closes integration gaps #4 (amount_usd exposed) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Live-verifies analytics and monitoring. Updates stale planning artifacts.
+**Gap Closure:** Closes integration gaps #4 (amount_usd exposed, resolved Phase 17) and #5 (ViewerAccount.slug empty). Formally verifies 7 orphaned requirements. Live-verifies analytics and monitoring. Updates stale planning artifacts.
 **Success Criteria** (what must be TRUE):
   1. BD checkout responses never include `amount_usd` or any field exposing FX rates.
   2. ViewerAccount.slug is populated from control-plane viewer endpoint.
@@ -169,7 +171,7 @@ Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
 | 16. Capability Columns Fix | v1.1 | n/a | Complete | 2026-04-25 |
 | 17. FX/USD Zero-Leak | v1.1 | n/a | Complete | 2026-05-09 (PR #137) |
 | 18. RBAC Matrix | v1.1 | Complete    | 2026-05-15 | - |
-| 19. Foundation Slice | v1.1 | 2/4 | In Progress | - |
+| 19. Foundation Slice | v1.1 | 3/4 | Complete (deferred: M12, C4) | 2026-05-29 |
 | 20. Provider Catalog | v1.1 | TBD | Planned | - |
 | 21. Credit and Quota Engine | v1.1 | TBD | Planned | - |
 | 22. Shared Knowledge-Base RAG | v1.1 | TBD | Planned | - |
@@ -180,4 +182,4 @@ Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
 
 ---
 
-*Last updated: 2026-05-17 — Phase 26 web-search scope added to v1.1 sequence; Open WebUI pivot is authoritative in `.planning/v1.1-chatapp/V1.1-MASTER-PLAN.md`.*
+*Last updated: 2026-06-10 — Phase 19 closed (PR #146 merged 2026-05-29, plans 19-01/02/03 shipped); M12 and C4 deferred to Phase 20 kickoff. Phase 26 web-search scope in v1.1 sequence; Open WebUI pivot authoritative in `.planning/v1.1-chatapp/V1.1-MASTER-PLAN.md`.*

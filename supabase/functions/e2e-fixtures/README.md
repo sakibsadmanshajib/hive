@@ -17,7 +17,7 @@ Link the repo to the project (only needed once; password prompt uses
 
 ```bash
 cd /home/sakib/hive
-supabase link --project-ref yimgflllgdsbcibnaxqe
+supabase link --project-ref <PROJECT_REF>
 ```
 
 Deploy the function and configure its secret:
@@ -38,7 +38,7 @@ Add two GitHub Actions secrets in the repo settings:
 
 | Secret | Value |
 |--------|-------|
-| `E2E_FIXTURE_URL` | `https://yimgflllgdsbcibnaxqe.functions.supabase.co/e2e-fixtures` |
+| `E2E_FIXTURE_URL` | `https://<PROJECT_REF>.functions.supabase.co/e2e-fixtures` |
 | `E2E_FIXTURE_SECRET` | same value you set via `supabase secrets set` |
 
 ## Contract

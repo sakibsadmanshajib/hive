@@ -12,7 +12,7 @@
 |------------|---------|---------|-----------------|
 | Go | 1.26.1 | Edge API, control plane, workers | Best delivery/performance balance for a custom gateway that must preserve streaming behavior, concurrency, and low overhead without hand-writing unsafe systems code. |
 | LiteLLM Proxy | 1.81.3-stable | Provider translation, routing, fallback, spend hooks | Already translates many providers into OpenAI-shaped endpoints, supports OpenRouter, budgets, virtual keys, routing, and reduces the amount of provider-specific code Hive must own. |
-| Supabase Hosted (`yimgflllgdsbcibnaxqe`) | Managed platform | Auth, managed Postgres, storage primitives, admin workflows | Lowest-ops v1 choice; every Supabase project already includes a full Postgres database plus auth, which covers Hive's transactional source of truth without a second standalone Postgres service. |
+| Supabase Hosted | Managed platform | Auth, managed Postgres, storage primitives, admin workflows | Lowest-ops v1 choice; every Supabase project already includes a full Postgres database plus auth, which covers Hive's transactional source of truth without a second standalone Postgres service. |
 | Redis | 8.4 | Hot-path rate limiting, idempotency, reservation cache, ephemeral streaming state | Fast counters and TTL-backed state fit request gating and short-lived reservation workflows. |
 | Next.js | 16.1 | Developer console frontend | Current Active LTS web framework with React 19.2 support, mature auth integration patterns, and strong DX for billing and developer tooling. |
 

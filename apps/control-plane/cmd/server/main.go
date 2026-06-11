@@ -47,6 +47,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signupguard"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
@@ -216,6 +217,16 @@ func main() {
 	var auditWAL *audit.FileWALWriter
 	var signupWebhook *signup.Webhook
 	var tenantsHandler *tenants.Handler
+	// Signup abuse-prevention (issue #116). The disposable-domain blocklist is
+	// parsed once from an embedded file (no network), so it is available even
+	// when the database pool failed to come up. The per-IP limiter and the
+	// Turnstile verifier are wired below once redisClient is known.
+	disposableBlocklist, blErr := signupguard.LoadDisposableBlocklist()
+	if blErr != nil {
+		log.Fatalf("signupguard: load disposable blocklist: %v", blErr)
+	}
+	log.Printf("signupguard: disposable-domain blocklist loaded (%d domains)", disposableBlocklist.Len())
+	var signupPrecheck *signupguard.Handler
 	if pool != nil {
 		if cfg.RedisURL != "" {
 			redisClient = platformredis.NewClient(cfg.RedisURL)
@@ -374,6 +385,36 @@ func main() {
 		auditLogger = audit.NewLogger(audit.LoggerDeps{Sync: auditSync, WAL: walWriter})
 		log.Println("phase-19 audit logger ready")
 
+		// Signup precheck (issue #116): disposable-domain + per-IP rate limit +
+		// Turnstile CAPTCHA. Wired here (not gated on the phase-19 identity env
+		// vars) so abuse controls run on every deployment. The per-IP limiter
+		// reuses the control-plane Redis client; a nil client (Redis down at
+		// startup) disables only the rate limit while disposable + CAPTCHA keep
+		// working. The limiter fails CLOSED on a backend error per the #51
+		// policy unless RATE_LIMIT_FAIL_OPEN=true.
+		signupLimiter := signupguard.NewRateLimiter(
+			signupguard.NewRedisIncrementer(redisClient),
+			signupguard.RateLimitConfig{
+				Limit:    cfg.SignupRateLimitPerWindow,
+				Window:   cfg.SignupRateLimitWindow,
+				FailOpen: cfg.SignupRateLimitFailOpen,
+			},
+		)
+		turnstile := signupguard.NewTurnstileVerifier(cfg.TurnstileSecretKey, nil)
+		if !turnstile.Enabled() {
+			log.Println("WARNING: signupguard captcha disabled (TURNSTILE_SECRET_KEY unset)")
+		}
+		signupPrecheck = signupguard.NewHandler(signupguard.HandlerDeps{
+			Blocklist:         disposableBlocklist,
+			RateLimiter:       signupLimiter,
+			Turnstile:         turnstile,
+			AuditFunc:         signupGuardAudit(auditLogger),
+			TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+			MaxConcurrent:     cfg.PrecheckMaxConcurrent,
+			PrecheckTimeout:   time.Duration(cfg.PrecheckTimeoutSeconds) * time.Second,
+		})
+		log.Println("signupguard precheck ready (issue #116)")
+
 		missingPhase19 := make([]string, 0, 4)
 		if owuiBaseURL == "" {
 			missingPhase19 = append(missingPhase19, "OWUI_BASE_URL")
@@ -417,12 +458,15 @@ func main() {
 			})
 
 			signupWebhook = signup.NewWebhook(signup.WebhookDeps{
-				Pool:         pool,
-				Resolver:     signupResolver,
-				EnsureGroup:  owuiClient.EnsureGroup,
-				AddUser:      owuiClient.AddUserToGroup,
-				Audit:        auditLogger,
-				SharedSecret: signupSecret,
+				Pool:        pool,
+				Resolver:    signupResolver,
+				EnsureGroup: owuiClient.EnsureGroup,
+				AddUser:     owuiClient.AddUserToGroup,
+				Audit:       auditLogger,
+				// Disposable-domain backstop (issue #116) for scripted signups
+				// that hit Supabase directly and bypass the web-console precheck.
+				DisposableCheck: disposableBlocklist.IsDisposableEmail,
+				SharedSecret:    signupSecret,
 			})
 
 			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
@@ -741,6 +785,15 @@ func main() {
 		routerMux.Handle("/internal/auth/user-created", signupWebhook)
 		log.Println("signup webhook route registered (Phase 19)")
 	}
+
+	// Signup abuse-prevention precheck (issue #116). Public (no auth bearer —
+	// the caller is not yet a Hive account); the web-console signup page calls
+	// this before invoking Supabase signUp. The exact path beats the
+	// authenticated /api/v1/ catch-all by ServeMux longest-prefix match.
+	if signupPrecheck != nil {
+		routerMux.Handle("/api/v1/auth/sign-up/precheck", signupPrecheck)
+		log.Println("signup precheck route registered (issue #116)")
+	}
 	if tenantsHandler != nil {
 		protectedSwitch := authMiddleware.Require(http.HandlerFunc(tenantsHandler.Switch))
 		routerMux.Handle("/v1/tenants/switch", protectedSwitch)
@@ -810,6 +863,24 @@ type storageRuntimeConfig struct {
 // token to its target tenant. tenant_invites is provisioned by Plan 03;
 // until then the query simply returns ErrNoMatch, gating the resolver to
 // its domain-mapping fallback.
+// signupGuardAudit adapts the audit Logger to the signupguard.AuditFunc seam.
+// Detail maps carry classification strings only (never the raw email/domain or
+// any provider value), satisfying the BD provider-blind + audit-leak rules.
+// A nil logger yields a no-op so the precheck still works when audit is absent.
+func signupGuardAudit(logger *audit.Logger) signupguard.AuditFunc {
+	if logger == nil {
+		return nil
+	}
+	return func(ctx context.Context, action string, detail map[string]string) {
+		_ = logger.Log(ctx, audit.Event{
+			Action:   action,
+			Severity: audit.SeverityWarning,
+			Actor:    audit.Actor{Type: audit.ActorSystem},
+			Before:   detail,
+		})
+	}
+}
+
 func signupLookupInvite(pool *pgxpool.Pool) signup.LookupFunc {
 	return func(ctx context.Context, token string) (uuid.UUID, error) {
 		var id uuid.UUID
