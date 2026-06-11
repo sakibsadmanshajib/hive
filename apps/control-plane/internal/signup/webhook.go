@@ -15,12 +15,15 @@ package signup
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -72,6 +75,24 @@ type webhookBody struct {
 	InviteToken string    `json:"invite_token,omitempty"`
 }
 
+// emailAuditToken returns an opaque, one-way token suitable for audit logs.
+// It is the hex-encoded SHA-256 of the lowercased, trimmed email address,
+// prefixed with "email_sha256:" so the field is self-describing. The domain
+// portion is also included separately so operators can correlate by provider
+// without recovering the full address.
+//
+// Neither the raw local-part nor the full email ever appears in an audit row.
+func emailAuditToken(email string) (token, domain string) {
+	norm := strings.ToLower(strings.TrimSpace(email))
+	sum := sha256.Sum256([]byte(norm))
+	token = "email_sha256:" + hex.EncodeToString(sum[:])
+	at := strings.LastIndexByte(norm, '@')
+	if at >= 0 {
+		domain = norm[at+1:]
+	}
+	return token, domain
+}
+
 // ServeHTTP handles the Supabase webhook.
 func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Fail-closed on missing shared secret. constant_time_compare("","")
@@ -102,14 +123,15 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	emailToken, emailDomain := emailAuditToken(body.Email)
 
 	// Disposable-domain backstop (issue #116). Runs before any DB write so a
 	// throwaway signup never reaches tenant provisioning or a free-credit grant.
 	// Reply 204 (terminal) so Supabase does not retry — the address will not
-	// become eligible on a later attempt. The audit detail carries a fixed
-	// classification only, never the raw email/domain. A check error is treated
-	// as "not disposable" and logged, so a bug in the list never blocks all
-	// signups (availability over a soft abuse signal at this backstop layer).
+	// become eligible on a later attempt. The audit detail carries a hash token
+	// and domain only, never the raw email. A check error is treated as "not
+	// disposable" and logged, so a bug in the list never blocks all signups
+	// (availability over a soft abuse signal at this backstop layer).
 	if h.deps.DisposableCheck != nil {
 		blocked, checkErr := h.deps.DisposableCheck(body.Email)
 		if checkErr != nil {
@@ -120,7 +142,7 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 					Action:   "AUTH_SIGNUP_DISPOSABLE_BLOCKED",
 					Severity: audit.SeverityWarning,
-					Before:   map[string]string{"stage": "disposable"},
+					Before:   map[string]string{"stage": "disposable", "email_sha256": emailToken, "domain": emailDomain},
 				})
 			}
 			w.WriteHeader(http.StatusNoContent)
@@ -145,7 +167,7 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 				Action:   "AUTH_SIGNIN_FAILURE_NO_TENANT",
 				Severity: audit.SeverityWarning,
-				Before:   map[string]string{"email": body.Email},
+				Before:   map[string]string{"email_sha256": emailToken, "domain": emailDomain},
 			})
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -159,13 +181,13 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 			Action:   "AUTH_SIGNIN_FAILURE_NO_TENANT",
 			Severity: audit.SeverityError,
-			Before:   map[string]string{"email": body.Email, "stage": "resolver_error", "error": "resolver_transient"},
+			Before:   map[string]string{"email_sha256": emailToken, "domain": emailDomain, "stage": "resolver_error", "error": "resolver_transient"},
 		})
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
 	}
 
-	if err := h.provision(ctx, tenantID, body); err != nil {
+	if err := h.provision(ctx, tenantID, body, emailToken, emailDomain); err != nil {
 		// See comment above — class only in audit, full error to log.
 		log.Printf("signup: provision failed user=%s tenant=%s: %v", body.UserID, tenantID, fmt.Errorf("provision_db: %w", err))
 		_ = h.deps.Audit.Log(ctx, audit.Event{
@@ -173,7 +195,7 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 			Action:   "AUTH_SIGNUP_SUCCESS",
 			Severity: audit.SeverityError,
-			Before:   map[string]string{"email": body.Email, "stage": "provision_failed", "error": "provision_db"},
+			Before:   map[string]string{"email_sha256": emailToken, "domain": emailDomain, "stage": "provision_failed", "error": "provision_db"},
 		})
 		http.Error(w, `{"error":"internal"}`, http.StatusInternalServerError)
 		return
@@ -181,7 +203,7 @@ func (h *Webhook) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Webhook) provision(ctx context.Context, tenantID uuid.UUID, body webhookBody) error {
+func (h *Webhook) provision(ctx context.Context, tenantID uuid.UUID, body webhookBody, emailToken, emailDomain string) error {
 	_, err := h.deps.Pool.Exec(ctx, `
 		INSERT INTO public.tenant_users(tenant_id, user_id, role, status)
 		VALUES ($1, $2, 'MEMBER', 'ACTIVE')
@@ -196,7 +218,7 @@ func (h *Webhook) provision(ctx context.Context, tenantID uuid.UUID, body webhoo
 		Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 		Action:   "AUTH_SIGNUP_SUCCESS",
 		Severity: audit.SeverityInfo,
-		After:    map[string]string{"email": body.Email},
+		After:    map[string]string{"email_sha256": emailToken, "domain": emailDomain},
 	})
 	_ = h.deps.Audit.Log(ctx, audit.Event{
 		TenantID: tenantID,
@@ -234,7 +256,7 @@ func (h *Webhook) provision(ctx context.Context, tenantID uuid.UUID, body webhoo
 			Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 			Action:   "OWUI_GROUP_ADD_FAILURE",
 			Severity: audit.SeverityError,
-			Before:   map[string]string{"group_id": groupID, "email": body.Email, "error": "owui_add_user"},
+			Before:   map[string]string{"group_id": groupID, "email_sha256": emailToken, "domain": emailDomain, "error": "owui_add_user"},
 		})
 		return fmt.Errorf("add user: %w", err)
 	}
@@ -243,7 +265,7 @@ func (h *Webhook) provision(ctx context.Context, tenantID uuid.UUID, body webhoo
 		Actor:    audit.Actor{ID: body.UserID, Type: audit.ActorUser},
 		Action:   "OWUI_GROUP_ADD_SUCCESS",
 		Severity: audit.SeverityInfo,
-		After:    map[string]string{"group_id": groupID, "email": body.Email},
+		After:    map[string]string{"group_id": groupID, "email_sha256": emailToken, "domain": emailDomain},
 	})
 	return nil
 }

@@ -5,6 +5,53 @@ import (
 	"time"
 )
 
+func TestTrustedProxyCIDRsDefault(t *testing.T) {
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Fatalf("default TrustedProxyCIDRs should be empty, got %v", cfg.TrustedProxyCIDRs)
+	}
+}
+
+func TestTrustedProxyCIDRsParsed(t *testing.T) {
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8,192.168.0.0/16")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Fatalf("expected 2 CIDRs, got %d: %v", len(cfg.TrustedProxyCIDRs), cfg.TrustedProxyCIDRs)
+	}
+}
+
+func TestTrustedProxyCIDRsInvalid(t *testing.T) {
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "not-a-cidr")
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for invalid CIDR, got nil")
+	}
+}
+
+func TestPrecheckConcurrencyAndTimeoutDefaults(t *testing.T) {
+	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.PrecheckMaxConcurrent != 100 {
+		t.Fatalf("PrecheckMaxConcurrent default = %d, want 100", cfg.PrecheckMaxConcurrent)
+	}
+	if cfg.PrecheckTimeoutSeconds != 8 {
+		t.Fatalf("PrecheckTimeoutSeconds default = %d, want 8", cfg.PrecheckTimeoutSeconds)
+	}
+}
+
 func TestSignupGuardDefaults(t *testing.T) {
 	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
 	// Leave all signup-guard envs unset to assert defaults.

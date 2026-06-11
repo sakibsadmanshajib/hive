@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -22,10 +23,10 @@ type Config struct {
 	InternalToken string
 
 	// Phase 15 — local batch executor knobs.
-	BatchExecutorConcurrency  int
-	BatchExecutorMaxRetries   int
+	BatchExecutorConcurrency   int
+	BatchExecutorMaxRetries    int
 	BatchExecutorLineTimeoutMs int
-	BatchExecutorKind         string // "auto" | "local" | "upstream"
+	BatchExecutorKind          string // "auto" | "local" | "upstream"
 
 	// Signup abuse-prevention knobs (issue #116).
 	//
@@ -37,10 +38,23 @@ type Config struct {
 	//
 	// TurnstileSecretKey enables server-side Cloudflare Turnstile verification
 	// when non-empty; empty disables CAPTCHA with a startup warning.
-	SignupRateLimitPerWindow int
-	SignupRateLimitWindow    time.Duration
-	SignupRateLimitFailOpen  bool
-	TurnstileSecretKey       string
+	//
+	// TrustedProxyCIDRs is the list of CIDR ranges whose direct peers are
+	// permitted to supply accurate CF-Connecting-IP / X-Forwarded-For headers.
+	// Default (empty): forwarded headers are never trusted; the raw RemoteAddr
+	// is always used. Set to Cloudflare IP ranges in production deployments
+	// via TRUSTED_PROXY_CIDRS (comma-separated CIDR notation).
+	//
+	// PrecheckMaxConcurrent is the global concurrent-request ceiling for the
+	// precheck handler (default 100). PrecheckTimeoutSeconds is the per-request
+	// deadline in seconds (default 8).
+	SignupRateLimitPerWindow   int
+	SignupRateLimitWindow      time.Duration
+	SignupRateLimitFailOpen    bool
+	TurnstileSecretKey         string
+	TrustedProxyCIDRs          []*net.IPNet
+	PrecheckMaxConcurrent      int
+	PrecheckTimeoutSeconds     int
 }
 
 // Load reads configuration from environment variables and returns a validated Config.
@@ -59,6 +73,11 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("SUPABASE_URL is required")
 	}
 
+	trustedCIDRs, err := parseCIDRList(os.Getenv("TRUSTED_PROXY_CIDRS"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid TRUSTED_PROXY_CIDRS: %w", err)
+	}
+
 	return &Config{
 		Port:                       port,
 		SupabaseURL:                supabaseURL,
@@ -74,7 +93,34 @@ func Load() (*Config, error) {
 		SignupRateLimitWindow:      time.Duration(intEnv("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", 3600)) * time.Second,
 		SignupRateLimitFailOpen:    boolEnv("RATE_LIMIT_FAIL_OPEN", false),
 		TurnstileSecretKey:         os.Getenv("TURNSTILE_SECRET_KEY"),
+		TrustedProxyCIDRs:          trustedCIDRs,
+		PrecheckMaxConcurrent:      intEnv("SIGNUP_PRECHECK_MAX_CONCURRENT", 100),
+		PrecheckTimeoutSeconds:     intEnv("SIGNUP_PRECHECK_TIMEOUT_SECONDS", 8),
 	}, nil
+}
+
+// parseCIDRList parses a comma-separated list of CIDR strings. Empty string
+// returns a nil slice (no trusted proxies). Malformed entries are returned as
+// an error so misconfiguration is caught at startup.
+func parseCIDRList(raw string) ([]*net.IPNet, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]*net.IPNet, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(p)
+		if err != nil {
+			return nil, fmt.Errorf("parse %q: %w", p, err)
+		}
+		out = append(out, cidr)
+	}
+	return out, nil
 }
 
 func intEnv(key string, def int) int {

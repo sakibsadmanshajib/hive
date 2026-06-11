@@ -405,10 +405,13 @@ func main() {
 			log.Println("WARNING: signupguard captcha disabled (TURNSTILE_SECRET_KEY unset)")
 		}
 		signupPrecheck = signupguard.NewHandler(signupguard.HandlerDeps{
-			Blocklist:   disposableBlocklist,
-			RateLimiter: signupLimiter,
-			Turnstile:   turnstile,
-			AuditFunc:   signupGuardAudit(auditLogger),
+			Blocklist:         disposableBlocklist,
+			RateLimiter:       signupLimiter,
+			Turnstile:         turnstile,
+			AuditFunc:         signupGuardAudit(auditLogger),
+			TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+			MaxConcurrent:     cfg.PrecheckMaxConcurrent,
+			PrecheckTimeout:   time.Duration(cfg.PrecheckTimeoutSeconds) * time.Second,
 		})
 		log.Println("signupguard precheck ready (issue #116)")
 

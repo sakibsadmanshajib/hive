@@ -106,12 +106,36 @@ func (b *Blocklist) Len() int {
 
 // IsDisposableDomain reports whether the given (already lowercased) domain is in
 // the blocklist. An empty domain never matches.
+//
+// Subdomain matching: a domain is blocked if any of its registered suffixes
+// appear in the blocklist (e.g. "a.mailinator.com" is blocked because
+// "mailinator.com" is listed). The match walks from the most-specific label
+// outward so an exact match is always preferred.
+//
+// IDN note: golang.org/x/net/idna is not in the module graph. Callers should
+// pass domains that have already been lowercased (NormalizeEmail does this).
+// Punycode ACE labels (xn--...) in the blocklist will match ACE input directly;
+// Unicode display forms will not. A future upgrade to x/net/idna can fold both
+// representations before lookup.
 func (b *Blocklist) IsDisposableDomain(domain string) bool {
 	if b == nil || domain == "" {
 		return false
 	}
-	_, ok := b.domains[domain]
-	return ok
+	// Walk suffixes from most-specific to least-specific.
+	// "a.b.mailinator.com" checks: "a.b.mailinator.com", "b.mailinator.com",
+	// "mailinator.com", "com". Stopping at the first match keeps the loop O(labels).
+	s := domain
+	for {
+		if _, ok := b.domains[s]; ok {
+			return true
+		}
+		dot := strings.IndexByte(s, '.')
+		if dot < 0 {
+			break
+		}
+		s = s[dot+1:]
+	}
+	return false
 }
 
 // IsDisposableEmail normalizes the email and reports whether its domain is a

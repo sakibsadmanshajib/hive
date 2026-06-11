@@ -86,6 +86,26 @@ func TestDisposableBlocklist(t *testing.T) {
 	}
 }
 
+func TestDisposableBlocklistSubdomains(t *testing.T) {
+	bl, err := LoadDisposableBlocklist()
+	if err != nil {
+		t.Fatalf("LoadDisposableBlocklist: %v", err)
+	}
+
+	// Subdomains of a listed domain must also be blocked.
+	if !bl.IsDisposableDomain("sub.mailinator.com") {
+		t.Fatal("IsDisposableDomain(sub.mailinator.com) = false, want true")
+	}
+	if !bl.IsDisposableDomain("a.b.guerrillamail.com") {
+		t.Fatal("IsDisposableDomain(a.b.guerrillamail.com) = false, want true")
+	}
+
+	// A subdomain of a non-blocked domain must not match.
+	if bl.IsDisposableDomain("mail.gmail.com") {
+		t.Fatal("IsDisposableDomain(mail.gmail.com) = true, want false")
+	}
+}
+
 func TestDisposableBlocklistDomainComments(t *testing.T) {
 	bl, err := LoadDisposableBlocklist()
 	if err != nil {
