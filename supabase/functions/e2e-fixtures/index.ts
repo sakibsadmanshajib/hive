@@ -388,18 +388,22 @@ Deno.serve(async (req) => {
       (body as { email?: string }).email ??
       (Deno.env.get("E2E_DEFAULT_VERIFIED_EMAIL") ?? DEFAULTS.verifiedEmail);
 
-    const { data: userList, error: listErr } =
-      await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
-    if (listErr) {
+    // Look up the account via account_profiles.login_email directly.
+    // Avoids auth.admin.listUsers({ page, perPage }) which triggers GoTrue
+    // "Database error finding users" in Supabase edge functions.
+    const { data: profileRow, error: profileLookupErr } = await admin
+      .from("account_profiles")
+      .select("account_id")
+      .eq("login_email", targetEmail)
+      .limit(1)
+      .maybeSingle();
+    if (profileLookupErr) {
       return jsonResponse(
-        { error: `listUsers failed: ${listErr.message}` },
+        { error: `profile lookup failed: ${profileLookupErr.message}` },
         500,
       );
     }
-    const targetUser = userList.users.find(
-      (u: any) => u.email?.toLowerCase() === targetEmail.toLowerCase(),
-    );
-    if (!targetUser) {
+    if (!profileRow) {
       return jsonResponse(
         { error: `user not found for email: ${targetEmail}` },
         404,
@@ -409,7 +413,7 @@ Deno.serve(async (req) => {
     const { data: membership, error: memErr } = await admin
       .from("account_memberships")
       .select("account_id")
-      .eq("user_id", targetUser.id)
+      .eq("account_id", profileRow.account_id)
       .eq("role", "owner")
       .maybeSingle();
     if (memErr) {
