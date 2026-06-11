@@ -81,17 +81,25 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 // response and returns a non-nil sentinel error when any unsupported parameter
 // is present, so the caller can return immediately.
 func rejectUnsupportedChatParams(w http.ResponseWriter, req *ChatCompletionRequest) error {
+	// isPresent returns true when a json.RawMessage field was explicitly set by
+	// the caller (non-empty and not the JSON literal "null"). Using len > 0 alone
+	// misses the case where the client sends `"tools": []` — Go unmarshals that
+	// as an empty non-nil slice whose JSON encoding is "[]", not "null".
+	isPresent := func(f json.RawMessage) bool {
+		return len(f) > 0 && string(f) != "null"
+	}
+
 	var param string
 	switch {
-	case len(req.Tools) > 0:
+	case isPresent(req.Tools):
 		param = "tools"
-	case len(req.ToolChoice) > 0:
+	case isPresent(req.ToolChoice):
 		param = "tool_choice"
-	case len(req.ResponseFormat) > 0:
+	case isPresent(req.ResponseFormat):
 		param = "response_format"
-	case len(req.Functions) > 0:
+	case isPresent(req.Functions):
 		param = "functions"
-	case len(req.FunctionCall) > 0:
+	case isPresent(req.FunctionCall):
 		param = "function_call"
 	}
 

@@ -47,6 +47,13 @@ func TestChatCompletions_ToolsRejected(t *testing.T) {
 			name: "function_call (legacy) field rejected",
 			body: `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"functions":[{"name":"f","description":"d","parameters":{"type":"object","properties":{}}}],"function_call":"auto"}`,
 		},
+		{
+			// Empty array must be treated as present (non-null), not silently ignored.
+			// A client sending `"tools": []` has explicitly opted in to the tools
+			// parameter and must receive the same 400 as a non-empty tools array.
+			name: "tools empty array rejected",
+			body: `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}],"tools":[]}`,
+		},
 	}
 
 	for _, tc := range cases {

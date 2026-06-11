@@ -98,7 +98,7 @@
       "path": "/v1/chat/completions",
       "status": "supported_now",
       "phase": 6,
-      "notes": "Chat completion inference"
+      "notes": "Chat completion inference. The following parameters are rejected with 400 unsupported_parameter until capability-based provider routing ships (planned Phase 20+): tools, tool_choice, response_format, parallel_tool_calls, functions, function_call."
     },
     {
       "method": "GET",
