@@ -1,12 +1,13 @@
 -- =============================================================================
 -- Phase 20-01: Provider Catalog schema
 --   * Relax provider_routes CHECK constraint (openrouter/groq only -> non-empty)
---   * Create custom_providers table with seed rows for openrouter + groq
+--   * Create custom_providers table with seed rows for openrouter, groq, nvidia_nim
 --   * Create tenant_model_visibility table
 --   * ADD COLUMN tools_supported to provider_capabilities
 --   * Extend model_aliases.visibility CHECK to include 'restricted'
 --   * RLS: enable + force, FOR ALL TO hive_app policies (idempotent DO $$)
 --   * GRANTs for hive_app on both new tables
+--   * FK: provider_routes.provider -> custom_providers(slug)
 --   * updated_at triggers (reuse public.set_updated_at())
 -- =============================================================================
 
@@ -42,12 +43,28 @@ CREATE TABLE IF NOT EXISTS public.custom_providers (
 CREATE INDEX IF NOT EXISTS custom_providers_slug_idx    ON public.custom_providers (slug);
 CREATE INDEX IF NOT EXISTS custom_providers_enabled_idx ON public.custom_providers (enabled);
 
+-- Seed known providers. nvidia_nim seeded (enabled=false) so the FK below
+-- validates the existing route-nvidia-embedding row from
+-- 20260424_02_embedding_fallback_route.sql.
 INSERT INTO public.custom_providers
   (slug, display_name, base_url, api_key_env, litellm_prefix, enabled)
 VALUES
-  ('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1',   'OPENROUTER_API_KEY', 'openrouter/', true),
-  ('groq',       'Groq',       'https://api.groq.com/openai/v1', 'GROQ_API_KEY',       'groq/',       true)
+  ('openrouter', 'OpenRouter', 'https://openrouter.ai/api/v1',        'OPENROUTER_API_KEY', 'openrouter/', true),
+  ('groq',       'Groq',       'https://api.groq.com/openai/v1',      'GROQ_API_KEY',       'groq/',       true),
+  ('nvidia_nim', 'NVIDIA NIM', 'https://integrate.api.nvidia.com/v1', 'NVIDIA_API_KEY',     'nvidia_nim/', false)
 ON CONFLICT (slug) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Task 2b: FK provider_routes.provider -> custom_providers(slug)
+-- Placed after seed inserts so all existing rows validate immediately.
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.provider_routes
+  DROP CONSTRAINT IF EXISTS provider_routes_provider_fk;
+
+ALTER TABLE public.provider_routes
+  ADD CONSTRAINT provider_routes_provider_fk
+    FOREIGN KEY (provider) REFERENCES public.custom_providers(slug) ON DELETE RESTRICT;
 
 -- ---------------------------------------------------------------------------
 -- Task 3: tenant_model_visibility table
@@ -63,8 +80,9 @@ CREATE TABLE IF NOT EXISTS public.tenant_model_visibility (
   UNIQUE (tenant_id, alias_id)
 );
 
-CREATE INDEX IF NOT EXISTS tmv_tenant_idx ON public.tenant_model_visibility (tenant_id);
-CREATE INDEX IF NOT EXISTS tmv_alias_idx  ON public.tenant_model_visibility (alias_id);
+-- tmv_tenant_idx omitted: UNIQUE(tenant_id, alias_id) already creates a
+-- tenant_id-leading index, making a standalone tenant_id index redundant.
+CREATE INDEX IF NOT EXISTS tmv_alias_idx ON public.tenant_model_visibility (alias_id);
 
 -- ---------------------------------------------------------------------------
 -- Task 4: provider_capabilities — ADD COLUMN tools_supported
