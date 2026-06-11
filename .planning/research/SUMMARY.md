@@ -26,7 +26,7 @@ Use `ogen` 1.15.1 or `oapi-codegen` 2.5.1 against the OpenAI OpenAPI spec (curre
 - **LiteLLM 1.81.3-stable:** provider adapter and routing — minimizes custom provider code
 - **Supabase hosted Postgres:** ledger, payments, catalog, keys, invoices — strongest low-ops transactional base for v1
 - **Redis 8.4:** limits, idempotency, reservations — best fit for hot-path enforcement
-- **Supabase hosted project (`yimgflllgdsbcibnaxqe`)**: auth/session layer and primary relational store — fastest low-ops identity and transactional foundation
+- **Supabase hosted project**: auth/session layer and primary relational store — fastest low-ops identity and transactional foundation
 - **Next.js 16.1 / React 19.2:** developer console — current stable frontend foundation
 - **Docker Compose with containerized watchers:** local dev, hot reload, codegen, builds, and tests — no host Go/Node installs required
 

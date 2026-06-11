@@ -1,10 +1,16 @@
 # Phase 19 Remediation — Resume State
 
+> **RESOLVED.** PR #146 merged 2026-05-29 (squash merge, branch deleted).
+> All CRITICAL/HIGH/MEDIUM items below are shipped. Remaining open items
+> (M12, C4, L2, L3, L4, L5, L7, L8) are deferred per the notes in this file.
+> This document is preserved as a historical record.
+
 Paused: 2026-05-18 13:40 EDT.
+Resolved: 2026-05-29 (PR #146 merged).
 
 ## Branch / PR
-- Branch: `b/phase-19-remediation`
-- PR: https://github.com/sakibsadmanshajib/hive/pull/146
+- Branch: `b/phase-19-remediation` (deleted after merge)
+- PR: https://github.com/sakibsadmanshajib/hive/pull/146 — **MERGED 2026-05-29**
 - Head commit: `7275eee` (r3 — H/M/L inline)
 - Prior commits on branch: `40e8484` (r1 — CRITICAL C1-C4), `50f287c` (r2 — adversarial-review fixes)
 
@@ -52,7 +58,7 @@ Paused: 2026-05-18 13:40 EDT.
 
 - All local tests green (48 ok, vet clean).
 - r3 pushed to remote.
-- PR #146 is awaiting CI + CodeRabbit + Codex review.
+- PR #146 merged 2026-05-29. CI passed, CodeRabbit + Codex reviews addressed.
 - Monitor `bs239mrgj` was watching PR until pause — stopped.
 
 ## Resume protocol
