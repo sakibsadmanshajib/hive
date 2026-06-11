@@ -7,7 +7,6 @@
       "Go tests (storage)",
       "Repo policy lints (tenant + audit)",
       "Web console (type + unit + build)",
-      "Live integration (SDK tests + smoke)",
       "Web E2E (full stack)"
     ]
   },

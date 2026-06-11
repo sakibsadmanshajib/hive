@@ -13,8 +13,9 @@ on:
       - 'deploy/litellm/**'
       - '.github/workflows/deploy-staging.yml'
   schedule:
-    # Hourly — `detect-changes` job skips deploy if no diff vs last successful run
-    - cron: '0 * * * *'
+    # Daily at 03:00 UTC — `detect-changes` job skips deploy if no diff vs last successful run.
+    # Reduced from hourly to daily to cut wasted runner minutes on unchanged main.
+    - cron: '0 3 * * *'
   workflow_dispatch:
 
 concurrency:
