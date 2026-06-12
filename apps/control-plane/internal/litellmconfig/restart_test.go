@@ -26,7 +26,7 @@ func startFakeDockerEngine(t *testing.T, socketPath string, statusCode int, rece
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			select {
-			case received <- r.URL.Path + "?" + r.URL.RawQuery:
+			case received <- r.URL.Path:
 			default:
 			}
 			if statusCode == http.StatusNotFound {
