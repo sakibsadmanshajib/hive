@@ -4,6 +4,10 @@
 
 Project use OpenWolf for context mgmt. Read + follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files.
 
+## Orchestrator Contract
+
+The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session start. It defines persona, delegation rules, communication protocol, agent fleet rules, and context hygiene for the CTO orchestrator role.
+
 
 # Hive
 
