@@ -45,6 +45,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signupguard"
@@ -198,6 +199,7 @@ func main() {
 	var roleSvc *platform.RoleService
 	var authzMW authz.Middleware // Phase 18: set after roleSvc+accountsSvc are ready
 	var catalogHandler *catalog.Handler
+	var providersHandler *providers.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
 	var routingHandler *routing.Handler
@@ -247,6 +249,11 @@ func main() {
 		catalogRepo := catalog.NewPgxRepository(pool)
 		catalogSvc := catalog.NewService(catalogRepo)
 		catalogHandler = catalog.NewHandler(catalogSvc)
+
+		providersRepo := providers.NewPgxRepository(pool)
+		providersSvc := providers.NewService(providersRepo)
+		providersHandler = providers.NewHandler(providersSvc)
+		log.Println("providers module ready (Phase 20 Plan 02)")
 
 		routingRepo := routing.NewPgxRepository(pool)
 		routingSvc = routing.NewService(routingRepo)
@@ -644,12 +651,14 @@ func main() {
 		LedgerHandler:      ledgerHandler,
 		PaymentsHandler:    paymentsHandler,
 		ProfilesHandler:    profilesHandler,
+		ProvidersRouter:    providersHandler,
 		RoutingHandler:     routingHandler,
 		UsageHandler:       usageHandler,
 		MetricsRegistry:    metricsRegistry,
 		PrometheusRegistry: promRegistry,
 		Mux:                routerMux,
 		InternalToken:      cfg.InternalToken,
+		RoleSvc:            roleSvc,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
