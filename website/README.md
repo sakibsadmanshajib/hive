@@ -73,12 +73,11 @@ Once a domain is chosen, add it under **Pages project > Custom domains** and
 point a CNAME at the `*.pages.dev` target. Cloudflare provisions TLS
 automatically.
 
-## Domain note (decision pending)
+## Domain
 
-The owner mentioned **hive.sqv.co** as the likely target domain. **scubed.co**
-is also owned, and the API endpoint referenced in the copy currently uses
-`api-hive.scubed.co`. The final marketing domain is **not yet decided**. The
-site itself is domain-agnostic: all internal links are relative and external
-links use absolute public URLs, so it will work under whichever hostname is
-chosen without code changes. When the decision is made, only DNS and the
-Cloudflare custom-domain binding need updating.
+The marketing site domain is **hive.scubed.co** (owner confirmed, final).
+The API endpoint referenced in the copy uses `api-hive.scubed.co` on the same
+zone. The site itself is domain-agnostic: all internal links are relative and
+external links use absolute public URLs, so serving it is a matter of the
+Cloudflare Pages custom-domain binding plus a proxied CNAME from
+`hive.scubed.co` to the project's `*.pages.dev` hostname.
