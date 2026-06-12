@@ -76,7 +76,7 @@
   <span class="tok-flag">-H</span> <span class="tok-str">"Authorization: Bearer $HIVE_API_KEY"</span> <span class="tok-flag">\</span>
   <span class="tok-flag">-H</span> <span class="tok-str">"Content-Type: application/json"</span> <span class="tok-flag">\</span>
   <span class="tok-flag">-d</span> <span class="tok-str">'{</span>
-    <span class="tok-key">"model"</span><span class="tok-str">: "openai/gpt-4o-mini",</span>
+    <span class="tok-key">"model"</span><span class="tok-str">: "hive-default",</span>
     <span class="tok-key">"messages"</span><span class="tok-str">: [{ "role": "user", "content": "Hello!" }],</span>
     <span class="tok-key">"stream"</span><span class="tok-str">: false</span>
   <span class="tok-str">}'</span></pre>
@@ -102,7 +102,7 @@ client = <span class="tok-cmd">OpenAI</span>(
 )
 
 resp = client.chat.completions.<span class="tok-cmd">create</span>(
-    model=<span class="tok-str">"openai/gpt-4o-mini"</span>,
+    model=<span class="tok-str">"hive-default"</span>,
     messages=[{<span class="tok-str">"role"</span>: <span class="tok-str">"user"</span>, <span class="tok-str">"content"</span>: <span class="tok-str">"Hello from Dhaka!"</span>}],
 )
 <span class="tok-cmd">print</span>(resp.choices[<span class="tok-str">0</span>].message.content)</pre>
@@ -110,7 +110,7 @@ resp = client.chat.completions.<span class="tok-cmd">create</span>(
       <ul class="bul">
         <li>Streaming works the same way: pass <code class="inline">stream=True</code>.</li>
         <li>Files and media endpoints are available on the same base URL.</li>
-        <li>Model identifiers are provider-prefixed, for example <code class="inline">openai/gpt-4o-mini</code>.</li>
+        <li>Use the public model aliases: <code class="inline">hive-default</code>, <code class="inline">hive-fast</code>, or <code class="inline">hive-auto</code>.</li>
       </ul>
 
       <h2 id="enterpriseedge">Self-host with EnterpriseEdge</h2>
@@ -128,11 +128,13 @@ resp = client.chat.completions.<span class="tok-cmd">create</span>(
         <li>Your prompts and data stay on your own infrastructure by default.</li>
       </ul>
 
-      <h2 id="hardware">Hardware advisor</h2>
+      <h2 id="hardware">Hardware advisor (planned)</h2>
       <p>
-        Before you commit hardware, the advisor reports what your machine can comfortably run, so
-        you can size a box once instead of guessing. It looks at available memory and compute and
-        suggests a model tier that will run smoothly on-device.
+        On the roadmap: an advisor that reports what your machine can comfortably run, so you can
+        size a box once instead of guessing. The plan is to look at available memory and compute
+        and suggest a model tier that will run smoothly on-device. Until it ships, size against
+        the model requirements published by <code class="inline">Ollama</code> for the models you
+        intend to run.
       </p>
 
       <h2 id="billing">Prepaid credits</h2>
