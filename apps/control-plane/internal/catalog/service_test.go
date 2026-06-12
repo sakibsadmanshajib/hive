@@ -3,6 +3,7 @@ package catalog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -107,6 +108,18 @@ func (s *stubRepository) GetAllVisibleTenantsForAlias(_ context.Context, aliasID
 		}
 	}
 	return out, nil
+}
+
+func (s *stubRepository) GetAlias(_ context.Context, aliasID string) (ModelAlias, error) {
+	if s.err != nil {
+		return ModelAlias{}, s.err
+	}
+	for _, a := range s.aliases {
+		if a.AliasID == aliasID {
+			return a, nil
+		}
+	}
+	return ModelAlias{}, fmt.Errorf("catalog: model alias not found")
 }
 
 // ---------------------------------------------------------------------------

@@ -17,6 +17,10 @@ type Repository interface {
 	// explicitly blocked when visible=false row exists.
 	ListAliasesForTenant(ctx context.Context, tenantID uuid.UUID) ([]ModelAlias, error)
 	GetSnapshot(ctx context.Context) (CatalogSnapshot, error)
+	// GetAlias fetches a single model alias by its alias_id.
+	// Used by syncOWUI to determine the alias visibility class before choosing
+	// the OWUI sync strategy (restricted vs public/preview).
+	GetAlias(ctx context.Context, aliasID string) (ModelAlias, error)
 	// Visibility admin operations for tenant_model_visibility table.
 	GetVisibilityRows(ctx context.Context, tenantID uuid.UUID) ([]TenantModelVisibility, error)
 	UpsertVisibility(ctx context.Context, row TenantModelVisibility) error
@@ -126,6 +130,34 @@ func (r *pgxRepository) ListAliasesForTenant(ctx context.Context, tenantID uuid.
 		return nil, fmt.Errorf("catalog: iterate tenant aliases: %w", err)
 	}
 	return aliases, nil
+}
+
+// GetAlias returns a single model alias by its alias_id.
+func (r *pgxRepository) GetAlias(ctx context.Context, aliasID string) (ModelAlias, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT
+			alias_id,
+			owned_by,
+			display_name,
+			summary,
+			visibility,
+			lifecycle,
+			capability_badges,
+			input_price_credits,
+			output_price_credits,
+			cache_read_price_credits,
+			cache_write_price_credits,
+			created_at,
+			updated_at
+		FROM public.model_aliases
+		WHERE alias_id = $1
+	`, aliasID)
+
+	alias, err := scanModelAlias(row)
+	if err != nil {
+		return ModelAlias{}, fmt.Errorf("catalog: get alias %q: %w", aliasID, err)
+	}
+	return alias, nil
 }
 
 // GetVisibilityRows returns all tenant_model_visibility rows for a given tenant.

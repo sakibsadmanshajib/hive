@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 )
 
 // Handler serves catalog endpoints. The public catalog route reads the optional
@@ -46,13 +46,13 @@ func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePublicCatalog returns the model list filtered for the caller's tenant.
-// If a tenants.User is present in context (JWT auth middleware ran), its
-// TenantID is used. If not present, only public aliases are returned
-// (unauthenticated / public API key path).
+// If an auth.Viewer is present in context (OptionalRequire middleware ran) and
+// its TenantID is non-nil, that tenant's visibility rules are applied.
+// Otherwise only public/preview aliases are returned (unauthenticated path).
 func (h *Handler) handlePublicCatalog(w http.ResponseWriter, r *http.Request) {
 	tenantID := uuid.Nil
-	if u, ok := tenants.UserFrom(r.Context()); ok {
-		tenantID = u.TenantID
+	if v, ok := auth.ViewerFromContext(r.Context()); ok && v.TenantID != uuid.Nil {
+		tenantID = v.TenantID
 	}
 
 	aliases, err := h.svc.ListModelsForTenant(r.Context(), tenantID)
@@ -92,7 +92,14 @@ func buildPublicCatalogModels(aliases []ModelAlias) []PublicCatalogModel {
 
 // OWUISync is satisfied by *owui.Client. Declared as an interface here so
 // tests can inject a fake without importing the owui package.
+//
+// EnsureGroup creates or looks up the OWUI group by name and returns its
+// OWUI-internal UUID. SyncModelAccessControl sets the per-model access_control
+// object; passing a nil/empty allowedGroupIDs sends access_control:null
+// (public). Callers must resolve group names to UUIDs via EnsureGroup before
+// calling SyncModelAccessControl.
 type OWUISync interface {
+	EnsureGroup(ctx context.Context, name string) (string, error)
 	SyncModelAccessControl(ctx context.Context, modelID string, allowedGroupIDs []string) error
 }
 
@@ -205,21 +212,66 @@ func (h *VisibilityHandler) handleDeleteVisibility(w http.ResponseWriter, r *htt
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// syncOWUI computes the full allowlist for aliasID and calls SyncModelAccessControl.
-// Errors are logged but do not fail the HTTP response: OWUI sync is best-effort.
+// syncOWUI computes the full OWUI access_control state for aliasID after any
+// visibility mutation and writes it atomically. It is best-effort: errors do
+// not fail the HTTP response.
+//
+// Visibility semantics:
+//   - restricted alias, no visible=true rows: model should be inaccessible in
+//     OWUI. We send a non-nil but empty-named sentinel group so OWUI does not
+//     fall back to public access (access_control:null = public for all users).
+//     Concretely we use the group "hive-restricted-placeholder" which by
+//     definition has no members.
+//   - restricted alias, visible=true rows exist: resolve real OWUI group UUIDs
+//     via EnsureGroup and send those as the allowlist.
+//   - public/preview alias with visible=false rows (explicit blocks): the
+//     model stays in OWUI as public (access_control:null) because OWUI cannot
+//     express per-user deny lists. Hive's catalog filtering is the enforcement
+//     layer for public-alias blocks; OWUI sync is skipped for public aliases.
 func (h *VisibilityHandler) syncOWUI(r *http.Request, aliasID string) {
 	if h.owui == nil {
 		return
 	}
-	visibleRows, err := h.svc.repo.GetAllVisibleTenantsForAlias(r.Context(), aliasID)
+	ctx := r.Context()
+
+	alias, err := h.svc.repo.GetAlias(ctx, aliasID)
 	if err != nil {
 		return
 	}
+
+	// Public/preview aliases: Hive catalog is the enforcement layer for
+	// visible=false blocks. OWUI has no deny-list primitive, so skip sync.
+	if alias.Visibility != "restricted" {
+		return
+	}
+
+	visibleRows, err := h.svc.repo.GetAllVisibleTenantsForAlias(ctx, aliasID)
+	if err != nil {
+		return
+	}
+
+	if len(visibleRows) == 0 {
+		// Restricted alias with no active grants: lock it down in OWUI by
+		// using a placeholder group that has no members. Sending null would
+		// make it public, which is the opposite of the desired state.
+		placeholderID, err := h.owui.EnsureGroup(ctx, "hive-restricted-placeholder")
+		if err != nil {
+			return
+		}
+		_ = h.owui.SyncModelAccessControl(ctx, aliasID, []string{placeholderID})
+		return
+	}
+
+	// Resolve real OWUI group UUIDs for each tenant that has an active grant.
 	groupIDs := make([]string, 0, len(visibleRows))
 	for _, row := range visibleRows {
-		groupIDs = append(groupIDs, "tenant_"+row.TenantID.String())
+		gid, err := h.owui.EnsureGroup(ctx, "tenant_"+row.TenantID.String())
+		if err != nil {
+			return
+		}
+		groupIDs = append(groupIDs, gid)
 	}
-	_ = h.owui.SyncModelAccessControl(r.Context(), aliasID, groupIDs)
+	_ = h.owui.SyncModelAccessControl(ctx, aliasID, groupIDs)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

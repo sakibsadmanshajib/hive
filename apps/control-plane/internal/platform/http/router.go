@@ -33,7 +33,8 @@ type RouterConfig struct {
 	AccountsHandler   *accounts.Handler
 	AccountingHandler *accounting.Handler
 	APIKeysHandler    *apikeys.Handler
-	CatalogHandler    *catalog.Handler
+	CatalogHandler           *catalog.Handler
+	CatalogVisibilityHandler *catalog.VisibilityHandler
 	LedgerHandler     *ledger.Handler
 	PaymentsHandler   *payments.Handler
 	ProfilesHandler   *profiles.Handler
@@ -108,8 +109,21 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	if cfg.CatalogHandler != nil {
 		mux.Handle("/internal/catalog/snapshot", internal(cfg.CatalogHandler))
-		// Public catalog endpoint — unauthenticated; customer-safe model list.
-		mux.Handle("/api/v1/catalog/models", cfg.CatalogHandler)
+		// Public catalog endpoint — optional auth: if a valid bearer token is present
+		// the Viewer (with TenantID from raw_user_meta_data.selected_tenant_id) is
+		// stored in context so tenant-specific visibility filtering applies.
+		// Unauthenticated callers receive only public/preview aliases.
+		if cfg.AuthMiddleware != nil {
+			mux.Handle("/api/v1/catalog/models", cfg.AuthMiddleware.OptionalRequire(cfg.CatalogHandler))
+		} else {
+			mux.Handle("/api/v1/catalog/models", cfg.CatalogHandler)
+		}
+	}
+
+	// Phase 20 Plan 04 — tenant model visibility admin routes.
+	// All /internal/catalog/visibility/* routes are guarded by the shared-secret token.
+	if cfg.CatalogVisibilityHandler != nil {
+		mux.Handle("/internal/catalog/visibility/", internal(cfg.CatalogVisibilityHandler.VisibilityMux()))
 	}
 
 	if cfg.RoutingHandler != nil {

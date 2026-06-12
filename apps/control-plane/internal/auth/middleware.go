@@ -17,6 +17,22 @@ func NewMiddleware(client *Client) *Middleware {
 	return &Middleware{client: client}
 }
 
+// OptionalRequire wraps handler h with best-effort auth. If a bearer token is
+// present and valid, the resolved Viewer (including TenantID from
+// raw_user_meta_data.selected_tenant_id) is stored in context via WithViewer.
+// Missing or invalid tokens are silently ignored; the request proceeds
+// unauthenticated. Use ViewerFromContext to read the result.
+func (m *Middleware) OptionalRequire(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if token := extractBearer(r); token != "" {
+			if viewer, err := m.client.LookupUser(r.Context(), token); err == nil {
+				r = r.WithContext(WithViewer(r.Context(), viewer))
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 // Require wraps handler h, returning 401 when the bearer token is missing or invalid.
 func (m *Middleware) Require(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
