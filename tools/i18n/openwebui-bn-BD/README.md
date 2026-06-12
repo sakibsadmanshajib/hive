@@ -83,21 +83,22 @@ python3 validate_placeholders.py
 ## Flagged pre-existing keys
 
 A review of the original 402 translations surfaced **28 questionable entries**.
-Per policy the pre-existing translations were **left unchanged**, with **two
-exceptions**: entries that had genuinely **broken interpolation placeholders**,
-which would break the running UI and fail validation. Those two were corrected
-and are listed first below, explicitly (not silently). The remaining 26 are
+Per policy the pre-existing translations were **left unchanged**, with **three
+exceptions**: entries where either the placeholder was broken (two cases) or the
+translation was semantically opposite to the source (one case). Those three were
+corrected and are listed first below, explicitly (not silently). The remaining 25 are
 documented for the upstream maintainers to decide on; they are content or
 terminology issues, not crashes, and were left as-is in `translation.json`.
 
-### Corrected (broken placeholders — 2)
+### Corrected (broken placeholders / wrong meaning — 3)
 
 | Key | Was | Now | Why |
 |-----|-----|-----|-----|
 | `{{ models }}` | `{{ মডেল}}` | `{{ models }}` | Placeholder token was translated; it must stay verbatim or interpolation breaks. |
 | `Write a summary in 50 words that summarizes {{topic}}.` | `...[topic or keyword]...` | `{{topic}} এর একটি সারসংক্ষেপ ৫০ শব্দের মধ্যে লিখুন।` | `{{topic}}` placeholder was dropped and replaced with literal text. |
+| `Yesterday` | `আগামী` | `গতকাল` | Translation was semantically opposite ("upcoming/future" vs. "yesterday"); corrected. |
 
-### Flagged, left unchanged (content / terminology — 26)
+### Flagged, left unchanged (content / terminology — 25)
 
 These are recorded for upstream review. They were **not** modified in the
 submitted file:
@@ -105,7 +106,6 @@ submitted file:
 | Key | Current bn-BD | Issue |
 |-----|---------------|-------|
 | `Continue Response` | `যাচাই করুন` | Means "Verify", not "Continue Response". |
-| `Yesterday` | `আগামী` | Means "upcoming/future" — opposite of Yesterday. |
 | `Read Aloud` | `পড়াশোনা করুন` | Means "Study", not read-aloud (TTS). |
 | `Personalization` | `ডিজিটাল বাংলা` | Unrelated ("Digital Bangla"). |
 | `Positive attitude` | `পজিটিভ আক্রমণ` | "আক্রমণ" = attack, not attitude. |
