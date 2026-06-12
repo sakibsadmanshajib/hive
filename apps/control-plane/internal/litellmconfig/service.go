@@ -54,7 +54,7 @@ func (s *SyncService) Sync(ctx context.Context) error {
 			cp.base_url        AS base_url,
 			cp.api_key_env     AS api_key_env
 		FROM public.provider_routes pr
-		JOIN public.custom_providers cp ON cp.id = pr.provider_id
+		JOIN public.custom_providers cp ON cp.slug = pr.provider
 		WHERE pr.health_state NOT IN ('disabled', 'eol')
 		  AND cp.enabled = true
 		ORDER BY pr.route_id ASC

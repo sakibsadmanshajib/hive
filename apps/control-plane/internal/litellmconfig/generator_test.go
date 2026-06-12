@@ -250,3 +250,50 @@ func TestWriteAndRestartFirstRunNoExistingFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, r.calls)
 }
+
+func TestWriteAndRestartPreservesModelInfo(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	// Write a pre-existing config that has model_info on an embedding route.
+	existing := `
+model_list:
+  - model_name: route-embedding
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: embedding
+general_settings:
+  master_key: old-key
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o600))
+
+	// New sync includes the same model_name but WITHOUT model_info.
+	cfg := litellmconfig.Config{
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:   "route-embedding",
+				LiteLLMName: "openai/text-embedding-3-small",
+				APIBase:     "https://api.openai.com/v1",
+				APIKeyEnv:   "OPENAI_API_KEY",
+			},
+		},
+		GeneralSettings: litellmconfig.GeneralSettings{
+			MasterKey: "new-key",
+		},
+		ExistingConfigPath: configPath,
+	}
+
+	r := &mockRestarter{}
+	err := litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, r)
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	content := string(data)
+
+	// model_info with mode: embedding must survive the merge.
+	assert.Contains(t, content, "model_info", "model_info must be preserved across sync")
+	assert.Contains(t, content, "embedding", "mode: embedding must be preserved across sync")
+}

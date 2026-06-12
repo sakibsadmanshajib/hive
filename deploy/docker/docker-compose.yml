@@ -51,6 +51,9 @@ services:
 
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.77.7-stable}
+    # Fixed container name so the control-plane Docker restart API can locate
+    # this container by name regardless of the Compose project name.
+    container_name: litellm
     ports:
       - "4000:4000"
     environment:
@@ -75,7 +78,20 @@ services:
       # LiteLLM reads from it. The volume persists generated config across
       # container recreates; the seed file is copied in on first start.
       - litellm-config:/etc/litellm
-    command: ["--config=/etc/litellm/config.yaml"]
+      # Mount the repo seed config read-only so the entrypoint can copy it
+      # into the shared volume when the volume is empty (first boot).
+      - ../../deploy/litellm/config.yaml:/seed/config.yaml:ro
+    # On first boot the shared volume is empty; copy the seed config so LiteLLM
+    # has a valid config.yaml before control-plane pushes its first sync.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /etc/litellm/config.yaml ]; then
+          cp /seed/config.yaml /etc/litellm/config.yaml
+        fi
+        exec litellm --config=/etc/litellm/config.yaml
+    command: []
 
   sdk-tests-js:
     image: hive-sdk-tests-js:ci

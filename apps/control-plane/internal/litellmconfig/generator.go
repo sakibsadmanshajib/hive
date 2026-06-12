@@ -162,8 +162,41 @@ func mergeConfig(existing, generated map[string]interface{}) map[string]interfac
 		result[k] = v
 	}
 
-	// Replace model_list entirely.
-	result["model_list"] = generated["model_list"]
+	// Replace model_list with newly generated entries, but preserve per-model
+	// model_info from the existing config (e.g. mode: embedding set by the
+	// seed config on embedding routes).
+	newList, _ := generated["model_list"].([]interface{})
+	if newList != nil {
+		// Build a lookup of existing model_info keyed by model_name.
+		existingInfo := map[string]interface{}{}
+		if oldList, ok := existing["model_list"].([]interface{}); ok {
+			for _, item := range oldList {
+				if entry, ok := item.(map[string]interface{}); ok {
+					if name, ok := entry["model_name"].(string); ok {
+						if info, exists := entry["model_info"]; exists {
+							existingInfo[name] = info
+						}
+					}
+				}
+			}
+		}
+		// Restore model_info on each new entry where it existed before.
+		for i, item := range newList {
+			if entry, ok := item.(map[string]interface{}); ok {
+				if name, ok := entry["model_name"].(string); ok {
+					if info, exists := existingInfo[name]; exists {
+						updated := make(map[string]interface{}, len(entry)+1)
+						for k, v := range entry {
+							updated[k] = v
+						}
+						updated["model_info"] = info
+						newList[i] = updated
+					}
+				}
+			}
+		}
+	}
+	result["model_list"] = newList
 
 	// Merge general_settings: start from existing, overlay new master_key.
 	if newGS, ok := generated["general_settings"].(map[string]interface{}); ok {
