@@ -182,15 +182,40 @@ clone_or_update_repo() {
 
 # ─── Prompt helper ────────────────────────────────────────────────────────────
 # Reads a value interactively or returns existing env var.
-# Usage: prompt_value VAR_NAME "label" "required|optional" [default]
+# Usage: prompt_value VAR_NAME "label" "required|optional" [default] [secret]
+#
+# Assignments use `eval "${_varname}=\$_value"`: the variable NAME (a hardcoded
+# literal at every call site) is interpolated, but the VALUE is passed as a
+# variable reference and never re-parsed by the shell. Safe for any content
+# including single quotes.
+#
+# When the 5th arg is "secret", terminal echo is disabled while typing
+# (POSIX stty, restored afterwards and on interrupt) so secrets never land
+# in terminal scrollback.
+
+# Read one line with terminal echo disabled. Restores echo on interrupt.
+read_secret() {
+    _stty_orig="$(stty -g 2>/dev/null || true)"
+    if [ -n "$_stty_orig" ]; then
+        trap 'stty "$_stty_orig" 2>/dev/null || true' INT TERM
+        stty -echo 2>/dev/null || true
+    fi
+    read -r _input
+    if [ -n "$_stty_orig" ]; then
+        stty "$_stty_orig" 2>/dev/null || true
+        trap - INT TERM
+    fi
+    printf '\n'
+}
+
 prompt_value() {
     _varname="$1"
     _label="$2"
     _required="$3"
     _default="${4:-}"
+    _secret="${5:-}"
 
     # Non-interactive: use env var if set, or default
-    # shellcheck disable=SC2016
     if [ "$NON_INTERACTIVE" = "true" ] || [ ! -t 0 ]; then
         # Dynamic variable dereference: intentional, _varname is controlled input
         eval '_current="${'"${_varname}"':-}"'
@@ -198,7 +223,7 @@ prompt_value() {
             return
         fi
         if [ -n "$_default" ]; then
-            eval "${_varname}='${_default}'"
+            eval "${_varname}=\$_default"
             return
         fi
         if [ "$_required" = "required" ]; then
@@ -211,26 +236,33 @@ prompt_value() {
     eval '_current="${'"${_varname}"':-}"'
     _req_marker=""
     [ "$_required" = "required" ] && _req_marker=" ${RED}[required]${RESET}"
+    _secret_marker=""
+    [ "$_secret" = "secret" ] && _secret_marker=" (input hidden)"
 
     if [ -n "$_current" ]; then
-        printf '%s%s%s (current value set, press Enter to keep)%s: ' "${BOLD}" "$_label" "$_req_marker" "${RESET}"
-        read -r _input
-        [ -n "$_input" ] && eval "${_varname}='${_input}'"
+        printf '%s%s%s%s (current value set, press Enter to keep)%s: ' "${BOLD}" "$_label" "$_req_marker" "$_secret_marker" "${RESET}"
+        if [ "$_secret" = "secret" ]; then read_secret; else read -r _input; fi
+        [ -n "$_input" ] && eval "${_varname}=\$_input"
     elif [ -n "$_default" ]; then
-        printf '%s%s%s [%s]%s: ' "${BOLD}" "$_label" "$_req_marker" "$_default" "${RESET}"
-        read -r _input
-        if [ -n "$_input" ]; then
-            eval "${_varname}='${_input}'"
+        if [ "$_secret" = "secret" ]; then
+            printf '%s%s%s%s [auto-generated if blank]%s: ' "${BOLD}" "$_label" "$_req_marker" "$_secret_marker" "${RESET}"
+            read_secret
         else
-            eval "${_varname}='${_default}'"
+            printf '%s%s%s [%s]%s: ' "${BOLD}" "$_label" "$_req_marker" "$_default" "${RESET}"
+            read -r _input
+        fi
+        if [ -n "$_input" ]; then
+            eval "${_varname}=\$_input"
+        else
+            eval "${_varname}=\$_default"
         fi
     else
-        printf '%s%s%s%s: ' "${BOLD}" "$_label" "$_req_marker" "${RESET}"
-        read -r _input
+        printf '%s%s%s%s%s: ' "${BOLD}" "$_label" "$_req_marker" "$_secret_marker" "${RESET}"
+        if [ "$_secret" = "secret" ]; then read_secret; else read -r _input; fi
         if [ -z "$_input" ] && [ "$_required" = "required" ]; then
             error "$_varname is required and cannot be empty."
         fi
-        eval "${_varname}='${_input}'"
+        eval "${_varname}=\$_input"
     fi
 }
 
@@ -256,21 +288,21 @@ setup_env() {
     # ── Supabase (required) ──
     printf '%s-- Supabase --%s\n' "${BOLD}" "${RESET}"
     prompt_value SUPABASE_URL          "Supabase Project URL" required
-    prompt_value SUPABASE_ANON_KEY     "Supabase Anon Key" required
-    prompt_value SUPABASE_SERVICE_ROLE_KEY "Supabase Service Role Key" required
-    prompt_value SUPABASE_DB_URL       "Supabase DB URL (postgres://...)" required
+    prompt_value SUPABASE_ANON_KEY     "Supabase Anon Key" required "" secret
+    prompt_value SUPABASE_SERVICE_ROLE_KEY "Supabase Service Role Key" required "" secret
+    prompt_value SUPABASE_DB_URL       "Supabase DB URL (postgres://...)" required "" secret
 
     # ── Storage (required) ──
     printf '%s-- Supabase Storage (S3) --%s\n' "${BOLD}" "${RESET}"
     prompt_value S3_ENDPOINT  "S3 Endpoint (e.g. https://<ref>.supabase.co/storage/v1/s3)" required
-    prompt_value S3_ACCESS_KEY "S3 Access Key" required
-    prompt_value S3_SECRET_KEY "S3 Secret Key" required
+    prompt_value S3_ACCESS_KEY "S3 Access Key" required "" secret
+    prompt_value S3_SECRET_KEY "S3 Secret Key" required "" secret
     prompt_value S3_REGION    "S3 Region" optional "us-east-1"
 
     # ── LLM Provider (at least one required) ──
     printf '%s-- LLM Provider (at least one required) --%s\n' "${BOLD}" "${RESET}"
-    prompt_value OPENROUTER_API_KEY "OpenRouter API Key" optional
-    prompt_value GROQ_API_KEY       "Groq API Key" optional
+    prompt_value OPENROUTER_API_KEY "OpenRouter API Key" optional "" secret
+    prompt_value GROQ_API_KEY       "Groq API Key" optional "" secret
 
     if [ "$WITH_OLLAMA" = "true" ]; then
         OLLAMA_BASE_URL="http://ollama:11434"
@@ -280,16 +312,16 @@ setup_env() {
     # ── Security tokens ──
     printf '%s-- Security --%s\n' "${BOLD}" "${RESET}"
     _default_token="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 || printf 'change-me-generate-with-openssl-rand-base64-32')"
-    prompt_value CONTROL_PLANE_INTERNAL_TOKEN "Internal service token" required "$_default_token"
+    prompt_value CONTROL_PLANE_INTERNAL_TOKEN "Internal service token" required "$_default_token" secret
 
     _default_litellm="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 24 || printf 'litellm-change-me')"
-    prompt_value LITELLM_MASTER_KEY "LiteLLM master key" required "$_default_litellm"
+    prompt_value LITELLM_MASTER_KEY "LiteLLM master key" required "$_default_litellm" secret
 
     # ── Optional: Grafana ──
     printf '%s-- Grafana (optional, for --profile monitoring) --%s\n' "${BOLD}" "${RESET}"
     _default_grafana="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 18 || printf 'admin')"
     prompt_value GRAFANA_ADMIN_USER     "Grafana admin username" optional "admin"
-    prompt_value GRAFANA_ADMIN_PASSWORD "Grafana admin password" optional "$_default_grafana"
+    prompt_value GRAFANA_ADMIN_PASSWORD "Grafana admin password" optional "$_default_grafana" secret
 
     # Validate: at least one LLM provider
     _has_provider=false

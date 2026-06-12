@@ -116,4 +116,4 @@ Re-running the installer is safe:
 
 ## Design Notes
 
-The script wraps all logic inside `main()` called at the very last line. This means a truncated partial download from `curl | bash` will never execute any code (pattern from Ollama and uv installers). The script passes `shellcheck` (SC2048, SC2086, SC1091 suppressed with inline comments where correct).
+The script wraps all logic inside `main()` called at the very last line. This means a truncated partial download from `curl | bash` will never execute any code (pattern from Ollama and uv installers). Secret prompts (API keys, tokens, passwords) disable terminal echo via POSIX `stty -echo` while typing, with echo restored afterwards and on interrupt, so secrets never land in terminal scrollback. Dynamic variable assignments use `eval "${var}=\$value"` indirection so user input is never re-parsed by the shell. The script passes `shellcheck -S warning` (SC2048, SC2086, SC1091 suppressed with inline comments where correct).
