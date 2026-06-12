@@ -37,7 +37,7 @@ write_files:
     permissions: "0644"
     content: |
       {
-        email sakibsadmanshajib@gmail.com
+        email <CADDY_ACME_EMAIL>
       }
 
       api-hive.scubed.co {
