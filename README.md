@@ -50,6 +50,13 @@ Billing + catalog reads are served by **control-plane**, consumed by both **edge
 | Payments | Stripe, bKash, SSLCommerz | — |
 | Object storage | Supabase Storage (S3-compatible) | — |
 
+## Quick Start
+
+```bash
+# Install the Hive CLI (PR #202 install method)
+curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash
+```
+
 ## Prerequisites
 
 - Docker (with Compose v2) — everything runs in containers; no host Go/Node required.
@@ -102,11 +109,21 @@ supabase db push                                # If Supabase CLI is linked
 ```bash
 cd deploy/docker
 
-# Core stack — edge-api + control-plane + redis + litellm + web-console
-docker compose --env-file ../../.env up -d --build
+# local: core stack + in-stack Redis + Open WebUI + Caddy (default for local dev).
+# Open WebUI requires its own shim-key configuration; see deploy/docker/docker-compose.yml.
+docker compose --env-file ../../.env --profile local up -d --build
 
-# With monitoring (adds Prometheus, Grafana, Alertmanager)
-docker compose --env-file ../../.env --profile monitoring up -d --build
+# cloud: core services expecting managed Upstash Redis (set REDIS_URL=rediss://... in .env)
+docker compose --env-file ../../.env --profile cloud up -d --build
+
+# enterprise: core + in-stack Redis + Open WebUI + Caddy (self-hosted single box)
+docker compose --env-file ../../.env --profile enterprise up -d --build
+
+# chat: add Open WebUI + Caddy on top of cloud profile
+docker compose --env-file ../../.env --profile cloud --profile chat up -d --build
+
+# monitoring: add Prometheus, Grafana, Alertmanager to any profile
+docker compose --env-file ../../.env --profile local --profile monitoring up -d --build
 ```
 
 ### 4. Verify
@@ -220,13 +237,18 @@ See `.planning/UAT-REPORT.md` for full runtime UAT,
 `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for Phase 10 UAT
 closure, and `.planning/v1.1-DEFERRED-SCOPE.md` for items deferred out of v1.0.
 
+## Live Staging
+
+| Surface | URL |
+|---------|-----|
+| Edge API (staging) | https://api-hive.scubed.co |
+| Control Plane (staging) | https://cp-hive.scubed.co |
+
 ## Project State
 
-- **v1.0 — developer-api-core**: ready to ship. Phases 1–10 complete. Covers
-  chat-app + CLI-coding-agent integrators. See `.planning/STATE.md`.
-- **v1.1 — deferred**: phases 11–14 plus batch success-path settlement,
-  `ensureCapabilityColumns` table fix, `amount_usd` BD checkout. See
-  `.planning/v1.1-DEFERRED-SCOPE.md`.
+- **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete.
+- **v1.1 — in progress**: Phase 20 (Provider Catalog) closing. Phases 12-19 complete. See `.planning/STATE.md`.
+- **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
 
 Planning artifacts live in `.planning/`:
 
@@ -259,7 +281,7 @@ apps/                       Go + Next.js services (see Architecture table)
 packages/
   openai-contract/          Spec + support matrix (single source of truth)
   sdk-tests/                JS / Python / Java integration suites
-supabase/migrations/        Postgres schema (14 migrations)
+supabase/migrations/        Postgres schema (41 migrations)
 deploy/
   docker/                   Compose + Dockerfiles
   litellm/                  LiteLLM config

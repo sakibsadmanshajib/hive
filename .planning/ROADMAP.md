@@ -43,7 +43,7 @@ Full breakdown: `.planning/milestones/v1.0-ROADMAP.md`
 - [x] **Phase 17: FX/USD Zero-Leak** — Strip `amount_usd` / FX rate / provider hints from all customer-bound surfaces (payments DTOs, ledger invoice rows, web-console types, PDF rendering, post-purchase grant metadata). Adversarial walk of every `map[string]any` customer wire. CI-blocking lint `lint-no-customer-usd.mjs`. Closes BD regulatory gap. PR #137 ready-for-review 2026-05-09.
 - [x] **Phase 18: RBAC Matrix** — Reusable verification-aware permission matrix replacing ad hoc `CanInviteMembers` / `CanManageAPIKeys` / `is_platform_admin` booleans. Roles (member/owner/platform_admin) × named permissions (billing.*, api_keys.*, analytics.*, members.*, workspace.settings.*, grants.create, ledger.view, platform.admin) enforced in control-plane handlers AND mirrored in web-console route/nav gating. Inherits HANDOFF-17-01 (`is_platform_admin` overlay) and Phase 14 stub `internal/platform/role.go`. Blocks v1.1 ship-gate. (completed 2026-05-15)
 - [x] **Phase 19: Foundation Slice** — Tenant settings, identity bridge, Open WebUI compose, Caddy admin strip, chat happy path, SOC 2 audit primitive, and Open WebUI nightly/dev-time E2E. Plans 19-01, 19-02, and 19-03 merged (PR #146 merged 2026-05-29). Remaining: M12 (CI live-integration OWUI+Caddy, infra decision pending) and C4 live JWT curl verification (needs running stack) — deferred to Phase 20 kickoff.
-- [ ] **Phase 20: Provider Catalog** — Stock providers seeded, custom providers DB-managed, LiteLLM YAML regenerated/reloaded, model visibility tied to tenant policy.
+- 🚧 **Phase 20: Provider Catalog** — Waves 1-3 shipped (PRs #197, #199, #204, #205, #206): stock providers seeded, custom providers DB-managed (HTTP CRUD + repository + service), LiteLLM YAML regenerated/reloaded, tenant model visibility, tools capability flag. Wave 4 pending.
 - [ ] **Phase 21: Credit and Quota Engine** — Tenant pool, per-user soft caps, monthly grants, owner top-ups, extra-usage top-ups, and bucket rate limits.
 - [ ] **Phase 22: Shared Knowledge-Base RAG** — Admin-managed tenant KB ingestion, embeddings through LiteLLM, and edge-api retrieval injection.
 - [ ] **Phase 23: Admin Console Pages** — Tenant settings, provider management, audit viewer, users/roles, and credit controls in web-console.
@@ -172,7 +172,7 @@ Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
 | 17. FX/USD Zero-Leak | v1.1 | n/a | Complete | 2026-05-09 (PR #137) |
 | 18. RBAC Matrix | v1.1 | Complete    | 2026-05-15 | - |
 | 19. Foundation Slice | v1.1 | 3/4 | Complete (deferred: M12, C4) | 2026-05-29 |
-| 20. Provider Catalog | v1.1 | TBD | Planned | - |
+| 20. Provider Catalog | v1.1 | waves 1-3 | In Progress (wave 4 pending) | - |
 | 21. Credit and Quota Engine | v1.1 | TBD | Planned | - |
 | 22. Shared Knowledge-Base RAG | v1.1 | TBD | Planned | - |
 | 23. Admin Console Pages | v1.1 | TBD | Planned | - |
@@ -182,4 +182,4 @@ Plans: 7 plans (single `PLAN.md` with 7 plans across 5 waves)
 
 ---
 
-*Last updated: 2026-06-10 — Phase 19 closed (PR #146 merged 2026-05-29, plans 19-01/02/03 shipped); M12 and C4 deferred to Phase 20 kickoff. Phase 26 web-search scope in v1.1 sequence; Open WebUI pivot authoritative in `.planning/v1.1-chatapp/V1.1-MASTER-PLAN.md`.*
+*Last updated: 2026-06-11 — Phase 20 waves 1-3 shipped (PRs #197, #199, #204, #205, #206); wave 4 pending. Phase 19 closed (PR #146 merged 2026-05-29). Phase 26 web-search scope in v1.1 sequence; Open WebUI pivot authoritative in `.planning/v1.1-chatapp/V1.1-MASTER-PLAN.md`.*
