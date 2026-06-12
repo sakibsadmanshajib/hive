@@ -93,11 +93,12 @@
           <span class="d"></span><span class="d"></span><span class="d"></span>
           <span class="fname">client.py</span>
         </div>
-<pre><span class="tok-key">from</span> openai <span class="tok-key">import</span> OpenAI
+<pre><span class="tok-key">import</span> os
+<span class="tok-key">from</span> openai <span class="tok-key">import</span> OpenAI
 
 client = <span class="tok-cmd">OpenAI</span>(
     base_url=<span class="tok-str">"https://api-hive.scubed.co/v1"</span>,
-    api_key=<span class="tok-str">"YOUR_HIVE_API_KEY"</span>,
+    api_key=os.environ[<span class="tok-str">"HIVE_API_KEY"</span>],
 )
 
 resp = client.chat.completions.<span class="tok-cmd">create</span>(
@@ -154,7 +155,7 @@ resp = client.chat.completions.<span class="tok-cmd">create</span>(
 
   <footer class="footer">
     <div class="wrap">
-      <div class="footer-bottom" style="margin-top:0; border-top:0; padding-top:0">
+      <div class="footer-bottom flush">
         <span>&copy; <span id="yr">2026</span> Hive. Built in Bangladesh.</span>
         <a href="index.html">Back to home</a>
       </div>

@@ -310,7 +310,7 @@ p { margin: 0; }
 .code .tok-flag { color: #8fb8ff; }
 .code .tok-str { color: #8fd6a0; }
 .code .tok-key { color: #d99cf0; }
-.code .tok-com { color: #6b7480; }
+.code .tok-com { color: #8b94a1; }
 
 /* ---- EnterpriseEdge installer ------------------------------------------- */
 .installer {
@@ -384,6 +384,15 @@ p { margin: 0; }
   border-left: 3px solid var(--honey); border-radius: 10px; padding: 16px 18px; color: var(--text-muted); font-size: 15px;
 }
 .callout strong { color: var(--honey-bright); }
+
+/* ---- Small utilities (keep CSP free of inline styles) -------------------- */
+.mt-36 { margin-top: 36px; }
+.hero-cta.center { justify-content: center; margin-top: 28px; }
+.footer-bottom.flush { margin-top: 0; border-top: 0; padding-top: 0; }
+.cta-inner { position: relative; z-index: 1; }
+.pay-pill .dot.red { background: var(--bd-red); }
+.pay-pill .dot.green { background: var(--bd-green); }
+.pay-pill .dot.honey { background: var(--honey); }
 
 /* ---- Responsive ---------------------------------------------------------- */
 @media (max-width: 940px) {
