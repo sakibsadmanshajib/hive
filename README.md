@@ -59,6 +59,22 @@ Billing + catalog reads are served by **control-plane**, consumed by both **edge
 
 Payment rail keys (Stripe / bKash / SSLCommerz) are optional — services start without them.
 
+## EnterpriseEdge: One-Line Install
+
+Deploy a full self-hosted Hive box on any Ubuntu/Debian server (x86_64 or arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash
+```
+
+With local Ollama inference:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash -s -- --with-ollama
+```
+
+The installer handles Docker setup, repo clone/update, `.env` configuration wizard, and health-checked stack launch. See [`scripts/README.md`](scripts/README.md) for flags, non-interactive usage, and uninstall instructions.
+
 ## Getting Started
 
 ### 1. Configure environment
