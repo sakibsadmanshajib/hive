@@ -109,7 +109,8 @@ supabase db push                                # If Supabase CLI is linked
 ```bash
 cd deploy/docker
 
-# local: core stack with in-stack Redis (default for local dev)
+# local: core stack + in-stack Redis + Open WebUI + Caddy (default for local dev).
+# Open WebUI requires its own shim-key configuration; see deploy/docker/docker-compose.yml.
 docker compose --env-file ../../.env --profile local up -d --build
 
 # cloud: core services expecting managed Upstash Redis (set REDIS_URL=rediss://... in .env)
