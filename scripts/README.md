@@ -26,7 +26,7 @@ curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts
 
 | Flag | Description |
 |------|-------------|
-| `--with-ollama` | Enable in-stack Ollama local inference. Sets `OLLAMA_BASE_URL=http://ollama:11434` and uncomments ollama entries in `deploy/litellm/config.yaml`. |
+| `--with-ollama` | Enable in-stack Ollama local inference. Triggers the hardware-aware model advisor, sets `OLLAMA_BASE_URL=http://ollama:11434`, and uncomments ollama entries in `deploy/litellm/config.yaml`. |
 | `--uninstall` | Stop the stack and print what remains for manual cleanup. Does not delete source files or volumes. |
 | `--non-interactive` | Skip all prompts. Read all values from environment variables. |
 | `--help` | Show usage. |
@@ -36,6 +36,7 @@ curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HIVE_HOME` | `/opt/hive` | Where the repo is cloned / updated |
+| `OLLAMA_MODEL` | (advisor-selected) | Override the model advisor selection. Example: `OLLAMA_MODEL=llama3.1:8b` |
 
 All `.env` values can be pre-set as shell environment variables before running the installer. Required values in non-interactive mode:
 
@@ -78,7 +79,7 @@ curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts
 2. Installs Docker CE plus the Compose plugin via the official Docker apt repository if not already present.
 3. Clones the repo to `$HIVE_HOME` on first run, or does `git fetch + reset --hard origin/main` on subsequent runs (idempotent).
 4. Copies `.env.example` to `.env` and runs a configuration wizard (TTY) or reads from environment (non-TTY / `--non-interactive`). Existing `.env` files are left untouched on re-runs.
-5. If `--with-ollama`: sets `OLLAMA_BASE_URL=http://ollama:11434` and uncomments ollama model entries in `deploy/litellm/config.yaml`.
+5. If `--with-ollama`: runs the hardware-aware model advisor (see below), sets `OLLAMA_BASE_URL=http://ollama:11434`, and uncomments ollama model entries in `deploy/litellm/config.yaml`. Appends the advisor-selected model as a named LiteLLM route.
 6. Runs `docker compose --profile enterprise up -d --build` from `deploy/docker`.
 7. Health-polls `edge-api :8080/health` and `control-plane :8081/health` with a 120-second timeout, then prints a success banner with all service URLs or actionable diagnostics on failure.
 
@@ -113,6 +114,33 @@ Re-running the installer is safe:
 - The repo is updated to `origin/main` rather than re-cloned.
 - An existing `.env` file is reused without modification.
 - The stack is restarted (`up -d --build` is idempotent for Compose).
+
+## Hardware-Aware Model Advisor
+
+When `--with-ollama` is set the installer runs a two-tier hardware detection step before starting the stack.
+
+**Tier 1 (always runs, no extra dependencies):** reads `/proc/meminfo` for total RAM and calls `nvidia-smi` for VRAM if an NVIDIA GPU is present. Maps detected hardware to a recommended Ollama model tag:
+
+| Hardware tier | Ollama tag | Disk size | Notes |
+|---------------|------------|-----------|-------|
+| CPU-only / less than 12 GB RAM | `phi4-mini` | 2.5 GB | 3.8B, 128k context, tools support |
+| 8 GB VRAM | `qwen3:8b` | 5.2 GB | Strong multilingual, Bangla-capable |
+| 12 to 16 GB VRAM | `qwen2.5:14b` | 9.0 GB | Strong instruction following |
+| 24+ GB VRAM | `qwen3:32b` | 20 GB | Thinking and tools support |
+| 128 GB unified memory | `qwen2.5:72b` | 47 GB | Datacentre / workstation tier |
+
+Note: `llama3.3` on Ollama is a 70B model only. Use `qwen3:8b` or `llama3.1:8b` for 8 GB VRAM slots.
+
+**Tier 2 (optional, requires Node.js >= 16):** if Node.js is available on the host, the advisor runs `npx llm-checker hw-detect` for a richer GPU inventory and scored model analysis. `llm-checker` (npm package by Pavelevich) analyses over 200 Ollama models across quality, speed, and context dimensions. The bash detection result remains the authoritative default; llm-checker output is shown for operator reference.
+
+The operator can accept the recommendation, enter a different Ollama tag, or bypass the advisor entirely by setting `OLLAMA_MODEL=<tag>` before running the installer. In TTY mode the installer offers to pull the chosen model immediately after the stack reaches healthy status. In non-interactive or piped mode it prints the pull command for later use.
+
+To override the advisor and pull a specific model non-interactively:
+
+```sh
+export OLLAMA_MODEL=qwen3:8b
+curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash -s -- --with-ollama --non-interactive
+```
 
 ## Design Notes
 

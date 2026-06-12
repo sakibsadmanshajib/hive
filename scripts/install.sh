@@ -8,10 +8,21 @@
 #
 # Supported platforms: Ubuntu/Debian on x86_64 or arm64.
 # Flags:
-#   --with-ollama     Enable in-stack Ollama local inference
+#   --with-ollama     Enable in-stack Ollama local inference (triggers hardware-aware model advisor)
 #   --uninstall       Stop stack and print what is left behind
 #   --non-interactive Skip all prompts; read env vars from environment
 #   --help            Show usage
+#
+# Hardware-aware model advisor (active when --with-ollama is selected):
+#   Tier 1 (always available): pure-bash detection via /proc/meminfo + nvidia-smi
+#   Tier 2 (optional, requires Node.js >= 16): npx llm-checker for richer GPU analysis
+#   Recommended Ollama model tags (validated June 2026):
+#     CPU-only / low RAM   : phi4-mini     (3.8 GB, 128k ctx, tools support)
+#     8 GB VRAM            : qwen3:8b      (5.2 GB, strong multilingual, Bangla-capable)
+#     12 to 16 GB VRAM     : qwen2.5:14b  (9.0 GB, strong instruction following)
+#     24+ GB VRAM          : qwen3:32b    (20 GB, thinking + tools support)
+#     128 GB unified memory: qwen2.5:72b  (47 GB, datacentre / workstation tier)
+#   Note: llama3.3 on Ollama is a 70B model only. Use qwen3:8b or llama3.1:8b for 8 GB VRAM.
 
 set -eu
 
@@ -50,6 +61,11 @@ HIVE_REPO="https://github.com/sakibsadmanshajib/hive.git"
 WITH_OLLAMA=false
 UNINSTALL=false
 NON_INTERACTIVE=false
+# OLLAMA_MODEL is resolved by the model advisor when --with-ollama is set.
+# Override via environment: OLLAMA_MODEL=qwen3:8b bash install.sh --with-ollama
+OLLAMA_MODEL="${OLLAMA_MODEL:-}"
+# Set to true by the advisor when the operator opts to pull immediately (TTY only).
+OLLAMA_PULL_NOW=false
 
 # ─── Arg parsing ──────────────────────────────────────────────────────────────
 parse_args() {
@@ -398,6 +414,166 @@ setup_env() {
     success ".env written to $ENV_FILE"
 }
 
+# ─── Hardware-aware model advisor ─────────────────────────────────────────────
+# Runs only when --with-ollama is set. Detects RAM and VRAM via bash builtins
+# (Tier 1, always works) then optionally defers to npx llm-checker (Tier 2,
+# requires Node.js >= 16 on the host). Resolves OLLAMA_MODEL and offers to pull
+# it immediately (TTY) or prints the pull command (non-TTY / non-interactive).
+#
+# Model selection table (Ollama tags, validated June 2026):
+#   CPU-only / <8 GB RAM : phi4-mini      3.8B  2.5 GB  128k ctx  tools
+#   8 GB VRAM            : qwen3:8b       8B    5.2 GB  Bangla-capable multilingual
+#   12 to 16 GB VRAM     : qwen2.5:14b   14B   9.0 GB  strong instruction following
+#   24+ GB VRAM          : qwen3:32b     32B   20 GB   thinking + tools
+#   128 GB unified mem   : qwen2.5:72b   72B   47 GB   datacentre / workstation
+#
+# llm-checker (npm) is a hardware-detection + model-recommendation CLI by a
+# Bangladeshi author. It requires Node.js >= 16 and runs fully non-interactively
+# via: npx llm-checker hw-detect --json
+# We treat it as an optional enrichment layer only; the bash tier always runs first.
+advise_ollama_model() {
+    if [ "$WITH_OLLAMA" != "true" ]; then
+        return
+    fi
+
+    # Skip if the operator pre-set OLLAMA_MODEL via env var
+    if [ -n "$OLLAMA_MODEL" ]; then
+        status "OLLAMA_MODEL pre-set to '$OLLAMA_MODEL', skipping advisor."
+        return
+    fi
+
+    printf '\n'
+    status "Running hardware-aware model advisor..."
+
+    # ── Tier 1: bash detection (always runs) ────────────────────────────────
+    _ram_kb=0
+    if [ -f /proc/meminfo ]; then
+        _ram_kb="$(awk '/^MemTotal:/ { print $2 }' /proc/meminfo 2>/dev/null || printf '0')"
+    fi
+    _ram_gb=$((_ram_kb / 1024 / 1024))
+
+    _vram_mb=0
+    _gpu_name=""
+    if command -v nvidia-smi >/dev/null 2>&1; then
+        _vram_mb="$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ' || printf '0')"
+        _gpu_name="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 | xargs || printf '')"
+    fi
+    _vram_gb=$((_vram_mb / 1024))
+
+    printf '  Detected: RAM %d GB' "$_ram_gb"
+    if [ "$_vram_mb" -gt 0 ]; then
+        printf ', VRAM %d GB (%s)' "$_vram_gb" "$_gpu_name"
+    else
+        printf ', no NVIDIA GPU detected (CPU-only path)'
+    fi
+    printf '\n'
+
+    # Map hardware to recommended model
+    _recommended=""
+    _tier_label=""
+    if [ "$_vram_mb" -ge 98304 ]; then
+        # 96 GB+ VRAM or unified memory class (128 GB tier detection via RAM when no discrete GPU)
+        _recommended="qwen2.5:72b"
+        _tier_label="128 GB unified-memory / datacentre workstation tier"
+    elif [ "$_vram_gb" -ge 24 ]; then
+        _recommended="qwen3:32b"
+        _tier_label="24+ GB VRAM tier (RTX 5090 / professional GPU)"
+    elif [ "$_vram_gb" -ge 12 ]; then
+        _recommended="qwen2.5:14b"
+        _tier_label="12 to 16 GB VRAM tier (RTX 5070/5070 Ti/5080)"
+    elif [ "$_vram_gb" -ge 7 ]; then
+        _recommended="qwen3:8b"
+        _tier_label="8 GB VRAM tier (RTX 5060 Ti 8 GB or equivalent)"
+    elif [ "$_ram_gb" -ge 96 ]; then
+        # Large unified memory (e.g. Apple M-series 96/128 GB, DGX Spark without nvidia-smi)
+        _recommended="qwen2.5:72b"
+        _tier_label="128 GB unified-memory tier (detected via RAM, no discrete GPU)"
+    elif [ "$_ram_gb" -ge 24 ]; then
+        _recommended="qwen3:32b"
+        _tier_label="24+ GB RAM tier (CPU inference, large memory)"
+    elif [ "$_ram_gb" -ge 12 ]; then
+        _recommended="qwen2.5:14b"
+        _tier_label="12 to 16 GB RAM tier (CPU inference, mid memory)"
+    else
+        _recommended="phi4-mini"
+        _tier_label="low-resource / CPU-only tier (< 12 GB RAM)"
+    fi
+
+    printf '\n'
+    printf '%s  Model Recommendation Table%s\n' "${BOLD}" "${RESET}"
+    printf '  %-30s  %-16s  %s\n' "Hardware tier" "Ollama tag" "Size"
+    printf '  %-30s  %-16s  %s\n' "------------------------------" "----------------" "------"
+    printf '  %-30s  %-16s  %s\n' "CPU-only / <12 GB RAM" "phi4-mini" "2.5 GB"
+    printf '  %-30s  %-16s  %s\n' "8 GB VRAM" "qwen3:8b" "5.2 GB"
+    printf '  %-30s  %-16s  %s\n' "12 to 16 GB VRAM" "qwen2.5:14b" "9.0 GB"
+    printf '  %-30s  %-16s  %s\n' "24+ GB VRAM" "qwen3:32b" "20 GB"
+    printf '  %-30s  %-16s  %s\n' "128 GB unified memory" "qwen2.5:72b" "47 GB"
+    printf '\n'
+    printf '  Detected tier : %s\n' "$_tier_label"
+    printf '  Recommended   : %s%s%s\n' "${GREEN}" "$_recommended" "${RESET}"
+
+    # ── Tier 2: optional npx llm-checker enrichment ─────────────────────────
+    if command -v node >/dev/null 2>&1 && command -v npx >/dev/null 2>&1; then
+        _node_major="$(node --version 2>/dev/null | sed 's/v\([0-9]*\).*/\1/' || printf '0')"
+        if [ "$_node_major" -ge 16 ] 2>/dev/null; then
+            printf '\n'
+            printf '  Node.js %s detected. Running npx llm-checker for richer GPU analysis...\n' "$(node --version)"
+            printf '  (llm-checker by Pavelevich, npm:llm-checker, optional enrichment only)\n'
+            if npx --yes llm-checker hw-detect 2>/dev/null; then
+                printf '  llm-checker analysis shown above. Bash detection recommendation stands as default.\n'
+            else
+                printf '  llm-checker unavailable or failed. Bash detection result used.\n'
+            fi
+        fi
+    else
+        printf '\n'
+        printf '  Node.js not found. Skipping optional llm-checker enrichment.\n'
+        printf '  Install Node.js >= 16 and re-run for richer GPU analysis:\n'
+        printf '    npx llm-checker hw-detect\n'
+    fi
+
+    # ── Accept or override ──────────────────────────────────────────────────
+    if [ "$NON_INTERACTIVE" = "true" ] || [ ! -t 0 ]; then
+        OLLAMA_MODEL="$_recommended"
+        status "Non-interactive mode: using recommended model '$OLLAMA_MODEL'."
+    else
+        printf '\n'
+        printf '%s  Accept recommended model [%s] or enter a different tag%s: ' \
+            "${BOLD}" "$_recommended" "${RESET}"
+        read -r _model_input
+        if [ -n "$_model_input" ]; then
+            OLLAMA_MODEL="$_model_input"
+        else
+            OLLAMA_MODEL="$_recommended"
+        fi
+        success "Model selected: $OLLAMA_MODEL"
+    fi
+
+    # ── Offer to pull now ───────────────────────────────────────────────────
+    printf '\n'
+    _pull_cmd="docker exec hive-ollama-1 ollama pull $OLLAMA_MODEL"
+    if [ "$NON_INTERACTIVE" = "true" ] || [ ! -t 0 ]; then
+        printf '  Pull the model after the stack is running:\n'
+        printf '    %s\n' "$_pull_cmd"
+    else
+        printf '%s  Pull model now? This downloads %s from the Ollama registry. [Y/n]%s: ' \
+            "${BOLD}" "$OLLAMA_MODEL" "${RESET}"
+        read -r _pull_answer
+        case "${_pull_answer:-Y}" in
+            [Yy]|[Yy][Ee][Ss]|"")
+                status "Will pull '$OLLAMA_MODEL' after the stack starts."
+                # Store the pull intent; executed in verify_and_banner after stack is up
+                OLLAMA_PULL_NOW=true
+                ;;
+            *)
+                printf '  Skipping pull. Run manually after the stack is up:\n'
+                printf '    %s\n' "$_pull_cmd"
+                OLLAMA_PULL_NOW=false
+                ;;
+        esac
+    fi
+}
+
 # ─── Ollama litellm config patch ───────────────────────────────────────────────
 patch_ollama_config() {
     if [ "$WITH_OLLAMA" != "true" ]; then
@@ -423,6 +599,21 @@ patch_ollama_config() {
     # model: is ambiguous with "model_name:" so match the exact key word
     $SUDO sed -i 's|^# \([ ]*model: \)|\1|' "$LITELLM_CONFIG" || true
     success "Ollama model entries uncommented in $LITELLM_CONFIG"
+
+    # If the model advisor resolved a specific model, insert it inside the
+    # model_list block (before the litellm_settings: line) so LiteLLM can
+    # route it. Appending after files_settings would place the entry outside
+    # model_list and produce a malformed config.
+    if [ -n "${OLLAMA_MODEL:-}" ]; then
+        if ! grep -qF "ollama_chat/${OLLAMA_MODEL}" "$LITELLM_CONFIG" 2>/dev/null; then
+            status "Inserting advisor-selected model '$OLLAMA_MODEL' into LiteLLM model_list..."
+            $SUDO sed -i "s|^litellm_settings:|  - model_name: ollama/${OLLAMA_MODEL}\n    litellm_params:\n      model: ollama_chat/${OLLAMA_MODEL}\n      api_base: os.environ/OLLAMA_BASE_URL\n\nlitellm_settings:|" "$LITELLM_CONFIG" || true
+            success "Model '$OLLAMA_MODEL' added to $LITELLM_CONFIG"
+        else
+            status "Model '$OLLAMA_MODEL' already present in $LITELLM_CONFIG, skipping."
+        fi
+    fi
+
     warn "Review $LITELLM_CONFIG to confirm the ollama model entries are correct."
 }
 
@@ -486,9 +677,23 @@ verify_and_banner() {
         printf '\n'
         if [ "$WITH_OLLAMA" = "true" ]; then
             printf '  Ollama:         http://localhost:11434 (in-stack)\n'
+            if [ -n "${OLLAMA_MODEL:-}" ]; then
+                printf '  Ollama model:   %s\n' "$OLLAMA_MODEL"
+            fi
             printf '\n'
         fi
         printf '%s%s%s\n' "${GREEN}" "$(printf '%.0s=' $(seq 1 60))" "${RESET}"
+
+        # Pull the advisor-selected Ollama model now that the stack is healthy
+        if [ "$WITH_OLLAMA" = "true" ] && [ -n "${OLLAMA_MODEL:-}" ] && [ "${OLLAMA_PULL_NOW:-false}" = "true" ]; then
+            printf '\n'
+            status "Pulling Ollama model '$OLLAMA_MODEL' (this may take several minutes)..."
+            if $SUDO docker exec hive-ollama-1 ollama pull "$OLLAMA_MODEL"; then
+                success "Model '$OLLAMA_MODEL' pulled successfully."
+            else
+                warn "Model pull failed. Run manually: docker exec hive-ollama-1 ollama pull $OLLAMA_MODEL"
+            fi
+        fi
     else
         printf '%s>>> Some services did not become healthy within the timeout.%s\n' "${RED}" "${RESET}"
         printf '\nDiagnostics:\n'
@@ -523,6 +728,7 @@ main() {
     install_docker
     clone_or_update_repo
     setup_env
+    advise_ollama_model
     patch_ollama_config
     start_stack
     verify_and_banner
