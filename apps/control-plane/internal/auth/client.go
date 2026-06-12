@@ -38,7 +38,8 @@ type supabaseUserResponse struct {
 }
 
 type userMetadata struct {
-	FullName string `json:"full_name"`
+	FullName         string `json:"full_name"`
+	SelectedTenantID string `json:"selected_tenant_id"`
 }
 
 type appMetadata struct {
@@ -86,8 +87,16 @@ func (c *Client) LookupUser(ctx context.Context, bearerToken string) (Viewer, er
 		emailVerified = *su.AppMetadata.HiveEmailVerified
 	}
 
+	tenantID := uuid.Nil
+	if su.UserMetadata.SelectedTenantID != "" {
+		if parsed, err := uuid.Parse(su.UserMetadata.SelectedTenantID); err == nil {
+			tenantID = parsed
+		}
+	}
+
 	return Viewer{
 		UserID:        userID,
+		TenantID:      tenantID,
 		Email:         su.Email,
 		EmailVerified: emailVerified,
 		FullName:      su.UserMetadata.FullName,

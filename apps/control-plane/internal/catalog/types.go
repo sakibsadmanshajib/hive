@@ -1,6 +1,20 @@
 package catalog
 
-import "time"
+import (
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// TenantModelVisibility records whether a specific tenant has been granted or
+// blocked access to a model alias. Rows only exist when the default behaviour
+// (public aliases visible, restricted aliases hidden) is overridden.
+type TenantModelVisibility struct {
+	TenantID  uuid.UUID
+	AliasID   string
+	Visible   bool
+	UpdatedAt time.Time
+}
 
 type ModelAlias struct {
 	AliasID                string

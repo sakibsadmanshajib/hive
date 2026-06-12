@@ -9,6 +9,7 @@ import (
 // Viewer represents the authenticated Supabase user resolved from a bearer token.
 type Viewer struct {
 	UserID        uuid.UUID
+	TenantID      uuid.UUID // resolved from raw_user_meta_data.selected_tenant_id; uuid.Nil when absent
 	Email         string
 	EmailVerified bool
 	FullName      string
