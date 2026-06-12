@@ -20,15 +20,16 @@ type selectRouteRequest struct {
 	NeedResponses       bool     `json:"need_responses"`
 	NeedChatCompletions bool     `json:"need_chat_completions"`
 	NeedEmbeddings      bool     `json:"need_embeddings"`
-	NeedStreaming       bool     `json:"need_streaming"`
-	NeedReasoning       bool     `json:"need_reasoning"`
-	NeedCacheRead       bool     `json:"need_cache_read"`
-	NeedCacheWrite      bool     `json:"need_cache_write"`
+	NeedStreaming        bool     `json:"need_streaming"`
+	NeedReasoning        bool     `json:"need_reasoning"`
+	NeedCacheRead        bool     `json:"need_cache_read"`
+	NeedCacheWrite       bool     `json:"need_cache_write"`
 	NeedImageGeneration bool     `json:"need_image_generation"`
 	NeedImageEdit       bool     `json:"need_image_edit"`
 	NeedTTS             bool     `json:"need_tts"`
 	NeedSTT             bool     `json:"need_stt"`
 	NeedBatch           bool     `json:"need_batch"`
+	RequireToolCapable  bool     `json:"require_tool_capable"`
 	AllowedAliases      []string `json:"allowed_aliases"`
 	AllowedProviders    []string `json:"allowed_providers"`
 }
@@ -60,15 +61,16 @@ func (h *Handler) handleSelectRoute(w http.ResponseWriter, r *http.Request) {
 		NeedResponses:       request.NeedResponses,
 		NeedChatCompletions: request.NeedChatCompletions,
 		NeedEmbeddings:      request.NeedEmbeddings,
-		NeedStreaming:       request.NeedStreaming,
-		NeedReasoning:       request.NeedReasoning,
-		NeedCacheRead:       request.NeedCacheRead,
-		NeedCacheWrite:      request.NeedCacheWrite,
+		NeedStreaming:        request.NeedStreaming,
+		NeedReasoning:        request.NeedReasoning,
+		NeedCacheRead:        request.NeedCacheRead,
+		NeedCacheWrite:       request.NeedCacheWrite,
 		NeedImageGeneration: request.NeedImageGeneration,
 		NeedImageEdit:       request.NeedImageEdit,
 		NeedTTS:             request.NeedTTS,
 		NeedSTT:             request.NeedSTT,
 		NeedBatch:           request.NeedBatch,
+		RequireToolCapable:  request.RequireToolCapable,
 		AllowedAliases:      request.AllowedAliases,
 		AllowedProviders:    request.AllowedProviders,
 	})
@@ -84,6 +86,8 @@ func writeRoutingError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrAliasNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case errors.Is(err, ErrNoCapableRoute):
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 	case errors.Is(err, ErrRouteNotEligible):
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 	default:

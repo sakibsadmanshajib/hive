@@ -14,8 +14,12 @@ type SelectionInput struct {
 	NeedTTS             bool
 	NeedSTT             bool
 	NeedBatch           bool
-	AllowedAliases      []string
-	AllowedProviders    []string
+	// RequireToolCapable, when true, restricts route selection to routes where
+	// provider_capabilities.tools_supported = true. Returns ErrNoCapableRoute
+	// when no such route exists for the alias.
+	RequireToolCapable bool
+	AllowedAliases     []string
+	AllowedProviders   []string
 }
 
 type RouteCandidate struct {
@@ -31,15 +35,16 @@ type RouteCandidate struct {
 	SupportsChatCompletions bool
 	SupportsCompletions     bool
 	SupportsEmbeddings      bool
-	SupportsStreaming       bool
-	SupportsReasoning       bool
-	SupportsCacheRead       bool
-	SupportsCacheWrite      bool
+	SupportsStreaming        bool
+	SupportsReasoning        bool
+	SupportsCacheRead        bool
+	SupportsCacheWrite       bool
 	SupportsImageGeneration bool
 	SupportsImageEdit       bool
 	SupportsTTS             bool
 	SupportsSTT             bool
 	SupportsBatch           bool
+	SupportsTools           bool
 }
 
 type SelectionResult struct {

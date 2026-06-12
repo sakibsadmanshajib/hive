@@ -77,6 +77,7 @@ func (o *Orchestrator) executeSync(
 		NeedEmbeddings:      needFlags.NeedEmbeddings,
 		NeedStreaming:        needFlags.NeedStreaming,
 		NeedReasoning:        needFlags.NeedReasoning,
+		RequireToolCapable:  needFlags.RequireToolCapable,
 	})
 	if err != nil {
 		errMsg := err.Error()

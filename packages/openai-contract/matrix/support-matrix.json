@@ -98,7 +98,7 @@
       "path": "/v1/chat/completions",
       "status": "supported_now",
       "phase": 6,
-      "notes": "Chat completion inference. The following parameters are rejected with 400 unsupported_parameter until capability-based provider routing ships (planned Phase 20+): tools, tool_choice, response_format, parallel_tool_calls, functions, function_call."
+      "notes": "Chat completion inference. tools, tool_choice, response_format, parallel_tool_calls, functions, function_call are conditionally supported (Phase 20): passed through when the alias has at least one route with provider_capabilities.tools_supported=true; returns 400 unsupported_parameter (with param field) when no capable route exists for the alias."
     },
     {
       "method": "GET",
