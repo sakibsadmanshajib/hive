@@ -91,6 +91,12 @@ CREATE INDEX IF NOT EXISTS tmv_alias_idx ON public.tenant_model_visibility (alia
 ALTER TABLE public.provider_capabilities
   ADD COLUMN IF NOT EXISTS tools_supported BOOLEAN NOT NULL DEFAULT false;
 
+-- Seed known tool-capable providers. openrouter and groq both support the
+-- OpenAI function-calling / tool-use wire format via LiteLLM passthrough.
+UPDATE public.provider_capabilities
+  SET tools_supported = true
+  WHERE provider IN ('openrouter', 'groq');
+
 -- ---------------------------------------------------------------------------
 -- Task 5: model_aliases.visibility CHECK extended to include 'restricted'
 -- ---------------------------------------------------------------------------

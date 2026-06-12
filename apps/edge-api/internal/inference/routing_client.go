@@ -15,18 +15,20 @@ import (
 
 // SelectRouteInput mirrors the control-plane routing.SelectionInput.
 type SelectRouteInput struct {
-	AliasID              string   `json:"alias_id"`
-	NeedResponses        bool     `json:"need_responses"`
-	NeedChatCompletions  bool     `json:"need_chat_completions"`
-	NeedEmbeddings       bool     `json:"need_embeddings"`
-	NeedStreaming         bool     `json:"need_streaming"`
+	AliasID             string   `json:"alias_id"`
+	NeedResponses       bool     `json:"need_responses"`
+	NeedChatCompletions bool     `json:"need_chat_completions"`
+	NeedEmbeddings      bool     `json:"need_embeddings"`
+	NeedStreaming        bool     `json:"need_streaming"`
 	NeedReasoning        bool     `json:"need_reasoning"`
-	NeedImageGeneration  bool     `json:"need_image_generation"`
-	NeedImageEdit        bool     `json:"need_image_edit"`
-	NeedTTS              bool     `json:"need_tts"`
-	NeedSTT              bool     `json:"need_stt"`
-	AllowedAliases       []string `json:"allowed_aliases,omitempty"`
-	AllowedProviders     []string `json:"allowed_providers,omitempty"`
+	NeedImageGeneration bool     `json:"need_image_generation"`
+	NeedImageEdit       bool     `json:"need_image_edit"`
+	NeedTTS             bool     `json:"need_tts"`
+	NeedSTT             bool     `json:"need_stt"`
+	// RequireToolCapable restricts routing to tool-capable routes only.
+	RequireToolCapable bool     `json:"require_tool_capable,omitempty"`
+	AllowedAliases     []string `json:"allowed_aliases,omitempty"`
+	AllowedProviders   []string `json:"allowed_providers,omitempty"`
 }
 
 // SelectRouteResult mirrors the control-plane routing.SelectionResult.

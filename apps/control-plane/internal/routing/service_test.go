@@ -375,3 +375,189 @@ func TestSelectRoutePropagatesAliasLookupErrors(t *testing.T) {
 		t.Fatalf("expected one policy load, got %d", repo.loadPolicyCalls)
 	}
 }
+
+// TestRequireToolCapable_CapableRouteSelected verifies that when RequireToolCapable=true
+// and at least one route has SupportsTools=true, that route is selected.
+func TestRequireToolCapable_CapableRouteSelected(t *testing.T) {
+	repo := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-tools",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+			FallbackOrder:           []string{"route-capable", "route-incapable"},
+		},
+		candidates: []RouteCandidate{
+			{
+				RouteID:                 "route-capable",
+				AliasID:                 "hive-tools",
+				Provider:                "openrouter",
+				LiteLLMModelName:        "route-capable",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsChatCompletions: true,
+				SupportsTools:           true,
+			},
+			{
+				RouteID:                 "route-incapable",
+				AliasID:                 "hive-tools",
+				Provider:                "groq",
+				LiteLLMModelName:        "route-incapable",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                20,
+				SupportsChatCompletions: true,
+				SupportsTools:           false,
+			},
+		},
+	}
+
+	svc := NewService(repo)
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-tools",
+		NeedChatCompletions: true,
+		RequireToolCapable:  true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+	if result.RouteID != "route-capable" {
+		t.Fatalf("expected route-capable, got %q", result.RouteID)
+	}
+}
+
+// TestRequireToolCapable_NoCapableRoute verifies that ErrNoCapableRoute is returned
+// when RequireToolCapable=true and all routes have SupportsTools=false.
+func TestRequireToolCapable_NoCapableRoute(t *testing.T) {
+	repo := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-basic",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+		},
+		candidates: []RouteCandidate{
+			{
+				RouteID:                 "route-no-tools",
+				AliasID:                 "hive-basic",
+				Provider:                "groq",
+				LiteLLMModelName:        "route-no-tools",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsChatCompletions: true,
+				SupportsTools:           false,
+			},
+		},
+	}
+
+	svc := NewService(repo)
+
+	_, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-basic",
+		NeedChatCompletions: true,
+		RequireToolCapable:  true,
+	})
+	if err == nil {
+		t.Fatal("expected ErrNoCapableRoute")
+	}
+	if !errors.Is(err, ErrNoCapableRoute) {
+		t.Fatalf("expected ErrNoCapableRoute, got %v", err)
+	}
+}
+
+// TestRequireToolCapable_FalseAllowsMixedRoutes verifies that with RequireToolCapable=false
+// (default), both capable and incapable routes are considered (existing behaviour).
+func TestRequireToolCapable_FalseAllowsMixedRoutes(t *testing.T) {
+	repo := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-mixed",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+			FallbackOrder:           []string{"route-incapable"},
+		},
+		candidates: []RouteCandidate{
+			{
+				RouteID:                 "route-incapable",
+				AliasID:                 "hive-mixed",
+				Provider:                "groq",
+				LiteLLMModelName:        "route-incapable",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsChatCompletions: true,
+				SupportsTools:           false,
+			},
+		},
+	}
+
+	svc := NewService(repo)
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-mixed",
+		NeedChatCompletions: true,
+		RequireToolCapable:  false,
+	})
+	if err != nil {
+		t.Fatalf("expected success with RequireToolCapable=false, got %v", err)
+	}
+	if result.RouteID != "route-incapable" {
+		t.Fatalf("expected route-incapable, got %q", result.RouteID)
+	}
+}
+
+// TestRequireToolCapable_MixedProviderOnlyCapableSelected verifies that per-route
+// filtering applies: a provider with one capable and one incapable route only passes
+// the capable route when RequireToolCapable=true.
+func TestRequireToolCapable_MixedProviderOnlyCapableSelected(t *testing.T) {
+	repo := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-tools",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+			FallbackOrder:           []string{"route-vision-only", "route-tools"},
+		},
+		candidates: []RouteCandidate{
+			{
+				// Same provider, non-capable route (e.g. vision-only model).
+				RouteID:                 "route-vision-only",
+				AliasID:                 "hive-tools",
+				Provider:                "openrouter",
+				LiteLLMModelName:        "route-vision-only",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                5,
+				SupportsChatCompletions: true,
+				SupportsTools:           false,
+			},
+			{
+				// Same provider, capable route.
+				RouteID:                 "route-tools",
+				AliasID:                 "hive-tools",
+				Provider:                "openrouter",
+				LiteLLMModelName:        "route-tools",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsChatCompletions: true,
+				SupportsTools:           true,
+			},
+		},
+	}
+
+	svc := NewService(repo)
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-tools",
+		NeedChatCompletions: true,
+		RequireToolCapable:  true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+	// Must select the capable route, not the vision-only route, even though both
+	// share the same provider slug.
+	if result.RouteID != "route-tools" {
+		t.Fatalf("expected route-tools (capable), got %q", result.RouteID)
+	}
+}

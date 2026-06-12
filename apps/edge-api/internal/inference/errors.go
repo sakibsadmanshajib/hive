@@ -10,8 +10,11 @@ import (
 
 func writeUnsupportedParamError(w http.ResponseWriter, param, model string) {
 	code := "unsupported_parameter"
-	apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error",
-		fmt.Sprintf("The parameter '%s' is not supported with model '%s'.", param, model), &code)
+	msg := fmt.Sprintf("Model does not support parameter: %s. Choose an alias with tool-calling capability.", param)
+	if model != "" {
+		msg = fmt.Sprintf("Model '%s' does not support parameter: %s. Choose an alias with tool-calling capability.", model, param)
+	}
+	apierrors.WriteErrorWithParam(w, http.StatusBadRequest, "invalid_request_error", msg, &code, param)
 }
 
 func writeModelNotFoundError(w http.ResponseWriter, model string) {

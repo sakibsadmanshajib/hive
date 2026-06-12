@@ -1,8 +1,8 @@
 package inference
 
 import (
+	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 )
@@ -30,14 +30,14 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Reject requests that carry tool-calling or structured-output fields that
-	// are not yet supported end-to-end (issue #118). Silently forwarding them
-	// causes the provider to ignore the fields and return a plain content
-	// response, which misleads SDK consumers into thinking the model did not
-	// use the tool. Return an explicit 400 until provider-routing support for
-	// these parameters is wired in a future phase.
-	if err := rejectUnsupportedChatParams(w, &req); err != nil {
-		return
+	// Detect tool-calling / structured-output parameters (issue #118).
+	// If present, probe whether the alias has at least one tool-capable route.
+	// Return 400 only when no capable route exists; otherwise pass through.
+	toolParam := firstToolParam(&req)
+	if toolParam != "" {
+		if blocked := guardToolCapability(r.Context(), o, w, req.Model, toolParam); blocked {
+			return
+		}
 	}
 
 	needFlags := NeedFlags{
@@ -76,59 +76,67 @@ func normalizeChatCompletion(respBody []byte, aliasID string) ([]byte, *UsageRes
 	return normalized, resp.Usage, nil
 }
 
-// rejectUnsupportedChatParams checks for fields that are parsed and present in
-// ChatCompletionRequest but not yet supported end-to-end. It writes a 400
-// response and returns a non-nil sentinel error when any unsupported parameter
-// is present, so the caller can return immediately.
-func rejectUnsupportedChatParams(w http.ResponseWriter, req *ChatCompletionRequest) error {
-	// isPresent returns true when a json.RawMessage field was explicitly set by
-	// the caller (non-empty and not the JSON literal "null"). Using len > 0 alone
-	// misses the case where the client sends `"tools": []` — Go unmarshals that
-	// as an empty non-nil slice whose JSON encoding is "[]", not "null".
+// firstToolParam returns the name of the first tool-calling or structured-output
+// parameter present in the request, or "" if none are present.
+//
+// isPresent treats a json.RawMessage field as present when it is non-empty and
+// not the JSON literal "null". This correctly handles `"tools": []` (empty
+// array) which must be treated as present, not silently ignored.
+func firstToolParam(req *ChatCompletionRequest) string {
 	isPresent := func(f json.RawMessage) bool {
 		return len(f) > 0 && string(f) != "null"
 	}
 
-	var param string
 	switch {
 	case isPresent(req.Tools):
-		param = "tools"
+		return "tools"
 	case isPresent(req.ToolChoice):
-		param = "tool_choice"
+		return "tool_choice"
 	case isPresent(req.ResponseFormat):
-		param = "response_format"
+		return "response_format"
 	case isPresent(req.Functions):
-		param = "functions"
+		return "functions"
 	case isPresent(req.FunctionCall):
-		param = "function_call"
+		return "function_call"
 	}
 
-	if param == "" && req.ParallelToolCalls != nil {
-		param = "parallel_tool_calls"
+	if req.ParallelToolCalls != nil {
+		return "parallel_tool_calls"
 	}
 
-	if param == "" {
-		return nil
-	}
-
-	code := "unsupported_parameter"
-	writeError(w, http.StatusBadRequest, "invalid_request_error",
-		"The '"+param+"' parameter is not yet supported. Tool calling and structured output will be available in a future release.",
-		&code,
-	)
-	return errors.New("unsupported parameter: " + param)
+	return ""
 }
 
-// writeError is a local helper to write OpenAI-style errors.
-func writeError(w http.ResponseWriter, status int, errType, message string, code *string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
-		"error": map[string]any{
-			"message": message,
-			"type":    errType,
-			"param":   nil,
-			"code":    code,
-		},
+// guardToolCapability probes the routing layer to determine whether the alias
+// has at least one tool-capable route. If no capable route exists it writes a
+// provider-blind 400 and returns true (caller must return). If a capable route
+// exists (or the routing client is unavailable), it returns false so the request
+// proceeds normally through the standard executeSync / executeStreaming path.
+//
+// The routing probe is a lightweight SelectRoute call with RequireToolCapable=true.
+// Auth and billing are NOT performed here — the normal execution path handles them.
+func guardToolCapability(ctx context.Context, o *Orchestrator, w http.ResponseWriter, model, param string) bool {
+	if o.routing == nil {
+		// No routing client (e.g. unit-test environment with bare Orchestrator).
+		// Fail closed: reject the request as unsupported.
+		writeUnsupportedParamError(w, param, model)
+		return true
+	}
+
+	_, err := o.routing.SelectRoute(ctx, SelectRouteInput{
+		AliasID:             model,
+		NeedChatCompletions: true,
+		RequireToolCapable:  true,
 	})
+	if err != nil {
+		// ErrNoCapableRoute surfaces as a 422 from the control-plane HTTP layer
+		// which the routing client returns as a non-nil error containing "422"
+		// or "no tool-capable". Any routing error for a tool request is treated
+		// as "no capable route" — return provider-blind 400.
+		writeUnsupportedParamError(w, param, model)
+		return true
+	}
+
+	// At least one capable route exists — let the request pass through.
+	return false
 }

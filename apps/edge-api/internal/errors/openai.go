@@ -39,6 +39,23 @@ func WriteError(w http.ResponseWriter, httpStatus int, errType string, message s
 	json.NewEncoder(w).Encode(NewError(errType, message, code))
 }
 
+// WriteErrorWithParam writes an OpenAI-style error response that includes the
+// specific parameter name that caused the error in the "param" field. This is
+// used for unsupported_parameter errors so SDK callers know which field to fix.
+func WriteErrorWithParam(w http.ResponseWriter, httpStatus int, errType string, message string, code *string, param string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(httpStatus)
+	body := OpenAIError{
+		Error: OpenAIErrorBody{
+			Message: message,
+			Type:    errType,
+			Param:   &param,
+			Code:    code,
+		},
+	}
+	json.NewEncoder(w).Encode(body)
+}
+
 // WriteRateLimitError writes a 429 OpenAI-style error with retry metadata headers.
 func WriteRateLimitError(w http.ResponseWriter, message string, code *string, headers map[string]string) {
 	for key, value := range headers {

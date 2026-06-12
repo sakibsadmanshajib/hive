@@ -12,8 +12,11 @@ import (
 )
 
 var (
-	ErrAliasNotFound     = errors.New("routing: alias not found")
-	ErrRouteNotEligible  = errors.New("routing: no eligible routes")
+	ErrAliasNotFound    = errors.New("routing: alias not found")
+	ErrRouteNotEligible = errors.New("routing: no eligible routes")
+	// ErrNoCapableRoute is returned when RequireToolCapable=true but no route
+	// for the alias has tools_supported=true in provider_capabilities.
+	ErrNoCapableRoute = errors.New("routing: no tool-capable route")
 )
 
 type Service struct {
@@ -42,6 +45,24 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	candidates, err := s.repo.ListRouteCandidates(ctx, aliasID)
 	if err != nil {
 		return SelectionResult{}, err
+	}
+
+	// When RequireToolCapable is set, first narrow candidates to tool-capable
+	// routes only. This operates at individual route granularity so that a
+	// provider with mixed-capability routes does not pass a non-capable route.
+	// If the alias has zero capable routes we return ErrNoCapableRoute so the
+	// caller can surface a specific 400 rather than a generic routing failure.
+	if input.RequireToolCapable {
+		capable := make([]RouteCandidate, 0, len(candidates))
+		for _, c := range candidates {
+			if c.SupportsTools {
+				capable = append(capable, c)
+			}
+		}
+		if len(capable) == 0 {
+			return SelectionResult{}, fmt.Errorf("%w: alias %s has no tool-capable routes", ErrNoCapableRoute, aliasID)
+		}
+		candidates = capable
 	}
 
 	filtered := make([]RouteCandidate, 0, len(candidates))
@@ -123,6 +144,10 @@ func matchesRequestedCapabilities(candidate RouteCandidate, input SelectionInput
 
 	return true
 }
+
+// NOTE: RequireToolCapable pre-filtering happens before matchesRequestedCapabilities
+// is called (see SelectRoute). The SupportsTools field is checked there, not here,
+// so that we can return the specific ErrNoCapableRoute sentinel.
 
 func aliasAllowed(aliasID string, allowed []string) bool {
 	if len(allowed) == 0 {
