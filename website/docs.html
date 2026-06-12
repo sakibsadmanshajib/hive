@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="dark" />
+  <meta name="theme-color" content="#0c0d10" />
+  <title>Quickstart, Hive docs</title>
+  <meta name="description" content="Get started with Hive: send your first OpenAI-compatible request, point an existing SDK at the gateway, or self-host EnterpriseEdge in one command." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f6b73c' d='M6 1h12l6 11-6 11H6L0 12z'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <a class="brand" href="index.html" aria-label="Hive home">
+        <span class="brand-mark" aria-hidden="true">
+          <span class="cell c1"></span><span class="cell c2"></span><span class="cell c3"></span>
+        </span>
+        Hive
+      </a>
+      <nav class="nav-links compact" aria-label="Primary">
+        <a href="index.html#developers">Developers</a>
+        <a href="index.html#pricing">Pricing</a>
+        <a href="https://github.com/sakibsadmanshajib/hive">GitHub</a>
+        <a class="btn btn-primary btn-sm" href="index.html#pricing">Get started</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main" class="wrap doc-layout">
+    <!-- Sidebar -->
+    <aside class="doc-nav" aria-label="Docs sections">
+      <h4>Quickstart</h4>
+      <ul>
+        <li><a href="#quickstart">Overview</a></li>
+        <li><a href="#first-request">First request</a></li>
+        <li><a href="#sdk">Use an SDK</a></li>
+      </ul>
+      <h4>Self-hosting</h4>
+      <ul>
+        <li><a href="#enterpriseedge">EnterpriseEdge</a></li>
+        <li><a href="#hardware">Hardware advisor</a></li>
+      </ul>
+      <h4>Billing</h4>
+      <ul>
+        <li><a href="#billing">Prepaid credits</a></li>
+      </ul>
+    </aside>
+
+    <!-- Body -->
+    <article class="doc-body">
+      <h1 id="quickstart">Quickstart</h1>
+      <p>
+        Hive is an OpenAI-compatible API gateway. If your tooling already speaks the OpenAI
+        API, it speaks Hive. This page covers your first request, pointing an existing SDK at
+        the gateway, and self-hosting with Hive EnterpriseEdge.
+      </p>
+
+      <div class="callout">
+        <strong>Base URL.</strong> Hive Cloud serves the OpenAI-compatible surface at
+        <code class="inline">https://api-hive.scubed.co/v1</code>. Authenticate with a Hive API
+        key from your developer console.
+      </div>
+
+      <h2 id="first-request">Your first request</h2>
+      <p>Send a chat completion with <code class="inline">curl</code>. Replace <code class="inline">$HIVE_API_KEY</code> with the key from your console.</p>
+      <div class="code">
+        <div class="code-bar">
+          <span class="d"></span><span class="d"></span><span class="d"></span>
+          <span class="fname">first-request.sh</span>
+        </div>
+<pre><span class="tok-cmd">curl</span> https://api-hive.scubed.co/v1/chat/completions <span class="tok-flag">\</span>
+  <span class="tok-flag">-H</span> <span class="tok-str">"Authorization: Bearer $HIVE_API_KEY"</span> <span class="tok-flag">\</span>
+  <span class="tok-flag">-H</span> <span class="tok-str">"Content-Type: application/json"</span> <span class="tok-flag">\</span>
+  <span class="tok-flag">-d</span> <span class="tok-str">'{</span>
+    <span class="tok-key">"model"</span><span class="tok-str">: "hive-default",</span>
+    <span class="tok-key">"messages"</span><span class="tok-str">: [{ "role": "user", "content": "Hello!" }],</span>
+    <span class="tok-key">"stream"</span><span class="tok-str">: false</span>
+  <span class="tok-str">}'</span></pre>
+      </div>
+
+      <h2 id="sdk">Use an existing SDK</h2>
+      <p>
+        You do not need a new client library. Point an official OpenAI SDK at the Hive base URL
+        and pass your Hive key. Below is the Python SDK; the JavaScript and Java SDKs follow the
+        same pattern.
+      </p>
+      <div class="code">
+        <div class="code-bar">
+          <span class="d"></span><span class="d"></span><span class="d"></span>
+          <span class="fname">client.py</span>
+        </div>
+<pre><span class="tok-key">import</span> os
+<span class="tok-key">from</span> openai <span class="tok-key">import</span> OpenAI
+
+client = <span class="tok-cmd">OpenAI</span>(
+    base_url=<span class="tok-str">"https://api-hive.scubed.co/v1"</span>,
+    api_key=os.environ[<span class="tok-str">"HIVE_API_KEY"</span>],
+)
+
+resp = client.chat.completions.<span class="tok-cmd">create</span>(
+    model=<span class="tok-str">"hive-default"</span>,
+    messages=[{<span class="tok-str">"role"</span>: <span class="tok-str">"user"</span>, <span class="tok-str">"content"</span>: <span class="tok-str">"Hello from Dhaka!"</span>}],
+)
+<span class="tok-cmd">print</span>(resp.choices[<span class="tok-str">0</span>].message.content)</pre>
+      </div>
+      <ul class="bul">
+        <li>Streaming works the same way: pass <code class="inline">stream=True</code>.</li>
+        <li>Files and media endpoints are available on the same base URL.</li>
+        <li>Use the public model aliases: <code class="inline">hive-default</code>, <code class="inline">hive-fast</code>, or <code class="inline">hive-auto</code>.</li>
+      </ul>
+
+      <h2 id="enterpriseedge">Self-host with EnterpriseEdge</h2>
+      <p>
+        Hive EnterpriseEdge runs the gateway, developer console and chat workstation on a single
+        machine. Anything Docker can run, EnterpriseEdge can run. Install with one command:
+      </p>
+      <div class="installer" role="group" aria-label="One-line installer command">
+        <span class="prompt" aria-hidden="true">$</span>
+        <code>curl -fsSL https://raw.githubusercontent.com/sakibsadmanshajib/hive/main/scripts/install.sh | bash</code>
+      </div>
+      <ul class="bul">
+        <li>Pair with <code class="inline">Ollama</code> to serve open models entirely on-device.</li>
+        <li>The bundled chat workstation is built on Open WebUI.</li>
+        <li>Your prompts and data stay on your own infrastructure by default.</li>
+      </ul>
+
+      <h2 id="hardware">Hardware advisor (planned)</h2>
+      <p>
+        On the roadmap: an advisor that reports what your machine can comfortably run, so you can
+        size a box once instead of guessing. The plan is to look at available memory and compute
+        and suggest a model tier that will run smoothly on-device. Until it ships, size against
+        the model requirements published by <code class="inline">Ollama</code> for the models you
+        intend to run.
+      </p>
+
+      <h2 id="billing">Prepaid credits</h2>
+      <p>
+        Hive Cloud is prepaid. Top up a credit balance in Bangladeshi Taka and spend it as you go,
+        with no subscription and no foreign card.
+      </p>
+      <ul class="bul">
+        <li>Top up via bKash or SSLCommerz.</li>
+        <li>Card payments are also supported through Stripe.</li>
+        <li>Track balance, keys and usage in the developer console.</li>
+      </ul>
+
+      <div class="callout">
+        <strong>More to come.</strong> This is a getting-started page. Full endpoint reference and
+        the support matrix live in the <a href="https://github.com/sakibsadmanshajib/hive">project repository</a>.
+      </div>
+    </article>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">
+      <div class="footer-bottom flush">
+        <span>&copy; <span id="yr">2026</span> Hive. Built in Bangladesh.</span>
+        <a href="index.html">Back to home</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    document.getElementById('yr').textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
