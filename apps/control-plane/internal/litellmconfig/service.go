@@ -42,8 +42,9 @@ func NewSyncService(pool *pgxpool.Pool, configPath, masterKey string, restarter 
 }
 
 // Sync queries active provider routes, builds model entries, and calls
-// WriteAndRestart. Active routes are those with health_state NOT equal to
-// 'disabled'. Routes with 'healthy' or 'degraded' health_state are included.
+// WriteAndRestart. Active routes are those with health_state in ('healthy',
+// 'degraded'). Rows with health_state 'disabled' or 'eol' are excluded so
+// retired routes never receive live LiteLLM traffic.
 func (s *SyncService) Sync(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
@@ -54,7 +55,7 @@ func (s *SyncService) Sync(ctx context.Context) error {
 			cp.api_key_env     AS api_key_env
 		FROM public.provider_routes pr
 		JOIN public.custom_providers cp ON cp.id = pr.provider_id
-		WHERE pr.health_state != 'disabled'
+		WHERE pr.health_state NOT IN ('disabled', 'eol')
 		  AND cp.enabled = true
 		ORDER BY pr.route_id ASC
 	`)
