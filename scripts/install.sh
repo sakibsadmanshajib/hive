@@ -134,12 +134,21 @@ do_uninstall() {
 install_docker() {
     if command -v docker >/dev/null 2>&1; then
         status "Docker already installed: $(docker --version)"
+        # Verify Compose v2 plugin is present even when Docker CLI already exists
+        if ! docker compose version >/dev/null 2>&1; then
+            status "Docker Compose v2 plugin missing, installing..."
+            $SUDO apt-get update -qq
+            $SUDO apt-get install -y -qq docker-compose-plugin
+            success "Docker Compose v2 plugin installed."
+        fi
         return
     fi
 
     status "Installing Docker via official apt repository..."
     $SUDO apt-get update -qq
-    $SUDO apt-get install -y -qq ca-certificates curl gnupg lsb-release
+    # git added here so clone_or_update_repo always has it available on minimal
+    # Ubuntu/Debian images where git is not pre-installed.
+    $SUDO apt-get install -y -qq ca-certificates curl gnupg lsb-release git
 
     $SUDO install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | \
@@ -317,19 +326,36 @@ setup_env() {
     _default_litellm="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 24 || printf 'litellm-change-me')"
     prompt_value LITELLM_MASTER_KEY "LiteLLM master key" required "$_default_litellm" secret
 
+    # OWUI_SHIM_KEY: Open WebUI sends this as upstream API key; edge disables
+    # the shim-unwrap middleware when it is empty, so a missing key causes chat
+    # requests to fail at edge on the enterprise profile.
+    _default_owui_shim="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 || printf 'owui-shim-change-me')"
+    prompt_value OWUI_SHIM_KEY "Open WebUI shim key" required "$_default_owui_shim" secret
+
     # ── Optional: Grafana ──
     printf '%s-- Grafana (optional, for --profile monitoring) --%s\n' "${BOLD}" "${RESET}"
     _default_grafana="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 18 || printf 'admin')"
     prompt_value GRAFANA_ADMIN_USER     "Grafana admin username" optional "admin"
     prompt_value GRAFANA_ADMIN_PASSWORD "Grafana admin password" optional "$_default_grafana" secret
 
-    # Validate: at least one LLM provider
+    # Validate: at least one LLM provider.  Use :- so set -u does not abort
+    # when an optional variable was never set (non-interactive path).
     _has_provider=false
-    for _v in "$OPENROUTER_API_KEY" "$GROQ_API_KEY" "${OLLAMA_BASE_URL:-}"; do
+    for _v in "${OPENROUTER_API_KEY:-}" "${GROQ_API_KEY:-}" "${OLLAMA_BASE_URL:-}"; do
         [ -n "$_v" ] && _has_provider=true && break
     done
     if [ "$_has_provider" = "false" ]; then
         error "At least one LLM provider key (OPENROUTER_API_KEY, GROQ_API_KEY) or OLLAMA_BASE_URL must be set."
+    fi
+
+    # Derive JWT vars from SUPABASE_URL so the edge JWKS validator gets a real
+    # URL instead of the <PROJECT_REF> placeholder copied from .env.example.
+    # Pattern: https://<ref>.supabase.co  ->  issuer = https://<ref>.supabase.co/auth/v1
+    #                                         jwks   = https://<ref>.supabase.co/auth/v1/.well-known/jwks.json
+    if [ -n "${SUPABASE_URL:-}" ]; then
+        _supabase_base="${SUPABASE_URL%/}"
+        SUPABASE_JWT_ISSUER="${_supabase_base}/auth/v1"
+        SUPABASE_JWKS_URL="${_supabase_base}/auth/v1/.well-known/jwks.json"
     fi
 
     # Write values into .env using sed (no secret values echoed in status output)
@@ -349,6 +375,8 @@ setup_env() {
     _write_env_var "SUPABASE_ANON_KEY" "${SUPABASE_ANON_KEY:-}"
     _write_env_var "SUPABASE_SERVICE_ROLE_KEY" "${SUPABASE_SERVICE_ROLE_KEY:-}"
     _write_env_var "SUPABASE_DB_URL" "${SUPABASE_DB_URL:-}"
+    _write_env_var "SUPABASE_JWT_ISSUER" "${SUPABASE_JWT_ISSUER:-}"
+    _write_env_var "SUPABASE_JWKS_URL" "${SUPABASE_JWKS_URL:-}"
     _write_env_var "NEXT_PUBLIC_SUPABASE_URL" "${SUPABASE_URL:-}"
     _write_env_var "NEXT_PUBLIC_SUPABASE_ANON_KEY" "${SUPABASE_ANON_KEY:-}"
     _write_env_var "S3_ENDPOINT" "${S3_ENDPOINT:-}"
@@ -360,6 +388,7 @@ setup_env() {
     _write_env_var "OLLAMA_BASE_URL" "${OLLAMA_BASE_URL:-}"
     _write_env_var "CONTROL_PLANE_INTERNAL_TOKEN" "${CONTROL_PLANE_INTERNAL_TOKEN:-}"
     _write_env_var "LITELLM_MASTER_KEY" "${LITELLM_MASTER_KEY:-}"
+    _write_env_var "OWUI_SHIM_KEY" "${OWUI_SHIM_KEY:-}"
     _write_env_var "GRAFANA_ADMIN_USER" "${GRAFANA_ADMIN_USER:-admin}"
     _write_env_var "GRAFANA_ADMIN_PASSWORD" "${GRAFANA_ADMIN_PASSWORD:-}"
 
@@ -382,10 +411,18 @@ patch_ollama_config() {
     fi
 
     status "Enabling Ollama model entries in LiteLLM config..."
-    # Uncomment lines that start with '#' followed by 'ollama' (case-insensitive)
-    # The .env.example documents: uncomment ollama model entries in deploy/litellm/config.yaml
-    $SUDO sed -i 's/^#\(.*ollama.*\)$/\1/I' "$LITELLM_CONFIG" || true
-    success "Ollama entries uncommented in $LITELLM_CONFIG"
+    # Uncomment only the YAML model-entry lines in the ollama block.
+    # These lines contain YAML keys (model_name, litellm_params, model, api_base)
+    # and are formatted as "#   - key:" or "#     key:".
+    # Prose comment lines (instructions, numbered steps, docker exec examples)
+    # do not contain these keys so they are left untouched, preventing
+    # LiteLLM from receiving a malformed config at startup.
+    for _key in 'model_name:' 'litellm_params:' 'api_base:'; do
+        $SUDO sed -i "s|^# \([ ]*- $_key\)|\1|;s|^# \([ ]*$_key\)|\1|" "$LITELLM_CONFIG" || true
+    done
+    # model: is ambiguous with "model_name:" so match the exact key word
+    $SUDO sed -i 's|^# \([ ]*model: \)|\1|' "$LITELLM_CONFIG" || true
+    success "Ollama model entries uncommented in $LITELLM_CONFIG"
     warn "Review $LITELLM_CONFIG to confirm the ollama model entries are correct."
 }
 
