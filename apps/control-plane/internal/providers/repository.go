@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -169,13 +169,10 @@ func (r *pgxRepository) Delete(ctx context.Context, id uuid.UUID) error {
 	return nil
 }
 
-// isUniqueViolation returns true when err is a Postgres unique-constraint violation (SQLSTATE 23505).
+// isUniqueViolation returns true when err is a Postgres unique-constraint
+// violation (SQLSTATE 23505). Uses pgconn.PgError type assertion so the check
+// is exact and cannot false-positive on wrapped error messages.
 func isUniqueViolation(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "23505") ||
-		strings.Contains(msg, "unique constraint") ||
-		strings.Contains(msg, "duplicate key")
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

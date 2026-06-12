@@ -5,9 +5,24 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"regexp"
 
 	"github.com/google/uuid"
 )
+
+// slugRe allows lowercase alphanumeric, hyphens, and underscores; must start
+// with a letter or digit; max 64 chars. Values flow into LiteLLM YAML config
+// (plan 20-03), so the charset is intentionally tight.
+var slugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+
+// apiKeyEnvRe matches conventional POSIX env-var names: uppercase letters,
+// digits, underscores; must start with a letter or underscore; max 128 chars.
+var apiKeyEnvRe = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+
+// litellmPrefixRe allows the characters that appear in valid LiteLLM model
+// prefixes (e.g. "openrouter/", "together_ai/", "groq/"): alphanumeric,
+// hyphens, underscores, forward-slashes, and dots; max 128 chars.
+var litellmPrefixRe = regexp.MustCompile(`^[a-zA-Z0-9_./-]{0,128}$`)
 
 // Service wraps the Repository with input validation.
 type Service struct {
@@ -61,12 +76,23 @@ func (e *ErrValidation) Error() string {
 }
 
 // validate checks the required fields on a Provider before persistence.
+// Charset rules are strict because slug, api_key_env, and litellm_prefix
+// flow verbatim into generated LiteLLM YAML config (plan 20-03).
 func validate(p Provider) error {
 	if p.Slug == "" {
 		return &ErrValidation{Field: "slug", Message: "must not be empty"}
 	}
+	if !slugRe.MatchString(p.Slug) {
+		return &ErrValidation{Field: "slug", Message: "must match ^[a-z0-9][a-z0-9_-]{0,63}$ (lowercase, digits, hyphens, underscores; max 64 chars)"}
+	}
 	if p.APIKeyEnv == "" {
 		return &ErrValidation{Field: "api_key_env", Message: "must not be empty"}
+	}
+	if !apiKeyEnvRe.MatchString(p.APIKeyEnv) {
+		return &ErrValidation{Field: "api_key_env", Message: "must be a valid env var name: uppercase letters, digits, underscores; max 128 chars"}
+	}
+	if p.LiteLLMPrefix != "" && !litellmPrefixRe.MatchString(p.LiteLLMPrefix) {
+		return &ErrValidation{Field: "litellm_prefix", Message: "contains disallowed characters; allowed: alphanumeric, _, -, /, ."}
 	}
 	if p.BaseURL != "" {
 		u, err := url.Parse(p.BaseURL)

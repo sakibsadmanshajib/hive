@@ -367,3 +367,125 @@ func TestMissingInternalTokenReturns401(t *testing.T) {
 		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// =============================================================================
+// Charset validation tests (reviewer finding 1 — YAML injection guard).
+// =============================================================================
+
+func TestCreateProviderInvalidSlugCharsReturns400(t *testing.T) {
+	cases := []struct {
+		name string
+		slug string
+	}{
+		{"uppercase", "OpenRouter"},
+		{"leading hyphen", "-openrouter"},
+		{"newline", "open\nrouter"},
+		{"colon", "open:router"},
+		{"space", "open router"},
+		{"too long", "a123456789012345678901234567890123456789012345678901234567890abcde"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stubRepo{}
+			handler := newTestHandler(repo)
+
+			body := map[string]any{
+				"slug":        tc.slug,
+				"display_name": "Test",
+				"base_url":    "https://example.com",
+				"api_key_env": "VALID_KEY",
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/internal/providers", bodyJSON(t, body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(platformhttp.InternalTokenHeader, testToken)
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("slug %q: expected 400, got %d: %s", tc.slug, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreateProviderInvalidAPIKeyEnvReturns400(t *testing.T) {
+	cases := []struct {
+		name      string
+		apiKeyEnv string
+	}{
+		{"lowercase", "openrouter_api_key"},
+		{"leading digit", "1OPENROUTER_KEY"},
+		{"shell injection", "KEY=$(whoami)"},
+		{"space", "OPEN ROUTER"},
+		{"newline", "KEY\nINJECT"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stubRepo{}
+			handler := newTestHandler(repo)
+
+			body := map[string]any{
+				"slug":        "valid-slug",
+				"display_name": "Test",
+				"base_url":    "https://example.com",
+				"api_key_env": tc.apiKeyEnv,
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/internal/providers", bodyJSON(t, body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(platformhttp.InternalTokenHeader, testToken)
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("api_key_env %q: expected 400, got %d: %s", tc.apiKeyEnv, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreateProviderInvalidLiteLLMPrefixReturns400(t *testing.T) {
+	cases := []struct {
+		name   string
+		prefix string
+	}{
+		{"newline", "openrouter/\n"},
+		{"semicolon", "openrouter;rm"},
+		{"backtick", "openrouter`cmd`"},
+		{"dollar brace", "openrouter${KEY}"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stubRepo{}
+			handler := newTestHandler(repo)
+
+			body := map[string]any{
+				"slug":           "valid-slug",
+				"display_name":   "Test",
+				"base_url":       "https://example.com",
+				"api_key_env":    "VALID_KEY",
+				"litellm_prefix": tc.prefix,
+			}
+
+			req := httptest.NewRequest(http.MethodPost, "/internal/providers", bodyJSON(t, body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set(platformhttp.InternalTokenHeader, testToken)
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Errorf("litellm_prefix %q: expected 400, got %d: %s", tc.prefix, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
