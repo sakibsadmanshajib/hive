@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
+
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // handleChatCompletions handles POST /v1/chat/completions.
@@ -44,6 +47,7 @@ func handleChatCompletions(o *Orchestrator, w http.ResponseWriter, r *http.Reque
 		NeedChatCompletions: true,
 		NeedStreaming:        req.Stream,
 		NeedReasoning:        req.ReasoningEffort != nil,
+		RequireToolCapable:  toolParam != "",
 	}
 
 	if req.Stream {
@@ -129,11 +133,19 @@ func guardToolCapability(ctx context.Context, o *Orchestrator, w http.ResponseWr
 		RequireToolCapable:  true,
 	})
 	if err != nil {
-		// ErrNoCapableRoute surfaces as a 422 from the control-plane HTTP layer
-		// which the routing client returns as a non-nil error containing "422"
-		// or "no tool-capable". Any routing error for a tool request is treated
-		// as "no capable route" — return provider-blind 400.
-		writeUnsupportedParamError(w, param, model)
+		errMsg := err.Error()
+		// 422 from the control-plane signals ErrNoCapableRoute: no tool-capable
+		// route exists for this alias. Return a provider-blind 400.
+		if strings.Contains(errMsg, "422") || strings.Contains(errMsg, "no tool-capable") {
+			writeUnsupportedParamError(w, param, model)
+			return true
+		}
+		// Any other routing failure (500, timeout, network error) is a transient
+		// infrastructure problem, not a permanent capability mismatch. Return 502
+		// so the caller knows to retry rather than treating it as a bad request.
+		code := "routing_error"
+		apierrors.WriteError(w, http.StatusBadGateway, "api_error",
+			"Failed to verify tool-calling capability for this request.", &code)
 		return true
 	}
 

@@ -18,10 +18,11 @@ type NeedFlags struct {
 	NeedEmbeddings      bool
 	NeedStreaming        bool
 	NeedReasoning       bool
-	// NOTE: NeedToolCalling is intentionally omitted in Phase 6.
-	// Tool-calling capability enforcement is delegated to LiteLLM's
-	// provider-error response path. A future phase may add this field
-	// for Hive-layer pre-dispatch gating.
+	// RequireToolCapable restricts route selection to routes where
+	// provider_capabilities.tools_supported = true. Set when the request
+	// carries tool-calling parameters (tools, tool_choice, response_format,
+	// functions, function_call, parallel_tool_calls).
+	RequireToolCapable bool
 }
 
 // StreamOptions controls streaming behavior.

@@ -11,8 +11,12 @@
 
 begin;
 
-UPDATE public.provider_capabilities
+-- provider_capabilities is keyed by route_id; the provider column lives on
+-- provider_routes. Join to identify the rows belonging to openrouter and groq.
+UPDATE public.provider_capabilities AS pc
   SET tools_supported = true
-  WHERE provider IN ('openrouter', 'groq');
+  FROM public.provider_routes AS pr
+  WHERE pr.route_id = pc.route_id
+    AND pr.provider IN ('openrouter', 'groq');
 
 commit;

@@ -303,10 +303,54 @@ func TestChatCompletions_ToolsWithNoCapableRoute(t *testing.T) {
 	}
 }
 
+// TestChatCompletions_ToolsRoutingTransientError verifies that when the routing
+// probe fails with a non-422 error (e.g. 500, network error), the guard returns
+// 502 Bad Gateway rather than 400 unsupported_parameter, so the caller knows the
+// failure is transient and retryable, not a permanent capability mismatch.
+func TestChatCompletions_ToolsRoutingTransientError(t *testing.T) {
+	stub := &stubRoutingClientWithStatus{
+		statusCode: http.StatusInternalServerError,
+		body:       `{"error":"internal routing failure"}`,
+	}
+
+	orch := &Orchestrator{
+		routing: newRoutingClientFromStatusStub(stub),
+	}
+	h := NewHandler(orch)
+
+	body := `{"model":"hive-basic","messages":[{"role":"user","content":"hi"}],"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{"type":"object","properties":{}}}}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 for transient routing failure, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	errObj, ok := resp["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected top-level error object")
+	}
+	code, _ := errObj["code"].(string)
+	if code != "routing_error" {
+		t.Errorf("expected code 'routing_error', got %q", code)
+	}
+}
+
 // routingProbeError is a test error type.
 type routingProbeError struct{ msg string }
 
 func (e *routingProbeError) Error() string { return e.msg }
+
+// stubRoutingClientWithStatus returns a fixed HTTP status and body from the stub server.
+type stubRoutingClientWithStatus struct {
+	statusCode int
+	body       string
+}
 
 // newRoutingClientFromStub builds a RoutingClient whose underlying transport
 // is replaced by the stub via an in-process httptest.Server. This lets us
@@ -327,5 +371,16 @@ func newRoutingClientFromStub(stub routingProber) *RoutingClient {
 		json.NewEncoder(w).Encode(result)
 	}))
 	// Note: srv is not closed in tests; the test process reclaims it.
+	return NewRoutingClient(srv.URL)
+}
+
+// newRoutingClientFromStatusStub builds a RoutingClient whose stub always
+// returns the given HTTP status code and body, for testing error path handling.
+func newRoutingClientFromStatusStub(stub *stubRoutingClientWithStatus) *RoutingClient {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(stub.statusCode)
+		w.Write([]byte(stub.body))
+	}))
 	return NewRoutingClient(srv.URL)
 }
