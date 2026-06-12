@@ -65,6 +65,20 @@ type RouterConfig struct {
 	// control-plane logs a startup warning; when set, callers must present a matching
 	// X-Internal-Token header.
 	InternalToken string
+
+	// ProvidersRouter exposes an InternalMux() for CRUD over custom_providers.
+	// Mounted under /internal/providers (shared-secret) and
+	// /api/v1/admin/providers (platform admin JWT).
+	// Using a narrow interface avoids an import cycle between platform/http and providers.
+	ProvidersRouter interface {
+		InternalMux() http.Handler
+	}
+
+	// RoleSvc is required to gate the /api/v1/admin/providers routes
+	// with RequirePlatformAdmin. When nil those admin routes are skipped.
+	RoleSvc interface {
+		RequirePlatformAdmin(http.Handler) http.Handler
+	}
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -187,6 +201,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux.Handle("/webhooks/sslcommerz/success", cfg.PaymentsHandler)
 		mux.Handle("/webhooks/sslcommerz/fail", cfg.PaymentsHandler)
 		mux.Handle("/webhooks/sslcommerz/cancel", cfg.PaymentsHandler)
+	}
+
+	// Phase 20 Plan 02 — provider CRUD routes.
+	// /internal/providers/* is guarded by the shared-secret token.
+	// /api/v1/admin/providers/* is guarded by RequirePlatformAdmin (JWT path).
+	if cfg.ProvidersRouter != nil {
+		internalProviders := internal(cfg.ProvidersRouter.InternalMux())
+		mux.Handle("/internal/providers", internalProviders)
+		mux.Handle("/internal/providers/", internalProviders)
+
+		if cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
+			adminProviders := cfg.AuthMiddleware.Require(
+				cfg.RoleSvc.RequirePlatformAdmin(cfg.ProvidersRouter.InternalMux()),
+			)
+			mux.Handle("/api/v1/admin/providers", adminProviders)
+			mux.Handle("/api/v1/admin/providers/", adminProviders)
+		}
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.
