@@ -72,7 +72,7 @@ The repository is still largely greenfield beyond the Phase 1 edge API and SDK h
 
 | Technology | Version / Variant | Purpose | Why It Fits Phase 2 |
 |------------|-------------------|---------|---------------------|
-| Hosted Supabase (`yimgflllgdsbcibnaxqe`) | Managed platform | Auth plus primary transactional Postgres | Already locked by project decisions; gives email auth, recovery flows, and managed Postgres without introducing more infra in Phase 2. |
+| Hosted Supabase (`<PROJECT_REF>`) | Managed platform | Auth plus primary transactional Postgres | Already locked by project decisions; gives email auth, recovery flows, and managed Postgres without introducing more infra in Phase 2. |
 | Go | 1.26.1 line | Control-plane service | Matches the project stack, keeps direct SQL access explicit, and avoids pushing business-state writes into browser clients or generated Supabase REST layers. |
 | `pgx/v5` | Go driver family | Direct Postgres access | Fits the project guidance to use direct Postgres patterns for transactional flows. |
 | Next.js | 16.1 | Web console | Matches the project research and gives SSR/session middleware patterns needed for persistent authenticated console flows. |
