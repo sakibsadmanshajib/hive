@@ -36,7 +36,7 @@ apps/edge-api         Go — auth, rate limiting, inference dispatch, SSE stream
 apps/web-console      Next.js — developer console (billing, keys, analytics, catalog)
 packages/openai-contract  OpenAI spec + support matrix (single source of truth)
 packages/sdk-tests    JS/Python/Java SDK integration tests (real OpenAI SDKs)
-supabase/migrations   Postgres schema (14 migrations)
+supabase/migrations   Postgres schema (41 migrations)
 deploy/docker         Docker Compose + Dockerfiles
 deploy/litellm        LiteLLM config (OpenRouter/Groq routing)
 deploy/prometheus     Prometheus + alert rules
@@ -153,13 +153,15 @@ See `.planning/UAT-REPORT.md` for full runtime UAT results, `.planning/phases/10
 
 1. **`ensureCapabilityColumns` targets wrong table** — Resolved by Phase 16 (2026-04-25). Function removed from `apps/control-plane/internal/routing/repository.go`; schema lives in `supabase/migrations/20260414_01_provider_capabilities_media_columns.sql` (correctly targets `public.provider_capabilities`); regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence. Evidence: `.planning/phases/16-capability-columns-fix/evidence/CAP-16-01.md`.
 2. **File storage wiring under final verification** — Phase 10 now wires file + media endpoints to Supabase Storage. Final live smoke verification tracked in Phase 10 Plan 10-08.
-3. **`amount_usd` exposed in BD checkout** — `apps/control-plane/internal/payments/http.go:105-115`. Regulatory risk.
-4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). See `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`. Unblocks via (a) adding supported provider key or (b) implementing local batch executor in control-plane.
+3. **`amount_usd` exposed in BD checkout** — Resolved by Phase 17 (PR #137, 2026-05-09). FX/USD stripped from all customer-bound surfaces; CI-blocking lint `lint-no-customer-usd.mjs` enforces non-recurrence. Regression guard active.
+4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). Phase 15 shipped a local batch executor in control-plane. See `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`.
+5. **Provider capability routing** — Resolved by Phase 20 wave 3 (PR #206, 2026-06-11). Custom providers are now DB-managed; capability routing dispatches based on tenant model visibility policy.
 
 ## Project State
 
-- **v1.0 — developer-api-core**: ready to ship. Phases 1–10 complete. Covers chat-app + CLI-coding-agent integrators. See `.planning/STATE.md`.
-- **v1.1 — deferred**: phases 11–14 plus batch success-path settlement, `ensureCapabilityColumns` table fix, `amount_usd` BD checkout. See `.planning/v1.1-DEFERRED-SCOPE.md`.
+- **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete. Covers chat-app + CLI-coding-agent integrators.
+- **v1.1 — in progress**: Phase 20 (Provider Catalog) waves 1-3 complete (PRs 197, 199, 204, 205, 206), wave 4 pending. Phases 12-19 complete. See `.planning/STATE.md`.
+- **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
 
 Planning artifacts in `.planning/`:
 

@@ -8,8 +8,8 @@ previous_milestone_name: developer-api-core
 current_phase: 20
 current_plan: null
 status: phase_complete
-stopped_at: "Phase 19 — Foundation Slice — COMPLETE. Plans 01-04 + post-merge remediation merged (PRs #140, #143, #144, #146). PR #146 (critical C1-C4 + adversarial review + Docker go.work fix + 6 review threads) merged to main 2026-05-29; all CI green. Minor items deferred (H6/H9/H10/M4/M12/M13 + L-items) per 19-REMEDIATION-RESUME.md. Next: Phase 20 Provider Catalog."
-last_updated: "2026-05-29T05:35:00.000Z"
+stopped_at: "Phase 20 — Provider Catalog — IN PROGRESS. Waves 1-3 implemented (PRs #197, #199, #204, #205, #206): stock providers seeded, custom providers DB-managed, LiteLLM YAML regeneration, tenant model visibility, tools capability flag. Wave 4 pending."
+last_updated: "2026-06-11T00:00:00.000Z"
 progress:
   total_phases: 16
   completed_phases: 7
@@ -35,7 +35,7 @@ v1_1_phase_status:
   phase_17: complete
   phase_18: complete
   phase_19: complete
-  phase_20: pending
+  phase_20: in_progress
   phase_21: pending
   phase_22: pending
   phase_23: pending
@@ -66,8 +66,8 @@ See: .planning/PROJECT.md (updated 2026-04-21 after v1.0 milestone completion)
 
 ## Current Position
 
-Phase: 19 (Foundation Slice) — IN PROGRESS
-Plan: 19-03 (Open WebUI deploy + chat happy path) pending after Plan 02 merged in PR #140
+Phase: 20 (Provider Catalog) — IN PROGRESS
+Waves 1-3 implemented (PRs #197, #199, #204, #205, #206). Wave 4 pending.
 
 ## Performance Metrics
 
