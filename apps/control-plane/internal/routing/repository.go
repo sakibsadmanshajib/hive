@@ -81,7 +81,8 @@ func (r *pgxRepository) ListRouteCandidates(ctx context.Context, aliasID string)
 			c.supports_image_edit,
 			c.supports_tts,
 			c.supports_stt,
-			c.supports_batch
+			c.supports_batch,
+			c.tools_supported
 		FROM public.provider_routes r
 		JOIN public.provider_capabilities c ON c.route_id = r.route_id
 		WHERE r.alias_id = $1
@@ -137,6 +138,7 @@ func scanRouteCandidate(scanner rowScanner) (RouteCandidate, error) {
 		&candidate.SupportsTTS,
 		&candidate.SupportsSTT,
 		&candidate.SupportsBatch,
+		&candidate.SupportsTools,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			return RouteCandidate{}, fmt.Errorf("routing: route candidate not found")
