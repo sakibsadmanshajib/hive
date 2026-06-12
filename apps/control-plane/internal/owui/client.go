@@ -63,6 +63,54 @@ func (c *Client) EnsureGroup(ctx context.Context, name string) (string, error) {
 	return "", err
 }
 
+// SyncModelAccessControl sets the per-model access_control object in OWUI so
+// that only tenants in allowedGroupIDs can read the model. The caller is
+// responsible for computing the full desired allowlist (not just the delta).
+//
+// Passing an empty or nil allowedGroupIDs sends access_control: null, making
+// the model public to all OWUI users.
+//
+// The function does NOT perform a prior GET to merge: the caller supplies the
+// authoritative desired state and this function writes it atomically.
+func (c *Client) SyncModelAccessControl(ctx context.Context, modelID string, allowedGroupIDs []string) error {
+	type groupList struct {
+		GroupIDs []string `json:"group_ids"`
+		UserIDs  []string `json:"user_ids"`
+	}
+	type accessControl struct {
+		Read  groupList `json:"read"`
+		Write groupList `json:"write"`
+	}
+
+	var body map[string]any
+	if len(allowedGroupIDs) == 0 {
+		// Nil / empty → public: send access_control: null.
+		body = map[string]any{
+			"id":             modelID,
+			"access_control": nil,
+		}
+	} else {
+		body = map[string]any{
+			"id": modelID,
+			"access_control": accessControl{
+				Read: groupList{
+					GroupIDs: allowedGroupIDs,
+					UserIDs:  []string{},
+				},
+				Write: groupList{
+					GroupIDs: []string{},
+					UserIDs:  []string{},
+				},
+			},
+		}
+	}
+
+	if err := c.post(ctx, "/api/v1/models/", body, nil); err != nil {
+		return fmt.Errorf("owui: sync model access_control %q: %w", modelID, err)
+	}
+	return nil
+}
+
 func (c *Client) findGroupByName(ctx context.Context, name string) (string, error) {
 	var groups []struct {
 		ID   string `json:"id"`

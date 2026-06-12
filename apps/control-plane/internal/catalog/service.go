@@ -3,6 +3,8 @@ package catalog
 import (
 	"context"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 type Service struct {
@@ -20,6 +22,22 @@ func (s *Service) GetSnapshot(ctx context.Context) (CatalogSnapshot, error) {
 	}
 
 	return buildCatalogSnapshot(aliases), nil
+}
+
+// ListModelsForTenant returns the model aliases the given tenant is permitted
+// to use. Visibility rules (enforced by the repository query):
+//  1. public / preview aliases are visible by default.
+//  2. A tenant_model_visibility row with visible=false blocks any alias.
+//  3. restricted aliases require an explicit visible=true row.
+//
+// When tenantID is uuid.Nil (unauthenticated caller), only public/preview
+// aliases with no per-tenant override are returned.
+func (s *Service) ListModelsForTenant(ctx context.Context, tenantID uuid.UUID) ([]ModelAlias, error) {
+	if tenantID == uuid.Nil {
+		// Unauthenticated: return public aliases only (no tenant overrides).
+		return s.repo.ListPublicAliases(ctx)
+	}
+	return s.repo.ListAliasesForTenant(ctx, tenantID)
 }
 
 func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {

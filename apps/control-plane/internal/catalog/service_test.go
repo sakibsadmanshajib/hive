@@ -5,25 +5,113 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 )
 
+// stubRepository implements Repository for unit tests. Visibility filtering
+// is performed in-memory using the same rules as the SQL query in pgxRepository.
 type stubRepository struct {
-	aliases []ModelAlias
-	err     error
+	aliases        []ModelAlias
+	visibilityRows []TenantModelVisibility
+	err            error
+	visibilityErr  error
 }
 
 func (s *stubRepository) ListPublicAliases(_ context.Context) ([]ModelAlias, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
+	// Mirror the real pgx query: only public/preview visibility.
+	var out []ModelAlias
+	for _, a := range s.aliases {
+		if a.Visibility == "public" || a.Visibility == "preview" {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
 
-	return append([]ModelAlias(nil), s.aliases...), nil
+func (s *stubRepository) ListAliasesForTenant(_ context.Context, tenantID uuid.UUID) ([]ModelAlias, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	overrides := make(map[string]TenantModelVisibility)
+	for _, row := range s.visibilityRows {
+		if row.TenantID == tenantID {
+			overrides[row.AliasID] = row
+		}
+	}
+	var result []ModelAlias
+	for _, alias := range s.aliases {
+		row, hasRow := overrides[alias.AliasID]
+		switch {
+		case hasRow && !row.Visible:
+			// Explicitly blocked.
+		case alias.Visibility == "restricted" && (!hasRow || !row.Visible):
+			// Restricted with no active grant.
+		default:
+			result = append(result, alias)
+		}
+	}
+	return result, nil
 }
 
 func (s *stubRepository) GetSnapshot(ctx context.Context) (CatalogSnapshot, error) {
 	svc := NewService(s)
 	return svc.GetSnapshot(ctx)
 }
+
+func (s *stubRepository) GetVisibilityRows(_ context.Context, tenantID uuid.UUID) ([]TenantModelVisibility, error) {
+	if s.visibilityErr != nil {
+		return nil, s.visibilityErr
+	}
+	var out []TenantModelVisibility
+	for _, row := range s.visibilityRows {
+		if row.TenantID == tenantID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+func (s *stubRepository) UpsertVisibility(_ context.Context, row TenantModelVisibility) error {
+	for i, r := range s.visibilityRows {
+		if r.TenantID == row.TenantID && r.AliasID == row.AliasID {
+			s.visibilityRows[i] = row
+			return nil
+		}
+	}
+	s.visibilityRows = append(s.visibilityRows, row)
+	return nil
+}
+
+func (s *stubRepository) DeleteVisibility(_ context.Context, tenantID uuid.UUID, aliasID string) error {
+	for i, r := range s.visibilityRows {
+		if r.TenantID == tenantID && r.AliasID == aliasID {
+			s.visibilityRows = append(s.visibilityRows[:i], s.visibilityRows[i+1:]...)
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *stubRepository) GetAllVisibleTenantsForAlias(_ context.Context, aliasID string) ([]TenantModelVisibility, error) {
+	if s.visibilityErr != nil {
+		return nil, s.visibilityErr
+	}
+	var out []TenantModelVisibility
+	for _, row := range s.visibilityRows {
+		if row.AliasID == aliasID && row.Visible {
+			out = append(out, row)
+		}
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// Existing snapshot tests (unchanged behaviour).
+// ---------------------------------------------------------------------------
 
 func TestGetSnapshotReturnsHiveOwnedModels(t *testing.T) {
 	repo := &stubRepository{
@@ -163,6 +251,121 @@ func TestGetSnapshotPropagatesRepositoryErrors(t *testing.T) {
 	_, err := svc.GetSnapshot(context.Background())
 	if err == nil {
 		t.Fatal("expected repository error")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Task 5: ListModelsForTenant filtering tests (TDD — RED before implementation).
+// ---------------------------------------------------------------------------
+
+// TC1: tenant with no visibility rows sees all public aliases.
+func TestListModelsForTenant_NoRows_SeesPublicAliases(t *testing.T) {
+	tenantID := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001")
+	repo := &stubRepository{
+		aliases: []ModelAlias{
+			{AliasID: "pub-a", Visibility: "public", CreatedAt: time.Now()},
+			{AliasID: "pub-b", Visibility: "preview", CreatedAt: time.Now()},
+		},
+	}
+	svc := NewService(repo)
+	models, err := svc.ListModelsForTenant(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+}
+
+// TC2: visible=false row for a public alias excludes it.
+func TestListModelsForTenant_VisibleFalse_ExcludesPublicAlias(t *testing.T) {
+	tenantID := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000002")
+	repo := &stubRepository{
+		aliases: []ModelAlias{
+			{AliasID: "pub-a", Visibility: "public", CreatedAt: time.Now()},
+			{AliasID: "pub-b", Visibility: "public", CreatedAt: time.Now()},
+		},
+		visibilityRows: []TenantModelVisibility{
+			{TenantID: tenantID, AliasID: "pub-a", Visible: false},
+		},
+	}
+	svc := NewService(repo)
+	models, err := svc.ListModelsForTenant(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	if models[0].AliasID != "pub-b" {
+		t.Fatalf("expected pub-b, got %q", models[0].AliasID)
+	}
+}
+
+// TC3: visible=true row for a restricted alias includes it.
+func TestListModelsForTenant_VisibleTrue_IncludesRestrictedAlias(t *testing.T) {
+	tenantID := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000003")
+	repo := &stubRepository{
+		aliases: []ModelAlias{
+			{AliasID: "restricted-x", Visibility: "restricted", CreatedAt: time.Now()},
+		},
+		visibilityRows: []TenantModelVisibility{
+			{TenantID: tenantID, AliasID: "restricted-x", Visible: true},
+		},
+	}
+	svc := NewService(repo)
+	models, err := svc.ListModelsForTenant(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	if models[0].AliasID != "restricted-x" {
+		t.Fatalf("expected restricted-x, got %q", models[0].AliasID)
+	}
+}
+
+// TC4: restricted alias with no tenant row is excluded.
+func TestListModelsForTenant_NoRow_ExcludesRestrictedAlias(t *testing.T) {
+	tenantID := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000004")
+	repo := &stubRepository{
+		aliases: []ModelAlias{
+			{AliasID: "restricted-x", Visibility: "restricted", CreatedAt: time.Now()},
+			{AliasID: "pub-a", Visibility: "public", CreatedAt: time.Now()},
+		},
+	}
+	svc := NewService(repo)
+	models, err := svc.ListModelsForTenant(context.Background(), tenantID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model (only public), got %d", len(models))
+	}
+	if models[0].AliasID != "pub-a" {
+		t.Fatalf("expected pub-a, got %q", models[0].AliasID)
+	}
+}
+
+// TC5: unauthenticated (zero tenantID) returns only public aliases.
+func TestListModelsForTenant_ZeroTenant_ReturnsPublicOnly(t *testing.T) {
+	repo := &stubRepository{
+		aliases: []ModelAlias{
+			{AliasID: "pub-a", Visibility: "public", CreatedAt: time.Now()},
+			{AliasID: "restricted-x", Visibility: "restricted", CreatedAt: time.Now()},
+		},
+	}
+	svc := NewService(repo)
+	models, err := svc.ListModelsForTenant(context.Background(), uuid.Nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model (public only for zero tenant), got %d", len(models))
+	}
+	if models[0].AliasID != "pub-a" {
+		t.Fatalf("expected pub-a, got %q", models[0].AliasID)
 	}
 }
 
