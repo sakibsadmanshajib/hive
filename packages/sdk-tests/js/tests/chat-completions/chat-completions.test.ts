@@ -77,6 +77,9 @@ describe("Chat Completions", () => {
           },
         },
       ],
+      // Force the model to invoke get_weather so the tool_calls assertions are
+      // deterministic and do not depend on the model's auto-routing decision.
+      tool_choice: { type: "function", function: { name: "get_weather" } },
     });
 
     expect(response.object).toBe("chat.completion");
