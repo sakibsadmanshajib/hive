@@ -42,7 +42,6 @@ WORKDIR /src/apps/edge-api
 RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w' -o /out/edge-api ./cmd/server
 
-
 # Runtime stage: no --platform needed here; buildx selects the correct
 # arch image automatically for the target platform.
 FROM alpine:3.20

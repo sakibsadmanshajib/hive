@@ -53,6 +53,11 @@ DISPLAY_NAME="${OCI_DISPLAY_NAME:-hive-a1-staging}"
 BACKOFF_MIN="${BACKOFF_MIN:-30}"    # seconds between first retry
 BACKOFF_MAX="${BACKOFF_MAX:-300}"   # cap at 5 minutes
 BACKOFF_FACTOR="${BACKOFF_FACTOR:-2}"
+# Ensure BACKOFF_FACTOR is a positive integer to prevent arithmetic errors.
+if ! [[ "${BACKOFF_FACTOR}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: BACKOFF_FACTOR must be a positive integer, got: '${BACKOFF_FACTOR}'" >&2
+  exit 1
+fi
 
 SHAPE="VM.Standard.A1.Flex"
 
@@ -108,15 +113,27 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 # Returns 0 and prints the instance OCID if an instance with OCI_DISPLAY_NAME
 # already exists in RUNNING or PROVISIONING state.
 check_existing() {
-  oci compute instance list \
+  local running provisioning combined
+  running=$(oci compute instance list \
     "${REGION_FLAG[@]}" \
     --compartment-id "${COMPARTMENT_ID}" \
     --display-name   "${DISPLAY_NAME}" \
     --lifecycle-state RUNNING \
-    --lifecycle-state PROVISIONING \
-    --query 'data[0].id' \
+    --query 'data[*].id' \
     --raw-output \
-    2>/dev/null || true
+    2>/dev/null || echo "[]")
+  provisioning=$(oci compute instance list \
+    "${REGION_FLAG[@]}" \
+    --compartment-id "${COMPARTMENT_ID}" \
+    --display-name   "${DISPLAY_NAME}" \
+    --lifecycle-state PROVISIONING \
+    --query 'data[*].id' \
+    --raw-output \
+    2>/dev/null || echo "[]")
+  # Combine both arrays and return first hit, if any.
+  combined=$(printf '%s\n%s\n' "${running}" "${provisioning}" \
+    | grep -v '^\[\]$' | grep -v '^$' | head -1 || true)
+  echo "${combined}"
 }
 
 # Attempt to launch a single instance.
@@ -142,7 +159,7 @@ try_launch() {
     --image-id                         "${IMAGE_ID}" \
     --subnet-id                        "${SUBNET_ID}" \
     --assign-public-ip                 true \
-    --metadata                         "{\"ssh_authorized_keys\": \"${SSH_KEY}\"}" \
+    --metadata                         "$(jq -n --arg k "${SSH_KEY}" '{"ssh_authorized_keys":$k}')" \
     --wait-for-state                   RUNNING \
     --max-wait-seconds                 600 \
     --query 'data.id' \

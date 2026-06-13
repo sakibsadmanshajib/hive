@@ -82,14 +82,22 @@ BUILD_FLAGS=(
 if [[ "${PUSH}" == "1" ]]; then
   BUILD_FLAGS+=(--push)
 else
-  # Without --push, load into local docker daemon. However, multi-platform
-  # images cannot be loaded simultaneously; load one platform at a time or
-  # omit --load and use --output type=oci,dest=<file> for artifact builds.
-  # Here we default to --load when push is disabled, which loads the image
-  # for the BUILD host's native arch only (buildx limitation).
-  echo "WARNING: --load with multi-platform only loads the host-native arch." \
-       "Use --push or export with --output to get a true multi-arch manifest." >&2
-  BUILD_FLAGS+=(--load)
+  # Count how many platforms were requested.
+  # docker buildx --load does not support multi-platform manifests; passing it
+  # with two or more platforms causes a hard error. When only one platform is
+  # specified, --load is safe and loads the image into the local daemon.
+  # When multiple platforms are specified without --push, omit any output flag
+  # so buildx builds and caches in the builder without exporting. Callers who
+  # need a portable artifact can set HIVE_PUSH=1 or use --output directly.
+  platform_count=$(echo "${PLATFORMS}" | tr ',' '\n' | grep -c .)
+  if [[ "${platform_count}" -eq 1 ]]; then
+    BUILD_FLAGS+=(--load)
+  else
+    echo "INFO: multiple platforms (${PLATFORMS}) without --push: building and caching" \
+         "in builder '${BUILDER}' only (no local daemon load)." \
+         "Re-run with --push or HIVE_PUSH=1 to export images." >&2
+    # No --load here; multi-platform load is not supported by docker buildx.
+  fi
 fi
 
 # ---- edge-api ---------------------------------------------------------------
