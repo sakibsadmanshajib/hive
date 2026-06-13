@@ -23,7 +23,7 @@ const (
 // Validated at construction time to prevent path injection into the Docker
 // Engine API URL (e.g. a value like "../images/prune" would target an
 // unintended endpoint).
-var containerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_./-]*$`)
+var containerNameRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
 
 // DockerRestarter signals a LiteLLM container restart via the Docker Engine
 // HTTP API over a Unix socket. No `docker` CLI binary is required; only the

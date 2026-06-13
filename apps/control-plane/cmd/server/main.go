@@ -261,14 +261,22 @@ func main() {
 		// LITELLM_CONFIG_PATH defaults to /etc/litellm/config.yaml (shared volume mount).
 		// LITELLM_MASTER_KEY is the LiteLLM proxy admin key.
 		// LITELLM_CONTAINER_NAME is read inside NewDefaultDockerRestarter (default: litellm).
+		litellmConfigMode := strings.TrimSpace(os.Getenv("LITELLM_CONFIG_MODE"))
 		litellmConfigPath := os.Getenv("LITELLM_CONFIG_PATH")
 		if litellmConfigPath == "" {
 			litellmConfigPath = "/etc/litellm/config.yaml"
 		}
-		litellmMasterKey := os.Getenv("LITELLM_MASTER_KEY")
-		litellmRestarter := litellmconfig.NewDefaultDockerRestarter("")
-		litellmSyncSvc := litellmconfig.NewSyncService(pool, litellmConfigPath, litellmMasterKey, litellmRestarter)
-		litellmSyncHandler = litellmconfig.NewSyncHandler(litellmSyncSvc)
+		litellmMasterKey := resolveLiteLLMMasterKey()
+		switch litellmConfigMode {
+		case "", "file":
+			litellmRestarter := litellmconfig.NewDefaultDockerRestarter("")
+			litellmSyncSvc := litellmconfig.NewSyncService(pool, litellmConfigPath, litellmMasterKey, litellmRestarter)
+			litellmSyncHandler = litellmconfig.NewSyncHandler(litellmSyncSvc)
+		case "db":
+			log.Fatalf("LITELLM_CONFIG_MODE=db is documented but not yet implemented in control-plane startup")
+		default:
+			log.Fatalf("invalid LITELLM_CONFIG_MODE %q: supported values are file (default) and db (not yet implemented)", litellmConfigMode)
+		}
 		log.Println("litellm sync handler ready (Phase 20 Plan 03)")
 
 		routingRepo := routing.NewPgxRepository(pool)

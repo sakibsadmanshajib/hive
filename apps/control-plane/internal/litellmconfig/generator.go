@@ -6,6 +6,7 @@ package litellmconfig
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -104,11 +105,16 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 
 	if existingRaw, readErr := os.ReadFile(existingPath); readErr == nil {
 		var existingMap map[string]interface{}
-		if parseErr := yaml.Unmarshal(existingRaw, &existingMap); parseErr == nil && existingMap != nil {
+		if parseErr := yaml.Unmarshal(existingRaw, &existingMap); parseErr != nil {
+			return fmt.Errorf("litellmconfig: parse existing config: %w", parseErr)
+		}
+		if existingMap != nil {
 			merged = mergeConfig(existingMap, newMap)
 		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return fmt.Errorf("litellmconfig: read existing config: %w", readErr)
 	}
-	// If the file doesn't exist or can't be parsed, merged stays as newMap (first-run).
+	// If the file does not exist, merged stays as newMap (first-run).
 
 	finalData, err := yaml.Marshal(merged)
 	if err != nil {

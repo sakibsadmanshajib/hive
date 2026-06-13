@@ -26,7 +26,7 @@ func startFakeDockerEngine(t *testing.T, socketPath string, statusCode int, rece
 	srv := &http.Server{
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			select {
-			case received <- r.URL.Path:
+			case received <- r.Method + " " + r.URL.Path:
 			default:
 			}
 			if statusCode == http.StatusNotFound {
@@ -61,7 +61,7 @@ func TestDockerRestarterCallsDockerEngineAPI(t *testing.T) {
 
 	select {
 	case req := <-received:
-		assert.Contains(t, req, "/containers/test-litellm/restart")
+		assert.Equal(t, http.MethodPost+" /containers/test-litellm/restart", req)
 	default:
 		t.Fatal("no request received by fake Docker Engine")
 	}
@@ -95,6 +95,7 @@ func TestDockerRestarterRejectsInvalidContainerName(t *testing.T) {
 		"litellm\x00null",
 		"name with spaces",
 		"name;rm -rf",
+		"litellm/foo",
 	}
 	for _, name := range cases {
 		_, err := litellmconfig.NewDockerRestarter(name, "/var/run/docker.sock")
@@ -120,7 +121,7 @@ func TestDockerRestarterUsesEnvVarContainerName(t *testing.T) {
 
 	select {
 	case path := <-received:
-		assert.Contains(t, path, "custom-litellm")
+		assert.Equal(t, http.MethodPost+" /containers/custom-litellm/restart", path)
 	default:
 		t.Fatal("no request received")
 	}
@@ -144,7 +145,7 @@ func TestDockerRestarterDefaultContainerName(t *testing.T) {
 
 	select {
 	case path := <-received:
-		assert.Equal(t, fmt.Sprintf("/containers/%s/restart", "litellm"), path)
+		assert.Equal(t, http.MethodPost+" "+fmt.Sprintf("/containers/%s/restart", "litellm"), path)
 	default:
 		t.Fatal("no request received")
 	}
