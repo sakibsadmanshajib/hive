@@ -1,39 +1,35 @@
-# ─── Phase 15: Local batch executor ───
-# OpenRouter and Groq chat-completions routes ship with
-# `route_capabilities.executor_kind = 'local'` (set in supabase/migrations/
-# 0015_batch_local_executor.sql). The control-plane submitter routes
-# `POST /v1/batches` for these providers to the in-process executor (which
-# calls `POST /v1/chat/completions` line-by-line via this LiteLLM gateway)
-# instead of LiteLLM's `POST /v1/files purpose=batch` upload path — that
-# path is only supported by openai/azure/vertex_ai/anthropic providers.
-# No `files_settings` block is required for the openrouter/groq batch
-# success-path under this design. See
-# .planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md
-# for the original constraint.
+# ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─
+#
+# IMPORTANT: Do NOT add a second top-level `model_list:` key. YAML parsers do
+# not merge duplicate keys; a second key silently drops everything in the first.
+# Append new models inside the single model_list block, before litellm_settings.
+#
+# Phase 15 note: OpenRouter and Groq chat-completions routes ship with
+# `route_capabilities.executor_kind = 'local'` in the database so the
+# control-plane local batch executor handles POST /v1/batches for these
+# providers instead of LiteLLM's upstream file-upload path.
+# See .planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md
 
+# Demo budget posture — paid-route count
+# ──────────────────────────────────────
+# The demo caps paid-provider usage. Of the five routes below, only ONE is a
+# hard-coded paid model: route-openrouter-embedding-fallback (qwen3-embedding-8b),
+# the last resort in the embedding cascade after the free Nemotron-Embed primary.
+# The flagship (route-openrouter-default) and vision (route-openrouter-auto)
+# routes resolve their slug from env vars that default to `openrouter/free` in
+# .env.example, so out of the box they cost nothing; an operator opts into a paid
+# flagship only by setting OPENROUTER_DEFAULT_MODEL to a paid slug. The Groq fast
+# route is free-tier. Net: 1 hard-coded paid route, within the demo cap of 2.
+# OpenRouter exposes no embedding models on /api/v1/models (embeddings ride the
+# openai/ generic adapter), so there is no verified free embedding slug to swap
+# the fallback to; it stays paid by necessity and is documented here.
 model_list:
-  # OpenRouter primary routes (chat).
-  #
-  # OpenRouter's `:free` and `/free` shapes route across a multi-provider
-  # backing pool with different tokenizers + reasoning budgets, which
-  # produces wild variance in `usage.prompt_tokens` and `usage.completion_tokens`
-  # for identical requests (see .planning/debug/flaky-usage-tokens-root-cause.md).
-  # PR #99 added an edge-api clamp that prevents the worst symptom (ct=0 on
-  # non-empty output → 0-billed); this provider pin attacks the variance
-  # itself so the clamp rarely needs to fire.
-  #
-  # Pinning strategy (effective when OPENROUTER_*_MODEL points at a specific
-  # model — e.g. `openrouter/meta-llama/llama-3.3-70b-instruct:free` — rather
-  # than the meta `openrouter/free` route, which OR resolves before honoring
-  # provider preferences):
-  #
-  #   provider.allow_fallbacks: false  — refuse silent re-route to a
-  #                                       different backing tokenizer
-  #   provider.sort: throughput        — prefer fastest reporter; ties broken
-  #                                       deterministically by OR
-  #
-  # Groq routes below stay as the cross-provider safety net so a strict pin
-  # never produces a hard 503 — see `litellm_settings.fallbacks` further down.
+  # ── 1. Flagship chat (paid-capable; defaults to free via env) ───────────────
+  # OpenRouter: Meta Llama 3.3 70B Instruct — strong instruction-following,
+  # 128k context, best quality/cost ratio for the demo tier.
+  # Pinned to a specific model slug to avoid usage-token variance from the
+  # generic `openrouter/free` pool (see PR #99 and
+  # .planning/debug/flaky-usage-tokens-root-cause.md for background).
   - model_name: route-openrouter-default
     litellm_params:
       model: os.environ/OPENROUTER_DEFAULT_MODEL
@@ -42,6 +38,21 @@ model_list:
         provider:
           allow_fallbacks: false
           sort: throughput
+
+  # ── 2. Fast / cheap chat (Groq free tier) ───────────────────────────────────
+  # Groq free tier: moonshotai/kimi-k2-instruct — fast inference, free quota,
+  # ideal for lightweight everyday prompts and cost-sensitive paths.
+  # Falls back to the flagship route automatically via litellm_settings.fallbacks
+  # if Groq's free quota is exhausted or the service is unavailable.
+  - model_name: route-groq-fast
+    litellm_params:
+      model: os.environ/GROQ_FAST_MODEL
+      api_key: os.environ/GROQ_API_KEY
+
+  # ── 3. Vision (OpenRouter free pool) ────────────────────────────────────────
+  # OpenRouter: meta-llama/llama-4-scout:free — vision-capable (image input),
+  # available on the OpenRouter free tier. Used for multimodal / image-analysis
+  # requests routed by the edge-api capability selector.
   - model_name: route-openrouter-auto
     litellm_params:
       model: os.environ/OPENROUTER_AUTO_MODEL
@@ -50,42 +61,16 @@ model_list:
         provider:
           allow_fallbacks: false
           sort: throughput
-  - model_name: route-openrouter-fast-fallback
-    litellm_params:
-      model: os.environ/OPENROUTER_FAST_FALLBACK_MODEL
-      api_key: os.environ/OPENROUTER_API_KEY
-      extra_body:
-        provider:
-          allow_fallbacks: false
-          sort: throughput
 
-  # Groq FREE tier fallback for chat. gpt-oss-20b handles everyday
-  # prompts; gpt-oss-120b reserved for reasoning-heavy workloads.
-  - model_name: route-groq-fast
-    litellm_params:
-      model: os.environ/GROQ_FAST_MODEL
-      api_key: os.environ/GROQ_API_KEY
-  - model_name: route-groq-reasoning
-    litellm_params:
-      model: os.environ/GROQ_REASONING_MODEL
-      api_key: os.environ/GROQ_API_KEY
-
-  # Embedding routes. Both primary and fallback ride OpenRouter after NVIDIA
-  # retired its retrieval-line NIM models in bulk on 2026-05-18 (both the
-  # 300m-embed and nv-embedqa-1b-v2 returned HTTP 410 on the same day).
+  # ── 4. Embedding (OpenRouter free pool, with paid fallback) ─────────────────
+  # LiteLLM's native `openrouter/` provider does NOT map the /embeddings
+  # endpoint. We use the `openai/` generic adapter with `api_base` pointing
+  # at OpenRouter's base URL so the model slug is passed through directly.
   #
-  # LiteLLM's native `openrouter/` provider does NOT map the `/embeddings`
-  # endpoint, so we route through the OpenAI-compatible adapter pointing
-  # at OpenRouter's base URL (`https://openrouter.ai/api/v1`). The
-  # `openai/` prefix is what tells LiteLLM to use the generic adapter,
-  # and `api_base` redirects it at OpenRouter. The model id is the
-  # OpenRouter slug *without* the `openrouter/` prefix.
-  #
-  # Primary: NVIDIA Nemotron-Embed VL 1B (multimodal text+image embeddings)
-  # via OpenRouter's `:free` pool.
-  # Fallback: Qwen3 Embedding 8B via OpenRouter (paid, larger context).
-  # Triggered by litellm_settings.fallbacks after the primary's retries
-  # exhaust.
+  # Primary: NVIDIA Nemotron-Embed VL 1B (free pool, multimodal embeddings).
+  # Fallback: Qwen3 Embedding 8B (paid, larger context window).
+  # NVIDIA NIM retrieval models were retired on 2026-05-18 (HTTP 410); the
+  # Nemotron-Embed VL route is the replacement via OpenRouter's free pool.
   - model_name: route-openrouter-embedding
     litellm_params:
       model: openai/nvidia/llama-nemotron-embed-vl-1b-v2:free
@@ -116,7 +101,6 @@ litellm_settings:
   fallbacks:
     - route-openrouter-default: [route-groq-fast]
     - route-openrouter-auto: [route-groq-fast]
-    - route-openrouter-fast-fallback: [route-groq-fast]
     # Embedding cascade: Nemotron-Embed VL (free pool) → Qwen3 Embedding
     # (paid, larger context). NVIDIA NIM is no longer in the chain after
     # the 2026-05-18 retrieval-model EOL wave.
@@ -126,34 +110,9 @@ files_settings:
   - custom_llm_provider: openrouter
     api_key: os.environ/OPENROUTER_API_KEY
 
-# ─── EnterpriseEdge: Ollama local inference (optional) ───────────────────────
-# To activate local Ollama models, append entries to the model_list above
-# (do NOT add a second top-level `model_list:` key — YAML parsers do not merge
-# duplicate keys; a second key would silently drop all OpenRouter/Groq routes).
-#
-# Steps:
-#   1. Set OLLAMA_BASE_URL=http://ollama:11434 in .env.
-#   2. Cut the commented entries below and paste them at the end of the
-#      `model_list:` block above (before the `litellm_settings:` line),
-#      removing the leading `#` from each line.
-#   3. Restart LiteLLM: docker compose --profile enterprise restart litellm
-#   4. Pull the model inside the Ollama container:
-#        docker exec -it hive-ollama-1 ollama pull llama3
-#
-# NOTE: These entries only wire LiteLLM. Routing requests through the Hive
-# edge-api (SelectRoute) also requires provider_capabilities rows and route
-# aliases in the database. That wiring is planned for a future phase; until
-# it ships, direct LiteLLM calls work but edge-api routing to these model
-# aliases will return 404.
-#
-#   - model_name: ollama/llama3
-#     litellm_params:
-#       model: ollama_chat/llama3
-#       api_base: os.environ/OLLAMA_BASE_URL
-#
-#   - model_name: ollama/mistral
-#     litellm_params:
-#       model: ollama_chat/mistral
-#       api_base: os.environ/OLLAMA_BASE_URL
-#
+# ─── Ollama local inference: NOT active in cloud demo ────────────────────────
+# Ollama entries are intentionally omitted from this config. The cloud demo
+# runs on managed providers (OpenRouter + Groq) only. To activate Ollama for
+# the enterprise profile, append entries to model_list above (do NOT add a
+# second top-level model_list: key) and follow the steps in deploy/gcp/README.md.
 # ─────────────────────────────────────────────────────────────────────────────
