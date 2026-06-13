@@ -6,6 +6,8 @@
 
 ---
 
+<!-- VERIFY advisor name spelling (Susana Martins?) before sending -->
+
 Hi Susana,
 
 It has been a while since we last connected, when you kindly invited me to [event name / approx date]. Thank you again for that. I went heads-down building ever since, and I am reaching out now because the work has reached a point where your help could make a real difference.
