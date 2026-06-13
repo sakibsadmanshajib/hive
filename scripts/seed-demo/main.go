@@ -68,9 +68,39 @@ var demoEndpoints = []string{
 	"/v1/embeddings",
 }
 
+// safeEnvironments is the ALLOWLIST of HIVE_ENV values (trimmed, lowercased)
+// in which the demo seed is permitted to run. The seed writes synthetic rows
+// (an auth.users stub, accounts, API keys, ledger grants); it must never touch
+// a real production database. An unset or unrecognised HIVE_ENV fails closed.
+var safeEnvironments = map[string]bool{
+	"demo":        true,
+	"staging":     true,
+	"local":       true,
+	"development": true,
+	"test":        true,
+}
+
+// checkSeedSafety refuses to run unless HIVE_ENV is in the allowlist. This
+// mirrors the payment stub's production guard: the seed must only ever run in
+// a known-safe environment, never against real production data.
+func checkSeedSafety() {
+	env := strings.ToLower(strings.TrimSpace(os.Getenv("HIVE_ENV")))
+	if !safeEnvironments[env] {
+		log.Fatalf(
+			"seed-demo: refusing to run — HIVE_ENV must be one of "+
+				"{demo, staging, local, development, test}; got HIVE_ENV=%q. "+
+				"This script writes synthetic data and must never touch a production database.",
+			strings.TrimSpace(os.Getenv("HIVE_ENV")),
+		)
+	}
+}
+
 func main() {
 	ctx := context.Background()
 	verbose := os.Getenv("DEMO_SEED_VERBOSE") == "1"
+
+	// Fail closed unless we are in a known-safe environment.
+	checkSeedSafety()
 
 	dbURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	if dbURL == "" {
@@ -151,12 +181,20 @@ func (s *seeder) seedAll(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 // auth.users stub
 // Required because public.accounts.owner_user_id FKs to auth.users(id).
-// We insert a minimal stub row only; the password hash is not real and
-// cannot be used to log in.
+//
+// This row is NON-LOGINABLE BY DESIGN: encrypted_password is a fixed
+// placeholder string, not a valid bcrypt hash, so no password can ever match
+// it and the account cannot authenticate. The row exists solely to satisfy the
+// foreign key from public.accounts. Because the seed only runs in allowlisted
+// non-production environments (see checkSeedSafety), this synthetic identity
+// must never coexist with real user data; running it against a production
+// auth.users table is explicitly disallowed.
 // ---------------------------------------------------------------------------
 
 func (s *seeder) seedAuthUser(ctx context.Context) error {
-	// Produce a placeholder hash that is not a real bcrypt value.
+	// Produce a placeholder hash that is not a real bcrypt value. Combined with
+	// the non-production-only guard, this guarantees the demo identity is never
+	// usable to log in and never lands beside real credentials.
 	placeholder := "$2a$10$seed-demo-not-a-real-password-hash-placeholder-value-x"
 	return s.exec(ctx, "auth.users upsert", `
 		INSERT INTO auth.users (
@@ -458,7 +496,7 @@ func (s *seeder) seedUsage(ctx context.Context) error {
 				'completed', $5, $6, 'completed',
 				$7, $8, 0, 0, $9, $10
 			)
-			ON CONFLICT DO NOTHING
+			ON CONFLICT (id) DO NOTHING
 		`, eventID, demoAccountID, attemptID, requestID,
 			endpoint, model, inputTokens, outputTokens, creditDelta, completedAt)
 		if err != nil {

@@ -79,6 +79,22 @@ func (a *ledgerGrantAdapter) GrantCredits(
 	return err
 }
 
+// stubCountryAdapter wraps *profiles.Service to satisfy the
+// paymentStub.AccountCountryReader interface, exposing only the account's ISO
+// country code so the stub can apply the same country to rail access control
+// as the production payment service. Used only when HIVE_PAYMENTS_STUB=true.
+type stubCountryAdapter struct {
+	svc *profiles.Service
+}
+
+func (a *stubCountryAdapter) CountryCode(ctx context.Context, accountID uuid.UUID) (string, error) {
+	profile, err := a.svc.GetAccountProfile(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	return profile.CountryCode, nil
+}
+
 // accountsResolverAdapter adapts accounts.Service to the payments.AccountResolver interface.
 // It extracts the viewer from context (set by auth middleware) and resolves the current account.
 type accountsResolverAdapter struct {
@@ -617,14 +633,11 @@ func main() {
 
 		paymentsRepo := payments.NewPgxRepository(pool)
 
-		// Hard-fail if the payment stub is enabled in production. Checked here
-		// (main.go) and inside the stub package (CheckProductionSafety) for
-		// defense in depth: neither path alone is sufficient if the other is
-		// accidentally removed during a future refactor.
-		if paymentStub.IsEnabled() && strings.EqualFold(strings.TrimSpace(os.Getenv("HIVE_ENV")), "production") {
-			log.Fatal("payments: HIVE_PAYMENTS_STUB must never be enabled when HIVE_ENV=production — " +
-				"refusing to start to prevent instant-credit bypass of real payment rails")
-		}
+		// Hard-fail unless the payment stub is allowed to run in this
+		// environment. The allowlist (demo, staging, local, development, test)
+		// lives in paymentStub.CheckProductionSafety as the single source of
+		// truth; an unset or unrecognised HIVE_ENV fails closed so the
+		// instant-credit stub can never silently activate in real production.
 		paymentStub.CheckProductionSafety()
 
 		var paymentsSvc payments.PaymentService
@@ -633,7 +646,12 @@ func main() {
 			// ledger; no payment rail is called. Gate: HIVE_PAYMENTS_STUB=true.
 			// ledgerGrantAdapter wraps ledger.Service to satisfy the stub's
 			// LedgerGranter interface (returns error only, discards LedgerEntry).
-			paymentsSvc = paymentStub.NewStubService(&ledgerGrantAdapter{svc: ledgerSvc})
+			// stubCountryAdapter lets the stub apply the same country to rail
+			// access control as production via payments.AvailableRails.
+			paymentsSvc = paymentStub.NewStubService(
+				&ledgerGrantAdapter{svc: ledgerSvc},
+				&stubCountryAdapter{svc: profilesSvc},
+			)
 		} else {
 			realSvc := payments.NewService(paymentsRepo, ledgerSvc, profilesSvc, fxSvc, rails)
 			paymentsSvc = realSvc
