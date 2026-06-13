@@ -1,25 +1,391 @@
 ---
-// Security & Data Residency page stub (scope: onprem). The page builder fills
-// the body from SPEC.md: jurisdiction diagram + two exposure vectors + the
-// generic court sentence + how Hive removes it + designed-for controls +
-// honest Hive-Cloud scope boundary + security disclaimer. No Pinterest here.
+// Security & Data Residency page (scope: onprem). Highest claim-risk page.
+//
+// Structure (SPEC.md Security map):
+//   1. Hero: states the cloud-AI exposure plainly.
+//   2. Jurisdiction diagram: teal on-prem boundary with zero outbound arrows
+//      vs a red without-Hive external-cloud path. Rendered as a labelled
+//      figure, NOT a ChartFrame: this is an architectural diagram, not a data
+//      chart, so it must not carry a data-source citation.
+//   3. Two exposure vectors: US CLOUD Act + litigation discovery, with the
+//      exact generic court sentence (no date, no case, no provider name).
+//   4. How Hive removes the exposure.
+//   5. Designed-for controls, not certifications.
+//   6. Honest Hive Cloud scope boundary.
+//   7. Verbatim security disclaimer (names S Cubed).
+//   8. Closing CTA.
+//
+// Claim guardrail: never assert a framework is satisfied or accredited;
+// sovereignty stays on-prem scoped and qualified in the same sentence; no cost
+// proof and no named-vendor cost story belong on this page. Legal and
+// regulatory statements are wrapped in <Claim id> tied to the matching
+// sources[].claim_id in security.mdx (the compliance source of record).
 import Base from '../layouts/Base.astro';
+import Claim from '../components/Claim.astro';
+import JurisdictionDiagram from '../components/charts/JurisdictionDiagram.astro';
+
+const eyebrow = 'Security and data residency';
 ---
 
 <Base
   title="Security & Data Residency"
   description="Designed for on-prem data residency. Open model weights run entirely on your hardware; inference never calls an external API."
 >
+  {/* 1. HERO — state the exposure plainly. */}
+  <section class="shell py-section hero">
+    <p class="eyebrow">{eyebrow}</p>
+    <h1>Your data does not leave your building.</h1>
+    <p class="lede">
+      Cloud AI works by sending your prompts, your documents, and your
+      customers' information to a provider you do not control. Hive runs the
+      model on your own hardware instead. Self-hosted deployment: your hardware,
+      your network, your data.
+    </p>
+    <div class="cta-row">
+      <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+      <a class="cta cta--ghost tap-target" href="#how-hive-removes-it">
+        See how it works
+      </a>
+    </div>
+  </section>
+
+  {/* 2. JURISDICTION DIAGRAM (architectural diagram, no data citation). */}
+  <section class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">Where your data goes</p>
+      <h2>Two architectures. One leaves your building.</h2>
+      <p class="intro">
+        With Hive on-prem, open model weights run entirely on your hardware and
+        inference never calls an external API. Without Hive, every request
+        travels to an external cloud service that sits under a foreign
+        jurisdiction.
+      </p>
+
+      <figure class="diagram">
+        <JurisdictionDiagram
+          ariaLabel="On the left, a teal boundary labelled your network boundary contains your data and the model with no outbound arrows. On the right, a red path shows your data leaving your network to an external cloud AI service under foreign jurisdiction."
+        />
+        <figcaption class="diagram__reading">
+          On the left, every inference stays inside your network boundary. On
+          the right, your data leaves your network the moment a cloud AI service
+          answers a request.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  {/* 3. TWO EXPOSURE VECTORS (CLOUD Act + litigation discovery). */}
   <section class="shell py-section">
-    <h1>Security and data residency</h1>
-    <p class="placeholder">TODO: page builder fills this from SPEC.md.</p>
+    <p class="eyebrow">What you are exposed to</p>
+    <h2>Two ways your data becomes someone else's to reach.</h2>
+    <p class="intro">
+      Once your data leaves your network, there are two distinct ways it becomes
+      reachable by someone other than you.
+    </p>
+
+    <div class="vectors">
+      <article class="vector-card">
+        <h3 class="vector-card__title">Government compulsion</h3>
+        <p>
+          <Claim id="cloud-act-extraterritorial">The US CLOUD Act lets US
+          authorities compel a US-owned provider to hand over data it holds or
+          controls, regardless of where that data is physically stored.</Claim>
+        </p>
+        <p class="vector-card__note">
+          A data centre in your own country does not remove this exposure when
+          the operator is US-owned.
+        </p>
+      </article>
+
+      <article class="vector-card">
+        <h3 class="vector-card__title">Litigation discovery</h3>
+        <p>
+          <Claim id="litigation-discovery">In a legal dispute, a court can order
+          a provider to produce the electronically stored information it holds
+          about you.</Claim>
+        </p>
+        <p class="vector-card__note">
+          Data you handed to a third party can be pulled into a matter you are
+          not even a party to.
+        </p>
+      </article>
+    </div>
+
+    <p class="court-line">
+      <Claim id="court-preserve-logs">A US court has already ordered a major AI
+      provider to preserve chat logs.</Claim>
+    </p>
+  </section>
+
+  {/* 4. HOW HIVE REMOVES IT. */}
+  <section id="how-hive-removes-it" class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">How Hive removes it</p>
+      <h2>There is no provider to compel, because the provider is you.</h2>
+      <ul class="removes">
+        <li>Open model weights run entirely on your hardware.</li>
+        <li>Every inference executes locally.</li>
+        <li>
+          No prompt, no response, and no document ever calls an external API or
+          leaves your network boundary.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  {/* 5. DESIGNED-FOR CONTROLS, NOT CERTIFICATIONS. */}
+  <section class="shell py-section">
+    <p class="eyebrow">Designed-for controls, not certifications</p>
+    <h2>Not a compliance certification. A control architecture you can audit.</h2>
+    <p class="intro">
+      Hive is designed for on-prem data residency, and customers validate
+      regulatory fit with their own counsel. The controls are architectural
+      facts you can inspect, not badges we claim.
+    </p>
+    <ul class="controls">
+      <li>The model runs inside your network.</li>
+      <li>The inference path has no outbound call.</li>
+      <li>You hold the hardware, the keys, and the logs.</li>
+    </ul>
+  </section>
+
+  {/* 6. HONEST HIVE CLOUD SCOPE BOUNDARY. */}
+  <section class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">Hive Cloud is different</p>
+      <h2>We say the boundary plainly.</h2>
+      <p class="intro">
+        Hive Cloud runs on third-party infrastructure. It does not carry the
+        same data-residency properties as the on-prem edition. If your
+        requirement is that data stays on hardware you control, the on-prem
+        edition is the one that meets it.
+      </p>
+    </div>
+  </section>
+
+  {/* 7. SECURITY DISCLAIMER — verbatim, names S Cubed. */}
+  <section class="shell py-section">
+    <p class="eyebrow">Disclaimer</p>
+    <p class="disclaimer" role="note">
+      Hive's on-prem deployment is designed so that your data does not leave
+      your infrastructure. This is an architectural property, not a compliance
+      certification. Whether this architecture satisfies your organisation's
+      obligations under PIPEDA, HIPAA, or other frameworks is a determination
+      your team must make with qualified legal counsel. S Cubed does not provide
+      legal or compliance advice.
+    </p>
+  </section>
+
+  {/* 8. CLOSING CTA. */}
+  <section class="band">
+    <div class="shell py-section closing">
+      <h2>See it run inside your own network.</h2>
+      <div class="cta-row">
+        <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost tap-target" href="/pricing">See Pricing</a>
+      </div>
+    </div>
   </section>
 </Base>
 
 <style>
-  .placeholder {
+  /* Shared eyebrow (team-aligned: mirrors Footer geo-label). */
+  .eyebrow {
     color: var(--text-faint);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+
+  /* Alternating full-bleed band on a raised surface. */
+  .band {
+    background-color: var(--bg-raised);
+    border-block: 1px solid var(--border);
+  }
+
+  h2 {
+    font-size: 30px;
+    margin: 0;
+  }
+
+  .lede {
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1.6;
+    max-width: 60ch;
+    margin: 20px 0 0;
+  }
+
+  .intro {
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 68ch;
+    margin: 16px 0 0;
+  }
+
+  /* CTA recipe (team-aligned). Primary = gold pill (Nav .nav__cta). */
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 32px;
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
     font-size: 15px;
-    margin-top: 24px;
+    padding: 10px 18px;
+    border-radius: 10px;
+  }
+
+  .cta--primary {
+    background-color: var(--gold);
+    color: #1a1205;
+  }
+
+  .cta--primary:hover {
+    filter: brightness(1.05);
+  }
+
+  .cta--ghost {
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    background-color: transparent;
+  }
+
+  .cta--ghost:hover {
+    border-color: var(--text-faint);
+  }
+
+  /* Jurisdiction diagram figure. */
+  .diagram {
+    margin: 32px 0 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 28px;
+  }
+
+  .diagram :global(svg) {
+    width: 100%;
+    height: auto;
+  }
+
+  .diagram__reading {
+    margin: 16px 0 0;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  /* Exposure-vector cards. Risk framing = red left accent. */
+  .vectors {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+    margin-top: 32px;
+  }
+
+  .vector-card {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--red);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+  }
+
+  .vector-card__title {
+    font-size: 17px;
+    margin: 0 0 12px;
+  }
+
+  .vector-card p {
+    margin: 0;
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.55;
+  }
+
+  .vector-card__note {
+    margin-top: 12px !important;
+    color: var(--text-muted) !important;
+    font-size: 14px !important;
+  }
+
+  .court-line {
+    margin: 28px 0 0;
+    color: var(--text);
+    font-size: 17px;
+    line-height: 1.55;
+    max-width: 68ch;
+  }
+
+  /* Safe / control lists. Teal marker = sovereign / safe. */
+  .removes,
+  .controls {
+    margin: 24px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    max-width: 68ch;
+  }
+
+  .removes li,
+  .controls li {
+    position: relative;
+    padding-left: 28px;
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  .removes li::before,
+  .controls li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.45em;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background-color: var(--teal);
+  }
+
+  /* Verbatim disclaimer block. */
+  .disclaimer {
+    margin: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 78ch;
+  }
+
+  .closing {
+    text-align: center;
+  }
+
+  .closing .cta-row {
+    justify-content: center;
+  }
+
+  @media (max-width: 760px) {
+    .vectors {
+      grid-template-columns: 1fr;
+    }
+    h2 {
+      font-size: 26px;
+    }
   }
 </style>

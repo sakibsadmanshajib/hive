@@ -12,7 +12,91 @@ sources:
     url: https://www.scubed.co
     label: A US court has already ordered a major AI provider to preserve chat logs.
     retrieved: June 2026
+  - claim_id: cloud-act-extraterritorial
+    url: https://www.congress.gov/115/plaws/publ141/PLAW-115publ141.pdf
+    label: The US CLOUD Act amends the Stored Communications Act to reach data held by US-owned providers regardless of where it is physically stored.
+    retrieved: June 2026
+  - claim_id: litigation-discovery
+    url: https://www.law.cornell.edu/rules/frcp/rule_34
+    label: US civil procedure lets a party compel production of electronically stored information that an opposing party holds or controls.
+    retrieved: June 2026
 updated: 2026-06-13
 ---
 
-{/* TODO: page builder fills this from SPEC.md. scope:onprem — sovereignty wording is legitimate here. No Pinterest on this page. */}
+{/*
+  Security and data residency page (scope: onprem). This MDX file is the
+  compliance source of record: every regulatory or legal statement that
+  appears on the rendered page (src/pages/security.astro) is mirrored here
+  inside a <Claim id> with a matching sources[].claim_id above, so the
+  content-lint cross-check passes and each claim is citation-backed.
+
+  Highest claim-risk page. Hard rules enforced here:
+    1. Never assert a framework is satisfied or accredited.
+    2. Sovereignty is on-prem scoped, qualified in the same sentence.
+    3. The court sentence is verbatim and generic: no date, no case, no name.
+    4. No cost proof and no named-vendor cost story on this page.
+    5. The security disclaimer is verbatim and names S Cubed.
+*/}
+
+## Your data does not leave your building
+
+Cloud AI works by sending your prompts, your documents, and your customers'
+information to a provider you do not control. Hive runs the model on your own
+hardware instead, so every inference stays inside your network boundary and no
+data leaves your building.
+
+## Two architectures. One leaves your building.
+
+With Hive on-prem, open model weights run entirely on your hardware and
+inference never calls an external API. Without Hive, every request travels to an
+external cloud service that sits under a foreign jurisdiction.
+
+## What you are exposed to with cloud AI
+
+There are two distinct ways your data becomes reachable by someone other than
+you once it leaves your network.
+
+<Claim id="cloud-act-extraterritorial">The US CLOUD Act lets US authorities
+compel a US-owned provider to hand over data it holds or controls, regardless of
+where that data is physically stored.</Claim> A data centre in your own country
+does not remove this exposure when the operator is US-owned.
+
+The second vector is litigation. <Claim id="litigation-discovery">In a legal
+dispute, a court can order a provider to produce the electronically stored
+information it holds about you.</Claim> Data you handed to a third party can be
+pulled into a matter you are not even a party to.
+
+<Claim id="court-preserve-logs">A US court has already ordered a major AI
+provider to preserve chat logs.</Claim>
+
+## How Hive removes the exposure
+
+Open model weights run entirely on your hardware. Every inference executes
+locally. No prompt, no response, and no document ever calls an external API or
+leaves your network boundary. There is no provider to compel, because the
+provider is you.
+
+## Designed-for controls, not certifications
+
+Not a compliance certification. A control architecture you can audit. Hive is
+designed for on-prem data residency, and customers validate regulatory fit with
+their own counsel.
+
+The controls are architectural facts you can inspect: the model runs inside your
+network, the inference path has no outbound call, and you hold the hardware, the
+keys, and the logs.
+
+## Hive Cloud is different, and we say so plainly
+
+Hive Cloud runs on third-party infrastructure. It does not carry the same
+data-residency properties as the on-prem edition. If your requirement is that
+data stays on hardware you control, the on-prem edition is the one that meets it.
+
+## Disclaimer
+
+Hive's on-prem deployment is designed so that your data does not leave your
+infrastructure. This is an architectural property, not a compliance
+certification. Whether this architecture satisfies your organisation's
+obligations under PIPEDA, HIPAA, or other frameworks is a determination your team
+must make with qualified legal counsel. S Cubed does not provide legal or
+compliance advice.
