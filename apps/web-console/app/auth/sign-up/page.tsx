@@ -94,53 +94,64 @@ export default function SignUpPage() {
     setError(null);
     setLoading(true);
 
-    // Abuse-prevention precheck (issue #116): rate limit, disposable-domain
-    // blocklist, and Turnstile CAPTCHA. The call goes through a Next.js Route
-    // Handler so CONTROL_PLANE_BASE_URL stays server-side only.
-    const precheckRes = await fetch("/api/auth/signup-precheck", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, captcha_token: captchaToken ?? "" }),
-    });
+    try {
+      // Abuse-prevention precheck (issue #116): rate limit, disposable-domain
+      // blocklist, and Turnstile CAPTCHA. The call goes through a Next.js Route
+      // Handler so CONTROL_PLANE_BASE_URL stays server-side only.
+      const precheckRes = await fetch("/api/auth/signup-precheck", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, captcha_token: captchaToken ?? "" }),
+      });
 
-    if (!precheckRes.ok) {
-      let msg =
-        "We could not complete your sign-up. Please try again or use a different email address.";
-      try {
-        const body = (await precheckRes.json()) as { error?: string };
-        if (typeof body.error === "string" && body.error.length > 0) {
-          msg = body.error;
+      if (!precheckRes.ok) {
+        let msg =
+          "We could not complete your sign-up. Please try again or use a different email address.";
+        try {
+          const body: unknown = await precheckRes.json();
+          if (
+            body !== null &&
+            typeof body === "object" &&
+            "error" in body &&
+            typeof (body as Record<string, unknown>).error === "string" &&
+            ((body as Record<string, unknown>).error as string).length > 0
+          ) {
+            msg = (body as Record<string, unknown>).error as string;
+          }
+        } catch {
+          // Ignore parse errors; generic message is already set.
         }
-      } catch {
-        // Ignore parse errors; generic message is already set.
+        setError(msg);
+        return;
       }
-      setError(msg);
+
+      const appUrl =
+        process.env.NEXT_PUBLIC_APP_URL ??
+        (typeof window !== "undefined"
+          ? window.location.origin
+          : "http://localhost:3000");
+
+      const { error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          emailRedirectTo: `${appUrl}/auth/callback`,
+        },
+      });
+
+      if (signUpError) {
+        setError(signUpError.message);
+        return;
+      }
+
+      setSuccess(true);
+    } catch {
+      setError(
+        "An unexpected error occurred. Please check your connection and try again."
+      );
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const appUrl =
-      process.env.NEXT_PUBLIC_APP_URL ??
-      (typeof window !== "undefined"
-        ? window.location.origin
-        : "http://localhost:3000");
-
-    const { error: signUpError } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${appUrl}/auth/callback`,
-      },
-    });
-
-    if (signUpError) {
-      setError(signUpError.message);
-      setLoading(false);
-      return;
-    }
-
-    setSuccess(true);
-    setLoading(false);
   }
 
   if (success) {

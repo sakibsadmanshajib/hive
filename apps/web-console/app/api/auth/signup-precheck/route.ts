@@ -43,24 +43,30 @@ export async function POST(request: Request): Promise<Response> {
 
   const upstreamUrl = `${baseUrl}/api/v1/auth/sign-up/precheck`;
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
   let upstream: Response;
   try {
     upstream = await fetch(upstreamUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email: body.email, captcha_token: body.captcha_token }),
+      signal: controller.signal,
     });
   } catch {
-    // Network-level failure: do not expose internal URL or error detail.
+    // Network-level failure or timeout: do not expose internal URL or error detail.
     return NextResponse.json(
       { error: "Service temporarily unavailable. Please try again." },
       { status: 503 }
     );
+  } finally {
+    clearTimeout(timeoutId);
   }
 
-  let upstreamBody: Record<string, string>;
+  let upstreamBody: Record<string, unknown>;
   try {
-    upstreamBody = (await upstream.json()) as Record<string, string>;
+    upstreamBody = (await upstream.json()) as Record<string, unknown>;
   } catch {
     upstreamBody = {};
   }
