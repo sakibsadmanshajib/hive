@@ -47,6 +47,18 @@ func IsEnabled() bool {
 	return strings.TrimSpace(os.Getenv(envFlag)) == "true"
 }
 
+// CheckProductionSafety hard-fails if the stub is enabled while HIVE_ENV is
+// "production" (case-insensitive, trimmed). Call this during startup, before
+// constructing any payment service. This is a defense-in-depth guard: the same
+// check is also performed in main.go so that a future refactor that skips this
+// function cannot accidentally bypass it.
+func CheckProductionSafety() {
+	if IsEnabled() && strings.EqualFold(strings.TrimSpace(os.Getenv("HIVE_ENV")), "production") {
+		log.Fatal("payments: HIVE_PAYMENTS_STUB must never be enabled when HIVE_ENV=production — " +
+			"refusing to start to prevent instant-credit bypass of real payment rails")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // StubService
 // ---------------------------------------------------------------------------

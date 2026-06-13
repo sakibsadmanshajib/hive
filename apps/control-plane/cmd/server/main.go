@@ -617,6 +617,16 @@ func main() {
 
 		paymentsRepo := payments.NewPgxRepository(pool)
 
+		// Hard-fail if the payment stub is enabled in production. Checked here
+		// (main.go) and inside the stub package (CheckProductionSafety) for
+		// defense in depth: neither path alone is sufficient if the other is
+		// accidentally removed during a future refactor.
+		if paymentStub.IsEnabled() && strings.EqualFold(strings.TrimSpace(os.Getenv("HIVE_ENV")), "production") {
+			log.Fatal("payments: HIVE_PAYMENTS_STUB must never be enabled when HIVE_ENV=production — " +
+				"refusing to start to prevent instant-credit bypass of real payment rails")
+		}
+		paymentStub.CheckProductionSafety()
+
 		var paymentsSvc payments.PaymentService
 		if paymentStub.IsEnabled() {
 			// Demo stub mode: credits are granted immediately through the real
@@ -628,7 +638,7 @@ func main() {
 			realSvc := payments.NewService(paymentsRepo, ledgerSvc, profilesSvc, fxSvc, rails)
 			paymentsSvc = realSvc
 
-			// M1: BD-payments confirmation loop — only runs in production mode.
+			// M1: BD-payments confirmation loop — only runs when the stub is OFF (i.e. real payment rails active).
 			// Bound to runCtx so it runs for the lifetime of the server, not
 			// the 10s startup ctx. Each tick uses runCtx so graceful shutdown
 			// aborts an in-flight rail call instead of letting it linger.

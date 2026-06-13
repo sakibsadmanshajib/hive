@@ -378,16 +378,17 @@ func (s *seeder) seedAPIKeys(ctx context.Context) error {
 			return fmt.Errorf("api key %q: %w", k.nickname, err)
 		}
 
+		eventID := deterministicUUID("api_key_event:created:" + k.id)
 		err = s.exec(ctx, "api_key_events created: "+k.nickname, `
 			INSERT INTO public.api_key_events (
-				api_key_id, account_id, event_type, actor_user_id,
+				id, api_key_id, account_id, event_type, actor_user_id,
 				metadata, created_at
 			) VALUES (
-				$1::uuid, $2::uuid, 'created', $3::uuid,
-				'{"source":"demo_seed"}'::jsonb, $4
+				$1::uuid, $2::uuid, $3::uuid, 'created', $4::uuid,
+				'{"source":"demo_seed"}'::jsonb, $5
 			)
-			ON CONFLICT DO NOTHING
-		`, k.id, demoAccountID, demoUserID, ts)
+			ON CONFLICT (id) DO NOTHING
+		`, eventID, k.id, demoAccountID, demoUserID, ts)
 		if err != nil {
 			return fmt.Errorf("api key event %q: %w", k.nickname, err)
 		}
@@ -420,7 +421,10 @@ func (s *seeder) seedUsage(ctx context.Context) error {
 		// Simplified: 1 credit per token.
 		creditDelta := -(inputTokens + outputTokens)
 
-		requestID := fmt.Sprintf("seed-req-%04d-%d", i, startedAt.UnixNano())
+		// requestID must be keyed only on the loop index so re-runs are
+		// idempotent. Including time.Now() or UnixNano would make ON CONFLICT
+		// never fire and cause 60 duplicate rows on every re-run.
+		requestID := fmt.Sprintf("seed-req-%04d", i)
 		attemptID := deterministicUUID("attempt:" + requestID)
 		eventID := deterministicUUID("event:" + requestID)
 

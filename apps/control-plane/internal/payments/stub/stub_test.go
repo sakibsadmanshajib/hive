@@ -2,6 +2,8 @@ package stub_test
 
 import (
 	"context"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -181,4 +183,46 @@ func TestIsEnabled_default_false(t *testing.T) {
 func TestIsEnabled_true(t *testing.T) {
 	t.Setenv("HIVE_PAYMENTS_STUB", "true")
 	assert.True(t, stub.IsEnabled())
+}
+
+// ---------------------------------------------------------------------------
+// Production guard tests
+// ---------------------------------------------------------------------------
+
+func TestCheckProductionSafety_stub_disabled_does_not_panic(t *testing.T) {
+	// When the stub is off, CheckProductionSafety must be a no-op regardless of HIVE_ENV.
+	t.Setenv("HIVE_PAYMENTS_STUB", "false")
+	t.Setenv("HIVE_ENV", "production")
+	// Must not fatal: if it does, the test process exits and the test fails.
+	stub.CheckProductionSafety()
+}
+
+func TestCheckProductionSafety_stub_enabled_non_production_does_not_panic(t *testing.T) {
+	// Stub enabled in non-production environments must be allowed without fatal.
+	for _, env := range []string{"", "development", "staging", "demo", "local"} {
+		env := env
+		t.Run("HIVE_ENV="+env, func(t *testing.T) {
+			t.Setenv("HIVE_PAYMENTS_STUB", "true")
+			t.Setenv("HIVE_ENV", env)
+			stub.CheckProductionSafety() // must not fatal
+		})
+	}
+}
+
+func TestProductionGuard_condition_detects_production(t *testing.T) {
+	// Verify the exact condition used by CheckProductionSafety and main.go
+	// triggers for all case/whitespace variants of "production".
+	// We test the condition logic (not log.Fatal itself) to avoid killing the process.
+	cases := []string{"production", "Production", "PRODUCTION", " production ", " Production "}
+	for _, hiveEnv := range cases {
+		hiveEnv := hiveEnv
+		t.Run(hiveEnv, func(t *testing.T) {
+			t.Setenv("HIVE_PAYMENTS_STUB", "true")
+			t.Setenv("HIVE_ENV", hiveEnv)
+			enabled := stub.IsEnabled()
+			isProd := strings.EqualFold(strings.TrimSpace(os.Getenv("HIVE_ENV")), "production")
+			assert.True(t, enabled, "stub must be reported as enabled")
+			assert.True(t, isProd, "HIVE_ENV=%q must be classified as production", hiveEnv)
+		})
+	}
 }
