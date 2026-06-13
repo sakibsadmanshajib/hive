@@ -1,0 +1,161 @@
+[
+  {
+    "id": "sovereignty-two-series",
+    "title": "Where your data lives at inference time",
+    "unit": "data location",
+    "ratesAsOf": "June 2026",
+    "assumptions": "Architectural fact, not a projection. Reflects how each deployment model routes data at inference time.",
+    "source": {
+      "citation": "Hive on-prem reference architecture. Open-weight model weights and inference execute on customer hardware; no inference call leaves the network boundary.",
+      "publisher": "S Cubed",
+      "accessed": "June 2026",
+      "provenance": "Internal architecture specification."
+    },
+    "verified": false,
+    "series": [
+      {
+        "name": "Hive on-prem",
+        "color": "teal",
+        "points": [
+          { "label": "Data stays on your hardware", "value": 100 },
+          { "label": "Inference leaves your network", "value": 0 }
+        ]
+      },
+      {
+        "name": "Cloud AI provider",
+        "color": "red",
+        "points": [
+          { "label": "Data stays on your hardware", "value": 0 },
+          { "label": "Inference leaves your network", "value": 100 }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "cost-wedge",
+    "title": "Output cost per million tokens",
+    "unit": "USD per 1M output tokens",
+    "ratesAsOf": "June 2026",
+    "assumptions": "Hosted-API pricing. Self-hosting economics differ. Open range reflects published open-weight model API pricing; proprietary range reflects published frontier model API pricing.",
+    "source": {
+      "citation": "Published hosted-API price sheets for open-weight and proprietary frontier models, captured June 2026. Re-verify before publish.",
+      "publisher": "Multiple model providers (public price pages)",
+      "accessed": "June 2026",
+      "provenance": "Public pricing pages. Figures must be re-pulled at pre-publish."
+    },
+    "verified": false,
+    "series": [
+      {
+        "name": "Open-weight (hosted)",
+        "color": "teal",
+        "points": [
+          { "label": "Low", "value": 0.196 },
+          { "label": "High", "value": 1.92 }
+        ]
+      },
+      {
+        "name": "Proprietary frontier",
+        "color": "grey",
+        "points": [
+          { "label": "Low", "value": 12 },
+          { "label": "High", "value": 30 }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "quality-parity",
+    "title": "Best open-weight versus best closed model",
+    "unit": "Intelligence Index (v4.0)",
+    "ratesAsOf": "June 2026",
+    "assumptions": "Artificial Analysis Intelligence Index v4.0. Rankings shift frequently. Verify current standings before citing.",
+    "source": {
+      "citation": "Artificial Analysis Intelligence Index v4.0. Best open 54, best closed 60.",
+      "publisher": "Artificial Analysis (artificialanalysis.ai)",
+      "accessed": "June 2026",
+      "provenance": "Third-party benchmark. Re-verify current standings at artificialanalysis.ai before publish."
+    },
+    "verified": false,
+    "series": [
+      {
+        "name": "Best open-weight",
+        "color": "teal",
+        "points": [{ "label": "Intelligence Index", "value": 54 }]
+      },
+      {
+        "name": "Best closed",
+        "color": "grey",
+        "points": [{ "label": "Intelligence Index", "value": 60 }]
+      }
+    ]
+  },
+  {
+    "id": "onprem-hardware",
+    "title": "On-prem hardware entry points",
+    "unit": "USD capex (approx)",
+    "ratesAsOf": "June 2026",
+    "assumptions": "Approximate hardware prices as of June 2026, rising. Hardware is a workstation-class box you own, not a recurring bill.",
+    "source": {
+      "citation": "Published hardware pricing for AMD Strix Halo 128GB class systems and NVIDIA DGX Spark, captured June 2026.",
+      "publisher": "Hardware vendor public listings",
+      "accessed": "June 2026",
+      "provenance": "Public vendor listings. Prices approximate and rising; re-verify before publish."
+    },
+    "verified": false,
+    "series": [
+      {
+        "name": "AMD Strix Halo 128GB (entry)",
+        "color": "teal",
+        "points": [{ "label": "Entry box", "value": 2000 }]
+      },
+      {
+        "name": "NVIDIA DGX Spark (step-up)",
+        "color": "grey",
+        "points": [{ "label": "Step-up box", "value": 4699 }]
+      }
+    ]
+  },
+  {
+    "id": "tco-crossover",
+    "title": "36-month total cost of ownership",
+    "unit": "USD cumulative over 36 months",
+    "ratesAsOf": "June 2026",
+    "assumptions": "Assumes 10M output tokens per month. Power-only opex, excludes labour. Hardware prices approx. June 2026. Band, not a point estimate.",
+    "source": {
+      "citation": "Modelled 36-month TCO. Strix payback approx month 7, DGX payback approx month 17. Month-36 totals approx $2,391 (Strix) and $5,261 (DGX) versus approx $10,800 cloud API.",
+      "publisher": "S Cubed (internal model)",
+      "accessed": "June 2026",
+      "provenance": "Internal TCO model. Inputs approximate; re-verify hardware and power inputs before publish."
+    },
+    "verified": false,
+    "series": [
+      {
+        "name": "On-prem Strix",
+        "color": "teal",
+        "points": [
+          { "label": "Month 0", "value": 2000 },
+          { "label": "Month 7", "value": 2100 },
+          { "label": "Month 36", "value": 2391 }
+        ]
+      },
+      {
+        "name": "On-prem DGX",
+        "color": "teal",
+        "points": [
+          { "label": "Month 0", "value": 4699 },
+          { "label": "Month 17", "value": 4900 },
+          { "label": "Month 36", "value": 5261 }
+        ]
+      },
+      {
+        "name": "Cloud API",
+        "color": "grey",
+        "points": [
+          { "label": "Month 0", "value": 0 },
+          { "label": "Month 18", "value": 5400 },
+          { "label": "Month 36", "value": 10800 }
+        ]
+      }
+    ]
+  }
+]

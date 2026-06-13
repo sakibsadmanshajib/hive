@@ -1,0 +1,348 @@
+---
+// Use Cases page (template: usecase, scope: both).
+//
+// Four verticals, outcome-led, each: pain -> Hive capability -> exposure
+// removed. The three regulated verticals (law, finance, healthcare) are on-prem
+// scoped and carry sovereignty / no-egress framing. Regulatory references are
+// GENERAL INFORMATION, not advice; each regulated card recommends the customer's
+// own counsel (SPEC sections 8, 11, 12).
+//
+// The SMB vertical is the Hive Cloud story: cost only. It carries NO
+// sovereignty, no-egress, or data-residency language, per the claim guardrail.
+//
+// No Pinterest proof point here; the cost proof lives on the Pricing page. No
+// "compliant" / "certified" framework language anywhere. Canadian English, no
+// dash punctuation between clauses.
+import Base from '../layouts/Base.astro';
+
+interface RegulatedVertical {
+  kind: 'regulated';
+  id: string;
+  label: string;
+  framework: string;
+  pain: string;
+  capability: string;
+  exposureRemoved: string;
+  counselNote: string;
+}
+
+interface CostVertical {
+  kind: 'cost';
+  id: string;
+  label: string;
+  framework: string;
+  pain: string;
+  capability: string;
+  outcome: string;
+}
+
+type Vertical = RegulatedVertical | CostVertical;
+
+// Ordered most-regulated to least, ending on the SMB / Hive Cloud story so the
+// page closes on economics rather than sovereignty.
+const verticals: Vertical[] = [
+  {
+    kind: 'regulated',
+    id: 'law',
+    label: 'Law',
+    framework: 'Privilege and discovery',
+    pain: 'Client matter is privileged. Sending a brief, a contract, or a discovery set to a US-owned AI endpoint puts that material under a foreign jurisdiction and into a third party’s logs, where it can be compelled or pulled into discovery.',
+    capability:
+      'Open model weights run on your own hardware, with retrieval over your matter files happening inside your network. Every inference executes locally.',
+    exposureRemoved:
+      'No prompt, no response, no document leaves your network boundary, so there is nothing in an external provider’s hands to compel or disclose.',
+    counselNote:
+      'Whether this satisfies your obligations is a determination for your own counsel. This is general information, not legal advice.',
+  },
+  {
+    kind: 'regulated',
+    id: 'finance',
+    label: 'Finance',
+    framework: 'GLBA, FTC Safeguards Rule',
+    pain: 'Proprietary signals, credit models, and client positions are the firm’s edge. Routing them through an external endpoint hands your most valuable data to a third party and raises an obligation question under frameworks such as GLBA and the FTC Safeguards Rule.',
+    capability:
+      'On-prem inference with a private retrieval layer over your own documents and data. The API is OpenAI-compatible, so the tools your desk already uses point at Hive with a base-url change.',
+    exposureRemoved:
+      'Model weights and every inference stay on your hardware, so proprietary data never leaves the building.',
+    counselNote:
+      'Regulatory fit is a determination for your compliance team and counsel. This is general information, not advice.',
+  },
+  {
+    kind: 'regulated',
+    id: 'healthcare',
+    label: 'Healthcare',
+    framework: 'HIPAA',
+    pain: 'Patient data and clinical notes are the most sensitive records you hold. An external AI endpoint means protected health information crosses your boundary into a third party’s systems.',
+    capability:
+      'Open-weight models run on your own hardware, air-gap capable for the most restricted environments. No external API is ever called.',
+    exposureRemoved:
+      'No protected health information leaves the building. Inference happens entirely inside your own infrastructure.',
+    counselNote:
+      'Whether this architecture meets your obligations under HIPAA or any other framework is a determination your team must make with qualified counsel. This is general information, not advice.',
+  },
+  {
+    kind: 'cost',
+    id: 'smb',
+    label: 'Small and growing teams',
+    framework: 'Predictable economics',
+    pain: 'Useful AI is priced by the token, billed in US dollars, and the bill climbs with every request. At real working volume the per-token model prices the work out before it pays off.',
+    capability:
+      'Hive Cloud runs the same open-weight models behind the same OpenAI-compatible API, at regional pricing that is a fraction of the US rate, on a plan you can predict.',
+    outcome:
+      'You get capable AI your team can actually afford to use every day, with no change to the code you already wrote against the OpenAI API.',
+  },
+];
+---
+
+<Base
+  title="Use Cases"
+  description="Law, finance, healthcare, and SMB. Each pain mapped to a Hive capability and the exposure it removes."
+>
+  <!-- Intro band: states the shared problem and splits it into the two delivery
+       stories (on-prem for regulated, Hive Cloud for cost). -->
+  <section class="shell py-section intro" aria-labelledby="usecases-title">
+    <p class="eyebrow">Use cases</p>
+    <h1 id="usecases-title">
+      Sensitive work cannot leave the building. Everyday work cannot break the
+      budget.
+    </h1>
+    <p class="intro__lede">
+      For regulated work, sensitive data cannot route through an external AI
+      endpoint. For everyone else, per-token US billing makes useful AI too
+      expensive to run at the volume the work actually needs. Hive answers both:
+      open-weight models on your own hardware for regulated work, and Hive Cloud
+      at regional pricing for teams that want the economics without running their
+      own box.
+    </p>
+  </section>
+
+  <!-- Vertical cards. Three regulated (on-prem scope, sovereignty framing) then
+       the SMB / Hive Cloud card (cost only, no sovereignty language). -->
+  <section class="shell verticals" aria-label="Use cases by sector">
+    <ul class="vertical-grid">
+      {
+        verticals.map((v) => (
+          <li class="vertical-card" id={v.id}>
+            <header class="vertical-card__head">
+              <h2 class="vertical-card__title">{v.label}</h2>
+              <span class="vertical-card__framework">{v.framework}</span>
+            </header>
+
+            <dl class="vertical-card__body">
+              <div class="row">
+                <dt class="row__label">The pain</dt>
+                <dd class="row__text">{v.pain}</dd>
+              </div>
+
+              <div class="row">
+                <dt class="row__label">What Hive does</dt>
+                <dd class="row__text">{v.capability}</dd>
+              </div>
+
+              {v.kind === 'regulated' ? (
+                <div class="row">
+                  <dt class="row__label row__label--teal">Exposure removed</dt>
+                  <dd class="row__text">{v.exposureRemoved}</dd>
+                </div>
+              ) : (
+                <div class="row">
+                  <dt class="row__label row__label--teal">The outcome</dt>
+                  <dd class="row__text">{v.outcome}</dd>
+                </div>
+              )}
+            </dl>
+
+            {v.kind === 'regulated' && (
+              <p class="vertical-card__counsel">{v.counselNote}</p>
+            )}
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <!-- Closing band: general-information framing repeated once, plus the dual
+       CTA. Book a Demo is the single gold action; See Pricing is the ghost
+       secondary, matching the site's CTA pattern. -->
+  <section class="shell py-section closing" aria-labelledby="closing-title">
+    <h2 id="closing-title" class="closing__title">Talk it through</h2>
+    <p class="closing__text">
+      Tell us the workload and the constraints. We will show you which delivery
+      fits: the on-prem edition you run yourself, or Hive Cloud at regional
+      pricing. Regulatory points on this page are general information, not legal
+      or compliance advice; confirm fit with your own counsel.
+    </p>
+    <div class="closing__cta">
+      <a class="btn btn--gold tap-target" href="/book-a-demo">Book a Demo</a>
+      <a class="btn btn--ghost tap-target" href="/pricing">See Pricing</a>
+    </div>
+  </section>
+</Base>
+
+<style>
+  /* Shared eyebrow: uppercase faint label, matches Footer geo-label. */
+  .eyebrow {
+    color: var(--text-faint);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin: 0 0 16px;
+  }
+
+  .intro {
+    padding-bottom: 64px;
+  }
+
+  .intro h1 {
+    max-width: 18ch;
+  }
+
+  .intro__lede {
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1.6;
+    max-width: 62ch;
+    margin-top: 24px;
+  }
+
+  /* Vertical cards. Surface, border, and radius mirror CalloutCard so the cards
+     read as one family with the proof-point cards on the other pages. */
+  .verticals {
+    padding-bottom: var(--section-rhythm);
+  }
+
+  .vertical-grid {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 24px;
+  }
+
+  .vertical-card {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--teal);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .vertical-card__head {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .vertical-card__title {
+    margin: 0;
+    font-size: 22px;
+  }
+
+  .vertical-card__framework {
+    color: var(--text-faint);
+    font-size: 13px;
+    font-weight: 500;
+  }
+
+  .vertical-card__body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .row__label {
+    color: var(--text-faint);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .row__label--teal {
+    color: var(--teal);
+  }
+
+  .row__text {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .vertical-card__counsel {
+    margin: 0;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    color: var(--text-faint);
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* Closing band. */
+  .closing__title {
+    font-size: 28px;
+    margin: 0;
+  }
+
+  .closing__text {
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 62ch;
+    margin-top: 16px;
+  }
+
+  .closing__cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 32px;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    font-weight: 600;
+    font-size: 15px;
+    padding: 12px 22px;
+    border-radius: 10px;
+    transition: filter 120ms ease, border-color 120ms ease, color 120ms ease;
+  }
+
+  .btn--gold {
+    background-color: var(--gold);
+    color: #1a1205;
+  }
+
+  .btn--gold:hover {
+    filter: brightness(1.05);
+  }
+
+  .btn--ghost {
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+  }
+
+  .btn--ghost:hover {
+    border-color: var(--teal);
+    color: var(--teal);
+  }
+
+  @media (max-width: 760px) {
+    .vertical-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

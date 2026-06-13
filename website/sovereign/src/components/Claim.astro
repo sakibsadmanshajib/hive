@@ -1,0 +1,24 @@
+---
+// <Claim id="..."> wraps a factual statement that must be backed by a
+// citation. The id MUST match an entry in the page frontmatter sources[]
+// (sources[].claim_id). The content-lint integration enforces this at build
+// time: an unmatched id fails the build. Never render a claim without a
+// matching source.
+//
+// Visually the claim is inline text with a subtle underline so authors and
+// reviewers can see which statements are citation-backed. The id is emitted as
+// a data attribute for the cross-check and for later footnote wiring.
+interface Props {
+  id: string;
+}
+
+const { id } = Astro.props;
+---
+
+<span class="claim" data-claim-id={id}><slot /></span>
+
+<style>
+  .claim {
+    border-bottom: 1px dotted var(--border-strong);
+  }
+</style>

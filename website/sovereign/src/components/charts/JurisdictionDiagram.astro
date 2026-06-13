@@ -1,0 +1,91 @@
+---
+// Jurisdiction diagram. Static SVG, zero client JS. Used on the Security page.
+//
+// Teal boundary box with zero outbound arrows (with Hive, every inference stays
+// inside). A separate red "without Hive" path shows data leaving to an external
+// cloud under foreign jurisdiction.
+interface Props {
+  ariaLabel: string;
+}
+
+const { ariaLabel } = Astro.props;
+
+const TEAL = '#2dd4bf';
+const RED = '#f04438';
+const GRID = '#1e2733';
+const TEXT = '#aeb6c2';
+
+const width = 640;
+const height = 320;
+---
+
+<svg
+  class="jur"
+  viewBox={`0 0 ${width} ${height}`}
+  role="img"
+  aria-label={ariaLabel}
+  preserveAspectRatio="xMidYMid meet"
+>
+  <!-- With Hive: teal boundary, contained. -->
+  <text class="jur__title" x="24" y="28">With Hive on-prem</text>
+  <rect x="24" y="44" width="280" height="150" rx="14" fill="none" stroke={TEAL} stroke-width="2" />
+  <text class="jur__zone" x="40" y="70">Your network boundary</text>
+  <rect x="48" y="86" width="110" height="44" rx="8" fill={TEAL} fill-opacity="0.16" stroke={TEAL} stroke-width="1.5" />
+  <text class="jur__node" x="103" y="108" text-anchor="middle" dominant-baseline="middle">Your data</text>
+  <rect x="178" y="86" width="110" height="44" rx="8" fill={TEAL} fill-opacity="0.16" stroke={TEAL} stroke-width="1.5" />
+  <text class="jur__node" x="233" y="108" text-anchor="middle" dominant-baseline="middle">Model + inference</text>
+  <line x1="158" y1="108" x2="178" y2="108" stroke={TEAL} stroke-width="2" />
+  <text class="jur__ok" x="40" y="160">No outbound inference. Zero data egress.</text>
+
+  <!-- Without Hive: red path crossing out. -->
+  <text class="jur__title" x="24" y="232">Without Hive</text>
+  <rect x="24" y="248" width="200" height="56" rx="10" fill="none" stroke={GRID} stroke-width="1.5" stroke-dasharray="3 4" />
+  <text class="jur__node" x="124" y="276" text-anchor="middle" dominant-baseline="middle">Your data</text>
+  <line x1="224" y1="276" x2="404" y2="276" stroke={RED} stroke-width="2.5" marker-end="url(#jur-arrow)" />
+  <text class="jur__leaving" x="314" y="266" text-anchor="middle">leaves your network</text>
+  <rect x="412" y="248" width="200" height="56" rx="10" fill={RED} fill-opacity="0.12" stroke={RED} stroke-width="2" />
+  <text class="jur__node" x="512" y="270" text-anchor="middle">External cloud AI</text>
+  <text class="jur__foreign" x="512" y="290" text-anchor="middle">foreign jurisdiction</text>
+
+  <defs>
+    <marker id="jur-arrow" markerWidth="9" markerHeight="9" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill={RED} />
+    </marker>
+  </defs>
+</svg>
+
+<style>
+  .jur {
+    width: 100%;
+    height: auto;
+  }
+  .jur__title {
+    fill: var(--text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .jur__zone {
+    fill: var(--teal);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .jur__node {
+    fill: var(--text);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .jur__ok {
+    fill: var(--teal);
+    font-family: var(--font-sans);
+    font-size: 12px;
+  }
+  .jur__leaving,
+  .jur__foreign {
+    fill: var(--red);
+    font-family: var(--font-sans);
+    font-size: 11px;
+  }
+</style>

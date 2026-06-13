@@ -1,0 +1,79 @@
+/*
+ * Design tokens for the Hive sovereign site.
+ *
+ * Two layers:
+ *   1. :root custom properties — the raw token values, usable from any CSS
+ *      and from inline SVG charts.
+ *   2. @theme — exposes the same tokens to Tailwind 4 utility generation
+ *      (bg-bg, text-text-muted, text-teal, etc.). Keep both in sync;
+ *      tailwind.config.ts mirrors these for editor tooling.
+ *
+ * Colour discipline:
+ *   --gold  scarce, one accent per viewport.
+ *   --teal  verified / safe / sovereign.
+ *   --red   RISK framing only.
+ *   --grey  competitor baseline. AA verified 3.71:1 on --bg-card.
+ *           Never use #5b6472; it fails contrast.
+ */
+
+:root {
+  /* surfaces */
+  --bg: #0a0e16;
+  --bg-raised: #11161f;
+  --bg-card: #141b26;
+
+  /* borders */
+  --border: #1e2733;
+  --border-strong: #2a3543;
+
+  /* text */
+  --text: #f5f7fa;
+  --text-muted: #aeb6c2;
+  --text-faint: #828b99;
+
+  /* accents */
+  --gold: #f0b429;
+  --teal: #2dd4bf;
+  --red: #f04438;
+
+  /* competitor baseline */
+  --grey: #6b7585;
+
+  /* geometry */
+  --radius: 14px;
+  --max-width: 1140px;
+  --section-rhythm: 120px;
+
+  /* type families */
+  --font-display: 'Fraunces', 'Inter', ui-serif, serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
+}
+
+@theme {
+  --color-bg: #0a0e16;
+  --color-bg-raised: #11161f;
+  --color-bg-card: #141b26;
+
+  --color-border: #1e2733;
+  --color-border-strong: #2a3543;
+
+  --color-text: #f5f7fa;
+  --color-text-muted: #aeb6c2;
+  --color-text-faint: #828b99;
+
+  --color-gold: #f0b429;
+  --color-teal: #2dd4bf;
+  --color-risk: #f04438;
+  --color-grey: #6b7585;
+
+  --radius-card: 14px;
+
+  --max-width-shell: 1140px;
+
+  --spacing-section: 120px;
+
+  --font-display: 'Fraunces', 'Inter', ui-serif, serif;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
+}

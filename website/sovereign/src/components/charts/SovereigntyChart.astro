@@ -1,0 +1,87 @@
+---
+// Sovereignty two-series chart. Static SVG, zero client JS. This is the Home
+// hero chart.
+//
+// It states an architectural fact, not a projection: with Hive on-prem (teal)
+// data stays on your hardware and inference never leaves your network; with a
+// cloud AI provider (red) the inference call exits your building into another
+// jurisdiction.
+//
+// Risk semantics: teal = sovereign / safe, red = exposed. No grey here, no
+// gold annotation, no projection language.
+interface Props {
+  ariaLabel: string;
+}
+
+const { ariaLabel } = Astro.props;
+
+const TEAL = '#2dd4bf';
+const RED = '#f04438';
+const GRID = '#1e2733';
+
+const width = 520;
+const height = 300;
+---
+
+<svg
+  class="sov"
+  viewBox={`0 0 ${width} ${height}`}
+  role="img"
+  aria-label={ariaLabel}
+  preserveAspectRatio="xMidYMid meet"
+>
+  <!-- Centre divider: your network boundary. -->
+  <line x1={width / 2} y1="24" x2={width / 2} y2={height - 40} stroke={GRID} stroke-width="1" stroke-dasharray="4 4" />
+
+  <!-- Left: Hive on-prem, data contained. -->
+  <text class="sov__col-title" x={width / 4} y="20" text-anchor="middle">Hive on-prem</text>
+  <rect x="40" y="60" width={width / 2 - 90} height="180" rx="12" fill="none" stroke={TEAL} stroke-width="2" />
+  <circle cx={width / 4 - 4} cy="150" r="26" fill={TEAL} fill-opacity="0.18" stroke={TEAL} stroke-width="2" />
+  <text class="sov__inside" x={width / 4 - 4} y="150" text-anchor="middle" dominant-baseline="middle">data</text>
+  <text class="sov__caption sov__caption--safe" x={width / 4} y="262" text-anchor="middle">Stays on your hardware</text>
+
+  <!-- Right: cloud AI, data exits. -->
+  <text class="sov__col-title" x={(3 * width) / 4} y="20" text-anchor="middle">Cloud AI provider</text>
+  <rect x={width / 2 + 50} y="60" width={width / 2 - 90} height="180" rx="12" fill="none" stroke={GRID} stroke-width="1.5" stroke-dasharray="3 4" />
+  <circle cx={(3 * width) / 4} cy="150" r="26" fill={RED} fill-opacity="0.16" stroke={RED} stroke-width="2" />
+  <text class="sov__inside" x={(3 * width) / 4} y="150" text-anchor="middle" dominant-baseline="middle">data</text>
+  <!-- Outbound arrow crossing the boundary. -->
+  <line x1={width / 2 + 18} y1="150" x2={(3 * width) / 4 - 30} y2="150" stroke={RED} stroke-width="2.5" marker-end="url(#sov-arrow)" />
+  <text class="sov__caption sov__caption--risk" x={(3 * width) / 4} y="262" text-anchor="middle">Leaves your building</text>
+
+  <defs>
+    <marker id="sov-arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+      <path d="M0,0 L6,3 L0,6 Z" fill={RED} />
+    </marker>
+  </defs>
+</svg>
+
+<style>
+  .sov {
+    width: 100%;
+    height: auto;
+  }
+  .sov__col-title {
+    fill: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .sov__inside {
+    fill: var(--text);
+    font-family: var(--font-sans);
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .sov__caption {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .sov__caption--safe {
+    fill: var(--teal);
+  }
+  .sov__caption--risk {
+    fill: var(--red);
+  }
+</style>

@@ -1,0 +1,131 @@
+---
+// Base layout shell. Every page renders inside this.
+//
+// Accessibility:
+//   - html lang="en"
+//   - skip-link to #main
+//   - gold focus ring (defined in global.css, contrast >= 3:1)
+//   - prefers-reduced-motion honoured globally (global.css)
+//   - interactive targets >= 24px (tap-target utility)
+//
+// Performance:
+//   - only Fraunces 600 and Inter 400 are preloaded. Other weights load on
+//     demand via Fontsource @font-face (font-display: swap).
+//
+// Background:
+//   - a faint hex-lattice motif at ~4% opacity, NOT the BD honeycomb.
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/global.css';
+
+// Self-hosted fonts live in public/fonts and are served from the same origin.
+// Preload only the two used above the fold (Fraunces 600 + Inter 400). The
+// other weights load on demand via the @font-face rules in global.css.
+const fraunces600 = '/fonts/fraunces-latin-600-normal.woff2';
+const inter400 = '/fonts/inter-latin-400-normal.woff2';
+
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+const fullTitle = `${title} | Hive`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <meta name="theme-color" content="#0a0e16" />
+    <link rel="canonical" href={Astro.url.href} />
+
+    <!--
+      hreflang cross-links. This site (.co) is the global default; the Bangladesh
+      site (.com.bd) is the locale variant. Each page self-canonicals above, so
+      the two sites cross-link as locale alternates rather than duplicates.
+      Reciprocity is mandatory: Google ignores an hreflang pair unless both sides
+      use the same language tag and link back to each other. The geo-router
+      Worker injects the exact mirror of this set on the .com.bd side (.co as
+      "en" and "x-default", .com.bd as "bn-BD"), so these three tags match it one
+      for one. Keep them in sync with deploy/geo-router/src/index.js. Never
+      switch the geo redirect to 301, or one site will be de-indexed.
+    -->
+    <link rel="alternate" hreflang="en" href={Astro.url.href} />
+    <link rel="alternate" hreflang="x-default" href={Astro.url.href} />
+    <link
+      rel="alternate"
+      hreflang="bn-BD"
+      href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
+    />
+
+    <!-- Preload the two above-the-fold faces only. -->
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href={fraunces600}
+      crossorigin="anonymous"
+    />
+    <link
+      rel="preload"
+      as="font"
+      type="font/woff2"
+      href={inter400}
+      crossorigin="anonymous"
+    />
+
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.url.href} />
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="hex-lattice" aria-hidden="true"></div>
+
+    <Nav />
+
+    <main id="main">
+      <slot />
+    </main>
+
+    <Footer />
+
+    <style>
+      .skip-link {
+        position: absolute;
+        left: -9999px;
+        top: 0;
+        z-index: 100;
+        background-color: var(--gold);
+        color: #1a1205;
+        padding: 10px 16px;
+        font-weight: 600;
+        border-radius: 0 0 8px 0;
+      }
+
+      .skip-link:focus {
+        left: 0;
+      }
+
+      /* Faint hex-lattice motif. Pure CSS, fixed, ~4% opacity. Decorative. */
+      .hex-lattice {
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        opacity: 0.04;
+        background-color: var(--bg);
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='56' height='100' viewBox='0 0 56 100'><g fill='none' stroke='%23aeb6c2' stroke-width='1'><path d='M28 0 L56 16 L56 50 L28 66 L0 50 L0 16 Z'/><path d='M28 66 L56 82 L56 116 M28 66 L0 82 L0 116'/></g></svg>");
+        background-repeat: repeat;
+        background-size: 56px 100px;
+      }
+    </style>
+  </body>
+</html>

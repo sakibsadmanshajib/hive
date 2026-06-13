@@ -1,0 +1,72 @@
+---
+title: Your AI runs on your hardware
+description: Open-weight AI on your own servers. No data leaves your building. No usage-based vendor bill.
+template: home
+order: 1
+eyebrow: Sovereign AI
+hero:
+  headline: Your AI runs on your hardware. Not ours. Not anyone's.
+  subTicks:
+    - Open-weight models on your own servers.
+    - No data leaves your building.
+    - No usage-based vendor bill.
+  scopeClarifier: Self-hosted deployment. Your hardware, your network, your data.
+  ctaLabel: Book a Demo
+  ctaHref: /book-a-demo
+  secondaryLabel: See Pricing
+  secondaryHref: /pricing
+charts:
+  - sovereignty-two-series
+  - cost-wedge
+scope: both
+sources:
+  - claim_id: perplexity-self-host
+    url: https://www.perplexity.ai
+    label: Perplexity self-hosted DeepSeek R1 on Western data centres
+    retrieved: January 2025
+  - claim_id: pinterest-qwen
+    url: https://medium.com/pinterest-engineering
+    label: Pinterest open-weight Qwen3-VL on own infrastructure
+    retrieved: June 2026
+updated: 2026-06-13
+---
+
+{/*
+  Governance source for the Home route. The visible page is rendered by
+  src/pages/index.astro (split-evidence hero, proof spine, cost band, dual
+  delivery, competitive line, dual CTA). This MDX file is the content-governed
+  twin: it carries the locked hero frontmatter, the citation sources[], and the
+  proof statements wrapped in <Claim> so the content-lint claim cross-check and
+  the future remark footnote wiring have a single audited home. Keep every
+  proof sentence here byte-aligned with the copy rendered in index.astro.
+*/}
+
+## Proof spine
+
+The architecture is the proof. Open model weights run entirely on your hardware,
+inference never calls an external API, and no prompt, response, or document ever
+leaves your network boundary.
+
+<Claim id="perplexity-self-host">
+  Perplexity runs DeepSeek R1 on its own servers in US and EU data centres. User
+  data never leaves Western servers.
+</Claim>
+
+{/* cost-section: the cost-wedge bar and the Pinterest proof live in their own
+    band, never in the same section as a sovereignty claim. The sentinel below
+    is what the content-lint Pinterest-scope rule keys on. */}
+
+## Economics
+
+The same open weights that keep your data in your building also cut the bill.
+Open-weight output runs roughly ten to thirty times cheaper per million tokens
+than proprietary frontier APIs.
+
+<Claim id="pinterest-qwen">
+  Pinterest cut AI costs roughly 90 percent and raised accuracy roughly 30
+  percent by running and customising the open-weight Qwen3-VL model on its own
+  infrastructure.
+</Claim>
+
+Results reflect Pinterest's specific implementation. Your outcomes will depend
+on your hardware, model choice, and workload.
