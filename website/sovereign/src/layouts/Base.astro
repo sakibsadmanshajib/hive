@@ -43,6 +43,27 @@ const fullTitle = `${title} | Hive`;
     <meta name="theme-color" content="#0a0e16" />
     <link rel="canonical" href={Astro.url.href} />
 
+    <!--
+      hreflang cross-links. This site (.co) is the global default; the Bangladesh
+      site (.com.bd) is the locale variant. Each page self-canonicals above, so
+      the two sites cross-link as locale alternates rather than duplicates. The
+      geo-router Worker injects the matching headers on the .com.bd side. Never
+      switch the geo redirect to 301, or one site will be de-indexed.
+    -->
+    <link rel="alternate" hreflang="en" href={Astro.url.href} />
+    <link rel="alternate" hreflang="en-CA" href={Astro.url.href} />
+    <link rel="alternate" hreflang="x-default" href={Astro.url.href} />
+    <link
+      rel="alternate"
+      hreflang="bn-BD"
+      href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
+    />
+    <link
+      rel="alternate"
+      hreflang="en-BD"
+      href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
+    />
+
     <!-- Preload the two above-the-fold faces only. -->
     <link
       rel="preload"
