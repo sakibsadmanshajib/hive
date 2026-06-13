@@ -72,7 +72,7 @@ Response 200:
   system_fingerprint=fp_8b41efc9a3
 ```
 
-Finding: the model behind `hive-fast` on staging is a thinking/reasoning model. 57 of 67 tokens are consumed by hidden chain-of-thought. With max_tokens=20 the entire budget is exhausted by reasoning and the visible content field is empty string. The response is 200, so clients receive no error signal. The seed migration sets hive-fast to `groq/llama-3.3-70b-versatile` but the staging routing DB appears to point elsewhere (fingerprint mismatch). Any caller using max_tokens below ~60 will receive a silent empty response.
+Finding: the model behind `hive-fast` on staging is a thinking/reasoning model. 57 of 67 tokens are consumed by hidden chain-of-thought. With max_tokens=20 the entire budget is exhausted by reasoning and the visible content field is empty string. The response is 200, so clients receive no error signal. The seed migration sets hive-fast to `groq/llama-3.3-70b-versatile` but the staging routing DB appears to point elsewhere (fingerprint mismatch). Note: `deploy/litellm/config.yaml` maps `route-groq-fast` to `os.environ/GROQ_FAST_MODEL`, so the active model is determined by that environment variable at LiteLLM startup. Correcting only the DB row (alias_route_policies) without also checking the `GROQ_FAST_MODEL` env var may leave the reasoning model in place. Any caller using max_tokens below ~60 will receive a silent empty response.
 
 #### hive-auto — FAIL
 
@@ -144,7 +144,9 @@ Playwright test on `https://console-hive.scubed.co/auth/sign-up`:
 4. Network call: `POST HOST/auth/v1/signup?redirect_to=https://console-hive.scubed.co/auth/callback` (Supabase)
 5. Result page: "ALMOST THERE / Check your email — We sent a verification link to staging-audit-test-...@mailnull.com."
 
-PASS. Signup flow reaches email verification step. Full account activation requires email click-through (not testable without real mailbox access). The Supabase signup webhook (`/internal/auth/user-created`) fires post-confirmation — not directly testable here.
+Note: the web-console signup form calls `supabase.auth.signUp` directly and does not call the control-plane precheck endpoint (`/api/v1/auth/sign-up/precheck`). The confirmation screen appearing here does not confirm that the abuse-prevention precheck ran on the customer path. The precheck is testable independently (see control-plane precheck row in the summary table) but is bypassed by the current console form.
+
+PASS. Signup flow reaches email verification step. Full account activation requires email click-through (not testable without real mailbox access). Note: the control-plane signup webhook (`/internal/auth/user-created`) is a Supabase Database Webhook that fires on `auth.users` INSERT, which occurs at this step before email confirmation. Whether provisioning succeeded or failed is not visible on the confirmation screen. Checking control-plane logs for the webhook invocation is required to confirm account provisioning ran without error.
 
 ### Control-Plane Protected Routes
 
@@ -186,7 +188,7 @@ PASS. The Cloudflare Workers deployment is live and correctly serving the Next.j
 ### P0 — Blocking
 
 **1. hive-auto inference returns 404.**
-The alias appears in `/v1/models` and CP catalog but fails on inference. Any client using `hive-auto` gets a 404. Fix: verify the `hive-auto` alias has a working `litellm_model_name` in the `routing_policies` DB table on staging and a matching route in `deploy/litellm/config.yaml`.
+The alias appears in `/v1/models` and CP catalog but fails on inference. Any client using `hive-auto` gets a 404. Fix: verify the `hive-auto` alias has a working `litellm_model_name` in the `alias_route_policies` table on staging (joined to a row in `provider_routes`) and a matching model entry in `deploy/litellm/config.yaml`.
 
 **2. hive-fast empty response at low max_tokens.**
 With `max_tokens` under ~60, the reasoning model consumes all tokens on hidden chain-of-thought and returns empty content with status 200. Callers receive no error signal. Fix: either (a) revert `hive-fast` staging route to a non-reasoning model (`groq/llama-3.3-70b-versatile` as per seed migration), or (b) add an edge validation guard that returns 400 for requests to reasoning-backed aliases below a safe `max_tokens` threshold, with a clear error message.
