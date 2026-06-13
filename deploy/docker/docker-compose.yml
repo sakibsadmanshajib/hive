@@ -51,6 +51,9 @@ services:
 
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.77.7-stable}
+    # Fixed container name so the control-plane Docker restart API can locate
+    # this container by name regardless of the Compose project name.
+    container_name: litellm
     ports:
       - "4000:4000"
     environment:
@@ -71,8 +74,24 @@ services:
       # ollama_chat/ model entries in deploy/litellm/config.yaml.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
     volumes:
-      - ../../deploy/litellm/config.yaml:/app/config.yaml
-    command: ["--config=/app/config.yaml"]
+      # Phase 20 Plan 03 — shared config volume: control-plane writes here,
+      # LiteLLM reads from it. The volume persists generated config across
+      # container recreates; the seed file is copied in on first start.
+      - litellm-config:/etc/litellm
+      # Mount the repo seed config read-only so the entrypoint can copy it
+      # into the shared volume when the volume is empty (first boot).
+      - ../../deploy/litellm/config.yaml:/seed/config.yaml:ro
+    # On first boot the shared volume is empty; copy the seed config so LiteLLM
+    # has a valid config.yaml before control-plane pushes its first sync.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        if [ ! -f /etc/litellm/config.yaml ]; then
+          cp /seed/config.yaml /etc/litellm/config.yaml
+        fi
+        exec litellm --config=/etc/litellm/config.yaml
+    command: []
 
   sdk-tests-js:
     image: hive-sdk-tests-js:ci
@@ -137,6 +156,13 @@ services:
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
+      # Phase 20 Plan 03 — shared LiteLLM config volume (control-plane writes,
+      # LiteLLM reads). Mount read-write so control-plane can write atomically.
+      - litellm-config:/etc/litellm
+      # Docker socket mount (read-write required — the restart API needs write
+      # access). control-plane calls POST /containers/<name>/restart over the
+      # Unix socket directly via net/http; no docker CLI binary is needed.
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
@@ -167,6 +193,10 @@ services:
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}
       AUDIT_WAL_DIR: ${AUDIT_WAL_DIR:-/var/lib/hive/audit-wal}
+      # Phase 20 Plan 03 — LiteLLM config generation and controlled restart.
+      LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
+      LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 5s
@@ -406,3 +436,8 @@ volumes:
   # ollama-models persists pulled model weights across container recreates.
   # Active only when the `enterprise` profile is used.
   ollama-models:
+  # litellm-config is a shared volume between control-plane (writer) and litellm
+  # (reader). control-plane generates config.yaml via POST /internal/litellm/sync
+  # and writes it atomically; litellm reads it at startup and on restart.
+  # Phase 20 Plan 03.
+  litellm-config:

@@ -45,6 +45,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
@@ -200,6 +201,7 @@ func main() {
 	var authzMW authz.Middleware // Phase 18: set after roleSvc+accountsSvc are ready
 	var catalogHandler *catalog.Handler
 	var providersHandler *providers.Handler
+	var litellmSyncHandler http.Handler
 	var ledgerHandler *ledger.Handler
 	var profilesHandler *profiles.Handler
 	var routingHandler *routing.Handler
@@ -254,6 +256,28 @@ func main() {
 		providersSvc := providers.NewService(providersRepo)
 		providersHandler = providers.NewHandler(providersSvc)
 		log.Println("providers module ready (Phase 20 Plan 02)")
+
+		// Phase 20 Plan 03 — LiteLLM config sync handler.
+		// LITELLM_CONFIG_PATH defaults to /etc/litellm/config.yaml (shared volume mount).
+		// LITELLM_MASTER_KEY is the LiteLLM proxy admin key.
+		// LITELLM_CONTAINER_NAME is read inside NewDefaultDockerRestarter (default: litellm).
+		litellmConfigMode := strings.TrimSpace(os.Getenv("LITELLM_CONFIG_MODE"))
+		litellmConfigPath := os.Getenv("LITELLM_CONFIG_PATH")
+		if litellmConfigPath == "" {
+			litellmConfigPath = "/etc/litellm/config.yaml"
+		}
+		litellmMasterKey := resolveLiteLLMMasterKey()
+		switch litellmConfigMode {
+		case "", "file":
+			litellmRestarter := litellmconfig.NewDefaultDockerRestarter("")
+			litellmSyncSvc := litellmconfig.NewSyncService(pool, litellmConfigPath, litellmMasterKey, litellmRestarter)
+			litellmSyncHandler = litellmconfig.NewSyncHandler(litellmSyncSvc)
+		case "db":
+			log.Fatalf("LITELLM_CONFIG_MODE=db is documented but not yet implemented in control-plane startup")
+		default:
+			log.Fatalf("invalid LITELLM_CONFIG_MODE %q: supported values are file (default) and db (not yet implemented)", litellmConfigMode)
+		}
+		log.Println("litellm sync handler ready (Phase 20 Plan 03)")
 
 		routingRepo := routing.NewPgxRepository(pool)
 		routingSvc = routing.NewService(routingRepo)
@@ -652,6 +676,7 @@ func main() {
 		PaymentsHandler:    paymentsHandler,
 		ProfilesHandler:    profilesHandler,
 		ProvidersRouter:    providersHandler,
+		LiteLLMSyncHandler: litellmSyncHandler,
 		RoutingHandler:     routingHandler,
 		UsageHandler:       usageHandler,
 		MetricsRegistry:    metricsRegistry,

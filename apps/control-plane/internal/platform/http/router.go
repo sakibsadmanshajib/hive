@@ -80,6 +80,10 @@ type RouterConfig struct {
 	RoleSvc interface {
 		RequirePlatformAdmin(http.Handler) http.Handler
 	}
+
+	// LiteLLMSyncHandler handles POST /internal/litellm/sync.
+	// Guarded by the shared-secret token. When nil the route is not registered.
+	LiteLLMSyncHandler http.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -215,6 +219,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux.Handle("/webhooks/sslcommerz/success", cfg.PaymentsHandler)
 		mux.Handle("/webhooks/sslcommerz/fail", cfg.PaymentsHandler)
 		mux.Handle("/webhooks/sslcommerz/cancel", cfg.PaymentsHandler)
+	}
+
+	// Phase 20 Plan 03 — LiteLLM config sync endpoint.
+	// POST /internal/litellm/sync triggers config regeneration and container restart.
+	if cfg.LiteLLMSyncHandler != nil {
+		mux.Handle("/internal/litellm/sync", internal(cfg.LiteLLMSyncHandler))
 	}
 
 	// Phase 20 Plan 02 — provider CRUD routes.
