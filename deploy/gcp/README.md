@@ -38,13 +38,24 @@ gcloud config set project YOUR_GCP_PROJECT_ID
 
 # Provision (idempotent, safe to re-run)
 export GCP_PROJECT=YOUR_GCP_PROJECT_ID
+
+# REQUIRED: the CIDR allowed to reach SSH (port 22). The script has no default
+# and aborts if this is unset, so SSH is never accidentally opened to the whole
+# internet. Use your office or VPN range, e.g. 203.0.113.0/24.
+export SSH_SOURCE_RANGE=YOUR_OFFICE_OR_VPN_CIDR
+
 bash deploy/gcp/provision.sh
 ```
 
 The script creates an e2-standard-2 VM in `asia-southeast1-b` named
 `hive-demo`, installs Docker Engine + the Compose plugin, and creates
-a firewall rule for SSH. It does NOT open ports 80 or 443 because
-Cloudflare Tunnel handles all external traffic.
+a firewall rule that permits SSH only from `SSH_SOURCE_RANGE`. It does NOT
+open ports 80 or 443 because Cloudflare Tunnel handles all external traffic.
+
+`SSH_SOURCE_RANGE` is mandatory and has no default: if it is unset the script
+exits with an error rather than exposing port 22 to `0.0.0.0/0`. For a
+throwaway demo where world-open SSH is acceptable, set it explicitly to
+`0.0.0.0/0` so the decision is recorded in your shell history.
 
 ## Step 2: Create the Cloudflare Tunnel
 

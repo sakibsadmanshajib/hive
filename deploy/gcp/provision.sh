@@ -39,9 +39,13 @@ MACHINE_TYPE="e2-standard-2"
 IMAGE_FAMILY="ubuntu-2204-lts"
 IMAGE_PROJECT="ubuntu-os-cloud"
 DISK_SIZE="30GB"
-# SSH source range for the firewall rule. Default 0.0.0.0/0 allows SSH from
-# anywhere; restrict to your office/VPN CIDR in production, e.g. 203.0.113.0/24.
-SSH_SOURCE_RANGE="${SSH_SOURCE_RANGE:-0.0.0.0/0}"
+# SSH source range for the firewall rule. There is intentionally NO default.
+# The operator MUST set SSH_SOURCE_RANGE explicitly to the office or VPN CIDR
+# permitted to reach port 22, e.g. 203.0.113.0/24. The required-value check
+# below aborts when it is unset, so the script never silently opens SSH to the
+# entire internet. If a throwaway demo genuinely needs world-open SSH, set the
+# value explicitly to 0.0.0.0/0 so that choice is recorded, never implied.
+SSH_SOURCE_RANGE="${SSH_SOURCE_RANGE:-}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -55,6 +59,15 @@ done
 
 if [[ -z "$PROJECT" ]]; then
   echo "ERROR: GCP_PROJECT env var or --project flag is required." >&2
+  exit 1
+fi
+
+if [[ -z "$SSH_SOURCE_RANGE" ]]; then
+  echo "ERROR: SSH_SOURCE_RANGE is required and has no default." >&2
+  echo "       Set it to the CIDR allowed to reach SSH (port 22), e.g.:" >&2
+  echo "         export SSH_SOURCE_RANGE=203.0.113.0/24" >&2
+  echo "       This prevents accidentally exposing SSH to the entire internet." >&2
+  echo "       For a throwaway demo only, set it explicitly to 0.0.0.0/0." >&2
   exit 1
 fi
 

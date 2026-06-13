@@ -10,8 +10,21 @@
 # providers instead of LiteLLM's upstream file-upload path.
 # See .planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md
 
+# Demo budget posture — paid-route count
+# ──────────────────────────────────────
+# The demo caps paid-provider usage. Of the five routes below, only ONE is a
+# hard-coded paid model: route-openrouter-embedding-fallback (qwen3-embedding-8b),
+# the last resort in the embedding cascade after the free Nemotron-Embed primary.
+# The flagship (route-openrouter-default) and vision (route-openrouter-auto)
+# routes resolve their slug from env vars that default to `openrouter/free` in
+# .env.example, so out of the box they cost nothing; an operator opts into a paid
+# flagship only by setting OPENROUTER_DEFAULT_MODEL to a paid slug. The Groq fast
+# route is free-tier. Net: 1 hard-coded paid route, within the demo cap of 2.
+# OpenRouter exposes no embedding models on /api/v1/models (embeddings ride the
+# openai/ generic adapter), so there is no verified free embedding slug to swap
+# the fallback to; it stays paid by necessity and is documented here.
 model_list:
-  # ── 1. Flagship chat (paid, best quality) ───────────────────────────────────
+  # ── 1. Flagship chat (paid-capable; defaults to free via env) ───────────────
   # OpenRouter: Meta Llama 3.3 70B Instruct — strong instruction-following,
   # 128k context, best quality/cost ratio for the demo tier.
   # Pinned to a specific model slug to avoid usage-token variance from the
