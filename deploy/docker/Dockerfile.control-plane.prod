@@ -1,22 +1,51 @@
-# Production multi-stage build for control-plane
-FROM golang:1.24-alpine AS build
+# syntax=docker/dockerfile:1
+# Production multi-stage build for control-plane.
+# Supports linux/amd64 and linux/arm64 via docker buildx.
+# docker buildx injects BUILDPLATFORM and TARGETARCH automatically when
+# --platform is specified. A plain `docker build` (no buildx) still works
+# and builds for the host arch because TARGETARCH defaults to empty.
+
+# Build stage: pinned to the BUILD host's native arch so the Go toolchain
+# itself runs fast (no qemu overhead for the compiler).
+FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS build
+
+# TARGETARCH is injected by buildx (value: amd64 or arm64).
+# When empty (plain docker build) Go uses the host GOARCH.
+ARG TARGETARCH
+
 RUN apk add --no-cache git ca-certificates
+
 WORKDIR /src
+
+# Cache dependencies: copy go.work and all module manifests first so the
+# workspace resolver downloads modules before source changes invalidate cache.
 COPY go.work go.work.sum* ./
 COPY apps/control-plane/go.mod apps/control-plane/go.sum* ./apps/control-plane/
 COPY apps/edge-api/go.mod apps/edge-api/go.sum* ./apps/edge-api/
 COPY packages/storage/go.mod packages/storage/go.sum* ./packages/storage/
 COPY packages/audit-canonical/go.mod packages/audit-canonical/go.sum* ./packages/audit-canonical/
 RUN cd apps/control-plane && go mod download
+
 COPY apps/control-plane/ ./apps/control-plane/
 COPY packages/storage/ ./packages/storage/
 COPY packages/audit-canonical/ ./packages/audit-canonical/
-WORKDIR /src/apps/control-plane
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/control-plane ./cmd/server
 
+WORKDIR /src/apps/control-plane
+
+# CGO_ENABLED=0 produces a fully static binary (no libc dependency),
+# which is required for cross-compilation and works on alpine.
+# GOARCH cross-compiles for the target platform (amd64 or arm64).
+RUN CGO_ENABLED=0 GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags='-s -w' -o /out/control-plane ./cmd/server
+
+# Runtime stage: no --platform needed here; buildx selects the correct
+# arch image automatically for the target platform.
 FROM alpine:3.20
+
 RUN apk add --no-cache ca-certificates wget && adduser -D -u 10001 app
+
 COPY --from=build /out/control-plane /usr/local/bin/control-plane
+
 # Pre-create the audit WAL directory under /var/lib/hive owned by the
 # non-root `app` user. The control-plane binary calls os.MkdirAll on
 # AUDIT_WAL_DIR (default /var/lib/hive/audit-wal) at startup and
@@ -24,6 +53,7 @@ COPY --from=build /out/control-plane /usr/local/bin/control-plane
 # cannot create directories under /var/lib and the container exits
 # immediately, failing the healthcheck.
 RUN mkdir -p /var/lib/hive/audit-wal/events && chown -R app:app /var/lib/hive
+
 WORKDIR /app
 USER app
 EXPOSE 8081
