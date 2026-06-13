@@ -1,0 +1,50 @@
+# Cloudflare Tunnel ingress configuration for the Hive cloud demo VM.
+#
+# Tunnel identity
+# ───────────────
+# The tunnel token is NOT stored here. It is supplied at runtime via the
+# TUNNEL_TOKEN environment variable, which cloudflared reads automatically
+# when running:
+#
+#   cloudflared tunnel --config /etc/cloudflared/config.yml run
+#
+# Generate the token in the Cloudflare Zero Trust dashboard:
+#   Networks > Tunnels > Create a tunnel > name it "hive-demo-sg" > copy token.
+# Then set TUNNEL_TOKEN=<token> in the VM's .env file.
+#
+# Routing overview
+# ────────────────
+#   api-hive.scubed.co   -> edge-api:8080  (OpenAI-compatible inference API)
+#   chat-hive.scubed.co  -> open-webui:8080 (Hive Chat front-end)
+#
+#   console-hive.scubed.co is served by Cloudflare Workers (@opennextjs/cloudflare)
+#   and is NOT routed through this VM. Do not add it here.
+#
+# DNS
+# ───
+# After creating the tunnel in the dashboard, add CNAME records in Cloudflare
+# DNS for each hostname pointing at <tunnel-id>.cfargotunnel.com. The
+# dashboard provides the exact CNAME values under the tunnel's "Overview" tab.
+# Keep "Proxy" (orange cloud) enabled on each record.
+#
+# TLS
+# ───
+# Cloudflare terminates TLS at its edge. The tunnel carries traffic over an
+# encrypted connection from the Cloudflare edge to this cloudflared agent.
+# Services on the internal Docker network are reached over plain HTTP because
+# they are not directly exposed to the internet.
+
+tunnel: hive-demo-sg
+
+ingress:
+  # OpenAI-compatible API endpoint
+  - hostname: api-hive.scubed.co
+    service: http://edge-api:8080
+
+  # Hive Chat (Open WebUI) front-end
+  - hostname: chat-hive.scubed.co
+    service: http://open-webui:8080
+
+  # Catch-all: any request that does not match the above hostnames returns
+  # a 404 from the tunnel rather than reaching an unintended service.
+  - service: http_status:404

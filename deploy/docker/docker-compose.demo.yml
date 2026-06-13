@@ -1,0 +1,87 @@
+# Hive Cloud Demo — GCP e2-standard-2 + Cloudflare Tunnel override
+#
+# Usage (from repo root):
+#   docker compose \
+#     -f deploy/docker/docker-compose.yml \
+#     -f deploy/docker/docker-compose.demo.yml \
+#     --env-file ../../.env \
+#     --profile cloud --profile chat --profile demo \
+#     up --build -d
+#
+# What this override does:
+#   - Adds the `demo` profile to every service that should run on the GCP VM.
+#   - Adds the `cloudflared` service (Cloudflare Tunnel agent) for inbound
+#     traffic without opening firewall ports.
+#   - No in-stack Redis: the cloud profile already expects REDIS_URL
+#     (managed Upstash). Do NOT add the `local` profile alongside `demo`.
+#   - No Caddy: Cloudflare Tunnel terminates TLS and routes directly to
+#     the internal services by hostname. Caddy was only needed to expose
+#     Open WebUI externally; the Tunnel replaces that role here.
+#   - console-hive.scubed.co runs on Cloudflare Workers and is NOT routed
+#     through this VM. Do not add web-console to the tunnel ingress.
+#
+# Required env vars (set in .env before starting):
+#   TUNNEL_TOKEN          Cloudflare Tunnel token (from cloudflared dashboard).
+#                         Keep this secret; do not commit it.
+#   REDIS_URL             Upstash Redis URL (rediss://...).
+#   OWUI_SHIM_KEY         Shared key between Open WebUI and edge-api.
+#   LITELLM_MASTER_KEY    LiteLLM admin key.
+#   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+#   OPENROUTER_API_KEY, GROQ_API_KEY
+#   (See .env.example for the full list.)
+
+services:
+
+  # ── Core services: expose them under the `demo` profile so they all
+  #    start with a single --profile demo flag alongside --profile cloud
+  #    and --profile chat. ──────────────────────────────────────────────
+
+  edge-api:
+    profiles:
+      - demo
+
+  control-plane:
+    profiles:
+      - demo
+
+  litellm:
+    profiles:
+      - demo
+
+  open-webui:
+    # The base compose defines open-webui with profiles [local, enterprise, chat].
+    # Add `demo` so it activates with --profile cloud --profile chat --profile demo.
+    profiles:
+      - demo
+
+  # caddy-owui is intentionally ABSENT from this override.
+  # Cloudflare Tunnel routes chat traffic directly to open-webui:8080
+  # (internal Docker network); no host-port exposure is needed or desired.
+
+  # ── Cloudflare Tunnel ─────────────────────────────────────────────────
+  # The tunnel token is provisioned at deploy time via the TUNNEL_TOKEN
+  # env var. It is never hardcoded here. Generate a token in the
+  # Cloudflare Zero Trust dashboard: Networks > Tunnels > Create a tunnel,
+  # copy the token, and export TUNNEL_TOKEN=<value> in .env.
+  #
+  # Ingress rules live in deploy/cloudflared/config.yml. The tunnel
+  # container is given read-only access to that file.
+  #
+  # The cloudflared container connects outbound to Cloudflare's edge over
+  # HTTPS (port 443). No inbound ports need to be opened on the VM
+  # firewall; this is the key security advantage of the tunnel approach.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --config /etc/cloudflared/config.yml run
+    profiles:
+      - demo
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set in .env}
+    volumes:
+      - ../cloudflared/config.yml:/etc/cloudflared/config.yml:ro
+    depends_on:
+      edge-api:
+        condition: service_healthy
+      open-webui:
+        condition: service_healthy
+    restart: unless-stopped
