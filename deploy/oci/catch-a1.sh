@@ -229,7 +229,8 @@ while true; do
   for size_spec in "${SIZES[@]}"; do
     read -r ocpus memory_gb <<< "${size_spec}"
 
-    for ad in ${ADS}; do
+    read -ra ADS_ARRAY <<< "${ADS}"
+    for ad in "${ADS_ARRAY[@]}"; do
       instance_id=$(try_launch "${ocpus}" "${memory_gb}" "${ad}") && {
         log "SUCCESS! Instance provisioned."
         log "  OCID        : ${instance_id}"
