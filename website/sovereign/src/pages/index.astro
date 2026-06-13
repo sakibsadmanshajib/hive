@@ -1,0 +1,26 @@
+---
+// Home page stub. Renders the shell and a placeholder. The page builder fills
+// the body from SPEC.md: hero (sovereignty two-series) + proof spine strip +
+// cost-wedge bar (below fold, distinct band) + dual delivery teaser +
+// competitive one-liner + dual CTA. Compliance placement rule: cost-proof and
+// residency-risk components never share a section band.
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Your AI runs on your hardware"
+  description="Open-weight AI on your own servers. No data leaves your building. No usage-based vendor bill."
+>
+  <section class="shell py-section">
+    <h1>Your AI runs on your hardware. Not ours. Not anyone's.</h1>
+    <p class="placeholder">TODO: page builder fills this from SPEC.md.</p>
+  </section>
+</Base>
+
+<style>
+  .placeholder {
+    color: var(--text-faint);
+    font-size: 15px;
+    margin-top: 24px;
+  }
+</style>

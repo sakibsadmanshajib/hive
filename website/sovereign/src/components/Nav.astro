@@ -1,0 +1,122 @@
+---
+// Primary navigation. "Book a Demo" is the single gold call to action.
+// All targets are at least 24px (WCAG 2.2 target size).
+const links = [
+  { href: '/', label: 'Home' },
+  { href: '/security', label: 'Security & Data Residency' },
+  { href: '/pricing', label: 'Pricing' },
+  { href: '/use-cases', label: 'Use Cases' },
+];
+
+const path = Astro.url.pathname;
+function isActive(href: string): boolean {
+  if (href === '/') return path === '/';
+  return path.startsWith(href);
+}
+---
+
+<nav class="nav" aria-label="Primary">
+  <div class="shell nav__inner">
+    <a class="nav__brand" href="/" aria-label="Hive home">
+      <span class="nav__brand-mark" aria-hidden="true"></span>
+      Hive
+    </a>
+
+    <ul class="nav__links">
+      {
+        links.map((link) => (
+          <li>
+            <a
+              class="nav__link tap-target"
+              href={link.href}
+              aria-current={isActive(link.href) ? 'page' : undefined}
+            >
+              {link.label}
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+
+    <a class="nav__cta tap-target" href="/book-a-demo">Book a Demo</a>
+  </div>
+</nav>
+
+<style>
+  .nav {
+    border-bottom: 1px solid var(--border);
+    background-color: color-mix(in srgb, var(--bg) 88%, transparent);
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    backdrop-filter: blur(8px);
+  }
+
+  .nav__inner {
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    min-height: 64px;
+  }
+
+  .nav__brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 600;
+    font-size: 18px;
+    letter-spacing: -0.01em;
+  }
+
+  .nav__brand-mark {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    background-color: var(--teal);
+  }
+
+  .nav__links {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    margin-inline-start: auto;
+  }
+
+  .nav__link {
+    display: inline-flex;
+    align-items: center;
+    color: var(--text-muted);
+    font-size: 15px;
+    font-weight: 500;
+    transition: color 120ms ease;
+  }
+
+  .nav__link:hover,
+  .nav__link[aria-current='page'] {
+    color: var(--text);
+  }
+
+  .nav__cta {
+    display: inline-flex;
+    align-items: center;
+    background-color: var(--gold);
+    color: #1a1205;
+    font-weight: 600;
+    font-size: 15px;
+    padding: 10px 18px;
+    border-radius: 10px;
+  }
+
+  .nav__cta:hover {
+    filter: brightness(1.05);
+  }
+
+  @media (max-width: 760px) {
+    .nav__links {
+      display: none;
+    }
+  }
+</style>

@@ -1,0 +1,32 @@
+# Cloudflare Pages headers.
+#
+# Astro's built-in CSP injects per-page <meta http-equiv="content-security-policy">
+# tags with the exact hashes for every inline script and style it emits, with no
+# 'unsafe-inline'. These header rules are the transport-layer baseline and the
+# one place where a per-route relaxation can be expressed.
+#
+# Baseline for every route: strictest. No 'unsafe-inline' anywhere.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+# Pricing route only: Recharts writes inline style ATTRIBUTES (style="...") on
+# SVG nodes, which style-src cannot cover. style-src-attr 'unsafe-inline' is
+# scoped to this route alone. script-src and style-src stay strict; only the
+# attribute channel is relaxed, and only here.
+/pricing
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+
+/pricing/
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self'; img-src 'self' data:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: geolocation=(), microphone=(), camera=()

@@ -1,0 +1,179 @@
+/*
+ * Global stylesheet. Import order matters:
+ *   1. Tailwind 4 engine.
+ *   2. Design tokens (:root + @theme).
+ *   3. Self-hosted fonts via Fontsource (latin woff2, font-display: swap).
+ *   4. Base element styling.
+ *
+ * Fonts are self-hosted. No external font CDN, so font-src can stay 'self'.
+ * We pull only the latin subsets and only the weights actually used:
+ *   Fraunces 600  — H1 only.
+ *   Inter 400/500/600 — all UI, headings, body.
+ *   Geist Mono 400/500 — every numeral and code block, tabular figures.
+ * Fraunces 600 and Inter 400 are additionally preloaded in Base.astro.
+ */
+
+@import 'tailwindcss';
+
+/* Tailwind 4 is CSS-first: design tokens are exposed to utility generation via
+   the @theme block in tokens.css. tailwind.config.ts mirrors the same tokens
+   for editor tooling but is intentionally NOT loaded with @config here, because
+   the @config directive trips a rolldown-vite resolver bug in Astro 6
+   (Missing field `tsconfigPaths`). tokens.css @theme is the build-time source. */
+@import './tokens.css';
+
+/*
+ * Self-hosted fonts. The woff2 files are copied from Fontsource into
+ * public/fonts/ and served from the same origin (/fonts/...), so font-src can
+ * stay 'self'. We declare @font-face explicitly rather than importing the
+ * Fontsource CSS, because that CSS uses relative url(./files/...) paths that
+ * the PostCSS pipeline does not rewrite, leaving the non-preloaded weights
+ * unresolved. Latin subset only. font-display: swap on every face.
+ *   Fraunces 600  — H1 only.
+ *   Inter 400/500/600 — all UI, headings, body.
+ *   Geist Mono 400/500 — numerals and code.
+ */
+@font-face {
+  font-family: 'Fraunces';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/fraunces-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/inter-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/inter-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/inter-latin-600-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/geist-mono-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Geist Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/geist-mono-latin-500-normal.woff2') format('woff2');
+}
+
+/* Geist Mono ships proportional figures by default. Force tabular ('tnum')
+   wherever the mono family is applied so numeric columns and ticks align. */
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    line-height: 1.55;
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    /* Locked H1 scale. */
+    font-size: clamp(44px, 5.5vw, 60px);
+  }
+
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: -0.005em;
+  }
+
+  /* All numerals and code render in Geist Mono with tabular figures. */
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre,
+  [data-numeric] {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  /* Honour reduced-motion globally. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  /* Gold focus ring, contrast >= 3:1 against dark surfaces. */
+  :focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+}
+
+@layer components {
+  /* Page shell width and section rhythm. */
+  .shell {
+    width: 100%;
+    max-width: var(--max-width);
+    margin-inline: auto;
+    padding-inline: 24px;
+  }
+
+  .py-section {
+    padding-block: var(--section-rhythm);
+  }
+
+  /* Interactive targets must be at least 24px (WCAG 2.2 target size). */
+  .tap-target {
+    min-height: 24px;
+    min-width: 24px;
+  }
+}

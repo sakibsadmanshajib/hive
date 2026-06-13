@@ -1,0 +1,27 @@
+---
+// Pricing page stub (scope: both). The page builder fills the body from
+// SPEC.md: on-prem ladder (Strix entry / DGX step-up; annual licence) vs Hive
+// Cloud tier (regional, no sovereignty language) + TCO crossover Recharts
+// island + Pinterest cost proof + pricing disclaimer. This is the only route
+// that loads the Recharts island and the only route with the scoped
+// style-src-attr relaxation in public/_headers.
+import Base from '../layouts/Base.astro';
+---
+
+<Base
+  title="Pricing"
+  description="On-prem hardware ladder plus an annual licence, or Hive Cloud at a fraction of US price."
+>
+  <section class="shell py-section">
+    <h1>Pricing</h1>
+    <p class="placeholder">TODO: page builder fills this from SPEC.md.</p>
+  </section>
+</Base>
+
+<style>
+  .placeholder {
+    color: var(--text-faint);
+    font-size: 15px;
+    margin-top: 24px;
+  }
+</style>

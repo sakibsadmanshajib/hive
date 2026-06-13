@@ -1,0 +1,157 @@
+---
+// Static horizontal bar chart. Server-rendered SVG, zero client JS.
+// Used for: cost-wedge, quality-parity, hardware capex bars.
+//
+// Conventions enforced here:
+//   - zero-baseline (bars start at 0)
+//   - direct labels on each bar, no legend box
+//   - at most one gold annotation (the `annotation` prop)
+//   - horizontal gridlines in #1e2733 only
+//   - tick text in Geist Mono tabular (font applied via class)
+//   - cost charts: teal (Hive/open) vs grey (competitor)
+//
+// Each series is rendered as a labelled bar using the max point value, so this
+// works for ranges (low/high collapse to the high end as the bar length, with
+// the range printed as the value label) and single-point series alike.
+import { resolveColor, GRIDLINE_COLOR } from './colors';
+import type { ChartColorName } from './colors';
+
+interface BarRow {
+  name: string;
+  color?: ChartColorName;
+  // The bar length value.
+  value: number;
+  // What is printed at the end of the bar (e.g. "$0.196 to $1.92").
+  valueLabel: string;
+}
+
+interface Props {
+  rows: BarRow[];
+  // Domain max for the x-axis. Bars scale against this.
+  max: number;
+  // Optional single gold annotation (e.g. "~10x to ~30x cheaper").
+  annotation?: string;
+  // Accessible description of the chart.
+  ariaLabel: string;
+}
+
+const { rows, max, annotation, ariaLabel } = Astro.props;
+
+const width = 640;
+const rowHeight = 56;
+const labelGutter = 168;
+const rightPad = 24;
+const topPad = 16;
+const bottomPad = annotation ? 44 : 16;
+const height = topPad + rows.length * rowHeight + bottomPad;
+const plotWidth = width - labelGutter - rightPad;
+
+// Four gridlines at 0, 1/3, 2/3, full.
+const gridFractions = [0, 1 / 3, 2 / 3, 1];
+
+function barLen(value: number): number {
+  if (max <= 0) return 0;
+  return Math.max(0, Math.min(1, value / max)) * plotWidth;
+}
+---
+
+<svg
+  class="static-bar"
+  viewBox={`0 0 ${width} ${height}`}
+  role="img"
+  aria-label={ariaLabel}
+  preserveAspectRatio="xMidYMid meet"
+>
+  <!-- Horizontal gridlines, #1e2733 only. -->
+  {
+    gridFractions.map((f) => {
+      const x = labelGutter + f * plotWidth;
+      return (
+        <line
+          x1={x}
+          y1={topPad}
+          x2={x}
+          y2={topPad + rows.length * rowHeight}
+          stroke={GRIDLINE_COLOR}
+          stroke-width="1"
+        />
+      );
+    })
+  }
+
+  {
+    rows.map((row, i) => {
+      const y = topPad + i * rowHeight;
+      const len = barLen(row.value);
+      const fill = resolveColor(row.color);
+      return (
+        <g>
+          <text
+            class="static-bar__name"
+            x={labelGutter - 12}
+            y={y + rowHeight / 2}
+            text-anchor="end"
+            dominant-baseline="middle"
+          >
+            {row.name}
+          </text>
+          <rect
+            x={labelGutter}
+            y={y + rowHeight / 2 - 11}
+            width={len}
+            height={22}
+            rx={5}
+            fill={fill}
+          />
+          <text
+            class="static-bar__value"
+            x={labelGutter + len + 10}
+            y={y + rowHeight / 2}
+            dominant-baseline="middle"
+          >
+            {row.valueLabel}
+          </text>
+        </g>
+      );
+    })
+  }
+
+  {
+    annotation ? (
+      <text
+        class="static-bar__annotation"
+        x={labelGutter}
+        y={height - 16}
+      >
+        {annotation}
+      </text>
+    ) : null
+  }
+</svg>
+
+<style>
+  .static-bar {
+    width: 100%;
+    height: auto;
+  }
+
+  .static-bar__name {
+    fill: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 13px;
+  }
+
+  .static-bar__value {
+    fill: var(--text);
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 13px;
+  }
+
+  .static-bar__annotation {
+    fill: var(--gold);
+    font-family: var(--font-sans);
+    font-weight: 600;
+    font-size: 14px;
+  }
+</style>

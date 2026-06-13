@@ -1,0 +1,103 @@
+---
+// Editorial chart frame. Wraps every chart with a consistent structure:
+//   - headline (named slot or `headline` prop)
+//   - chart (default slot)
+//   - plain-reading line: a one-sentence "what this says" in human language
+//   - citation footer: REQUIRED. If no citation is provided the frame renders a
+//     loud broken state instead of silently omitting it. Never fake a citation.
+//   - optional compliance-footnote slot
+//
+// The citation is passed as a prop (usually wired from the charts collection
+// source). A chart with no citation is a build/authoring error made visible.
+interface Props {
+  headline: string;
+  plainReading: string;
+  citation?: string;
+  ratesAsOf?: string;
+}
+
+const { headline, plainReading, citation, ratesAsOf } = Astro.props;
+const hasCitation = typeof citation === 'string' && citation.trim().length > 0;
+---
+
+<figure class="frame">
+  <figcaption class="frame__headline">{headline}</figcaption>
+
+  <div class="frame__chart">
+    <slot />
+  </div>
+
+  <p class="frame__reading">{plainReading}</p>
+
+  <slot name="compliance-footnote" />
+
+  {
+    hasCitation ? (
+      <p class="frame__citation">
+        <span class="frame__citation-label">Source:</span> {citation}
+        {ratesAsOf ? <span class="frame__rates"> — rates as of {ratesAsOf}</span> : null}
+      </p>
+    ) : (
+      <p class="frame__citation frame__citation--broken" role="alert">
+        Missing citation. This chart must not be published until a real source
+        is attached. Do not fabricate one.
+      </p>
+    )
+  }
+</figure>
+
+<style>
+  .frame {
+    margin: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .frame__headline {
+    font-weight: 600;
+    font-size: 18px;
+    color: var(--text);
+    line-height: 1.25;
+  }
+
+  .frame__chart {
+    width: 100%;
+  }
+
+  .frame__reading {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.5;
+  }
+
+  .frame__citation {
+    margin: 0;
+    color: var(--text-faint);
+    font-size: 12.5px;
+    line-height: 1.45;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
+
+  .frame__citation-label {
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+
+  .frame__rates {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .frame__citation--broken {
+    color: var(--red);
+    font-weight: 600;
+    border-top-color: var(--red);
+  }
+</style>
