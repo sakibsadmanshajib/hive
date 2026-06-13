@@ -39,6 +39,9 @@ MACHINE_TYPE="e2-standard-2"
 IMAGE_FAMILY="ubuntu-2204-lts"
 IMAGE_PROJECT="ubuntu-os-cloud"
 DISK_SIZE="30GB"
+# SSH source range for the firewall rule. Default 0.0.0.0/0 allows SSH from
+# anywhere; restrict to your office/VPN CIDR in production, e.g. 203.0.113.0/24.
+SSH_SOURCE_RANGE="${SSH_SOURCE_RANGE:-0.0.0.0/0}"
 
 # ── Argument parsing ──────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -104,7 +107,7 @@ else
     --network=default \
     --action=ALLOW \
     --rules=tcp:22 \
-    --source-ranges=0.0.0.0/0 \
+    --source-ranges="$SSH_SOURCE_RANGE" \
     --target-tags="hive-demo"
   echo "==> Firewall rule created."
 fi

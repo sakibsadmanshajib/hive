@@ -1,24 +1,31 @@
 # Hive Cloud Demo — GCP e2-standard-2 + Cloudflare Tunnel override
 #
-# Usage (from repo root):
+# Usage (from repo root on the VM):
 #   docker compose \
 #     -f deploy/docker/docker-compose.yml \
 #     -f deploy/docker/docker-compose.demo.yml \
-#     --env-file ../../.env \
-#     --profile cloud --profile chat --profile demo \
+#     --env-file .env \
+#     --profile cloud --profile chat \
 #     up --build -d
 #
 # What this override does:
-#   - Adds the `demo` profile to every service that should run on the GCP VM.
 #   - Adds the `cloudflared` service (Cloudflare Tunnel agent) for inbound
-#     traffic without opening firewall ports.
+#     traffic without opening firewall ports. cloudflared is given profiles
+#     [cloud, chat] so it starts automatically with the standard
+#     --profile cloud --profile chat invocation.
 #   - No in-stack Redis: the cloud profile already expects REDIS_URL
-#     (managed Upstash). Do NOT add the `local` profile alongside `demo`.
+#     (managed Upstash). Do NOT add the `local` profile alongside cloud/chat.
 #   - No Caddy: Cloudflare Tunnel terminates TLS and routes directly to
 #     the internal services by hostname. Caddy was only needed to expose
 #     Open WebUI externally; the Tunnel replaces that role here.
 #   - console-hive.scubed.co runs on Cloudflare Workers and is NOT routed
 #     through this VM. Do not add web-console to the tunnel ingress.
+#   - No profiles are re-declared on edge-api, control-plane, litellm, or
+#     open-webui. Those services activate via their own base-file profile
+#     definitions (edge-api/control-plane/litellm have no profiles and
+#     always start; open-webui activates on the chat profile). Re-declaring
+#     profiles in an override file REPLACES the base list, which would
+#     prevent those services from starting.
 #
 # Required env vars (set in .env before starting):
 #   TUNNEL_TOKEN          Cloudflare Tunnel token (from cloudflared dashboard).
@@ -32,32 +39,6 @@
 
 services:
 
-  # ── Core services: expose them under the `demo` profile so they all
-  #    start with a single --profile demo flag alongside --profile cloud
-  #    and --profile chat. ──────────────────────────────────────────────
-
-  edge-api:
-    profiles:
-      - demo
-
-  control-plane:
-    profiles:
-      - demo
-
-  litellm:
-    profiles:
-      - demo
-
-  open-webui:
-    # The base compose defines open-webui with profiles [local, enterprise, chat].
-    # Add `demo` so it activates with --profile cloud --profile chat --profile demo.
-    profiles:
-      - demo
-
-  # caddy-owui is intentionally ABSENT from this override.
-  # Cloudflare Tunnel routes chat traffic directly to open-webui:8080
-  # (internal Docker network); no host-port exposure is needed or desired.
-
   # ── Cloudflare Tunnel ─────────────────────────────────────────────────
   # The tunnel token is provisioned at deploy time via the TUNNEL_TOKEN
   # env var. It is never hardcoded here. Generate a token in the
@@ -70,11 +51,15 @@ services:
   # The cloudflared container connects outbound to Cloudflare's edge over
   # HTTPS (port 443). No inbound ports need to be opened on the VM
   # firewall; this is the key security advantage of the tunnel approach.
+  #
+  # profiles [cloud, chat] ensures cloudflared starts automatically with
+  # the standard --profile cloud --profile chat launch command.
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2025.5.0
     command: tunnel --config /etc/cloudflared/config.yml run
     profiles:
-      - demo
+      - cloud
+      - chat
     environment:
       TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set in .env}
     volumes:

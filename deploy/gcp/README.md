@@ -84,8 +84,8 @@ SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
 SUPABASE_DB_URL=postgresql://postgres:<password>@db.<project>.supabase.co:5432/postgres
 
 # LLM providers
-OPENROUTER_API_KEY=sk-or-...
-GROQ_API_KEY=gsk_...
+OPENROUTER_API_KEY=<your-openrouter-key>
+GROQ_API_KEY=<your-groq-key>
 
 # Shared internal secrets
 LITELLM_MASTER_KEY=<random-32-chars>
@@ -113,7 +113,7 @@ docker compose \
   -f deploy/docker/docker-compose.yml \
   -f deploy/docker/docker-compose.demo.yml \
   --env-file .env \
-  --profile cloud --profile chat --profile demo \
+  --profile cloud --profile chat \
   up --build -d
 ```
 
@@ -124,7 +124,7 @@ docker compose \
   -f deploy/docker/docker-compose.yml \
   -f deploy/docker/docker-compose.demo.yml \
   --env-file .env \
-  --profile cloud --profile chat --profile demo \
+  --profile cloud --profile chat \
   ps
 
 # Smoke test the API (from inside the VM)
@@ -169,7 +169,7 @@ docker compose \
   -f deploy/docker/docker-compose.yml \
   -f deploy/docker/docker-compose.demo.yml \
   --env-file .env \
-  --profile cloud --profile chat --profile demo \
+  --profile cloud --profile chat \
   down
 ```
 
