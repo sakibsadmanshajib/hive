@@ -1,12 +1,37 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/browser";
-import { useState, type FormEvent } from "react";
+import { useState, useRef, useEffect, type FormEvent } from "react";
 import { Mail } from "lucide-react";
 
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+
+// Minimal ambient type for the Cloudflare Turnstile widget. The full SDK type
+// is not installed as a dev dependency; we only need the render/remove surface.
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (
+        container: string | HTMLElement,
+        options: {
+          sitekey: string;
+          callback: (token: string) => void;
+          "expired-callback": () => void;
+          "error-callback": () => void;
+          theme?: "light" | "dark" | "auto";
+        }
+      ) => string;
+      remove: (widgetId: string) => void;
+    };
+  }
+}
+
+const TURNSTILE_SITE_KEY =
+  typeof process !== "undefined"
+    ? process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? ""
+    : "";
 
 export default function SignUpPage() {
   const supabase = createClient();
@@ -15,11 +40,84 @@ export default function SignUpPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+
+  const turnstileContainerRef = useRef<HTMLDivElement | null>(null);
+  const widgetIdRef = useRef<string | null>(null);
+
+  // Load the Turnstile script and render the widget when a site key is
+  // configured. When NEXT_PUBLIC_TURNSTILE_SITE_KEY is unset (local dev),
+  // the widget is skipped and captchaToken stays null, which the precheck
+  // endpoint accepts (server-side key also absent in dev).
+  useEffect(() => {
+    if (!TURNSTILE_SITE_KEY || !turnstileContainerRef.current) return;
+
+    const scriptId = "cf-turnstile-script";
+    const alreadyLoaded = document.getElementById(scriptId) !== null;
+
+    function renderWidget() {
+      if (!window.turnstile || !turnstileContainerRef.current) return;
+      widgetIdRef.current = window.turnstile.render(
+        turnstileContainerRef.current,
+        {
+          sitekey: TURNSTILE_SITE_KEY,
+          callback: (token) => setCaptchaToken(token),
+          "expired-callback": () => setCaptchaToken(null),
+          "error-callback": () => setCaptchaToken(null),
+          theme: "light",
+        }
+      );
+    }
+
+    if (alreadyLoaded) {
+      renderWidget();
+      return;
+    }
+
+    const script = document.createElement("script");
+    script.id = scriptId;
+    script.src = "https://challenges.cloudflare.com/turnstile/v0/api.js";
+    script.async = true;
+    script.defer = true;
+    script.onload = renderWidget;
+    document.head.appendChild(script);
+
+    return () => {
+      if (widgetIdRef.current && window.turnstile) {
+        window.turnstile.remove(widgetIdRef.current);
+      }
+    };
+  }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setError(null);
     setLoading(true);
+
+    // Abuse-prevention precheck (issue #116): rate limit, disposable-domain
+    // blocklist, and Turnstile CAPTCHA. The call goes through a Next.js Route
+    // Handler so CONTROL_PLANE_BASE_URL stays server-side only.
+    const precheckRes = await fetch("/api/auth/signup-precheck", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, captcha_token: captchaToken ?? "" }),
+    });
+
+    if (!precheckRes.ok) {
+      let msg =
+        "We could not complete your sign-up. Please try again or use a different email address.";
+      try {
+        const body = (await precheckRes.json()) as { error?: string };
+        if (typeof body.error === "string" && body.error.length > 0) {
+          msg = body.error;
+        }
+      } catch {
+        // Ignore parse errors; generic message is already set.
+      }
+      setError(msg);
+      setLoading(false);
+      return;
+    }
 
     const appUrl =
       process.env.NEXT_PUBLIC_APP_URL ??
@@ -27,7 +125,7 @@ export default function SignUpPage() {
         ? window.location.origin
         : "http://localhost:3000");
 
-    const { error } = await supabase.auth.signUp({
+    const { error: signUpError } = await supabase.auth.signUp({
       email,
       password,
       options: {
@@ -35,8 +133,8 @@ export default function SignUpPage() {
       },
     });
 
-    if (error) {
-      setError(error.message);
+    if (signUpError) {
+      setError(signUpError.message);
       setLoading(false);
       return;
     }
@@ -111,6 +209,9 @@ export default function SignUpPage() {
             minLength={8}
           />
         </Field>
+        {TURNSTILE_SITE_KEY ? (
+          <div ref={turnstileContainerRef} className="flex justify-center" />
+        ) : null}
         {error ? (
           <p
             role="alert"
