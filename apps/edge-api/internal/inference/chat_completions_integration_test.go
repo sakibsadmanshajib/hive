@@ -28,7 +28,7 @@ func TestChatCompletions_ToolCapable_AllowsTools(t *testing.T) {
 	routingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(SelectRouteResult{
+		_ = json.NewEncoder(w).Encode(SelectRouteResult{
 			AliasID:          "gpt-4o",
 			RouteID:          "route-tool-capable",
 			LiteLLMModelName: "openrouter/openai/gpt-4o",
@@ -65,7 +65,7 @@ func TestChatCompletions_IncapableRoute_Rejects(t *testing.T) {
 	routingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error": "routing: no tool-capable route for alias hive-basic",
 		})
 	}))
@@ -151,7 +151,7 @@ func TestChatCompletions_RoutingTransient_Returns502(t *testing.T) {
 	routingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
-		w.Write([]byte(`{"error":"internal routing failure"}`))
+		_, _ = w.Write([]byte(`{"error":"internal routing failure"}`))
 	}))
 	defer routingSrv.Close()
 
@@ -199,7 +199,7 @@ func TestChatCompletions_ToolCapable_UpstreamContainsTools(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		// Minimal valid OpenAI chat completion response.
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"id":      "chatcmpl-test",
 			"object":  "chat.completion",
 			"created": 1234567890,
@@ -227,7 +227,7 @@ func TestChatCompletions_ToolCapable_UpstreamContainsTools(t *testing.T) {
 	routingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(SelectRouteResult{
+		_ = json.NewEncoder(w).Encode(SelectRouteResult{
 			AliasID:          "gpt-4o",
 			RouteID:          "route-tool-capable",
 			LiteLLMModelName: "openrouter/openai/gpt-4o",

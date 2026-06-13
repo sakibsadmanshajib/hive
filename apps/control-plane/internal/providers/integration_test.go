@@ -16,7 +16,7 @@ package providers
 
 import (
 	"context"
-	"math/rand"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -50,15 +50,11 @@ func connectTestDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// randomSuffix returns a short random lowercase string for unique slug creation.
+// randomSuffix returns a short unique string derived from the current nanosecond
+// timestamp for slug creation. Uniqueness relies on wall-clock resolution; callers
+// in tight loops should append an additional counter if needed.
 func randomSuffix() string {
-	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	b := make([]byte, 6)
-	for i := range b {
-		b[i] = chars[r.Intn(len(chars))]
-	}
-	return string(b)
+	return fmt.Sprintf("%x", time.Now().UnixNano())
 }
 
 const integrationToken = "test-integration-secret"
@@ -211,18 +207,35 @@ func TestProviderCRUDIntegration(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// Step 6: INSERT INTO provider_routes referencing the slug succeeds.
 	// This verifies the CHECK constraint no longer enumerates fixed provider names.
+	// Seed model_aliases first to satisfy the FK constraint on provider_routes.alias_id.
 	// -------------------------------------------------------------------------
+	const testAliasID = "test-integ-alias"
+	_, err = pool.Exec(ctx, `
+		INSERT INTO public.model_aliases
+			(alias_id, owned_by, display_name, summary, visibility, lifecycle,
+			 capability_badges, input_price_credits, output_price_credits, created_at, updated_at)
+		VALUES ($1, 'test', $1, 'test', 'public', 'stable', '[]'::jsonb, 10, 30, now(), now())
+		ON CONFLICT (alias_id) DO NOTHING
+	`, testAliasID)
+	if err != nil {
+		t.Fatalf("step 6: seed model_aliases: %v", err)
+	}
+	// Cleanup alias row after route row (FK order: route first, then alias).
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DELETE FROM public.model_aliases WHERE alias_id = $1", testAliasID)
+	})
+
 	var routeID string
 	err = pool.QueryRow(ctx, `
 		INSERT INTO public.provider_routes
 			(alias_id, provider, provider_model, litellm_model_name, price_class, health_state, priority)
-		VALUES ('test-integ-alias', $1, 'test-model', 'test/test-model', 'standard', 'healthy', 1)
+		VALUES ($2, $1, 'test-model', 'test/test-model', 'standard', 'healthy', 1)
 		RETURNING route_id
-	`, slug).Scan(&routeID)
+	`, slug, testAliasID).Scan(&routeID)
 	if err != nil {
 		t.Fatalf("step 6: INSERT provider_routes with custom slug: %v", err)
 	}
-	// Cleanup route row before provider row (FK order).
+	// Cleanup route row before alias row (FK order).
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM public.provider_routes WHERE route_id = $1", routeID)
 	})
