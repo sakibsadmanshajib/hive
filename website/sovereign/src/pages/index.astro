@@ -1,26 +1,481 @@
 ---
-// Home page stub. Renders the shell and a placeholder. The page builder fills
-// the body from SPEC.md: hero (sovereignty two-series) + proof spine strip +
-// cost-wedge bar (below fold, distinct band) + dual delivery teaser +
-// competitive one-liner + dual CTA. Compliance placement rule: cost-proof and
-// residency-risk components never share a section band.
+// Home page (template: home, scope: both).
+//
+// Structure (SPEC.md sections 7, 8, 10):
+//   1. Hero, split-evidence: copy left, sovereignty two-series chart right.
+//   2. Proof spine strip: architecture claim plus the Perplexity callout.
+//   3. Economics band (cost-section), a DISTINCT band from the sovereignty hero
+//      per the compliance placement rule: cost-wedge bar, quality-parity bar,
+//      and the Pinterest cost proof live here, never adjacent to a sovereignty
+//      claim.
+//   4. Dual delivery teaser: on-prem box vs Hive Cloud (Cloud carries no
+//      sovereignty language).
+//   5. Competitive one-liner.
+//   6. Closing dual CTA.
+//
+// Compliance: sovereignty wording is on-prem scoped. The Pinterest proof point
+// sits in the cost band only. No "150x" anywhere. Canadian English, no dash
+// punctuation between clauses.
 import Base from '../layouts/Base.astro';
+import ChartFrame from '../components/charts/ChartFrame.astro';
+import SovereigntyChart from '../components/charts/SovereigntyChart.astro';
+import StaticBar from '../components/charts/StaticBar.astro';
+import CalloutCard from '../components/charts/CalloutCard.astro';
+
+const ratesAsOf = 'June 2026';
+
+// Wired from src/data/charts.json (figures re-verified at the pre-publish gate).
+const sovereigntyCitation =
+  'Hive on-prem reference architecture. Open-weight model weights and inference execute on customer hardware; no inference call leaves the network boundary.';
+const costCitation =
+  'Published hosted-API price sheets for open-weight and proprietary frontier models, captured June 2026. Re-verify before publish.';
+const qualityCitation =
+  'Artificial Analysis Intelligence Index v4.0. Best open 54, best closed 60.';
+
+const costRows = [
+  {
+    name: 'Open-weight (hosted)',
+    color: 'teal' as const,
+    value: 1.92,
+    valueLabel: '$0.196 to $1.92',
+  },
+  {
+    name: 'Proprietary frontier',
+    color: 'grey' as const,
+    value: 30,
+    valueLabel: '$12 to $30',
+  },
+];
+
+const qualityRows = [
+  {
+    name: 'Best open-weight',
+    color: 'teal' as const,
+    value: 54,
+    valueLabel: '54',
+  },
+  {
+    name: 'Best closed',
+    color: 'grey' as const,
+    value: 60,
+    valueLabel: '60',
+  },
+];
 ---
 
 <Base
   title="Your AI runs on your hardware"
   description="Open-weight AI on your own servers. No data leaves your building. No usage-based vendor bill."
 >
+  {/* 1. HERO (split-evidence). Copy left, sovereignty two-series right. */}
+  <section class="shell py-section hero">
+    <div class="hero__copy">
+      <p class="eyebrow">Sovereign AI</p>
+      <h1>Your AI runs on your hardware. Not ours. Not <span class="h1-gold">anyone's</span>.</h1>
+
+      <ul class="ticks">
+        <li>Open-weight models on your own servers.</li>
+        <li>No data leaves your building.</li>
+        <li>No usage-based vendor bill.</li>
+      </ul>
+
+      <p class="scope-clarifier">
+        Self-hosted deployment. Your hardware, your network, your data.
+      </p>
+
+      <div class="cta-row">
+        <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost tap-target" href="/pricing">See Pricing</a>
+      </div>
+    </div>
+
+    <div class="hero__evidence">
+      <ChartFrame
+        headline="Where your data lives at inference time"
+        plainReading="With Hive on-prem, your data stays on your hardware. With a cloud AI provider, every inference leaves your network."
+        citation={sovereigntyCitation}
+        ratesAsOf={ratesAsOf}
+      >
+        <SovereigntyChart
+          ariaLabel="Two columns. On the left, Hive on-prem keeps your data inside your network boundary with no outbound arrow. On the right, a cloud AI provider shows your data leaving your building."
+        />
+      </ChartFrame>
+    </div>
+  </section>
+
+  {/* 2. PROOF SPINE STRIP. Architecture claim plus Perplexity. No cost here. */}
+  <section class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">Why it holds</p>
+      <h2>The guarantee is architectural, not a promise.</h2>
+      <div class="proof-grid">
+        <div class="proof-statement">
+          <p>
+            Open-weight model weights run on your hardware. Every inference
+            executes locally. No prompt, no response, no document ever calls an
+            external API or leaves your network boundary.
+          </p>
+        </div>
+        <CalloutCard
+          accent="teal"
+          statement="Perplexity runs DeepSeek R1 on its own servers in US and EU data centres. User data never leaves Western servers."
+          asOf="as of January 2025"
+        />
+      </div>
+    </div>
+  </section>
+
+  {/* 3. ECONOMICS BAND (cost-section). DISTINCT band, never adjacent to the
+       sovereignty hero. Cost-wedge, quality-parity, and the Pinterest proof. */}
   <section class="shell py-section">
-    <h1>Your AI runs on your hardware. Not ours. Not anyone's.</h1>
-    <p class="placeholder">TODO: page builder fills this from SPEC.md.</p>
+    <p class="eyebrow">The economics</p>
+    <h2>Frontier-class quality. A fraction of the cost.</h2>
+    <p class="intro">
+      Open-weight models have caught up on quality while costing a fraction of
+      the proprietary frontier per unit of work. Run them yourself and the cost
+      is a box you own, not a meter that climbs with every request.
+    </p>
+
+    <div class="chart-pair">
+      <ChartFrame
+        headline="Output cost per million tokens"
+        plainReading="Open-weight inference runs roughly 10x to 30x cheaper per output token than the proprietary frontier."
+        citation={costCitation}
+        ratesAsOf={ratesAsOf}
+      >
+        <StaticBar
+          rows={costRows}
+          max={30}
+          annotation="~10x to ~30x cheaper"
+          ariaLabel="Open-weight hosted output pricing ranges from $0.196 to $1.92 per million tokens; proprietary frontier ranges from $12 to $30 per million tokens."
+        />
+        <p slot="compliance-footnote" class="footnote">
+          Hosted-API pricing. Self-hosting economics differ.
+        </p>
+      </ChartFrame>
+
+      <ChartFrame
+        headline="Best open-weight versus best closed model"
+        plainReading="The best open-weight models now score within roughly 10 percent of the best closed models."
+        citation={qualityCitation}
+        ratesAsOf={ratesAsOf}
+      >
+        <StaticBar
+          rows={qualityRows}
+          max={60}
+          ariaLabel="On the Artificial Analysis Intelligence Index version 4.0, the best open-weight model scores 54 and the best closed model scores 60."
+        />
+        <p slot="compliance-footnote" class="footnote">
+          Artificial Analysis Intelligence Index v4.0. Rankings shift
+          frequently. Verify current standings at artificialanalysis.ai before
+          citing. Captured June 2026.
+        </p>
+      </ChartFrame>
+    </div>
+
+    <div class="proof-callout">
+      <CalloutCard
+        accent="teal"
+        statement="Pinterest cut AI costs roughly 90 percent and raised accuracy roughly 30 percent by running and customising the open-weight Qwen3-VL model on its own infrastructure."
+        asOf="as of 2026"
+      >
+        <p slot="disclaimer" class="footnote">
+          Results reflect Pinterest's specific implementation. Your outcomes
+          will depend on your hardware, model choice, and workload.
+        </p>
+      </CalloutCard>
+    </div>
+  </section>
+
+  {/* 4. DUAL DELIVERY. On-prem box vs Hive Cloud (Cloud: no sovereignty copy). */}
+  <section class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">Two ways to run it</p>
+      <h2>Your building, or your region.</h2>
+      <div class="delivery">
+        <article class="delivery-card delivery-card--onprem">
+          <h3>On-prem box</h3>
+          <p>
+            The whole stack on hardware you own. Self-hosted deployment: your
+            hardware, your network, your data. Start on a workstation-class box
+            and scale as you grow.
+          </p>
+          <a class="card-link tap-target" href="/security">
+            See security and data residency
+          </a>
+        </article>
+        <article class="delivery-card delivery-card--cloud">
+          <h3>Hive Cloud</h3>
+          <p>
+            The same open-weight models behind the same OpenAI-compatible API,
+            at regional pricing that is a fraction of the US rate. Predictable,
+            and ready in minutes.
+          </p>
+          <a class="card-link tap-target" href="/pricing">See pricing</a>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  {/* 5. COMPETITIVE ONE-LINER. */}
+  <section class="shell py-section competitive">
+    <p class="competitive__line">
+      Glean, Writer, Cohere North, and Microsoft Copilot route every query
+      through their own cloud. Hive runs the same capability stack in yours.
+    </p>
+  </section>
+
+  {/* 6. CLOSING DUAL CTA. */}
+  <section class="band">
+    <div class="shell py-section closing">
+      <h2>See it run on your own hardware.</h2>
+      <div class="cta-row">
+        <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost tap-target" href="/pricing">See Pricing</a>
+      </div>
+    </div>
   </section>
 </Base>
 
 <style>
-  .placeholder {
+  .eyebrow {
     color: var(--text-faint);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+
+  .band {
+    background-color: var(--bg-raised);
+    border-block: 1px solid var(--border);
+  }
+
+  h2 {
+    font-size: 30px;
+    margin: 0;
+  }
+
+  .intro {
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 68ch;
+    margin: 16px 0 0;
+  }
+
+  /* Hero split-evidence layout. */
+  .hero {
+    display: grid;
+    grid-template-columns: 1.05fr 0.95fr;
+    gap: 56px;
+    align-items: center;
+  }
+
+  .h1-gold {
+    color: var(--gold);
+  }
+
+  .ticks {
+    margin: 28px 0 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .ticks li {
+    position: relative;
+    padding-left: 30px;
+    color: var(--text);
+    font-size: 17px;
+    line-height: 1.4;
+  }
+
+  .ticks li::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.3em;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    background-color: var(--teal);
+  }
+
+  .scope-clarifier {
+    margin: 22px 0 0;
+    color: var(--text-faint);
+    font-size: 14px;
+    line-height: 1.5;
+    max-width: 48ch;
+  }
+
+  .hero__evidence {
+    width: 100%;
+  }
+
+  /* CTA recipe (aligned with Nav and Security page). */
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 32px;
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
     font-size: 15px;
-    margin-top: 24px;
+    padding: 10px 18px;
+    border-radius: 10px;
+  }
+
+  .cta--primary {
+    background-color: var(--gold);
+    color: #1a1205;
+  }
+
+  .cta--primary:hover {
+    filter: brightness(1.05);
+  }
+
+  .cta--ghost {
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    background-color: transparent;
+  }
+
+  .cta--ghost:hover {
+    border-color: var(--text-faint);
+  }
+
+  /* Proof spine strip. */
+  .proof-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 28px;
+    align-items: start;
+  }
+
+  .proof-statement {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--teal);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+  }
+
+  .proof-statement p {
+    margin: 0;
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1.55;
+  }
+
+  /* Economics band charts. */
+  .chart-pair {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 32px;
+  }
+
+  .proof-callout {
+    margin-top: 20px;
+    max-width: 720px;
+  }
+
+  .footnote {
+    margin: 0;
+    color: var(--text-faint);
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  /* Dual delivery. */
+  .delivery {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 32px;
+  }
+
+  .delivery-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+  }
+
+  .delivery-card--onprem {
+    border-top: 3px solid var(--teal);
+  }
+
+  .delivery-card--cloud {
+    border-top: 3px solid var(--gold);
+  }
+
+  .delivery-card h3 {
+    font-size: 18px;
+    margin: 0 0 12px;
+  }
+
+  .delivery-card p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .card-link {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 16px;
+    color: var(--teal);
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .card-link:hover {
+    filter: brightness(1.1);
+  }
+
+  /* Competitive one-liner. */
+  .competitive__line {
+    margin: 0;
+    color: var(--text);
+    font-size: 22px;
+    line-height: 1.45;
+    max-width: 40ch;
+    font-weight: 500;
+  }
+
+  .closing {
+    text-align: center;
+  }
+
+  .closing .cta-row {
+    justify-content: center;
+  }
+
+  @media (max-width: 860px) {
+    .hero {
+      grid-template-columns: 1fr;
+      gap: 36px;
+    }
+    .proof-grid,
+    .chart-pair,
+    .delivery {
+      grid-template-columns: 1fr;
+    }
+    h2 {
+      font-size: 26px;
+    }
   }
 </style>

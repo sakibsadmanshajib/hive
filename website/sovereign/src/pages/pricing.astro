@@ -1,27 +1,438 @@
 ---
-// Pricing page stub (scope: both). The page builder fills the body from
-// SPEC.md: on-prem ladder (Strix entry / DGX step-up; annual licence) vs Hive
-// Cloud tier (regional, no sovereignty language) + TCO crossover Recharts
-// island + Pinterest cost proof + pricing disclaimer. This is the only route
-// that loads the Recharts island and the only route with the scoped
-// style-src-attr relaxation in public/_headers.
+// Pricing page (template: pricing, scope: both).
+//
+// Structure (SPEC.md sections 9, 10, 12):
+//   1. Hero: no exact dollar figure in the heading (a workstation-class box you
+//      own, low thousands).
+//   2. On-prem ladder: Strix entry and DGX step-up, plus the annual licence,
+//      with the hardware capex bar.
+//   3. TCO crossover: the ONE Recharts island (client:visible), a 36-month
+//      band with a gold breakeven annotation and the on-face assumptions.
+//   4. Hive Cloud tier: regional, a fraction of US pricing, NO sovereignty or
+//      data-residency language.
+//   5. Pinterest cost proof (cost-section) with its results-vary disclaimer.
+//   6. Verbatim pricing disclaimer.
+//   7. Closing CTA.
+//
+// This is the only route that loads the Recharts island and the only route
+// with the scoped style-src-attr relaxation in public/_headers. Canadian
+// English, no dash punctuation between clauses. No "150x".
 import Base from '../layouts/Base.astro';
+import ChartFrame from '../components/charts/ChartFrame.astro';
+import StaticBar from '../components/charts/StaticBar.astro';
+import CalloutCard from '../components/charts/CalloutCard.astro';
+import TcoCrossover from '../components/charts/TcoCrossover';
+
+const ratesAsOf = 'June 2026';
+
+const hardwareCitation =
+  'Published hardware pricing for AMD Strix Halo 128GB class systems and NVIDIA DGX Spark, captured June 2026.';
+const tcoCitation =
+  'Modelled 36-month TCO. Strix payback approx month 7, DGX payback approx month 17. Month-36 totals approx $2,391 (Strix) and $5,261 (DGX) versus approx $10,800 cloud API.';
+
+const hardwareRows = [
+  {
+    name: 'AMD Strix Halo 128GB (entry)',
+    color: 'teal' as const,
+    value: 2000,
+    valueLabel: 'starts under $2,000',
+  },
+  {
+    name: 'NVIDIA DGX Spark (step-up)',
+    color: 'grey' as const,
+    value: 4699,
+    valueLabel: 'approx $4,699',
+  },
+];
+
+// 36-month cumulative cost. On-prem band runs from the Strix lower bound to the
+// DGX upper bound; cloud is the API meter. Breakeven versus the entry box is
+// about month 7.
+const tcoData = [
+  { month: 0, onpremLow: 2000, onpremHigh: 4699, cloud: 0 },
+  { month: 6, onpremLow: 2065, onpremHigh: 4793, cloud: 1800 },
+  { month: 7, onpremLow: 2077, onpremHigh: 4808, cloud: 2100 },
+  { month: 12, onpremLow: 2131, onpremHigh: 4886, cloud: 3600 },
+  { month: 17, onpremLow: 2196, onpremHigh: 4980, cloud: 5100 },
+  { month: 18, onpremLow: 2209, onpremHigh: 4995, cloud: 5400 },
+  { month: 24, onpremLow: 2261, onpremHigh: 5074, cloud: 7200 },
+  { month: 30, onpremLow: 2326, onpremHigh: 5167, cloud: 9000 },
+  { month: 36, onpremLow: 2391, onpremHigh: 5261, cloud: 10800 },
+];
 ---
 
 <Base
   title="Pricing"
-  description="On-prem hardware ladder plus an annual licence, or Hive Cloud at a fraction of US price."
+  description="On-prem hardware ladder plus an annual licence, or Hive Cloud at a fraction of US price. The entry box pays for itself in about seven months."
 >
+  {/* 1. HERO. No exact dollar in the heading. */}
+  <section class="shell py-section hero">
+    <p class="eyebrow">Pricing</p>
+    <h1>A box you own, not a meter that climbs.</h1>
+    <p class="lede">
+      Run Hive on a workstation-class box for low thousands of dollars, with an
+      annual licence for the software. Or rent Hive Cloud by the region at a
+      fraction of US pricing. Either way the cost is predictable.
+    </p>
+    <div class="cta-row">
+      <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+      <a class="cta cta--ghost tap-target" href="#tco">See the math</a>
+    </div>
+  </section>
+
+  {/* 2. ON-PREM LADDER. */}
+  <section class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">On-prem edition</p>
+      <h2>Buy the box once. Scale when you grow.</h2>
+
+      <div class="tiers">
+        <article class="tier">
+          <h3 class="tier__name">Entry</h3>
+          <p class="tier__price"><span data-numeric>starts under $2,000</span></p>
+          <p class="tier__hw">AMD Strix Halo, 128GB unified memory.</p>
+          <p class="tier__body">
+            A workstation-class box that runs the full stack for a small team.
+            The right starting point for most firms.
+          </p>
+        </article>
+        <article class="tier tier--featured">
+          <h3 class="tier__name">Step-up</h3>
+          <p class="tier__price"><span data-numeric>approx $4,699</span></p>
+          <p class="tier__hw">NVIDIA DGX Spark.</p>
+          <p class="tier__body">
+            More headroom for larger models and heavier concurrent workloads.
+            Add units as demand grows.
+          </p>
+        </article>
+      </div>
+
+      <div class="licence">
+        <h3>Annual licence</h3>
+        <p>
+          The annual licence covers software updates, compatibility with new
+          open-weight models as they ship, and support. Hardware is yours to own.
+        </p>
+      </div>
+
+      <div class="chart-wrap">
+        <ChartFrame
+          headline="On-prem hardware entry points"
+          plainReading="Start on an entry box for low thousands and step up to the DGX class when you need more headroom."
+          citation={hardwareCitation}
+          ratesAsOf={ratesAsOf}
+        >
+          <StaticBar
+            rows={hardwareRows}
+            max={4699}
+            annotation="approx June 2026, rising"
+            ariaLabel="The entry AMD Strix Halo box starts under $2,000. The NVIDIA DGX Spark step-up box is approximately $4,699."
+          />
+        </ChartFrame>
+      </div>
+    </div>
+  </section>
+
+  {/* 3. TCO CROSSOVER. The ONE Recharts island. */}
+  <section id="tco" class="shell py-section">
+    <p class="eyebrow">Total cost of ownership</p>
+    <h2>The entry box pays for itself in about seven months.</h2>
+    <p class="intro">
+      Cloud API billing climbs with every request. On-prem is a fixed capex plus
+      a small power cost. Over 36 months the gap compounds in your favour.
+    </p>
+
+    <div class="chart-wrap chart-wrap--wide">
+      <ChartFrame
+        headline="36-month total cost of ownership"
+        plainReading="The entry box pays for itself in about 7 months, then keeps saving. The shaded band is the on-prem range from the entry box to the step-up box."
+        citation={tcoCitation}
+        ratesAsOf={ratesAsOf}
+      >
+        <TcoCrossover client:visible data={tcoData} breakevenMonth={7} />
+        <p slot="compliance-footnote" class="footnote">
+          Assumes 10M output tokens per month. Power-only opex, excludes labour.
+          Hardware prices approx June 2026. A band, not a point estimate.
+        </p>
+      </ChartFrame>
+    </div>
+  </section>
+
+  {/* 4. HIVE CLOUD TIER. No sovereignty or data-residency language here. */}
+  <section class="band">
+    <div class="shell py-section">
+      <p class="eyebrow">Hive Cloud</p>
+      <h2>Rent it by the region.</h2>
+      <div class="cloud-card">
+        <p>
+          Hive Cloud runs the same open-weight models behind the same
+          OpenAI-compatible API, hosted by region at a fraction of US pricing.
+          Top up, point your base URL at Hive, and start sending requests. No
+          box to buy, predictable pricing, ready in minutes.
+        </p>
+        <a class="card-link tap-target" href="/book-a-demo">Talk to us about Cloud</a>
+      </div>
+    </div>
+  </section>
+
+  {/* 5. PINTEREST COST PROOF (cost-section). */}
   <section class="shell py-section">
-    <h1>Pricing</h1>
-    <p class="placeholder">TODO: page builder fills this from SPEC.md.</p>
+    <p class="eyebrow">Proof at scale</p>
+    <div class="proof-callout">
+      <CalloutCard
+        accent="teal"
+        statement="Pinterest cut AI costs roughly 90 percent and raised accuracy roughly 30 percent by running and customising the open-weight Qwen3-VL model on its own infrastructure."
+        asOf="as of 2026"
+      >
+        <p slot="disclaimer" class="footnote">
+          Results reflect Pinterest's specific implementation. Your outcomes
+          will depend on your hardware, model choice, and workload.
+        </p>
+      </CalloutCard>
+    </div>
+  </section>
+
+  {/* 6. PRICING DISCLAIMER (verbatim). */}
+  <section class="shell py-section">
+    <p class="eyebrow">Disclaimer</p>
+    <p class="disclaimer" role="note">
+      On-prem pricing covers software licensing and support. Hardware
+      procurement, security hardening, and regulatory validation are the
+      customer's responsibility. Hive Cloud deployments run on third-party
+      infrastructure and do not carry the same data-residency properties as the
+      on-prem edition.
+    </p>
+  </section>
+
+  {/* 7. CLOSING CTA. */}
+  <section class="band">
+    <div class="shell py-section closing">
+      <h2>Price it for your workload.</h2>
+      <div class="cta-row">
+        <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost tap-target" href="/use-cases">See use cases</a>
+      </div>
+    </div>
   </section>
 </Base>
 
 <style>
-  .placeholder {
+  .eyebrow {
     color: var(--text-faint);
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+
+  .band {
+    background-color: var(--bg-raised);
+    border-block: 1px solid var(--border);
+  }
+
+  h2 {
+    font-size: 30px;
+    margin: 0;
+  }
+
+  .lede {
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1.6;
+    max-width: 60ch;
+    margin: 20px 0 0;
+  }
+
+  .intro {
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 68ch;
+    margin: 16px 0 0;
+  }
+
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin-top: 32px;
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 600;
     font-size: 15px;
+    padding: 10px 18px;
+    border-radius: 10px;
+  }
+
+  .cta--primary {
+    background-color: var(--gold);
+    color: #1a1205;
+  }
+
+  .cta--primary:hover {
+    filter: brightness(1.05);
+  }
+
+  .cta--ghost {
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    background-color: transparent;
+  }
+
+  .cta--ghost:hover {
+    border-color: var(--text-faint);
+  }
+
+  /* On-prem tiers. */
+  .tiers {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+    margin-top: 32px;
+  }
+
+  .tier {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+  }
+
+  .tier--featured {
+    border-top: 3px solid var(--teal);
+  }
+
+  .tier__name {
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-faint);
+    margin: 0;
+  }
+
+  .tier__price {
+    font-size: 22px;
+    color: var(--text);
+    margin: 10px 0 4px;
+  }
+
+  .tier__hw {
+    color: var(--teal);
+    font-size: 14px;
+    margin: 0 0 12px;
+  }
+
+  .tier__body {
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.55;
+    margin: 0;
+  }
+
+  .licence {
     margin-top: 24px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--gold);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+    max-width: 760px;
+  }
+
+  .licence h3 {
+    font-size: 17px;
+    margin: 0 0 10px;
+  }
+
+  .licence p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  .chart-wrap {
+    margin-top: 32px;
+    max-width: 720px;
+  }
+
+  .chart-wrap--wide {
+    max-width: 920px;
+  }
+
+  .footnote {
+    margin: 0;
+    color: var(--text-faint);
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+
+  /* Hive Cloud card. */
+  .cloud-card {
+    margin-top: 28px;
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--gold);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+    max-width: 760px;
+  }
+
+  .cloud-card p {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1.6;
+  }
+
+  .card-link {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 16px;
+    color: var(--teal);
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .card-link:hover {
+    filter: brightness(1.1);
+  }
+
+  .proof-callout {
+    max-width: 720px;
+  }
+
+  .disclaimer {
+    margin: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background-color: var(--bg-card);
+    padding: 24px;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.65;
+    max-width: 78ch;
+  }
+
+  .closing {
+    text-align: center;
+  }
+
+  .closing .cta-row {
+    justify-content: center;
+  }
+
+  @media (max-width: 760px) {
+    .tiers {
+      grid-template-columns: 1fr;
+    }
+    h2 {
+      font-size: 26px;
+    }
   }
 </style>
