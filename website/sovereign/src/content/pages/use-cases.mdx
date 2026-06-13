@@ -8,4 +8,82 @@ scope: both
 updated: 2026-06-13
 ---
 
-{/* TODO: page builder fills this from SPEC.md. Four verticals: law, finance, healthcare, SMB. Outcome-led. */}
+{/*
+  Structured content source for the Use Cases page. The rendered page lives in
+  src/pages/use-cases.astro; this MDX file holds the governed copy and the
+  compliance scope so the content lint can check it.
+
+  scope: both — the regulated verticals (law, finance, healthcare) are on-prem
+  scoped and may carry sovereignty / no-egress wording. The SMB vertical is the
+  Hive Cloud story: it must carry NO sovereignty or no-egress language at all
+  (cost only). No Pinterest proof point on this page; the cost proof lives on
+  the Pricing page. Regulatory references are general information, not advice.
+*/}
+
+## The shared problem
+
+For regulated work, sensitive data cannot route through an external AI endpoint.
+For everyone else, per-token US billing makes useful AI too expensive to run at
+the volume the work actually needs. Hive answers both: open-weight models on your
+own hardware for regulated work, and Hive Cloud at regional pricing for teams
+that want the economics without running their own box.
+
+## Law
+
+Pain: client matter is privileged. Sending a brief, a contract, or a discovery
+set to a US-owned AI endpoint puts that material under a foreign jurisdiction and
+into a third party's logs, where it can be compelled or pulled into discovery.
+
+Hive capability: open model weights run on your own hardware, with retrieval over
+your matter files happening inside your network. Every inference executes locally.
+
+Exposure removed: no prompt, no response, no document leaves your network
+boundary, so there is nothing in an external provider's hands to compel or
+disclose. Whether this satisfies your obligations is a determination for your own
+counsel; this is general information, not legal advice.
+
+## Finance
+
+Pain: proprietary signals, credit models, and client positions are the firm's
+edge. Routing them through an external endpoint hands your most valuable data to
+a third party and creates an obligation question under frameworks such as GLBA
+and the FTC Safeguards Rule.
+
+Hive capability: on-prem inference with a private retrieval layer over your own
+documents and data. The API is OpenAI-compatible, so the tools your desk already
+uses point at Hive with a base-url change.
+
+Exposure removed: model weights and every inference stay on your hardware, so
+proprietary data never leaves the building. Regulatory fit is a determination for
+your compliance team and counsel; this is general information, not advice.
+
+## Healthcare
+
+Pain: patient data and clinical notes are the most sensitive records you hold.
+An external AI endpoint means protected health information crosses your boundary
+into a third party's systems.
+
+Hive capability: open-weight models run on your own hardware, air-gap capable for
+the most restricted environments. No external API is ever called.
+
+Exposure removed: no PHI leaves the building. Whether this architecture meets your
+obligations under HIPAA or any other framework is a determination your team must
+make with qualified counsel; this is general information, not advice.
+
+## Small and growing teams
+
+Pain: useful AI is priced by the token, billed in US dollars, and the bill climbs
+with every request. At real working volume the per-token model prices the work
+out before it pays off.
+
+Hive capability: Hive Cloud runs the same open-weight models behind the same
+OpenAI-compatible API, at regional pricing that is a fraction of the US rate, on
+a plan you can predict.
+
+Outcome: you get capable AI your team can actually afford to use every day, with
+no change to the code you already wrote against the OpenAI API.
+
+## Talk it through
+
+Tell us the workload and the constraints. We will show you which delivery fits:
+the on-prem edition you run yourself, or Hive Cloud at regional pricing.
