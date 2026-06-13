@@ -47,7 +47,7 @@
   /* type families */
   --font-display: 'Fraunces', 'Inter', ui-serif, serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
 }
 
 @theme {
@@ -75,5 +75,5 @@
 
   --font-display: 'Fraunces', 'Inter', ui-serif, serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
 }

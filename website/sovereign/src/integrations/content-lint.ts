@@ -1,14 +1,16 @@
 // Content-lint Astro integration.
 //
-// Runs at astro:build:start (and astro:server:setup for dev) and scans every
-// MDX page under src/content/pages. It enforces the compliance lints that the
-// zod schema cannot express because they are about prose and cross-file
-// references, not frontmatter shape. Any violation throws and fails the build.
+// Registers on the astro:config:setup hook (which fires for both dev and build,
+// before any content processing) and scans every MDX page under
+// src/content/pages. It enforces the compliance lints that the zod schema
+// cannot express because they are about prose and cross-file references, not
+// frontmatter shape. Any violation throws and fails the build.
 //
 // Lints (all ERROR, fail build):
 //   1. Banned strings: "150x" and "up to 150x" anywhere, including comments.
 //   2. Sovereignty wording only in scope:onprem pages.
-//   3. The Pinterest proof point only in cost-scoped sections.
+//   3. The Pinterest proof point only in cost-scoped sections (FILE-level
+//      heuristic, see the caveat on that lint below).
 //   4. Every <Claim id="..."> has a matching frontmatter sources[].claim_id.
 //
 // The frontmatter parse here is a deliberately small YAML reader for the
@@ -143,6 +145,17 @@ function lintFile(file: string, label: string): Violation[] {
   // 3. Pinterest proof point only in cost-scoped sections.
   //    Trip only on the actual claim (Pinterest + a signature cost figure), not
   //    a bare mention, and only when no cost-section sentinel is present.
+  //
+  //    CAVEAT (file-level heuristic, not section-scoped): this checks only that
+  //    the cost-section sentinel exists SOMEWHERE in the same file as the
+  //    Pinterest claim. It cannot verify the claim actually sits inside that
+  //    section, nor that it is non-adjacent to a sovereignty claim elsewhere on
+  //    the page. A page that carries both a cost section and a sovereignty claim
+  //    could place the Pinterest proof point next to the sovereignty claim and
+  //    still pass. Until this is upgraded to a true section-scoped check, the
+  //    SPEC placement rule (section 10: cost-proof and residency-risk components
+  //    never share a section band) requires a MANUAL adjacency review gate
+  //    before publish. Do not treat a green lint as proof of correct placement.
   const hasPinterestClaim =
     lower.includes(PINTEREST_NAME) &&
     PINTEREST_CLAIM_SIGNATURES.some((sig) => lower.includes(sig));

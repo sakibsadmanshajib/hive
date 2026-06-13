@@ -35,7 +35,7 @@ const hasCitation = typeof citation === 'string' && citation.trim().length > 0;
     hasCitation ? (
       <p class="frame__citation">
         <span class="frame__citation-label">Source:</span> {citation}
-        {ratesAsOf ? <span class="frame__rates"> — rates as of {ratesAsOf}</span> : null}
+        {ratesAsOf ? <span class="frame__rates"> (rates as of {ratesAsOf})</span> : null}
       </p>
     ) : (
       <p class="frame__citation frame__citation--broken" role="alert">

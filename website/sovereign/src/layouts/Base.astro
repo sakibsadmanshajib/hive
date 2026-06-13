@@ -46,21 +46,19 @@ const fullTitle = `${title} | Hive`;
     <!--
       hreflang cross-links. This site (.co) is the global default; the Bangladesh
       site (.com.bd) is the locale variant. Each page self-canonicals above, so
-      the two sites cross-link as locale alternates rather than duplicates. The
-      geo-router Worker injects the matching headers on the .com.bd side. Never
+      the two sites cross-link as locale alternates rather than duplicates.
+      Reciprocity is mandatory: Google ignores an hreflang pair unless both sides
+      use the same language tag and link back to each other. The geo-router
+      Worker injects the exact mirror of this set on the .com.bd side (.co as
+      "en" and "x-default", .com.bd as "bn-BD"), so these three tags match it one
+      for one. Keep them in sync with deploy/geo-router/src/index.js. Never
       switch the geo redirect to 301, or one site will be de-indexed.
     -->
     <link rel="alternate" hreflang="en" href={Astro.url.href} />
-    <link rel="alternate" hreflang="en-CA" href={Astro.url.href} />
     <link rel="alternate" hreflang="x-default" href={Astro.url.href} />
     <link
       rel="alternate"
       hreflang="bn-BD"
-      href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
-    />
-    <link
-      rel="alternate"
-      hreflang="en-BD"
       href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
     />
 
@@ -83,6 +81,7 @@ const fullTitle = `${title} | Hive`;
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content={Astro.url.href} />
   </head>
 
   <body>
