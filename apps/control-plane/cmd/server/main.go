@@ -38,6 +38,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/invoices"
 	sslcommerzRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/sslcommerz"
 	stripeRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/stripe"
+	paymentStub "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/stub"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/config"
 	platformdb "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/db"
@@ -59,6 +60,40 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 )
+
+// ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
+// interface (which returns only error, discarding the LedgerEntry return value).
+// Used only when HIVE_PAYMENTS_STUB=true is set.
+type ledgerGrantAdapter struct {
+	svc *ledger.Service
+}
+
+func (a *ledgerGrantAdapter) GrantCredits(
+	ctx context.Context,
+	accountID uuid.UUID,
+	idempotencyKey string,
+	credits int64,
+	metadata map[string]any,
+) error {
+	_, err := a.svc.GrantCredits(ctx, accountID, idempotencyKey, credits, metadata)
+	return err
+}
+
+// stubCountryAdapter wraps *profiles.Service to satisfy the
+// paymentStub.AccountCountryReader interface, exposing only the account's ISO
+// country code so the stub can apply the same country to rail access control
+// as the production payment service. Used only when HIVE_PAYMENTS_STUB=true.
+type stubCountryAdapter struct {
+	svc *profiles.Service
+}
+
+func (a *stubCountryAdapter) CountryCode(ctx context.Context, accountID uuid.UUID) (string, error) {
+	profile, err := a.svc.GetAccountProfile(ctx, accountID)
+	if err != nil {
+		return "", err
+	}
+	return profile.CountryCode, nil
+}
 
 // accountsResolverAdapter adapts accounts.Service to the payments.AccountResolver interface.
 // It extracts the viewer from context (set by auth middleware) and resolves the current account.
@@ -597,30 +632,53 @@ func main() {
 		}())
 
 		paymentsRepo := payments.NewPgxRepository(pool)
-		paymentsSvc := payments.NewService(paymentsRepo, ledgerSvc, profilesSvc, fxSvc, rails)
-		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
 
-		// M1: BD-payments confirmation loop. Bound to runCtx so it
-		// runs for the lifetime of the server, not the 10s startup
-		// ctx. Each tick also uses runCtx so a graceful shutdown
-		// aborts an in-flight rail call instead of letting it linger.
-		go func() {
-			ticker := time.NewTicker(60 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					confirmed, err := paymentsSvc.ConfirmPendingBDPayments(runCtx)
-					if err != nil {
-						log.Printf("payments: error confirming BD payments: %v", err)
-					} else if confirmed > 0 {
-						log.Printf("payments: confirmed %d pending BD payment(s)", confirmed)
+		// Hard-fail unless the payment stub is allowed to run in this
+		// environment. The allowlist (demo, staging, local, development, test)
+		// lives in paymentStub.CheckProductionSafety as the single source of
+		// truth; an unset or unrecognised HIVE_ENV fails closed so the
+		// instant-credit stub can never silently activate in real production.
+		paymentStub.CheckProductionSafety()
+
+		var paymentsSvc payments.PaymentService
+		if paymentStub.IsEnabled() {
+			// Demo stub mode: credits are granted immediately through the real
+			// ledger; no payment rail is called. Gate: HIVE_PAYMENTS_STUB=true.
+			// ledgerGrantAdapter wraps ledger.Service to satisfy the stub's
+			// LedgerGranter interface (returns error only, discards LedgerEntry).
+			// stubCountryAdapter lets the stub apply the same country to rail
+			// access control as production via payments.AvailableRails.
+			paymentsSvc = paymentStub.NewStubService(
+				&ledgerGrantAdapter{svc: ledgerSvc},
+				&stubCountryAdapter{svc: profilesSvc},
+			)
+		} else {
+			realSvc := payments.NewService(paymentsRepo, ledgerSvc, profilesSvc, fxSvc, rails)
+			paymentsSvc = realSvc
+
+			// M1: BD-payments confirmation loop — only runs when the stub is OFF (i.e. real payment rails active).
+			// Bound to runCtx so it runs for the lifetime of the server, not
+			// the 10s startup ctx. Each tick uses runCtx so graceful shutdown
+			// aborts an in-flight rail call instead of letting it linger.
+			go func() {
+				ticker := time.NewTicker(60 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ticker.C:
+						confirmed, err := realSvc.ConfirmPendingBDPayments(runCtx)
+						if err != nil {
+							log.Printf("payments: error confirming BD payments: %v", err)
+						} else if confirmed > 0 {
+							log.Printf("payments: confirmed %d pending BD payment(s)", confirmed)
+						}
+					case <-runCtx.Done():
+						return
 					}
-				case <-runCtx.Done():
-					return
 				}
-			}
-		}()
+			}()
+		}
+		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
 	}
 
 	// Build Prometheus metrics registry before the router so /metrics and
