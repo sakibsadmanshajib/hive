@@ -1,31 +1,43 @@
 ---
 // Home route for the Hive sovereign site (hive.scubed.co).
 //
-// Art direction: a confidential institutional dossier. The page reads like a
-// meticulously typeset legal/financial briefing, not a generic SaaS landing
-// page. Every numbered section uses a document grid: a left margin column holds
-// a large Fraunces numeral and a short uppercase margin label, the right column
-// holds content at a comfortable reading measure. Sections are separated by
-// full-width 1px hairline rules and spacing, never by coloured background bands.
+// Art direction: a modern, minimal, boutique-grade institutional site. The page
+// reads as a confident editorial briefing. Content is centred in a single
+// container and balanced: every section wraps its content in .shell (max-width
+// 1140px). There is no narrow left content column with an empty right third.
 //
-// Surfaces: warm off-white base throughout, near-black ink used on exactly two
-// deliberate dark surfaces (the trust strip and the closing CTA) for rhythm. One
-// deep forest accent (var(--accent)). No teal, no gold. Red appears only inside
-// the data-boundary diagram's own markup (residency risk), never on page chrome.
+// Layout system: "centred editorial + zigzag".
+//   - Section headers: a small inline kicker (numbered story feel, forest accent,
+//     middot separator, never a dash), a Fraunces H2, a short Inter intro at a
+//     ~65ch measure. Left-aligned and consistent across sections.
+//   - Feature rows (FeatureRow.astro): 50/50 two-column rows that alternate sides
+//     so the page zigzags. Each column fills its half, vertically centred, no
+//     empty thirds.
+//   - Ink bands: exactly two besides the TrustStrip (section 07 pull quote and
+//     the closing CTA), full-bleed ink background with off-white text. Everything
+//     else stays on the off-white base.
+//   - Off-white sections are separated by a top hairline rule and consistent
+//     vertical padding. Ink bands use the colour change as their divider.
 //
-// Dossier silhouette:
+// Surfaces: warm off-white base throughout, near-black ink used on exactly three
+// deliberate dark surfaces (the trust strip, the section-07 pull quote, and the
+// closing CTA) for rhythm and drama. One deep forest accent (var(--accent)),
+// scarce. No teal, no gold. Red appears only inside the data-boundary diagram's
+// own markup (residency risk), never on page chrome.
+//
+// Silhouette:
 //   Hero (asymmetric editorial: meta-row + Fraunces H1 + value lines + CTAs,
-//         hero image as a tall full-bleed ink panel on the right)
+//         hero image on the right; unchanged from the loved hero)
 //   Trust strip (ink) -- frameworks + auditor footnote + quiet proof stats
-//   01 The control problem        + control cards
-//   02 What you are exposed to     + data-boundary svg (Fig. 1)
+//   01 The control problem        + control cards (full-width, no figure)
+//   02 What you are exposed to     + exposures grid + data-boundary svg (Fig. 1)
 //   03 A spectrum of control       + tier-spectrum svg (Fig. 2) + tier cards
 //   04 The ownership cost story     + cost-crossover svg (Fig. 3) + Pinterest proof
-//   05 Who it is for                five audience cards
-//   06 Continuous improvement       section photo (Fig. 4)
-//   07 The difference in one line   the one Fraunces pull quote
+//   05 Who it is for                five audience cards (carousel)
+//   06 A platform, not a frozen box + capacity-ladder svg (Fig. 4)
+//   07 The difference in one line   the one Fraunces pull quote (ink band)
 //   08 What is actually true here   proof spine
-//   Closing CTA (ink)               the second deliberate dark surface
+//   Closing CTA (ink)               the last deliberate dark surface
 //
 // Copy rules honoured: never the word "compliant" with any framework;
 // sovereignty and no-egress language scoped to the on-prem deployment in the
@@ -34,24 +46,24 @@
 // English. Jurisdiction-neutral. LEGAL-REVIEW markers are invisible Astro
 // comments only.
 //
-// Zero client JS. No <script> tags. The two photographic images go through
-// astro:assets <Image>, which emits hashed webp/avif with width/height/srcset
-// and no inline style (CSP-clean under img-src 'self' data:). The diagram SVGs
-// are inlined at build time via ?raw + set:html, which ships no runtime and
-// re-tints via currentColor and the diagram class hooks. This .astro page is not
-// content-lint scanned (lint scans only MDX under src/content/pages), so no
-// <Claim> tags belong here.
+// Zero client JS. No <script> tags. The hero image goes through astro:assets
+// <Image>, which emits hashed webp/avif with width/height/srcset and no inline
+// style (CSP-clean under img-src 'self' data:). The diagram SVGs are inlined at
+// build time via ?raw + set:html, which ships no runtime and re-tints via
+// currentColor and the diagram class hooks. This .astro page is not content-lint
+// scanned (lint scans only MDX under src/content/pages), so no <Claim> tags
+// belong here.
 import { Image } from 'astro:assets';
 import Base from '../layouts/Base.astro';
 import CalloutCard from '../components/charts/CalloutCard.astro';
-import SectionShell from '../components/SectionShell.astro';
 import Figure from '../components/Figure.astro';
+import FeatureRow from '../components/FeatureRow.astro';
 import TrustStrip from '../components/TrustStrip.astro';
 
 // Curated photographic image, optimized by astro:assets at build time. Section
-// 06 now uses an inline capacity-ladder SVG rather than a photographic plate, so
+// 06 uses an inline capacity-ladder SVG rather than a photographic plate, so
 // only the hero photo is imported here.
-import heroImg from '../assets/generated/heroB2/ink-cinematic-1.jpg';
+import heroImg from '../assets/generated/heroDark/hero-dark-final.png';
 
 // Build-time inlined SVGs. set:html keeps them CSP-clean and zero-JS, while
 // currentColor + the .d-* class hooks let the host palette re-tint every stroke
@@ -62,26 +74,19 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 ---
 
 <Base
-  title="Sovereign On-Prem AI"
-  description="Your AI runs on your hardware, not ours. Hive runs open-weight models on a box you own, so prompts and documents never leave your building."
+  title="On-Premises AI for Regulated Industries"
+  description="On-prem AI for finance, healthcare, legal, and government. Open-weight models run on hardware you own, so prompts and documents never leave your network."
   structuredData={{ organization: true, website: true, service: true, faq: true }}
 >
-  {/* ============ HERO (cinematic ink band: editorial lede + seamless full-bleed appliance) ============
-      The hero is one ink band (background var(--ink)). The hero image is the SAME ink ground,
-      so the matte-black appliance bleeds in seamlessly (no box, no border, no radius, no shadow,
-      no seam mask): both the band and the image background are the identical ink, so there is no
-      visible edge. The hero uses a real two-column CSS grid (text column plus media column), so the
-      media is a normal grid child and never an absolute overlay. That removes the overlap that the
-      old absolute 52vw panel produced between roughly 881px and 1100px. Because the media column is
-      at most about half the capped shell width, the rendered slot stays well under the 1376px source
-      even at a 1920px viewport, so the appliance never upscales or blurs. The image fills its column
-      (object-fit cover) on the same ink ground, so the matte-black appliance bleeds into the band
-      with no box, border, radius, or shadow. object-position keeps the right-of-centre appliance and
-      its forest light-slot whole at every column ratio. The Fraunces H1 reads off-white over pure ink
-      on the left. A 1px on-ink hairline at the band bottom separates this ink hero from the ink
-      TrustStrip that follows. Below 880px the media stacks above the text at full width. */}
+  {/* ============ HERO (2-column on desktop: text left, image right) ============
+      Desktop (>=900px): CSS grid 2-col. Left = eyebrow + h1 + bullets + sub + CTAs.
+      Right = hero-final.png, fully visible (never cropped), vertically centred.
+      Mobile (<900px): single column, text first, then image full-width.
+      No ink band. No border/shadow around the image. Background seamless off-white.
+      Image appears ONCE (in the right column only).
+      A 1px border separates the hero from the TrustStrip (ink surface) below. */}
   <section class="hero" aria-labelledby="hero-h1">
-    <div class="shell hero__grid">
+    <div class="hero__grid shell">
       <div class="hero__col load-rise">
         <p class="hero__meta">
           <span class="hero__tag">Sovereign AI</span>
@@ -101,507 +106,601 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         <p class="hero__scope">
           Self-hosted deployment. Your hardware, your network, your data.
         </p>
-        <div class="cta-row">
+        <div class="cta-row hero__ctas">
           <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
-          <a class="cta cta--ghost-hero tap-target" href="/pricing">See Pricing</a>
+          <a class="cta cta--ghost tap-target" href="/pricing">See Pricing</a>
         </div>
       </div>
-
-      <div class="hero__media">
+      <div class="hero__imgcol">
         <Image
           src={heroImg}
-          alt="Hive on-prem AI appliance"
-          widths={[688, 900, 1100, 1376]}
-          sizes="(max-width: 880px) 100vw, 48vw"
-          width={1376}
-          height={768}
+          alt="An open laptop and an upright phone connected wirelessly to a Hive on-premises AI appliance, shown as green signal arcs on a deep black background"
+          widths={[768, 1100, 1376, 1920, 2752]}
+          sizes="(max-width: 900px) 92vw, 50vw"
+          width={2752}
+          height={1536}
           format="webp"
-          quality={84}
+          quality={88}
           loading="eager"
           fetchpriority="high"
           class="hero__img"
         />
-        <div class="hero__glow" aria-hidden="true"></div>
       </div>
     </div>
   </section>
 
-  {/* ============ TRUST STRIP (ink, one of two deliberate dark surfaces) ============ */}
+  {/* ============ TRUST STRIP (ink, the first of three deliberate dark surfaces) ============ */}
   <TrustStrip />
 
-  {/* ============ 01 THE CONTROL PROBLEM ============ */}
-  <SectionShell numeral="01" label="Control, not trust" id="control-h2">
-    <h2 class="section-h2 section-h2--lead">
-      A data-protection promise is only as strong as the jurisdiction that
-      can override it.
-    </h2>
-    <div class="prose">
-      <p>
-        Every cloud AI provider will tell you your data is protected, and
-        most of them mean it. The limit is structural, not a question of
-        intent. Any provider is subject to the laws of the jurisdiction it
-        answers to, so a contractual promise can be overridden by a lawful
-        order from that jurisdiction. This is true of every cloud, in every
-        country. It is the nature of handing data to a third party.
-      </p>
-      <p>
-        Hive changes the mechanism rather than the promise. The open-weight
-        model runs on hardware you control. Your prompts, your documents, and
-        the model's responses stay inside your own network boundary. On the
-        on-prem deployment, inference runs locally and the request never
-        calls an external API, so there is no third-party endpoint to
-        subpoena and no external data path to audit. The data does not move,
-        so there is nothing to compel.
-      </p>
-      <p>
-        That is what we mean by sovereignty, scoped precisely: the on-prem
-        Hive deployment keeps every inference inside your own infrastructure,
-        under your physical and legal control.
-        {/* LEGAL-REVIEW */}
-      </p>
-    </div>
-
-    <ul class="ds__bleed cards cards--3" role="list">
-      <li class="card card--static">
-        <h3 class="card__h3">You hold the hardware.</h3>
-        <p class="card__body">
-          The box sits on your premises, or in an in-region datacentre you
-          select, under your own jurisdiction. You hold the keys, the logs, and
-          the machine.
+  {/* ============ 01 THE CONTROL PROBLEM (centred editorial + full-width cards) ============ */}
+  <section class="band" aria-labelledby="control-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>01</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          Control
+        </span>
+        <h2 id="control-h2" class="section-h2 section-h2--lead">
+          A data-protection promise is only as strong as the jurisdiction that
+          can override it.
+        </h2>
+      </header>
+      <div class="prose">
+        <p>
+          Every cloud AI provider will tell you your data is protected, and
+          most of them mean it. The limit is structural, not a question of
+          intent. Any provider is subject to the laws of the jurisdiction it
+          answers to, so a contractual promise can be overridden by a lawful
+          order from that jurisdiction. This is true of every cloud, in every
+          country. It is the nature of handing data to a third party.
         </p>
-      </li>
-      <li class="card card--static">
-        <h3 class="card__h3">No request leaves the boundary.</h3>
-        <p class="card__body">
-          On the on-prem deployment, inference runs locally and never calls an
-          external API. There is no provider in the loop, so there is no
-          provider to be ordered to produce anything.
+        <p>
+          Hive changes the mechanism rather than the promise. The open-weight
+          model runs on hardware you control. Your prompts, your documents, and
+          the model's responses stay inside your own network boundary. On the
+          on-prem deployment, inference runs locally and the request never
+          calls an external API, so there is no third-party endpoint to
+          subpoena and no external data path to audit. The data does not move,
+          so there is nothing to compel.
+        </p>
+        <p>
+          That is what we mean by sovereignty, scoped precisely: the on-prem
+          Hive deployment keeps every inference inside your own infrastructure,
+          under your physical and legal control.
           {/* LEGAL-REVIEW */}
         </p>
-      </li>
-      <li class="card card--static">
-        <h3 class="card__h3">One vendor relationship, no metered data path.</h3>
-        <p class="card__body">
-          You license software and support from us. Your data never reaches us,
-          because there is no place in the architecture for it to go.
-          {/* LEGAL-REVIEW */}
-        </p>
-      </li>
-      {/* NATIONALITY-SLOT: hold a fourth "A Canadian company." card until S Cubed Canadian registration confirmed. Do not render. */}
-    </ul>
-  </SectionShell>
+      </div>
 
-  {/* ============ 02 WHAT YOU ARE EXPOSED TO TODAY ============ */}
-  <SectionShell numeral="02" label="What a third-party cloud carries with it" id="exposure-h2">
-    <h2 class="section-h2 section-h2--lead">
-      Three exposures come bundled with every cloud AI subscription.
-    </h2>
-    <p class="prose prose--single">
-      When your team puts a contract, a patient record, or a quarter's
-      unpublished numbers into a third-party AI tool, three things follow
-      that most buyers never priced in. None of them is about a bad provider.
-      All three are properties of sending data outside your own control.
-    </p>
-
-    <ul class="ds__bleed exposures" role="list">
-      <li class="exposure__item">
-        <span class="exposure__index font-mono" data-numeric>01</span>
-        <p class="exposure__text">
-          <span class="exposure__lead">Reach that follows the provider, not the data.</span>
-          Any cloud provider can be compelled, under the law of the jurisdiction
-          it answers to, to produce customer data regardless of where that data
-          physically sits. The
-          <a
-            class="cite-link"
-            href="https://www.congress.gov/115/plaws/publ141/PLAW-115publ141.pdf"
-            target="_blank"
-            rel="noopener noreferrer">US CLOUD Act</a>
-          is one well-known example of this
-          general principle: it lets a US-controlled provider be ordered to hand
-          over data even when that data lives in another country. The point is
-          not specific to one law or one country. Residency is where the bytes
-          live. Sovereignty is who can be ordered to produce them. They are not
-          the same thing, in any jurisdiction.
-          {/* LEGAL-REVIEW */}
-        </p>
-      </li>
-      <li class="exposure__item">
-        <span class="exposure__index font-mono" data-numeric>02</span>
-        <p class="exposure__text">
-          <span class="exposure__lead">Your prompts become records someone else holds.</span>
-          {/* [SOURCE-TODO]: court-order preserve-logs line, no neutral source URL available */}
-          A US court has already ordered a major AI provider to preserve chat
-          logs. Prompts and responses sent to a third-party AI service are
-          electronically stored information held by another party. They can be
-          subpoenaed, preserved by order, and pulled into discovery
-          <a
-            class="cite-link"
-            href="https://www.law.cornell.edu/rules/frcp/rule_34"
-            target="_blank"
-            rel="noopener noreferrer">(source)</a>, and a "we
-          do not retain" promise gives way the moment a preservation order
-          lands. The data you cannot see is the data you cannot govern.
-          {/* LEGAL-REVIEW */}
-        </p>
-      </li>
-      <li class="exposure__item">
-        <span class="exposure__index font-mono" data-numeric>03</span>
-        <p class="exposure__text">
-          <span class="exposure__lead">A bill that grows with use.</span>
-          A third-party AI API meters you per token. Light, occasional usage
-          stays cheap. But once AI runs inside long-running agents, automations,
-          and sustained daily work, the meter never stops and the bill grows
-          with every win. The more value you get, the more it costs to keep
-          getting it.
-        </p>
-      </li>
-    </ul>
-
-    <p class="prose__after">
-      The first two exposures are about who can reach your data. The third is
-      about who controls your cost. Running the model yourself addresses all
-      three.
-    </p>
-
-    <div class="ds__bleed">
-      <Figure
-        fig="Fig. 1"
-        svg={dataBoundary}
-        caption="With Hive on-prem, your data stays inside your network boundary. Data sent to a third-party cloud crosses that boundary, and once it has crossed, the jurisdiction that governs it is no longer only yours."
-      />
-    </div>
-  </SectionShell>
-
-  {/* ============ 03 THREE-TIER SPECTRUM ============ */}
-  <SectionShell numeral="03" label="A spectrum of control" id="spectrum-h2">
-    <h2 class="section-h2">
-      Run Hive at the level of control your data demands.
-    </h2>
-    <p class="prose prose--single">
-      The same Hive software runs three ways, from maximum control to lowest
-      cost. You choose the point that fits your data, your team, and your
-      budget. Every hosted option runs only on infrastructure that sits
-      in-region and under your own jurisdiction, because hosting you under a
-      jurisdiction other than your own would reintroduce the exact exposure
-      you came here to remove.
-      {/* LEGAL-REVIEW */}
-    </p>
-
-    <div class="ds__bleed">
-      <Figure
-        fig="Fig. 2"
-        svg={tierSpectrum}
-        caption="The spectrum of control"
-        ariaLabel="The control spectrum: Own on-prem, Colocate, Shared Cloud"
-      />
-    </div>
-
-    <ul class="ds__bleed cards cards--3" role="list">
-      <li>
-        <a class="card card--link" href="/how-you-run-hive">
-          <h3 class="card__h3">Own it (on-prem).</h3>
+      <ul class="cards cards--3" role="list">
+        <li class="card card--static">
+          <h3 class="card__h3">You hold the hardware.</h3>
           <p class="card__body">
-            A Hive deployment on your premises, run by your team. Data never
-            leaves the building. The strongest position on the spectrum.
+            The box sits on your premises, or in an in-region datacentre you
+            select, under your own jurisdiction. You hold the keys, the logs, and
+            the machine.
+          </p>
+        </li>
+        <li class="card card--static">
+          <h3 class="card__h3">No request leaves the boundary.</h3>
+          <p class="card__body">
+            On the on-prem deployment, inference runs locally and never calls an
+            external API. There is no provider in the loop, so there is no
+            provider to be ordered to produce anything.
             {/* LEGAL-REVIEW */}
           </p>
-        </a>
-      </li>
-      <li>
-        <a class="card card--link" href="/how-you-run-hive">
-          <h3 class="card__h3">Colocate it.</h3>
+        </li>
+        <li class="card card--static">
+          <h3 class="card__h3">One vendor relationship, no metered data path.</h3>
           <p class="card__body">
-            A dedicated Hive box, hosted by us in-region, on infrastructure under
-            your own jurisdiction. We manage the hardware. Residency stays
-            in-region.
+            You license software and support from us. Your data never reaches us,
+            because there is no place in the architecture for it to go.
+            {/* LEGAL-REVIEW */}
           </p>
-        </a>
-      </li>
-      <li>
-        <a class="card card--link" href="/how-you-run-hive">
-          <h3 class="card__h3">Shared cloud.</h3>
-          <p class="card__body">
-            A region-locked shared instance with a full audit trail. Lowest cost,
-            fastest start. Honestly the weakest tier on the spectrum, and we grade
-            it that way.
-          </p>
-        </a>
-      </li>
-    </ul>
-
-    <p class="prose__after">
-      <a class="textlink" href="/how-you-run-hive">Compare the three tiers</a>
-    </p>
-  </SectionShell>
-
-  {/* ============ 04 THE OWNERSHIP COST STORY ============ */}
-  <SectionShell numeral="04" label="Own the model, stop renting the meter" id="cost-h2">
-    <h2 class="section-h2 section-h2--lead">
-      An open-weight model you own costs a fraction of the API you rent.
-    </h2>
-    <div class="prose">
-      <p>
-        Open-weight models have closed much of the quality gap with the large
-        proprietary APIs, and they run on hardware you can buy. Run the same
-        workload on a model you own and the cost changes shape. There is a
-        mostly fixed cost up front for the box, and after that inference is
-        roughly the cost of the electricity it draws.
-      </p>
-      <p>
-        Measured on output, open-weight inference runs roughly
-        <span class="font-mono" data-numeric>10x</span> to
-        <span class="font-mono" data-numeric>30x</span> cheaper than the
-        proprietary APIs. For an entry-tier box handling sustained daily
-        work, the box pays for itself in about
-        <span class="font-mono" data-numeric>seven months</span>, then keeps
-        saving every month after. For light, occasional use, a public API is
-        a reasonable choice. For long-running agents, automations, and heavy
-        daily usage, ownership is the cheaper position over time.
-      </p>
+        </li>
+        {/* NATIONALITY-SLOT: hold a fourth "A Canadian company." card until S Cubed Canadian registration confirmed. Do not render. */}
+      </ul>
     </div>
+  </section>
 
-    <div class="ds__bleed cost__faceline">
-      <span class="cost__facefig font-mono" data-numeric>~10x to ~30x</span>
-      <span class="cost__facelabel">cheaper on output than proprietary APIs</span>
-    </div>
-
-    <div class="ds__bleed">
-      <Figure
-        fig="Fig. 3"
-        svg={costCrossover}
-        caption="Cumulative cost over time. The box you own passes metered cloud at breakeven, then keeps costing less."
-      />
-    </div>
-
-    <p class="cost__citation">
-      <span class="font-mono" data-numeric>Rates as of June 2026</span>.
-      Hosted-API pricing, self-hosting economics differ.
-    </p>
-
-    <div class="cost__proof">
-      <CalloutCard
-        accent="teal"
-        statement="Pinterest cut AI costs roughly 90 percent and raised accuracy roughly 30 percent by running and customising the open-weight Qwen3-VL model on its own infrastructure."
-        asOf="as of June 2026"
-      >
-        <p slot="disclaimer" class="callout-disclaimer">
-          Results reflect Pinterest's specific implementation. Your outcomes
-          will depend on your hardware, model choice, and workload.
-          <a
-            class="cite-link"
-            href="https://medium.com/pinterest-engineering"
-            target="_blank"
-            rel="noopener noreferrer">Source</a>
+  {/* ============ 02 WHAT YOU ARE EXPOSED TO TODAY ============
+      Editorial header + intro + full-width exposures grid, then a zigzag row
+      pairing the summary prose with Fig. 1 (text left, figure right). */}
+  <section class="band" aria-labelledby="exposure-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>02</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          Exposure
+        </span>
+        <h2 id="exposure-h2" class="section-h2 section-h2--lead">
+          Three exposures come bundled with every cloud AI subscription.
+        </h2>
+        <p class="sec-head__intro">
+          When your team puts a contract, a patient record, or a quarter's
+          unpublished numbers into a third-party AI tool, three things follow
+          that most buyers never priced in. None of them is about a bad provider.
+          All three are properties of sending data outside your own control.
         </p>
-      </CalloutCard>
+      </header>
+
+      <ul class="exposures" role="list">
+        <li class="exposure__item">
+          <span class="exposure__index font-mono" data-numeric>01</span>
+          <p class="exposure__text">
+            <span class="exposure__lead">Reach that follows the provider, not the data.</span>
+            Any cloud provider can be compelled, under the law of the jurisdiction
+            it answers to, to produce customer data regardless of where that data
+            physically sits. The
+            <a
+              class="cite-link"
+              href="https://www.congress.gov/bill/115th-congress/house-bill/4943/text"
+              target="_blank"
+              rel="noopener noreferrer">US CLOUD Act</a>
+            is one well-known example of this
+            general principle: it lets a US-controlled provider be ordered to hand
+            over data even when that data lives in another country. The point is
+            not specific to one law or one country. Residency is where the bytes
+            live. Sovereignty is who can be ordered to produce them. They are not
+            the same thing, in any jurisdiction.
+            {/* LEGAL-REVIEW */}
+          </p>
+        </li>
+        <li class="exposure__item">
+          <span class="exposure__index font-mono" data-numeric>02</span>
+          <p class="exposure__text">
+            <span class="exposure__lead">Your prompts become records someone else holds.</span>
+            A US court has already ordered a major AI provider to preserve chat
+            logs
+            <a
+              class="cite-link"
+              href="https://www.law.cornell.edu/uscode/text/18/2703"
+              target="_blank"
+              rel="noopener noreferrer">(source)</a>.
+            Prompts and responses sent to a third-party AI service are
+            electronically stored information held by another party. They can be
+            subpoenaed, preserved by order, and pulled into discovery
+            <a
+              class="cite-link"
+              href="https://www.law.cornell.edu/rules/frcp/rule_34#rule_34_a_1"
+              target="_blank"
+              rel="noopener noreferrer">(source)</a>, and a "we
+            do not retain" promise gives way the moment a preservation order
+            lands. The data you cannot see is the data you cannot govern.
+            {/* LEGAL-REVIEW */}
+          </p>
+        </li>
+        <li class="exposure__item">
+          <span class="exposure__index font-mono" data-numeric>03</span>
+          <p class="exposure__text">
+            <span class="exposure__lead">A bill that grows with use.</span>
+            A third-party AI API meters you per token. Light, occasional usage
+            stays cheap. But once AI runs inside long-running agents, automations,
+            and sustained daily work, the meter never stops and the bill grows
+            with every win. The more value you get, the more it costs to keep
+            getting it.
+          </p>
+        </li>
+      </ul>
+
+      <FeatureRow>
+        <p class="prose prose--single feature-prose">
+          The first two exposures are about who can reach your data. The third is
+          about who controls your cost. Running the model yourself addresses all
+          three. With Hive on-prem, your data stays inside your network boundary,
+          so the jurisdiction that governs it stays only yours.
+        </p>
+        <Figure
+          slot="figure"
+          fig="Fig. 1"
+          svg={dataBoundary}
+          caption="With Hive on-prem, your data stays inside your network boundary. Data sent to a third-party cloud crosses that boundary, and once it has crossed, the jurisdiction that governs it is no longer only yours."
+        />
+      </FeatureRow>
     </div>
+  </section>
 
-    <p class="prose__after">
-      <a class="textlink" href="/pricing">See the full cost model</a>
-    </p>
-  </SectionShell>
+  {/* ============ 03 THREE-TIER SPECTRUM ============
+      Editorial header + intro, a zigzag row pairing the prose with Fig. 2
+      (figure left, text right), then the three tier cards as a full-width grid. */}
+  <section class="band" aria-labelledby="spectrum-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>03</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          Spectrum of control
+        </span>
+        <h2 id="spectrum-h2" class="section-h2">
+          Run Hive at the level of control your data demands.
+        </h2>
+      </header>
 
-  {/* ============ 05 WHO IT IS FOR ============ */}
-  <SectionShell numeral="05" label="Built for confidential work" id="who-h2">
-    <h2 class="section-h2 section-h2--lead">
-      If your data cannot go to a third-party AI service, Hive runs in your
-      own.
-    </h2>
-    <p class="prose prose--single">
-      Hive is built for organisations whose data is the one thing they cannot
-      put at risk. That covers a wide range of work, in many jurisdictions.
-    </p>
+      <FeatureRow reverse>
+        <p class="prose prose--single feature-prose">
+          The same Hive software runs three ways, from maximum control to lowest
+          cost. You choose the point that fits your data, your team, and your
+          budget. Every hosted option runs only on infrastructure that sits
+          in-region and under your own jurisdiction, because hosting you under a
+          jurisdiction other than your own would reintroduce the exact exposure
+          you came here to remove.
+          {/* LEGAL-REVIEW */}
+        </p>
+        <Figure
+          slot="figure"
+          fig="Fig. 2"
+          svg={tierSpectrum}
+          caption="The spectrum of control"
+          ariaLabel="The control spectrum: Own on-prem, Colocate, Shared Cloud"
+        />
+      </FeatureRow>
 
-    <ul class="ds__bleed cards cards--4" role="list">
-      <li>
-        <a class="card card--link" href="/use-cases#finance">
-          <h3 class="card__h3">Financial institutions.</h3>
-          <p class="card__body">
-            Banks, credit unions, insurers, and FinTech firms handling material
-            non-public information, internal agents, and recordkeeping
-            obligations that an external endpoint cannot satisfy.
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="card card--link" href="/use-cases#healthcare">
-          <h3 class="card__h3">Healthcare and health-data custodians.</h3>
-          <p class="card__body">
-            Personal health information stays under the custodian's direct
-            control, with no external service provider in the data path.
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="card card--link" href="/use-cases#government">
-          <h3 class="card__h3">Government and defence.</h3>
-          <p class="card__body">
-            Public-sector bodies and military programmes, including air-gapped
-            and offline deployments where no outbound network path is permitted.
-            {/* LEGAL-REVIEW */}
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="card card--link" href="/use-cases#legal">
-          <h3 class="card__h3">Legal.</h3>
-          <p class="card__body">
-            Privilege does not survive a third-party processor. Client matters
-            and document review stay inside the firm.
-          </p>
-        </a>
-      </li>
-      <li>
-        <a class="card card--link" href="/use-cases#sensitive">
-          <h3 class="card__h3">Any sensitive-data organisation.</h3>
-          <p class="card__body">
-            If "do not send our data to a third party" is a hard rule, on-prem
-            inference is the posture that keeps it. Trade secrets, source code,
-            R&D, and competitive plans included.
-            {/* LEGAL-REVIEW */}
-          </p>
-        </a>
-      </li>
-    </ul>
+      <ul class="cards cards--3" role="list">
+        <li>
+          <a class="card card--link" href="/how-you-run-hive">
+            <h3 class="card__h3">Own it (on-prem).</h3>
+            <p class="card__body">
+              A Hive deployment on your premises, run by your team. Data never
+              leaves the building. The strongest position on the spectrum.
+              {/* LEGAL-REVIEW */}
+            </p>
+          </a>
+        </li>
+        <li>
+          <a class="card card--link" href="/how-you-run-hive">
+            <h3 class="card__h3">Colocate it.</h3>
+            <p class="card__body">
+              A dedicated Hive box, hosted by us in-region, on infrastructure under
+              your own jurisdiction. We manage the hardware. Residency stays
+              in-region.
+            </p>
+          </a>
+        </li>
+        <li>
+          <a class="card card--link" href="/how-you-run-hive">
+            <h3 class="card__h3">Shared cloud.</h3>
+            <p class="card__body">
+              A region-locked shared instance with a full audit trail. Lowest cost,
+              fastest start. Honestly the weakest tier on the spectrum, and we grade
+              it that way.
+            </p>
+          </a>
+        </li>
+      </ul>
 
-    <p class="prose__after">
-      <a class="textlink" href="/use-cases">See use cases by industry</a>
-    </p>
-  </SectionShell>
-
-  {/* ============ 06 CONTINUOUS IMPROVEMENT ============ */}
-  <SectionShell numeral="06" label="A platform, not a frozen box" id="improve-h2">
-    <h2 class="section-h2 section-h2--lead">
-      The box you buy keeps getting better.
-    </h2>
-    <div class="prose">
-      <p>
-        Owning your hardware does not mean owning a snapshot. Under the annual
-        licence, the Hive software and the supported open-weight models keep
-        improving. New and stronger open models are validated and made
-        available as they ship, so your deployment tracks the state of the art
-        instead of falling behind it. When a workload outgrows a single box,
-        capacity is added: one box, then multiple GPUs, then multiple nodes.
-        You are buying a platform that keeps improving, on hardware you can
-        extend.
+      <p class="prose__after">
+        <a class="textlink" href="/how-you-run-hive">Compare the three tiers</a>
       </p>
     </div>
+  </section>
 
-    <div class="ds__bleed improve__fig">
-      <Figure fig="Fig. 4" caption="Capacity you add, not a box you replace">
-        {/* Capacity ladder: single box, then multi-GPU, then multi-node. Same
-            palette and class hooks as the other diagrams (forest accent scarce,
-            ink line-work via currentColor, grey secondary, surface #fff). CSP
-            safe: presentation attributes only, no inline style, no script. */}
-        <svg
-          class="ladder-svg diagram"
-          viewBox="0 0 760 220"
-          role="img"
-          aria-label="Capacity ladder: a single box scales to multiple GPUs, then to multiple linked nodes."
+  {/* ============ 04 THE OWNERSHIP COST STORY ============
+      Editorial header + intro, a zigzag row pairing the cost prose with Fig. 3
+      (text left, figure right), the accent face-stat, the citation, then the
+      Pinterest proof callout. */}
+  <section class="band" aria-labelledby="cost-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>04</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          Ownership cost
+        </span>
+        <h2 id="cost-h2" class="section-h2 section-h2--lead">
+          An open-weight model you own costs a fraction of the API you rent.
+        </h2>
+      </header>
+
+      <FeatureRow>
+        <div class="prose feature-prose">
+          <p>
+            Open-weight models have closed much of the quality gap with the large
+            proprietary APIs, and they run on hardware you can buy. Run the same
+            workload on a model you own and the cost changes shape. There is a
+            mostly fixed cost up front for the box, and after that inference is
+            roughly the cost of the electricity it draws.
+          </p>
+          <p>
+            Measured on output, open-weight inference runs roughly
+            <span class="font-mono" data-numeric>10x</span> to
+            <span class="font-mono" data-numeric>30x</span> cheaper than the
+            proprietary APIs. For an entry-tier box handling sustained daily
+            work, the box pays for itself in about
+            <span class="font-mono" data-numeric>seven months</span>, then keeps
+            saving every month after. For light, occasional use, a public API is
+            a reasonable choice. For long-running agents, automations, and heavy
+            daily usage, ownership is the cheaper position over time.
+          </p>
+        </div>
+        <Figure
+          slot="figure"
+          fig="Fig. 3"
+          svg={costCrossover}
+          caption="Cumulative cost over time. The box you own passes metered cloud at breakeven, then keeps costing less."
+        />
+      </FeatureRow>
+
+      <div class="cost__faceline">
+        <span class="cost__facefig font-mono" data-numeric>~10x to ~30x</span>
+        <span class="cost__facelabel">cheaper on output than proprietary APIs</span>
+      </div>
+
+      <p class="cost__citation">
+        <span class="font-mono" data-numeric>Rates as of June 2026</span>.
+        Hosted-API pricing, self-hosting economics differ.
+      </p>
+
+      <div class="cost__proof">
+        <CalloutCard
+          accent="teal"
+          statement="Pinterest cut AI costs roughly 90 percent and raised accuracy roughly 30 percent by rebuilding the open-weight Qwen3-VL vision model on its own infrastructure with proprietary embeddings."
+          asOf="as of June 2026"
         >
-          <title>Capacity you add, not a box you replace</title>
+          <p slot="disclaimer" class="callout-disclaimer">
+            Results reflect Pinterest's specific implementation. Your outcomes
+            will depend on your hardware, model choice, and workload.
+            <a
+              class="cite-link"
+              href="https://venturebeat.com/orchestration/pinterest-cut-ai-costs-90-by-gutting-a-frontier-models-vision-layer"
+              target="_blank"
+              rel="noopener noreferrer">Source</a>
+          </p>
+        </CalloutCard>
+      </div>
 
-          {/* Stage 1: single box */}
-          <g>
-            <rect class="d-faint d-surface" x="28" y="74" width="120" height="72" rx="6" stroke-width="1.5" />
-            <rect class="d-grey" x="48" y="96" width="80" height="9" rx="2" stroke="none" />
-            <rect class="d-grey" x="48" y="114" width="56" height="9" rx="2" stroke="none" />
-            <text class="d-muted" x="88" y="178" text-anchor="middle" font-size="14">Single box</text>
-          </g>
-
-          {/* Chevron 1 to 2 */}
-          <path class="d-accent-line" d="M168 110 L196 110" stroke-width="2" fill="none" />
-          <path class="d-accent-line" d="M188 102 L196 110 L188 118" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-
-          {/* Stage 2: one box, stacked GPU units */}
-          <g>
-            <rect class="d-faint d-surface" x="216" y="62" width="128" height="96" rx="6" stroke-width="1.5" />
-            <rect class="d-accent" x="234" y="78" width="92" height="12" rx="2" stroke="none" />
-            <rect class="d-grey" x="234" y="98" width="92" height="12" rx="2" stroke="none" />
-            <rect class="d-grey" x="234" y="118" width="92" height="12" rx="2" stroke="none" />
-            <text class="d-muted" x="280" y="186" text-anchor="middle" font-size="14">Multi-GPU</text>
-          </g>
-
-          {/* Chevron 2 to 3 */}
-          <path class="d-accent-line" d="M364 110 L392 110" stroke-width="2" fill="none" />
-          <path class="d-accent-line" d="M384 102 L392 110 L384 118" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
-
-          {/* Stage 3: multiple linked nodes */}
-          <g>
-            <rect class="d-faint d-surface" x="412" y="70" width="86" height="80" rx="6" stroke-width="1.5" />
-            <rect class="d-faint d-surface" x="510" y="70" width="86" height="80" rx="6" stroke-width="1.5" />
-            <rect class="d-faint d-surface" x="608" y="70" width="86" height="80" rx="6" stroke-width="1.5" />
-            <rect class="d-grey" x="428" y="92" width="54" height="8" rx="2" stroke="none" />
-            <rect class="d-grey" x="428" y="108" width="40" height="8" rx="2" stroke="none" />
-            <rect class="d-grey" x="526" y="92" width="54" height="8" rx="2" stroke="none" />
-            <rect class="d-grey" x="526" y="108" width="40" height="8" rx="2" stroke="none" />
-            <rect class="d-grey" x="624" y="92" width="54" height="8" rx="2" stroke="none" />
-            <rect class="d-grey" x="624" y="108" width="40" height="8" rx="2" stroke="none" />
-            {/* Links between nodes */}
-            <path class="d-accent-dash" d="M498 110 L510 110" stroke-width="2" fill="none" stroke-dasharray="3 3" />
-            <path class="d-accent-dash" d="M596 110 L608 110" stroke-width="2" fill="none" stroke-dasharray="3 3" />
-            <text class="d-muted" x="553" y="178" text-anchor="middle" font-size="14">Multi-node</text>
-          </g>
-        </svg>
-      </Figure>
+      <p class="prose__after">
+        <a class="textlink" href="/pricing">See on-premises AI pricing</a>
+      </p>
     </div>
+  </section>
 
-    <p class="prose__after">
-      <a class="textlink" href="/how-you-run-hive">See how you run Hive</a>
-    </p>
-  </SectionShell>
-
-  {/* ============ 07 COMPETITIVE ONE-LINER (the one Fraunces pull quote) ============ */}
-  <SectionShell numeral="07" label="The difference in one line" id="oneliner-h2">
-    <blockquote class="pullquote">
-      Glean, Writer, Cohere North, and Copilot route every query through their
-      cloud. Hive runs in yours.
-    </blockquote>
-  </SectionShell>
-
-  {/* ============ 08 PROOF SPINE ============ */}
-  <SectionShell numeral="08" label="What is actually true here" id="proof-h2">
-    <ul class="ds__bleed proofs" role="list">
-      <li class="proof__item">
-        <span class="proof__label">Architecture</span>
-        <p class="proof__text">
-          Open-weight model weights run on your hardware. Every inference
-          executes locally. No prompt, no response, no document calls an
-          external API or leaves your network boundary.
-          {/* LEGAL-REVIEW */}
+  {/* ============ 05 WHO IT IS FOR (centred editorial + carousel) ============ */}
+  <section class="band" aria-labelledby="who-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>05</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          Who it is for
+        </span>
+        <h2 id="who-h2" class="section-h2 section-h2--lead">
+          If your data cannot go to a third-party AI service, Hive runs in your
+          own.
+        </h2>
+        <p class="sec-head__intro">
+          Hive is built for organisations whose data is the one thing they cannot
+          put at risk. That covers a wide range of work, in many jurisdictions.
         </p>
-      </li>
-      <li class="proof__item">
-        <span class="proof__label">Perplexity</span>
-        <p class="proof__text">
-          Perplexity runs DeepSeek R1 on its own servers in US and EU data
-          centres. User data never leaves Western servers.
-          <a
-            class="cite-link"
-            href="https://www.perplexity.ai"
-            target="_blank"
-            rel="noopener noreferrer">Source</a>
-          <span class="proof__stamp font-mono" data-numeric>(as of January 2025)</span>
-        </p>
-      </li>
-      <li class="proof__item">
-        <span class="proof__label">Regulatory category</span>
-        <p class="proof__text">
-          Finance, healthcare, and legal teams often cannot route sensitive
-          data through an external AI endpoint. Self-hosted open weights keep
-          every inference inside the network boundary. This is general
-          information, not legal advice.
-          {/* LEGAL-REVIEW */}
-        </p>
-      </li>
-    </ul>
-  </SectionShell>
+      </header>
 
-  {/* ============ CLOSING CTA (ink, the second deliberate dark surface) ============ */}
+      <div class="carousel-wrap" aria-label="Industries Hive is built for" role="region">
+        <ul class="cards cards--carousel" role="list">
+          <li>
+            <a class="card card--link" href="/use-cases#finance">
+              <h3 class="card__h3">Financial institutions.</h3>
+              <p class="card__body">
+                Banks, credit unions, insurers, and FinTech firms handling material
+                non-public information, internal agents, and recordkeeping
+                obligations that an external endpoint cannot satisfy.
+              </p>
+            </a>
+          </li>
+          <li>
+            <a class="card card--link" href="/use-cases#healthcare">
+              <h3 class="card__h3">Healthcare and health-data custodians.</h3>
+              <p class="card__body">
+                Personal health information stays under the custodian's direct
+                control, with no external service provider in the data path.
+              </p>
+            </a>
+          </li>
+          <li>
+            <a class="card card--link" href="/use-cases#government">
+              <h3 class="card__h3">Government and defence.</h3>
+              <p class="card__body">
+                Public-sector bodies and military programmes, including air-gapped
+                and offline deployments where no outbound network path is permitted.
+                {/* LEGAL-REVIEW */}
+              </p>
+            </a>
+          </li>
+          <li>
+            <a class="card card--link" href="/use-cases#legal">
+              <h3 class="card__h3">Legal.</h3>
+              <p class="card__body">
+                Privilege does not survive a third-party processor. Client matters
+                and document review stay inside the firm.
+              </p>
+            </a>
+          </li>
+          <li>
+            <a class="card card--link" href="/use-cases#sensitive">
+              <h3 class="card__h3">Any sensitive-data organisation.</h3>
+              <p class="card__body">
+                If "do not send our data to a third party" is a hard rule, on-prem
+                inference is the posture that keeps it. Trade secrets, source code,
+                R&D, and competitive plans included.
+                {/* LEGAL-REVIEW */}
+              </p>
+            </a>
+          </li>
+        </ul>
+      </div>
+
+      <p class="prose__after">
+        <a class="textlink" href="/use-cases">See use cases by industry</a>
+      </p>
+    </div>
+  </section>
+
+  {/* ============ 06 A PLATFORM, NOT A FROZEN BOX ============
+      Editorial header, then a zigzag row pairing the prose with the inline
+      capacity-ladder Fig. 4 (figure left, text right). */}
+  <section class="band" aria-labelledby="improve-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>06</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          A platform, not a frozen box
+        </span>
+        <h2 id="improve-h2" class="section-h2 section-h2--lead">
+          The box you buy keeps getting better.
+        </h2>
+      </header>
+
+      <FeatureRow reverse>
+        <div class="prose feature-prose">
+          <p>
+            Owning your hardware does not mean owning a snapshot. Under the annual
+            licence, the Hive software and the supported open-weight models keep
+            improving. New and stronger open models are validated and made
+            available as they ship, so your deployment tracks the state of the art
+            instead of falling behind it. When a workload outgrows a single box,
+            capacity is added: one box, then multiple GPUs, then multiple nodes.
+            You are buying a platform that keeps improving, on hardware you can
+            extend.
+          </p>
+        </div>
+        <div slot="figure" class="improve__fig">
+          <Figure fig="Fig. 4" caption="Capacity you add, not a box you replace">
+            {/* Capacity ladder: single box, then multi-GPU, then multi-node. Same
+                palette and class hooks as the other diagrams (forest accent scarce,
+                light line-work via currentColor, grey secondary, dark raised
+                surface). CSP safe: presentation attributes only, no inline style,
+                no script. */}
+            <svg
+              class="ladder-svg diagram"
+              viewBox="0 0 760 220"
+              role="img"
+              aria-label="Capacity ladder: a single box scales to multiple GPUs, then to multiple linked nodes."
+            >
+              <title>Capacity you add, not a box you replace</title>
+
+              {/* Stage 1: single box — centred on y=110, label at y=190 */}
+              <g>
+                <rect class="d-faint d-surface" x="30" y="74" width="120" height="72" rx="6" stroke-width="1.5" />
+                <rect class="d-grey" x="50" y="96" width="80" height="9" rx="2" stroke="none" />
+                <rect class="d-grey" x="50" y="114" width="56" height="9" rx="2" stroke="none" />
+                <text class="d-muted" x="90" y="190" text-anchor="middle" font-size="13">Single box</text>
+              </g>
+
+              {/* Chevron 1 to 2 — centred on y=110 */}
+              <path class="d-accent-line" d="M170 110 L198 110" stroke-width="2" fill="none" />
+              <path class="d-accent-line" d="M190 102 L198 110 L190 118" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+
+              {/* Stage 2: multi-GPU box — centred on y=110, label at y=190 */}
+              <g>
+                <rect class="d-faint d-surface" x="218" y="62" width="124" height="96" rx="6" stroke-width="1.5" />
+                <rect class="d-accent" x="236" y="78" width="88" height="12" rx="2" stroke="none" />
+                <rect class="d-grey" x="236" y="98" width="88" height="12" rx="2" stroke="none" />
+                <rect class="d-grey" x="236" y="118" width="88" height="12" rx="2" stroke="none" />
+                <text class="d-muted" x="280" y="190" text-anchor="middle" font-size="13">Multi-GPU</text>
+              </g>
+
+              {/* Chevron 2 to 3 — centred on y=110 */}
+              <path class="d-accent-line" d="M362 110 L390 110" stroke-width="2" fill="none" />
+              <path class="d-accent-line" d="M382 102 L390 110 L382 118" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+
+              {/* Stage 3: three linked nodes — centred on y=110, label at y=190 */}
+              <g>
+                <rect class="d-faint d-surface" x="408" y="70" width="84" height="80" rx="6" stroke-width="1.5" />
+                <rect class="d-faint d-surface" x="506" y="70" width="84" height="80" rx="6" stroke-width="1.5" />
+                <rect class="d-faint d-surface" x="604" y="70" width="84" height="80" rx="6" stroke-width="1.5" />
+                <rect class="d-grey" x="424" y="91" width="52" height="8" rx="2" stroke="none" />
+                <rect class="d-grey" x="424" y="107" width="38" height="8" rx="2" stroke="none" />
+                <rect class="d-grey" x="522" y="91" width="52" height="8" rx="2" stroke="none" />
+                <rect class="d-grey" x="522" y="107" width="38" height="8" rx="2" stroke="none" />
+                <rect class="d-grey" x="620" y="91" width="52" height="8" rx="2" stroke="none" />
+                <rect class="d-grey" x="620" y="107" width="38" height="8" rx="2" stroke="none" />
+                {/* Links between nodes */}
+                <path class="d-accent-dash" d="M492 110 L506 110" stroke-width="2" fill="none" stroke-dasharray="3 3" />
+                <path class="d-accent-dash" d="M590 110 L604 110" stroke-width="2" fill="none" stroke-dasharray="3 3" />
+                <text class="d-muted" x="548" y="190" text-anchor="middle" font-size="13">Multi-node</text>
+              </g>
+            </svg>
+          </Figure>
+        </div>
+      </FeatureRow>
+
+      <p class="prose__after">
+        <a class="textlink" href="/how-you-run-hive">See how you run Hive</a>
+      </p>
+    </div>
+  </section>
+
+  {/* ============ 07 COMPETITIVE ONE-LINER (ink band, the second deliberate dark surface) ============ */}
+  <section class="oneliner" aria-labelledby="oneliner-h2">
+    <div class="shell oneliner__inner">
+      <span class="kicker kicker--on-ink">
+        <span class="kicker__num font-mono" data-numeric>07</span>
+        <span class="kicker__sep" aria-hidden="true"></span>
+        The difference in one line
+      </span>
+      <blockquote id="oneliner-h2" class="pullquote">
+        Glean, Writer, Cohere North, and Copilot route every query through their
+        cloud. Hive runs in yours.
+      </blockquote>
+    </div>
+  </section>
+
+  {/* ============ 08 PROOF SPINE (centred editorial + 3-col proofs) ============ */}
+  <section class="band" aria-labelledby="proof-h2">
+    <div class="shell">
+      <header class="sec-head">
+        <span class="kicker">
+          <span class="kicker__num font-mono" data-numeric>08</span>
+          <span class="kicker__sep" aria-hidden="true"></span>
+          Proof spine
+        </span>
+        <h2 id="proof-h2" class="section-h2">
+          What is actually true here.
+        </h2>
+      </header>
+
+      <ul class="proofs" role="list">
+        <li class="proof__item">
+          <span class="proof__label">Architecture</span>
+          <p class="proof__text">
+            Open-weight model weights run on your hardware. Every inference
+            executes locally. No prompt, no response, no document calls an
+            external API or leaves your network boundary.
+            {/* LEGAL-REVIEW */}
+          </p>
+        </li>
+        <li class="proof__item">
+          <span class="proof__label">Perplexity</span>
+          <p class="proof__text">
+            Perplexity runs DeepSeek R1 on its own servers in US data centres,
+            with EU to follow. User data never leaves Western servers.
+            <a
+              class="cite-link"
+              href="https://x.com/perplexity_ai/status/1884084767374860506"
+              target="_blank"
+              rel="noopener noreferrer">Source</a>
+            <span class="proof__stamp font-mono" data-numeric>(as of January 2025)</span>
+          </p>
+        </li>
+        <li class="proof__item">
+          <span class="proof__label">Regulatory category</span>
+          <p class="proof__text">
+            Finance, healthcare, and legal teams often cannot route sensitive
+            data through an external AI endpoint. Self-hosted open weights keep
+            every inference inside the network boundary. This is general
+            information, not legal advice.
+            {/* LEGAL-REVIEW */}
+          </p>
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  {/* ============ CLOSING CTA (ink, the third deliberate dark surface) ============ */}
   <section class="closing" aria-labelledby="closing-h2">
     <div class="shell narrow closing__inner">
       <h2 id="closing-h2" class="section-h2 section-h2--lead closing__h2">
-        See it run inside your own network.
+        Run your first AI inference on hardware you control.
       </h2>
       <p class="closing__line">
         Book a short demo and we will show Hive running locally, with no data
@@ -617,25 +716,84 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
 <style>
   /* =========================================================================
+     SECTION WRAPPERS (replaces SectionShell on the Home page)
+     Off-white editorial bands: a top hairline rule plus consistent vertical
+     padding give the rhythm SectionShell used to provide, without the dossier
+     margin column. All content lives inside .shell (max-width 1140px), centred.
+     Ink bands (.oneliner, .closing) define their own surface below and skip the
+     top hairline (the colour change is the divider).
+     ========================================================================= */
+  .band {
+    border-top: 1px solid var(--border);
+    padding-block: var(--space-9);
+    background-color: var(--bg);
+  }
+
+  /* =========================================================================
+     SECTION HEADER  (kicker + Fraunces H2 + short intro, left-aligned)
+     ========================================================================= */
+  .sec-head {
+    margin: 0 0 var(--space-7);
+    max-width: 65ch;
+  }
+
+  /* Small uppercase eyebrow keeping the numbered-story feel. The number is mono;
+     a forest middot separator (CSS ::before on .kicker__sep) sits between number
+     and label, never a literal dash. */
+  .kicker {
+    display: inline-flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    margin: 0 0 var(--space-4);
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    line-height: var(--lh-snug);
+  }
+
+  .kicker__num {
+    color: var(--accent);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  /* Forest middot separator. A real glyph inserted by CSS, not a dash. */
+  .kicker__sep::before {
+    content: '\00B7';
+    color: var(--accent);
+  }
+
+  .sec-head__intro {
+    margin: var(--space-5) 0 0;
+    color: var(--text);
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
+    max-width: 66ch;
+    text-wrap: pretty;
+  }
+
+  /* =========================================================================
      SHARED TYPE ROLES
-     global.css forces h1 to Fraunces and h2..h6 to Inter. The dossier wants
+     global.css forces h1 to Fraunces and h2..h6 to Inter. The headers want
      Fraunces for the H2 section titles and the pull quote, so each explicitly
      re-declares the display family to override the global Inter rule.
      ========================================================================= */
   .section-h2 {
-    margin: 0 0 var(--space-6);
+    margin: 0;
     font-family: var(--font-display);
     font-weight: 600;
     font-size: var(--text-h2-dossier);
     line-height: var(--lh-heading);
     letter-spacing: -0.01em;
     color: var(--text);
-    max-width: 22ch;
+    max-width: 24ch;
     text-wrap: balance;
   }
 
   .section-h2--lead {
-    max-width: 24ch;
+    max-width: 26ch;
   }
 
   .prose {
@@ -646,7 +804,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
   .prose p {
     margin: 0 0 var(--space-5);
-    max-width: 68ch;
+    max-width: 65ch;
     text-wrap: pretty;
   }
 
@@ -655,9 +813,19 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   .prose--single {
-    margin: var(--space-5) 0 0;
-    max-width: 66ch;
+    max-width: 65ch;
     text-wrap: pretty;
+  }
+
+  /* Prose that lives inside a FeatureRow column fills the column width (the
+     column itself is already ~half the container), so the measure cap is removed
+     and the text balances against the paired figure. */
+  .feature-prose {
+    max-width: none;
+  }
+
+  .feature-prose.prose p {
+    max-width: none;
   }
 
   .prose__after {
@@ -665,7 +833,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     font-size: var(--text-base);
     color: var(--text-muted);
     line-height: var(--lh-body);
-    max-width: 68ch;
+    max-width: 65ch;
     text-wrap: pretty;
   }
 
@@ -679,6 +847,11 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
   .textlink:hover {
     border-bottom-color: var(--accent);
+  }
+
+  .textlink:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   /* Quiet inline source citation for light surfaces. Small, forest accent, an
@@ -734,7 +907,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
   .cta--primary {
     background-color: var(--accent);
-    color: var(--bg);
+    color: var(--on-accent);
     border: 1px solid var(--accent);
   }
 
@@ -751,8 +924,15 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   .cta--ghost:hover {
-    border-color: var(--text-faint);
+    border-color: var(--accent);
+    color: var(--accent);
     transform: translateY(-1px);
+  }
+
+  /* Visible keyboard focus on every CTA, on the dark canvas. */
+  .cta:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
   }
 
   /* On-ink primary: off-white fill, ink label (17.66:1). */
@@ -795,8 +975,113 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     grid-template-columns: repeat(3, 1fr);
   }
 
-  .cards--4 {
-    grid-template-columns: repeat(2, 1fr);
+  /* =========================================================================
+     CAROUSEL  (section 05 audience cards, CSS-only scroll-snap, zero JS)
+
+     RIGHT-ONLY BLEED. The .carousel-wrap sits inside .shell, so its LEFT edge
+     already aligns with the section header, intro, and the trailing link. We keep
+     that left edge fixed and extend only the RIGHT edge out to the viewport edge,
+     so the next card peeks. We do NOT centre or use a 100vw transform (that
+     misaligns the left edge and, because 100vw ignores the scrollbar, causes
+     horizontal page overflow on mobile).
+
+     The right bleed distance = the gap from the container right edge to the
+     viewport right edge. That equals the shell side margin when the viewport
+     exceeds --max-width, plus the shell's 24px inline padding, clamped to never
+     go negative on narrow screens:
+       --carousel-bleed-right: calc(max(0px, (100vw - var(--max-width)) / 2) + 24px)
+     We then pull the scroller right by that amount with a negative right margin.
+
+     The .carousel-wrap is set to overflow-x: clip so any sub-pixel rounding from
+     the bleed can never produce a horizontal PAGE scrollbar. The card track keeps
+     its own overflow-x: auto for the actual horizontal scroll.
+
+     At >=1100px roughly 3 cards show with the next peeking. Scrollbar hidden;
+     drag and keyboard scroll remain. Reduced-motion: no smooth.
+     ========================================================================= */
+  .carousel-wrap {
+    position: relative;
+    isolation: isolate;
+    margin-top: var(--space-8);
+    /* Right-only bleed: extend the wrap's right edge to the viewport edge.
+       max(0px, ...) keeps this 0 below --max-width so narrow screens never
+       gain extra width. The +24px is the shell inline padding. */
+    --carousel-bleed-right: calc(max(0px, (100vw - var(--max-width)) / 2) + 24px);
+    margin-right: calc(-1 * var(--carousel-bleed-right));
+    /* Guard: clip any sub-pixel bleed so the page never scrolls sideways. */
+    overflow-x: clip;
+    /* Cap the wrap box at its container width so 100vw scrollbar gutter math
+       can never widen the page itself; the inner track still scrolls. */
+    max-width: 100%;
+  }
+
+  .cards--carousel {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: var(--space-5);
+    list-style: none;
+    margin: 0;
+    /* Left padding 0 (left edge aligns to container); right padding is the
+       bleed distance so the last card can rest clear of the viewport edge. */
+    padding: 0 var(--carousel-bleed-right) 0 0;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+    /* Hide scrollbar visually; drag and keyboard scroll remain */
+    scrollbar-width: none;
+    align-items: stretch;
+    box-sizing: border-box;
+  }
+
+  .cards--carousel::-webkit-scrollbar {
+    display: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cards--carousel {
+      scroll-behavior: auto;
+    }
+  }
+
+  .cards--carousel > li {
+    flex: 0 0 auto;
+    width: clamp(260px, 80vw, 330px);
+    scroll-snap-align: start;
+    display: flex;
+  }
+
+  /* On wider viewports show ~3 cards with the next card peeking */
+  @media (min-width: 1100px) {
+    .cards--carousel > li {
+      width: clamp(280px, 22vw, 310px);
+    }
+  }
+
+  @media (min-width: 900px) and (max-width: 1099px) {
+    .cards--carousel > li {
+      width: clamp(260px, 26vw, 300px);
+    }
+  }
+
+  /* Equalize card heading height so short headings ("Legal.") and long ones
+     ("Healthcare and health-data custodians.") do not make cards ragged. */
+  .cards--carousel .card__h3 {
+    min-height: 3.6em;
+  }
+
+  /* Right-edge fade affordance: sits at the true right edge of the wrap
+     (the viewport edge), scoped to the carousel region. */
+  .carousel-wrap::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 80px;
+    height: 100%;
+    background: linear-gradient(to right, transparent, var(--bg) 90%);
+    pointer-events: none;
+    z-index: 2;
   }
 
   .card {
@@ -868,12 +1153,28 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
   /* =========================================================================
      DIAGRAM COLOUR HOOKS (consumed by the SVGs inside Figure.astro)
-     Inline attributes in the SVGs already paint the correct palette; these
-     :global hooks let the assets re-tint cleanly from the host palette and keep
-     ink line-work on currentColor. Red lives only inside data-boundary.svg.
+     The SVG assets ship with inline fill/stroke hex baked for the OLD light
+     theme (white surfaces, ink line-work). On dark those invert wrongly, so
+     these :global CSS hooks REMAP every hooked element for the dark canvas.
+     CSS presentation properties win over the SVG's inline presentation
+     attributes (lower specificity), so the dark palette below takes effect:
+       line-work / strokes -> light hairline (#cdd3db via currentColor + d-faint)
+       surfaces            -> dark raised (var(--bg-elevated))
+       grey fills          -> mid (var(--grey))
+       muted text          -> light-muted (var(--text-muted))
+       accent              -> brighter forest (var(--accent))
+     Red (residency risk) stays red, tuned for dark. The text/strokes that paint
+     with currentColor inherit .diagram { color } below, so they read as light
+     line-work instead of near-black ink.
      ========================================================================= */
+  /* Plain (unclassed) line-work and text paint with currentColor, so set the
+     diagram's currentColor to a light hairline. Classed elements (d-muted,
+     d-accent, d-risk-text, ...) override with their own fill below. */
   :global(.fig__svg .diagram) {
-    color: var(--text);
+    color: #cdd3db;
+  }
+  :global(.fig__svg .diagram text) {
+    font-family: var(--font-sans);
   }
   :global(.fig__svg .d-faint) {
     stroke: var(--border-strong);
@@ -888,6 +1189,13 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     stroke: var(--grey);
     fill: var(--grey);
   }
+  /* hosted-model box on the right path of the boundary diagram: dark raised
+     surface with a grey outline (the SVG ships a bare white fill for the old
+     light theme, which must be overridden to a dark surface here). */
+  :global(.fig__svg .d-grey-stroke) {
+    fill: var(--bg-elevated);
+    stroke: var(--grey);
+  }
   :global(.fig__svg .d-accent) {
     stroke: var(--accent);
     fill: var(--accent);
@@ -900,8 +1208,14 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   :global(.fig__svg .d-accent-text) {
     fill: var(--accent);
   }
+  /* burden series (tier-spectrum cost-of-control) reads as muted mid on dark */
+  :global(.fig__svg .d-burden) {
+    fill: var(--grey);
+    stroke: var(--grey);
+  }
+  /* dark raised surface for boxes/plates inside the diagrams */
   :global(.fig__svg .d-surface) {
-    fill: var(--bg-card);
+    fill: var(--bg-elevated);
   }
   /* Residency-risk red lives only inside the data-boundary diagram. */
   :global(.fig__svg .d-risk) {
@@ -911,45 +1225,67 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   :global(.fig__svg .d-risk-text) {
     fill: var(--risk);
   }
-  :global(.fig__svg .diagram text) {
-    font-family: var(--font-sans);
-  }
   :global(.fig__svg .d-num) {
     font-family: var(--font-mono);
   }
 
   /* =========================================================================
-     HERO  (cinematic ink band: real two-column grid, editorial lede on the
-     left, seamless full-bleed appliance on the right)
-     The hero is a true two-column CSS grid: a text column and a media column.
-     The media is a normal grid child, not an absolute overlay, so there is no
-     overlap at any width (the old absolute 52vw panel overlapped the text
-     between roughly 881px and 1100px). The hero background and the image
-     background are both var(--ink), so the appliance bleeds in with no visible
-     seam: no mask, no border, no radius, no box-shadow. A 1px on-ink hairline
-     at the bottom separates this ink band from the ink TrustStrip that follows.
+     HERO  (2-column grid on desktop, single column on mobile)
+     Desktop (>=900px): left col ~48% text, right col ~52% image.
+     Image: full natural 16:9, never cropped, vertically centred.
+     No border/shadow/card frame around the image.
+     The hero bottom border separates it from the TrustStrip (ink surface) below.
      ========================================================================= */
   .hero {
     position: relative;
     overflow-x: clip;
-    background-color: var(--ink);
-    padding-block: var(--space-8) var(--space-8);
-    border-bottom: 1px solid var(--on-ink-border);
+    background-color: var(--bg);
+    padding-top: var(--space-9);
+    padding-bottom: 0;
+    border-bottom: 1px solid var(--border);
   }
 
+  /* 2-col grid lives inside .shell so it inherits the shell's horizontal padding */
   .hero__grid {
     display: grid;
-    grid-template-columns: 1.05fr 1fr;
+    grid-template-columns: 1fr;
     gap: var(--space-8);
-    align-items: stretch;
+    align-items: center;
+  }
+
+  @media (min-width: 900px) {
+    .hero__grid {
+      grid-template-columns: 48fr 52fr;
+      gap: var(--space-8);
+      padding-bottom: var(--space-9);
+    }
   }
 
   .hero__col {
     position: relative;
     z-index: 2;
-    max-width: 38rem;
-    padding-block: 0;
-    align-self: center;
+    padding-bottom: var(--space-8);
+  }
+
+  @media (min-width: 900px) {
+    .hero__col {
+      padding-bottom: 0;
+    }
+  }
+
+  .hero__imgcol {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* On mobile the image sits below the text with a small bottom pad */
+    padding-bottom: var(--space-6);
+  }
+
+  @media (min-width: 900px) {
+    .hero__imgcol {
+      padding-bottom: 0;
+      align-self: center;
+    }
   }
 
   .hero__meta {
@@ -957,11 +1293,11 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     flex-wrap: wrap;
     gap: var(--space-3);
     padding-bottom: var(--space-4);
-    border-bottom: 1px solid var(--on-ink-border);
+    border-bottom: 1px solid var(--border-strong);
   }
 
   .hero__tag {
-    color: var(--on-ink-muted);
+    color: var(--text-muted);
     font-size: var(--text-xs);
     font-weight: 600;
     letter-spacing: 0.12em;
@@ -969,12 +1305,12 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   .hero__metasep {
-    color: var(--on-ink-faint);
+    color: var(--text-faint);
   }
 
   .hero__h1 {
     margin: var(--space-6) 0 0;
-    color: var(--on-ink);
+    color: var(--text);
     font-size: clamp(46px, 6.2vw, 80px);
     line-height: var(--lh-tight);
     letter-spacing: -0.02em;
@@ -995,87 +1331,66 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     padding-left: var(--space-6);
     font-size: var(--text-md);
     line-height: var(--lh-snug);
-    color: var(--on-ink-muted);
+    color: var(--text-muted);
     text-wrap: pretty;
   }
 
-  /* Forest tick: accent bar with a subtle green glow. */
+  /* Forest accent square marker (6px, var(--accent)). No dash, no hyphen glyph.
+     Vertically centred on the first line of text. AA contrast: forest on off-white ~9:1. */
   .hero__point::before {
     content: '';
     position: absolute;
     left: 0;
-    top: 0.62em;
-    width: 14px;
-    height: 2px;
+    top: 0.55em;
+    width: 6px;
+    height: 6px;
     background-color: var(--accent);
     border-radius: 1px;
-    box-shadow: 0 0 8px rgba(46, 160, 110, 0.55);
   }
 
   .hero__scope {
     margin: var(--space-6) 0 0;
-    color: var(--on-ink-faint);
+    color: var(--text-faint);
     font-size: var(--text-sm);
     line-height: var(--lh-snug);
     max-width: 48ch;
     text-wrap: pretty;
   }
 
-  /* Hero-scoped ghost CTA: on-ink colours, not the off-white page ghost. */
-  .hero .cta--ghost-hero {
-    background-color: transparent;
-    color: var(--on-ink);
-    border: 1px solid var(--on-ink-border);
+  .hero__ctas {
+    margin-top: var(--space-7);
   }
 
-  .hero .cta--ghost-hero:hover {
-    border-color: var(--on-ink);
-    transform: translateY(-1px);
-  }
-
-  /* Media column: a normal grid child (not an absolute overlay). Its ink
-     background matches the hero band exactly, so the appliance image bleeds in
-     with no seam. No mask, no border, no radius, no box-shadow. position
-     relative only so the glow overlay can pin inside this column. */
-  .hero__media {
-    position: relative;
-    z-index: 0;
-    min-height: 100%;
-    background-color: var(--ink);
-    transform-origin: center;
-  }
-
-  /* Image fills the media column height. No border, no radius, no shadow.
-     object-position keeps the right-of-centre appliance and its forest
-     light-slot whole across tall and short column ratios. */
+  /* Hero image: full natural 16:9, never cropped, no border, no card frame.
+     A soft alpha mask feathers all four edges (~12% each side) so the charcoal
+     plate dissolves into the page canvas with no visible rectangle border.
+     The mask is the intersection of two linear gradients (left-right and
+     top-bottom), achieved via mask-composite: intersect.
+     Devices are centred inside the plate's dark margin, so 12% feathering
+     clips only the outer dark margin, not the hardware subjects.
+     CSP-safe: mask-image uses gradient functions, no url() or inline style attr. */
   .hero__img {
     display: block;
     width: 100%;
-    height: 100%;
-    max-width: none;
-    object-fit: cover;
-    object-position: 60% center;
-    opacity: 1;
-  }
-
-  /* Static glow overlay: forest green radial at 62% 58%, pinned inside the
-     media column. Lives outside the motion query so it is always present as a
-     base. Animation in the motion query adds a breathe cycle on top. */
-  .hero__glow {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    pointer-events: none;
-    background: radial-gradient(circle at 62% 58%, rgba(46, 160, 110, 0.16), rgba(46, 160, 110, 0) 42%);
-    opacity: 0.10;
+    height: auto;
+    max-width: 100%;
+    object-fit: contain;
+    -webkit-mask-image:
+      linear-gradient(to right,  transparent 0%, #000 12%, #000 88%, transparent 100%),
+      linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+    -webkit-mask-composite: source-in;
+    mask-image:
+      linear-gradient(to right,  transparent 0%, #000 12%, #000 88%, transparent 100%),
+      linear-gradient(to bottom, transparent 0%, #000 12%, #000 88%, transparent 100%);
+    mask-composite: intersect;
   }
 
   /* =========================================================================
-     02 EXPOSURE  (numbered stack)
+     02 EXPOSURE  (numbered 3-col grid, full-width inside .shell)
      ========================================================================= */
   .exposures {
     list-style: none;
-    margin: var(--space-8) 0 0;
+    margin: 0 0 var(--space-8);
     padding: 0;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1113,7 +1428,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
      04 COST  (on-face figure callout)
      ========================================================================= */
   .cost__faceline {
-    margin: var(--space-7) 0 0;
+    margin: var(--space-8) 0 0;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
@@ -1158,14 +1473,14 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   /* =========================================================================
-     06 CONTINUOUS IMPROVEMENT  (inline capacity-ladder SVG inside Figure frame)
-     The old photographic plate left a large empty band. Tighten the Figure top
-     margin and plate padding here (scoped to sec 06, so the global dossier
-     rhythm is untouched), and cap the ladder width so it reads as a compact
-     exhibit rather than a wide empty plate.
+     06 PLATFORM  (inline capacity-ladder SVG inside Figure frame)
+     The ladder is the figure column of a zigzag row, so it reads as a compact
+     exhibit beside the prose. Tighten the Figure top margin and plate padding
+     (scoped to sec 06, so the global rhythm is untouched), and cap the ladder
+     width so it stays a tidy exhibit rather than a wide empty plate.
      ========================================================================= */
   .improve__fig :global(.fig) {
-    margin-top: var(--space-6);
+    margin-top: 0;
   }
 
   .improve__fig :global(.fig__plate) {
@@ -1178,18 +1493,19 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     width: 100%;
     height: auto;
     max-width: 620px;
-    color: var(--text);
+    /* plain stroke-work in the ladder uses currentColor; light hairline on dark */
+    color: #cdd3db;
   }
 
   /* Colour hooks for the inline ladder SVG. It sits in the Figure default slot,
-     not the .fig__svg set:html path, so it needs its own hooks (same palette as
-     the other diagrams). Ink line-work, grey secondary, forest accent scarce,
-     #fff surface. No red on this exhibit. */
+     not the .fig__svg set:html path, so it needs its own hooks (same dark
+     palette as the other diagrams). Light line-work, grey secondary, brighter
+     forest accent scarce, dark raised surface. No red on this exhibit. */
   .ladder-svg :global(.d-faint) {
     stroke: var(--border-strong);
   }
   .ladder-svg :global(.d-surface) {
-    fill: var(--bg-card);
+    fill: var(--bg-elevated);
   }
   .ladder-svg :global(.d-grey) {
     fill: var(--grey);
@@ -1209,19 +1525,51 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   /* =========================================================================
-     07 COMPETITIVE PULL QUOTE  (a Fraunces exception)
+     07 COMPETITIVE PULL QUOTE  (ink band, the second deliberate dark surface)
+     Full-bleed ink background, content centred in .shell, Fraunces pull quote
+     in light text. No top hairline: the colour change is the divider.
      ========================================================================= */
+  /* Feature-moment band. On dark this is a RAISED deep-forest-tinted surface
+     with hairline borders top and bottom, so it reads as a distinct elevation
+     (a feature moment) rather than disappearing into the near-black canvas. */
+  .oneliner {
+    background-color: var(--ink);
+    color: var(--on-ink);
+    padding-block: var(--space-9);
+    border-block: 1px solid var(--on-ink-border);
+  }
+
+  .oneliner__inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: var(--space-5);
+  }
+
   .pullquote {
     margin: 0;
     padding: 0;
     font-family: var(--font-display);
     font-weight: 600;
-    font-size: clamp(28px, 3.4vw, 38px);
+    font-size: clamp(28px, 3.4vw, 40px);
     line-height: var(--lh-snug);
     letter-spacing: -0.01em;
-    color: var(--text);
-    max-width: 22ch;
+    color: var(--on-ink);
+    max-width: 24ch;
     text-wrap: balance;
+  }
+
+  /* On-ink kicker variant for the pull-quote band. The forest accent does not
+     clear AA on ink, so the eyebrow uses off-white muted instead, and its middot
+     and number follow. */
+  .kicker--on-ink,
+  .kicker--on-ink .kicker__num {
+    color: var(--on-ink-muted);
+  }
+
+  .kicker--on-ink .kicker__sep::before {
+    color: var(--on-ink-muted);
   }
 
   /* =========================================================================
@@ -1229,7 +1577,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
      ========================================================================= */
   .proofs {
     list-style: none;
-    margin: var(--space-7) 0 0;
+    margin: 0;
     padding: 0;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
@@ -1266,15 +1614,18 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   /* =========================================================================
-     CLOSING  (ink, the second deliberate dark surface)
+     CLOSING  (ink, the third deliberate dark surface)
      ========================================================================= */
+  /* Closing feature band: same raised deep-forest-tinted surface as the
+     one-liner, with a top hairline so it reads as a distinct elevation on the
+     dark canvas. */
   .closing {
     background-color: var(--ink);
     color: var(--on-ink);
-    border-top: 1px solid var(--on-ink-border);
     padding-block: var(--space-9);
     position: relative;
     overflow: hidden;
+    border-top: 1px solid var(--on-ink-border);
   }
 
   .closing__inner {
@@ -1292,7 +1643,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   .closing__line {
-    margin: 0;
+    margin: var(--space-5) 0 0;
     color: var(--on-ink-muted);
     font-size: var(--text-md);
     line-height: var(--lh-body);
@@ -1327,19 +1678,6 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     .load-fade {
       animation: load-fade var(--dur-reveal) var(--ease-out) 120ms both;
     }
-
-    /* Ink panel settles in: scale 1.02 to 1 over ~620ms, slight opacity lift.
-       Starts near-full (0.85) so content is never hidden if animation skips.
-       transform-origin on base rule keeps absolute pin stable. */
-    .hero__media {
-      animation: hero-img-settle 620ms var(--ease-out) 140ms both;
-    }
-
-    /* Glow breathe: slow 6s cycle, opacity 0.04 to 0.16. Static base 0.10
-       lives outside this query so the overlay is always present. */
-    .hero__glow {
-      animation: hero-glow-breathe 6s var(--ease-out) infinite;
-    }
   }
 
   /* Entrance shifts position and fades from near-full opacity. Because the
@@ -1365,76 +1703,33 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     }
   }
 
-  /* Ink panel settle: scale 1.02 to 1 over ~620ms. No persistent hidden state. */
-  @keyframes hero-img-settle {
-    from {
-      opacity: 0.85;
-      transform: scale(1.02);
-    }
-    to {
-      opacity: 1;
-      transform: scale(1);
-    }
-  }
-
-  /* Glow breathe: forest green overlay pulses gently. */
-  @keyframes hero-glow-breathe {
-    0%, 100% { opacity: 0.04; }
-    50%       { opacity: 0.16; }
-  }
-
   /* =========================================================================
-     RESPONSIVE
+     RESPONSIVE  (mobile collapse to single column, tighter section padding)
      ========================================================================= */
-  @media (max-width: 1024px) {
-    /* Two even columns through the mid-range. The media is a grid child, so it
-       can never overlap the text the way the old absolute panel did. */
-    .hero__grid {
-      grid-template-columns: 1fr 1fr;
-      gap: var(--space-7);
-    }
-  }
-
   @media (max-width: 880px) {
-    /* Hero collapses to single column. Media returns to normal flow above the
-       lede at full width. Ink background kept (matches hero band) so the image
-       background is seamless on mobile too. Aspect-ratio set from intrinsic
-       width/height to prevent CLS. */
+    .band {
+      padding-block: var(--space-8);
+    }
+    .oneliner,
+    .closing {
+      padding-block: var(--space-8);
+    }
     .hero {
-      padding-block: var(--space-7) var(--space-7);
-    }
-    .hero__grid {
-      grid-template-columns: 1fr;
-      gap: var(--space-6);
-    }
-    .hero__media {
-      position: relative;
-      width: 100%;
-      min-height: 0;
-      height: auto;
-      order: -1;
-      background-color: var(--ink);
-      aspect-ratio: 1376 / 768;
-    }
-    .hero__img {
-      width: 100%;
-      height: 100%;
-      max-width: 100%;
-      object-fit: cover;
-      object-position: center;
-    }
-    .hero__glow {
-      display: none;
+      padding-top: var(--space-7);
     }
     .hero__col {
       max-width: none;
+      padding-bottom: var(--space-6);
     }
-
     .cards--3,
-    .cards--4,
     .exposures,
     .proofs {
       grid-template-columns: 1fr;
+    }
+
+    /* Carousel stays horizontal on mobile */
+    .cards--carousel > li {
+      width: clamp(240px, 78vw, 300px);
     }
   }
 </style>

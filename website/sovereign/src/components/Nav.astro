@@ -37,21 +37,30 @@ function isActive(href: string): boolean {
       Hive
     </a>
 
-    <ul class="nav__links">
-      {
-        links.map((link) => (
-          <li>
-            <a
-              class="nav__link tap-target"
-              href={link.href}
-              aria-current={isActive(link.href) ? 'page' : undefined}
-            >
-              {link.label}
-            </a>
-          </li>
-        ))
-      }
-    </ul>
+    <details class="nav__mobile">
+      <summary class="nav__toggle" aria-label="Menu">
+        <svg class="nav__toggle-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true" focusable="false">
+          <rect x="3" y="6" width="18" height="2" rx="1" fill="currentColor" />
+          <rect x="3" y="11" width="18" height="2" rx="1" fill="currentColor" />
+          <rect x="3" y="16" width="18" height="2" rx="1" fill="currentColor" />
+        </svg>
+      </summary>
+      <ul class="nav__links">
+        {
+          links.map((link) => (
+            <li>
+              <a
+                class="nav__link tap-target"
+                href={link.href}
+                aria-current={isActive(link.href) ? 'page' : undefined}
+              >
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </details>
 
     <a class="nav__cta tap-target" href="/book-a-demo">Book a Demo</a>
   </div>
@@ -100,6 +109,22 @@ function isActive(href: string): boolean {
     height: 20px;
   }
 
+  /* =========================================================================
+     MOBILE DISCLOSURE WRAPPER
+     Desktop: details always treated as open via block layout; summary hidden.
+     Mobile: native <details> open/close disclosure, links drop below nav bar.
+     Zero JavaScript. CSP-safe.
+     ========================================================================= */
+  .nav__mobile {
+    /* Desktop: participate in the flex row, push links to the right */
+    display: contents;
+  }
+
+  /* Hide the toggle on desktop; the details content is always visible */
+  .nav__toggle {
+    display: none;
+  }
+
   .nav__links {
     display: flex;
     align-items: center;
@@ -116,37 +141,130 @@ function isActive(href: string): boolean {
     color: var(--text-muted);
     font-size: 15px;
     font-weight: 500;
-    transition: color 120ms ease;
+    cursor: pointer;
+    border-bottom: 1px solid transparent;
+    transition:
+      color 120ms ease,
+      border-color 120ms ease;
   }
 
-  .nav__link:hover,
+  .nav__link:hover {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
   .nav__link[aria-current='page'] {
     color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
+  .nav__link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 
   .nav__cta {
     display: inline-flex;
     align-items: center;
-    background-color: var(--gold);
-    color: var(--bg);
+    background-color: var(--accent);
+    color: var(--on-accent);
     font-weight: 600;
     font-size: 15px;
     padding: 10px 18px;
     border-radius: 10px;
+    cursor: pointer;
     transition:
       transform 120ms ease,
-      filter 120ms ease;
+      background-color 120ms ease;
   }
 
   /* Subtle 1px lift on hover. transform only, so there is no layout shift. */
   .nav__cta:hover {
     transform: translateY(-1px);
-    filter: brightness(1.05);
+    background-color: var(--accent-hover);
   }
 
+  .nav__cta:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+  }
+
+  /* =========================================================================
+     MOBILE (<=760px): show hamburger toggle, collapse links into dropdown
+     ========================================================================= */
   @media (max-width: 760px) {
+    /* The sticky nav bar is the positioning context for the dropdown panel,
+       so the panel can be pinned to both shell gutters and never overflow. */
+    .nav {
+      position: sticky;
+    }
+
+    /* details becomes a block container that holds the toggle on the right */
+    .nav__mobile {
+      display: block;
+      margin-inline-start: auto;
+      /* No position: relative here, so the absolute panel below resolves
+         against the full-width .nav bar instead of this narrow box. */
+    }
+
+    /* Remove default marker */
+    .nav__toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      list-style: none;
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-sm, 8px);
+      color: var(--text);
+      cursor: pointer;
+      /* Visible focus ring for keyboard users */
+    }
+
+    .nav__toggle::-webkit-details-marker {
+      display: none;
+    }
+
+    .nav__toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* Links panel: hidden until details[open], then drops down. Resolves
+       against the full-width sticky .nav bar and is pinned to both shell
+       gutters (24px each side), so it always sits fully inside the viewport,
+       the left edge can never go negative, and labels never clip. */
     .nav__links {
       display: none;
+      position: absolute;
+      inset-inline: 24px;
+      top: 100%;
+      margin-top: 8px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: var(--space-3, 12px) 0;
+      background-color: var(--bg-card, #fff);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card, 12px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      z-index: 100;
+    }
+
+    .nav__mobile[open] .nav__links {
+      display: flex;
+    }
+
+    .nav__links li {
+      width: 100%;
+    }
+
+    .nav__link {
+      display: flex;
+      width: 100%;
+      padding: 12px var(--space-5, 20px);
+      font-size: 15px;
     }
   }
 </style>

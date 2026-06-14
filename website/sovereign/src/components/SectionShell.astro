@@ -83,6 +83,10 @@ const { numeral, label, id } = Astro.props;
 
   .ds__content {
     max-width: var(--dossier-measure);
+    /* Allow the grid item to shrink below its min-content so a wide child
+       (e.g. a min-width table inside an overflow-x:auto wrapper) scrolls
+       internally instead of widening the page on narrow viewports. */
+    min-width: 0;
     /* Wider blocks (card grids, diagrams) opt out with .ds__bleed below. */
   }
 

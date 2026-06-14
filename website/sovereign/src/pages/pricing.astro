@@ -92,8 +92,16 @@ const tcoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" ro
 ---
 
 <Base
-  title="Pricing"
+  title="On-Premises AI Pricing: Own vs Rent"
   description="Buy a workstation-class box you own in the low thousands, with an annual licence. Or start on Hive Cloud at a fraction of typical hosted-API pricing. For sustained daily work, owning is the cheaper position over time."
+  structuredData={{
+    breadcrumbs: [
+      { name: 'Home', url: 'https://hive.scubed.co/' },
+      { name: 'Pricing', url: 'https://hive.scubed.co/pricing' },
+    ],
+    pricingFaq: true,
+    service: true,
+  }}
 >
   {/* ============ HERO (single editorial column, the only h1) ============ */}
   <section class="hero" aria-labelledby="hero-h1">
@@ -309,6 +317,30 @@ const tcoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" ro
       infrastructure and do not carry the same data-residency properties as the
       on-prem edition.
     </p>
+  </SectionShell>
+
+  {/* ============ 08 FAQ ============ */}
+  <SectionShell numeral="08" label="Common questions" id="faq-h2">
+    <h2 class="section-h2 section-h2--lead">
+      Frequently asked questions
+    </h2>
+    <div class="faq">
+      <details class="faq__item">
+        <summary class="faq__q">How long does an on-prem Hive box take to pay for itself?</summary>
+        <p class="faq__a">
+          It depends on your inference volume. The model on this page shows
+          the breakeven point where the owned box passes metered cloud.
+        </p>
+      </details>
+      <details class="faq__item">
+        <summary class="faq__q">What is included in the annual Hive licence?</summary>
+        <p class="faq__a">
+          Continuous software updates, validation and availability of new
+          supported open-weight models, and the platform that runs them on
+          your hardware.
+        </p>
+      </details>
+    </div>
   </SectionShell>
 
   {/* ============ CLOSING CTA (ink, the one deliberate dark surface) ============ */}
@@ -595,11 +627,13 @@ const tcoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" ro
 
   /* =========================================================================
      DIAGRAM COLOUR HOOKS (consumed by the static TCO SVG inside Figure).
-     Copied verbatim from the Home page. No red on this page; the cost chart
-     uses grey for the metered cloud and forest for the owned series.
+     Copied verbatim from the Home page. Remapped for the dark canvas: light
+     hairline line-work, dark raised surfaces, brighter forest accent. No red
+     on this page; the cost chart uses grey for the metered cloud and forest
+     for the owned series.
      ========================================================================= */
   :global(.fig__svg .diagram) {
-    color: var(--text);
+    color: #cdd3db;
   }
   :global(.fig__svg .d-faint) {
     stroke: var(--border-strong);
@@ -622,6 +656,10 @@ const tcoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" ro
   :global(.fig__svg .d-accent-ring),
   :global(.fig__svg .d-accent-dash) {
     stroke: var(--accent);
+  }
+  /* breakeven ring centre reads as a hollow marker on the dark chart */
+  :global(.fig__svg .d-accent-ring) {
+    fill: var(--bg);
   }
   :global(.fig__svg .d-accent-text) {
     fill: var(--accent);
@@ -691,6 +729,72 @@ const tcoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" ro
     font-size: var(--text-md);
     line-height: var(--lh-body);
     max-width: 60ch;
+  }
+
+  /* =========================================================================
+     FAQ (CSS-only disclosure, zero JS)
+     ========================================================================= */
+  .faq {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 70ch;
+  }
+
+  .faq__item {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    background-color: var(--bg-card);
+    margin-bottom: var(--space-3);
+    overflow: hidden;
+  }
+
+  .faq__q {
+    display: block;
+    padding: var(--space-5) var(--space-6);
+    font-weight: 600;
+    font-size: var(--text-base);
+    color: var(--text);
+    cursor: pointer;
+    list-style: none;
+    position: relative;
+    padding-inline-end: calc(var(--space-6) + 24px);
+  }
+
+  .faq__q::-webkit-details-marker {
+    display: none;
+  }
+
+  .faq__q::after {
+    content: '';
+    position: absolute;
+    inset-inline-end: var(--space-6);
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    background-color: var(--accent);
+    mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 6l5 5 5-5' stroke='currentColor' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    mask-repeat: no-repeat;
+    mask-size: contain;
+    transition: transform 180ms ease;
+  }
+
+  .faq__item[open] .faq__q::after {
+    transform: translateY(-50%) rotate(180deg);
+  }
+
+  .faq__q:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+
+  .faq__a {
+    margin: 0;
+    padding: 0 var(--space-6) var(--space-5);
+    color: var(--text-muted);
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
   }
 
   /* =========================================================================

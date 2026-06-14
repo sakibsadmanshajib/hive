@@ -8,47 +8,59 @@
  *      (bg-bg, text-text-muted, text-accent, etc.). Keep both in sync;
  *      tailwind.config.ts mirrors these for editor tooling.
  *
- * Scheme: light institutional. Warm off-white surfaces, near-black ink,
- * a single deep forest accent. Restraint over colour noise.
+ * Scheme: dark institutional. Deep near-black cool surfaces, light ink,
+ * a single brighter forest accent. Restraint over colour noise. The mood is
+ * a refined, quiet, premium dark canvas with generous whitespace.
  *
  * Colour discipline (one accent only):
- *   --accent  deep forest. CTAs, links, focus ring, at most one highlight
- *             per viewport. There is no second hue.
+ *   --accent  brighter forest, legible on the dark canvas. CTAs, links, focus
+ *             ring, at most one highlight per viewport. There is no second hue.
  *   --gold, --teal  legacy token NAMES kept so existing components compile.
  *             Both repoint to the single forest accent, so any var(--gold)
  *             or var(--teal) renders the one accent, never a second colour.
- *   --red     restrained muted ink, risk framing is no longer used on Home.
+ *   --red     residency-risk red, tuned for dark, used only inside the
+ *             data-boundary diagram.
  *   --grey    secondary text, competitor baseline.
+ *
+ * Contrast notes (verified against --bg #0c0e12):
+ *   --text       #e9ebef  ~15.5:1   AA + AAA body
+ *   --text-muted #aab2bd  ~9.1:1    AA body
+ *   --text-faint #7d858f  ~4.6:1    AA for large/decorative
+ *   --accent     #4cc08a  ~8.1:1    AA links/markers on bg
+ *   accent button label: #07140f on #4cc08a ~7.9:1  AA
  */
 
 :root {
-  /* surfaces */
-  --bg: #f8f7f4;
-  --bg-raised: #f2f1ec;
-  --bg-card: #ffffff;
+  /* surfaces (dark, slightly cool) */
+  --bg: #0c0e12;
+  --bg-raised: #15181e;
+  --bg-card: #15181e;
+  --bg-elevated: #1b1f26;
 
-  /* borders */
-  --border: #e4e2dc;
-  --border-strong: #d4d1c9;
+  /* borders (quiet hairlines that still read on dark) */
+  --border: #262a31;
+  --border-strong: #353b44;
 
   /* text */
-  --text: #0d1117;
-  /* muted darkened to #4a515e for >= 4.5:1 on --bg (#f8f7f4); faint to #707886
-     for >= 3:1 and visibly lighter than muted. Both used site-wide. */
-  --text-muted: #4a515e;
-  --text-faint: #707886;
+  --text: #e9ebef;
+  /* muted #aab2bd >= 4.5:1 on --bg; faint #7d858f >= 4.5:1, lighter than muted
+     only by role (used for large/decorative and quiet stamps). */
+  --text-muted: #aab2bd;
+  --text-faint: #7d858f;
 
-  /* accent (single deep forest, one per viewport) */
-  --accent: #0d3b2e;
-  --accent-hover: #0f4636;
+  /* accent (single brighter forest, one per viewport) */
+  --accent: #4cc08a;
+  --accent-hover: #5fcf9a;
+  /* label colour for solid-accent buttons: near-black green for AA on accent */
+  --on-accent: #07140f;
 
   /* legacy accent names, all repointed to the single forest accent */
-  --gold: #0d3b2e;
-  --teal: #0d3b2e;
-  --red: #6b7585;
+  --gold: #4cc08a;
+  --teal: #4cc08a;
+  --red: #f8736a;
 
   /* competitor baseline / muted */
-  --grey: #6b7585;
+  --grey: #8a93a0;
 
   /* geometry */
   --radius: 14px;
@@ -63,16 +75,16 @@
   /* ---- additive refinements (art-directed minimalism) ---- */
 
   /* surfaces: two faint additions for quiet depth without new hues */
-  --bg-forest-tint: #f1f4f2;
-  --bg-sunken: #efece6;
+  --bg-forest-tint: #10231c;
+  --bg-sunken: #0a0c0f;
 
-  /* accent tints derived from the single forest */
-  --accent-wash: #e9efeb;
-  --accent-line: #c3d3cb;
+  /* accent tints derived from the single forest, for dark surfaces */
+  --accent-wash: #122a22;
+  --accent-line: #2c5446;
 
-  /* residency-risk red, single source */
-  --risk: #f04438;
-  --risk-wash: #fdecea;
+  /* residency-risk red, single source (tuned for dark) */
+  --risk: #f8736a;
+  --risk-wash: #2a1513;
 
   /* spacing scale, 4px base */
   --space-1: 4px;
@@ -111,11 +123,11 @@
   --radius-pill: 999px;
 
   /* active/selected edge */
-  --border-accent: #0d3b2e;
+  --border-accent: #4cc08a;
 
-  /* elevation: almost flat, one restrained hover shadow */
-  --shadow-raise: 0 1px 2px rgba(13, 17, 23, 0.04),
-                  0 8px 24px rgba(13, 17, 23, 0.06);
+  /* elevation: soft dark shadow plus a faint top sheen via the border */
+  --shadow-raise: 0 1px 2px rgba(0, 0, 0, 0.4),
+                  0 12px 32px rgba(0, 0, 0, 0.45);
 
   /* motion tokens */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
@@ -133,40 +145,45 @@
   --dossier-gap: var(--space-8);
   --dossier-measure: 680px;
 
-  /* deliberate dark accent surfaces (trust strip + closing CTA only) */
-  --ink: #0d1117;
-  --on-ink: #f8f7f4;
-  --on-ink-muted: #c3c9d2;
-  --on-ink-faint: #a7aebb;
-  --on-ink-border: rgba(248, 247, 244, 0.22);
+  /* Feature-moment surfaces (trust strip + section-07 + closing CTA).
+     On the dark site these are RAISED, deep-forest-tinted bands that read as
+     distinct elevation, not the dark-on-dark "ink" of the old light theme.
+       --ink         the feature-band surface (forest-tinted, raised)
+       --on-ink      primary text on that band
+       --on-ink-*    muted / faint / hairline on that band */
+  --ink: #11241d;
+  --on-ink: #eef3f0;
+  --on-ink-muted: #b6c4bd;
+  --on-ink-faint: #8ea096;
+  --on-ink-border: rgba(124, 196, 162, 0.22);
 
   /* large Fraunces dossier section numeral */
   --text-numeral: clamp(40px, 4.6vw, 60px);
   --text-h2-dossier: clamp(32px, 3.4vw, 40px);
 
-  /* subtle paper-grain texture (decorative, ~2.5% opacity data-uri noise) */
+  /* subtle grain texture (decorative, low-opacity data-uri noise) */
   --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.55'/></svg>");
 }
 
 @theme {
-  --color-bg: #f8f7f4;
-  --color-bg-raised: #f2f1ec;
-  --color-bg-card: #ffffff;
+  --color-bg: #0c0e12;
+  --color-bg-raised: #15181e;
+  --color-bg-card: #15181e;
 
-  --color-border: #e4e2dc;
-  --color-border-strong: #d4d1c9;
+  --color-border: #262a31;
+  --color-border-strong: #353b44;
 
-  --color-text: #0d1117;
-  --color-text-muted: #4a515e;
-  --color-text-faint: #707886;
+  --color-text: #e9ebef;
+  --color-text-muted: #aab2bd;
+  --color-text-faint: #7d858f;
 
-  --color-accent: #0d3b2e;
-  --color-accent-hover: #0f4636;
+  --color-accent: #4cc08a;
+  --color-accent-hover: #5fcf9a;
 
-  --color-gold: #0d3b2e;
-  --color-teal: #0d3b2e;
-  --color-risk: #6b7585;
-  --color-grey: #6b7585;
+  --color-gold: #4cc08a;
+  --color-teal: #4cc08a;
+  --color-risk: #f8736a;
+  --color-grey: #8a93a0;
 
   --radius-card: 14px;
 

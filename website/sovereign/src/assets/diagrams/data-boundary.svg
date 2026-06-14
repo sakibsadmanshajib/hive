@@ -92,9 +92,12 @@
     <text x="247" y="151" text-anchor="middle" font-size="10" font-weight="500" fill="#6b7585" class="d-muted">Backup</text>
     <text x="40" y="196" font-size="12.5" fill="#6b7585" class="d-muted">Retained, logged, discoverable.</text>
 
-    <!-- residency-risk callout, red, clear of header and egress, pointing up at the retained copies -->
-    <g transform="translate(208 178)">
-      <path class="d-risk" d="M14 -8 L8 -2" stroke="#f04438" stroke-width="1.6" fill="none" />
+    <!-- residency-risk callout, red, positioned above the caption row so it
+         does not overlap "Retained, logged, discoverable." (y=196). The badge
+         sits at ~y=175 (translate y=165, circle cy=10), well clear of y=196.
+         The pointer line aims down-right toward the retained-copies row. -->
+    <g transform="translate(208 158)">
+      <path class="d-risk" d="M14 22 L10 30" stroke="#f04438" stroke-width="1.6" fill="none" />
       <circle class="d-risk" cx="10" cy="10" r="10" fill="#f04438" />
       <path d="M10 5 l0 7 M10 14.5 l0 0.5" stroke="#ffffff" stroke-width="2" fill="none" />
       <text x="26" y="15" font-size="13" font-weight="600" fill="#f04438" class="d-risk-text">Residency risk</text>

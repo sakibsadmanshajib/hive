@@ -80,7 +80,7 @@
    wherever the mono family is applied so numeric columns and ticks align. */
 @layer base {
   :root {
-    color-scheme: light;
+    color-scheme: dark;
   }
 
   html {
@@ -89,16 +89,37 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    /* Guard against any sub-pixel horizontal overflow (e.g. right-bleed carousel
+       on the Home page). overflow-x: clip (not hidden) does not create a scroll
+       container, so sticky positioning inside the page still works. */
+    overflow-x: clip;
   }
 
   body {
     margin: 0;
     min-height: 100vh;
-    background-color: var(--bg);
     color: var(--text);
     font-family: var(--font-sans);
     font-weight: 400;
     line-height: 1.55;
+    /* Subtle premium depth on the dark canvas. Two faint radial vignettes (a
+       quiet cool glow top, a barely-there forest hint) sit over the flat base
+       colour. CSP-safe: declared in this stylesheet, no inline style, no script.
+       The hex-lattice layer in Base.astro adds the fine grain on top. */
+    background-color: var(--bg);
+    background-image:
+      radial-gradient(
+        1200px 700px at 50% -10%,
+        rgba(76, 192, 138, 0.05),
+        rgba(76, 192, 138, 0) 60%
+      ),
+      radial-gradient(
+        1000px 800px at 100% 0%,
+        rgba(120, 140, 180, 0.05),
+        rgba(120, 140, 180, 0) 55%
+      );
+    background-attachment: fixed;
+    background-repeat: no-repeat;
   }
 
   h1 {

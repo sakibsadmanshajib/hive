@@ -22,7 +22,7 @@ interface Props {
 const { fig, caption, svg, ariaLabel } = Astro.props;
 ---
 
-<figure class="fig" aria-label={ariaLabel}>
+<figure class="fig" role="img" aria-label={ariaLabel}>
   <div class="fig__plate">
     {svg ? <div class="fig__svg" set:html={svg} /> : <slot />}
   </div>

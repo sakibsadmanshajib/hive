@@ -56,9 +56,16 @@ interface Props {
   organization?: boolean;
   website?: boolean;
   service?: boolean;
-  /* Emit an FAQPage only where the matching Q&A actually appears on the page. */
+  /* Emit an FAQPage only where the matching Q&A actually appears on the page.
+     faq        — home page general FAQ (existing behaviour, unchanged).
+     securityFaq — security page FAQ (data residency vs sovereignty, air-gap).
+     pricingFaq  — pricing page FAQ (payback period, licence inclusions). */
   faq?: boolean;
-  /* Emit a BreadcrumbList on interior pages. Pass the trail in order. */
+  securityFaq?: boolean;
+  pricingFaq?: boolean;
+  /* Emit a BreadcrumbList on interior pages. Pass the trail in order.
+     Example: [{ name: 'Home', url: 'https://hive.scubed.co/' },
+               { name: 'Security', url: 'https://hive.scubed.co/security' }] */
   breadcrumbs?: Crumb[];
 }
 
@@ -67,6 +74,8 @@ const {
   website = false,
   service = false,
   faq = false,
+  securityFaq = false,
+  pricingFaq = false,
   breadcrumbs,
 } = Astro.props;
 
@@ -82,12 +91,12 @@ const organizationNode = {
   name: 'S Cubed Technology Ltd.',
   url: SITE,
   /*
-    LOGO: no logo asset exists yet. When a square logo is added (e.g.
-    /og/logo.png at 112x112 or larger), uncomment the logo property below and
+    LOGO: no logo asset exists yet. Needs /og/logo-sq.png (square, 112x112 or
+    larger). When that asset is added, uncomment the logo property below and
     point it at the absolute URL. Leaving it out is valid; an unverified path is
     worse than an absent one.
   */
-  // logo: `${SITE}/og/logo.png`,
+  // logo: `${SITE}/og/logo-sq.png`,
   description:
     'Independently held company that builds and licenses Hive, sovereign on-premises AI. No US ownership, no US jurisdiction over the company that builds the box.',
   brand: { '@type': 'Brand', name: 'Hive' },
@@ -110,7 +119,7 @@ const serviceNode = {
   description:
     'Capable open-weight AI models that run on hardware you own and control, inside your own network boundary. Prompts, documents, and responses stay on the on-premises box, with no external endpoint to subpoena and no usage-based vendor bill.',
   provider: { '@id': ORG_ID },
-  areaServed: 'Worldwide',
+  areaServed: ['Canada', 'United Kingdom', 'United States', 'Worldwide'],
   /*
     No Offer with price is baked in on purpose. Hardware prices and the licence
     fee are the owner's call and change over time; a stale Offer is worse than
@@ -166,6 +175,52 @@ const faqNode = {
   ],
 };
 
+const securityFaqNode = {
+  '@type': 'FAQPage',
+  '@id': `${SITE}/#faq-security`,
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'What is the difference between data residency and data sovereignty?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Residency is where your data physically sits. Sovereignty is which jurisdiction governs the company that holds it. A provider\'s Canadian data centre keeps the bytes in Canada, but if that provider is foreign-controlled a foreign court order can still reach them. On-prem Hive removes the third party from the data path.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can Hive run in an air-gapped environment?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes. Hive runs inference entirely on hardware you own, with no outbound network path required, which supports fully air-gapped and offline deployments.',
+      },
+    },
+  ],
+};
+
+const pricingFaqNode = {
+  '@type': 'FAQPage',
+  '@id': `${SITE}/#faq-pricing`,
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'How long does an on-prem Hive box take to pay for itself?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'It depends on your inference volume. The pricing page shows a worked total cost of ownership model with the breakeven point where the owned box passes metered cloud.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What is included in the annual Hive licence?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Continuous software updates, validation and availability of new supported open-weight models, and the platform that runs them on your hardware.',
+      },
+    },
+  ],
+};
+
 /* Collect the site-wide entity nodes into one @graph script so a single block
    carries Organization, WebSite, and Service where they are requested. */
 const graphNodes = [
@@ -180,9 +235,18 @@ const graph =
     : null;
 
 /* FAQPage is emitted as its own script: it is page-specific and keeping it
-   separate from the @graph keeps each block easy to validate in isolation. */
+   separate from the @graph keeps each block easy to validate in isolation.
+   Each FAQ variant maps to a distinct @id so pages can be validated cleanly. */
 const faqJson = faq
   ? { '@context': 'https://schema.org', ...faqNode }
+  : null;
+
+const securityFaqJson = securityFaq
+  ? { '@context': 'https://schema.org', ...securityFaqNode }
+  : null;
+
+const pricingFaqJson = pricingFaq
+  ? { '@context': 'https://schema.org', ...pricingFaqNode }
   : null;
 
 /* BreadcrumbList is built from the props trail, in order. */
@@ -206,6 +270,12 @@ const breadcrumbJson =
 )}
 {faqJson && (
   <script type="application/ld+json" set:html={JSON.stringify(faqJson)} />
+)}
+{securityFaqJson && (
+  <script type="application/ld+json" set:html={JSON.stringify(securityFaqJson)} />
+)}
+{pricingFaqJson && (
+  <script type="application/ld+json" set:html={JSON.stringify(pricingFaqJson)} />
 )}
 {breadcrumbJson && (
   <script type="application/ld+json" set:html={JSON.stringify(breadcrumbJson)} />

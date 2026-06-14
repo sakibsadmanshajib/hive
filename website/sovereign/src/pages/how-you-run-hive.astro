@@ -98,8 +98,8 @@ const compareRows = [
 ---
 
 <Base
-  title="How You Run Hive"
-  description="One Hive, three ways to run it. Own it on-prem, colocate a dedicated box in-region, or start on a region-locked shared instance. You choose how much control you keep."
+  title="Self-Hosted AI Deployment Options"
+  description="On-prem, colocated, or region-locked shared instance. Hive runs on hardware you control, including air-gapped deployments with no outbound network path."
   structuredData={{
     breadcrumbs: [
       { name: 'Home', url: 'https://hive.scubed.co/' },
@@ -824,6 +824,9 @@ const compareRows = [
   .table-wrap {
     margin: var(--space-8) 0 0;
     overflow-x: auto;
+    /* Clamp the wrap to the content column so the 640px-min table scrolls
+       inside this box instead of widening the page on narrow viewports. */
+    max-width: 100%;
   }
 
   .compare {
@@ -889,7 +892,7 @@ const compareRows = [
      re-tints from the host palette here; shared files are not edited).
      ========================================================================= */
   :global(.fig__svg .diagram) {
-    color: var(--text);
+    color: #cdd3db;
   }
   :global(.fig__svg .d-faint) {
     stroke: var(--border-strong);

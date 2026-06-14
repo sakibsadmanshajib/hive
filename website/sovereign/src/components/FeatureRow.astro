@@ -1,0 +1,63 @@
+---
+// Zigzag feature row used by the Home page. Pairs a prose column (default slot)
+// with a figure column (named slot "figure") as a balanced 50/50 two-column row
+// on desktop, vertically centred, each column filling its half so neither side
+// leaves an empty third.
+//
+// The `reverse` prop flips the visual order on DESKTOP ONLY: figure left, text
+// right. On mobile the source order always wins, so text reads first and the
+// figure follows, regardless of `reverse`.
+//
+// Plain Astro, scoped <style>, zero JS, no inline style attributes (CSP-clean).
+interface Props {
+  reverse?: boolean;
+}
+
+const { reverse = false } = Astro.props;
+const rowClass = reverse ? 'feature-row feature-row--reverse' : 'feature-row';
+---
+
+<div class:list={[rowClass]}>
+  <div class="feature-row__text">
+    <slot />
+  </div>
+  <div class="feature-row__figure">
+    <slot name="figure" />
+  </div>
+</div>
+
+<style>
+  /* Mobile-first: single column, source order (text first, then figure),
+     each block full width. */
+  .feature-row {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-7);
+    align-items: center;
+  }
+
+  .feature-row__text,
+  .feature-row__figure {
+    min-width: 0;
+  }
+
+  /* Desktop: balanced 50/50 columns, both vertically centred. */
+  @media (min-width: 900px) {
+    .feature-row {
+      grid-template-columns: 1fr 1fr;
+      gap: var(--space-8);
+    }
+
+    /* Reverse flips the visual order on desktop only (figure left, text right)
+       by assigning explicit grid columns. Mobile keeps source order because the
+       single-column grid ignores these column assignments. */
+    .feature-row--reverse .feature-row__text {
+      grid-column: 2;
+    }
+
+    .feature-row--reverse .feature-row__figure {
+      grid-column: 1;
+      grid-row: 1;
+    }
+  }
+</style>
