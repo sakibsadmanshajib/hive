@@ -1,348 +1,610 @@
 ---
-// Use Cases page (template: usecase, scope: both).
+// Use Cases (PAGE 5). Restyled to the Home dossier system: numbered hairline
+// SectionShell sections, Fraunces H2s, margin labels, the one Fraunces pull
+// quote, ink closing surface, AA contrast, single forest accent, off-white
+// base, zero client JS, CSP-clean (no inline style attrs, no inline script).
+// Exactly one H1. The old dark-theme teal-border card grid is removed entirely.
 //
-// Four verticals, outcome-led, each: pain -> Hive capability -> exposure
-// removed. The three regulated verticals (law, finance, healthcare) are on-prem
-// scoped and carry sovereignty / no-egress framing. Regulatory references are
-// GENERAL INFORMATION, not advice; each regulated card recommends the customer's
-// own counsel (SPEC sections 8, 11, 12).
+// Copy: "PAGE 5: USE CASES". Five verticals, Canada-led, each following pain ->
+// Hive capability -> exposure removed -> worked example -> outcome, plus the SMB
+// note and the competitive one-liner. One worked example is US-flavoured
+// (healthcare) and one is UK-flavoured (government and defence).
 //
-// The SMB vertical is the Hive Cloud story: cost only. It carries NO
-// sovereignty, no-egress, or data-residency language, per the claim guardrail.
-//
-// No Pinterest proof point here; the cost proof lives on the Pricing page. No
-// "compliant" / "certified" framework language anywhere. Canadian English, no
-// dash punctuation between clauses.
+// Claim rules honoured: scope is on-prem for the sovereignty framing in each
+// vertical; "sovereignty"/no-egress scoped to the on-prem box in the same
+// sentence; the court sentence appears only in its permitted verbatim form (it
+// is not used on this page, but the discovery framing stays generic); no
+// "compliant"/"certified"/"ready"; frameworks mapped to the right vertical
+// (OSFI B-10/B-13, Quebec Law 25 to finance; HIPAA to US healthcare only;
+// LSO/SRA to legal); HIPAA never tied to banking; no Pinterest, no cost proof;
+// no named Hive customer; Canadian English; no dash punctuation between
+// clauses. LEGAL-REVIEW markers are invisible Astro comments only.
 import Base from '../layouts/Base.astro';
+import SectionShell from '../components/SectionShell.astro';
 
-interface RegulatedVertical {
-  kind: 'regulated';
-  id: string;
-  label: string;
-  framework: string;
-  pain: string;
-  capability: string;
-  exposureRemoved: string;
-  counselNote: string;
-}
-
-interface CostVertical {
-  kind: 'cost';
-  id: string;
-  label: string;
-  framework: string;
-  pain: string;
-  capability: string;
-  outcome: string;
-}
-
-type Vertical = RegulatedVertical | CostVertical;
-
-// Ordered most-regulated to least, ending on the SMB / Hive Cloud story so the
-// page closes on economics rather than sovereignty.
-const verticals: Vertical[] = [
+// The five verticals, ordered finance, healthcare, legal, government and
+// defence, then any sensitive-data team. Each carries pain, capability,
+// exposure removed, a worked example, and an outcome line.
+const verticals = [
   {
-    kind: 'regulated',
-    id: 'law',
-    label: 'Law',
-    framework: 'Privilege and discovery',
-    pain: 'Client matter is privileged. Sending a brief, a contract, or a discovery set to a US-owned AI endpoint puts that material under a foreign jurisdiction and into a third party’s logs, where it can be compelled or pulled into discovery.',
-    capability:
-      'Open model weights run on your own hardware, with retrieval over your matter files happening inside your network. Every inference executes locally.',
-    exposureRemoved:
-      'No prompt, no response, no document leaves your network boundary, so there is nothing in an external provider’s hands to compel or disclose.',
-    counselNote:
-      'Whether this satisfies your obligations is a determination for your own counsel. This is general information, not legal advice.',
-  },
-  {
-    kind: 'regulated',
+    numeral: '01',
+    label: 'Finance and insurance',
     id: 'finance',
-    label: 'Finance',
-    framework: 'GLBA, FTC Safeguards Rule',
-    pain: 'Proprietary signals, credit models, and client positions are the firm’s edge. Routing them through an external endpoint hands your most valuable data to a third party and raises an obligation question under frameworks such as GLBA and the FTC Safeguards Rule.',
+    h2: 'Material non-public information cannot sit on someone else’s server.',
+    pain: 'Internal AI agents in finance touch the most sensitive data a firm holds: deal information, unpublished results, and client positions. Routing that through a third-party API creates an external record subject to discovery and recordkeeping scrutiny, and it sits awkwardly against third-party and outsourcing-risk expectations.',
     capability:
-      'On-prem inference with a private retrieval layer over your own documents and data. The API is OpenAI-compatible, so the tools your desk already uses point at Hive with a base-url change.',
-    exposureRemoved:
-      'Model weights and every inference stay on your hardware, so proprietary data never leaves the building.',
-    counselNote:
-      'Regulatory fit is a determination for your compliance team and counsel. This is general information, not advice.',
-  },
-  {
-    kind: 'regulated',
-    id: 'healthcare',
-    label: 'Healthcare',
-    framework: 'HIPAA',
-    pain: 'Patient data and clinical notes are the most sensitive records you hold. An external AI endpoint means protected health information crosses your boundary into a third party’s systems.',
-    capability:
-      'Open-weight models run on your own hardware, air-gap capable for the most restricted environments. No external API is ever called.',
-    exposureRemoved:
-      'No protected health information leaves the building. Inference happens entirely inside your own infrastructure.',
-    counselNote:
-      'Whether this architecture meets your obligations under HIPAA or any other framework is a determination your team must make with qualified counsel. This is general information, not advice.',
-  },
-  {
-    kind: 'cost',
-    id: 'smb',
-    label: 'Small and growing teams',
-    framework: 'Predictable economics',
-    pain: 'Useful AI is priced by the token, billed in US dollars, and the bill climbs with every request. At real working volume the per-token model prices the work out before it pays off.',
-    capability:
-      'Hive Cloud runs the same open-weight models behind the same OpenAI-compatible API, at regional pricing that is a fraction of the US rate, on a plan you can predict.',
+      'Hive runs internal agents and analysis on open-weight models on the institution’s own hardware, with a full local audit trail of every request.',
+    exposure:
+      'Material non-public information never leaves the institution’s boundary, the cross-border transfer step is removed, and there is no external endpoint holding a discoverable copy of the prompt.',
+    exampleTag: 'Worked example, Canada-led',
+    example:
+      'A Canadian asset manager wants an internal research agent that reads draft deal memos and unpublished earnings models. OSFI Guideline B-10 sets expectations for third-party and outsourcing risk, B-13 for technology and cyber risk, and Quebec Law 25 would treat sending that data outside Quebec as a transfer requiring assessment. Running the agent on a third-party API would place material non-public information into an external provider’s systems. With Hive on-prem, the agent runs on the firm’s own box, the data stays inside the institution’s boundary, the audit trail stays local and inspectable, and there is no cross-border transfer to assess. The firm validates the fit with its own auditor.',
     outcome:
-      'You get capable AI your team can actually afford to use every day, with no change to the code you already wrote against the OpenAI API.',
+      'Internal agents on your most sensitive data, with the data never leaving your control.',
+  },
+  {
+    numeral: '02',
+    label: 'Healthcare',
+    id: 'healthcare',
+    h2: 'Personal health information stays with the custodian, full stop.',
+    pain: 'Clinical and administrative AI workflows are valuable, but personal health information sent to an external AI endpoint puts the custodian’s accountability at risk and can constitute a breach without an appropriate agreement and controls in place.',
+    capability:
+      'Hive runs clinic and hospital workflows on open-weight models on hardware the custodian controls, so personal health information stays in the custodian’s own systems.',
+    exposure:
+      'No personal health information enters an external service provider’s data path. The custodian keeps direct control, which is the posture the accountability obligation expects.',
+    exampleTag: 'Worked example, US-flavoured',
+    example:
+      'A US regional health system wants to draft visit summaries and triage intake notes with AI across several clinics. Under HIPAA, the system stays responsible for how any service provider handles protected health information, and a third-party AI endpoint would place patient records outside its direct control without a business associate agreement and matching controls. With Hive on-prem, the model runs on hardware inside the health system, the summaries are drafted locally, and the patient data never leaves the custodian’s own systems. The health system validates HIPAA fit with its own counsel.',
+    outcome:
+      'The clinical productivity, without ever handing patient data to a third party.',
+  },
+  {
+    numeral: '03',
+    label: 'Legal',
+    id: 'legal',
+    h2: 'Privilege does not survive a third-party processor.',
+    pain: 'Document review and drafting are exactly where AI helps most, and exactly where the data is most protected. Sending privileged material or client confidences to a third-party AI service puts another party in the chain of custody, which can risk waiver and breach the duty of confidentiality.',
+    capability:
+      'Hive runs an open-weight model on a box inside the firm. Lawyers can summarise, review, and search across matter files, contracts, and discovery sets with the model running locally.',
+    exposure:
+      'No client confidence reaches an external processor. There is no third-party record of the prompt to be subpoenaed and no out-of-jurisdiction provider to be compelled.',
+    exampleTag: 'Worked example, Canada-led',
+    example:
+      'An Ontario litigation boutique needs to review forty thousand documents in a production. Sending them to a third-party AI tool would route privileged material through an external provider, with the duty of confidentiality under the Law Society of Ontario rules in play and a real risk of privilege waiver. With Hive on-prem, the review model runs on a box in the firm’s own server room. The documents never leave the building, the work product stays privileged, and the partner can attest exactly where every byte was processed. The firm confirms the approach with its own counsel.',
+    outcome:
+      'Faster review, privilege intact, nothing to disclose to anyone.',
+  },
+  {
+    numeral: '04',
+    label: 'Government and defence',
+    id: 'government',
+    h2: 'Some environments allow no outbound path at all.',
+    pain: 'Public-sector and defence workloads often carry classification, residency, and accreditation requirements that no external AI endpoint can satisfy. For the most sensitive of these, any outbound network connection is itself prohibited, which rules out every hosted AI service by definition.',
+    capability:
+      'Hive runs on hardware the organisation controls, and supports air-gapped and offline deployment where no outbound network path is permitted, so inference runs with no external connectivity at all.',
+    exposure:
+      'With no outbound path, there is no external endpoint, no third-party record, and no cross-jurisdiction reach. The data stays inside the accredited boundary because the architecture provides no way out.',
+    exampleTag: 'Worked example, UK-flavoured',
+    example:
+      'A UK public-sector body needs AI assistance on sensitive case files held under strict residency and access controls, in an environment where outbound connectivity is not permitted. A hosted AI service is impossible by rule. With Hive deployed air-gapped on hardware inside the accredited boundary, analysts get a capable assistant with no external connection, the case files never leave the environment, and the deployment can be inspected end to end. The body validates accreditation fit with its own authority.',
+    outcome:
+      'Modern AI inside the boundary, with no path out by design.',
+  },
+  {
+    numeral: '05',
+    label: 'No third-party cloud',
+    id: 'sensitive',
+    h2: 'When “do not send our data out” is a hard rule, on-prem is the posture that keeps it.',
+    pain: 'Many organisations are not in a named regulated vertical but still treat their data as something they will not put on someone else’s server: trade secrets, source code, R&D, customer records, and competitive plans. For them, every third-party AI tool is a policy violation waiting to happen.',
+    capability:
+      'Hive gives them the same modern AI capability their competitors get from public tools, running entirely on their own hardware so it never touches an outside provider.',
+    exposure:
+      'There is no external endpoint, no third-party record, and no out-of-jurisdiction data path. The hard rule stays intact because the data never leaves.',
+    exampleTag: 'Worked example',
+    example:
+      'A manufacturer with valuable process IP wants its engineers to use AI on internal design documents and supplier contracts, but company policy forbids sending any internal data to a third party. Public AI tools are off the table by rule. With Hive on-prem, the engineers get a fully capable assistant running on a box in the building, the IP never leaves the network, and the policy is honoured by architecture rather than by trust.',
+    outcome:
+      'Modern AI for your team, with your no-third-party rule kept by design.',
   },
 ];
 ---
 
 <Base
   title="Use Cases"
-  description="Law, finance, healthcare, and SMB. Each pain mapped to a Hive capability and the exposure it removes."
+  description="Finance, healthcare, legal, government and defence, and any team that will not share its data. Each pain mapped to a Hive on-prem capability and the exposure it removes, with a worked example."
+  structuredData={{
+    breadcrumbs: [
+      { name: 'Home', url: 'https://hive.scubed.co/' },
+      { name: 'Use Cases', url: 'https://hive.scubed.co/use-cases' },
+    ],
+  }}
 >
-  <!-- Intro band: states the shared problem and splits it into the two delivery
-       stories (on-prem for regulated, Hive Cloud for cost). -->
-  <section class="shell py-section intro" aria-labelledby="usecases-title">
-    <p class="eyebrow">Use cases</p>
-    <h1 id="usecases-title">
-      Sensitive work cannot leave the building. Everyday work cannot break the
-      budget.
-    </h1>
-    <p class="intro__lede">
-      For regulated work, sensitive data cannot route through an external AI
-      endpoint. For everyone else, per-token US billing makes useful AI too
-      expensive to run at the volume the work actually needs. Hive answers both:
-      open-weight models on your own hardware for regulated work, and Hive Cloud
-      at regional pricing for teams that want the economics without running their
-      own box.
-    </p>
+  {/* ============ HERO (single editorial column) ============ */}
+  <section class="hero" aria-labelledby="hero-h1">
+    <div class="shell hero__col load-rise">
+      <p class="hero__meta">
+        <span class="hero__tag">Use cases</span>
+        <span class="hero__metasep" aria-hidden="true">&#183;</span>
+        <span class="hero__tag">By industry</span>
+        <span class="hero__metasep" aria-hidden="true">&#183;</span>
+        <span class="hero__tag">Canada-led</span>
+      </p>
+      <h1 id="hero-h1" class="hero__h1">
+        The work you cannot send to a third-party AI service is the work Hive was
+        built for.
+      </h1>
+      <p class="hero__lede">
+        Privilege, material non-public information, and personal health
+        information do not survive a third-party endpoint. Here is what each looks
+        like when the AI runs inside your own walls instead.
+      </p>
+      <div class="cta-row">
+        <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost tap-target" href="/how-you-run-hive">
+          See how you run Hive
+        </a>
+      </div>
+    </div>
   </section>
 
-  <!-- Vertical cards. Three regulated (on-prem scope, sovereignty framing) then
-       the SMB / Hive Cloud card (cost only, no sovereignty language). -->
-  <section class="shell verticals" aria-label="Use cases by sector">
-    <ul class="vertical-grid">
-      {
-        verticals.map((v) => (
-          <li class="vertical-card" id={v.id}>
-            <header class="vertical-card__head">
-              <h2 class="vertical-card__title">{v.label}</h2>
-              <span class="vertical-card__framework">{v.framework}</span>
-            </header>
+  {/* ============ FIVE VERTICALS (one numbered dossier section each) ============ */}
+  {
+    verticals.map((v) => (
+      <SectionShell numeral={v.numeral} label={v.label} id={`${v.id}-h2`}>
+        <h2 class="section-h2 section-h2--lead" id={`${v.id}-h2`}>
+          {v.h2}
+        </h2>
 
-            <dl class="vertical-card__body">
-              <div class="row">
-                <dt class="row__label">The pain</dt>
-                <dd class="row__text">{v.pain}</dd>
-              </div>
+        <dl class="vstack" role="list">
+          <div class="vrow">
+            <dt class="vrow__key">The pain</dt>
+            <dd class="vrow__val">{v.pain}</dd>
+          </div>
+          <div class="vrow">
+            <dt class="vrow__key">What Hive does</dt>
+            <dd class="vrow__val">{v.capability}</dd>
+          </div>
+          <div class="vrow">
+            <dt class="vrow__key vrow__key--accent">Exposure removed</dt>
+            <dd class="vrow__val">{v.exposure}</dd>
+          </div>
+        </dl>
 
-              <div class="row">
-                <dt class="row__label">What Hive does</dt>
-                <dd class="row__text">{v.capability}</dd>
-              </div>
+        <div class="ds__bleed worked">
+          <span class="worked__tag">{v.exampleTag}</span>
+          <p class="worked__text">{v.example}</p>
+        </div>
 
-              {v.kind === 'regulated' ? (
-                <div class="row">
-                  <dt class="row__label row__label--teal">Exposure removed</dt>
-                  <dd class="row__text">{v.exposureRemoved}</dd>
-                </div>
-              ) : (
-                <div class="row">
-                  <dt class="row__label row__label--teal">The outcome</dt>
-                  <dd class="row__text">{v.outcome}</dd>
-                </div>
-              )}
-            </dl>
+        <p class="outcome">
+          <span class="outcome__label">Outcome</span>
+          {v.outcome}
+        </p>
+        {/* LEGAL-REVIEW */}
+      </SectionShell>
+    ))
+  }
 
-            {v.kind === 'regulated' && (
-              <p class="vertical-card__counsel">{v.counselNote}</p>
-            )}
-          </li>
-        ))
-      }
-    </ul>
-  </section>
-
-  <!-- Closing band: general-information framing repeated once, plus the dual
-       CTA. Book a Demo is the single gold action; See Pricing is the ghost
-       secondary, matching the site's CTA pattern. -->
-  <section class="shell py-section closing" aria-labelledby="closing-title">
-    <h2 id="closing-title" class="closing__title">Talk it through</h2>
-    <p class="closing__text">
-      Tell us the workload and the constraints. We will show you which delivery
-      fits: the on-prem edition you run yourself, or Hive Cloud at regional
-      pricing. Regulatory points on this page are general information, not legal
-      or compliance advice; confirm fit with your own counsel.
+  {/* ============ 06 SMB NOTE ============ */}
+  <SectionShell numeral="06" label="Smaller teams" id="smb-h2">
+    <h2 class="section-h2 section-h2--lead">
+      You do not need to be an enterprise to own your AI.
+    </h2>
+    <div class="prose">
+      <p>
+        The entry box is workstation-class and priced in the low thousands, which
+        puts owned AI within reach of a small firm, not only a large institution.
+        A boutique law practice, a small clinic, or a lean finance shop can run
+        the same on-prem posture as a much larger organisation, on a single box
+        that pays for itself in about seven months on sustained daily work. As the
+        team grows, the same box extends with added compute and nodes rather than
+        being replaced.
+        {/* LEGAL-REVIEW */}
+      </p>
+    </div>
+    <p class="prose__after">
+      <a class="textlink" href="/pricing">See pricing</a>
     </p>
-    <div class="closing__cta">
-      <a class="btn btn--gold tap-target" href="/book-a-demo">Book a Demo</a>
-      <a class="btn btn--ghost tap-target" href="/pricing">See Pricing</a>
+  </SectionShell>
+
+  {/* ============ 07 COMPETITIVE ONE-LINER (the one Fraunces pull quote) ============ */}
+  <SectionShell numeral="07" label="The difference in one line" id="oneliner-h2">
+    <blockquote class="pullquote">
+      Glean, Writer, Cohere North, and Copilot route every query through their
+      cloud. Hive runs in yours.
+    </blockquote>
+  </SectionShell>
+
+  {/* ============ CLOSING CTA (ink, the one deliberate dark surface) ============ */}
+  <section class="closing" aria-labelledby="closing-h2">
+    <div class="shell narrow closing__inner">
+      <h2 id="closing-h2" class="section-h2 section-h2--lead closing__h2">
+        Find your use case running inside your own network.
+      </h2>
+      <p class="closing__line">
+        Book a demo and we will show Hive running locally on the kind of work your
+        team does every day.
+      </p>
+      <p class="closing__note">
+        Regulatory points on this page are general information, not legal or
+        compliance advice. Validate fit for your obligations with your own
+        counsel.
+      </p>
+      <div class="cta-row">
+        <a class="cta cta--on-ink tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost-ink tap-target" href="/pricing">See Pricing</a>
+      </div>
     </div>
   </section>
 </Base>
 
 <style>
-  /* Shared eyebrow: uppercase faint label, matches Footer geo-label. */
-  .eyebrow {
-    color: var(--text-faint);
-    font-size: 12px;
+  /* =========================================================================
+     SHARED TYPE ROLES (ported from the Home dossier so this page matches it)
+     ========================================================================= */
+  .section-h2 {
+    margin: 0 0 var(--space-6);
+    font-family: var(--font-display);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    margin: 0 0 16px;
+    font-size: var(--text-h2-dossier);
+    line-height: var(--lh-heading);
+    letter-spacing: -0.01em;
+    color: var(--text);
+    max-width: 24ch;
   }
 
-  .intro {
-    padding-bottom: 64px;
+  .section-h2--lead {
+    max-width: 26ch;
   }
 
-  .intro h1 {
-    max-width: 18ch;
+  .prose {
+    color: var(--text);
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
   }
 
-  .intro__lede {
+  .prose p {
+    margin: 0 0 var(--space-5);
+    max-width: 68ch;
+  }
+
+  .prose p:last-child {
+    margin-bottom: 0;
+  }
+
+  .prose__after {
+    margin: var(--space-7) 0 0;
+    font-size: var(--text-base);
     color: var(--text-muted);
-    font-size: 18px;
-    line-height: 1.6;
-    max-width: 62ch;
-    margin-top: 24px;
+    line-height: var(--lh-body);
+    max-width: 68ch;
   }
 
-  /* Vertical cards. Surface, border, and radius mirror CalloutCard so the cards
-     read as one family with the proof-point cards on the other pages. */
-  .verticals {
-    padding-bottom: var(--section-rhythm);
-  }
-
-  .vertical-grid {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 24px;
-  }
-
-  .vertical-card {
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--teal);
-    border-radius: var(--radius);
-    background-color: var(--bg-card);
-    padding: 28px;
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-
-  .vertical-card__head {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .vertical-card__title {
-    margin: 0;
-    font-size: 22px;
-  }
-
-  .vertical-card__framework {
-    color: var(--text-faint);
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  .vertical-card__body {
-    margin: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .row {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .row__label {
-    color: var(--text-faint);
-    font-size: 12px;
+  .textlink {
+    color: var(--accent);
     font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
+    border-bottom: 1px solid var(--accent-line);
+    padding-bottom: 1px;
+    transition: border-color var(--dur-fast) var(--ease-out);
   }
 
-  .row__label--teal {
-    color: var(--teal);
+  .textlink:hover {
+    border-bottom-color: var(--accent);
   }
 
-  .row__text {
-    margin: 0;
-    color: var(--text-muted);
-    font-size: 15px;
-    line-height: 1.55;
+  .narrow {
+    max-width: 800px;
   }
 
-  .vertical-card__counsel {
-    margin: 0;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    color: var(--text-faint);
-    font-size: 13px;
-    line-height: 1.5;
-  }
-
-  /* Closing band. */
-  .closing__title {
-    font-size: 28px;
-    margin: 0;
-  }
-
-  .closing__text {
-    color: var(--text-muted);
-    font-size: 16px;
-    line-height: 1.6;
-    max-width: 62ch;
-    margin-top: 16px;
-  }
-
-  .closing__cta {
+  /* =========================================================================
+     CTA BUTTONS (identical to Home; verified contrast ratios apply)
+     ========================================================================= */
+  .cta-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 14px;
-    margin-top: 32px;
+    gap: var(--space-3);
+    margin-top: var(--space-7);
   }
 
-  .btn {
+  .cta {
     display: inline-flex;
     align-items: center;
+    cursor: pointer;
+    font-size: var(--text-sm);
     font-weight: 600;
-    font-size: 15px;
-    padding: 12px 22px;
-    border-radius: 10px;
-    transition: filter 120ms ease, border-color 120ms ease, color 120ms ease;
+    letter-spacing: 0.01em;
+    padding: 14px 26px;
+    border-radius: var(--radius-sm);
+    transition: background-color var(--dur-base) var(--ease-out),
+                border-color var(--dur-base) var(--ease-out),
+                transform var(--dur-base) var(--ease-out);
   }
 
-  .btn--gold {
-    background-color: var(--gold);
-    color: #1a1205;
+  .cta--primary {
+    background-color: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
   }
 
-  .btn--gold:hover {
-    filter: brightness(1.05);
+  .cta--primary:hover {
+    background-color: var(--accent-hover);
+    border-color: var(--accent-hover);
+    transform: translateY(-1px);
   }
 
-  .btn--ghost {
-    border: 1px solid var(--border-strong);
+  .cta--ghost {
+    background-color: transparent;
     color: var(--text);
+    border: 1px solid var(--border-strong);
   }
 
-  .btn--ghost:hover {
-    border-color: var(--teal);
-    color: var(--teal);
+  .cta--ghost:hover {
+    border-color: var(--text-faint);
+    transform: translateY(-1px);
   }
 
-  @media (max-width: 760px) {
-    .vertical-grid {
+  .cta--on-ink {
+    background-color: var(--on-ink);
+    color: var(--ink);
+    border: 1px solid var(--on-ink);
+  }
+
+  .cta--on-ink:hover {
+    background-color: #ffffff;
+    border-color: #ffffff;
+    transform: translateY(-1px);
+  }
+
+  .cta--ghost-ink {
+    background-color: transparent;
+    color: var(--on-ink);
+    border: 1px solid var(--on-ink-border);
+  }
+
+  .cta--ghost-ink:hover {
+    border-color: var(--on-ink);
+    transform: translateY(-1px);
+  }
+
+  /* =========================================================================
+     HERO (single editorial column; matches Home's meta-row and type scale)
+     ========================================================================= */
+  .hero {
+    padding-block: var(--space-8) var(--space-8);
+  }
+
+  .hero__col {
+    max-width: 46rem;
+  }
+
+  .hero__meta {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    padding-bottom: var(--space-4);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hero__tag {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .hero__metasep {
+    color: var(--text-faint);
+  }
+
+  .hero__h1 {
+    margin: var(--space-6) 0 0;
+    font-size: clamp(38px, 4.6vw, 60px);
+    line-height: var(--lh-tight);
+    letter-spacing: -0.02em;
+    max-width: 22ch;
+  }
+
+  .hero__lede {
+    margin: var(--space-6) 0 0;
+    color: var(--text-muted);
+    font-size: var(--text-md);
+    line-height: var(--lh-body);
+    max-width: 60ch;
+  }
+
+  /* =========================================================================
+     VERTICAL STACK (pain / capability / exposure key-value rows)
+     ========================================================================= */
+  .vstack {
+    margin: 0;
+    display: grid;
+    gap: 0;
+  }
+
+  .vrow {
+    display: grid;
+    grid-template-columns: 170px minmax(0, 1fr);
+    gap: var(--space-5);
+    padding: var(--space-5) 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .vrow:last-child {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .vrow__key {
+    margin: 0;
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: var(--lh-snug);
+  }
+
+  .vrow__key--accent {
+    color: var(--accent);
+  }
+
+  .vrow__val {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-base);
+    line-height: var(--lh-snug);
+    max-width: 66ch;
+  }
+
+  /* =========================================================================
+     WORKED EXAMPLE (accent-wash panel, matches Home callout treatment)
+     ========================================================================= */
+  .worked {
+    margin: var(--space-7) 0 0;
+    padding: var(--space-6) var(--space-7);
+    background-color: var(--accent-wash);
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius-card);
+  }
+
+  .worked__tag {
+    display: block;
+    margin-bottom: var(--space-3);
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .worked__text {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
+    max-width: 70ch;
+  }
+
+  /* =========================================================================
+     OUTCOME LINE
+     ========================================================================= */
+  .outcome {
+    margin: var(--space-6) 0 0;
+    color: var(--text);
+    font-size: var(--text-md);
+    line-height: var(--lh-snug);
+    max-width: 60ch;
+  }
+
+  .outcome__label {
+    display: block;
+    margin-bottom: var(--space-2);
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  /* =========================================================================
+     COMPETITIVE PULL QUOTE (a Fraunces exception, matches Home)
+     ========================================================================= */
+  .pullquote {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: clamp(28px, 3.4vw, 38px);
+    line-height: var(--lh-snug);
+    letter-spacing: -0.01em;
+    color: var(--text);
+    max-width: 22ch;
+  }
+
+  /* =========================================================================
+     CLOSING (ink, the one deliberate dark surface on this page)
+     ========================================================================= */
+  .closing {
+    background-color: var(--ink);
+    color: var(--on-ink);
+    border-top: 1px solid var(--on-ink-border);
+    padding-block: var(--space-9);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .closing__inner {
+    position: relative;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 1;
+  }
+
+  .closing__h2 {
+    color: var(--on-ink);
+    max-width: 22ch;
+  }
+
+  .closing__line {
+    margin: 0;
+    color: var(--on-ink-muted);
+    font-size: var(--text-md);
+    line-height: var(--lh-body);
+    max-width: 52ch;
+  }
+
+  .closing__note {
+    margin: var(--space-5) 0 0;
+    color: var(--on-ink-faint);
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+    max-width: 56ch;
+  }
+
+  .closing .cta-row {
+    justify-content: center;
+  }
+
+  /* =========================================================================
+     PAGE-LOAD REVEAL (matches Home; guarded, never hides content)
+     ========================================================================= */
+  @media (prefers-reduced-motion: no-preference) {
+    .load-rise {
+      animation: load-rise var(--dur-reveal) var(--ease-out) both;
+    }
+    .load-rise > * {
+      animation: load-rise var(--dur-reveal) var(--ease-out) both;
+    }
+    .load-rise > *:nth-child(1) { animation-delay: 40ms; }
+    .load-rise > *:nth-child(2) { animation-delay: 110ms; }
+    .load-rise > *:nth-child(3) { animation-delay: 180ms; }
+    .load-rise > *:nth-child(4) { animation-delay: 250ms; }
+  }
+
+  @keyframes load-rise {
+    from {
+      transform: translateY(var(--reveal-shift));
+      opacity: 0.6;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  /* =========================================================================
+     RESPONSIVE
+     ========================================================================= */
+  @media (max-width: 880px) {
+    .hero {
+      padding-block: var(--space-7) var(--space-8);
+    }
+    .vrow {
       grid-template-columns: 1fr;
+      gap: var(--space-2);
     }
   }
 </style>

@@ -1,0 +1,1012 @@
+---
+// How You Run Hive (PAGE 2). Art direction matches the Home dossier exactly:
+// numbered hairline SectionShell sections, Fraunces H2s, margin labels,
+// captioned Figure, ink trust/closing surfaces, AA contrast, single forest
+// accent, off-white base, zero client JS, CSP-clean (no inline style attrs,
+// no inline script).
+//
+// Purpose (copy "PAGE 2: HOW YOU RUN HIVE"): the three delivery tiers in
+// depth, honestly graded; the same-software story; the in-region rule; the
+// non-on-prem boundary callout; extendable hardware; continuous upgrades; the
+// scannable comparison; closing. The tier-spectrum.svg is the captioned Fig. 1.
+//
+// Claim rules honoured: "sovereignty" scoped to the on-prem box in the same
+// sentence; hosted tiers framed as "in-region, under your own jurisdiction",
+// never anti-US; no "compliant"/"certified"/"ready"; no Pinterest, no cost
+// proof on this page; Canadian English; no dash punctuation between clauses.
+// LEGAL-REVIEW markers are invisible Astro comments only. Exactly one H1.
+//
+// Diagram colour hooks: the .fig__svg .d-* hooks live scoped in index.astro,
+// not globally. This page re-declares the same small block (scoped here) so the
+// tier-spectrum SVG re-tints correctly. Duplication is intentional; shared
+// files are not edited.
+import Base from '../layouts/Base.astro';
+import SectionShell from '../components/SectionShell.astro';
+import Figure from '../components/Figure.astro';
+
+// Build-time inlined SVG (CSP-clean, zero-JS), re-tinted via currentColor and
+// the .d-* class hooks declared in this page's scoped style block.
+import tierSpectrum from '../assets/diagrams/tier-spectrum.svg?raw';
+
+// Honestly-graded delivery tiers, ordered maximum control to lowest cost.
+const tiers = [
+  {
+    numeral: '01',
+    label: 'Maximum control',
+    name: 'Own it',
+    sub: 'On-prem EnterpriseEdge',
+    sovereignty: 'Highest',
+    ops: 'Your team, with our support',
+  },
+  {
+    numeral: '02',
+    label: 'Dedicated and in-region',
+    name: 'Colocate it',
+    sub: 'Dedicated box, hosted by us',
+    sovereignty: 'High, third-party hosted',
+    ops: 'Low, we manage it',
+  },
+  {
+    numeral: '03',
+    label: 'Lowest cost, fastest start',
+    name: 'Shared cloud',
+    sub: 'Region-locked, fully audited',
+    sovereignty: 'Lowest, region-locked',
+    ops: 'None, we run everything',
+  },
+];
+
+// Comparison rows for the scannable table.
+const compareRows = [
+  {
+    dimension: 'What runs where',
+    own: 'Your box, your building',
+    colo: 'Your dedicated box, our in-region datacentre',
+    shared: 'Shared instance, region-locked',
+  },
+  {
+    dimension: 'Sovereignty',
+    own: 'Highest',
+    colo: 'High, third-party hosted',
+    shared: 'Lowest, region-locked and audited',
+  },
+  {
+    dimension: 'Data isolation',
+    own: 'Physical, on your premises',
+    colo: 'Dedicated hardware',
+    shared: 'Shared capacity',
+  },
+  {
+    dimension: 'Ops burden',
+    own: 'Your team, with our support',
+    colo: 'We manage it',
+    shared: 'We manage it',
+  },
+  {
+    dimension: 'Infrastructure',
+    own: 'Yours',
+    colo: 'In-region, your jurisdiction',
+    shared: 'In-region, region-locked',
+  },
+  {
+    dimension: 'Best for',
+    own: 'Data that cannot leave the building',
+    colo: 'Dedicated and in-region without running a box',
+    shared: 'Lowest cost and fastest start',
+  },
+];
+---
+
+<Base
+  title="How You Run Hive"
+  description="One Hive, three ways to run it. Own it on-prem, colocate a dedicated box in-region, or start on a region-locked shared instance. You choose how much control you keep."
+  structuredData={{
+    breadcrumbs: [
+      { name: 'Home', url: 'https://hive.scubed.co/' },
+      { name: 'How You Run Hive', url: 'https://hive.scubed.co/how-you-run-hive' },
+    ],
+  }}
+>
+  {/* ============ HERO (single-column editorial lede) ============ */}
+  <section class="hero" aria-labelledby="hero-h1">
+    <div class="shell hero__col load-rise">
+      <p class="hero__meta">
+        <span class="hero__tag">How you run Hive</span>
+        <span class="hero__metasep" aria-hidden="true">&#183;</span>
+        <span class="hero__tag">Three tiers</span>
+        <span class="hero__metasep" aria-hidden="true">&#183;</span>
+        <span class="hero__tag">Canada-led</span>
+      </p>
+      <h1 id="hero-h1" class="hero__h1">
+        One Hive. Three ways to run it. You choose how much control you keep.
+      </h1>
+      <p class="hero__lede">
+        From a box you own and never let out of the building, to a region-locked
+        shared instance you can start in a day, the same Hive software runs
+        across the whole spectrum. You pick the point that matches your data and
+        your budget.
+      </p>
+      <div class="cta-row">
+        <a class="cta cta--primary tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost tap-target" href="/pricing">See Pricing</a>
+      </div>
+    </div>
+  </section>
+
+  {/* ============ 01 SAME SOFTWARE, THREE DEPLOYMENTS ============ */}
+  <SectionShell numeral="01" label="One stack, no rewrites" id="stack-h2">
+    <h2 class="section-h2 section-h2--lead">
+      The software does not change. Only where it runs does.
+    </h2>
+    <div class="prose">
+      <p>
+        Whichever way you run Hive, the underlying system is the same
+        OpenAI-compatible gateway, with the same models, the same API surface,
+        and the same admin console. Your applications do not change as you move
+        along the spectrum. You can start on a shared instance to prove value,
+        move to a dedicated colocated box as your data sensitivity grows, and
+        bring the box fully on-prem when control becomes non-negotiable, without
+        rebuilding your integration.
+      </p>
+    </div>
+  </SectionShell>
+
+  {/* ============ 02 THE IN-REGION INFRASTRUCTURE RULE ============ */}
+  <SectionShell
+    numeral="02"
+    label="The one rule across every hosted tier"
+    id="region-h2"
+  >
+    <h2 class="section-h2 section-h2--lead">
+      No hosted tier runs outside your own jurisdiction.
+    </h2>
+    <div class="prose">
+      <p>
+        This is the rule that makes the hosted tiers worth offering. The reason
+        on-prem control matters is that any cloud provider is reachable under the
+        law of the jurisdiction it answers to, wherever its datacentres sit. If
+        we then hosted you under a jurisdiction other than your own, we would
+        hand back the exact exposure you came to us to remove. So every hosted
+        Hive tier runs only on infrastructure that is in-region and under your
+        own jurisdiction.
+        {/* LEGAL-REVIEW */}
+      </p>
+    </div>
+
+    <div class="ds__bleed callout">
+      <span class="callout__label">An honest boundary</span>
+      <p class="callout__text">
+        A managed tier on any third-party infrastructure does not carry the same
+        data-residency properties as the on-prem edition. If your hard
+        requirement is that data stays on hardware you physically control, the
+        on-prem tier is the one that meets it.
+        {/* LEGAL-REVIEW */}
+      </p>
+    </div>
+  </SectionShell>
+
+  {/* ============ 03 A SPECTRUM OF CONTROL (figure + tier index) ============ */}
+  <SectionShell numeral="03" label="A spectrum of control" id="spectrum-h2">
+    <h2 class="section-h2">
+      The same Hive, from maximum control to lowest cost.
+    </h2>
+    <p class="prose prose--single">
+      Three tiers sit on one continuum. Isolation is highest on the left and the
+      operational burden you carry falls as you move right. Every tier runs the
+      same software. The three sections below describe each tier in depth, and
+      we grade each one honestly.
+    </p>
+
+    <div class="ds__bleed">
+      <Figure
+        fig="Fig. 1"
+        svg={tierSpectrum}
+        caption="The spectrum of control. Isolation decreases left to right, and so does the operational burden you carry."
+        ariaLabel="The control spectrum: Own on-prem, Colocate, Shared Cloud"
+      />
+    </div>
+
+    <ul class="ds__bleed tier-index" role="list">
+      {
+        tiers.map((t) => (
+          <li class="tier-index__item">
+            <span class="tier-index__numeral font-mono" data-numeric>
+              {t.numeral}
+            </span>
+            <div class="tier-index__body">
+              <span class="tier-index__name">{t.name}</span>
+              <span class="tier-index__sub">{t.sub}</span>
+              <dl class="tier-index__meta">
+                <div class="tier-index__pair">
+                  <dt>Sovereignty</dt>
+                  <dd>{t.sovereignty}</dd>
+                </div>
+                <div class="tier-index__pair">
+                  <dt>Ops burden</dt>
+                  <dd>{t.ops}</dd>
+                </div>
+              </dl>
+            </div>
+          </li>
+        ))
+      }
+    </ul>
+  </SectionShell>
+
+  {/* ============ 04 TIER 1: OWN IT (ON-PREM) ============ */}
+  <SectionShell numeral="04" label="Maximum control" id="own-h2">
+    <h2 class="section-h2 section-h2--lead">
+      Own it. A Hive deployment on your premises, run by your team.
+    </h2>
+    <div class="prose">
+      <p>
+        EnterpriseEdge is the full Hive stack running on a box that lives in your
+        building, owned and operated by you. It starts at a single
+        workstation-class box for a small regulated firm and scales to multi-GPU
+        and multi-device as load grows. It is the same software the hosted tiers
+        run, entirely inside your walls. Air-gapped and offline deployments are
+        supported for environments that permit no outbound network path.
+        {/* LEGAL-REVIEW */}
+      </p>
+    </div>
+
+    <dl class="ds__bleed tier-spec" role="list">
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Who it suits</dt>
+        <dd class="tier-spec__val">
+          Teams whose data cannot leave the premises under any circumstances.
+          Financial institutions handling material non-public information,
+          healthcare custodians holding personal health information, government
+          and defence programmes, and law firms protecting privilege.
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key tier-spec__key--accent">Sovereignty level</dt>
+        <dd class="tier-spec__val">
+          Highest. On the on-prem deployment, data never leaves your network
+          boundary and no third party is in the data path. This is the only tier
+          where the full sovereignty claim holds.
+          {/* LEGAL-REVIEW */}
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Ops burden</dt>
+        <dd class="tier-spec__val">
+          You run it. The box, the updates, and the hardware sit with your team,
+          backed by our support and your annual licence. Highest control, most
+          operational ownership.
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Regions</dt>
+        <dd class="tier-spec__val">
+          Anywhere you can place a box. There is no datacentre and no region
+          question, because the hardware is yours.
+        </dd>
+      </div>
+    </dl>
+  </SectionShell>
+
+  {/* ============ 05 TIER 2: COLOCATE IT ============ */}
+  <SectionShell numeral="05" label="Dedicated and in-region" id="colo-h2">
+    <h2 class="section-h2 section-h2--lead">
+      Colocate it. Your dedicated box, hosted by us in your region.
+    </h2>
+    <div class="prose">
+      <p>
+        We host a Hive box dedicated to you, in-region, on infrastructure under
+        your own jurisdiction. The hardware is not shared with any other
+        customer. We manage the machine so your team does not have to, and
+        residency stays in-region.
+      </p>
+    </div>
+
+    <dl class="ds__bleed tier-spec" role="list">
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Who it suits</dt>
+        <dd class="tier-spec__val">
+          Teams that need dedicated, in-region hardware and strong residency, but
+          do not want to run a box themselves. A middle ground when on-prem
+          operations are more than the team wants to carry.
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key tier-spec__key--accent">Sovereignty level</dt>
+        <dd class="tier-spec__val">
+          High, with one honest caveat. The box is dedicated and in-region, under
+          your own jurisdiction, which removes the cross-jurisdiction reach that
+          an out-of-region host would carry. It is still hosted by a third party
+          rather than physically held by you, so it does not match the on-prem
+          tier byte for byte.
+          {/* LEGAL-REVIEW */}
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Ops burden</dt>
+        <dd class="tier-spec__val">
+          Low. We manage the hardware, updates, and uptime. You get a dedicated
+          box without running one.
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Regions</dt>
+        <dd class="tier-spec__val">
+          Canada is the confirmed direction, hosted with an in-region Canadian
+          provider or research-cloud option under Canadian jurisdiction. We also
+          serve the UK and Bangladesh, with in-region providers being confirmed.
+          We will not name a facility until it is locked.
+          {/* LEGAL-REVIEW */}
+        </dd>
+      </div>
+    </dl>
+  </SectionShell>
+
+  {/* ============ 06 TIER 3: SHARED CLOUD ============ */}
+  <SectionShell numeral="06" label="Lowest cost, fastest start" id="shared-h2">
+    <h2 class="section-h2 section-h2--lead">
+      Shared cloud. Region-locked, fully audited, honestly the lowest tier.
+    </h2>
+    <div class="prose">
+      <p>
+        A shared Hive instance, region-locked, with a full audit trail of every
+        request. It runs only on in-region infrastructure under your own
+        jurisdiction, the same rule as the colocated tier, but capacity is shared
+        across customers rather than dedicated to you.
+      </p>
+    </div>
+
+    <dl class="ds__bleed tier-spec" role="list">
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Who it suits</dt>
+        <dd class="tier-spec__val">
+          Teams that are comfortable sharing capacity and want the lowest cost
+          and the fastest start. A practical way to prove value before committing
+          to dedicated or on-prem hardware.
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key tier-spec__key--accent">Sovereignty level</dt>
+        <dd class="tier-spec__val">
+          Lowest of the three, and we will not dress it up. It is region-locked,
+          fully auditable, and runs on infrastructure under your own
+          jurisdiction, but it is not physically isolated and it is not on
+          hardware you control. If physical isolation or on-prem control is your
+          requirement, this is not the tier for you.
+          {/* LEGAL-REVIEW */}
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Ops burden</dt>
+        <dd class="tier-spec__val">
+          None. We run everything. You point your application at it and go.
+        </dd>
+      </div>
+      <div class="tier-spec__row">
+        <dt class="tier-spec__key">Regions</dt>
+        <dd class="tier-spec__val">
+          Region-locked to the region you select, on in-region infrastructure
+          under your own jurisdiction.
+        </dd>
+      </div>
+    </dl>
+  </SectionShell>
+
+  {/* ============ 07 EXTENDABLE HARDWARE ============ */}
+  <SectionShell
+    numeral="07"
+    label="Capacity you add, not a box you replace"
+    id="extend-h2"
+  >
+    <h2 class="section-h2 section-h2--lead">
+      When a workload outgrows a box, you add to it.
+    </h2>
+    <div class="prose">
+      <p>
+        Hardware needs change as models grow and usage climbs. Hive is built to
+        extend rather than to be thrown out. You start on a single box sized to
+        today's workload. When throughput needs more, you add GPU capacity to
+        that box. When one box is not enough, you scale to multiple nodes. The
+        integration does not change as you grow, so the investment compounds
+        instead of resetting. A box bought today stays useful as the platform and
+        the models advance.
+      </p>
+    </div>
+  </SectionShell>
+
+  {/* ============ 08 CONTINUOUS UPGRADES ============ */}
+  <SectionShell numeral="08" label="Under the annual licence" id="upgrade-h2">
+    <h2 class="section-h2 section-h2--lead">
+      Your deployment keeps pace with the field.
+    </h2>
+    <div class="prose">
+      <p>
+        Owning the hardware does not freeze the software. The annual licence
+        keeps the Hive platform current and adds compatibility with new
+        open-weight models as they ship, so your box runs newer and stronger
+        models over time without a new purchase. You are not buying a fixed
+        snapshot. You are buying a platform that keeps improving on hardware you
+        already own.
+      </p>
+    </div>
+  </SectionShell>
+
+  {/* ============ 09 COMPARISON (scannable table) ============ */}
+  <SectionShell numeral="09" label="Side by side" id="compare-h2">
+    <h2 class="section-h2">The spectrum at a glance.</h2>
+
+    <div class="ds__bleed table-wrap">
+      <table class="compare">
+        <caption class="compare__caption">
+          The three Hive delivery tiers compared across six dimensions.
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col" class="compare__corner"><span class="visually-hidden">Dimension</span></th>
+            <th scope="col">Own it (on-prem)</th>
+            <th scope="col">Colocate it</th>
+            <th scope="col">Shared cloud</th>
+          </tr>
+        </thead>
+        <tbody>
+          {
+            compareRows.map((r) => (
+              <tr>
+                <th scope="row" class="compare__dim">
+                  {r.dimension}
+                </th>
+                <td>{r.own}</td>
+                <td>{r.colo}</td>
+                <td>{r.shared}</td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+
+    <p class="prose__after">
+      Sovereignty grading describes architectural posture, not a compliance
+      determination. Validate fit for your obligations with your own counsel.
+      {/* LEGAL-REVIEW */}
+    </p>
+  </SectionShell>
+
+  {/* ============ CLOSING CTA (ink, deliberate dark surface) ============ */}
+  <section class="closing" aria-labelledby="closing-h2">
+    <div class="shell narrow closing__inner">
+      <h2 id="closing-h2" class="section-h2 section-h2--lead closing__h2">
+        Not sure which tier fits? We will help you place it.
+      </h2>
+      <p class="closing__line">
+        Tell us about your data and your obligations, and we will recommend the
+        point on the spectrum that fits.
+      </p>
+      <div class="cta-row">
+        <a class="cta cta--on-ink tap-target" href="/book-a-demo">Book a Demo</a>
+        <a class="cta cta--ghost-ink tap-target" href="/pricing">See Pricing</a>
+      </div>
+    </div>
+  </section>
+</Base>
+
+<style>
+  /* =========================================================================
+     SHARED TYPE ROLES (ported from the Home dossier so this page matches it
+     exactly; global.css forces h2 to Inter, so .section-h2 re-declares the
+     display family).
+     ========================================================================= */
+  .section-h2 {
+    margin: 0 0 var(--space-6);
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-size: var(--text-h2-dossier);
+    line-height: var(--lh-heading);
+    letter-spacing: -0.01em;
+    color: var(--text);
+    max-width: 22ch;
+  }
+
+  .section-h2--lead {
+    max-width: 26ch;
+  }
+
+  .prose {
+    color: var(--text);
+    font-size: var(--text-base);
+    line-height: var(--lh-body);
+  }
+
+  .prose p {
+    margin: 0 0 var(--space-5);
+    max-width: 68ch;
+  }
+
+  .prose p:last-child {
+    margin-bottom: 0;
+  }
+
+  .prose--single {
+    margin: var(--space-5) 0 0;
+    max-width: 66ch;
+  }
+
+  .prose__after {
+    margin: var(--space-7) 0 0;
+    font-size: var(--text-sm);
+    color: var(--text-muted);
+    line-height: var(--lh-body);
+    max-width: 68ch;
+  }
+
+  .narrow {
+    max-width: 800px;
+  }
+
+  .visually-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* =========================================================================
+     CTA BUTTONS (identical to Home; verified contrast ratios apply).
+     ========================================================================= */
+  .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-7);
+  }
+
+  .cta {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    padding: 14px 26px;
+    border-radius: var(--radius-sm);
+    transition: background-color var(--dur-base) var(--ease-out),
+                border-color var(--dur-base) var(--ease-out),
+                transform var(--dur-base) var(--ease-out);
+  }
+
+  .cta--primary {
+    background-color: var(--accent);
+    color: var(--bg);
+    border: 1px solid var(--accent);
+  }
+
+  .cta--primary:hover {
+    background-color: var(--accent-hover);
+    border-color: var(--accent-hover);
+    transform: translateY(-1px);
+  }
+
+  .cta--ghost {
+    background-color: transparent;
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+  }
+
+  .cta--ghost:hover {
+    border-color: var(--text-faint);
+    transform: translateY(-1px);
+  }
+
+  .cta--on-ink {
+    background-color: var(--on-ink);
+    color: var(--ink);
+    border: 1px solid var(--on-ink);
+  }
+
+  .cta--on-ink:hover {
+    background-color: #ffffff;
+    border-color: #ffffff;
+    transform: translateY(-1px);
+  }
+
+  .cta--ghost-ink {
+    background-color: transparent;
+    color: var(--on-ink);
+    border: 1px solid var(--on-ink-border);
+  }
+
+  .cta--ghost-ink:hover {
+    border-color: var(--on-ink);
+    transform: translateY(-1px);
+  }
+
+  /* =========================================================================
+     HERO (single editorial column, matches Home's hero type scale and meta-row)
+     ========================================================================= */
+  .hero {
+    padding-block: var(--space-8) var(--space-8);
+  }
+
+  .hero__col {
+    max-width: 44rem;
+  }
+
+  .hero__meta {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+    padding-bottom: var(--space-4);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hero__tag {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .hero__metasep {
+    color: var(--text-faint);
+  }
+
+  .hero__h1 {
+    margin: var(--space-6) 0 0;
+    font-size: clamp(40px, 5vw, 64px);
+    line-height: var(--lh-tight);
+    letter-spacing: -0.02em;
+    max-width: 20ch;
+  }
+
+  .hero__lede {
+    margin: var(--space-6) 0 0;
+    color: var(--text-muted);
+    font-size: var(--text-md);
+    line-height: var(--lh-body);
+    max-width: 60ch;
+  }
+
+  /* =========================================================================
+     HONEST-BOUNDARY CALLOUT (accent-wash panel, matches Home's cost faceline)
+     ========================================================================= */
+  .callout {
+    margin: var(--space-7) 0 0;
+    padding: var(--space-6) var(--space-7);
+    background-color: var(--accent-wash);
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius-card);
+  }
+
+  .callout__label {
+    display: block;
+    margin-bottom: var(--space-3);
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .callout__text {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--text-base);
+    line-height: var(--lh-snug);
+    max-width: 64ch;
+  }
+
+  /* =========================================================================
+     TIER INDEX (numbered three-up cards under Fig. 1)
+     ========================================================================= */
+  .tier-index {
+    list-style: none;
+    margin: var(--space-8) 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-5);
+  }
+
+  .tier-index__item {
+    border-top: 1px solid var(--border-strong);
+    padding-top: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .tier-index__numeral {
+    color: var(--accent);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    letter-spacing: 0.04em;
+  }
+
+  .tier-index__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .tier-index__name {
+    font-size: var(--text-h3);
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .tier-index__sub {
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+  }
+
+  .tier-index__meta {
+    margin: var(--space-4) 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .tier-index__pair {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .tier-index__pair dt {
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .tier-index__pair dd {
+    margin: 0;
+    color: var(--text);
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+  }
+
+  /* =========================================================================
+     TIER SPEC (key/value rows inside each in-depth tier section)
+     ========================================================================= */
+  .tier-spec {
+    margin: var(--space-7) 0 0;
+    display: grid;
+    gap: 0;
+  }
+
+  .tier-spec__row {
+    display: grid;
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: var(--space-5);
+    padding: var(--space-5) 0;
+    border-top: 1px solid var(--border);
+  }
+
+  .tier-spec__row:last-child {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tier-spec__key {
+    margin: 0;
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: var(--lh-snug);
+  }
+
+  .tier-spec__key--accent {
+    color: var(--accent);
+  }
+
+  .tier-spec__val {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: var(--text-base);
+    line-height: var(--lh-snug);
+    max-width: 64ch;
+  }
+
+  /* =========================================================================
+     COMPARISON TABLE
+     ========================================================================= */
+  .table-wrap {
+    margin: var(--space-8) 0 0;
+    overflow-x: auto;
+  }
+
+  .compare {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+    min-width: 640px;
+  }
+
+  .compare__caption {
+    text-align: left;
+    color: var(--text-faint);
+    font-size: var(--text-xs);
+    margin-bottom: var(--space-4);
+  }
+
+  .compare th,
+  .compare td {
+    text-align: left;
+    vertical-align: top;
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .compare thead th {
+    color: var(--text);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    border-bottom: 1px solid var(--border-strong);
+  }
+
+  .compare thead th:first-child {
+    width: 150px;
+  }
+
+  .compare__corner {
+    background-color: transparent;
+  }
+
+  .compare tbody .compare__dim {
+    color: var(--accent);
+    font-weight: 600;
+    font-size: var(--text-xs);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .compare tbody td {
+    color: var(--text-muted);
+  }
+
+  /* The first data column (Own it) gets a faint accent wash so the strongest
+     tier reads as the anchor of the table, never with a second hue. */
+  .compare thead th:nth-child(2),
+  .compare tbody td:nth-child(2) {
+    background-color: var(--accent-wash);
+  }
+
+  /* =========================================================================
+     DIAGRAM COLOUR HOOKS (scoped duplicate of the Home block so tier-spectrum
+     re-tints from the host palette here; shared files are not edited).
+     ========================================================================= */
+  :global(.fig__svg .diagram) {
+    color: var(--text);
+  }
+  :global(.fig__svg .d-faint) {
+    stroke: var(--border-strong);
+  }
+  :global(.fig__svg .d-axis) {
+    stroke: var(--border-strong);
+  }
+  :global(.fig__svg .d-muted) {
+    fill: var(--text-muted);
+  }
+  :global(.fig__svg .d-grey) {
+    stroke: var(--grey);
+    fill: var(--grey);
+  }
+  :global(.fig__svg .d-accent) {
+    stroke: var(--accent);
+    fill: var(--accent);
+  }
+  :global(.fig__svg .d-accent-line),
+  :global(.fig__svg .d-accent-ring),
+  :global(.fig__svg .d-accent-dash) {
+    stroke: var(--accent);
+  }
+  :global(.fig__svg .d-accent-text) {
+    fill: var(--accent);
+  }
+  :global(.fig__svg .d-surface) {
+    fill: var(--bg-card);
+  }
+  :global(.fig__svg .d-burden) {
+    fill: var(--text-muted);
+  }
+  :global(.fig__svg .diagram text) {
+    font-family: var(--font-sans);
+  }
+  :global(.fig__svg .d-num) {
+    font-family: var(--font-mono);
+  }
+
+  /* =========================================================================
+     CLOSING (ink, the one deliberate dark surface on this page)
+     ========================================================================= */
+  .closing {
+    background-color: var(--ink);
+    color: var(--on-ink);
+    border-top: 1px solid var(--on-ink-border);
+    padding-block: var(--space-9);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .closing__inner {
+    position: relative;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    z-index: 1;
+  }
+
+  .closing__h2 {
+    color: var(--on-ink);
+    max-width: 24ch;
+  }
+
+  .closing__line {
+    margin: 0;
+    color: var(--on-ink-muted);
+    font-size: var(--text-md);
+    line-height: var(--lh-body);
+    max-width: 52ch;
+  }
+
+  .closing .cta-row {
+    justify-content: center;
+  }
+
+  /* =========================================================================
+     PAGE-LOAD REVEAL (matches Home; guarded by reduced-motion, never hides)
+     ========================================================================= */
+  @media (prefers-reduced-motion: no-preference) {
+    .load-rise {
+      animation: load-rise var(--dur-reveal) var(--ease-out) both;
+    }
+    .load-rise > * {
+      animation: load-rise var(--dur-reveal) var(--ease-out) both;
+    }
+    .load-rise > *:nth-child(1) { animation-delay: 40ms; }
+    .load-rise > *:nth-child(2) { animation-delay: 110ms; }
+    .load-rise > *:nth-child(3) { animation-delay: 180ms; }
+    .load-rise > *:nth-child(4) { animation-delay: 250ms; }
+  }
+
+  @keyframes load-rise {
+    from {
+      transform: translateY(var(--reveal-shift));
+      opacity: 0.6;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
+  }
+
+  /* =========================================================================
+     RESPONSIVE
+     ========================================================================= */
+  @media (max-width: 880px) {
+    .hero {
+      padding-block: var(--space-7) var(--space-8);
+    }
+    .tier-index {
+      grid-template-columns: 1fr;
+    }
+    .tier-spec__row {
+      grid-template-columns: 1fr;
+      gap: var(--space-2);
+    }
+  }
+</style>

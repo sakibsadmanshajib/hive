@@ -20,6 +20,11 @@
       .diagram .d-num     { font-family: 'Geist Mono', monospace; }
 
     Plot area: x 80..680, y 60..340. Origin at (80,340).
+
+    Crossover geometry (verified): cloud line (80,340)->(680,96) has equation
+    y = 340 - (244/600)(x-80); owned flat leg (150,222)->(680,196) has equation
+    y = 222 - (26/530)(x-150). Setting equal gives x = 400.4, y = 209.7, so the
+    marker at (400,210) sits on the true intersection of the two lines.
   -->
 
   <!-- faint horizontal gridlines (no values) -->
@@ -34,39 +39,38 @@
     <line x1="80" y1="60" x2="80" y2="340" />
     <line x1="80" y1="340" x2="680" y2="340" />
   </g>
-  <text x="80" y="372" font-size="12" fill="#6b7585" class="d-muted">Time and usage</text>
-  <text x="680" y="372" text-anchor="end" font-size="12" fill="#6b7585" class="d-muted" font-style="italic">the meter never stops</text>
-  <g transform="translate(40 200) rotate(-90 0 0)">
-    <text x="0" y="0" text-anchor="middle" font-size="12" fill="#6b7585" class="d-muted">Cumulative cost</text>
+  <text x="80" y="372" font-size="13" fill="#6b7585" class="d-muted">Time and usage</text>
+  <text x="680" y="372" text-anchor="end" font-size="13" fill="#6b7585" class="d-muted" font-style="italic">the meter never stops</text>
+  <g transform="translate(38 200) rotate(-90 0 0)">
+    <text x="0" y="0" text-anchor="middle" font-size="13" fill="#6b7585" class="d-muted">Cumulative cost</text>
   </g>
 
   <!-- METERED CLOUD: steady steep climb from origin, grey -->
-  <path class="d-grey" d="M80 340 L680 96" stroke="#6b7585" stroke-width="2.25" />
+  <path class="d-grey" d="M80 340 L680 96" stroke="#6b7585" stroke-width="2.25" fill="none" />
   <!-- a faint continuation hint past the frame edge -->
-  <circle class="d-grey-dot" cx="680" cy="96" r="3.5" fill="#6b7585" />
+  <circle class="d-grey-dot" cx="680" cy="96" r="3.75" fill="#6b7585" />
 
   <!-- OWNED / COLOCATED: upfront step (capex) then near-flat slope, forest -->
-  <path class="d-accent-line" d="M80 340 L80 226 L150 222 L680 196" stroke="#0d3b2e" stroke-width="2.5" fill="none" />
+  <path class="d-accent-line" d="M80 340 L80 226 L150 222 L680 196" stroke="#0d3b2e" stroke-width="2.5" fill="none" stroke-linejoin="round" />
   <!-- mark the upfront step -->
   <g class="d-accent" fill="#0d3b2e">
-    <circle cx="80" cy="226" r="3.5" />
+    <circle cx="80" cy="226" r="3.75" />
   </g>
-  <text x="92" y="232" font-size="11" fill="#6b7585" class="d-muted">Upfront, the box you own</text>
+  <text x="94" y="232" font-size="12" fill="#6b7585" class="d-muted">Upfront, the box you own</text>
 
-  <!-- CROSSOVER: where the grey cloud line meets the forest owned line. The
-       cloud line (80,340)->(680,96) and the owned flat leg (150,222)->(680,196)
-       intersect at approximately (400,210). Mark it qualitatively, no number. -->
+  <!-- CROSSOVER: where the grey cloud line meets the forest owned line, at the
+       verified intersection (400,210). Marked qualitatively, no number. -->
   <g class="d-cross">
-    <circle cx="400" cy="210" r="6" fill="#f8f7f4" stroke="#0d3b2e" stroke-width="2" class="d-accent-ring" />
-    <circle cx="400" cy="210" r="2" fill="#0d3b2e" class="d-accent" />
     <line x1="400" y1="210" x2="400" y2="340" stroke="#0d3b2e" stroke-width="1" stroke-dasharray="2 4" opacity="0.5" class="d-accent-dash" />
-    <text x="408" y="201" font-size="12.5" font-weight="600" fill="#0d3b2e" class="d-accent-text">Breakeven</text>
-    <text x="408" y="219" font-size="11" fill="#6b7585" class="d-muted">after this, owning costs less</text>
+    <circle cx="400" cy="210" r="6.5" fill="#f8f7f4" stroke="#0d3b2e" stroke-width="2" class="d-accent-ring" />
+    <circle cx="400" cy="210" r="2.25" fill="#0d3b2e" class="d-accent" />
+    <text x="412" y="200" font-size="13.5" font-weight="600" fill="#0d3b2e" class="d-accent-text">Breakeven</text>
+    <text x="412" y="218" font-size="12" fill="#6b7585" class="d-muted">after this, owning costs less</text>
   </g>
 
   <!-- inline legend (direct labels, no detached key) -->
-  <g font-size="12.5" font-weight="600">
-    <text x="560" y="118" fill="#6b7585" class="d-muted">Metered cloud</text>
-    <text x="520" y="188" fill="#0d3b2e" class="d-accent-text">Owned hardware</text>
+  <g font-size="13.5" font-weight="600">
+    <text x="556" y="116" fill="#6b7585" class="d-muted">Metered cloud</text>
+    <text x="512" y="184" fill="#0d3b2e" class="d-accent-text">Owned hardware</text>
   </g>
 </svg>

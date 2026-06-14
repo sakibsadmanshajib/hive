@@ -1,8 +1,11 @@
 ---
-// Captioned dossier figure. Gives every diagram and section photograph an
-// identical treatment: a hairline frame, a "Fig. N" label, and a one-line
-// caption below. The label and caption are separated by a middot, never a dash,
-// per the no-dash-punctuation rule.
+// Captioned dossier plate. Presents every diagram and section photograph as a
+// printed exhibit, not a clickable tile: a thin top hairline rule, the diagram
+// sitting large and open directly on the page (the off-white surface shows
+// through), and a "Fig. N" label plus one-line caption below. The label and
+// caption are separated by a middot, never a dash, per the no-dash-punctuation
+// rule. No card fill, no border-box, no radius on the frame, no shadow, no
+// hover: nothing that implies the figure is interactive.
 //
 // Two content modes:
 //   - svg:  raw SVG markup string, rendered via set:html (the ?raw diagrams).
@@ -20,7 +23,7 @@ const { fig, caption, svg, ariaLabel } = Astro.props;
 ---
 
 <figure class="fig" aria-label={ariaLabel}>
-  <div class="fig__frame">
+  <div class="fig__plate">
     {svg ? <div class="fig__svg" set:html={svg} /> : <slot />}
   </div>
   <figcaption class="fig__cap">
@@ -35,23 +38,22 @@ const { fig, caption, svg, ariaLabel } = Astro.props;
     margin: var(--space-7) 0 0;
   }
 
-  /* Hairline frame, consistent across diagrams and photos. Interior padding
-     kept tight so the diagram fills the frame and reads as a confident exhibit,
-     not a small drawing marooned in white space. */
-  .fig__frame {
-    border: 1px solid var(--border);
-    border-radius: var(--radius-card);
-    background-color: var(--bg-card);
-    padding: var(--space-4);
-    overflow: hidden;
+  /* Editorial plate, not a card. A single thin hairline rule across the top
+     marks the exhibit; the diagram then sits open on the page with vertical
+     breathing room above and below. No box border, no background fill, no
+     radius, no shadow: the figure must not read as a button or tile. */
+  .fig__plate {
+    border-top: 1px solid var(--border);
+    padding: var(--space-5) 0 var(--space-4);
   }
 
   @media (max-width: 640px) {
-    .fig__frame {
-      padding: var(--space-3);
+    .fig__plate {
+      padding: var(--space-4) 0 var(--space-3);
     }
   }
 
+  /* Diagrams fill the available width and read as a confident exhibit. */
   .fig__svg {
     width: 100%;
   }
@@ -62,8 +64,10 @@ const { fig, caption, svg, ariaLabel } = Astro.props;
     height: auto;
   }
 
-  /* Photographic images passed via the slot fill the frame edge to edge. */
-  .fig__frame :global(img) {
+  /* Photographic images passed via the slot fill the plate width. A photo is
+     not a fake button, so a small radius on the image itself is fine; the plate
+     wrapper around it stays open, with no card chrome. */
+  .fig__plate :global(img) {
     display: block;
     width: 100%;
     height: auto;
