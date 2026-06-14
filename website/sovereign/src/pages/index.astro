@@ -48,9 +48,10 @@ import SectionShell from '../components/SectionShell.astro';
 import Figure from '../components/Figure.astro';
 import TrustStrip from '../components/TrustStrip.astro';
 
-// Curated photographic images, optimized by astro:assets at build time.
+// Curated photographic image, optimized by astro:assets at build time. Section
+// 06 now uses an inline capacity-ladder SVG rather than a photographic plate, so
+// only the hero photo is imported here.
 import heroImg from '../assets/generated/heroB2/ink-cinematic-1.jpg';
-import sectionImg from '../assets/generated/slot6-1.jpg';
 
 // Build-time inlined SVGs. set:html keeps them CSP-clean and zero-JS, while
 // currentColor + the .d-* class hooks let the host palette re-tint every stroke
@@ -69,10 +70,16 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
       The hero is one ink band (background var(--ink)). The hero image is the SAME ink ground,
       so the matte-black appliance bleeds in seamlessly (no box, no border, no radius, no shadow,
       no seam mask): both the band and the image background are the identical ink, so there is no
-      visible edge. The image full-bleeds the right portion via an absolute 52vw panel (object-fit
-      cover, object-position tuned so the appliance and its forest green light-slot glow land on the
-      right). The Fraunces H1 reads off-white over pure ink on the left. A 1px on-ink hairline at the
-      band bottom separates this ink hero from the ink TrustStrip that follows. */}
+      visible edge. The hero uses a real two-column CSS grid (text column plus media column), so the
+      media is a normal grid child and never an absolute overlay. That removes the overlap that the
+      old absolute 52vw panel produced between roughly 881px and 1100px. Because the media column is
+      at most about half the capped shell width, the rendered slot stays well under the 1376px source
+      even at a 1920px viewport, so the appliance never upscales or blurs. The image fills its column
+      (object-fit cover) on the same ink ground, so the matte-black appliance bleeds into the band
+      with no box, border, radius, or shadow. object-position keeps the right-of-centre appliance and
+      its forest light-slot whole at every column ratio. The Fraunces H1 reads off-white over pure ink
+      on the left. A 1px on-ink hairline at the band bottom separates this ink hero from the ink
+      TrustStrip that follows. Below 880px the media stacks above the text at full width. */}
   <section class="hero" aria-labelledby="hero-h1">
     <div class="shell hero__grid">
       <div class="hero__col load-rise">
@@ -104,11 +111,12 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         <Image
           src={heroImg}
           alt="Hive on-prem AI appliance"
-          widths={[768, 1100, 1392]}
-          sizes="(max-width: 880px) 100vw, 55vw"
-          width={1392}
+          widths={[688, 900, 1100, 1376]}
+          sizes="(max-width: 880px) 100vw, 48vw"
+          width={1376}
           height={768}
           format="webp"
+          quality={84}
           loading="eager"
           fetchpriority="high"
           class="hero__img"
@@ -202,7 +210,13 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
           <span class="exposure__lead">Reach that follows the provider, not the data.</span>
           Any cloud provider can be compelled, under the law of the jurisdiction
           it answers to, to produce customer data regardless of where that data
-          physically sits. The US CLOUD Act is one well-known example of this
+          physically sits. The
+          <a
+            class="cite-link"
+            href="https://www.congress.gov/115/plaws/publ141/PLAW-115publ141.pdf"
+            target="_blank"
+            rel="noopener noreferrer">US CLOUD Act</a>
+          is one well-known example of this
           general principle: it lets a US-controlled provider be ordered to hand
           over data even when that data lives in another country. The point is
           not specific to one law or one country. Residency is where the bytes
@@ -215,10 +229,16 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         <span class="exposure__index font-mono" data-numeric>02</span>
         <p class="exposure__text">
           <span class="exposure__lead">Your prompts become records someone else holds.</span>
+          {/* [SOURCE-TODO]: court-order preserve-logs line, no neutral source URL available */}
           A US court has already ordered a major AI provider to preserve chat
           logs. Prompts and responses sent to a third-party AI service are
           electronically stored information held by another party. They can be
-          subpoenaed, preserved by order, and pulled into discovery, and a "we
+          subpoenaed, preserved by order, and pulled into discovery
+          <a
+            class="cite-link"
+            href="https://www.law.cornell.edu/rules/frcp/rule_34"
+            target="_blank"
+            rel="noopener noreferrer">(source)</a>, and a "we
           do not retain" promise gives way the moment a preservation order
           lands. The data you cannot see is the data you cannot govern.
           {/* LEGAL-REVIEW */}
@@ -367,6 +387,11 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         <p slot="disclaimer" class="callout-disclaimer">
           Results reflect Pinterest's specific implementation. Your outcomes
           will depend on your hardware, model choice, and workload.
+          <a
+            class="cite-link"
+            href="https://medium.com/pinterest-engineering"
+            target="_blank"
+            rel="noopener noreferrer">Source</a>
         </p>
       </CalloutCard>
     </div>
@@ -389,7 +414,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
     <ul class="ds__bleed cards cards--4" role="list">
       <li>
-        <a class="card card--link" href="/use-cases">
+        <a class="card card--link" href="/use-cases#finance">
           <h3 class="card__h3">Financial institutions.</h3>
           <p class="card__body">
             Banks, credit unions, insurers, and FinTech firms handling material
@@ -399,7 +424,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         </a>
       </li>
       <li>
-        <a class="card card--link" href="/use-cases">
+        <a class="card card--link" href="/use-cases#healthcare">
           <h3 class="card__h3">Healthcare and health-data custodians.</h3>
           <p class="card__body">
             Personal health information stays under the custodian's direct
@@ -408,7 +433,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         </a>
       </li>
       <li>
-        <a class="card card--link" href="/use-cases">
+        <a class="card card--link" href="/use-cases#government">
           <h3 class="card__h3">Government and defence.</h3>
           <p class="card__body">
             Public-sector bodies and military programmes, including air-gapped
@@ -418,7 +443,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         </a>
       </li>
       <li>
-        <a class="card card--link" href="/use-cases">
+        <a class="card card--link" href="/use-cases#legal">
           <h3 class="card__h3">Legal.</h3>
           <p class="card__body">
             Privilege does not survive a third-party processor. Client matters
@@ -427,7 +452,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         </a>
       </li>
       <li>
-        <a class="card card--link" href="/use-cases">
+        <a class="card card--link" href="/use-cases#sensitive">
           <h3 class="card__h3">Any sensitive-data organisation.</h3>
           <p class="card__body">
             If "do not send our data to a third party" is a hard rule, on-prem
@@ -462,18 +487,62 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
       </p>
     </div>
 
-    <div class="ds__bleed">
+    <div class="ds__bleed improve__fig">
       <Figure fig="Fig. 4" caption="Capacity you add, not a box you replace">
-        <Image
-          src={sectionImg}
-          alt="Engineers extending a Hive deployment with additional GPU capacity."
-          widths={[768, 1140]}
-          sizes="(max-width: 1140px) 100vw, 1140px"
-          width={1140}
-          height={636}
-          loading="lazy"
-          class="improve__img"
-        />
+        {/* Capacity ladder: single box, then multi-GPU, then multi-node. Same
+            palette and class hooks as the other diagrams (forest accent scarce,
+            ink line-work via currentColor, grey secondary, surface #fff). CSP
+            safe: presentation attributes only, no inline style, no script. */}
+        <svg
+          class="ladder-svg diagram"
+          viewBox="0 0 760 220"
+          role="img"
+          aria-label="Capacity ladder: a single box scales to multiple GPUs, then to multiple linked nodes."
+        >
+          <title>Capacity you add, not a box you replace</title>
+
+          {/* Stage 1: single box */}
+          <g>
+            <rect class="d-faint d-surface" x="28" y="74" width="120" height="72" rx="6" stroke-width="1.5" />
+            <rect class="d-grey" x="48" y="96" width="80" height="9" rx="2" stroke="none" />
+            <rect class="d-grey" x="48" y="114" width="56" height="9" rx="2" stroke="none" />
+            <text class="d-muted" x="88" y="178" text-anchor="middle" font-size="14">Single box</text>
+          </g>
+
+          {/* Chevron 1 to 2 */}
+          <path class="d-accent-line" d="M168 110 L196 110" stroke-width="2" fill="none" />
+          <path class="d-accent-line" d="M188 102 L196 110 L188 118" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+
+          {/* Stage 2: one box, stacked GPU units */}
+          <g>
+            <rect class="d-faint d-surface" x="216" y="62" width="128" height="96" rx="6" stroke-width="1.5" />
+            <rect class="d-accent" x="234" y="78" width="92" height="12" rx="2" stroke="none" />
+            <rect class="d-grey" x="234" y="98" width="92" height="12" rx="2" stroke="none" />
+            <rect class="d-grey" x="234" y="118" width="92" height="12" rx="2" stroke="none" />
+            <text class="d-muted" x="280" y="186" text-anchor="middle" font-size="14">Multi-GPU</text>
+          </g>
+
+          {/* Chevron 2 to 3 */}
+          <path class="d-accent-line" d="M364 110 L392 110" stroke-width="2" fill="none" />
+          <path class="d-accent-line" d="M384 102 L392 110 L384 118" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+
+          {/* Stage 3: multiple linked nodes */}
+          <g>
+            <rect class="d-faint d-surface" x="412" y="70" width="86" height="80" rx="6" stroke-width="1.5" />
+            <rect class="d-faint d-surface" x="510" y="70" width="86" height="80" rx="6" stroke-width="1.5" />
+            <rect class="d-faint d-surface" x="608" y="70" width="86" height="80" rx="6" stroke-width="1.5" />
+            <rect class="d-grey" x="428" y="92" width="54" height="8" rx="2" stroke="none" />
+            <rect class="d-grey" x="428" y="108" width="40" height="8" rx="2" stroke="none" />
+            <rect class="d-grey" x="526" y="92" width="54" height="8" rx="2" stroke="none" />
+            <rect class="d-grey" x="526" y="108" width="40" height="8" rx="2" stroke="none" />
+            <rect class="d-grey" x="624" y="92" width="54" height="8" rx="2" stroke="none" />
+            <rect class="d-grey" x="624" y="108" width="40" height="8" rx="2" stroke="none" />
+            {/* Links between nodes */}
+            <path class="d-accent-dash" d="M498 110 L510 110" stroke-width="2" fill="none" stroke-dasharray="3 3" />
+            <path class="d-accent-dash" d="M596 110 L608 110" stroke-width="2" fill="none" stroke-dasharray="3 3" />
+            <text class="d-muted" x="553" y="178" text-anchor="middle" font-size="14">Multi-node</text>
+          </g>
+        </svg>
       </Figure>
     </div>
 
@@ -507,6 +576,11 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
         <p class="proof__text">
           Perplexity runs DeepSeek R1 on its own servers in US and EU data
           centres. User data never leaves Western servers.
+          <a
+            class="cite-link"
+            href="https://www.perplexity.ai"
+            target="_blank"
+            rel="noopener noreferrer">Source</a>
           <span class="proof__stamp font-mono" data-numeric>(as of January 2025)</span>
         </p>
       </li>
@@ -557,6 +631,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     letter-spacing: -0.01em;
     color: var(--text);
     max-width: 22ch;
+    text-wrap: balance;
   }
 
   .section-h2--lead {
@@ -572,6 +647,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   .prose p {
     margin: 0 0 var(--space-5);
     max-width: 68ch;
+    text-wrap: pretty;
   }
 
   .prose p:last-child {
@@ -581,6 +657,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   .prose--single {
     margin: var(--space-5) 0 0;
     max-width: 66ch;
+    text-wrap: pretty;
   }
 
   .prose__after {
@@ -589,6 +666,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     color: var(--text-muted);
     line-height: var(--lh-body);
     max-width: 68ch;
+    text-wrap: pretty;
   }
 
   .textlink {
@@ -601,6 +679,26 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
   .textlink:hover {
     border-bottom-color: var(--accent);
+  }
+
+  /* Quiet inline source citation for light surfaces. Small, forest accent, an
+     underline that fills in on hover. AA on off-white (accent is 6.5:1+). */
+  .cite-link {
+    color: var(--accent);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 1px solid transparent;
+    transition: border-color var(--dur-fast) var(--ease-out);
+  }
+
+  .cite-link:hover {
+    border-bottom-color: var(--accent);
+  }
+
+  .cite-link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .narrow {
@@ -702,6 +800,9 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   .card {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     background-color: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
@@ -722,7 +823,9 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
      card reads as content, not a blue link, and give keyboard users a visible
      focus ring. */
   .card--link {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
     color: inherit;
     text-decoration: none;
   }
@@ -752,6 +855,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     font-size: var(--text-h3);
     line-height: var(--lh-heading);
     color: var(--text);
+    text-wrap: balance;
   }
 
   .card__body {
@@ -759,6 +863,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     color: var(--text-muted);
     font-size: var(--text-base);
     line-height: var(--lh-snug);
+    text-wrap: pretty;
   }
 
   /* =========================================================================
@@ -814,12 +919,15 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   /* =========================================================================
-     HERO  (cinematic ink band: full-viewport-width ink ground, seamless
-     full-bleed appliance on the right, editorial lede on the left)
-     The hero background and the image background are both var(--ink), so the
-     appliance bleeds in with no visible seam: no mask, no border, no radius,
-     no box-shadow. A 1px on-ink hairline at the bottom separates this ink band
-     from the ink TrustStrip that follows.
+     HERO  (cinematic ink band: real two-column grid, editorial lede on the
+     left, seamless full-bleed appliance on the right)
+     The hero is a true two-column CSS grid: a text column and a media column.
+     The media is a normal grid child, not an absolute overlay, so there is no
+     overlap at any width (the old absolute 52vw panel overlapped the text
+     between roughly 881px and 1100px). The hero background and the image
+     background are both var(--ink), so the appliance bleeds in with no visible
+     seam: no mask, no border, no radius, no box-shadow. A 1px on-ink hairline
+     at the bottom separates this ink band from the ink TrustStrip that follows.
      ========================================================================= */
   .hero {
     position: relative;
@@ -831,9 +939,9 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
   .hero__grid {
     display: grid;
-    grid-template-columns: minmax(0, 52%);
+    grid-template-columns: 1.05fr 1fr;
     gap: var(--space-8);
-    align-items: center;
+    align-items: stretch;
   }
 
   .hero__col {
@@ -841,6 +949,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     z-index: 2;
     max-width: 38rem;
     padding-block: 0;
+    align-self: center;
   }
 
   .hero__meta {
@@ -887,6 +996,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     font-size: var(--text-md);
     line-height: var(--lh-snug);
     color: var(--on-ink-muted);
+    text-wrap: pretty;
   }
 
   /* Forest tick: accent bar with a subtle green glow. */
@@ -908,6 +1018,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     font-size: var(--text-sm);
     line-height: var(--lh-snug);
     max-width: 48ch;
+    text-wrap: pretty;
   }
 
   /* Hero-scoped ghost CTA: on-ink colours, not the off-white page ghost. */
@@ -922,34 +1033,34 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     transform: translateY(-1px);
   }
 
-  /* Right panel: absolute, ink background matches hero band exactly, so the
-     appliance image bleeds in with no seam. No mask, no border, no radius,
-     no box-shadow. */
+  /* Media column: a normal grid child (not an absolute overlay). Its ink
+     background matches the hero band exactly, so the appliance image bleeds in
+     with no seam. No mask, no border, no radius, no box-shadow. position
+     relative only so the glow overlay can pin inside this column. */
   .hero__media {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 52vw;
+    position: relative;
     z-index: 0;
+    min-height: 100%;
     background-color: var(--ink);
     transform-origin: center;
   }
 
-  /* Image fills the panel. No border, no radius, no shadow. */
+  /* Image fills the media column height. No border, no radius, no shadow.
+     object-position keeps the right-of-centre appliance and its forest
+     light-slot whole across tall and short column ratios. */
   .hero__img {
     display: block;
     width: 100%;
     height: 100%;
     max-width: none;
     object-fit: cover;
-    object-position: 65% center;
+    object-position: 60% center;
     opacity: 1;
   }
 
-  /* Static glow overlay: forest green radial at 62% 58%. Lives outside the
-     motion query so it is always present as a base. Animation in the motion
-     query adds a breathe cycle on top. */
+  /* Static glow overlay: forest green radial at 62% 58%, pinned inside the
+     media column. Lives outside the motion query so it is always present as a
+     base. Animation in the motion query adds a breathe cycle on top. */
   .hero__glow {
     position: absolute;
     inset: 0;
@@ -990,6 +1101,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     color: var(--text);
     font-size: var(--text-base);
     line-height: var(--lh-snug);
+    text-wrap: pretty;
   }
 
   .exposure__lead {
@@ -1046,12 +1158,54 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   /* =========================================================================
-     06 CONTINUOUS IMPROVEMENT  (photo inside Figure frame)
+     06 CONTINUOUS IMPROVEMENT  (inline capacity-ladder SVG inside Figure frame)
+     The old photographic plate left a large empty band. Tighten the Figure top
+     margin and plate padding here (scoped to sec 06, so the global dossier
+     rhythm is untouched), and cap the ladder width so it reads as a compact
+     exhibit rather than a wide empty plate.
      ========================================================================= */
-  .improve__img {
+  .improve__fig :global(.fig) {
+    margin-top: var(--space-6);
+  }
+
+  .improve__fig :global(.fig__plate) {
+    padding: var(--space-4) 0 var(--space-3);
+  }
+
+  /* Modestly sized, scales to content width via the viewBox. */
+  .ladder-svg {
     display: block;
     width: 100%;
     height: auto;
+    max-width: 620px;
+    color: var(--text);
+  }
+
+  /* Colour hooks for the inline ladder SVG. It sits in the Figure default slot,
+     not the .fig__svg set:html path, so it needs its own hooks (same palette as
+     the other diagrams). Ink line-work, grey secondary, forest accent scarce,
+     #fff surface. No red on this exhibit. */
+  .ladder-svg :global(.d-faint) {
+    stroke: var(--border-strong);
+  }
+  .ladder-svg :global(.d-surface) {
+    fill: var(--bg-card);
+  }
+  .ladder-svg :global(.d-grey) {
+    fill: var(--grey);
+  }
+  .ladder-svg :global(.d-muted) {
+    fill: var(--text-muted);
+  }
+  .ladder-svg :global(.d-accent) {
+    fill: var(--accent);
+  }
+  .ladder-svg :global(.d-accent-line),
+  .ladder-svg :global(.d-accent-dash) {
+    stroke: var(--accent);
+  }
+  .ladder-svg :global(text) {
+    font-family: var(--font-sans);
   }
 
   /* =========================================================================
@@ -1067,6 +1221,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     letter-spacing: -0.01em;
     color: var(--text);
     max-width: 22ch;
+    text-wrap: balance;
   }
 
   /* =========================================================================
@@ -1101,6 +1256,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     color: var(--text-muted);
     font-size: var(--text-sm);
     line-height: var(--lh-body);
+    text-wrap: pretty;
   }
 
   .proof__stamp {
@@ -1141,6 +1297,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     font-size: var(--text-md);
     line-height: var(--lh-body);
     max-width: 52ch;
+    text-wrap: pretty;
   }
 
   .closing .cta-row {
@@ -1230,7 +1387,10 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
      RESPONSIVE
      ========================================================================= */
   @media (max-width: 1024px) {
+    /* Two even columns through the mid-range. The media is a grid child, so it
+       can never overlap the text the way the old absolute panel did. */
     .hero__grid {
+      grid-template-columns: 1fr 1fr;
       gap: var(--space-7);
     }
   }
@@ -1248,12 +1408,13 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
       gap: var(--space-6);
     }
     .hero__media {
-      position: static;
+      position: relative;
       width: 100%;
+      min-height: 0;
       height: auto;
       order: -1;
       background-color: var(--ink);
-      aspect-ratio: 1392 / 768;
+      aspect-ratio: 1376 / 768;
     }
     .hero__img {
       width: 100%;

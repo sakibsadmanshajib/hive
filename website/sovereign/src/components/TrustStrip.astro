@@ -40,7 +40,14 @@ const frameworks = [
           Perplexity runs DeepSeek R1 on its own servers in US and EU data
           centres. User data never leaves Western servers.
         </p>
-        <p class="trust__stamp font-mono" data-numeric>as of January 2025</p>
+        <p class="trust__cite-row">
+          <a
+            class="trust__cite"
+            href="https://www.perplexity.ai"
+            target="_blank"
+            rel="noopener noreferrer">Source</a>
+          <span class="trust__stamp font-mono" data-numeric>as of January 2025</span>
+        </p>
       </div>
 
       <div class="trust__stat">
@@ -53,7 +60,14 @@ const frameworks = [
           Results reflect Pinterest's specific implementation. Your outcomes
           will depend on your hardware, model choice, and workload.
         </p>
-        <p class="trust__stamp font-mono" data-numeric>as of June 2026</p>
+        <p class="trust__cite-row">
+          <a
+            class="trust__cite"
+            href="https://medium.com/pinterest-engineering"
+            target="_blank"
+            rel="noopener noreferrer">Source</a>
+          <span class="trust__stamp font-mono" data-numeric>as of June 2026</span>
+        </p>
       </div>
     </div>
   </div>
@@ -146,6 +160,37 @@ const frameworks = [
     color: var(--on-ink-faint);
     font-size: 12.5px;
     white-space: nowrap;
+  }
+
+  /* Source link plus date stamp share one baseline row under each stat. */
+  .trust__cite-row {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  /* Quiet on-ink source link. Off-white muted label, underline fills on hover.
+     On-ink-muted on ink clears AA. */
+  .trust__cite {
+    color: var(--on-ink-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 1px solid transparent;
+    transition: color var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out);
+  }
+
+  .trust__cite:hover {
+    color: var(--on-ink);
+    border-bottom-color: var(--on-ink);
+  }
+
+  .trust__cite:focus-visible {
+    outline: 2px solid var(--on-ink);
+    outline-offset: 2px;
   }
 
   @media (max-width: 880px) {

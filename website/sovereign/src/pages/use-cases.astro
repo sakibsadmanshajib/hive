@@ -151,6 +151,7 @@ const verticals = [
   {
     verticals.map((v) => (
       <SectionShell numeral={v.numeral} label={v.label} id={`${v.id}-h2`}>
+        <span id={v.id} class="anchor-target" aria-hidden="true" />
         <h2 class="section-h2 section-h2--lead" id={`${v.id}-h2`}>
           {v.h2}
         </h2>
@@ -412,6 +413,14 @@ const verticals = [
     font-size: var(--text-md);
     line-height: var(--lh-body);
     max-width: 60ch;
+  }
+
+  /* Invisible scroll anchor so /use-cases#finance and the rest resolve to the
+     right vertical. scroll-margin-top keeps the sticky nav from covering the
+     heading on a deep link. */
+  .anchor-target {
+    display: block;
+    scroll-margin-top: var(--space-8);
   }
 
   /* =========================================================================
