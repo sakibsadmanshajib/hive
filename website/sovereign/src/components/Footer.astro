@@ -1,13 +1,24 @@
 ---
-// Footer. Legal entity is "S Cubed". Country switcher links to ?geo=bd and
-// ?geo=co; a Cloudflare Worker will turn those into redirects later. Here we
-// only render the anchors.
-const navLinks = [
-  { href: '/', label: 'Home' },
+// Footer. Legal entity is "S Cubed Technology Ltd." Grouped link columns
+// (Product, Company, Region) plus brand + tagline + copyright. The region
+// switcher links to ?geo=bd and ?geo=co; a Cloudflare Worker will turn those
+// into redirects later. Here we only render the anchors.
+const product = [
+  { href: '/how-you-run-hive', label: 'How You Run Hive' },
   { href: '/security', label: 'Security & Data Residency' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/use-cases', label: 'Use Cases' },
+];
+
+const company = [
+  { href: '/', label: 'Home' },
   { href: '/book-a-demo', label: 'Book a Demo' },
+  { href: 'mailto:hello@hive.scubed.co', label: 'Contact' },
+];
+
+const regions = [
+  { href: '/?geo=co', label: 'Global', hreflang: 'en' },
+  { href: '/?geo=bd', label: 'Bangladesh', hreflang: 'en' },
 ];
 
 const year = new Date().getFullYear();
@@ -18,7 +29,7 @@ const year = new Date().getFullYear();
     <div class="footer__brand">
       <span class="footer__name">
         <span class="footer__mark" aria-hidden="true">
-          <svg viewBox="0 0 64 64" width="20" height="20" focusable="false">
+          <svg viewBox="0 0 64 64" width="22" height="22" focusable="false">
             <rect
               x="12"
               y="12"
@@ -32,42 +43,66 @@ const year = new Date().getFullYear();
             ></rect>
           </svg>
         </span>
-        S Cubed Technology Ltd.
+        Hive
       </span>
       <p class="footer__tagline">
-        Your AI runs on your hardware. Your data never moves.
+        Your AI runs on your hardware. Your data never moves. On-prem and
+        in-region AI for organisations that cannot send their data to a
+        third-party cloud.
       </p>
+      <p class="footer__entity">S Cubed Technology Ltd.</p>
     </div>
 
-    <nav class="footer__nav" aria-label="Footer">
-      <ul>
-        {
-          navLinks.map((link) => (
-            <li>
-              <a class="footer__link tap-target" href={link.href}>
-                {link.label}
-              </a>
-            </li>
-          ))
-        }
-      </ul>
+    <nav class="footer__cols" aria-label="Footer">
+      <div class="footer__col">
+        <span class="footer__col-label">Product</span>
+        <ul>
+          {
+            product.map((link) => (
+              <li>
+                <a class="footer__link tap-target" href={link.href}>
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+
+      <div class="footer__col">
+        <span class="footer__col-label">Company</span>
+        <ul>
+          {
+            company.map((link) => (
+              <li>
+                <a class="footer__link tap-target" href={link.href}>
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
+
+      <div class="footer__col">
+        <span class="footer__col-label">Region</span>
+        <ul>
+          {
+            regions.map((link) => (
+              <li>
+                <a
+                  class="footer__link tap-target"
+                  href={link.href}
+                  hreflang={link.hreflang}
+                >
+                  {link.label}
+                </a>
+              </li>
+            ))
+          }
+        </ul>
+      </div>
     </nav>
-
-    <div class="footer__geo">
-      <span class="footer__geo-label">Region</span>
-      <ul>
-        <li>
-          <a class="footer__link tap-target" href="/?geo=co" hreflang="en">
-            Global
-          </a>
-        </li>
-        <li>
-          <a class="footer__link tap-target" href="/?geo=bd" hreflang="en">
-            Bangladesh
-          </a>
-        </li>
-      </ul>
-    </div>
   </div>
 
   <div class="shell footer__legal">
@@ -80,12 +115,11 @@ const year = new Date().getFullYear();
     border-top: 1px solid var(--border);
     background-color: var(--bg-raised);
     padding-block: 56px 32px;
-    margin-top: var(--section-rhythm);
   }
 
   .footer__inner {
     display: grid;
-    grid-template-columns: 1.4fr 1fr 1fr;
+    grid-template-columns: 1.5fr 1fr 1fr 1fr;
     gap: 40px;
   }
 
@@ -94,7 +128,7 @@ const year = new Date().getFullYear();
     align-items: center;
     gap: 10px;
     font-weight: 600;
-    font-size: 16px;
+    font-size: 18px;
   }
 
   /* Concept 1 containment-vault mark, inlined so it themes via currentColor
@@ -103,41 +137,52 @@ const year = new Date().getFullYear();
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     color: var(--accent);
   }
 
   .footer__mark svg {
     display: block;
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
   }
 
   .footer__tagline {
     color: var(--text-muted);
     font-size: 14px;
-    margin-top: 10px;
-    max-width: 30ch;
+    line-height: var(--lh-snug);
+    margin-top: 14px;
+    max-width: 42ch;
+    text-wrap: pretty;
   }
 
-  .footer__nav ul,
-  .footer__geo ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+  .footer__entity {
+    color: var(--text-faint);
+    font-size: 13px;
+    margin-top: 16px;
   }
 
-  .footer__geo-label {
+  .footer__cols {
+    display: contents;
+  }
+
+  .footer__col-label {
     display: block;
     color: var(--text-faint);
     font-size: 12px;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    margin-bottom: 12px;
+    margin-bottom: 14px;
+  }
+
+  .footer__col ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 11px;
   }
 
   .footer__link {
@@ -155,13 +200,18 @@ const year = new Date().getFullYear();
   .footer__legal {
     color: var(--text-faint);
     font-size: 13px;
-    margin-top: 40px;
+    margin-top: 48px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
   }
 
   @media (max-width: 760px) {
     .footer__inner {
-      grid-template-columns: 1fr;
+      grid-template-columns: 1fr 1fr;
       gap: 28px;
+    }
+    .footer__brand {
+      grid-column: 1 / -1;
     }
   }
 </style>
