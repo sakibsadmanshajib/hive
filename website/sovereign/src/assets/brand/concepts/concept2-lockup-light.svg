@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64" role="img" aria-label="Hive">
+  <rect width="200" height="64" fill="#f8f7f4"/>
+  <!-- Mark -->
+  <polygon points="30,12 46,21.2 46,39.8 30,49 14,39.8 14,21.2"
+           fill="none" stroke="#0d3b2e" stroke-width="4" stroke-linejoin="round"/>
+  <rect x="27" y="24" width="6" height="13" rx="3" fill="#0d3b2e"/>
+  <!-- Wordmark -->
+  <text x="64" y="42" font-family="Fraunces, Georgia, serif" font-size="30"
+        font-weight="600" letter-spacing="0.5" fill="#0d1117">Hive</text>
+</svg>

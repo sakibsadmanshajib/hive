@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 380" role="img" aria-labelledby="db-title db-desc" fill="none" class="diagram diagram--boundary">
+  <title id="db-title">Where your data goes: inside your boundary versus out to a third-party cloud in another jurisdiction</title>
+  <desc id="db-desc">Two paths from a prompt. On the left, Hive on-prem: the prompt and the model both sit inside the customer boundary, and the data never leaves. On the right, hosted inference: the prompt leaves the boundary and travels to a third-party cloud, where it is retained, logged, and reachable under that jurisdiction's legal process. The leaving path is marked as the residency risk.</desc>
+
+  <!--
+    Data-boundary diagram, the GOOD/clear version. Two columns share one source
+    (the prompt). LEFT path stays contained (ink + forest accent, "safe").
+    RIGHT path crosses the wall to a third-party cloud (the ONE place red is
+    allowed on this site: residency risk). Competitor/cloud chrome stays grey
+    per the chart rule; red marks only the act of leaving the boundary.
+
+    Recommended host CSS (same token set as tier-spectrum):
+      .diagram { color: #0d1117; }
+      .diagram .d-faint  { stroke: #d4d1c9; }
+      .diagram .d-muted  { fill: #6b7585; }
+      .diagram .d-grey   { stroke: #6b7585; fill: #6b7585; }
+      .diagram .d-accent { stroke: #0d3b2e; fill: #0d3b2e; }
+      .diagram .d-risk   { stroke: #f04438; fill: #f04438; }  residency risk only
+      .diagram .d-surface{ fill: #ffffff; }
+      .diagram text      { font-family: 'Inter', system-ui, sans-serif; }
+  -->
+
+  <!-- shared source: the prompt -->
+  <g transform="translate(330 24)">
+    <rect class="d-surface" x="0" y="0" width="100" height="40" rx="8" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <text x="50" y="25" text-anchor="middle" font-size="13" font-weight="600" fill="currentColor">Prompt</text>
+  </g>
+  <!-- split into two paths -->
+  <path class="d-faint" d="M360 64 C360 96 200 92 200 120" stroke="#d4d1c9" stroke-width="1.5" />
+  <path class="d-faint" d="M400 64 C400 96 560 92 560 120" stroke="#d4d1c9" stroke-width="1.5" />
+
+  <!-- ============ LEFT: contained, on-prem ============ -->
+  <g transform="translate(40 120)">
+    <!-- the boundary wall -->
+    <rect x="0" y="0" width="320" height="220" rx="12" fill="none" stroke="currentColor" stroke-width="2" />
+    <text x="16" y="-10" font-size="11.5" letter-spacing="0.08em" fill="#0d3b2e" class="d-accent">YOUR BOUNDARY</text>
+    <!-- corner ticks -->
+    <g class="d-accent" stroke="#0d3b2e" stroke-width="1.75">
+      <path d="M0 16 l0 -16 l16 0" fill="none" />
+      <path d="M320 204 l0 16 l-16 0" fill="none" />
+    </g>
+
+    <!-- model + storage, both inside -->
+    <g transform="translate(40 50)">
+      <rect class="d-surface" x="0" y="0" width="110" height="50" rx="8" fill="#ffffff" stroke="currentColor" stroke-width="1.4" />
+      <text x="55" y="30" text-anchor="middle" font-size="12.5" font-weight="600" fill="currentColor">Model</text>
+    </g>
+    <g transform="translate(170 50)">
+      <rect class="d-surface" x="0" y="0" width="110" height="50" rx="8" fill="#ffffff" stroke="currentColor" stroke-width="1.4" />
+      <text x="55" y="30" text-anchor="middle" font-size="12.5" font-weight="600" fill="currentColor">Your data</text>
+    </g>
+    <!-- closed loop arrows: it cycles, it never exits -->
+    <path d="M150 75 l16 0 m-8 -6 l8 6 l-8 6" stroke="currentColor" stroke-width="1.4" />
+    <path d="M170 92 C120 120 100 120 95 100" stroke="currentColor" stroke-width="1.4" />
+    <path d="M95 100 l-5 8 m5 -8 l6 5" stroke="currentColor" stroke-width="1.4" />
+
+    <!-- verdict -->
+    <g transform="translate(40 138)">
+      <circle class="d-accent" cx="8" cy="8" r="8" fill="#0d3b2e" />
+      <path d="M4 8 l3 3 l5 -6" stroke="#ffffff" stroke-width="1.5" fill="none" />
+      <text x="26" y="13" font-size="13" font-weight="600" fill="currentColor">Data never moves</text>
+    </g>
+    <text x="40" y="180" font-size="11.5" fill="#6b7585" class="d-muted">Stays under your control and jurisdiction.</text>
+  </g>
+
+  <!-- ============ RIGHT: leaves to a third-party cloud ============ -->
+  <g transform="translate(400 120)">
+    <!-- broken boundary: the prompt crosses out, shown by a gap + red egress -->
+    <rect x="0" y="0" width="320" height="220" rx="12" fill="none" stroke="#d4d1c9" stroke-width="1.4" stroke-dasharray="4 5" class="d-faint" />
+    <text x="16" y="-10" font-size="11.5" letter-spacing="0.08em" fill="#6b7585" class="d-muted">THIRD-PARTY CLOUD</text>
+
+    <!-- the crossing arrow: red, the residency risk -->
+    <path class="d-risk" d="M120 -28 L160 60" stroke="#f04438" stroke-width="2" />
+    <path class="d-risk" d="M160 60 l-9 -2 m9 2 l-2 -9" stroke="#f04438" stroke-width="2" fill="none" />
+
+    <!-- hosted model -->
+    <g transform="translate(100 70)">
+      <rect class="d-surface" x="0" y="0" width="130" height="50" rx="8" fill="#ffffff" stroke="#6b7585" stroke-width="1.4" class="d-grey-stroke" />
+      <text x="65" y="30" text-anchor="middle" font-size="12.5" font-weight="600" fill="#6b7585" class="d-muted">Hosted model</text>
+    </g>
+
+    <!-- retained / logged copies, grey -->
+    <g class="d-grey" fill="#6b7585" opacity="0.85">
+      <rect x="60" y="142" width="60" height="34" rx="6" opacity="0.16" />
+      <rect x="135" y="142" width="60" height="34" rx="6" opacity="0.16" />
+      <rect x="210" y="142" width="60" height="34" rx="6" opacity="0.16" />
+    </g>
+    <text x="60" y="200" font-size="11.5" fill="#6b7585" class="d-muted">Retained, logged, discoverable.</text>
+
+    <!-- verdict marker, red -->
+    <g transform="translate(232 -28)">
+      <circle class="d-risk" cx="9" cy="9" r="9" fill="#f04438" />
+      <path d="M9 4 l0 7 M9 13.5 l0 0.5" stroke="#ffffff" stroke-width="1.8" />
+      <text x="-12" y="34" text-anchor="end" font-size="12" font-weight="600" fill="#f04438" class="d-risk-text">Residency risk</text>
+    </g>
+  </g>
+</svg>

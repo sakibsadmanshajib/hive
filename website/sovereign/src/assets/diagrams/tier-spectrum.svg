@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 360" role="img" aria-labelledby="ts-title ts-desc" fill="none" class="diagram diagram--spectrum">
+  <title id="ts-title">The control spectrum: Own, Colocate, Shared Cloud</title>
+  <desc id="ts-desc">Three delivery tiers arranged left to right. Own (on-prem) has the most isolation and the most operational burden. Colocate sits in the middle. Shared Cloud, region-locked and auditable, has the least isolation and the least operational burden. Isolation decreases left to right; the operational burden you carry also decreases left to right.</desc>
+
+  <!--
+    Three-tier control spectrum. Reads as a single continuum, not three
+    unrelated boxes. Isolation is encoded by the weight of the enclosing wall
+    (thick solid -> medium -> thin) and the depth of the nested rings. The
+    operational-burden track underneath runs the same direction.
+
+    Colours inherit from host via currentColor (ink) and .d-accent (forest).
+    Recommended host CSS:
+      .diagram { color: #0d1117; }
+      .diagram .d-faint  { stroke: #d4d1c9; }
+      .diagram .d-muted  { fill: #6b7585; }
+      .diagram .d-accent { stroke: #0d3b2e; fill: #0d3b2e; }
+      .diagram .d-surface{ fill: #ffffff; }
+      .diagram text      { font-family: 'Inter', system-ui, sans-serif; }
+      .diagram .d-num    { font-family: 'Geist Mono', monospace; }
+  -->
+
+  <!-- baseline continuum rail -->
+  <line class="d-faint" x1="60" y1="78" x2="700" y2="78" stroke="#d4d1c9" stroke-width="1.5" />
+  <g class="d-accent" fill="#0d3b2e">
+    <circle cx="60" cy="78" r="3" />
+    <circle cx="380" cy="78" r="3" />
+    <circle cx="700" cy="78" r="3" />
+  </g>
+  <text x="60" y="56" text-anchor="start" font-size="11.5" letter-spacing="0.08em" fill="#6b7585" class="d-muted">MOST ISOLATION</text>
+  <text x="700" y="56" text-anchor="end" font-size="11.5" letter-spacing="0.08em" fill="#6b7585" class="d-muted">LEAST ISOLATION</text>
+
+  <!-- ===== Tier 1: OWN. Thickest wall, deepest nesting, accent core. ===== -->
+  <g transform="translate(60 110)">
+    <rect class="d-surface" x="0" y="0" width="180" height="150" rx="10" fill="#ffffff" stroke="currentColor" stroke-width="2.25" />
+    <rect x="20" y="46" width="140" height="86" rx="6" fill="none" stroke="currentColor" stroke-width="1.4" opacity="0.55" />
+    <rect x="40" y="62" width="100" height="54" rx="4" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.35" />
+    <circle class="d-accent" cx="90" cy="89" r="9" fill="#0d3b2e" />
+    <text x="16" y="28" font-size="15" font-weight="600" fill="currentColor">Own</text>
+    <text x="16" y="146" font-size="11" fill="#6b7585" class="d-muted">On-prem, your building</text>
+  </g>
+
+  <!-- ===== Tier 2: COLOCATE. Medium wall, one inset, accent core. ===== -->
+  <g transform="translate(290 110)">
+    <rect class="d-surface" x="0" y="0" width="180" height="150" rx="10" fill="#ffffff" stroke="currentColor" stroke-width="1.6" />
+    <rect x="22" y="48" width="136" height="82" rx="6" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.4" />
+    <circle class="d-accent" cx="90" cy="89" r="9" fill="#0d3b2e" />
+    <text x="16" y="28" font-size="15" font-weight="600" fill="currentColor">Colocate</text>
+    <text x="16" y="146" font-size="11" fill="#6b7585" class="d-muted">Dedicated box, in-region DC</text>
+  </g>
+
+  <!-- ===== Tier 3: SHARED CLOUD. Thin dashed wall, accent core, region tag. ===== -->
+  <g transform="translate(520 110)">
+    <rect class="d-surface" x="0" y="0" width="180" height="150" rx="10" fill="#ffffff" stroke="currentColor" stroke-width="1.2" stroke-dasharray="3 4" opacity="0.85" />
+    <circle class="d-accent" cx="90" cy="89" r="9" fill="#0d3b2e" />
+    <text x="16" y="28" font-size="15" font-weight="600" fill="currentColor">Shared Cloud</text>
+    <text x="16" y="146" font-size="11" fill="#6b7585" class="d-muted">Region-locked, auditable</text>
+  </g>
+
+  <!-- connecting chevrons between tiers, reinforcing the continuum -->
+  <g class="d-faint" stroke="#d4d1c9" stroke-width="1.5">
+    <path d="M248 185 l30 0 m-8 -7 l8 7 l-8 7" />
+    <path d="M478 185 l30 0 m-8 -7 l8 7 l-8 7" />
+  </g>
+
+  <!-- ===== operational-burden track ===== -->
+  <g transform="translate(60 296)">
+    <text x="0" y="0" font-size="11.5" letter-spacing="0.08em" fill="#6b7585" class="d-muted">OPERATIONAL BURDEN YOU CARRY</text>
+    <!-- a wedge that thins left to right: most ops on Own, least on Cloud -->
+    <path d="M0 18 L640 30 L640 38 L0 44 Z" fill="#6b7585" opacity="0.16" class="d-burden" />
+    <text x="0" y="58" font-size="11" fill="#6b7585" class="d-muted">High</text>
+    <text x="640" y="58" text-anchor="end" font-size="11" fill="#6b7585" class="d-muted">Low</text>
+  </g>
+</svg>

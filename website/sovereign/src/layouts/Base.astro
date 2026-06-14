@@ -16,6 +16,7 @@
 //   - a faint hex-lattice motif at ~4% opacity, NOT the BD honeycomb.
 import Nav from '../components/Nav.astro';
 import Footer from '../components/Footer.astro';
+import StructuredData from '../components/StructuredData.astro';
 import '../styles/global.css';
 
 // Self-hosted fonts live in public/fonts and are served from the same origin.
@@ -27,10 +28,34 @@ const inter400 = '/fonts/inter-latin-400-normal.woff2';
 interface Props {
   title: string;
   description: string;
+  /* Optional, site-root-relative path to a social card (e.g. /og/foo.png).
+     Defaults to /og/default.png. Resolved to an absolute URL below. */
+  image?: string;
+  /* Open Graph object type. Defaults to 'website'. */
+  ogType?: string;
+  /* Per-page JSON-LD toggles. Omitted on most pages, so nothing is rendered;
+     the home page opts into Organization + WebSite + Service + FAQPage. */
+  structuredData?: {
+    organization?: boolean;
+    website?: boolean;
+    service?: boolean;
+    faq?: boolean;
+    breadcrumbs?: { name: string; url: string }[];
+  };
 }
 
-const { title, description } = Astro.props;
+const {
+  title,
+  description,
+  image,
+  ogType = 'website',
+  structuredData,
+} = Astro.props;
 const fullTitle = `${title} | Hive`;
+
+// Absolute social-card URL. Astro.site is https://hive.scubed.co; the fallback
+// is the build-time rasterized cover at public/og/default.png.
+const ogImage = new URL(image ?? '/og/default.png', Astro.site).href;
 ---
 
 <!doctype html>
@@ -40,25 +65,34 @@ const fullTitle = `${title} | Hive`;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{fullTitle}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#0a0e16" />
+    <meta name="theme-color" content="#f8f7f4" />
     <link rel="canonical" href={Astro.url.href} />
+
+    <!-- Favicons. Concept 1 containment-vault mark. Same-origin public assets,
+         fine under the img-src 'self' data: CSP. -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
 
     <!--
       hreflang cross-links. This site (.co) is the global default; the Bangladesh
       site (.com.bd) is the locale variant. Each page self-canonicals above, so
-      the two sites cross-link as locale alternates rather than duplicates.
-      Reciprocity is mandatory: Google ignores an hreflang pair unless both sides
-      use the same language tag and link back to each other. The geo-router
-      Worker injects the exact mirror of this set on the .com.bd side (.co as
-      "en" and "x-default", .com.bd as "bn-BD"), so these three tags match it one
-      for one. Keep them in sync with deploy/geo-router/src/index.js. Never
+      the two sites cross-link as locale alternates rather than duplicates. The
+      geo-router Worker injects the matching headers on the .com.bd side. Never
       switch the geo redirect to 301, or one site will be de-indexed.
     -->
     <link rel="alternate" hreflang="en" href={Astro.url.href} />
+    <link rel="alternate" hreflang="en-CA" href={Astro.url.href} />
     <link rel="alternate" hreflang="x-default" href={Astro.url.href} />
     <link
       rel="alternate"
       hreflang="bn-BD"
+      href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
+    />
+    <link
+      rel="alternate"
+      hreflang="en-BD"
       href={`https://hive.scubed.com.bd${Astro.url.pathname}`}
     />
 
@@ -80,8 +114,20 @@ const fullTitle = `${title} | Hive`;
 
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
-    <meta property="og:type" content="website" />
+    <meta property="og:type" content={ogType} />
     <meta property="og:url" content={Astro.url.href} />
+    <meta property="og:site_name" content="Hive" />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+
+    {/* Per-page JSON-LD. Renders nothing unless a page opts in. */}
+    {structuredData && <StructuredData {...structuredData} />}
   </head>
 
   <body>

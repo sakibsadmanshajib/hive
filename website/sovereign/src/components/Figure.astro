@@ -1,0 +1,92 @@
+---
+// Captioned dossier figure. Gives every diagram and section photograph an
+// identical treatment: a hairline frame, a "Fig. N" label, and a one-line
+// caption below. The label and caption are separated by a middot, never a dash,
+// per the no-dash-punctuation rule.
+//
+// Two content modes:
+//   - svg:  raw SVG markup string, rendered via set:html (the ?raw diagrams).
+//   - slot: any markup (e.g. an astro:assets <Image>) passed as the default slot.
+//
+// Plain Astro, scoped <style>, zero JS, no inline style attributes (CSP-clean).
+interface Props {
+  fig: string;
+  caption: string;
+  svg?: string;
+  ariaLabel?: string;
+}
+
+const { fig, caption, svg, ariaLabel } = Astro.props;
+---
+
+<figure class="fig" aria-label={ariaLabel}>
+  <div class="fig__frame">
+    {svg ? <div class="fig__svg" set:html={svg} /> : <slot />}
+  </div>
+  <figcaption class="fig__cap">
+    <span class="fig__num font-mono" data-numeric>{fig}</span>
+    <span class="fig__sep" aria-hidden="true">&#183;</span>
+    <span class="fig__text">{caption}</span>
+  </figcaption>
+</figure>
+
+<style>
+  .fig {
+    margin: var(--space-8) 0 0;
+  }
+
+  /* Hairline frame, consistent across diagrams and photos. */
+  .fig__frame {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    background-color: var(--bg-card);
+    padding: var(--space-6);
+    overflow: hidden;
+  }
+
+  .fig__svg {
+    width: 100%;
+  }
+
+  .fig__svg :global(svg) {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  /* Photographic images passed via the slot fill the frame edge to edge. */
+  .fig__frame :global(img) {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+  }
+
+  .fig__cap {
+    margin: var(--space-4) 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+    max-width: 62ch;
+  }
+
+  .fig__num {
+    color: var(--accent);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  .fig__sep {
+    color: var(--text-faint);
+  }
+
+  .fig__text {
+    flex: 1 1 16ch;
+    min-width: 0;
+  }
+</style>

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 208" role="presentation" aria-hidden="true" fill="none" class="motif motif--lattice">
+  <!--
+    Seamless hex-lattice texture tile. The site's quiet substrate, a drafted
+    field rather than the BD honeycomb. Tile is 240 x 208 and repeats cleanly on
+    both axes (a 120-wide, 208-tall hex column doubled). Use as a CSS
+    background-image at low opacity (4 to 7 percent) behind hero and band
+    headers, or inline as a section divider.
+
+    Re-tints via currentColor. Recommended host CSS:
+      .motif--lattice { color: #0d1117; opacity: 0.05; }
+    For a forest-tinted band substrate:
+      .motif--lattice.is-forest { color: #0d3b2e; opacity: 0.04; }
+  -->
+  <defs>
+    <pattern id="hl-cell" width="120" height="208" patternUnits="userSpaceOnUse">
+      <!-- one staggered pair of pointy-top hexes, edge length 60 -->
+      <path d="M60 0 l52 30 v60 l-52 30 l-52 -30 v-60 Z"
+            stroke="currentColor" stroke-width="1" fill="none" />
+      <path d="M0 104 l52 30 v60 l-52 30 M120 104 l-52 30 v60 l52 30"
+            stroke="currentColor" stroke-width="1" fill="none" />
+      <path d="M60 104 l52 30 v60 l-52 30 l-52 -30 v-60 Z"
+            stroke="currentColor" stroke-width="1" fill="none" />
+    </pattern>
+  </defs>
+  <rect width="240" height="208" fill="url(#hl-cell)" />
+</svg>

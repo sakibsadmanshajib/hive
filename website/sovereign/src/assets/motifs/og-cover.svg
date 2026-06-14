@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="og-title" fill="none">
+  <title id="og-title">Hive. Your AI runs on your hardware. Your data never moves.</title>
+  <!--
+    Open Graph / social cover. Self-contained: all colours baked in (social
+    scrapers do not load host CSS, and many rasterize the SVG, so this file must
+    stand alone). 1200 x 630 is the standard OG ratio.
+
+    IMPORTANT for production: most social platforms (LinkedIn, X, Slack) do NOT
+    render SVG OG images reliably. Rasterize this to PNG at 1200 x 630 at build
+    time (e.g. sharp or resvg-js) and reference the PNG in og:image. Keep this
+    SVG as the editable source of truth. Text uses the generic stack the host
+    already serves; when rasterizing, ensure Fraunces and Inter are installed in
+    the render environment or the PNG falls back to the listed fallbacks.
+  -->
+  <rect width="1200" height="630" fill="#f8f7f4" />
+
+  <!-- faint lattice corner, baked -->
+  <g stroke="#d4d1c9" stroke-width="1.4" opacity="0.5" fill="none">
+    <path d="M930 70 l52 30 v60 l-52 30 l-52 -30 v-60 Z" />
+    <path d="M982 100 l52 30 v60 l-52 30 l-52 -30 v-60 Z" />
+    <path d="M930 190 l52 30 v60 l-52 30 l-52 -30 v-60 Z" />
+    <path d="M1034 70 l52 30 v60 l-52 30 l-52 -30 v-60 Z" />
+  </g>
+
+  <!-- compact boundary mark, baked -->
+  <g transform="translate(880 300)">
+    <path d="M40 40 L210 32 Q236 31 244 56 L268 150 Q274 172 258 186 L246 246 Q239 266 218 266 L70 260 Q46 259 42 236 L26 96 Q22 60 40 40 Z"
+          stroke="#0d1117" stroke-width="2" opacity="0.9" fill="none" />
+    <g stroke="#0d1117" stroke-width="1.5" opacity="0.45">
+      <line x1="96" y1="118" x2="160" y2="100" />
+      <line x1="160" y1="100" x2="208" y2="132" />
+      <line x1="96" y1="118" x2="120" y2="186" />
+      <line x1="120" y1="186" x2="190" y2="196" />
+      <line x1="160" y1="100" x2="190" y2="196" />
+    </g>
+    <circle cx="96" cy="118" r="6" fill="#ffffff" stroke="#0d1117" stroke-width="2" />
+    <circle cx="160" cy="100" r="6" fill="#ffffff" stroke="#0d1117" stroke-width="2" />
+    <circle cx="208" cy="132" r="6" fill="#ffffff" stroke="#0d1117" stroke-width="2" />
+    <circle cx="120" cy="186" r="6" fill="#ffffff" stroke="#0d1117" stroke-width="2" />
+    <circle cx="190" cy="196" r="7.5" fill="#0d3b2e" stroke="#0d3b2e" stroke-width="2" />
+  </g>
+
+  <!-- wordmark + headline, baked. Fraunces for the brand, Inter for the line. -->
+  <g>
+    <rect x="100" y="250" width="18" height="18" rx="4" fill="#0d3b2e" />
+    <text x="132" y="266" font-family="Fraunces, Georgia, serif" font-size="30" font-weight="600" fill="#0d1117">Hive</text>
+    <text x="100" y="360" font-family="Fraunces, Georgia, serif" font-size="64" font-weight="600" fill="#0d1117">Your AI runs on</text>
+    <text x="100" y="430" font-family="Fraunces, Georgia, serif" font-size="64" font-weight="600" fill="#0d1117">your hardware.</text>
+    <text x="100" y="492" font-family="Inter, Helvetica, Arial, sans-serif" font-size="26" fill="#6b7585">Your data never moves. On-prem AI for regulated work.</text>
+  </g>
+
+  <!-- baseline rule -->
+  <rect x="100" y="540" width="1000" height="1" fill="#e4e2dc" />
+  <text x="100" y="572" font-family="Inter, Helvetica, Arial, sans-serif" font-size="18" fill="#8b93a1">S Cubed Technology Ltd.</text>
+</svg>

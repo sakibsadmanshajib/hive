@@ -80,7 +80,7 @@
    wherever the mono family is applied so numeric columns and ticks align. */
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
 
   html {

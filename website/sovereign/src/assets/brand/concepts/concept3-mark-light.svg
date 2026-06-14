@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Hive mark">
+  <rect width="64" height="64" fill="#f8f7f4"/>
+  <!-- Monogram H: two piers -->
+  <rect x="14" y="14" width="8" height="36" rx="2" fill="#0d3b2e"/>
+  <rect x="42" y="14" width="8" height="36" rx="2" fill="#0d3b2e"/>
+  <!-- Crossbar reimagined as an enclosed cell bridging the piers -->
+  <rect x="22" y="26" width="20" height="12" rx="2" fill="none" stroke="#0d3b2e" stroke-width="4"/>
+</svg>

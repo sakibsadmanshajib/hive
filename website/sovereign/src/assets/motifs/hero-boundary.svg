@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 540" role="img" aria-labelledby="hb-title hb-desc" fill="none" class="motif motif--boundary">
+  <title id="hb-title">A private network held inside a sovereign boundary</title>
+  <desc id="hb-desc">An abstract motif: structured data nodes connected by lines, fully enclosed within a single drawn perimeter, on a faint hexagonal lattice. The data stays inside the boundary.</desc>
+
+  <!--
+    Hero boundary motif. Concept: data held inside a boundary.
+    Palette is inherited from the host page via currentColor and the .motif
+    CSS classes (see sovereign-design-system.md). No fills are hard-coded to a
+    brand hue except the faint paper-tint substrate, so the asset re-tints if
+    the host palette ever moves. Intended on --bg (off-white) with ink line
+    work and a single forest accent node.
+
+    Defaults if the host sets nothing: ink strokes via currentColor.
+    Recommended host CSS:
+      .motif--boundary { color: #0d1117; }              ink line work
+      .motif--boundary .m-faint  { stroke: #d4d1c9; }   hairline lattice
+      .motif--boundary .m-accent { stroke: #0d3b2e; }   the one forest accent
+      .motif--boundary .m-accent-fill { fill: #0d3b2e; }
+      .motif--boundary .m-node   { fill: #ffffff; }     card surface
+  -->
+
+  <!-- Faint hexagonal lattice substrate. The "field" the boundary is drawn on. -->
+  <g class="m-faint" stroke="#d4d1c9" stroke-width="1" opacity="0.55">
+    <path d="M60 90 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+    <path d="M128 130 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+    <path d="M196 90 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+    <path d="M60 170 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+    <path d="M524 350 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+    <path d="M592 390 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+    <path d="M524 430 l34 -20 l34 20 v40 l-34 20 l-34 -20 Z" />
+  </g>
+
+  <!-- The boundary. A single, deliberate, slightly irregular perimeter: a building
+       footprint, not a circle. This is the customer's edge. Everything that
+       matters lives inside it. -->
+  <path
+    class="m-boundary"
+    d="M150 130
+       L470 110
+       Q520 107 540 150
+       L590 270
+       Q604 302 580 330
+       L560 420
+       Q548 452 512 452
+       L210 440
+       Q170 438 162 400
+       L132 200
+       Q126 158 150 130 Z"
+    stroke="currentColor"
+    stroke-width="1.5"
+    opacity="0.9" />
+
+  <!-- A second, inset hairline of the same boundary: the layered edge reads as
+       a real wall with depth, not a single thin outline. -->
+  <path
+    class="m-boundary-inner"
+    d="M168 152
+       L466 134
+       Q502 132 517 164
+       L562 274
+       Q572 298 555 318
+       L538 398
+       Q529 422 503 422
+       L216 412
+       Q188 410 182 382
+       L154 204
+       Q150 172 168 152 Z"
+    stroke="currentColor"
+    stroke-width="1"
+    opacity="0.28" />
+
+  <!-- Contained network. Connections are drawn first so nodes sit on top.
+       The graph is dense, structured, orderly: a private system at rest. -->
+  <g class="m-edges" stroke="currentColor" stroke-width="1.25" opacity="0.5">
+    <line x1="250" y1="210" x2="350" y2="180" />
+    <line x1="350" y1="180" x2="448" y2="220" />
+    <line x1="250" y1="210" x2="300" y2="300" />
+    <line x1="300" y1="300" x2="350" y2="180" />
+    <line x1="300" y1="300" x2="420" y2="330" />
+    <line x1="420" y1="330" x2="448" y2="220" />
+    <line x1="420" y1="330" x2="490" y2="290" />
+    <line x1="350" y1="180" x2="490" y2="290" />
+    <line x1="250" y1="210" x2="220" y2="330" />
+    <line x1="220" y1="330" x2="300" y2="300" />
+  </g>
+
+  <!-- Data nodes. White card surfaces with ink rings. One node is the forest
+       accent: the single highlight per viewport. -->
+  <g class="m-nodes">
+    <circle cx="250" cy="210" r="7" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <circle cx="350" cy="180" r="7" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <circle cx="448" cy="220" r="7" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <circle cx="300" cy="300" r="7" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <circle cx="220" cy="330" r="7" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <circle cx="490" cy="290" r="7" fill="#ffffff" stroke="currentColor" stroke-width="1.5" />
+    <!-- accent node: the contained system's core -->
+    <circle class="m-accent-fill" cx="420" cy="330" r="8.5" fill="#0d3b2e" stroke="#0d3b2e" stroke-width="1.5" />
+  </g>
+
+  <!-- A single line attempts to leave the boundary and is stopped at the wall:
+       it terminates at the edge with no node beyond. The visual statement is
+       "nothing crosses". Drawn faint so it reads as intent, not error. -->
+  <g class="m-egress" opacity="0.42">
+    <line x1="490" y1="290" x2="588" y2="262" stroke="currentColor" stroke-width="1.25" stroke-dasharray="2 5" />
+    <circle cx="588" cy="262" r="3" fill="none" stroke="currentColor" stroke-width="1.25" />
+  </g>
+
+  <!-- Corner registration ticks on the boundary: an institutional, drafted feel. -->
+  <g class="m-accent" stroke="#0d3b2e" stroke-width="1.5" opacity="0.85">
+    <path d="M150 130 l0 14 M150 130 l14 -1" />
+    <path d="M512 452 l0 -14 M512 452 l-14 1" />
+  </g>
+</svg>

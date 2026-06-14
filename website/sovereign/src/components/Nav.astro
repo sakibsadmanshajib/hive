@@ -18,28 +18,25 @@ function isActive(href: string): boolean {
 <nav class="nav" aria-label="Primary">
   <div class="shell nav__inner">
     <a class="nav__brand" href="/" aria-label="Hive home">
-      <span class="nav__brand-mark" aria-hidden="true"></span>
+      <span class="nav__brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64" width="20" height="20" focusable="false">
+          <rect
+            x="12"
+            y="12"
+            width="40"
+            height="40"
+            rx="10"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="5"></rect>
+          <rect x="26" y="26" width="12" height="12" rx="3" fill="currentColor"
+          ></rect>
+        </svg>
+      </span>
       Hive
     </a>
 
-    {/*
-      Mobile disclosure toggle. Hidden on wide viewports (the links sit inline
-      there). Below 760px the links collapse and this button reveals them.
-      aria-expanded reflects state, aria-controls points at the list. It is a
-      real <button>, so it is keyboard operable for free and picks up the global
-      gold :focus-visible ring. The bars are decorative (aria-hidden).
-    */}
-    <button
-      class="nav__toggle tap-target"
-      type="button"
-      aria-expanded="false"
-      aria-controls="nav-links"
-      aria-label="Open menu"
-    >
-      <span class="nav__toggle-bars" aria-hidden="true"></span>
-    </button>
-
-    <ul class="nav__links" id="nav-links">
+    <ul class="nav__links">
       {
         links.map((link) => (
           <li>
@@ -58,38 +55,6 @@ function isActive(href: string): boolean {
     <a class="nav__cta tap-target" href="/book-a-demo">Book a Demo</a>
   </div>
 </nav>
-
-<script>
-  // Mobile menu disclosure. Vanilla, no framework. Toggles aria-expanded and a
-  // data attribute the stylesheet keys off. Closes on Escape and when a link is
-  // chosen. On wide viewports the list is always shown by CSS, so this script
-  // only governs the collapsed mobile state.
-  const toggle = document.querySelector<HTMLButtonElement>('.nav__toggle');
-  const list = document.getElementById('nav-links');
-
-  if (toggle && list) {
-    const setOpen = (open: boolean): void => {
-      toggle.setAttribute('aria-expanded', String(open));
-      toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
-      list.dataset.open = open ? 'true' : 'false';
-    };
-
-    toggle.addEventListener('click', () => {
-      setOpen(toggle.getAttribute('aria-expanded') !== 'true');
-    });
-
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
-        setOpen(false);
-        toggle.focus();
-      }
-    });
-
-    list.addEventListener('click', (event) => {
-      if (event.target instanceof HTMLAnchorElement) setOpen(false);
-    });
-  }
-</script>
 
 <style>
   .nav {
@@ -117,11 +82,21 @@ function isActive(href: string): boolean {
     letter-spacing: -0.01em;
   }
 
+  /* Concept 1 containment-vault mark, inlined so it themes via currentColor
+     (forest accent on the off-white nav). */
   .nav__brand-mark {
-    width: 14px;
-    height: 14px;
-    border-radius: 4px;
-    background-color: var(--teal);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: var(--accent);
+  }
+
+  .nav__brand-mark svg {
+    display: block;
+    width: 20px;
+    height: 20px;
   }
 
   .nav__links {
@@ -152,122 +127,25 @@ function isActive(href: string): boolean {
     display: inline-flex;
     align-items: center;
     background-color: var(--gold);
-    color: #1a1205;
+    color: var(--bg);
     font-weight: 600;
     font-size: 15px;
     padding: 10px 18px;
     border-radius: 10px;
+    transition:
+      transform 120ms ease,
+      filter 120ms ease;
   }
 
+  /* Subtle 1px lift on hover. transform only, so there is no layout shift. */
   .nav__cta:hover {
+    transform: translateY(-1px);
     filter: brightness(1.05);
   }
 
-  /* Mobile disclosure toggle. Hidden on wide viewports (links are inline). The
-     bars are a pure-CSS hamburger glyph; the button itself carries no gold so
-     the single gold accent stays on the CTA. */
-  .nav__toggle {
-    display: none;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    margin-inline-start: auto;
-    background-color: transparent;
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
-    cursor: pointer;
-  }
-
-  .nav__toggle:hover {
-    border-color: var(--text-faint);
-  }
-
-  .nav__toggle-bars,
-  .nav__toggle-bars::before,
-  .nav__toggle-bars::after {
-    display: block;
-    width: 18px;
-    height: 2px;
-    background-color: var(--text-muted);
-    border-radius: 2px;
-    transition: transform 150ms ease, opacity 150ms ease;
-  }
-
-  .nav__toggle-bars {
-    position: relative;
-  }
-
-  .nav__toggle-bars::before,
-  .nav__toggle-bars::after {
-    content: '';
-    position: absolute;
-    left: 0;
-  }
-
-  .nav__toggle-bars::before {
-    transform: translateY(-6px);
-  }
-
-  .nav__toggle-bars::after {
-    transform: translateY(6px);
-  }
-
-  /* Open state morphs the glyph into an X. */
-  .nav__toggle[aria-expanded='true'] .nav__toggle-bars {
-    background-color: transparent;
-  }
-
-  .nav__toggle[aria-expanded='true'] .nav__toggle-bars::before {
-    transform: translateY(0) rotate(45deg);
-  }
-
-  .nav__toggle[aria-expanded='true'] .nav__toggle-bars::after {
-    transform: translateY(0) rotate(-45deg);
-  }
-
   @media (max-width: 760px) {
-    .nav__toggle {
-      display: inline-flex;
-      position: relative;
-    }
-
-    /* Collapse the links into a dropdown panel. Shown only when the toggle
-       reports data-open="true". */
     .nav__links {
-      position: absolute;
-      top: 64px;
-      left: 0;
-      right: 0;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0;
-      margin-inline-start: 0;
-      padding: 8px 24px 16px;
-      background-color: var(--bg-raised);
-      border-bottom: 1px solid var(--border);
       display: none;
-    }
-
-    .nav__links[data-open='true'] {
-      display: flex;
-    }
-
-    .nav__link {
-      padding-block: 12px;
-      min-height: 44px;
-      border-bottom: 1px solid var(--border);
-    }
-  }
-
-  /* Respect reduced-motion: drop the glyph transition. The global reduce rule
-     in global.css already neutralises transitions, this is a local guard. */
-  @media (prefers-reduced-motion: reduce) {
-    .nav__toggle-bars,
-    .nav__toggle-bars::before,
-    .nav__toggle-bars::after {
-      transition: none;
     }
   }
 </style>

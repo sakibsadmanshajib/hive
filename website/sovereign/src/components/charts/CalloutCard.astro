@@ -7,18 +7,25 @@
 // Placement is the caller's responsibility and is also enforced by the content
 // lint: the Pinterest card may only appear in a cost-scoped section, never on
 // the Security page and never adjacent to a sovereignty claim.
+//
+// The accent is applied through a scoped class, never an inline style attribute,
+// so it survives a strict Content-Security-Policy that forbids inline styles.
+// Both legacy accent names resolve to the single deep-forest accent (var(--accent));
+// there is no second hue on the site.
 interface Props {
-  // Visual accent. Proof points use teal; never red for a positive proof.
+  // Visual accent. Kept for API compatibility; both values render the single
+  // forest accent. Never red for a positive proof.
   accent?: 'teal' | 'gold';
   statement: string;
   asOf: string;
 }
 
 const { accent = 'teal', statement, asOf } = Astro.props;
-const accentColor = accent === 'gold' ? 'var(--gold)' : 'var(--teal)';
+// Class hook only; both accents map to the one forest accent in CSS below.
+const accentClass = accent === 'gold' ? 'callout--gold' : 'callout--teal';
 ---
 
-<div class="callout" style={`--callout-accent: ${accentColor}`}>
+<div class:list={['callout', accentClass]}>
   <p class="callout__statement">{statement}</p>
   <p class="callout__asof"><span data-numeric>{asOf}</span></p>
   <slot name="disclaimer" />
@@ -26,6 +33,8 @@ const accentColor = accent === 'gold' ? 'var(--gold)' : 'var(--teal)';
 
 <style>
   .callout {
+    /* Single forest accent. No inline style, CSP-clean. */
+    --callout-accent: var(--accent);
     border: 1px solid var(--border);
     border-left: 3px solid var(--callout-accent);
     border-radius: var(--radius);
@@ -34,6 +43,12 @@ const accentColor = accent === 'gold' ? 'var(--gold)' : 'var(--teal)';
     display: flex;
     flex-direction: column;
     gap: 12px;
+  }
+  /* Both accent variants resolve to the one forest accent; kept as explicit
+     hooks so the prop API stays meaningful without introducing a second hue. */
+  .callout--teal,
+  .callout--gold {
+    --callout-accent: var(--accent);
   }
   .callout__statement {
     margin: 0;

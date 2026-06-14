@@ -16,7 +16,24 @@ const year = new Date().getFullYear();
 <footer class="footer">
   <div class="shell footer__inner">
     <div class="footer__brand">
-      <span class="footer__name">S Cubed</span>
+      <span class="footer__name">
+        <span class="footer__mark" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="20" height="20" focusable="false">
+            <rect
+              x="12"
+              y="12"
+              width="40"
+              height="40"
+              rx="10"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="5"></rect>
+            <rect x="26" y="26" width="12" height="12" rx="3" fill="currentColor"
+            ></rect>
+          </svg>
+        </span>
+        S Cubed Technology Ltd.
+      </span>
       <p class="footer__tagline">
         Your AI runs on your hardware. Your data never moves.
       </p>
@@ -54,7 +71,7 @@ const year = new Date().getFullYear();
   </div>
 
   <div class="shell footer__legal">
-    <span data-numeric>{year}</span> S Cubed. All rights reserved.
+    <span data-numeric>{year}</span> S Cubed Technology Ltd. All rights reserved.
   </div>
 </footer>
 
@@ -73,8 +90,28 @@ const year = new Date().getFullYear();
   }
 
   .footer__name {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
     font-weight: 600;
     font-size: 16px;
+  }
+
+  /* Concept 1 containment-vault mark, inlined so it themes via currentColor
+     (forest accent). */
+  .footer__mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: var(--accent);
+  }
+
+  .footer__mark svg {
+    display: block;
+    width: 20px;
+    height: 20px;
   }
 
   .footer__tagline {

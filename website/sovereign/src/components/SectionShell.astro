@@ -1,0 +1,114 @@
+---
+// Dossier section shell. Implements the document-grid pattern used by every
+// numbered section on the Home page:
+//   - a left margin column holding a large Fraunces section numeral and a short
+//     uppercase letterspaced margin label (the section eyebrow, repurposed),
+//   - a right content column at a comfortable reading measure.
+//
+// On mobile the margin column collapses: numeral + label stack above the
+// content, full width. A full-width 1px hairline rule sits at the top of each
+// section, so sections are separated by rules and spacing, never by background
+// colour bands.
+//
+// Plain Astro, scoped <style>, zero JS, no inline style attributes (CSP-clean).
+// global.css forces h2..h6 to Inter; the numeral here is not a heading element,
+// and it explicitly sets the display family, so the override is safe.
+interface Props {
+  numeral: string;
+  label: string;
+  id?: string;
+}
+
+const { numeral, label, id } = Astro.props;
+---
+
+<section class="ds" aria-labelledby={id}>
+  <div class="shell ds__grid">
+    <div class="ds__margin">
+      <span class="ds__numeral font-mono" data-numeric aria-hidden="true"
+        >{numeral}</span
+      >
+      <span class="ds__label">{label}</span>
+    </div>
+    <div class="ds__content">
+      <slot />
+    </div>
+  </div>
+</section>
+
+<style>
+  /* Full-width hairline rule above every dossier section. This rule, plus the
+     numeral and spacing, is the only section differentiator on base surfaces.
+     No coloured bands. */
+  .ds {
+    border-top: 1px solid var(--border);
+    padding-block: var(--space-9);
+  }
+
+  .ds__grid {
+    display: grid;
+    grid-template-columns: var(--dossier-margin-col) minmax(0, 1fr);
+    gap: var(--dossier-gap);
+    align-items: start;
+  }
+
+  .ds__margin {
+    position: sticky;
+    top: var(--space-8);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  /* Large Fraunces numeral. Not a heading element, so it overrides the global
+     Inter-forcing by setting the display family directly. */
+  .ds__numeral {
+    font-family: var(--font-display);
+    font-feature-settings: 'tnum' 1;
+    font-size: var(--text-numeral);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+
+  .ds__label {
+    color: var(--text-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    line-height: var(--lh-snug);
+  }
+
+  .ds__content {
+    max-width: var(--dossier-measure);
+    /* Wider blocks (card grids, diagrams) opt out with .ds__bleed below. */
+  }
+
+  /* Content children that should break past the reading measure to the full
+     content-column width (card grids, full diagrams). */
+  .ds__content :global(.ds__bleed) {
+    max-width: none;
+  }
+
+  @media (max-width: 880px) {
+    .ds {
+      padding-block: var(--space-8);
+    }
+    .ds__grid {
+      grid-template-columns: 1fr;
+      gap: var(--space-6);
+    }
+    .ds__margin {
+      position: static;
+      top: auto;
+      flex-direction: row;
+      align-items: baseline;
+      gap: var(--space-4);
+    }
+    .ds__content {
+      max-width: none;
+    }
+  }
+</style>

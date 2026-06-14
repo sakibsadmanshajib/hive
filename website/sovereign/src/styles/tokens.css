@@ -2,78 +2,179 @@
  * Design tokens for the Hive sovereign site.
  *
  * Two layers:
- *   1. :root custom properties — the raw token values, usable from any CSS
+ *   1. :root custom properties, the raw token values, usable from any CSS
  *      and from inline SVG charts.
- *   2. @theme — exposes the same tokens to Tailwind 4 utility generation
- *      (bg-bg, text-text-muted, text-teal, etc.). Keep both in sync;
+ *   2. @theme, exposes the same tokens to Tailwind 4 utility generation
+ *      (bg-bg, text-text-muted, text-accent, etc.). Keep both in sync;
  *      tailwind.config.ts mirrors these for editor tooling.
  *
- * Colour discipline:
- *   --gold  scarce, one accent per viewport.
- *   --teal  verified / safe / sovereign.
- *   --red   RISK framing only.
- *   --grey  competitor baseline. AA verified 3.71:1 on --bg-card.
- *           Never use #5b6472; it fails contrast.
+ * Scheme: light institutional. Warm off-white surfaces, near-black ink,
+ * a single deep forest accent. Restraint over colour noise.
+ *
+ * Colour discipline (one accent only):
+ *   --accent  deep forest. CTAs, links, focus ring, at most one highlight
+ *             per viewport. There is no second hue.
+ *   --gold, --teal  legacy token NAMES kept so existing components compile.
+ *             Both repoint to the single forest accent, so any var(--gold)
+ *             or var(--teal) renders the one accent, never a second colour.
+ *   --red     restrained muted ink, risk framing is no longer used on Home.
+ *   --grey    secondary text, competitor baseline.
  */
 
 :root {
   /* surfaces */
-  --bg: #0a0e16;
-  --bg-raised: #11161f;
-  --bg-card: #141b26;
+  --bg: #f8f7f4;
+  --bg-raised: #f2f1ec;
+  --bg-card: #ffffff;
 
   /* borders */
-  --border: #1e2733;
-  --border-strong: #2a3543;
+  --border: #e4e2dc;
+  --border-strong: #d4d1c9;
 
   /* text */
-  --text: #f5f7fa;
-  --text-muted: #aeb6c2;
-  --text-faint: #828b99;
+  --text: #0d1117;
+  /* muted darkened to #4a515e for >= 4.5:1 on --bg (#f8f7f4); faint to #707886
+     for >= 3:1 and visibly lighter than muted. Both used site-wide. */
+  --text-muted: #4a515e;
+  --text-faint: #707886;
 
-  /* accents */
-  --gold: #f0b429;
-  --teal: #2dd4bf;
-  --red: #f04438;
+  /* accent (single deep forest, one per viewport) */
+  --accent: #0d3b2e;
+  --accent-hover: #0f4636;
 
-  /* competitor baseline */
+  /* legacy accent names, all repointed to the single forest accent */
+  --gold: #0d3b2e;
+  --teal: #0d3b2e;
+  --red: #6b7585;
+
+  /* competitor baseline / muted */
   --grey: #6b7585;
 
   /* geometry */
   --radius: 14px;
   --max-width: 1140px;
-  --section-rhythm: 120px;
+  --section-rhythm: 180px;
 
   /* type families */
   --font-display: 'Fraunces', 'Inter', ui-serif, serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+
+  /* ---- additive refinements (art-directed minimalism) ---- */
+
+  /* surfaces: two faint additions for quiet depth without new hues */
+  --bg-forest-tint: #f1f4f2;
+  --bg-sunken: #efece6;
+
+  /* accent tints derived from the single forest */
+  --accent-wash: #e9efeb;
+  --accent-line: #c3d3cb;
+
+  /* residency-risk red, single source */
+  --risk: #f04438;
+  --risk-wash: #fdecea;
+
+  /* spacing scale, 4px base */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  /* vertical rhythm tiers for band system */
+  --rhythm-tight: 96px;
+  --rhythm-base: 140px;
+  --rhythm-loose: 200px;
+
+  /* type sizes (role scale; H1 already set in global.css) */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 17px;
+  --text-md: 19px;
+  --text-lg: 24px;
+  --text-h3: 22px;
+  --text-h2: clamp(28px, 3vw, 36px);
+
+  /* line heights */
+  --lh-tight: 1.05;
+  --lh-heading: 1.2;
+  --lh-snug: 1.4;
+  --lh-body: 1.6;
+
+  /* radii */
+  --radius-sm: 8px;
+  --radius-card: 14px;
+  --radius-pill: 999px;
+
+  /* active/selected edge */
+  --border-accent: #0d3b2e;
+
+  /* elevation: almost flat, one restrained hover shadow */
+  --shadow-raise: 0 1px 2px rgba(13, 17, 23, 0.04),
+                  0 8px 24px rgba(13, 17, 23, 0.06);
+
+  /* motion tokens */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --dur-fast: 120ms;
+  --dur-base: 180ms;
+  --dur-reveal: 420ms;
+  --reveal-shift: 14px;
+
+  /* ---- dossier layout (additive; consumed only by the Home page) ---- */
+
+  /* document grid: left margin column holds the section numeral + label,
+     right column holds content at a comfortable reading measure. */
+  --dossier-margin-col: 148px;
+  --dossier-gap: var(--space-8);
+  --dossier-measure: 680px;
+
+  /* deliberate dark accent surfaces (trust strip + closing CTA only) */
+  --ink: #0d1117;
+  --on-ink: #f8f7f4;
+  --on-ink-muted: #c3c9d2;
+  --on-ink-faint: #a7aebb;
+  --on-ink-border: rgba(248, 247, 244, 0.22);
+
+  /* large Fraunces dossier section numeral */
+  --text-numeral: clamp(40px, 4.6vw, 60px);
+  --text-h2-dossier: clamp(32px, 3.4vw, 40px);
+
+  /* subtle paper-grain texture (decorative, ~2.5% opacity data-uri noise) */
+  --paper-grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.55'/></svg>");
 }
 
 @theme {
-  --color-bg: #0a0e16;
-  --color-bg-raised: #11161f;
-  --color-bg-card: #141b26;
+  --color-bg: #f8f7f4;
+  --color-bg-raised: #f2f1ec;
+  --color-bg-card: #ffffff;
 
-  --color-border: #1e2733;
-  --color-border-strong: #2a3543;
+  --color-border: #e4e2dc;
+  --color-border-strong: #d4d1c9;
 
-  --color-text: #f5f7fa;
-  --color-text-muted: #aeb6c2;
-  --color-text-faint: #828b99;
+  --color-text: #0d1117;
+  --color-text-muted: #4a515e;
+  --color-text-faint: #707886;
 
-  --color-gold: #f0b429;
-  --color-teal: #2dd4bf;
-  --color-risk: #f04438;
+  --color-accent: #0d3b2e;
+  --color-accent-hover: #0f4636;
+
+  --color-gold: #0d3b2e;
+  --color-teal: #0d3b2e;
+  --color-risk: #6b7585;
   --color-grey: #6b7585;
 
   --radius-card: 14px;
 
   --max-width-shell: 1140px;
 
-  --spacing-section: 120px;
+  --spacing-section: 180px;
 
   --font-display: 'Fraunces', 'Inter', ui-serif, serif;
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
-  --font-mono: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
 }

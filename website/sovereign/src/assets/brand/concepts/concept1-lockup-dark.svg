@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64" role="img" aria-label="Hive">
+  <rect width="200" height="64" fill="#0d1117"/>
+  <!-- Mark -->
+  <rect x="14" y="16" width="32" height="32" rx="8"
+        fill="none" stroke="#f8f7f4" stroke-width="4"/>
+  <rect x="25" y="27" width="10" height="10" rx="2.5" fill="#3f9e7c"/>
+  <!-- Wordmark -->
+  <text x="64" y="42" font-family="Fraunces, Georgia, serif" font-size="30"
+        font-weight="600" letter-spacing="0.5" fill="#f8f7f4">Hive</text>
+</svg>
