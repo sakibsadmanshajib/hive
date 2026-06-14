@@ -100,11 +100,11 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
       <div class="hero__media">
         <Image
           src={heroImg}
-          alt="Hive on-prem AI appliance."
-          widths={[480, 768, 1024]}
-          sizes="(max-width: 880px) 100vw, 46vw"
-          width={1024}
-          height={1024}
+          alt="Hive on-prem AI appliance"
+          widths={[768, 1100, 1376]}
+          sizes="(max-width: 880px) 100vw, 50vw"
+          width={1376}
+          height={768}
           format="webp"
           loading="eager"
           fetchpriority="high"
@@ -771,14 +771,20 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
      ========================================================================= */
   .hero {
     position: relative;
-    padding-block: var(--space-6) var(--space-9);
+    /* Clip the 50vw absolute media panel so it can bleed to the right viewport
+       edge without ever creating horizontal scroll. Clip (not hidden) so the
+       page never traps scroll position. */
+    overflow-x: clip;
+    padding-block: var(--space-6) var(--space-8);
   }
 
-  /* Real two-column keynote grid: lede slightly wider than the render, both
-     vertically centred so the shot reads as a balanced composition. */
+  /* Desktop: a single content column on the left at ~52% of the shell; the
+     hero media is taken out of flow as an absolute full-bleed panel that owns
+     the right half. Vertically centred so the lede reads as a balanced
+     composition against the appliance. */
   .hero__grid {
     display: grid;
-    grid-template-columns: 1.05fr 0.95fr;
+    grid-template-columns: minmax(0, 52%);
     gap: var(--space-8);
     align-items: center;
   }
@@ -787,7 +793,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     position: relative;
     z-index: 1;
     max-width: 36rem;
-    padding-block: var(--space-6) var(--space-6);
+    padding-block: 0 var(--space-6);
   }
 
   /* Thin meta-row, hairline separators, small uppercase tags. No fake badges. */
@@ -859,24 +865,48 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
     max-width: 48ch;
   }
 
-  /* Product render placed directly on the off-white page. No ink panel, no
-     frame. The render already sits on a seamless off-white background and
-     carries its own soft shadow; a faint radius and drop shadow ground it. */
+  /* Desktop full-bleed right panel: pinned to the top, right, and bottom of the
+     hero and sized slightly wider than the empty grid track so it always reaches
+     the viewport edge. Sits behind the lede (z-index 0 vs the col's z-index 1).
+     The literal #efece8 matches the render's own warm corner colour so any
+     sub-pixel gap at the feathered edge blends into the image, not the page.
+     A left-to-right mask feathers the inner ~22% from transparent to opaque so
+     there is no hard vertical seam against the off-white page. */
   .hero__media {
-    position: relative;
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 52vw;
     z-index: 0;
-    display: flex;
-    justify-content: center;
+    background-color: #efece8;
+    transform-origin: center;
+    -webkit-mask-image: linear-gradient(
+      to right,
+      transparent 0%,
+      rgba(0, 0, 0, 0) 4%,
+      #000 26%,
+      #000 100%
+    );
+    mask-image: linear-gradient(
+      to right,
+      transparent 0%,
+      rgba(0, 0, 0, 0) 4%,
+      #000 26%,
+      #000 100%
+    );
   }
 
+  /* The render fills the tall panel via object-fit:cover, so the appliance
+     reads large and confident rather than as a floating thumbnail. No radius,
+     no drop shadow: a full bleed has no floating-card edge. */
   .hero__img {
     display: block;
     width: 100%;
-    height: auto;
-    max-width: 540px;
-    border-radius: var(--radius-lg, 16px);
-    /* Soft keynote shadow on top of the render's own baked shadow. */
-    filter: drop-shadow(0 24px 48px rgba(13, 17, 23, 0.1));
+    height: 100%;
+    max-width: none;
+    object-fit: cover;
+    object-position: center;
     opacity: 1;
   }
 
@@ -922,7 +952,7 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
      04 COST  (on-face figure callout)
      ========================================================================= */
   .cost__faceline {
-    margin: var(--space-8) 0 0;
+    margin: var(--space-7) 0 0;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
@@ -1094,9 +1124,10 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
 
     /* Product render settles in: a subtle fade and scale-up. Starts near-full
        opacity (0.85) and a barely-scaled 0.98, so it is never hidden if the
-       animation does not run. transform-origin keeps the settle centred. */
+       animation does not run. transform-origin is set on the base rule. The
+       panel stays full-bleed correct: scale animates transform only, which does
+       not affect the absolute pin, and the final state is scale(1) opacity(1). */
     .hero__media {
-      transform-origin: center;
       animation: hero-img-settle var(--dur-reveal) var(--ease-out) 140ms both;
     }
   }
@@ -1146,8 +1177,10 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
   }
 
   @media (max-width: 880px) {
-    /* Hero collapses to a single column. The render moves above the lede and
-       runs full width on off-white at its natural height (no fixed banner). */
+    /* Hero collapses to a single column. The media leaves the absolute panel,
+       returns to normal flow above the lede, and runs full width on off-white
+       at its natural height. The desktop seam mask and corner-colour backdrop
+       are both dropped so a contain image is never clipped or fringed. */
     .hero {
       padding-block: var(--space-7) var(--space-8);
     }
@@ -1156,10 +1189,19 @@ import costCrossover from '../assets/diagrams/cost-crossover.svg?raw';
       gap: var(--space-6);
     }
     .hero__media {
+      position: static;
+      width: 100%;
+      height: auto;
       order: -1;
+      background-color: transparent;
+      -webkit-mask-image: none;
+      mask-image: none;
     }
     .hero__img {
+      width: 100%;
+      height: auto;
       max-width: 100%;
+      object-fit: contain;
     }
     .hero__col {
       max-width: none;

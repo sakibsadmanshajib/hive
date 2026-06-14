@@ -32,16 +32,24 @@ const { fig, caption, svg, ariaLabel } = Astro.props;
 
 <style>
   .fig {
-    margin: var(--space-8) 0 0;
+    margin: var(--space-7) 0 0;
   }
 
-  /* Hairline frame, consistent across diagrams and photos. */
+  /* Hairline frame, consistent across diagrams and photos. Interior padding
+     kept tight so the diagram fills the frame and reads as a confident exhibit,
+     not a small drawing marooned in white space. */
   .fig__frame {
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
     background-color: var(--bg-card);
-    padding: var(--space-6);
+    padding: var(--space-4);
     overflow: hidden;
+  }
+
+  @media (max-width: 640px) {
+    .fig__frame {
+      padding: var(--space-3);
+    }
   }
 
   .fig__svg {
