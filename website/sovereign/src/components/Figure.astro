@@ -1,0 +1,104 @@
+---
+// Captioned dossier plate. Presents every diagram and section photograph as a
+// printed exhibit, not a clickable tile: a thin top hairline rule, the diagram
+// sitting large and open directly on the page (the off-white surface shows
+// through), and a "Fig. N" label plus one-line caption below. The label and
+// caption are separated by a middot, never a dash, per the no-dash-punctuation
+// rule. No card fill, no border-box, no radius on the frame, no shadow, no
+// hover: nothing that implies the figure is interactive.
+//
+// Two content modes:
+//   - svg:  raw SVG markup string, rendered via set:html (the ?raw diagrams).
+//   - slot: any markup (e.g. an astro:assets <Image>) passed as the default slot.
+//
+// Plain Astro, scoped <style>, zero JS, no inline style attributes (CSP-clean).
+interface Props {
+  fig: string;
+  caption: string;
+  svg?: string;
+  ariaLabel?: string;
+}
+
+const { fig, caption, svg, ariaLabel } = Astro.props;
+---
+
+<figure class="fig" role="img" aria-label={ariaLabel}>
+  <div class="fig__plate">
+    {svg ? <div class="fig__svg" set:html={svg} /> : <slot />}
+  </div>
+  <figcaption class="fig__cap">
+    <span class="fig__num font-mono" data-numeric>{fig}</span>
+    <span class="fig__sep" aria-hidden="true">&#183;</span>
+    <span class="fig__text">{caption}</span>
+  </figcaption>
+</figure>
+
+<style>
+  .fig {
+    margin: var(--space-7) 0 0;
+  }
+
+  /* Editorial plate, not a card. A single thin hairline rule across the top
+     marks the exhibit; the diagram then sits open on the page with vertical
+     breathing room above and below. No box border, no background fill, no
+     radius, no shadow: the figure must not read as a button or tile. */
+  .fig__plate {
+    border-top: 1px solid var(--border);
+    padding: var(--space-5) 0 var(--space-4);
+  }
+
+  @media (max-width: 640px) {
+    .fig__plate {
+      padding: var(--space-4) 0 var(--space-3);
+    }
+  }
+
+  /* Diagrams fill the available width and read as a confident exhibit. */
+  .fig__svg {
+    width: 100%;
+  }
+
+  .fig__svg :global(svg) {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
+  /* Photographic images passed via the slot fill the plate width. A photo is
+     not a fake button, so a small radius on the image itself is fine; the plate
+     wrapper around it stays open, with no card chrome. */
+  .fig__plate :global(img) {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm);
+  }
+
+  .fig__cap {
+    margin: var(--space-4) 0 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-2);
+    color: var(--text-muted);
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+    max-width: 62ch;
+  }
+
+  .fig__num {
+    color: var(--accent);
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+  }
+
+  .fig__sep {
+    color: var(--text-faint);
+  }
+
+  .fig__text {
+    flex: 1 1 16ch;
+    min-width: 0;
+  }
+</style>

@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="img" aria-labelledby="cc-title cc-desc" fill="none" class="diagram diagram--crossover">
+  <title id="cc-title">Cumulative cost over time: metered cloud versus owned hardware</title>
+  <desc id="cc-desc">A conceptual line chart with no numbers. The horizontal axis is time; the vertical axis is cumulative cost. Metered cloud starts cheap then curves sharply upward in an exponential arc. Owned or on-prem hardware starts with an upfront capex step then stays nearly flat at a low slope of 2 to 4 degrees. The two paths cross at a marked breakeven point; after that, owning costs far less.</desc>
+
+  <!--
+    Conceptual cost-crossover. STATIC companion to the real Recharts TCO island
+    on /pricing; this one carries NO numbers and states the shape of the
+    argument anywhere on the site without the JS island.
+
+    Colour rule (cost chart, not risk): owned series = forest accent, cloud /
+    competitor series = GREY, never red. Red is not used in this file.
+    Recommended host CSS:
+      .diagram { color: #0d1117; }
+      .diagram .d-faint   { stroke: #e4e2dc; }   gridlines, very low contrast
+      .diagram .d-axis    { stroke: #d4d1c9; }
+      .diagram .d-muted   { fill: #6b7585; }
+      .diagram .d-grey    { stroke: #6b7585; }    metered cloud
+      .diagram .d-accent  { stroke: #0d3b2e; fill: #0d3b2e; }  owned
+      .diagram text       { font-family: 'Inter', system-ui, sans-serif; }
+      .diagram .d-num     { font-family: 'Geist Mono', monospace; }
+
+    Plot area: x 80..680, y 60..340. Origin at (80,340).
+
+    Cloud curve: quadratic bezier M80 340 Q380 338 680 60.
+      x(t) = 80 + 600t  (linear in t, control-point x = 380 = midpoint)
+      y(t) = 340 - 4t - 276t²
+      Starts almost horizontal then bends sharply upward (exponential shape).
+
+    Owned near-flat leg: M150 237 L680 204.
+      Slope in SVG coords: rise = -33, run = 530 -> angle ~3.6 deg from horizontal.
+
+    Breakeven intersection (verified):
+      Set 340 - 4t - 276t² = 241.358 - 37.358t  (owned line mapped to t via x=80+600t)
+      276t² - 33.358t - 98.642 = 0
+      Positive root t = 0.6615
+      x = 80 + 600*0.6615 = 476.9  -> marker at (477, 217)
+      Cloud y(0.6615) = 340 - 4*0.6615 - 276*0.6615^2 = 216.6
+      Owned y at x=477: 237 - (33/530)*(477-150) = 237 - 20.37 = 216.6  -> match.
+  -->
+
+  <!-- faint horizontal gridlines (no values) -->
+  <g class="d-faint" stroke="#e4e2dc" stroke-width="1">
+    <line x1="80" y1="120" x2="680" y2="120" />
+    <line x1="80" y1="190" x2="680" y2="190" />
+    <line x1="80" y1="260" x2="680" y2="260" />
+  </g>
+
+  <!-- axes -->
+  <g class="d-axis" stroke="#d4d1c9" stroke-width="1.5">
+    <line x1="80" y1="60" x2="80" y2="340" />
+    <line x1="80" y1="340" x2="680" y2="340" />
+  </g>
+  <text x="80" y="372" font-size="13" fill="#6b7585" class="d-muted">Time</text>
+  <text x="680" y="372" text-anchor="end" font-size="13" fill="#6b7585" class="d-muted" font-style="italic">the meter never stops</text>
+  <g transform="translate(38 200) rotate(-90 0 0)">
+    <text x="0" y="0" text-anchor="middle" font-size="13" fill="#6b7585" class="d-muted">Cost</text>
+  </g>
+
+  <!-- METERED CLOUD: exponential arc, starts gently then curves sharply upward, grey -->
+  <!-- Quadratic bezier: control point (380,338) keeps start flat, end steep -->
+  <path class="d-grey" d="M80 340 Q380 338 680 60" stroke="#6b7585" stroke-width="2.25" fill="none" />
+  <!-- dot at the high end to hint the curve keeps climbing -->
+  <circle cx="680" cy="60" r="3.75" fill="#6b7585" class="d-grey-dot" />
+
+  <!-- OWNED / ON-PREM: upfront capex step then near-flat (3.6 deg slope), forest -->
+  <path class="d-accent-line" d="M80 340 L80 240 L150 237 L680 204" stroke="#0d3b2e" stroke-width="2.5" fill="none" stroke-linejoin="round" />
+  <!-- mark the upfront capex step -->
+  <circle cx="80" cy="240" r="3.75" fill="#0d3b2e" class="d-accent" />
+  <text x="94" y="246" font-size="12" fill="#6b7585" class="d-muted">Upfront, the box you own</text>
+
+  <!-- BREAKEVEN: verified intersection at (477, 217) where both curves meet.
+       "Breakeven" label sits on the marker. "after this, owning costs less"
+       moved below-right with clear vertical separation from "Breakeven". -->
+  <g class="d-cross">
+    <line x1="477" y1="217" x2="477" y2="340" stroke="#0d3b2e" stroke-width="1" stroke-dasharray="2 4" opacity="0.5" class="d-accent-dash" />
+    <circle cx="477" cy="217" r="6.5" fill="#f8f7f4" stroke="#0d3b2e" stroke-width="2" class="d-accent-ring" />
+    <circle cx="477" cy="217" r="2.25" fill="#0d3b2e" class="d-accent" />
+    <text x="489" y="213" font-size="13.5" font-weight="600" fill="#0d3b2e" class="d-accent-text">Breakeven</text>
+    <text x="489" y="236" font-size="12" fill="#6b7585" class="d-muted">after this, owning costs less</text>
+  </g>
+
+  <!-- inline legend (direct labels).
+       "Owned hardware" moved to x=310, y=218 so it sits clearly on the
+       near-flat forest line well away from the breakeven marker at x=477. -->
+  <g font-size="13.5" font-weight="600">
+    <text x="540" y="92" fill="#6b7585" class="d-muted">Metered cloud</text>
+    <text x="162" y="225" fill="#0d3b2e" class="d-accent-text">Owned hardware</text>
+  </g>
+</svg>
