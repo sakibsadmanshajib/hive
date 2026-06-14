@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Hive">
+  <rect width="64" height="64" rx="12" fill="#f8f7f4"/>
+  <!-- Outer sovereign vault: rounded square enclosure -->
+  <rect x="11" y="11" width="42" height="42" rx="11"
+        fill="none" stroke="#0d3b2e" stroke-width="6"/>
+  <!-- Inner cell: the single contained unit -->
+  <rect x="25" y="25" width="14" height="14" rx="3.5" fill="#0d3b2e"/>
+</svg>

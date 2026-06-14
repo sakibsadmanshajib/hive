@@ -1,0 +1,282 @@
+---
+/*
+  StructuredData.astro
+  ====================
+  Reusable JSON-LD emitter for the Hive marketing site. Drop into Base.astro
+  <head> and pick which schema blocks each page emits via props.
+
+  CSP NOTE (read before changing anything):
+  ----------------------------------------
+  This site enforces Astro's built-in, stabilized CSP (astro.config.mjs sets
+  security.csp with scriptDirective.resources: ["'self'"] and NO 'unsafe-inline').
+  Astro hashes the inline scripts and styles IT PROCESSES and bundles at build
+  time, then adds those hashes to the policy automatically.
+
+  How this interacts with the JSON-LD below:
+
+  PRIMARY EXPECTATION
+    The block emitted here is <script type="application/ld+json">. Per the CSP
+    spec, script-src gates EXECUTABLE script. application/ld+json is a data block,
+    not executable JavaScript, so browsers do not execute it and it is generally
+    NOT subject to script-src hash/nonce enforcement. The content is also fully
+    static at build time (it derives only from props passed at build, never from
+    per-request values), so even if Astro hashes it the hash is deterministic and
+    gets added to the policy. Either way it should NOT break CSP.
+
+  WHAT KEEPS IT SAFE
+    1. Content is 100% static at build. No client-side injection. No
+       Astro.url-derived or per-request values feed JSON.stringify here (the
+       props are resolved at build time for static output). This is what makes
+       any emitted hash deterministic.
+    2. set:html is used on a value we control (JSON.stringify of a plain object),
+       not on user input, so there is no injection surface.
+
+  VERIFY AGAINST THE INSTALLED ASTRO (package.json: astro ^6.4.6)
+    After wiring this in, build and inspect the emitted <meta http-equiv
+    "content-security-policy"> plus the page in a browser. Confirm no CSP
+    violation is logged for the ld+json block.
+
+  FALLBACK IF A VIOLATION APPEARS
+    If a specific Astro build DOES gate ld+json under script-src and blocks it,
+    add the printed sha256 hash to script-src for the affected routes in
+    public/_headers (the same Cloudflare file that already carries the pricing
+    route's style-src-attr relaxation). That is the only change needed; do not
+    add 'unsafe-inline'. Because ld+json is not executed, the security posture is
+    unchanged either way.
+*/
+
+interface Crumb {
+  name: string;
+  url: string;
+}
+
+interface Props {
+  /* Toggle the site-wide entity blocks. Emit Organization + WebSite on the
+     home page; Service describes the Hive product (home or pricing). */
+  organization?: boolean;
+  website?: boolean;
+  service?: boolean;
+  /* Emit an FAQPage only where the matching Q&A actually appears on the page.
+     faq        — home page general FAQ (existing behaviour, unchanged).
+     securityFaq — security page FAQ (data residency vs sovereignty, air-gap).
+     pricingFaq  — pricing page FAQ (payback period, licence inclusions). */
+  faq?: boolean;
+  securityFaq?: boolean;
+  pricingFaq?: boolean;
+  /* Emit a BreadcrumbList on interior pages. Pass the trail in order.
+     Example: [{ name: 'Home', url: 'https://hive.scubed.co/' },
+               { name: 'Security', url: 'https://hive.scubed.co/security' }] */
+  breadcrumbs?: Crumb[];
+}
+
+const {
+  organization = false,
+  website = false,
+  service = false,
+  faq = false,
+  securityFaq = false,
+  pricingFaq = false,
+  breadcrumbs,
+} = Astro.props;
+
+/* All values are static literals so the serialized output is deterministic at
+   build time. Do not introduce Astro.url or any per-request value here. */
+const SITE = 'https://hive.scubed.co';
+const ORG_ID = `${SITE}/#org`;
+const SITE_ID = `${SITE}/#website`;
+
+const organizationNode = {
+  '@type': 'Organization',
+  '@id': ORG_ID,
+  name: 'S Cubed Technology Ltd.',
+  url: SITE,
+  /*
+    LOGO: no logo asset exists yet. Needs /og/logo-sq.png (square, 112x112 or
+    larger). When that asset is added, uncomment the logo property below and
+    point it at the absolute URL. Leaving it out is valid; an unverified path is
+    worse than an absent one.
+  */
+  // logo: `${SITE}/og/logo-sq.png`,
+  description:
+    'Independently held company that builds and licenses Hive, sovereign on-premises AI. No US ownership, no US jurisdiction over the company that builds the box.',
+  brand: { '@type': 'Brand', name: 'Hive' },
+};
+
+const websiteNode = {
+  '@type': 'WebSite',
+  '@id': SITE_ID,
+  name: 'Hive',
+  url: SITE,
+  publisher: { '@id': ORG_ID },
+  inLanguage: 'en',
+};
+
+const serviceNode = {
+  '@type': 'Service',
+  '@id': `${SITE}/#hive`,
+  name: 'Hive',
+  serviceType: 'Sovereign on-premises AI',
+  description:
+    'Capable open-weight AI models that run on hardware you own and control, inside your own network boundary. Prompts, documents, and responses stay on the on-premises box, with no external endpoint to subpoena and no usage-based vendor bill.',
+  provider: { '@id': ORG_ID },
+  areaServed: ['Canada', 'United Kingdom', 'United States', 'Worldwide'],
+  /*
+    No Offer with price is baked in on purpose. Hardware prices and the licence
+    fee are the owner's call and change over time; a stale Offer is worse than
+    none. If a priced Offer is wanted later, add it here with priceCurrency and
+    a real price, and keep it in sync with the Pricing page.
+  */
+};
+
+const faqNode = {
+  '@type': 'FAQPage',
+  '@id': `${SITE}/#faq`,
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'Where does Hive run my AI?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'On your own hardware. The open-weight model runs on a box you control, inside your own network boundary. Prompts, documents, and responses stay on that box and do not leave your building.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can a third party access my prompts or documents?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'There is no external endpoint to subpoena. Because the model runs on hardware you control rather than on a hosted API, your data never routes through a vendor and there is no outside service holding it.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Is S Cubed Technology Ltd. subject to US jurisdiction?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'No. S Cubed is independently held with no US ownership, so the company that builds the box is not subject to US jurisdiction.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'How much does Hive cost?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Hive ships as a workstation-class box (an AMD Strix Halo 128GB entry unit under $2,000, or an NVIDIA DGX Spark step-up unit at approximately $4,699) plus an annual software licence. Over time the cost works out roughly one tenth to one thirtieth of a metered cloud API, and the entry box pays for itself in about seven months.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Does Hive Cloud offer the same data residency as the on-premises box?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'No. Hive Cloud is a regional hosted tier offered at a fraction of US pricing. It is a cost option only and does not carry the on-premises sovereignty or data-residency guarantee that the box provides.',
+      },
+    },
+  ],
+};
+
+const securityFaqNode = {
+  '@type': 'FAQPage',
+  '@id': `${SITE}/#faq-security`,
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'What is the difference between data residency and data sovereignty?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Residency is where your data physically sits. Sovereignty is which jurisdiction governs the company that holds it. A provider\'s Canadian data centre keeps the bytes in Canada, but if that provider is foreign-controlled a foreign court order can still reach them. On-prem Hive removes the third party from the data path.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'Can Hive run in an air-gapped environment?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Yes. Hive runs inference entirely on hardware you own, with no outbound network path required, which supports fully air-gapped and offline deployments.',
+      },
+    },
+  ],
+};
+
+const pricingFaqNode = {
+  '@type': 'FAQPage',
+  '@id': `${SITE}/#faq-pricing`,
+  mainEntity: [
+    {
+      '@type': 'Question',
+      name: 'How long does an on-prem Hive box take to pay for itself?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'It depends on your inference volume. The pricing page shows a worked total cost of ownership model with the breakeven point where the owned box passes metered cloud.',
+      },
+    },
+    {
+      '@type': 'Question',
+      name: 'What is included in the annual Hive licence?',
+      acceptedAnswer: {
+        '@type': 'Answer',
+        text: 'Continuous software updates, validation and availability of new supported open-weight models, and the platform that runs them on your hardware.',
+      },
+    },
+  ],
+};
+
+/* Collect the site-wide entity nodes into one @graph script so a single block
+   carries Organization, WebSite, and Service where they are requested. */
+const graphNodes = [
+  organization ? organizationNode : null,
+  website ? websiteNode : null,
+  service ? serviceNode : null,
+].filter((n): n is NonNullable<typeof n> => n !== null);
+
+const graph =
+  graphNodes.length > 0
+    ? { '@context': 'https://schema.org', '@graph': graphNodes }
+    : null;
+
+/* FAQPage is emitted as its own script: it is page-specific and keeping it
+   separate from the @graph keeps each block easy to validate in isolation.
+   Each FAQ variant maps to a distinct @id so pages can be validated cleanly. */
+const faqJson = faq
+  ? { '@context': 'https://schema.org', ...faqNode }
+  : null;
+
+const securityFaqJson = securityFaq
+  ? { '@context': 'https://schema.org', ...securityFaqNode }
+  : null;
+
+const pricingFaqJson = pricingFaq
+  ? { '@context': 'https://schema.org', ...pricingFaqNode }
+  : null;
+
+/* BreadcrumbList is built from the props trail, in order. */
+const breadcrumbJson =
+  breadcrumbs && breadcrumbs.length > 0
+    ? {
+        '@context': 'https://schema.org',
+        '@type': 'BreadcrumbList',
+        itemListElement: breadcrumbs.map((c, i) => ({
+          '@type': 'ListItem',
+          position: i + 1,
+          name: c.name,
+          item: c.url,
+        })),
+      }
+    : null;
+---
+
+{graph && (
+  <script type="application/ld+json" set:html={JSON.stringify(graph)} />
+)}
+{faqJson && (
+  <script type="application/ld+json" set:html={JSON.stringify(faqJson)} />
+)}
+{securityFaqJson && (
+  <script type="application/ld+json" set:html={JSON.stringify(securityFaqJson)} />
+)}
+{pricingFaqJson && (
+  <script type="application/ld+json" set:html={JSON.stringify(pricingFaqJson)} />
+)}
+{breadcrumbJson && (
+  <script type="application/ld+json" set:html={JSON.stringify(breadcrumbJson)} />
+)}

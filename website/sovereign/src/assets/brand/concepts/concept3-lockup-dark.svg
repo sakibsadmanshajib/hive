@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64" role="img" aria-label="Hive">
+  <rect width="200" height="64" fill="#0d1117"/>
+  <!-- Mark -->
+  <rect x="14" y="18" width="6.5" height="28" rx="2" fill="#f8f7f4"/>
+  <rect x="37.5" y="18" width="6.5" height="28" rx="2" fill="#f8f7f4"/>
+  <rect x="20.5" y="27" width="17" height="10" rx="2" fill="none" stroke="#3f9e7c" stroke-width="3.5"/>
+  <!-- Wordmark in clean sans to contrast the geometric mark -->
+  <text x="62" y="42" font-family="Inter, system-ui, sans-serif" font-size="29"
+        font-weight="600" letter-spacing="-0.5" fill="#f8f7f4">Hive</text>
+</svg>

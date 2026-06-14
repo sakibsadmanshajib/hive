@@ -1,0 +1,204 @@
+---
+// Trust strip. A slim full-width band on a raised, deep-forest-tinted surface
+// (var(--ink)) with light text, sitting directly under the hero. On the dark
+// canvas it reads as its own distinct elevation, marked by hairline borders top
+// and bottom. It carries:
+//   - a "Designed to support" margin label (uppercase, letterspaced),
+//   - framework chips as text only, hairline border on ink, no fake logos,
+//   - the verbatim auditor footnote (never "compliant"/"certified"/"ready"),
+//   - two quiet proof stats lifted from existing copy (Perplexity, Pinterest),
+//     each carrying its own date stamp, the Pinterest disclaimer kept in the
+//     same block as the Pinterest statement.
+//
+// Contrast: off-white on ink is 17.66:1; chip text uses the same off-white, so
+// chips clear AA comfortably. Plain Astro, scoped <style>, zero JS, no inline
+// style attributes (CSP-clean).
+const frameworks = [
+  'HIPAA',
+  'PHIPA',
+  'PIPEDA',
+  'OSFI B-10/B-13',
+  'SOC 2',
+  'PCI DSS',
+];
+---
+
+<section class="trust" aria-label="Designed to support">
+  <div class="shell">
+    <div class="trust__head">
+      <span class="trust__label">Designed to support</span>
+      <ul class="trust__chips" role="list">
+        {frameworks.map((f) => <li class="trust__chip">{f}</li>)}
+      </ul>
+    </div>
+
+    <p class="trust__foot">
+      Designed to support these obligations. Validate with your own auditor.
+    </p>
+
+    <div class="trust__stats">
+      <div class="trust__stat">
+        <p class="trust__stat-text">
+          Perplexity runs DeepSeek R1 on its own servers in US and EU data
+          centres. User data never leaves Western servers.
+        </p>
+        <p class="trust__cite-row">
+          <a
+            class="trust__cite"
+            href="https://www.perplexity.ai"
+            target="_blank"
+            rel="noopener noreferrer">Source</a>
+          <span class="trust__stamp font-mono" data-numeric>as of January 2025</span>
+        </p>
+      </div>
+
+      <div class="trust__stat">
+        <p class="trust__stat-text">
+          Pinterest cut AI costs roughly 90 percent and raised accuracy roughly
+          30 percent by running and customising the open-weight Qwen3-VL model on
+          its own infrastructure.
+        </p>
+        <p class="trust__disclaimer">
+          Results reflect Pinterest's specific implementation. Your outcomes
+          will depend on your hardware, model choice, and workload.
+        </p>
+        <p class="trust__cite-row">
+          <a
+            class="trust__cite"
+            href="https://medium.com/pinterest-engineering"
+            target="_blank"
+            rel="noopener noreferrer">Source</a>
+          <span class="trust__stamp font-mono" data-numeric>as of June 2026</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  /* One of exactly two ink surfaces on the page (the other is the closing CTA). */
+  .trust {
+    background-color: var(--ink);
+    color: var(--on-ink);
+    border-block: 1px solid var(--on-ink-border);
+    padding-block: var(--space-8);
+  }
+
+  .trust__head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-5);
+  }
+
+  .trust__label {
+    color: var(--on-ink);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    flex: none;
+  }
+
+  .trust__chips {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  /* Text chips only, no fake logos. Hairline border on ink, off-white label. */
+  .trust__chip {
+    color: var(--on-ink);
+    font-size: var(--text-sm);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    padding: 6px 14px;
+    border: 1px solid var(--on-ink-border);
+    border-radius: var(--radius-pill);
+  }
+
+  .trust__foot {
+    margin: var(--space-5) 0 0;
+    color: var(--on-ink-muted);
+    font-size: var(--text-sm);
+    line-height: var(--lh-snug);
+    max-width: 60ch;
+  }
+
+  .trust__stats {
+    margin: var(--space-7) 0 0;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-7);
+  }
+
+  .trust__stat {
+    border-top: 1px solid var(--on-ink-border);
+    padding-top: var(--space-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .trust__stat-text {
+    margin: 0;
+    color: var(--on-ink);
+    font-size: var(--text-sm);
+    line-height: var(--lh-body);
+  }
+
+  .trust__disclaimer {
+    margin: 0;
+    color: var(--on-ink-faint);
+    font-size: var(--text-xs);
+    line-height: var(--lh-snug);
+  }
+
+  .trust__stamp {
+    margin: 0;
+    color: var(--on-ink-faint);
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+
+  /* Source link plus date stamp share one baseline row under each stat. */
+  .trust__cite-row {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  /* Quiet on-ink source link. Off-white muted label, underline fills on hover.
+     On-ink-muted on ink clears AA. */
+  .trust__cite {
+    color: var(--on-ink-muted);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    white-space: nowrap;
+    border-bottom: 1px solid transparent;
+    transition: color var(--dur-fast) var(--ease-out),
+                border-color var(--dur-fast) var(--ease-out);
+  }
+
+  .trust__cite:hover {
+    color: var(--on-ink);
+    border-bottom-color: var(--on-ink);
+  }
+
+  .trust__cite:focus-visible {
+    outline: 2px solid var(--on-ink);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 880px) {
+    .trust__stats {
+      grid-template-columns: 1fr;
+      gap: var(--space-6);
+    }
+  }
+</style>

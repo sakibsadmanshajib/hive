@@ -1,0 +1,13 @@
+# robots.txt for hive.scubed.co
+#
+# AI answer engines and search crawlers are welcome. We do not block any
+# crawler: GPTBot, ClaudeBot, PerplexityBot, Google-Extended, Bingbot, and the
+# rest are all permitted under the wildcard rule below. The site is public
+# marketing content and we want it cited accurately by AI assistants.
+
+User-agent: *
+Allow: /
+
+# Sitemap index produced by @astrojs/sitemap once the integration is added to
+# astro.config.mjs. Path is fixed by that integration.
+Sitemap: https://hive.scubed.co/sitemap-index.xml

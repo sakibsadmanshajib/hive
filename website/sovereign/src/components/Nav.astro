@@ -3,6 +3,7 @@
 // All targets are at least 24px (WCAG 2.2 target size).
 const links = [
   { href: '/', label: 'Home' },
+  { href: '/how-you-run-hive', label: 'How You Run Hive' },
   { href: '/security', label: 'Security & Data Residency' },
   { href: '/pricing', label: 'Pricing' },
   { href: '/use-cases', label: 'Use Cases' },
@@ -18,78 +19,52 @@ function isActive(href: string): boolean {
 <nav class="nav" aria-label="Primary">
   <div class="shell nav__inner">
     <a class="nav__brand" href="/" aria-label="Hive home">
-      <span class="nav__brand-mark" aria-hidden="true"></span>
+      <span class="nav__brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64" width="20" height="20" focusable="false">
+          <rect
+            x="12"
+            y="12"
+            width="40"
+            height="40"
+            rx="10"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="5"></rect>
+          <rect x="26" y="26" width="12" height="12" rx="3" fill="currentColor"
+          ></rect>
+        </svg>
+      </span>
       Hive
     </a>
 
-    {/*
-      Mobile disclosure toggle. Hidden on wide viewports (the links sit inline
-      there). Below 760px the links collapse and this button reveals them.
-      aria-expanded reflects state, aria-controls points at the list. It is a
-      real <button>, so it is keyboard operable for free and picks up the global
-      gold :focus-visible ring. The bars are decorative (aria-hidden).
-    */}
-    <button
-      class="nav__toggle tap-target"
-      type="button"
-      aria-expanded="false"
-      aria-controls="nav-links"
-      aria-label="Open menu"
-    >
-      <span class="nav__toggle-bars" aria-hidden="true"></span>
-    </button>
-
-    <ul class="nav__links" id="nav-links">
-      {
-        links.map((link) => (
-          <li>
-            <a
-              class="nav__link tap-target"
-              href={link.href}
-              aria-current={isActive(link.href) ? 'page' : undefined}
-            >
-              {link.label}
-            </a>
-          </li>
-        ))
-      }
-    </ul>
+    <details class="nav__mobile">
+      <summary class="nav__toggle" aria-label="Menu">
+        <svg class="nav__toggle-icon" viewBox="0 0 24 24" width="22" height="22" fill="none" aria-hidden="true" focusable="false">
+          <rect x="3" y="6" width="18" height="2" rx="1" fill="currentColor" />
+          <rect x="3" y="11" width="18" height="2" rx="1" fill="currentColor" />
+          <rect x="3" y="16" width="18" height="2" rx="1" fill="currentColor" />
+        </svg>
+      </summary>
+      <ul class="nav__links">
+        {
+          links.map((link) => (
+            <li>
+              <a
+                class="nav__link tap-target"
+                href={link.href}
+                aria-current={isActive(link.href) ? 'page' : undefined}
+              >
+                {link.label}
+              </a>
+            </li>
+          ))
+        }
+      </ul>
+    </details>
 
     <a class="nav__cta tap-target" href="/book-a-demo">Book a Demo</a>
   </div>
 </nav>
-
-<script>
-  // Mobile menu disclosure. Vanilla, no framework. Toggles aria-expanded and a
-  // data attribute the stylesheet keys off. Closes on Escape and when a link is
-  // chosen. On wide viewports the list is always shown by CSS, so this script
-  // only governs the collapsed mobile state.
-  const toggle = document.querySelector<HTMLButtonElement>('.nav__toggle');
-  const list = document.getElementById('nav-links');
-
-  if (toggle && list) {
-    const setOpen = (open: boolean): void => {
-      toggle.setAttribute('aria-expanded', String(open));
-      toggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
-      list.dataset.open = open ? 'true' : 'false';
-    };
-
-    toggle.addEventListener('click', () => {
-      setOpen(toggle.getAttribute('aria-expanded') !== 'true');
-    });
-
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && toggle.getAttribute('aria-expanded') === 'true') {
-        setOpen(false);
-        toggle.focus();
-      }
-    });
-
-    list.addEventListener('click', (event) => {
-      if (event.target instanceof HTMLAnchorElement) setOpen(false);
-    });
-  }
-</script>
 
 <style>
   .nav {
@@ -117,11 +92,37 @@ function isActive(href: string): boolean {
     letter-spacing: -0.01em;
   }
 
+  /* Concept 1 containment-vault mark, inlined so it themes via currentColor
+     (forest accent on the off-white nav). */
   .nav__brand-mark {
-    width: 14px;
-    height: 14px;
-    border-radius: 4px;
-    background-color: var(--teal);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    color: var(--accent);
+  }
+
+  .nav__brand-mark svg {
+    display: block;
+    width: 20px;
+    height: 20px;
+  }
+
+  /* =========================================================================
+     MOBILE DISCLOSURE WRAPPER
+     Desktop: details always treated as open via block layout; summary hidden.
+     Mobile: native <details> open/close disclosure, links drop below nav bar.
+     Zero JavaScript. CSP-safe.
+     ========================================================================= */
+  .nav__mobile {
+    /* Desktop: participate in the flex row, push links to the right */
+    display: contents;
+  }
+
+  /* Hide the toggle on desktop; the details content is always visible */
+  .nav__toggle {
+    display: none;
   }
 
   .nav__links {
@@ -140,134 +141,130 @@ function isActive(href: string): boolean {
     color: var(--text-muted);
     font-size: 15px;
     font-weight: 500;
-    transition: color 120ms ease;
+    cursor: pointer;
+    border-bottom: 1px solid transparent;
+    transition:
+      color 120ms ease,
+      border-color 120ms ease;
   }
 
-  .nav__link:hover,
+  .nav__link:hover {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
   .nav__link[aria-current='page'] {
     color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
+  .nav__link:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
   }
 
   .nav__cta {
     display: inline-flex;
     align-items: center;
-    background-color: var(--gold);
-    color: #1a1205;
+    background-color: var(--accent);
+    color: var(--on-accent);
     font-weight: 600;
     font-size: 15px;
     padding: 10px 18px;
     border-radius: 10px;
-  }
-
-  .nav__cta:hover {
-    filter: brightness(1.05);
-  }
-
-  /* Mobile disclosure toggle. Hidden on wide viewports (links are inline). The
-     bars are a pure-CSS hamburger glyph; the button itself carries no gold so
-     the single gold accent stays on the CTA. */
-  .nav__toggle {
-    display: none;
-    align-items: center;
-    justify-content: center;
-    width: 40px;
-    height: 40px;
-    padding: 0;
-    margin-inline-start: auto;
-    background-color: transparent;
-    border: 1px solid var(--border-strong);
-    border-radius: 10px;
     cursor: pointer;
+    transition:
+      transform 120ms ease,
+      background-color 120ms ease;
   }
 
-  .nav__toggle:hover {
-    border-color: var(--text-faint);
+  /* Subtle 1px lift on hover. transform only, so there is no layout shift. */
+  .nav__cta:hover {
+    transform: translateY(-1px);
+    background-color: var(--accent-hover);
   }
 
-  .nav__toggle-bars,
-  .nav__toggle-bars::before,
-  .nav__toggle-bars::after {
-    display: block;
-    width: 18px;
-    height: 2px;
-    background-color: var(--text-muted);
-    border-radius: 2px;
-    transition: transform 150ms ease, opacity 150ms ease;
+  .nav__cta:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
   }
 
-  .nav__toggle-bars {
-    position: relative;
-  }
-
-  .nav__toggle-bars::before,
-  .nav__toggle-bars::after {
-    content: '';
-    position: absolute;
-    left: 0;
-  }
-
-  .nav__toggle-bars::before {
-    transform: translateY(-6px);
-  }
-
-  .nav__toggle-bars::after {
-    transform: translateY(6px);
-  }
-
-  /* Open state morphs the glyph into an X. */
-  .nav__toggle[aria-expanded='true'] .nav__toggle-bars {
-    background-color: transparent;
-  }
-
-  .nav__toggle[aria-expanded='true'] .nav__toggle-bars::before {
-    transform: translateY(0) rotate(45deg);
-  }
-
-  .nav__toggle[aria-expanded='true'] .nav__toggle-bars::after {
-    transform: translateY(0) rotate(-45deg);
-  }
-
+  /* =========================================================================
+     MOBILE (<=760px): show hamburger toggle, collapse links into dropdown
+     ========================================================================= */
   @media (max-width: 760px) {
-    .nav__toggle {
-      display: inline-flex;
-      position: relative;
+    /* The sticky nav bar is the positioning context for the dropdown panel,
+       so the panel can be pinned to both shell gutters and never overflow. */
+    .nav {
+      position: sticky;
     }
 
-    /* Collapse the links into a dropdown panel. Shown only when the toggle
-       reports data-open="true". */
-    .nav__links {
-      position: absolute;
-      top: 64px;
-      left: 0;
-      right: 0;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0;
-      margin-inline-start: 0;
-      padding: 8px 24px 16px;
-      background-color: var(--bg-raised);
-      border-bottom: 1px solid var(--border);
+    /* details becomes a block container that holds the toggle on the right */
+    .nav__mobile {
+      display: block;
+      margin-inline-start: auto;
+      /* No position: relative here, so the absolute panel below resolves
+         against the full-width .nav bar instead of this narrow box. */
+    }
+
+    /* Remove default marker */
+    .nav__toggle {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      list-style: none;
+      width: 44px;
+      height: 44px;
+      border-radius: var(--radius-sm, 8px);
+      color: var(--text);
+      cursor: pointer;
+      /* Visible focus ring for keyboard users */
+    }
+
+    .nav__toggle::-webkit-details-marker {
       display: none;
     }
 
-    .nav__links[data-open='true'] {
+    .nav__toggle:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    /* Links panel: hidden until details[open], then drops down. Resolves
+       against the full-width sticky .nav bar and is pinned to both shell
+       gutters (24px each side), so it always sits fully inside the viewport,
+       the left edge can never go negative, and labels never clip. */
+    .nav__links {
+      display: none;
+      position: absolute;
+      inset-inline: 24px;
+      top: 100%;
+      margin-top: 8px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      padding: var(--space-3, 12px) 0;
+      background-color: var(--bg-card, #fff);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-card, 12px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+      z-index: 100;
+    }
+
+    .nav__mobile[open] .nav__links {
       display: flex;
     }
 
-    .nav__link {
-      padding-block: 12px;
-      min-height: 44px;
-      border-bottom: 1px solid var(--border);
+    .nav__links li {
+      width: 100%;
     }
-  }
 
-  /* Respect reduced-motion: drop the glyph transition. The global reduce rule
-     in global.css already neutralises transitions, this is a local guard. */
-  @media (prefers-reduced-motion: reduce) {
-    .nav__toggle-bars,
-    .nav__toggle-bars::before,
-    .nav__toggle-bars::after {
-      transition: none;
+    .nav__link {
+      display: flex;
+      width: 100%;
+      padding: 12px var(--space-5, 20px);
+      font-size: 15px;
     }
   }
 </style>

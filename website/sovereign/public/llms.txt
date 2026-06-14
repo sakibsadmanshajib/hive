@@ -1,0 +1,24 @@
+# Hive
+
+> Hive is sovereign on-premises AI from S Cubed Technology Ltd. Your AI runs on your hardware. Not ours. Not anyone's.
+
+Hive is on-premises AI inference software. The open-weight model runs on hardware the customer owns and controls; prompts, documents, and responses never leave the customer's network boundary. There is no external API and no usage-based billing.
+
+Hive lets an organisation run capable open-weight AI models on hardware it owns and controls, inside its own network boundary. Prompts, documents, and model responses stay on the on-premises box. There is no external endpoint that a third party could subpoena, and no usage-based vendor bill, because the model runs on your own server rather than on a metered cloud API.
+
+S Cubed Technology Ltd. is the independently held company that builds and licenses the Hive box. S Cubed has no US ownership, so the company that builds the box is not subject to US jurisdiction. Sovereignty and data-residency claims apply to the on-premises deployment only: the open-weight model runs on hardware you control and your data never leaves your building.
+
+Hive ships as a workstation-class box (an AMD Strix Halo 128GB entry unit under $2,000, or an NVIDIA DGX Spark step-up unit at approximately $4,699, prices as of June 2026, subject to change) plus an annual software licence. Over time the cost works out far below a metered cloud API, roughly one tenth to one thirtieth, and the entry box pays for itself in about seven months. A separate regional Hive Cloud tier offers hosted inference at a fraction of US pricing. Hive Cloud is a cost option only and carries no sovereignty or data-residency guarantee.
+
+## Pages
+
+- [Home](https://hive.scubed.co/): What Hive is, who it is for, and the core promise that your AI runs on your own hardware.
+- [Security and Data Residency](https://hive.scubed.co/security): How the on-premises boundary removes external exposure, with a jurisdiction diagram and the controls Hive is designed around.
+- [Pricing](https://hive.scubed.co/pricing): Box options, the annual software licence, the payback period, and how owning the box compares to renting a metered API over time.
+- [Use Cases](https://hive.scubed.co/use-cases): Law, finance, healthcare, and small business, each mapped to a Hive capability and the exposure or cost it removes.
+- [How You Run Hive](https://hive.scubed.co/how-you-run-hive): Three deployment tiers explained (own on-prem, colocate a dedicated box in-region, or start on a region-locked shared instance), with a tier-comparison table, sovereignty grading, and hardware scalability notes.
+- [Book a Demo](https://hive.scubed.co/book-a-demo): Contact Hive for a live demonstration running on hardware inside your own network. Email-based booking, no account creation required.
+
+## About
+
+- [S Cubed Technology Ltd.](https://hive.scubed.co/): The independently held company that builds and licenses Hive. No US ownership, no US jurisdiction over the company that builds the box.
