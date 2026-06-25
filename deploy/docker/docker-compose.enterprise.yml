@@ -77,7 +77,9 @@ services:
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
       GOTRUE_JWT_ADMIN_ROLES: service_role
       GOTRUE_JWT_AUD: authenticated
-      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://localhost:9999}
+      # Must match what edge-api expects in SUPABASE_JWT_ISSUER / SUPABASE_JWKS_URL.
+      # Default is the in-stack service name, not localhost.
+      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://supabase-auth:9999}
       GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
       GOTRUE_MAILER_AUTOCONFIRM: ${ENTERPRISE_MAILER_AUTOCONFIRM:-true}
       GOTRUE_SMTP_HOST: ${ENTERPRISE_SMTP_HOST:-}
@@ -180,17 +182,36 @@ services:
       - |
         set -e
         STORAGE_URL="http://supabase-storage:5000"
-        AUTH_HEADER="Authorization: Bearer ${SERVICE_KEY}"
+        # ponytail: $${VAR} escapes compose interpolation; shell expands at runtime.
+        AUTH_HEADER="Authorization: Bearer $${SERVICE_KEY}"
         for BUCKET in hive-files hive-images; do
           echo "Creating bucket: $${BUCKET}"
-          curl -sf -X POST "$${STORAGE_URL}/bucket" \
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$${STORAGE_URL}/bucket" \
             -H "Content-Type: application/json" \
             -H "$${AUTH_HEADER}" \
-            -d "{\"id\":\"$${BUCKET}\",\"name\":\"$${BUCKET}\",\"public\":false}" \
-            -w "\n[bucket=$${BUCKET} status=%{http_code}]\n" || true
+            -d "{\"id\":\"$${BUCKET}\",\"name\":\"$${BUCKET}\",\"public\":false}")
+          case "$${HTTP_STATUS}" in
+            2*|409) echo "  bucket $${BUCKET}: ok (status $${HTTP_STATUS})" ;;
+            *)      echo "  bucket $${BUCKET}: FAILED (status $${HTTP_STATUS})"; exit 1 ;;
+          esac
         done
         echo "Bucket init complete."
     restart: "no"
+
+  # ── depends_on overrides for edge-api and control-plane ───────────────────
+  # The base docker-compose.yml already declares required:false stubs for
+  # supabase-auth and supabase-storage. This override adds supabase-init so
+  # neither application service starts until buckets exist. Kept here (not in
+  # the base file) so --profile local and --profile cloud are unaffected.
+  edge-api:
+    depends_on:
+      supabase-init:
+        condition: service_completed_successfully
+
+  control-plane:
+    depends_on:
+      supabase-init:
+        condition: service_completed_successfully
 
 volumes:
   # Postgres WAL and data files. Persists the full schema, all migrations, and
