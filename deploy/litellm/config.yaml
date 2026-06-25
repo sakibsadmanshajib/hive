@@ -93,6 +93,10 @@ model_list:
 # (e.g. some OpenRouter free embedding providers reject `encoding_format`
 # or `dimensions`) instead of returning a hard 400 to the client.
 litellm_settings:
+  # Sovereign edge: disable all LiteLLM telemetry so no call metadata is
+  # sent to LiteLLM's hosted services. Must be set to False (string form)
+  # per the LiteLLM docs; the Python bool False is also accepted at runtime.
+  telemetry: False
   num_retries: 3
   request_timeout: 45
   allowed_fails: 3

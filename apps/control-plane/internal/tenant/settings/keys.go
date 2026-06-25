@@ -23,6 +23,7 @@ const (
 	EnableAuditSinkDatadog  Key = "ENABLE_AUDIT_SINK_DATADOG"
 	EnableAuditSinkSplunk   Key = "ENABLE_AUDIT_SINK_SPLUNK"
 	EnableAuditSinkLangfuse Key = "ENABLE_AUDIT_SINK_LANGFUSE"
+	EnableAuditSinkSentry   Key = "ENABLE_AUDIT_SINK_SENTRY"
 	EnableAdminConsole      Key = "ENABLE_ADMIN_CONSOLE"
 	EnableProviderCustom    Key = "ENABLE_PROVIDER_CUSTOM"
 )
