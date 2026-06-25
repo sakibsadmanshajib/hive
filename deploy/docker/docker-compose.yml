@@ -173,9 +173,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       # SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY:
-      # Enterprise profile: set to the local GoTrue / PostgREST base URL and
-      # the ENTERPRISE_ANON_KEY / ENTERPRISE_SERVICE_ROLE_KEY values.
-      #   SUPABASE_URL=http://supabase-rest:3000
+      # Enterprise profile: SUPABASE_URL must point at GoTrue, not PostgREST.
+      # control-plane calls GET /auth/v1/user on this URL; PostgREST cannot serve auth routes.
+      #   SUPABASE_URL=http://supabase-auth:9999
       #   SUPABASE_ANON_KEY=<ENTERPRISE_ANON_KEY>
       #   SUPABASE_SERVICE_ROLE_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
       # Cloud/local profiles: set these to the hosted Supabase project values.
@@ -187,7 +187,7 @@ services:
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       REDIS_URL: ${REDIS_URL}
       # Enterprise profile: set to local Storage endpoint:
-      #   S3_ENDPOINT=http://supabase-storage:5000/object/s3
+      #   S3_ENDPOINT=http://supabase-storage:5000/storage/v1/s3
       #   S3_ACCESS_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
       #   S3_SECRET_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
       #   S3_REGION=local
