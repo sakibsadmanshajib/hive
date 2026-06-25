@@ -11,6 +11,14 @@ services:
     depends_on:
       control-plane:
         condition: service_healthy
+      # Enterprise profile: wait for the local auth and storage services before
+      # edge-api starts so JWKS fetch and S3 bucket checks succeed at boot.
+      supabase-auth:
+        condition: service_healthy
+        required: false
+      supabase-storage:
+        condition: service_healthy
+        required: false
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
@@ -20,6 +28,9 @@ services:
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # SUPABASE_DB_URL: For the enterprise profile set this to the local DSN:
+      #   postgres://postgres:<ENTERPRISE_DB_PASSWORD>@supabase-db:5432/postgres
+      # For cloud/local profiles set this to the hosted Supabase DB URL.
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -28,6 +39,11 @@ services:
       S3_USE_SSL: ${S3_USE_SSL:-true}
       S3_BUCKET_IMAGES: ${S3_BUCKET_IMAGES:-hive-images}
       S3_BUCKET_FILES: ${S3_BUCKET_FILES:-hive-files}
+      # SUPABASE_JWT_ISSUER / SUPABASE_JWKS_URL: For the enterprise profile set
+      # these to the local GoTrue service:
+      #   SUPABASE_JWT_ISSUER=http://supabase-auth:9999
+      #   SUPABASE_JWKS_URL=http://supabase-auth:9999/.well-known/jwks.json
+      # For cloud/local profiles set these to the hosted Supabase auth URLs.
       SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-}
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-}
@@ -153,6 +169,11 @@ services:
       redis:
         condition: service_healthy
         required: false
+      # Enterprise profile: wait for local Postgres before control-plane starts
+      # so the DB connection pool succeeds at boot.
+      supabase-db:
+        condition: service_healthy
+        required: false
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
@@ -164,11 +185,26 @@ services:
       # Unix socket directly via net/http; no docker CLI binary is needed.
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
+      # SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY:
+      # Enterprise profile: set to the local GoTrue / PostgREST base URL and
+      # the ENTERPRISE_ANON_KEY / ENTERPRISE_SERVICE_ROLE_KEY values.
+      #   SUPABASE_URL=http://supabase-rest:3000
+      #   SUPABASE_ANON_KEY=<ENTERPRISE_ANON_KEY>
+      #   SUPABASE_SERVICE_ROLE_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      # Cloud/local profiles: set these to the hosted Supabase project values.
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Enterprise profile: set to local Postgres DSN:
+      #   postgres://postgres:<ENTERPRISE_DB_PASSWORD>@supabase-db:5432/postgres
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       REDIS_URL: ${REDIS_URL}
+      # Enterprise profile: set to local Storage endpoint:
+      #   S3_ENDPOINT=http://supabase-storage:5000/object/s3
+      #   S3_ACCESS_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      #   S3_SECRET_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      #   S3_REGION=local
+      #   S3_USE_SSL=false  (internal compose network, no TLS)
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -203,6 +239,179 @@ services:
       timeout: 3s
       retries: 5
       start_period: 120s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # EnterpriseEdge: Self-hosted Supabase data plane (issue #231)
+  #
+  # These services activate ONLY under the `enterprise` profile.
+  # The cloud/local/chat profiles continue to use hosted Supabase as before.
+  #
+  # Stack:
+  #   supabase-db      - Postgres 16 with pgvector pre-installed
+  #   supabase-auth    - GoTrue (auth server, JWT issuer)
+  #   supabase-rest    - PostgREST (auto REST API over Postgres)
+  #   supabase-storage - Supabase Storage API with local filesystem backend
+  #   supabase-init    - One-shot init container: creates hive-files and
+  #                      hive-images storage buckets via the Storage API.
+  #
+  # No MinIO: Supabase Storage with local filesystem backend eliminates the
+  # MinIO dependency (AGPL, banned for this product). Object data stays on the
+  # box under the supabase-storage-data volume.
+  #
+  # Network isolation: supabase-db binds only to the internal compose network.
+  # No Postgres port is exposed on the host interface.
+  # ──────────────────────────────────────────────────────────────────────────
+
+  supabase-db:
+    image: pgvector/pgvector:pg16
+    profiles:
+      - enterprise
+    environment:
+      POSTGRES_USER: ${ENTERPRISE_DB_USER:-postgres}
+      # ENTERPRISE_DB_PASSWORD must be set in .env before running --profile enterprise.
+      # No default is provided intentionally: Postgres refuses to start with an empty
+      # password when POSTGRES_PASSWORD is blank, which gives an obvious failure rather
+      # than a silently insecure deployment.
+      POSTGRES_PASSWORD: ${ENTERPRISE_DB_PASSWORD:-}
+      POSTGRES_DB: ${ENTERPRISE_DB_NAME:-postgres}
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+      # Seed the Supabase schema extensions Postgres needs for GoTrue and Storage.
+      - ../../deploy/supabase/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ENTERPRISE_DB_USER:-postgres} -d ${ENTERPRISE_DB_NAME:-postgres}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  supabase-auth:
+    image: supabase/gotrue:v2.170.0
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: "0.0.0.0"
+      GOTRUE_API_PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:-}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}?search_path=auth"
+      GOTRUE_SITE_URL: ${ENTERPRISE_SITE_URL:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ENTERPRISE_REDIRECT_ALLOW_LIST:-}
+      GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-false}
+      GOTRUE_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:-}
+      GOTRUE_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://localhost:9999}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENTERPRISE_MAILER_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_HOST: ${ENTERPRISE_SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${ENTERPRISE_SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${ENTERPRISE_SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${ENTERPRISE_SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${ENTERPRISE_SMTP_ADMIN_EMAIL:-admin@example.com}
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9999/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  supabase-rest:
+    image: postgrest/postgrest:v12.2.3
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:-}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
+      PGRST_DB_SCHEMAS: "public,storage,graphql_public"
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:-}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${ENTERPRISE_JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  supabase-storage:
+    image: supabase/storage-api:v1.11.13
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+      supabase-rest:
+        condition: service_healthy
+    environment:
+      ANON_KEY: ${ENTERPRISE_ANON_KEY:-}
+      SERVICE_KEY: ${ENTERPRISE_SERVICE_ROLE_KEY:-}
+      POSTGREST_URL: http://supabase-rest:3000
+      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:-}
+      DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:-}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
+      FILE_SIZE_LIMIT: ${ENTERPRISE_STORAGE_FILE_SIZE_LIMIT:-52428800}
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: local
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "true"
+      IMGPROXY_URL: ""
+    volumes:
+      - supabase-storage-data:/var/lib/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/status || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # One-shot init container: creates the hive-files and hive-images buckets
+  # via the Storage API. The restart policy is "no" so it runs exactly once
+  # per compose up. If the buckets already exist the API returns 200/409 and
+  # the script exits 0 either way.
+  supabase-init:
+    image: curlimages/curl:8.7.1
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-storage:
+        condition: service_healthy
+    environment:
+      SERVICE_KEY: ${ENTERPRISE_SERVICE_ROLE_KEY:-}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        STORAGE_URL="http://supabase-storage:5000"
+        AUTH_HEADER="Authorization: Bearer ${SERVICE_KEY}"
+        for BUCKET in hive-files hive-images; do
+          echo "Creating bucket: $${BUCKET}"
+          curl -sf -X POST "$${STORAGE_URL}/bucket" \
+            -H "Content-Type: application/json" \
+            -H "$${AUTH_HEADER}" \
+            -d "{\"id\":\"$${BUCKET}\",\"name\":\"$${BUCKET}\",\"public\":false}" \
+            -w "\n[bucket=$${BUCKET} status=%{http_code}]\n" || true
+        done
+        echo "Bucket init complete."
+    restart: "no"
 
   # In-stack Redis. Active for local dev, SDK tests, and self-hosted
   # enterprise deployments. Cloud deployments use managed Upstash via
@@ -441,3 +650,12 @@ volumes:
   # and writes it atomically; litellm reads it at startup and on restart.
   # Phase 20 Plan 03.
   litellm-config:
+  # Enterprise self-hosted Supabase data plane volumes (issue #231).
+  # Active only when the `enterprise` profile is used.
+  # supabase-db-data: Postgres WAL and data files. Persists the full schema,
+  #   all migrations, and all tenant data across container recreates.
+  supabase-db-data:
+  # supabase-storage-data: object files written by the Storage API local
+  #   filesystem backend. Holds hive-files and hive-images bucket contents.
+  #   No external S3 call; data never leaves the box.
+  supabase-storage-data:
