@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
@@ -129,6 +130,17 @@ func main() {
 	mux.Handle("/v1/completions", inferenceHandler)
 	mux.Handle("/v1/responses", inferenceHandler)
 	mux.Handle("/v1/embeddings", inferenceHandler)
+
+	// Anthropic Messages surface: POST /v1/messages and POST /v1/messages/count_tokens.
+	// The APIKeyNormalizer rewrites x-api-key to Authorization: Bearer so the
+	// standard auth.Selector routes hk_ keys to the API-key path and JWTs to
+	// the JWT path, reusing the same auth wrappers as /v1/chat/completions.
+	anthropicHandler := anthropic.NewHandler(anthropic.Deps{
+		LiteLLMURL: resolveLiteLLMBaseURL(),
+		LiteLLMKey: resolveLiteLLMMasterKey(),
+	})
+	mux.Handle("/v1/messages", anthropic.APIKeyNormalizer(jwtAwareChatHandler(anthropicHandler, anthropicHandler)))
+	mux.Handle("/v1/messages/", anthropic.APIKeyNormalizer(jwtAwareChatHandler(anthropicHandler, anthropicHandler)))
 
 	storageCfg, err := loadStorageConfigFromEnv()
 	if err != nil {
