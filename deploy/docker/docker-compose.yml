@@ -20,6 +20,9 @@ services:
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # SUPABASE_DB_URL: For the enterprise profile set this to the local DSN:
+      #   postgres://postgres:<ENTERPRISE_DB_PASSWORD>@supabase-db:5432/postgres
+      # For cloud/local profiles set this to the hosted Supabase DB URL.
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
@@ -28,6 +31,11 @@ services:
       S3_USE_SSL: ${S3_USE_SSL:-true}
       S3_BUCKET_IMAGES: ${S3_BUCKET_IMAGES:-hive-images}
       S3_BUCKET_FILES: ${S3_BUCKET_FILES:-hive-files}
+      # SUPABASE_JWT_ISSUER / SUPABASE_JWKS_URL: For the enterprise profile set
+      # these to the local GoTrue service:
+      #   SUPABASE_JWT_ISSUER=http://supabase-auth:9999
+      #   SUPABASE_JWKS_URL=http://supabase-auth:9999/.well-known/jwks.json
+      # For cloud/local profiles set these to the hosted Supabase auth URLs.
       SUPABASE_JWT_ISSUER: ${SUPABASE_JWT_ISSUER:-}
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-}
@@ -164,11 +172,26 @@ services:
       # Unix socket directly via net/http; no docker CLI binary is needed.
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
+      # SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY:
+      # Enterprise profile: SUPABASE_URL must point at GoTrue, not PostgREST.
+      # control-plane calls GET /auth/v1/user on this URL; PostgREST cannot serve auth routes.
+      #   SUPABASE_URL=http://supabase-auth:9999
+      #   SUPABASE_ANON_KEY=<ENTERPRISE_ANON_KEY>
+      #   SUPABASE_SERVICE_ROLE_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      # Cloud/local profiles: set these to the hosted Supabase project values.
       SUPABASE_URL: ${SUPABASE_URL}
       SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
+      # Enterprise profile: set to local Postgres DSN:
+      #   postgres://postgres:<ENTERPRISE_DB_PASSWORD>@supabase-db:5432/postgres
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       REDIS_URL: ${REDIS_URL}
+      # Enterprise profile: set to local Storage endpoint:
+      #   S3_ENDPOINT=http://supabase-storage:5000/storage/v1/s3
+      #   S3_ACCESS_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      #   S3_SECRET_KEY=<ENTERPRISE_SERVICE_ROLE_KEY>
+      #   S3_REGION=local
+      #   S3_USE_SSL=false  (internal compose network, no TLS)
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -203,6 +226,27 @@ services:
       timeout: 3s
       retries: 5
       start_period: 120s
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # EnterpriseEdge: Self-hosted Supabase data plane (issue #231)
+  #
+  # The five Supabase services (supabase-db, supabase-auth, supabase-rest,
+  # supabase-storage, supabase-init) are defined in the companion override
+  # file docker-compose.enterprise.yml. They are kept in a separate file
+  # because Docker Compose evaluates ALL environment variable interpolations
+  # in ALL services regardless of which profile is active, so :? guards in
+  # enterprise-only services would break `--profile local` and `--profile cloud`
+  # config validation for operators who have not set ENTERPRISE_* vars.
+  #
+  # To bring up the full enterprise stack:
+  #   docker compose \
+  #     -f docker-compose.yml \
+  #     -f docker-compose.enterprise.yml \
+  #     --profile enterprise up --build
+  #
+  # The installer (scripts/install.sh) passes both -f flags automatically when
+  # the enterprise profile is selected.
+  # ──────────────────────────────────────────────────────────────────────────
 
   # In-stack Redis. Active for local dev, SDK tests, and self-hosted
   # enterprise deployments. Cloud deployments use managed Upstash via
@@ -441,3 +485,5 @@ volumes:
   # and writes it atomically; litellm reads it at startup and on restart.
   # Phase 20 Plan 03.
   litellm-config:
+  # supabase-db-data and supabase-storage-data are declared in
+  # docker-compose.enterprise.yml and only exist when that override is loaded.

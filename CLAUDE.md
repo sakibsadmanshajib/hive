@@ -79,7 +79,10 @@ docker compose --env-file ../../.env --profile cloud --profile chat up --build
 # Hive EnterpriseEdge (self-hosted single box): core + in-stack Redis + OWUI + Caddy.
 # Optional Ollama: set OLLAMA_BASE_URL=http://ollama:11434 in .env and
 # uncomment the ollama model entries in deploy/litellm/config.yaml.
-docker compose --env-file ../../.env --profile enterprise up --build
+docker compose \
+  -f docker-compose.yml \
+  -f docker-compose.enterprise.yml \
+  --env-file ../../.env --profile enterprise up --build
 
 # Add monitoring to any profile (Prometheus, Grafana, Alertmanager):
 docker compose --env-file ../../.env --profile local --profile monitoring up --build
