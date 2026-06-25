@@ -133,7 +133,10 @@ do_uninstall() {
     status "Stopping Hive EnterpriseEdge stack..."
     if [ -d "$HIVE_HOME/deploy/docker" ]; then
         cd "$HIVE_HOME/deploy/docker"
-        $SUDO docker compose --env-file "$HIVE_HOME/.env" --profile enterprise down 2>/dev/null || true
+        $SUDO docker compose \
+            -f "$HIVE_HOME/deploy/docker/docker-compose.yml" \
+            -f "$HIVE_HOME/deploy/docker/docker-compose.enterprise.yml" \
+            --env-file "$HIVE_HOME/.env" --profile enterprise down 2>/dev/null || true
     fi
     printf '\n'
     printf '%s>>> Uninstall complete.%s\n' "${GREEN}" "${RESET}"
@@ -647,7 +650,10 @@ wait_healthy() {
 start_stack() {
     status "Starting Hive EnterpriseEdge stack (docker compose --profile enterprise)..."
     cd "$HIVE_HOME/deploy/docker"
-    $SUDO docker compose --env-file "$HIVE_HOME/.env" --profile enterprise up -d --build
+    $SUDO docker compose \
+        -f "$HIVE_HOME/deploy/docker/docker-compose.yml" \
+        -f "$HIVE_HOME/deploy/docker/docker-compose.enterprise.yml" \
+        --env-file "$HIVE_HOME/.env" --profile enterprise up -d --build
 
     success "Stack started."
 }
@@ -673,7 +679,7 @@ verify_and_banner() {
         printf '\n'
         printf '  Run with monitoring:\n'
         printf '    cd %s/deploy/docker\n' "$HIVE_HOME"
-        printf '    docker compose --env-file %s/.env --profile enterprise --profile monitoring up -d\n' "$HIVE_HOME"
+        printf '    docker compose -f %s/deploy/docker/docker-compose.yml -f %s/deploy/docker/docker-compose.enterprise.yml --env-file %s/.env --profile enterprise --profile monitoring up -d\n' "$HIVE_HOME" "$HIVE_HOME" "$HIVE_HOME"
         printf '\n'
         if [ "$WITH_OLLAMA" = "true" ]; then
             printf '  Ollama:         http://localhost:11434 (in-stack)\n'
@@ -698,7 +704,7 @@ verify_and_banner() {
         printf '%s>>> Some services did not become healthy within the timeout.%s\n' "${RED}" "${RESET}"
         printf '\nDiagnostics:\n'
         printf '  cd %s/deploy/docker\n' "$HIVE_HOME"
-        printf '  docker compose --env-file %s/.env --profile enterprise logs --tail=50\n' "$HIVE_HOME"
+        printf '  docker compose -f %s/deploy/docker/docker-compose.yml -f %s/deploy/docker/docker-compose.enterprise.yml --env-file %s/.env --profile enterprise logs --tail=50\n' "$HIVE_HOME" "$HIVE_HOME" "$HIVE_HOME"
         printf '\nCommon causes:\n'
         printf '  - .env is missing required values (check %s/.env)\n' "$HIVE_HOME"
         printf '  - Supabase Storage buckets hive-files / hive-images do not exist yet\n'
