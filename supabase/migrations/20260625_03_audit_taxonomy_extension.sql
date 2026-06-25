@@ -1,4 +1,4 @@
--- supabase/migrations/20260625_01_audit_taxonomy_extension.sql
+-- supabase/migrations/20260625_03_audit_taxonomy_extension.sql
 -- Extends the audit taxonomy with inference, RAG, file-access, and
 -- data-subject-request event types required for Quebec Law 25, PHIPA,
 -- and OSFI B-10 compliance.
