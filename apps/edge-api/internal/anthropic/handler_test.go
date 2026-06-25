@@ -88,6 +88,26 @@ func TestHandler_MissingModel(t *testing.T) {
 	}
 }
 
+func TestHandler_MissingMaxTokens(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
+	req := newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("missing max_tokens: want 400 got %d", rec.Code)
+	}
+}
+
+func TestHandler_ZeroMaxTokens(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
+	req := newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":0}`)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("zero max_tokens: want 400 got %d", rec.Code)
+	}
+}
+
 func TestHandler_MissingMessages(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
 	req := newAuthedRequest(t, `{"model":"m","max_tokens":5}`)

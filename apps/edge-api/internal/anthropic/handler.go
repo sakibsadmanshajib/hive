@@ -89,6 +89,10 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "messages is required and must be non-empty", nil)
 		return
 	}
+	if req.MaxTokens <= 0 {
+		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "max_tokens is required and must be greater than 0", nil)
+		return
+	}
 
 	// Capture the client alias before translation so we can echo it back
 	// in the response. We must never return an upstream route identifier.
