@@ -1,0 +1,201 @@
+# docker-compose.enterprise.yml
+#
+# EnterpriseEdge self-hosted Supabase data plane override (issue #231).
+#
+# This file is intentionally separate from docker-compose.yml because Docker
+# Compose evaluates ALL environment interpolations for ALL services regardless
+# of which --profile is active. Placing the enterprise-only Supabase services
+# here means that operators running --profile local or --profile cloud never
+# see :? errors for ENTERPRISE_* vars they have not set.
+#
+# Usage (always pass both -f flags for enterprise):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.enterprise.yml \
+#     --profile enterprise up --build
+#
+# The installer (scripts/install.sh) does this automatically.
+#
+# Required vars (set in .env before running):
+#   ENTERPRISE_DB_PASSWORD      openssl rand -base64 24
+#   ENTERPRISE_JWT_SECRET       openssl rand -base64 48  (min 32 chars)
+#   ENTERPRISE_ANON_KEY         sign {"role":"anon"} JWT with ENTERPRISE_JWT_SECRET
+#   ENTERPRISE_SERVICE_ROLE_KEY sign {"role":"service_role"} JWT with ENTERPRISE_JWT_SECRET
+#
+# See .env.example for the full ENTERPRISE_* block and generation instructions.
+
+name: hive
+
+services:
+
+  # ── supabase-db ────────────────────────────────────────────────────────────
+  # Postgres 16 with the pgvector extension pre-installed.
+  # No host port binding: all access is via the internal compose network.
+  # The init script at deploy/supabase/init/00-extensions.sql runs once on
+  # first startup and creates the required extensions, schemas, and roles
+  # (including hive_app which RLS policies reference).
+  supabase-db:
+    image: pgvector/pgvector:pg16
+    profiles:
+      - enterprise
+    environment:
+      POSTGRES_USER: ${ENTERPRISE_DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env (openssl rand -base64 24)}
+      POSTGRES_DB: ${ENTERPRISE_DB_NAME:-postgres}
+    volumes:
+      - supabase-db-data:/var/lib/postgresql/data
+      - ../../deploy/supabase/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${ENTERPRISE_DB_USER:-postgres} -d ${ENTERPRISE_DB_NAME:-postgres}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── supabase-auth (GoTrue) ─────────────────────────────────────────────────
+  # Local JWT issuer. edge-api validates tokens against this service via
+  # SUPABASE_JWKS_URL=http://supabase-auth:9999/.well-known/jwks.json.
+  # Set ENTERPRISE_MAILER_AUTOCONFIRM=true for air-gapped installs without SMTP.
+  supabase-auth:
+    image: supabase/gotrue:v2.170.0
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: "0.0.0.0"
+      GOTRUE_API_PORT: "9999"
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}?search_path=auth"
+      GOTRUE_SITE_URL: ${ENTERPRISE_SITE_URL:-http://localhost:3000}
+      GOTRUE_URI_ALLOW_LIST: ${ENTERPRISE_REDIRECT_ALLOW_LIST:-}
+      GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-false}
+      GOTRUE_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env (openssl rand -base64 48)}
+      GOTRUE_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_JWT_ADMIN_ROLES: service_role
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_ISSUER: ${ENTERPRISE_JWT_ISSUER:-http://localhost:9999}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: ${ENTERPRISE_MAILER_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_HOST: ${ENTERPRISE_SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${ENTERPRISE_SMTP_PORT:-587}
+      GOTRUE_SMTP_USER: ${ENTERPRISE_SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${ENTERPRISE_SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${ENTERPRISE_SMTP_ADMIN_EMAIL:-admin@example.com}
+      GOTRUE_MAILER_URLPATHS_INVITE: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9999/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  # ── supabase-rest (PostgREST) ──────────────────────────────────────────────
+  # Auto REST API over local Postgres. control-plane uses this as SUPABASE_URL.
+  supabase-rest:
+    image: postgrest/postgrest:v12.2.3
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
+      PGRST_DB_SCHEMAS: "public,storage,graphql_public"
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
+      PGRST_APP_SETTINGS_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── supabase-storage ───────────────────────────────────────────────────────
+  # Supabase Storage API with local filesystem backend.
+  # No MinIO: STORAGE_BACKEND=file writes object data to the supabase-storage-data
+  # volume. No S3 call leaves the box.
+  # S3_ENDPOINT for edge-api and control-plane: http://supabase-storage:5000/object/s3
+  supabase-storage:
+    image: supabase/storage-api:v1.11.13
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-db:
+        condition: service_healthy
+      supabase-rest:
+        condition: service_healthy
+    environment:
+      ANON_KEY: ${ENTERPRISE_ANON_KEY:?set ENTERPRISE_ANON_KEY in .env (sign anon JWT with ENTERPRISE_JWT_SECRET)}
+      SERVICE_KEY: ${ENTERPRISE_SERVICE_ROLE_KEY:?set ENTERPRISE_SERVICE_ROLE_KEY in .env (sign service_role JWT)}
+      POSTGREST_URL: http://supabase-rest:3000
+      PGRST_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
+      DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}"
+      FILE_SIZE_LIMIT: ${ENTERPRISE_STORAGE_FILE_SIZE_LIMIT:-52428800}
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: local
+      GLOBAL_S3_BUCKET: stub
+      ENABLE_IMAGE_TRANSFORMATION: "true"
+      IMGPROXY_URL: ""
+    volumes:
+      - supabase-storage-data:/var/lib/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:5000/status || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+
+  # ── supabase-init ──────────────────────────────────────────────────────────
+  # One-shot container: creates the hive-files and hive-images buckets via the
+  # Storage API. Runs once per compose up; restart: "no" prevents re-runs.
+  # Bucket creation is idempotent: a 409 from an existing bucket is treated as
+  # success (|| true) so re-runs after a container recreate do not fail.
+  supabase-init:
+    image: curlimages/curl:8.7.1
+    profiles:
+      - enterprise
+    depends_on:
+      supabase-storage:
+        condition: service_healthy
+    environment:
+      SERVICE_KEY: ${ENTERPRISE_SERVICE_ROLE_KEY:?set ENTERPRISE_SERVICE_ROLE_KEY in .env}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        STORAGE_URL="http://supabase-storage:5000"
+        AUTH_HEADER="Authorization: Bearer ${SERVICE_KEY}"
+        for BUCKET in hive-files hive-images; do
+          echo "Creating bucket: $${BUCKET}"
+          curl -sf -X POST "$${STORAGE_URL}/bucket" \
+            -H "Content-Type: application/json" \
+            -H "$${AUTH_HEADER}" \
+            -d "{\"id\":\"$${BUCKET}\",\"name\":\"$${BUCKET}\",\"public\":false}" \
+            -w "\n[bucket=$${BUCKET} status=%{http_code}]\n" || true
+        done
+        echo "Bucket init complete."
+    restart: "no"
+
+volumes:
+  # Postgres WAL and data files. Persists the full schema, all migrations, and
+  # all tenant data across container recreates.
+  supabase-db-data:
+  # Object files written by the Storage API local filesystem backend.
+  # Holds hive-files and hive-images bucket contents on the box filesystem.
+  supabase-storage-data:

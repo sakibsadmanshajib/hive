@@ -36,8 +36,18 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'supabase_admin') THEN
     CREATE ROLE supabase_admin NOLOGIN NOINHERIT BYPASSRLS;
   END IF;
+  -- hive_app is the application role used by control-plane and edge-api.
+  -- RLS policies in supabase/migrations/20260529_01_rls_tenant_tables.sql
+  -- grant full access to this role (NOLOGIN, non-BYPASSRLS so RLS still applies).
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hive_app') THEN
+    CREATE ROLE hive_app NOLOGIN;
+  END IF;
 END
 $$;
+
+-- Grant hive_app usage on schemas it needs to read and write application data.
+GRANT USAGE ON SCHEMA public TO hive_app;
+GRANT USAGE ON SCHEMA storage TO hive_app;
 
 -- Grant usage on schemas to application roles
 GRANT USAGE ON SCHEMA public TO anon, authenticated, service_role;
