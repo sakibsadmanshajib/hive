@@ -27,9 +27,9 @@ func TestNewActions_SecurityTierClassification(t *testing.T) {
 		{audit.ActionRAGChunkRetrieved, false, "RAG chunk retrieved, WAL tier"},
 		{audit.ActionFileAccess, false, "file access/download, WAL tier"},
 		// Regression: existing security actions must remain true.
-		{"AUTH_SIGNIN_SUCCESS", true, "existing auth action"},
-		{"CROSS_TENANT_ATTEMPT", true, "existing cross-tenant action"},
-		{"API_KEY_ISSUE", true, "existing key-issue action"},
+		{audit.ActionAuthSigninSuccess, true, "existing auth action"},
+		{audit.ActionCrossTenantAttempt, true, "existing cross-tenant action"},
+		{audit.ActionAPIKeyIssue, true, "existing key-issue action"},
 		// Regression: unknown action must be false.
 		{"UNKNOWN_ACTION", false, "unknown action defaults to WAL tier"},
 	}
@@ -209,7 +209,10 @@ func TestNewActions_RAGChunkRetrievedAfterJSON(t *testing.T) {
 	if !ok {
 		t.Fatal("after_json missing from canonical bytes")
 	}
-	after := afterRaw.(map[string]any)
+	after, ok := afterRaw.(map[string]any)
+	if !ok {
+		t.Fatalf("after_json not an object: %T", afterRaw)
+	}
 	if _, exists := after["document_id"]; !exists {
 		t.Error("after_json missing document_id")
 	}
