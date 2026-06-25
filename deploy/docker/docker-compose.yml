@@ -11,14 +11,6 @@ services:
     depends_on:
       control-plane:
         condition: service_healthy
-      # Enterprise profile: wait for the local auth and storage services before
-      # edge-api starts so JWKS fetch and S3 bucket checks succeed at boot.
-      supabase-auth:
-        condition: service_healthy
-        required: false
-      supabase-storage:
-        condition: service_healthy
-        required: false
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
@@ -167,11 +159,6 @@ services:
     # dependency entirely and control-plane connects via the managed REDIS_URL.
     depends_on:
       redis:
-        condition: service_healthy
-        required: false
-      # Enterprise profile: wait for local Postgres before control-plane starts
-      # so the DB connection pool succeeds at boot.
-      supabase-db:
         condition: service_healthy
         required: false
     volumes:
