@@ -76,6 +76,15 @@ func TestConfiguredAuditSinksEachFlagGates(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(tc.envKey, "true")
 			t.Setenv(tc.credKey, tc.credVal)
+			// Splunk requires both URL and token; supply the second cred here.
+			if tc.name == "splunk" {
+				t.Setenv("AUDIT_SINK_SPLUNK_HEC_TOKEN", "tok")
+			}
+			// Langfuse requires host + both keys; supply the extras here.
+			if tc.name == "langfuse" {
+				t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
+				t.Setenv("LANGFUSE_SECRET_KEY", "sec")
+			}
 
 			result := configuredAuditSinks()
 			require.Len(t, result, 1, "exactly one sink must be registered when only %s=true", tc.envKey)
@@ -93,6 +102,40 @@ func TestConfiguredAuditSinksMissingCredSkipped(t *testing.T) {
 
 	sinks := configuredAuditSinks()
 	assert.Empty(t, sinks, "sink must be skipped when enable flag is set but credentials are absent")
+}
+
+// TestConfiguredAuditSinksPartialCredsSkipped verifies that sinks with
+// multi-credential requirements are skipped when only some credentials are set.
+func TestConfiguredAuditSinksPartialCredsSkipped(t *testing.T) {
+	t.Run("splunk_url_only", func(t *testing.T) {
+		t.Setenv("ENABLE_AUDIT_SINK_SPLUNK", "true")
+		t.Setenv("AUDIT_SINK_SPLUNK_HEC_URL", "http://splunk.example.com")
+		// token intentionally absent
+		result := configuredAuditSinks()
+		assert.Empty(t, result, "splunk must be skipped when HEC token is absent")
+	})
+	t.Run("splunk_token_only", func(t *testing.T) {
+		t.Setenv("ENABLE_AUDIT_SINK_SPLUNK", "true")
+		t.Setenv("AUDIT_SINK_SPLUNK_HEC_TOKEN", "tok")
+		// url intentionally absent
+		result := configuredAuditSinks()
+		assert.Empty(t, result, "splunk must be skipped when HEC url is absent")
+	})
+	t.Run("langfuse_host_only", func(t *testing.T) {
+		t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
+		t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
+		// public and secret keys intentionally absent
+		result := configuredAuditSinks()
+		assert.Empty(t, result, "langfuse must be skipped when keys are absent")
+	})
+	t.Run("langfuse_missing_secret", func(t *testing.T) {
+		t.Setenv("ENABLE_AUDIT_SINK_LANGFUSE", "true")
+		t.Setenv("LANGFUSE_HOST", "http://langfuse.example.com")
+		t.Setenv("LANGFUSE_PUBLIC_KEY", "pub")
+		// secret key intentionally absent
+		result := configuredAuditSinks()
+		assert.Empty(t, result, "langfuse must be skipped when secret key is absent")
+	})
 }
 
 // TestAuditSinkEnabled verifies the helper's case-insensitive true detection.

@@ -1056,13 +1056,15 @@ func configuredAuditSinks() []auditworker.Sink {
 		}
 	}
 	if auditSinkEnabled("ENABLE_AUDIT_SINK_SPLUNK") {
-		if url := strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_URL")); url != "" {
+		url := strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_URL"))
+		token := strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_TOKEN"))
+		if url != "" && token != "" {
 			configured = append(configured, sinks.NewSplunk(sinks.SplunkConfig{
 				URL:   url,
-				Token: strings.TrimSpace(os.Getenv("AUDIT_SINK_SPLUNK_HEC_TOKEN")),
+				Token: token,
 			}))
 		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_SPLUNK=true but AUDIT_SINK_SPLUNK_HEC_URL is unset — sink skipped")
+			log.Println("WARNING: ENABLE_AUDIT_SINK_SPLUNK=true but AUDIT_SINK_SPLUNK_HEC_URL or AUDIT_SINK_SPLUNK_HEC_TOKEN is unset — sink skipped")
 		}
 	}
 	if auditSinkEnabled("ENABLE_AUDIT_SINK_SENTRY") {
@@ -1073,14 +1075,17 @@ func configuredAuditSinks() []auditworker.Sink {
 		}
 	}
 	if auditSinkEnabled("ENABLE_AUDIT_SINK_LANGFUSE") {
-		if host := strings.TrimSpace(os.Getenv("LANGFUSE_HOST")); host != "" {
+		host := strings.TrimSpace(os.Getenv("LANGFUSE_HOST"))
+		pub := strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY"))
+		sec := strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY"))
+		if host != "" && pub != "" && sec != "" {
 			configured = append(configured, sinks.NewLangfuse(sinks.LangfuseConfig{
 				Host:      host,
-				PublicKey: strings.TrimSpace(os.Getenv("LANGFUSE_PUBLIC_KEY")),
-				SecretKey: strings.TrimSpace(os.Getenv("LANGFUSE_SECRET_KEY")),
+				PublicKey: pub,
+				SecretKey: sec,
 			}))
 		} else {
-			log.Println("WARNING: ENABLE_AUDIT_SINK_LANGFUSE=true but LANGFUSE_HOST is unset — sink skipped")
+			log.Println("WARNING: ENABLE_AUDIT_SINK_LANGFUSE=true but LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, or LANGFUSE_SECRET_KEY is unset — sink skipped")
 		}
 	}
 	return configured
