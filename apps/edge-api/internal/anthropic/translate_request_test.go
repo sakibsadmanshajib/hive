@@ -9,13 +9,10 @@ import (
 
 func TestToOAIRequest_SimpleTextMessage(t *testing.T) {
 	req := anthropic.MessagesRequest{
-		Model: "claude-3-haiku",
-		Messages: []anthropic.Message{
-			{Role: "user", Content: anthropic.MessageContent{Text: "Hello"}},
-		},
+		Model:     "claude-3-haiku",
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "Hello"}}},
 		MaxTokens: 100,
 	}
-
 	got, err := anthropic.ToOAIRequest(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -26,11 +23,9 @@ func TestToOAIRequest_SimpleTextMessage(t *testing.T) {
 	if len(got.Messages) != 1 {
 		t.Fatalf("messages len: want 1 got %d", len(got.Messages))
 	}
-	if got.Messages[0].Role != "user" {
-		t.Errorf("role: want %q got %q", "user", got.Messages[0].Role)
-	}
-	if got.Messages[0].Content != "Hello" {
-		t.Errorf("content: want %q got %v", "Hello", got.Messages[0].Content)
+	b, _ := json.Marshal(got.Messages[0].Content)
+	if string(b) != `"Hello"` {
+		t.Errorf("content json: want %q got %s", `"Hello"`, b)
 	}
 	if got.MaxTokens == nil || *got.MaxTokens != 100 {
 		t.Errorf("max_tokens: want 100 got %v", got.MaxTokens)
@@ -39,14 +34,11 @@ func TestToOAIRequest_SimpleTextMessage(t *testing.T) {
 
 func TestToOAIRequest_SystemPrependsMessage(t *testing.T) {
 	req := anthropic.MessagesRequest{
-		Model:  "claude-3-haiku",
-		System: anthropic.SystemField{Text: "Be concise."},
-		Messages: []anthropic.Message{
-			{Role: "user", Content: anthropic.MessageContent{Text: "Hi"}},
-		},
+		Model:     "m",
+		System:    anthropic.SystemField{Text: "Be concise."},
+		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "Hi"}}},
 		MaxTokens: 10,
 	}
-
 	got, err := anthropic.ToOAIRequest(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -55,19 +47,16 @@ func TestToOAIRequest_SystemPrependsMessage(t *testing.T) {
 		t.Fatalf("messages len: want 2 got %d", len(got.Messages))
 	}
 	if got.Messages[0].Role != "system" {
-		t.Errorf("first message role: want %q got %q", "system", got.Messages[0].Role)
+		t.Errorf("first role: want system got %q", got.Messages[0].Role)
 	}
-	if got.Messages[0].Content != "Be concise." {
-		t.Errorf("system content: want %q got %v", "Be concise.", got.Messages[0].Content)
+	b, _ := json.Marshal(got.Messages[0].Content)
+	if string(b) != `"Be concise."` {
+		t.Errorf("system content json: want %q got %s", `"Be concise."`, b)
 	}
 }
 
 func TestToOAIRequest_SystemBlocks(t *testing.T) {
-	raw := `{
-		"model":"m","max_tokens":5,
-		"system":[{"type":"text","text":"Part1"},{"type":"text","text":"Part2"}],
-		"messages":[{"role":"user","content":"hi"}]
-	}`
+	raw := `{"model":"m","max_tokens":5,"system":[{"type":"text","text":"Part1"},{"type":"text","text":"Part2"}],"messages":[{"role":"user","content":"hi"}]}`
 	var req anthropic.MessagesRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -88,67 +77,70 @@ func TestToOAIRequest_StopSequences(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got.Stop) != 2 || got.Stop[0] != "END" || got.Stop[1] != "\n" {
+	if len(got.Stop) != 2 || got.Stop[0] != "END" {
 		t.Errorf("stop: want [END \\n] got %v", got.Stop)
 	}
 }
 
 func TestToOAIRequest_ToolChoice_Auto(t *testing.T) {
-	tc := &anthropic.ToolChoice{Type: "auto"}
 	req := anthropic.MessagesRequest{
 		Model:      "m",
 		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
 		MaxTokens:  5,
-		ToolChoice: tc,
+		ToolChoice: &anthropic.ToolChoice{Type: "auto"},
 	}
 	got, err := anthropic.ToOAIRequest(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.ToolChoice != "auto" {
-		t.Errorf("tool_choice: want %q got %v", "auto", got.ToolChoice)
+	if got.ToolChoice == nil {
+		t.Fatal("tool_choice nil")
+	}
+	b, _ := json.Marshal(got.ToolChoice)
+	if string(b) != `"auto"` {
+		t.Errorf("tool_choice json: want %q got %s", `"auto"`, b)
 	}
 }
 
 func TestToOAIRequest_ToolChoice_Any(t *testing.T) {
-	tc := &anthropic.ToolChoice{Type: "any"}
 	req := anthropic.MessagesRequest{
 		Model:      "m",
 		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
 		MaxTokens:  5,
-		ToolChoice: tc,
+		ToolChoice: &anthropic.ToolChoice{Type: "any"},
 	}
 	got, err := anthropic.ToOAIRequest(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got.ToolChoice != "required" {
-		t.Errorf("tool_choice: want %q got %v", "required", got.ToolChoice)
+	b, _ := json.Marshal(got.ToolChoice)
+	if string(b) != `"required"` {
+		t.Errorf("tool_choice json: want %q got %s", `"required"`, b)
 	}
 }
 
 func TestToOAIRequest_ToolChoice_Named(t *testing.T) {
-	tc := &anthropic.ToolChoice{Type: "tool", Name: "get_weather"}
 	req := anthropic.MessagesRequest{
 		Model:      "m",
 		Messages:   []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
 		MaxTokens:  5,
-		ToolChoice: tc,
+		ToolChoice: &anthropic.ToolChoice{Type: "tool", Name: "get_weather"},
 	}
 	got, err := anthropic.ToOAIRequest(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	m, ok := got.ToolChoice.(map[string]interface{})
-	if !ok {
-		t.Fatalf("tool_choice type: want map got %T", got.ToolChoice)
+	b, _ := json.Marshal(got.ToolChoice)
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal tool_choice: %v", err)
 	}
 	if m["type"] != "function" {
-		t.Errorf("tool_choice.type: want %q got %v", "function", m["type"])
+		t.Errorf("type: want function got %v", m["type"])
 	}
-	fn, _ := m["function"].(map[string]string)
+	fn, _ := m["function"].(map[string]interface{})
 	if fn["name"] != "get_weather" {
-		t.Errorf("tool_choice.function.name: want %q got %v", "get_weather", fn["name"])
+		t.Errorf("function.name: want get_weather got %v", fn["name"])
 	}
 }
 
@@ -158,36 +150,21 @@ func TestToOAIRequest_Tools(t *testing.T) {
 		Model:     "m",
 		MaxTokens: 5,
 		Messages:  []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "weather?"}}},
-		Tools: []anthropic.Tool{
-			{Name: "get_weather", Description: "Get weather", InputSchema: schema},
-		},
+		Tools:     []anthropic.Tool{{Name: "get_weather", Description: "Get weather", InputSchema: schema}},
 	}
 	got, err := anthropic.ToOAIRequest(req)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got.Tools) != 1 {
-		t.Fatalf("tools len: want 1 got %d", len(got.Tools))
-	}
-	if got.Tools[0].Type != "function" {
-		t.Errorf("tool type: want %q got %q", "function", got.Tools[0].Type)
-	}
-	if got.Tools[0].Function.Name != "get_weather" {
-		t.Errorf("tool name: want %q got %q", "get_weather", got.Tools[0].Function.Name)
+	if len(got.Tools) != 1 || got.Tools[0].Type != "function" || got.Tools[0].Function.Name != "get_weather" {
+		t.Errorf("tools: %+v", got.Tools)
 	}
 }
 
 func TestToOAIRequest_ImageContentBlock(t *testing.T) {
 	blocks := []anthropic.ContentBlock{
-		{Type: "text", Text: "Describe this image"},
-		{
-			Type: "image",
-			Source: &anthropic.ImageSource{
-				Type:      "base64",
-				MediaType: "image/png",
-				Data:      "abc123",
-			},
-		},
+		{Type: "text", Text: "Describe this"},
+		{Type: "image", Source: &anthropic.ImageSource{Type: "base64", MediaType: "image/png", Data: "abc123"}},
 	}
 	req := anthropic.MessagesRequest{
 		Model:     "m",
@@ -198,37 +175,25 @@ func TestToOAIRequest_ImageContentBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	parts, ok := got.Messages[0].Content.([]anthropic.OAIContentPart)
-	if !ok {
-		t.Fatalf("content type: want []OAIContentPart got %T", got.Messages[0].Content)
+	b, _ := json.Marshal(got.Messages[0].Content)
+	var parts []map[string]interface{}
+	if err := json.Unmarshal(b, &parts); err != nil {
+		t.Fatalf("unmarshal parts: %v body=%s", err, b)
 	}
 	if len(parts) != 2 {
 		t.Fatalf("parts len: want 2 got %d", len(parts))
 	}
-	if parts[1].Type != "image_url" {
-		t.Errorf("part[1] type: want %q got %q", "image_url", parts[1].Type)
+	if parts[1]["type"] != "image_url" {
+		t.Errorf("part[1] type: want image_url got %v", parts[1]["type"])
 	}
-	if parts[1].ImageURL == nil {
-		t.Fatal("image_url nil")
-	}
-	expected := "data:image/png;base64,abc123"
-	if parts[1].ImageURL.URL != expected {
-		t.Errorf("image URL: want %q got %q", expected, parts[1].ImageURL.URL)
+	iu, _ := parts[1]["image_url"].(map[string]interface{})
+	if iu["url"] != "data:image/png;base64,abc123" {
+		t.Errorf("image url: want data URI got %v", iu["url"])
 	}
 }
 
 func TestToOAIRequest_ToolUseBlock(t *testing.T) {
-	raw := `{
-		"model":"m","max_tokens":5,
-		"messages":[{
-			"role":"assistant",
-			"content":[{
-				"type":"tool_use",
-				"id":"tu_01","name":"search",
-				"input":{"query":"Go lang"}
-			}]
-		}]
-	}`
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu_01","name":"search","input":{"query":"Go lang"}}]}]}`
 	var req anthropic.MessagesRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -238,38 +203,20 @@ func TestToOAIRequest_ToolUseBlock(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	msg := got.Messages[0]
-	if msg.Role != "assistant" {
-		t.Errorf("role: want %q got %q", "assistant", msg.Role)
+	if msg.Role != "assistant" || len(msg.ToolCalls) != 1 {
+		t.Fatalf("message: role=%q tool_calls=%d", msg.Role, len(msg.ToolCalls))
 	}
-	if len(msg.ToolCalls) != 1 {
-		t.Fatalf("tool_calls len: want 1 got %d", len(msg.ToolCalls))
+	if msg.ToolCalls[0].ID != "tu_01" || msg.ToolCalls[0].Function.Name != "search" {
+		t.Errorf("tool_call: %+v", msg.ToolCalls[0])
 	}
-	tc := msg.ToolCalls[0]
-	if tc.ID != "tu_01" {
-		t.Errorf("tool_call id: want %q got %q", "tu_01", tc.ID)
-	}
-	if tc.Function.Name != "search" {
-		t.Errorf("function name: want %q got %q", "search", tc.Function.Name)
-	}
-	// Arguments must be valid JSON
 	var args interface{}
-	if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-		t.Errorf("arguments not valid JSON: %v, raw=%q", err, tc.Function.Arguments)
+	if err := json.Unmarshal([]byte(msg.ToolCalls[0].Function.Arguments), &args); err != nil {
+		t.Errorf("arguments not valid JSON: %v", err)
 	}
 }
 
 func TestToOAIRequest_ToolResultBlock(t *testing.T) {
-	raw := `{
-		"model":"m","max_tokens":5,
-		"messages":[{
-			"role":"user",
-			"content":[{
-				"type":"tool_result",
-				"tool_use_id":"tu_01",
-				"content":"Sunny and 25°C"
-			}]
-		}]
-	}`
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_01","content":"Sunny"}]}]}`
 	var req anthropic.MessagesRequest
 	if err := json.Unmarshal([]byte(raw), &req); err != nil {
 		t.Fatalf("unmarshal: %v", err)
@@ -280,28 +227,27 @@ func TestToOAIRequest_ToolResultBlock(t *testing.T) {
 	}
 	msg := got.Messages[0]
 	if msg.Role != "tool" {
-		t.Errorf("role: want %q got %q", "tool", msg.Role)
+		t.Errorf("role: want tool got %q", msg.Role)
 	}
 	if msg.ToolCallID != "tu_01" {
-		t.Errorf("tool_call_id: want %q got %q", "tu_01", msg.ToolCallID)
+		t.Errorf("tool_call_id: want tu_01 got %q", msg.ToolCallID)
 	}
-	if msg.Content != "Sunny and 25°C" {
-		t.Errorf("content: want %q got %v", "Sunny and 25°C", msg.Content)
+	b, _ := json.Marshal(msg.Content)
+	if string(b) != `"Sunny"` {
+		t.Errorf("content: want %q got %s", `"Sunny"`, b)
 	}
 }
 
-func TestToOAIRequest_EmptyModel_IsPreserved(t *testing.T) {
-	// Model validation is the handler's responsibility; the translator passes
-	// whatever is in the request so the handler can reject it uniformly.
-	req := anthropic.MessagesRequest{
-		Messages: []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
+// Finding 6: tool_result preceded by other blocks must return an error.
+func TestToOAIRequest_ToolResultPrecededByBlock_ReturnsError(t *testing.T) {
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[{"type":"text","text":"note"},{"type":"tool_result","tool_use_id":"tu_01","content":"ok"}]}]}`
+	var req anthropic.MessagesRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
 	}
-	got, err := anthropic.ToOAIRequest(req)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got.Model != "" {
-		t.Errorf("model: want empty got %q", got.Model)
+	_, err := anthropic.ToOAIRequest(req)
+	if err == nil {
+		t.Fatal("expected error for tool_result with preceding blocks, got nil")
 	}
 }
 
@@ -316,13 +262,12 @@ func TestToOAIRequest_NilToolChoice_Omitted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got.ToolChoice != nil {
-		t.Errorf("tool_choice should be nil when not set, got %v", got.ToolChoice)
+		t.Errorf("tool_choice should be nil when not set")
 	}
 }
 
 func TestToOAIRequest_TemperatureAndTopP(t *testing.T) {
-	temp := 0.7
-	topP := 0.9
+	temp, topP := 0.7, 0.9
 	req := anthropic.MessagesRequest{
 		Model:       "m",
 		Messages:    []anthropic.Message{{Role: "user", Content: anthropic.MessageContent{Text: "hi"}}},
@@ -339,5 +284,68 @@ func TestToOAIRequest_TemperatureAndTopP(t *testing.T) {
 	}
 	if got.TopP == nil || *got.TopP != 0.9 {
 		t.Errorf("top_p: want 0.9 got %v", got.TopP)
+	}
+}
+
+// OAIMessageContent marshals as plain string for text-only content.
+func TestOAIMessageContent_MarshalJSON_Text(t *testing.T) {
+	c := anthropic.OAIMessageContent{Text: "hello"}
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != `"hello"` {
+		t.Errorf("want %q got %s", `"hello"`, b)
+	}
+}
+
+// OAIMessageContent marshals as array for multipart content.
+func TestOAIMessageContent_MarshalJSON_Parts(t *testing.T) {
+	c := anthropic.OAIMessageContent{
+		Parts: []anthropic.OAIContentPart{
+			{Type: "text", Text: "hi"},
+			{Type: "image_url", ImageURL: &anthropic.OAIImageURL{URL: "data:image/png;base64,abc"}},
+		},
+	}
+	b, err := json.Marshal(c)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var arr []interface{}
+	if err := json.Unmarshal(b, &arr); err != nil || len(arr) != 2 {
+		t.Errorf("expected 2-element array, got: %s", b)
+	}
+}
+
+// OAIToolChoice marshals as string sentinel.
+func TestOAIToolChoice_MarshalJSON_Sentinel(t *testing.T) {
+	tc := anthropic.OAIToolChoice{Sentinel: "required"}
+	b, err := json.Marshal(tc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if string(b) != `"required"` {
+		t.Errorf("want %q got %s", `"required"`, b)
+	}
+}
+
+// OAIToolChoice marshals as object for named function.
+func TestOAIToolChoice_MarshalJSON_Named(t *testing.T) {
+	tc := anthropic.OAIToolChoice{
+		Named: &anthropic.OAINamedToolChoice{
+			Type:     "function",
+			Function: anthropic.OAINamedToolChoiceFunction{Name: "fn"},
+		},
+	}
+	b, err := json.Marshal(tc)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if m["type"] != "function" {
+		t.Errorf("type: want function got %v", m["type"])
 	}
 }

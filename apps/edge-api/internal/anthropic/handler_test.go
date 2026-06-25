@@ -13,7 +13,6 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 )
 
-// newAuthedRequest builds a POST request with a valid auth.User in context.
 func newAuthedRequest(t *testing.T, body string) *http.Request {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
@@ -50,11 +49,7 @@ func TestHandler_MissingUser(t *testing.T) {
 func TestHandler_NoTenant(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
-	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
-		ID:   uuid.New(),
-		Role: "member",
-		// TenantID is zero (uuid.Nil)
-	}))
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), Role: "member"}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -65,11 +60,7 @@ func TestHandler_NoTenant(t *testing.T) {
 func TestHandler_NoRole(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{}`))
-	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
-		ID:       uuid.New(),
-		TenantID: uuid.New(),
-		Role:     "guest", // not granted PermChatInvoke
-	}))
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), TenantID: uuid.New(), Role: "guest"}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
@@ -108,25 +99,13 @@ func TestHandler_MissingMessages(t *testing.T) {
 }
 
 func TestHandler_NonStreamHappyPath(t *testing.T) {
-	// Upstream returns a well-formed OpenAI response.
 	oaiResp := map[string]interface{}{
 		"id":    "chatcmpl-test",
-		"model": "claude-3-haiku",
+		"model": "openrouter/anthropic/claude-3-haiku", // upstream route id
 		"choices": []map[string]interface{}{
-			{
-				"index":         0,
-				"finish_reason": "stop",
-				"message": map[string]interface{}{
-					"role":    "assistant",
-					"content": "Hello!",
-				},
-			},
+			{"index": 0, "finish_reason": "stop", "message": map[string]interface{}{"role": "assistant", "content": "Hello!"}},
 		},
-		"usage": map[string]interface{}{
-			"prompt_tokens":     10,
-			"completion_tokens": 5,
-			"total_tokens":      15,
-		},
+		"usage": map[string]interface{}{"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -143,30 +122,33 @@ func TestHandler_NonStreamHappyPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status: want 200 got %d body=%s", rec.Code, rec.Body.String())
 	}
-
 	var got anthropic.MessagesResponse
 	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
-		t.Fatalf("decode response: %v", err)
+		t.Fatalf("decode: %v", err)
 	}
-	if got.Type != "message" {
-		t.Errorf("type: want message got %q", got.Type)
-	}
-	if got.Role != "assistant" {
-		t.Errorf("role: want assistant got %q", got.Role)
+	if got.Type != "message" || got.Role != "assistant" {
+		t.Errorf("type/role: %q/%q", got.Type, got.Role)
 	}
 	if got.StopReason != "end_turn" {
 		t.Errorf("stop_reason: want end_turn got %q", got.StopReason)
 	}
+	// Finding 2: model echoed back must be client alias.
+	if got.Model != "claude-3-haiku" {
+		t.Errorf("model: want claude-3-haiku got %q", got.Model)
+	}
+	if strings.Contains(got.Model, "openrouter") {
+		t.Errorf("upstream route id leaked in model: %q", got.Model)
+	}
 	if len(got.Content) == 0 || got.Content[0].Text != "Hello!" {
-		t.Errorf("content text: want Hello! got %v", got.Content)
+		t.Errorf("content: %+v", got.Content)
 	}
 }
 
 func TestHandler_StreamHappyPath(t *testing.T) {
 	stream := buildOAIStream(
-		`{"id":"chatcmpl-s","model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
-		`{"id":"chatcmpl-s","model":"m","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}`,
-		`{"id":"chatcmpl-s","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`,
+		`{"id":"chatcmpl-s","model":"route-x","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-s","model":"route-x","choices":[{"index":0,"delta":{"content":"Hi"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-s","model":"route-x","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`,
 	)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -176,7 +158,7 @@ func TestHandler_StreamHappyPath(t *testing.T) {
 	defer upstream.Close()
 
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: upstream.URL, LiteLLMKey: "k"})
-	req := newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":5,"stream":true}`)
+	req := newAuthedRequest(t, `{"model":"my-alias","messages":[{"role":"user","content":"hi"}],"max_tokens":5,"stream":true}`)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -190,17 +172,25 @@ func TestHandler_StreamHappyPath(t *testing.T) {
 	if !strings.Contains(body, "message_stop") {
 		t.Error("stream missing message_stop")
 	}
+	// Finding 2: model in message_start must be client alias.
+	if strings.Contains(body, "route-x") {
+		t.Error("upstream model route-x leaked in stream")
+	}
+	if !strings.Contains(body, "my-alias") {
+		t.Error("client alias my-alias not present in stream")
+	}
 }
 
+// Finding 8: provider-blind test uses the full stableErrorLeakPatterns set.
 func TestHandler_UpstreamError_IsProviderBlind(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, `{"error":{"message":"groq rate limit hit via openrouter"}}`)
+		fmt.Fprint(w, `{"error":{"message":"groq rate limit hit via openrouter/auto; litellm route-fast; anthropic backend; openai upstream"}}`)
 	}))
 	defer upstream.Close()
 
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: upstream.URL, LiteLLMKey: "k"})
-	req := newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`)
+	req := newAuthedRequest(t, `{"model":"my-alias","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -208,9 +198,16 @@ func TestHandler_UpstreamError_IsProviderBlind(t *testing.T) {
 		t.Errorf("status: want 429 got %d", rec.Code)
 	}
 	body := strings.ToLower(rec.Body.String())
-	for _, leak := range []string{"groq", "openrouter", "route-"} {
-		if strings.Contains(body, leak) {
-			t.Errorf("provider-blind violation: %q leaked in response", leak)
+	// Full stableErrorLeakPatterns provider name set from errors/codes.go.
+	leakTerms := []string{
+		"openai", "anthropic", "openrouter", "groq", "ollama", "vllm", "sglang",
+		"nim", "litellm", "google", "gemini", "mistral", "cohere", "cerebras",
+		"deepseek", "xai", "together", "fireworks", "replicate", "perplexity",
+		"route-",
+	}
+	for _, term := range leakTerms {
+		if strings.Contains(body, term) {
+			t.Errorf("provider-blind violation: %q leaked in response body", term)
 		}
 	}
 }
@@ -220,7 +217,6 @@ func TestHandler_CountTokens(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
 		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"Hello world"}],"max_tokens":5}`))
 	req.Header.Set("Content-Type", "application/json")
-	// count_tokens does not require auth (local estimator).
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -238,8 +234,7 @@ func TestHandler_CountTokens(t *testing.T) {
 
 func TestHandler_CountTokens_BadJSON(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
-		strings.NewReader(`{bad}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{bad}`))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {

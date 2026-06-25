@@ -46,7 +46,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Route count_tokens to the local estimator.
 	if strings.HasSuffix(r.URL.Path, "/count_tokens") {
 		h.handleCountTokens(w, r)
 		return
@@ -91,6 +90,10 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture the client alias before translation so we can echo it back
+	// in the response. We must never return an upstream route identifier.
+	clientAlias := req.Model
+
 	oaiReq, err := ToOAIRequest(req)
 	if err != nil {
 		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "request translation failed", nil)
@@ -129,19 +132,18 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		apierr.WriteProviderBlindUpstreamError(w, req.Model, resp.StatusCode, string(rawBody))
+		apierr.WriteProviderBlindUpstreamError(w, clientAlias, resp.StatusCode, string(rawBody))
 		return
 	}
 
 	if oaiReq.Stream {
-		t := NewSSETranslator(w)
-		if err := t.Translate(resp.Body); err != nil {
+		tr := NewSSETranslator(w, clientAlias)
+		if err := tr.Translate(resp.Body); err != nil {
 			slog.Warn("anthropic SSE translate error", "err", err, "request_id", requestID)
 		}
 		return
 	}
 
-	// Non-streaming: read the full OpenAI response and lift to Anthropic shape.
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "response read error", nil)
@@ -154,7 +156,7 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	anthResp := FromOAIResponse(oaiResp)
+	anthResp := FromOAIResponse(oaiResp, clientAlias)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	if encErr := json.NewEncoder(w).Encode(anthResp); encErr != nil {
@@ -163,7 +165,6 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleCountTokens returns a local token count estimate for the request body.
-// This satisfies the Anthropic SDK probe without a real LLM call.
 func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
@@ -177,7 +178,6 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Rough estimate: 1 token per 4 UTF-8 chars across all text content.
 	var totalChars int
 	if req.System.Text != "" {
 		totalChars += utf8.RuneCountInString(req.System.Text)
@@ -194,12 +194,13 @@ func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(CountTokensResponse{InputTokens: estimated})
+	if encErr := json.NewEncoder(w).Encode(CountTokensResponse{InputTokens: estimated}); encErr != nil {
+		slog.Warn("anthropic count_tokens encode error", "err", encErr)
+	}
 }
 
 // normalizeAPIKeyHeader rewrites an Anthropic x-api-key header to a standard
 // Authorization: Bearer header so downstream auth middleware works uniformly.
-// Called by the route wrapper before the Handler runs.
 func normalizeAPIKeyHeader(r *http.Request) *http.Request {
 	if r.Header.Get("Authorization") != "" {
 		return r

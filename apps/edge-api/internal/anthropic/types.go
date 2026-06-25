@@ -203,14 +203,16 @@ type StreamEvent struct {
 }
 
 // StreamMessage is the partial message envelope in message_start.
+// StopReason and StopSequence are *string so nil serialises as JSON null
+// (absent), matching the Anthropic protocol (stop_reason is null at start).
 type StreamMessage struct {
 	ID           string      `json:"id"`
 	Type         string      `json:"type"`
 	Role         string      `json:"role"`
 	Model        string      `json:"model"`
-	Content      []any       `json:"content"`
-	StopReason   interface{} `json:"stop_reason"`
-	StopSequence interface{} `json:"stop_sequence"`
+	Content      []string    `json:"content"` // always empty at message_start
+	StopReason   *string     `json:"stop_reason"`
+	StopSequence *string     `json:"stop_sequence"`
 	Usage        StreamUsage `json:"usage"`
 }
 
@@ -242,25 +244,71 @@ type StreamUsage struct {
 // These mirror the fields the chat.Handler and LiteLLM understand.
 // --------------------------------------------------------------------------
 
+// OAIToolChoice is a typed union for the OpenAI tool_choice field.
+// Either a string sentinel ("auto", "required", "none") or a named function
+// selector. This replaces the bare interface{} to keep the type-safe promise.
+type OAIToolChoice struct {
+	// Sentinel is set when tool_choice is "auto", "required", or "none".
+	Sentinel string
+	// Named is set when tool_choice selects a specific function.
+	Named *OAINamedToolChoice
+}
+
+// OAINamedToolChoice is the structured form of a named function selector.
+type OAINamedToolChoice struct {
+	Type     string                    `json:"type"` // always "function"
+	Function OAINamedToolChoiceFunction `json:"function"`
+}
+
+// OAINamedToolChoiceFunction holds the function name for a named tool choice.
+type OAINamedToolChoiceFunction struct {
+	Name string `json:"name"`
+}
+
+// MarshalJSON serialises OAIToolChoice to either a JSON string or an object.
+func (tc OAIToolChoice) MarshalJSON() ([]byte, error) {
+	if tc.Named != nil {
+		return json.Marshal(tc.Named)
+	}
+	return json.Marshal(tc.Sentinel)
+}
+
 // OAIRequest is the OpenAI chat completions request shape.
 type OAIRequest struct {
-	Model       string      `json:"model"`
-	Messages    []OAIMessage `json:"messages"`
-	Tools       []OAITool   `json:"tools,omitempty"`
-	ToolChoice  interface{} `json:"tool_choice,omitempty"`
-	MaxTokens   *int        `json:"max_tokens,omitempty"`
-	Stop        []string    `json:"stop,omitempty"`
-	Temperature *float64    `json:"temperature,omitempty"`
-	TopP        *float64    `json:"top_p,omitempty"`
-	Stream      bool        `json:"stream,omitempty"`
+	Model       string        `json:"model"`
+	Messages    []OAIMessage  `json:"messages"`
+	Tools       []OAITool     `json:"tools,omitempty"`
+	ToolChoice  *OAIToolChoice `json:"tool_choice,omitempty"`
+	MaxTokens   *int          `json:"max_tokens,omitempty"`
+	Stop        []string      `json:"stop,omitempty"`
+	Temperature *float64      `json:"temperature,omitempty"`
+	TopP        *float64      `json:"top_p,omitempty"`
+	Stream      bool          `json:"stream,omitempty"`
+}
+
+// OAIMessageContent is a typed union for an OAI message's content field.
+// Either a plain string or a multipart content-parts array.
+type OAIMessageContent struct {
+	// Text is set when content is a plain string.
+	Text string
+	// Parts is set when content is a multipart array (vision, etc.).
+	Parts []OAIContentPart
+}
+
+// MarshalJSON serialises OAIMessageContent to either a JSON string or array.
+func (c OAIMessageContent) MarshalJSON() ([]byte, error) {
+	if len(c.Parts) > 0 {
+		return json.Marshal(c.Parts)
+	}
+	return json.Marshal(c.Text)
 }
 
 // OAIMessage is a single OpenAI chat message.
 type OAIMessage struct {
-	Role       string        `json:"role"`
-	Content    interface{}   `json:"content,omitempty"`
-	ToolCallID string        `json:"tool_call_id,omitempty"`
-	ToolCalls  []OAIToolCall `json:"tool_calls,omitempty"`
+	Role       string            `json:"role"`
+	Content    OAIMessageContent `json:"content,omitempty"`
+	ToolCallID string            `json:"tool_call_id,omitempty"`
+	ToolCalls  []OAIToolCall     `json:"tool_calls,omitempty"`
 }
 
 // OAIToolCall is an assistant tool invocation.

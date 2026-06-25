@@ -7,31 +7,37 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/google/uuid"
 )
 
 // SSETranslator is a stateful re-emitter that converts an OpenAI SSE stream
 // (chat.completion.chunk) into the Anthropic streaming event sequence:
 //
-//  message_start
-//  content_block_start  (index 0, text)
-//  content_block_delta* (text_delta)
-//  -- on first tool_call delta:
-//  content_block_stop
-//  content_block_start  (index N, tool_use, id+name)
-//  content_block_delta* (input_json_delta)
-//  -- end of stream:
-//  content_block_stop
-//  message_delta        (stop_reason, usage)
-//  message_stop
+//	message_start
+//	content_block_start  (index 0, text)
+//	content_block_delta* (text_delta)
+//	-- on first tool_call delta:
+//	content_block_stop
+//	content_block_start  (index N, tool_use, id+name)
+//	content_block_delta* (input_json_delta)
+//	-- end of stream:
+//	content_block_stop
+//	message_delta        (stop_reason, usage)
+//	message_stop
 //
 // The translator never leaks provider names or upstream identifiers.
+// clientAlias is the model name the client sent; it is echoed in message_start
+// so upstream route identifiers never reach the client.
 type SSETranslator struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
 
+	// clientAlias is the model alias echoed back to the client.
+	clientAlias string
+
 	// state
 	messageID    string
-	model        string
 	inputTokens  int
 	outputTokens int
 	stopReason   string
@@ -41,6 +47,9 @@ type SSETranslator struct {
 
 	// tool call accumulation: keyed by upstream tool_calls[].index
 	toolBlocks map[int]toolBlockState
+
+	// writeErr captures the first write error so Translate can surface it.
+	writeErr error
 }
 
 type toolBlockState struct {
@@ -50,8 +59,9 @@ type toolBlockState struct {
 }
 
 // NewSSETranslator creates a translator bound to the given ResponseWriter.
+// clientAlias is echoed in message_start instead of any upstream model field.
 // It sets the Anthropic SSE headers on the writer immediately.
-func NewSSETranslator(w http.ResponseWriter) *SSETranslator {
+func NewSSETranslator(w http.ResponseWriter, clientAlias string) *SSETranslator {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -59,21 +69,25 @@ func NewSSETranslator(w http.ResponseWriter) *SSETranslator {
 
 	flusher, _ := w.(http.Flusher)
 	return &SSETranslator{
-		w:          w,
-		flusher:    flusher,
-		toolBlocks: make(map[int]toolBlockState),
+		w:           w,
+		flusher:     flusher,
+		clientAlias: clientAlias,
+		toolBlocks:  make(map[int]toolBlockState),
 	}
 }
 
 // Translate reads an upstream OpenAI SSE body and emits the Anthropic event
 // sequence to the bound ResponseWriter. It returns after the upstream [DONE]
-// signal or on read error.
+// signal or on a read/write error.
 func (t *SSETranslator) Translate(body io.Reader) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
 	firstChunk := true
 	for scanner.Scan() {
+		if t.writeErr != nil {
+			break
+		}
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -91,18 +105,17 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 			continue
 		}
 
-		// Capture metadata from the first chunk.
 		if firstChunk {
 			firstChunk = false
+			// Use the upstream chunk ID when present, otherwise generate a
+			// unique ID per stream so concurrent streams never collide.
 			t.messageID = chunk.ID
 			if t.messageID == "" {
-				t.messageID = "msg_stream_" + fmt.Sprintf("%d", 0)
+				t.messageID = "msg_" + uuid.New().String()
 			}
-			t.model = chunk.Model
 			t.emitMessageStart()
 		}
 
-		// Accumulate usage when present (often only on the final chunk).
 		if chunk.Usage != nil {
 			t.inputTokens = chunk.Usage.PromptTokens
 			t.outputTokens = chunk.Usage.CompletionTokens
@@ -119,7 +132,6 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 
 		delta := choice.Delta
 
-		// Text delta.
 		if delta.Content != "" {
 			if !t.hasOpenBlock {
 				t.openTextBlock()
@@ -127,10 +139,13 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 			t.emitTextDelta(delta.Content)
 		}
 
-		// Tool call deltas.
 		for _, tc := range delta.ToolCalls {
 			t.handleToolCallDelta(tc)
 		}
+	}
+
+	if t.writeErr != nil {
+		return t.writeErr
 	}
 
 	// Emit terminal sequence.
@@ -141,6 +156,9 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 	t.emitMessageDelta()
 	t.emitMessageStop()
 
+	if t.writeErr != nil {
+		return t.writeErr
+	}
 	return scanner.Err()
 }
 
@@ -153,8 +171,8 @@ func (t *SSETranslator) emitMessageStart() {
 			ID:           t.messageID,
 			Type:         "message",
 			Role:         "assistant",
-			Model:        t.model,
-			Content:      []any{},
+			Model:        t.clientAlias,
+			Content:      []string{},
 			StopReason:   nil,
 			StopSequence: nil,
 			Usage:        StreamUsage{InputTokens: t.inputTokens},
@@ -191,17 +209,11 @@ func (t *SSETranslator) emitTextDelta(text string) {
 func (t *SSETranslator) handleToolCallDelta(tc OAIToolCallDelta) {
 	bs, exists := t.toolBlocks[tc.Index]
 	if !exists {
-		// First delta for this tool call: close any open text block, open a
-		// new tool_use block.
 		hadOpenBlock := t.hasOpenBlock
 		if t.hasOpenBlock {
 			t.emitContentBlockStop(t.openBlockIndex)
 			t.hasOpenBlock = false
 		}
-		// Block index: if a text block was open it occupied index 0, so the
-		// first tool block is index 1. If no text block was ever opened, this
-		// tool block starts at index 0. Subsequent tool blocks increment from
-		// the previous tool block's index.
 		var nextIndex int
 		if len(t.toolBlocks) == 0 {
 			if hadOpenBlock {
@@ -210,7 +222,6 @@ func (t *SSETranslator) handleToolCallDelta(tc OAIToolCallDelta) {
 				nextIndex = 0
 			}
 		} else {
-			// Find the highest block index already assigned and add 1.
 			maxIdx := 0
 			for _, existing := range t.toolBlocks {
 				if existing.blockIndex > maxIdx {
@@ -290,7 +301,14 @@ func (t *SSETranslator) writeEvent(eventType string, data interface{}) {
 }
 
 func (t *SSETranslator) writeRaw(s string) {
-	_, _ = fmt.Fprint(t.w, s)
+	if t.writeErr != nil {
+		return
+	}
+	_, err := fmt.Fprint(t.w, s)
+	if err != nil {
+		t.writeErr = err
+		return
+	}
 	if t.flusher != nil {
 		t.flusher.Flush()
 	}

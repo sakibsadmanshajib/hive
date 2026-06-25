@@ -13,9 +13,11 @@ import (
 func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	var msgs []OAIMessage
 
-	// Prepend system message when present.
 	if req.System.Text != "" {
-		msgs = append(msgs, OAIMessage{Role: "system", Content: req.System.Text})
+		msgs = append(msgs, OAIMessage{
+			Role:    "system",
+			Content: OAIMessageContent{Text: req.System.Text},
+		})
 	}
 
 	for _, m := range req.Messages {
@@ -51,7 +53,8 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	if req.ToolChoice != nil {
-		out.ToolChoice = convertToolChoice(req.ToolChoice)
+		tc := convertToolChoice(req.ToolChoice)
+		out.ToolChoice = &tc
 	}
 
 	return out, nil
@@ -61,15 +64,36 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 func convertMessage(m Message) (OAIMessage, error) {
 	// Simple string content.
 	if m.Content.Text != "" {
-		return OAIMessage{Role: m.Role, Content: m.Content.Text}, nil
+		return OAIMessage{Role: m.Role, Content: OAIMessageContent{Text: m.Content.Text}}, nil
 	}
 
 	// No content blocks; treat as empty string message.
 	if len(m.Content.Blocks) == 0 {
-		return OAIMessage{Role: m.Role, Content: ""}, nil
+		return OAIMessage{Role: m.Role, Content: OAIMessageContent{Text: ""}}, nil
 	}
 
-	// Mixed content blocks: may need multipart content or tool_calls.
+	// Validate: a tool_result block must be the only block in the message.
+	// The Anthropic protocol requires each tool result to be its own message.
+	// Mixed non-tool_result blocks before a tool_result are an encoding error.
+	for i, bl := range m.Content.Blocks {
+		if bl.Type == "tool_result" {
+			if i > 0 {
+				return OAIMessage{}, fmt.Errorf(
+					"tool_result block at index %d has %d preceding block(s); "+
+						"each tool_result must be the sole block in its message",
+					i, i,
+				)
+			}
+			content := toolResultText(bl)
+			return OAIMessage{
+				Role:       "tool",
+				Content:    OAIMessageContent{Text: content},
+				ToolCallID: bl.ToolUseID,
+			}, nil
+		}
+	}
+
+	// Mixed content blocks: text, image, tool_use.
 	var parts []OAIContentPart
 	var toolCalls []OAIToolCall
 
@@ -94,7 +118,6 @@ func convertMessage(m Message) (OAIMessage, error) {
 			})
 
 		case "tool_use":
-			// assistant tool_use block becomes an OAI tool_calls entry.
 			args := "{}"
 			if len(bl.Input) > 0 {
 				args = string(bl.Input)
@@ -107,41 +130,33 @@ func convertMessage(m Message) (OAIMessage, error) {
 					Arguments: args,
 				},
 			})
-
-		case "tool_result":
-			// tool_result becomes an OpenAI tool message.
-			// We handle this as a standalone message below; for now collect text.
-			content := toolResultText(bl)
-			return OAIMessage{
-				Role:       "tool",
-				Content:    content,
-				ToolCallID: bl.ToolUseID,
-			}, nil
 		}
 	}
 
-	// If we collected tool_calls with no content parts, it is a pure tool-call
-	// assistant turn.
+	// Pure tool-call assistant turn.
 	if len(toolCalls) > 0 && len(parts) == 0 {
 		return OAIMessage{Role: m.Role, ToolCalls: toolCalls}, nil
 	}
 	// Tool calls plus text content.
 	if len(toolCalls) > 0 {
-		// OAI allows content + tool_calls simultaneously on assistant messages.
 		var contentStr string
 		for _, p := range parts {
 			if p.Type == "text" {
 				contentStr += p.Text
 			}
 		}
-		return OAIMessage{Role: m.Role, Content: contentStr, ToolCalls: toolCalls}, nil
+		return OAIMessage{
+			Role:      m.Role,
+			Content:   OAIMessageContent{Text: contentStr},
+			ToolCalls: toolCalls,
+		}, nil
 	}
 
 	// Pure text/image parts: use array form for vision, string for text-only.
 	if len(parts) == 1 && parts[0].Type == "text" {
-		return OAIMessage{Role: m.Role, Content: parts[0].Text}, nil
+		return OAIMessage{Role: m.Role, Content: OAIMessageContent{Text: parts[0].Text}}, nil
 	}
-	return OAIMessage{Role: m.Role, Content: parts}, nil
+	return OAIMessage{Role: m.Role, Content: OAIMessageContent{Parts: parts}}, nil
 }
 
 // toolResultText extracts the text content from a tool_result block.
@@ -181,25 +196,25 @@ func convertTools(tools []Tool) ([]OAITool, error) {
 	return out, nil
 }
 
-// convertToolChoice maps Anthropic tool_choice to the OpenAI equivalent.
+// convertToolChoice maps Anthropic tool_choice to the typed OAIToolChoice.
 //
-//   auto        -> "auto"
-//   any         -> "required"
-//   {type:tool} -> {type:"function", function:{name:...}}
-func convertToolChoice(tc *ToolChoice) interface{} {
+//	auto        -> sentinel "auto"
+//	any         -> sentinel "required"
+//	{type:tool} -> named function selector
+func convertToolChoice(tc *ToolChoice) OAIToolChoice {
 	switch tc.Type {
 	case "auto":
-		return "auto"
+		return OAIToolChoice{Sentinel: "auto"}
 	case "any":
-		return "required"
+		return OAIToolChoice{Sentinel: "required"}
 	case "tool":
-		return map[string]interface{}{
-			"type": "function",
-			"function": map[string]string{
-				"name": tc.Name,
+		return OAIToolChoice{
+			Named: &OAINamedToolChoice{
+				Type: "function",
+				Function: OAINamedToolChoiceFunction{Name: tc.Name},
 			},
 		}
 	default:
-		return "auto"
+		return OAIToolChoice{Sentinel: "auto"}
 	}
 }
