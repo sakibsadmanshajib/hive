@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -112,6 +113,8 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 			t.messageID = chunk.ID
 			if t.messageID == "" {
 				t.messageID = "msg_" + uuid.New().String()
+			} else if !strings.HasPrefix(t.messageID, "msg_") {
+				t.messageID = "msg_" + t.messageID
 			}
 			t.emitMessageStart()
 		}

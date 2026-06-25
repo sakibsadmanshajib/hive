@@ -166,6 +166,20 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 
 // handleCountTokens returns a local token count estimate for the request body.
 func (h *Handler) handleCountTokens(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFrom(r.Context())
+	if !ok || user == nil {
+		apierr.Write(w, http.StatusUnauthorized, apierr.CodeUnauthenticated, "missing user")
+		return
+	}
+	if user.TenantID == uuid.Nil {
+		apierr.Write(w, http.StatusForbidden, apierr.CodeNoTenant, "no tenant for user")
+		return
+	}
+	if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
+		apierr.Write(w, http.StatusForbidden, apierr.CodeForbidden, "chat not allowed")
+		return
+	}
+
 	raw, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes))
 	if err != nil {
 		apierr.WriteError(w, http.StatusBadRequest, "invalid_request_error", "body read error", nil)
@@ -205,10 +219,8 @@ func normalizeAPIKeyHeader(r *http.Request) *http.Request {
 	if r.Header.Get("Authorization") != "" {
 		return r
 	}
+	// ponytail: http.Header.Get canonicalises the key; one lookup is sufficient.
 	key := strings.TrimSpace(r.Header.Get("x-api-key"))
-	if key == "" {
-		key = strings.TrimSpace(r.Header.Get("X-Api-Key"))
-	}
 	if key == "" {
 		return r
 	}

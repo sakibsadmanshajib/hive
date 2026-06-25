@@ -333,6 +333,33 @@ func TestSSETranslator_TwoParallelToolUseBlocks(t *testing.T) {
 	assertContainsInOrder(t, seq, "content_block_start", "content_block_stop", "content_block_start", "content_block_stop")
 }
 
+// T3: when upstream chunk ID is non-empty but lacks msg_ prefix, the translator
+// must add it; Anthropic SDK clients reject IDs that don't start with msg_.
+func TestSSETranslator_NonMsgPrefixChunkID_GetsPrefix(t *testing.T) {
+	stream := buildOAIStream(
+		`{"id":"chatcmpl-abc123","model":"m","choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":null}]}`,
+		`{"id":"chatcmpl-abc123","model":"m","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+	)
+	rec := httptest.NewRecorder()
+	tr := anthropic.NewSSETranslator(rec, "m")
+	if err := tr.Translate(strings.NewReader(stream)); err != nil {
+		t.Fatalf("translate error: %v", err)
+	}
+	events := parseSSEEvents(t, rec.Body.String())
+	for _, ev := range events {
+		if ev["type"] == "message_start" {
+			msg, _ := ev["message"].(map[string]interface{})
+			if msg == nil {
+				t.Fatal("message_start has no message field")
+			}
+			id, _ := msg["id"].(string)
+			if !strings.HasPrefix(id, "msg_") {
+				t.Errorf("message_start.id: want msg_ prefix got %q", id)
+			}
+		}
+	}
+}
+
 func TestSSETranslator_EmptyStream(t *testing.T) {
 	rec := httptest.NewRecorder()
 	tr := anthropic.NewSSETranslator(rec, "m")

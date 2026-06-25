@@ -212,11 +212,46 @@ func TestHandler_UpstreamError_IsProviderBlind(t *testing.T) {
 	}
 }
 
-func TestHandler_CountTokens(t *testing.T) {
+// T1: count_tokens must enforce the same auth guards as handleMessages.
+func TestHandler_CountTokens_RequiresAuth(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
-		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"Hello world"}],"max_tokens":5}`))
-	req.Header.Set("Content-Type", "application/json")
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("no user: want 401 got %d", rec.Code)
+	}
+}
+
+func TestHandler_CountTokens_RequiresTenant(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`))
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), Role: "member"}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("no tenant: want 403 got %d", rec.Code)
+	}
+}
+
+func TestHandler_CountTokens_RequiresRole(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens",
+		strings.NewReader(`{"model":"m","messages":[{"role":"user","content":"hi"}],"max_tokens":5}`))
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), TenantID: uuid.New(), Role: "guest"}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("no role: want 403 got %d", rec.Code)
+	}
+}
+
+func TestHandler_CountTokens(t *testing.T) {
+	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
+	req := newAuthedRequest(t, `{"model":"m","messages":[{"role":"user","content":"Hello world"}],"max_tokens":5}`)
+	req.URL.Path = "/v1/messages/count_tokens"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -234,7 +269,8 @@ func TestHandler_CountTokens(t *testing.T) {
 
 func TestHandler_CountTokens_BadJSON(t *testing.T) {
 	h := anthropic.NewHandler(anthropic.Deps{LiteLLMURL: "http://unused", LiteLLMKey: "k"})
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{bad}`))
+	req := newAuthedRequest(t, `{bad}`)
+	req.URL.Path = "/v1/messages/count_tokens"
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {

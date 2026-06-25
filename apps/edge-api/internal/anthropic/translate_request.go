@@ -21,11 +21,11 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	}
 
 	for _, m := range req.Messages {
-		oai, err := convertMessage(m)
+		expanded, err := convertMessage(m)
 		if err != nil {
 			return OAIRequest{}, fmt.Errorf("message role=%s: %w", m.Role, err)
 		}
-		msgs = append(msgs, oai)
+		msgs = append(msgs, expanded...)
 	}
 
 	out := OAIRequest{
@@ -60,37 +60,50 @@ func ToOAIRequest(req MessagesRequest) (OAIRequest, error) {
 	return out, nil
 }
 
-// convertMessage converts a single Anthropic message to OAIMessage.
-func convertMessage(m Message) (OAIMessage, error) {
+// convertMessage converts a single Anthropic message to one or more OAIMessages.
+// Parallel tool calls send multiple tool_result blocks in one Anthropic message;
+// each must become a separate OAI "tool" message so the LLM receives all results.
+func convertMessage(m Message) ([]OAIMessage, error) {
 	// Simple string content.
 	if m.Content.Text != "" {
-		return OAIMessage{Role: m.Role, Content: OAIMessageContent{Text: m.Content.Text}}, nil
+		return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Text: m.Content.Text}}}, nil
 	}
 
 	// No content blocks; treat as empty string message.
 	if len(m.Content.Blocks) == 0 {
-		return OAIMessage{Role: m.Role, Content: OAIMessageContent{Text: ""}}, nil
+		return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Text: ""}}}, nil
 	}
 
-	// Validate: a tool_result block must be the only block in the message.
-	// The Anthropic protocol requires each tool result to be its own message.
-	// Mixed non-tool_result blocks before a tool_result are an encoding error.
+	// Collect all tool_result blocks first. If any exist, every block must be a
+	// tool_result (mixing non-tool_result blocks with tool_results is an error).
+	var toolResults []OAIMessage
 	for i, bl := range m.Content.Blocks {
 		if bl.Type == "tool_result" {
-			if i > 0 {
-				return OAIMessage{}, fmt.Errorf(
+			if len(toolResults) == 0 && i > 0 {
+				// There were non-tool_result blocks before this one.
+				return nil, fmt.Errorf(
 					"tool_result block at index %d has %d preceding block(s); "+
-						"each tool_result must be the sole block in its message",
+						"each tool_result must be the sole block type in its message",
 					i, i,
 				)
 			}
 			content := toolResultText(bl)
-			return OAIMessage{
+			toolResults = append(toolResults, OAIMessage{
 				Role:       "tool",
 				Content:    OAIMessageContent{Text: content},
 				ToolCallID: bl.ToolUseID,
-			}, nil
+			})
+		} else if len(toolResults) > 0 {
+			// tool_result blocks were already seen; a non-tool_result block after them is invalid.
+			return nil, fmt.Errorf(
+				"non-tool_result block %q at index %d follows tool_result blocks; "+
+					"each tool_result must be the sole block type in its message",
+				bl.Type, i,
+			)
 		}
+	}
+	if len(toolResults) > 0 {
+		return toolResults, nil
 	}
 
 	// Mixed content blocks: text, image, tool_use.
@@ -135,7 +148,7 @@ func convertMessage(m Message) (OAIMessage, error) {
 
 	// Pure tool-call assistant turn.
 	if len(toolCalls) > 0 && len(parts) == 0 {
-		return OAIMessage{Role: m.Role, ToolCalls: toolCalls}, nil
+		return []OAIMessage{{Role: m.Role, ToolCalls: toolCalls}}, nil
 	}
 	// Tool calls plus text content.
 	if len(toolCalls) > 0 {
@@ -145,18 +158,18 @@ func convertMessage(m Message) (OAIMessage, error) {
 				contentStr += p.Text
 			}
 		}
-		return OAIMessage{
+		return []OAIMessage{{
 			Role:      m.Role,
 			Content:   OAIMessageContent{Text: contentStr},
 			ToolCalls: toolCalls,
-		}, nil
+		}}, nil
 	}
 
 	// Pure text/image parts: use array form for vision, string for text-only.
 	if len(parts) == 1 && parts[0].Type == "text" {
-		return OAIMessage{Role: m.Role, Content: OAIMessageContent{Text: parts[0].Text}}, nil
+		return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Text: parts[0].Text}}}, nil
 	}
-	return OAIMessage{Role: m.Role, Content: OAIMessageContent{Parts: parts}}, nil
+	return []OAIMessage{{Role: m.Role, Content: OAIMessageContent{Parts: parts}}}, nil
 }
 
 // toolResultText extracts the text content from a tool_result block.

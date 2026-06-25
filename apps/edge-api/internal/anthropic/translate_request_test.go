@@ -287,6 +287,39 @@ func TestToOAIRequest_TemperatureAndTopP(t *testing.T) {
 	}
 }
 
+// T2: two tool_result blocks in the same Anthropic message (parallel tool calls)
+// must each produce a separate OAI "tool" message, none silently dropped.
+func TestToOAIRequest_ParallelToolResults_BothConverted(t *testing.T) {
+	// Anthropic sends parallel tool results as multiple tool_result blocks in one user message.
+	raw := `{"model":"m","max_tokens":5,"messages":[{"role":"user","content":[
+		{"type":"tool_result","tool_use_id":"tu_A","content":"Result A"},
+		{"type":"tool_result","tool_use_id":"tu_B","content":"Result B"}
+	]}]}`
+	var req anthropic.MessagesRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got, err := anthropic.ToOAIRequest(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Expect two OAI tool messages, one per tool_result block.
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages len: want 2 got %d (second tool_result likely dropped)", len(got.Messages))
+	}
+	for i, msg := range got.Messages {
+		if msg.Role != "tool" {
+			t.Errorf("[%d] role: want tool got %q", i, msg.Role)
+		}
+	}
+	if got.Messages[0].ToolCallID != "tu_A" {
+		t.Errorf("[0] tool_call_id: want tu_A got %q", got.Messages[0].ToolCallID)
+	}
+	if got.Messages[1].ToolCallID != "tu_B" {
+		t.Errorf("[1] tool_call_id: want tu_B got %q", got.Messages[1].ToolCallID)
+	}
+}
+
 // OAIMessageContent marshals as plain string for text-only content.
 func TestOAIMessageContent_MarshalJSON_Text(t *testing.T) {
 	c := anthropic.OAIMessageContent{Text: "hello"}
