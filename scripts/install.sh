@@ -654,6 +654,43 @@ patch_ollama_config() {
     warn "Review $LITELLM_CONFIG to confirm the ollama model entries are correct."
 }
 
+# ─── Sovereign .env enforcement ───────────────────────────────────────────────
+# Runs unconditionally when --sovereign is set, before and after setup_env,
+# so it catches both fresh installs and existing .env files on re-runs.
+# ponytail: scrubs cloud keys from an existing .env with sed rather than
+# refusing; refusing on re-run breaks the upgrade path. The error path (key
+# set in shell env at invocation time) stays hard, matching the fresh-install
+# behaviour.
+enforce_sovereign_env() {
+    if [ "$SOVEREIGN" != "true" ]; then
+        return
+    fi
+
+    # Reject keys set in the invoking shell environment — these would be
+    # interpolated by docker compose regardless of what is in .env.
+    if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+        error "--sovereign mode: OPENROUTER_API_KEY is set in the shell environment. Unset it and re-run."
+    fi
+    if [ -n "${GROQ_API_KEY:-}" ]; then
+        error "--sovereign mode: GROQ_API_KEY is set in the shell environment. Unset it and re-run."
+    fi
+
+    # If an existing .env contains cloud keys, blank them out so docker compose
+    # does not interpolate them into the LiteLLM container.
+    ENV_FILE="$HIVE_HOME/.env"
+    if [ -f "$ENV_FILE" ]; then
+        $SUDO sed -i 's|^OPENROUTER_API_KEY=.*|OPENROUTER_API_KEY=|' "$ENV_FILE" || true
+        $SUDO sed -i 's|^GROQ_API_KEY=.*|GROQ_API_KEY=|' "$ENV_FILE" || true
+        # Ensure HIVE_SOVEREIGN is recorded so services can read it.
+        if grep -q "^HIVE_SOVEREIGN=" "$ENV_FILE" 2>/dev/null; then
+            $SUDO sed -i 's|^HIVE_SOVEREIGN=.*|HIVE_SOVEREIGN=true|' "$ENV_FILE" || true
+        else
+            printf 'HIVE_SOVEREIGN=true\n' | $SUDO tee -a "$ENV_FILE" > /dev/null
+        fi
+        status "Sovereign mode: cloud provider keys blanked in existing .env."
+    fi
+}
+
 # ─── Sovereign LiteLLM config patch ───────────────────────────────────────────
 # Called after patch_ollama_config when --sovereign is active. Overwrites the
 # LiteLLM config with a local-only version: no OpenRouter or Groq routes, no
@@ -700,11 +737,23 @@ litellm_settings:
 SOVEREIGN_CONFIG
 
     success "Sovereign LiteLLM config written: cloud routes removed, Ollama only."
-    # Verify no cloud provider endpoints remain.
+    # Verify no cloud provider endpoints remain in the seed file.
     if grep -qE 'openrouter|groq' "$LITELLM_CONFIG" 2>/dev/null; then
         warn "WARNING: sovereign config still contains openrouter or groq references — review $LITELLM_CONFIG manually."
     else
         success "Verified: no openrouter or groq entries in sovereign LiteLLM config."
+    fi
+
+    # Also push the config directly into the running Docker volume so an
+    # upgrade path (where the volume already exists and the seed copy is
+    # skipped) picks up the sovereign config immediately on restart.
+    # ponytail: docker cp is the simplest way to write into a named volume
+    # without mounting it; upgrade path: litellm container hot-reload API
+    # if LiteLLM exposes one in future.
+    if docker inspect litellm > /dev/null 2>&1; then
+        docker cp "$LITELLM_CONFIG" litellm:/etc/litellm/config.yaml && \
+            success "Sovereign config pushed into running litellm container volume." || \
+            warn "Could not push config into litellm container — restart it manually to apply sovereign config."
     fi
 }
 
@@ -818,7 +867,9 @@ main() {
 
     install_docker
     clone_or_update_repo
+    enforce_sovereign_env
     setup_env
+    enforce_sovereign_env
     advise_ollama_model
     patch_ollama_config
     patch_sovereign_config
