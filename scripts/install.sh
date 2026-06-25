@@ -61,6 +61,10 @@ HIVE_REPO="https://github.com/sakibsadmanshajib/hive.git"
 WITH_OLLAMA=false
 UNINSTALL=false
 NON_INTERACTIVE=false
+# Sovereign mode: zero external LLM egress. Rejects OPENROUTER_API_KEY and
+# GROQ_API_KEY, enforces OLLAMA_BASE_URL as the only provider, and patches
+# the LiteLLM config to local-only routing. Set by --sovereign flag.
+SOVEREIGN=false
 # OLLAMA_MODEL is resolved by the model advisor when --with-ollama is set.
 # Override via environment: OLLAMA_MODEL=qwen3:8b bash install.sh --with-ollama
 OLLAMA_MODEL="${OLLAMA_MODEL:-}"
@@ -74,6 +78,7 @@ parse_args() {
             --with-ollama)    WITH_OLLAMA=true ;;
             --uninstall)      UNINSTALL=true ;;
             --non-interactive) NON_INTERACTIVE=true ;;
+            --sovereign)      SOVEREIGN=true ; WITH_OLLAMA=true ;;
             --help|-h)
                 printf 'Hive EnterpriseEdge installer\n\n'
                 printf 'Usage:\n'
@@ -81,6 +86,11 @@ parse_args() {
                 printf '  bash install.sh [flags]\n\n'
                 printf 'Flags:\n'
                 printf '  --with-ollama       Enable in-stack Ollama local inference\n'
+                printf '  --sovereign         Sovereign mode: zero external LLM egress.\n'
+                printf '                      Rejects OPENROUTER_API_KEY and GROQ_API_KEY.\n'
+                printf '                      Enforces OLLAMA_BASE_URL as the only provider.\n'
+                printf '                      Implies --with-ollama. Use this flag when the\n'
+                printf '                      box must never send prompts to an external API.\n'
                 printf '  --uninstall         Stop stack and show what remains\n'
                 printf '  --non-interactive   Read config from environment variables only\n'
                 printf '  --help              Show this help\n\n'
@@ -326,8 +336,23 @@ setup_env() {
 
     # ── LLM Provider (at least one required) ──
     printf '%s-- LLM Provider (at least one required) --%s\n' "${BOLD}" "${RESET}"
-    prompt_value OPENROUTER_API_KEY "OpenRouter API Key" optional "" secret
-    prompt_value GROQ_API_KEY       "Groq API Key" optional "" secret
+    if [ "$SOVEREIGN" = "true" ]; then
+        # Sovereign mode: external cloud LLM providers are prohibited. Reject
+        # any pre-set keys so they are never written to .env and never used by
+        # the LiteLLM router. OLLAMA_BASE_URL is the only permitted provider.
+        if [ -n "${OPENROUTER_API_KEY:-}" ]; then
+            error "--sovereign mode: OPENROUTER_API_KEY is set in the environment. External LLM providers are prohibited in sovereign mode. Unset it and re-run."
+        fi
+        if [ -n "${GROQ_API_KEY:-}" ]; then
+            error "--sovereign mode: GROQ_API_KEY is set in the environment. External LLM providers are prohibited in sovereign mode. Unset it and re-run."
+        fi
+        OPENROUTER_API_KEY=""
+        GROQ_API_KEY=""
+        status "Sovereign mode: external LLM providers disabled. Only Ollama (local) will be used."
+    else
+        prompt_value OPENROUTER_API_KEY "OpenRouter API Key" optional "" secret
+        prompt_value GROQ_API_KEY       "Groq API Key" optional "" secret
+    fi
 
     if [ "$WITH_OLLAMA" = "true" ]; then
         OLLAMA_BASE_URL="http://ollama:11434"
@@ -356,12 +381,23 @@ setup_env() {
 
     # Validate: at least one LLM provider.  Use :- so set -u does not abort
     # when an optional variable was never set (non-interactive path).
-    _has_provider=false
-    for _v in "${OPENROUTER_API_KEY:-}" "${GROQ_API_KEY:-}" "${OLLAMA_BASE_URL:-}"; do
-        [ -n "$_v" ] && _has_provider=true && break
-    done
-    if [ "$_has_provider" = "false" ]; then
-        error "At least one LLM provider key (OPENROUTER_API_KEY, GROQ_API_KEY) or OLLAMA_BASE_URL must be set."
+    if [ "$SOVEREIGN" = "true" ]; then
+        # In sovereign mode OLLAMA_BASE_URL is always set above; validate it is
+        # present and that no external keys were smuggled in via the environment.
+        if [ -z "${OLLAMA_BASE_URL:-}" ]; then
+            error "--sovereign mode: OLLAMA_BASE_URL must be set (should have been set automatically with --with-ollama)."
+        fi
+        if [ -n "${OPENROUTER_API_KEY:-}" ] || [ -n "${GROQ_API_KEY:-}" ]; then
+            error "--sovereign mode: external provider keys must not be set. Unset OPENROUTER_API_KEY and GROQ_API_KEY and re-run."
+        fi
+    else
+        _has_provider=false
+        for _v in "${OPENROUTER_API_KEY:-}" "${GROQ_API_KEY:-}" "${OLLAMA_BASE_URL:-}"; do
+            [ -n "$_v" ] && _has_provider=true && break
+        done
+        if [ "$_has_provider" = "false" ]; then
+            error "At least one LLM provider key (OPENROUTER_API_KEY, GROQ_API_KEY) or OLLAMA_BASE_URL must be set."
+        fi
     fi
 
     # Derive JWT vars from SUPABASE_URL so the edge JWKS validator gets a real
@@ -402,6 +438,7 @@ setup_env() {
     _write_env_var "OPENROUTER_API_KEY" "${OPENROUTER_API_KEY:-}"
     _write_env_var "GROQ_API_KEY" "${GROQ_API_KEY:-}"
     _write_env_var "OLLAMA_BASE_URL" "${OLLAMA_BASE_URL:-}"
+    _write_env_var "HIVE_SOVEREIGN" "${SOVEREIGN}"
     _write_env_var "CONTROL_PLANE_INTERNAL_TOKEN" "${CONTROL_PLANE_INTERNAL_TOKEN:-}"
     _write_env_var "LITELLM_MASTER_KEY" "${LITELLM_MASTER_KEY:-}"
     _write_env_var "OWUI_SHIM_KEY" "${OWUI_SHIM_KEY:-}"
