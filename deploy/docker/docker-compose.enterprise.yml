@@ -67,6 +67,8 @@ services:
     environment:
       GOTRUE_API_HOST: "0.0.0.0"
       GOTRUE_API_PORT: "9999"
+      # Required by GoTrue v2: the public-facing base URL for auth links in emails.
+      API_EXTERNAL_URL: ${ENTERPRISE_SITE_URL:-http://localhost:9999}
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}?search_path=auth"
       GOTRUE_SITE_URL: ${ENTERPRISE_SITE_URL:-http://localhost:3000}
@@ -91,6 +93,11 @@ services:
       GOTRUE_MAILER_URLPATHS_CONFIRMATION: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_RECOVERY: /auth/v1/verify
       GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: /auth/v1/verify
+      # Enable the custom access token hook so JWTs include tenant_id, tenants,
+      # and role claims. Migration 20260516_07 installs public.custom_access_token_hook;
+      # without this flag GoTrue issues plain tokens and all RLS/authz middleware breaks.
+      GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
+      GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: "pg-functions://postgres/public/custom_access_token_hook"
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9999/health || exit 1"]
       interval: 5s
@@ -117,7 +124,8 @@ services:
       PGRST_APP_SETTINGS_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env}
       PGRST_APP_SETTINGS_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3000/ || exit 1"]
+      # ponytail: postgrest image has no wget/curl; /dev/tcp is a bash builtin TCP probe.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/3000' 2>/dev/null || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 10
