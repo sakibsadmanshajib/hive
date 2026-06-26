@@ -234,6 +234,85 @@ func TestMiddleware_AllFeatures_Enabled(t *testing.T) {
 	}
 }
 
+// ---- SSO feature gate (issue #237) -----------------------------------------
+
+func TestMiddleware_SSO_Enabled_PassesThrough(t *testing.T) {
+	tid := uuid.New()
+	cp := &mockCP{flags: featuregate.FlagsResponse{SSOEnabled: true}}
+	srv := httptest.NewServer(cp)
+	defer srv.Close()
+
+	g := featuregate.New(featuregate.Config{ControlPlaneURL: srv.URL, TTL: 30 * time.Second})
+
+	reached := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+	rec := httptest.NewRecorder()
+	g.Require(featuregate.FeatureSSO)(inner).ServeHTTP(rec, newRequest(tid))
+
+	if !reached {
+		t.Error("inner handler not reached when SSO enabled")
+	}
+}
+
+func TestMiddleware_SSO_Disabled_Returns403(t *testing.T) {
+	tid := uuid.New()
+	cp := &mockCP{flags: featuregate.FlagsResponse{SSOEnabled: false}}
+	srv := httptest.NewServer(cp)
+	defer srv.Close()
+
+	g := featuregate.New(featuregate.Config{ControlPlaneURL: srv.URL, TTL: 30 * time.Second})
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	rec := httptest.NewRecorder()
+	g.Require(featuregate.FeatureSSO)(inner).ServeHTTP(rec, newRequest(tid))
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 when SSO disabled, got %d", rec.Code)
+	}
+	// Provider-blind: body must not leak "sso" or "saml" or "oidc".
+	body := rec.Body.String()
+	for _, banned := range []string{"sso", "SSO", "saml", "SAML", "oidc", "OIDC", "feature"} {
+		if strContains(body, banned) {
+			t.Errorf("response body leaks %q: %s", banned, body)
+		}
+	}
+}
+
+func TestFetch_SSOFlag_Propagated(t *testing.T) {
+	tid := uuid.New()
+	cp := &mockCP{flags: featuregate.FlagsResponse{SSOEnabled: true}}
+	srv := httptest.NewServer(cp)
+	defer srv.Close()
+
+	g := featuregate.New(featuregate.Config{ControlPlaneURL: srv.URL, TTL: 30 * time.Second})
+	flags, err := g.Fetch(newRequest(tid).Context(), tid)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if !flags.SSOEnabled {
+		t.Error("SSOEnabled must be propagated from control-plane response")
+	}
+}
+
+func TestFetch_SSOFlag_False_OnZeroResponse(t *testing.T) {
+	tid := uuid.New()
+	cp := &mockCP{flags: featuregate.FlagsResponse{}} // all false
+	srv := httptest.NewServer(cp)
+	defer srv.Close()
+
+	g := featuregate.New(featuregate.Config{ControlPlaneURL: srv.URL, TTL: 30 * time.Second})
+	flags, err := g.Fetch(newRequest(tid).Context(), tid)
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if flags.SSOEnabled {
+		t.Error("SSOEnabled must default to false")
+	}
+}
+
 // ---- control-plane handler tests -------------------------------------------
 
 func strContains(s, sub string) bool {

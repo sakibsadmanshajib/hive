@@ -28,6 +28,11 @@ type FlagsResponse struct {
 	VoiceEnabled  bool `json:"voice_enabled"`
 	RelayEnabled  bool `json:"relay_enabled"`
 	CoworkEnabled bool `json:"cowork_enabled"`
+	// SSOEnabled is true when at least one SSO provider key is enabled for the
+	// tenant: ENABLE_SSO_SAML, ENABLE_SSO_GOOGLE, or ENABLE_SSO_MICROSOFT.
+	// The edge-api gate uses this single flag; provider selection is GoTrue's
+	// responsibility, not the gate's.
+	SSOEnabled bool `json:"sso_enabled"`
 }
 
 // Resolver is the narrow interface the handler needs from settings.Resolver.
@@ -68,6 +73,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		VoiceEnabled:  h.resolver.IsEnabled(ctx, tenantID, settings.EnableVoice),
 		RelayEnabled:  h.resolver.IsEnabled(ctx, tenantID, settings.EnableRelay),
 		CoworkEnabled: h.resolver.IsEnabled(ctx, tenantID, settings.EnableCowork),
+		// SSOEnabled is the logical OR of all three SSO provider keys so the
+		// edge-api needs only one gate check regardless of which IdP is configured.
+		SSOEnabled: h.resolver.IsEnabled(ctx, tenantID, settings.EnableSSOSaml) ||
+			h.resolver.IsEnabled(ctx, tenantID, settings.EnableSSOGoogle) ||
+			h.resolver.IsEnabled(ctx, tenantID, settings.EnableSSOMicrosoft),
 	}
 
 	w.Header().Set("Content-Type", "application/json")

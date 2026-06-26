@@ -79,3 +79,77 @@ func TestHandler_AllFlagsDefault_WhenNoneEnabled(t *testing.T) {
 		t.Error("all flags must default to false when resolver returns nothing")
 	}
 }
+
+// ---- SSO feature gate (issue #237) -----------------------------------------
+
+func TestHandler_SSOEnabled_WhenSAMLKeySet(t *testing.T) {
+	tid := uuid.New()
+	h := featuregate.NewHandler(&stubResolver{enabled: map[settings.Key]bool{
+		settings.EnableSSOSaml: true,
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/internal/featuregate/"+tid.String(), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var resp featuregate.FlagsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.SSOEnabled {
+		t.Error("SSOEnabled must be true when ENABLE_SSO_SAML is set")
+	}
+}
+
+func TestHandler_SSOEnabled_WhenOIDCGoogleKeySet(t *testing.T) {
+	tid := uuid.New()
+	h := featuregate.NewHandler(&stubResolver{enabled: map[settings.Key]bool{
+		settings.EnableSSOGoogle: true,
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/internal/featuregate/"+tid.String(), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var resp featuregate.FlagsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.SSOEnabled {
+		t.Error("SSOEnabled must be true when ENABLE_SSO_GOOGLE is set")
+	}
+}
+
+func TestHandler_SSOEnabled_WhenOIDCMicrosoftKeySet(t *testing.T) {
+	tid := uuid.New()
+	h := featuregate.NewHandler(&stubResolver{enabled: map[settings.Key]bool{
+		settings.EnableSSOMicrosoft: true,
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/internal/featuregate/"+tid.String(), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var resp featuregate.FlagsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !resp.SSOEnabled {
+		t.Error("SSOEnabled must be true when ENABLE_SSO_MICROSOFT is set")
+	}
+}
+
+func TestHandler_SSODisabled_WhenNoSSOKeySet(t *testing.T) {
+	h := featuregate.NewHandler(&stubResolver{enabled: map[settings.Key]bool{
+		settings.EnableRAG: true, // unrelated flag
+	}})
+	req := httptest.NewRequest(http.MethodGet, "/internal/featuregate/"+uuid.New().String(), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	var resp featuregate.FlagsResponse
+	_ = json.NewDecoder(rec.Body).Decode(&resp)
+	if resp.SSOEnabled {
+		t.Error("SSOEnabled must be false when no SSO key is set")
+	}
+}

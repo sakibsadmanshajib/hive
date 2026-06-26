@@ -30,6 +30,10 @@ const (
 	FeatureVoice  Feature = "voice"
 	FeatureRelay  Feature = "relay"
 	FeatureCowork Feature = "cowork"
+	// FeatureSSO gates GoTrue-native SAML 2.0 and OIDC provider login (issue #237).
+	// Set when any of ENABLE_SSO_SAML, ENABLE_SSO_GOOGLE, or ENABLE_SSO_MICROSOFT
+	// is enabled for the tenant in control-plane.
+	FeatureSSO Feature = "sso"
 )
 
 // FlagsResponse is the JSON body returned by the control-plane
@@ -39,6 +43,9 @@ type FlagsResponse struct {
 	VoiceEnabled  bool `json:"voice_enabled"`
 	RelayEnabled  bool `json:"relay_enabled"`
 	CoworkEnabled bool `json:"cowork_enabled"`
+	// SSOEnabled is true when at least one SSO provider (SAML, Google OIDC, or
+	// Microsoft OIDC) is enabled for the tenant.
+	SSOEnabled bool `json:"sso_enabled"`
 }
 
 // isEnabled returns whether f is enabled for this response.
@@ -52,6 +59,8 @@ func (r FlagsResponse) isEnabled(f Feature) bool {
 		return r.RelayEnabled
 	case FeatureCowork:
 		return r.CoworkEnabled
+	case FeatureSSO:
+		return r.SSOEnabled
 	default:
 		return false // ponytail: unknown feature = deny
 	}
