@@ -388,7 +388,8 @@ setup_env() {
         printf '  Enter the public URL clients use to reach this box.\n'
         printf '  LAN example:    http://192.168.1.10:8085\n'
         printf '  Internet (TLS): https://relay.your-domain.com\n'
-        _default_relay_url="http://$(hostname -I 2>/dev/null | awk '{print $1}' || printf '127.0.0.1'):8085"
+        _host_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+        _default_relay_url="http://${_host_ip:-127.0.0.1}:8085"
         prompt_value HEADSCALE_SERVER_URL "Headscale server URL" required "$_default_relay_url"
     fi
 

@@ -84,7 +84,7 @@ services:
       # registered nodes must re-authenticate.
       - headscale-data:/var/lib/headscale
     healthcheck:
-      # ponytail: headscale/headscale image ships wget; /health returns 200 when ready.
+      # ponytail: headscale/headscale image ships wget; /health returns 200 when ready
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8085/health || exit 1"]
       interval: 10s
       timeout: 5s
