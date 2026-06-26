@@ -1,0 +1,96 @@
+name: Licence Gate (SBOM + AGPL/GPL block)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'scripts/sbom-license-check.sh'
+      - 'scripts/license-allowlist.json'
+      - '.github/workflows/license-gate.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+      - 'packages/**'
+      - 'go.work'
+      - 'go.work.sum'
+      - 'scripts/sbom-license-check.sh'
+      - 'scripts/license-allowlist.json'
+      - '.github/workflows/license-gate.yml'
+  workflow_dispatch:
+    inputs:
+      report_only:
+        description: 'Run in report-only mode (findings logged, build not failed)'
+        type: boolean
+        default: false
+
+# NOTE: This job is NOT yet wired into branch-protection required checks.
+# Enabling it as a required check is an owner decision tracked separately.
+# See .github/branch-protection-main.json for the current required-check list.
+
+concurrency:
+  group: license-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  license-gate:
+    name: Licence gate (SBOM + AGPL/GPL block)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          cache-dependency-path: |
+            apps/edge-api/go.sum
+            apps/control-plane/go.sum
+            packages/storage/go.sum
+
+      - name: Cache go-licenses binary
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/go-licenses
+          key: go-licenses-v1.6.0-${{ runner.os }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/web-console/package-lock.json
+
+      - name: Install web-console deps
+        working-directory: apps/web-console
+        run: npm ci --ignore-scripts
+
+      - name: Run licence gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          flag=""
+          if [ "${{ github.event.inputs.report_only || 'false' }}" = "true" ]; then
+            flag="--report-only"
+          fi
+          chmod +x scripts/sbom-license-check.sh
+          ./scripts/sbom-license-check.sh $flag
+
+      - name: Upload SBOM artefacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ github.sha }}
+          path: |
+            SBOM.json
+            SBOM-go.json
+            SBOM-npm.json
+          if-no-files-found: ignore
+          retention-days: 90

@@ -28,6 +28,9 @@ Thumbs.db
 .docker/
 
 # Generated
+SBOM.json
+SBOM-go.json
+SBOM-npm.json
 /packages/openai-contract/generated/
 /apps/edge-api/internal/generated/
 __pycache__/
