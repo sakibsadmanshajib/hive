@@ -196,33 +196,20 @@ func TestArchiveSelectsOldRowsOnly(t *testing.T) {
 
 // TestBoundaryMonthNoUnarchivedDelete is the P0 regression test.
 //
-// Setup: two rows share the same calendar month (3 months ago).
-// - oldRow: day 1 of that month — clearly before the 90-day cutoff.
-// - newRow: day 28 of that month — also before the 90-day cutoff if the month
-//   is old enough, BUT we place it exactly 1 day AFTER the cutoff by computing
-//   dates precisely so the month straddles the boundary.
+// Setup: two rows share the same calendar month.
+//   oldRow.TS = cutoff - 10 days  (fetched and archived)
+//   newRow.TS = cutoff + 1 day    (never fetched; must survive the delete pass)
 //
-// We use a fixed 30-day month offset so that:
-//   cutoff = now - 90 days
-//   oldRow.TS  = cutoff - 10 days  (should be archived+deleted)
-//   newRow.TS  = cutoff + 1 day    (same calendar month as oldRow, but AFTER cutoff)
-//
-// The P0 bug: without the cutoff guard in DeleteArchived, a full-month DELETE
-// would remove newRow even though it was never fetched or archived.
+// With exact-ID delete the month boundary is irrelevant: only the IDs returned
+// by FetchOlderThan are ever deleted, so newRow is safe even when it shares a
+// calendar month with oldRow.
 func TestBoundaryMonthNoUnarchivedDelete(t *testing.T) {
 	tenantID := uuid.New()
 	now := time.Now().UTC()
 	cutoff := now.AddDate(0, 0, -90)
 
-	// oldRow is 10 days before cutoff — qualifies for archiving.
 	oldTS := cutoff.AddDate(0, 0, -10)
-	// newRow is 1 day after cutoff — same calendar month as oldRow only if
-	// oldTS and newTS share a month. If they don't (e.g. cutoff is near month
-	// start), skip; the important property is tested when they do share a month.
 	newTS := cutoff.AddDate(0, 0, 1)
-	if oldTS.Month() != newTS.Month() || oldTS.Year() != newTS.Year() {
-		t.Skip("cutoff falls too close to a month boundary for this test; skipping")
-	}
 
 	oldRow := auditarchive.AuditRow{ID: 1, Seq: 1, TenantID: tenantID, Action: "A", Severity: "INFO", TS: oldTS}
 	newRow := auditarchive.AuditRow{ID: 2, Seq: 2, TenantID: tenantID, Action: "B", Severity: "INFO", TS: newTS}
