@@ -457,8 +457,8 @@ services:
   # Uses the faster-whisper server image which speaks the OpenAI Whisper API.
   # All languages except English route here, including Bangla ("bn") and
   # auto-detect (empty language field).
-  # Port 9000 is NOT exposed on the host; LiteLLM reaches it over the
-  # internal Compose network at http://faster-whisper:9000.
+  # Port 8000 is NOT exposed on the host; the stt.TieredClient reaches it
+  # over the internal Compose network at http://faster-whisper:8000.
   faster-whisper:
     image: fedirz/faster-whisper-server:latest-cpu
     profiles:

@@ -10,7 +10,9 @@
 package stt
 
 import (
+	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"strings"
 	"time"
@@ -83,20 +85,57 @@ func (c *TieredClient) selectBackend(language string) string {
 	return strings.TrimRight(c.cfg.FasterWhisperBaseURL, "/")
 }
 
-// forwardToBackend streams the multipart request to the selected backend and
-// pipes the response back to the caller. All upstream error details are
-// sanitised through provider-blind error handling before reaching the client.
+// forwardToBackend reconstructs the multipart body from r.MultipartForm (already
+// parsed by Transcribe) and streams it to the selected backend.
+// r.Body is drained after ParseMultipartForm, so we must rebuild — same pattern
+// as audio.Handler.handleMultipartAudio.
 func (c *TieredClient) forwardToBackend(w http.ResponseWriter, r *http.Request, backendBase string) {
 	upstreamURL := backendBase + "/v1/audio/transcriptions"
 
-	// Stream the raw body directly; Content-Type header (multipart boundary) is preserved.
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, r.Body)
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+
+	go func() {
+		defer pw.Close()
+		defer mw.Close()
+		for key, values := range r.MultipartForm.Value {
+			for _, val := range values {
+				if err := mw.WriteField(key, val); err != nil {
+					pw.CloseWithError(fmt.Errorf("write field %s: %w", key, err))
+					return
+				}
+			}
+		}
+		for fieldName, fileHeaders := range r.MultipartForm.File {
+			for _, fh := range fileHeaders {
+				f, err := fh.Open()
+				if err != nil {
+					pw.CloseWithError(fmt.Errorf("open file %s: %w", fieldName, err))
+					return
+				}
+				fw, err := mw.CreateFormFile(fieldName, fh.Filename)
+				if err != nil {
+					f.Close()
+					pw.CloseWithError(fmt.Errorf("create form file %s: %w", fieldName, err))
+					return
+				}
+				if _, err := io.Copy(fw, f); err != nil {
+					f.Close()
+					pw.CloseWithError(fmt.Errorf("copy audio %s: %w", fieldName, err))
+					return
+				}
+				f.Close()
+			}
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, pr)
 	if err != nil {
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build transcription request.", &code)
 		return
 	}
-	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

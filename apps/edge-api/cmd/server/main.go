@@ -29,6 +29,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/middleware"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/proxy"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -194,6 +195,13 @@ func main() {
 		resolveLiteLLMBaseURL(),
 		resolveLiteLLMMasterKey(),
 	)
+	if parakeetURL, fwURL := os.Getenv("PARAKEET_BASE_URL"), os.Getenv("FASTER_WHISPER_BASE_URL"); parakeetURL != "" || fwURL != "" {
+		audioHandler.WithSTT(stt.NewTieredClient(stt.Config{
+			ParakeetBaseURL:      parakeetURL,
+			FasterWhisperBaseURL: fwURL,
+		}))
+		log.Printf("voice STT enabled: parakeet=%q faster-whisper=%q", parakeetURL, fwURL)
+	}
 
 	filestoreClient := files.NewFilestoreClient(resolveControlPlaneBaseURL())
 	filesAuthorizer := files.NewAuthorizerAdapter(authorizer)

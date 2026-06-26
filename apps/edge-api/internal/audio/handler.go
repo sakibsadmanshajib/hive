@@ -13,6 +13,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 	"github.com/google/uuid"
 )
 
@@ -86,6 +87,7 @@ type Handler struct {
 	litellmBaseURL string
 	masterKey      string
 	httpClient     *http.Client
+	stt            *stt.TieredClient // non-nil when local STT backends are configured
 }
 
 // NewHandler creates a new audio Handler.
@@ -103,6 +105,13 @@ func NewHandler(
 		masterKey:      masterKey,
 		httpClient:     &http.Client{Timeout: 120 * time.Second},
 	}
+}
+
+// WithSTT attaches a two-tier local STT client to the handler. When set,
+// POST /v1/audio/transcriptions routes directly to the local backends
+// instead of LiteLLM. Call before serving requests.
+func (h *Handler) WithSTT(c *stt.TieredClient) {
+	h.stt = c
 }
 
 // authorize validates the request API key and writes a 401 on failure.
@@ -256,9 +265,21 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTranscription processes POST /v1/audio/transcriptions.
-// Audio files are forwarded in-flight via multipart — never written to disk or storage.
+// When local STT backends are configured (h.stt != nil), requests are dispatched
+// directly to the two-tier Parakeet/faster-whisper client — audio never leaves the
+// box. When no local backends are configured, a provider-blind 503 is returned;
+// we do NOT fall back to an external proxy on a sovereign edge box.
 func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
-	h.handleMultipartAudio(w, r, "/audio/transcriptions", "/v1/audio/transcriptions")
+	if h.stt == nil {
+		code := "feature_unavailable"
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech transcription is not available.", &code)
+		return
+	}
+	// Authorize before handing off; stt.TieredClient has no auth of its own.
+	if _, ok := h.authorize(w, r); !ok {
+		return
+	}
+	h.stt.Transcribe(w, r)
 }
 
 // handleTranslation processes POST /v1/audio/translations.
