@@ -16,7 +16,9 @@ import (
 
 const maxSerializationRetries = 3
 
-type auditEvent struct {
+// AuditEvent is the audit row shape. Exported so cross-package callers
+// (e.g. the RAG handler) can construct events without a circular import.
+type AuditEvent struct {
 	TenantID     uuid.UUID
 	ActorID      uuid.UUID
 	Action       string
@@ -30,10 +32,20 @@ type auditEvent struct {
 	ResourceID   string
 }
 
-// insertAuditEvent writes one audit row from the edge-api hot path,
-// chained per-tenant. The chain semantics, canonical byte string, and
-// timestamp format are owned by packages/audit-canonical so the
-// control-plane SyncWriter and this writer cannot drift apart silently.
+// auditEvent aliases AuditEvent so existing internal callers need no change.
+type auditEvent = AuditEvent
+
+// InsertAuditEvent writes one audit row from any edge-api handler.
+// It uses the same chain writer as the chat hot path so all events
+// land in the same durable store.
+func InsertAuditEvent(ctx context.Context, pool *pgxpool.Pool, event AuditEvent) error {
+	return insertAuditEvent(ctx, pool, event)
+}
+
+// insertAuditEvent writes one audit row, chained per-tenant. The chain
+// semantics, canonical byte string, and timestamp format are owned by
+// packages/audit-canonical so the control-plane SyncWriter and this
+// writer cannot drift apart silently.
 //
 // Cross-partition stitching: if no row exists in the current month for
 // this tenant, the prev_hash query falls back to the most recent row

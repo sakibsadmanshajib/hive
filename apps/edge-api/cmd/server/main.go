@@ -23,6 +23,7 @@ import (
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
+	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/images"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/limits"
@@ -31,6 +32,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/proxy"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 )
@@ -90,7 +92,6 @@ func main() {
 		ControlPlaneURL: cpBaseURL,
 		TTL:             30 * time.Second,
 	})
-	_ = featureGate // consumed by future feature route registrations (#232-235)
 
 	dbPool := openOptionalDBPool(rootCtx)
 	if dbPool != nil {
@@ -218,6 +219,50 @@ func main() {
 	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler)
 
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
+
+	// RAG routes (#232): always registered behind FeatureRAG so the gate returns
+	// 403 (not 404) regardless of whether the embedding backend is configured.
+	// When EMBEDDING_BASE_URL is unset the handler itself returns a provider-blind 503.
+	{
+		ragEmbedBaseURL := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL"))
+		ragEmbedModel := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL"))
+		if ragEmbedModel == "" {
+			ragEmbedModel = "bge-m3"
+		}
+		var ragRepo edgerag.Store
+		if dbPool != nil {
+			ragRepo = edgerag.NewRepo(dbPool)
+		}
+		var ragEmbedder edgerag.Embedder
+		if ragEmbedBaseURL != "" {
+			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel)
+		}
+		ragAudit := func(ctx context.Context, action, resourceType, resourceID, severity string,
+			tenantID, actorID uuid.UUID, userAgent string, after any) {
+			if dbPool == nil {
+				return
+			}
+			if err := chat.InsertAuditEvent(ctx, dbPool, chat.AuditEvent{
+				TenantID:     tenantID,
+				ActorID:      actorID,
+				Action:       action,
+				Severity:     severity,
+				ResourceType: resourceType,
+				ResourceID:   resourceID,
+				UserAgent:    userAgent,
+				After:        after,
+				DeploySHA:    os.Getenv("DEPLOY_SHA"),
+				Environment:  os.Getenv("HIVE_ENV"),
+			}); err != nil {
+				log.Printf("rag audit write failed: %v", err)
+			}
+		}
+		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, nil, rootCtx)
+		ragMW := featureGate.Require(featuregate.FeatureRAG)
+		ragMux := http.NewServeMux()
+		ragHandler.Register(ragMux)
+		mux.Handle("/v1/rag/", ragMW(ragMux))
+	}
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
