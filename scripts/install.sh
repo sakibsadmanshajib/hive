@@ -382,6 +382,16 @@ setup_env() {
     _default_owui_shim="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 || printf 'owui-shim-change-me')"
     prompt_value OWUI_SHIM_KEY "Open WebUI shim key" required "$_default_owui_shim" secret
 
+    # ── Optional: Headscale relay ──
+    if [ "$WITH_RELAY" = "true" ]; then
+        printf '%s-- Headscale relay (--with-relay) --%s\n' "${BOLD}" "${RESET}"
+        printf '  Enter the public URL clients use to reach this box.\n'
+        printf '  LAN example:    http://192.168.1.10:8085\n'
+        printf '  Internet (TLS): https://relay.your-domain.com\n'
+        _default_relay_url="http://$(hostname -I 2>/dev/null | awk '{print $1}' || printf '127.0.0.1'):8085"
+        prompt_value HEADSCALE_SERVER_URL "Headscale server URL" required "$_default_relay_url"
+    fi
+
     # ── Optional: Grafana ──
     printf '%s-- Grafana (optional, for --profile monitoring) --%s\n' "${BOLD}" "${RESET}"
     _default_grafana="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 18 || printf 'admin')"
@@ -453,6 +463,9 @@ setup_env() {
     _write_env_var "OWUI_SHIM_KEY" "${OWUI_SHIM_KEY:-}"
     _write_env_var "GRAFANA_ADMIN_USER" "${GRAFANA_ADMIN_USER:-admin}"
     _write_env_var "GRAFANA_ADMIN_PASSWORD" "${GRAFANA_ADMIN_PASSWORD:-}"
+    if [ "$WITH_RELAY" = "true" ]; then
+        _write_env_var "HEADSCALE_SERVER_URL" "${HEADSCALE_SERVER_URL:-}"
+    fi
 
     # Lock down permissions on .env
     $SUDO chmod 600 "$ENV_FILE"

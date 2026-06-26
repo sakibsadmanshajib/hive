@@ -21,16 +21,20 @@
 
 ---
 # Public URL that Tailscale clients use to reach this control server.
-# Set HEADSCALE_SERVER_URL in .env.  Example: http://192.168.1.10:8085
-# For production with Caddy TLS: https://relay.your-domain.com
-server_url: "${HEADSCALE_SERVER_URL}"
+# This value is a safe fallback only. The container environment variable
+# HEADSCALE_SERVER_URL (set in docker-compose.relay.yml from .env) overrides
+# this key at runtime via Headscale's native env-override mechanism.
+# Do NOT use ${...} here: compose does not interpolate mounted config files.
+server_url: "http://127.0.0.1:8085"
 
 # Bind address for the Headscale HTTP/gRPC listener inside the container.
 listen_addr: "0.0.0.0:8085"
 metrics_listen_addr: "0.0.0.0:9091"
 
-# gRPC (used by the headscale CLI inside the container for admin operations).
-grpc_listen_addr: "0.0.0.0:50443"
+# gRPC: bound to loopback so insecure gRPC admin cannot be exposed by a later
+# compose port-mapping edit. Admin commands (headscale nodes list, preauthkeys
+# create, etc.) run via docker exec which connects on the container loopback.
+grpc_listen_addr: "127.0.0.1:50443"
 grpc_allow_insecure: true
 
 # TLS: disabled inside the container.  Terminate TLS in Caddy and proxy to
@@ -44,11 +48,13 @@ ip_prefixes:
   - "100.64.0.0/10"
 
 # DNS pushed to all peers.  Magic DNS lets peers reach each other by hostname.
+# nameservers is intentionally empty: pushing off-box resolvers (Cloudflare,
+# Google) to peers leaks DNS queries and breaks the sovereignty guarantee for
+# regulated CA buyers.  Operators who need a specific resolver should set it
+# here explicitly (e.g. an on-box Unbound or Pi-hole address).
 dns_config:
   override_local_dns: false
-  nameservers:
-    - 1.1.1.1
-    - 8.8.8.8
+  nameservers: []
   domains: []
   magic_dns: true
   base_domain: "hive.internal"

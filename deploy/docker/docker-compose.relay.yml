@@ -67,9 +67,12 @@ services:
       # Metrics: loopback only so they are not publicly reachable.
       - "127.0.0.1:9091:9091"
     environment:
-      # HEADSCALE_SERVER_URL must be set in .env.  No default: an empty value
-      # causes Headscale to issue node maps with a blank coordinator URL, which
-      # breaks all client registrations.
+      # Headscale reads HEADSCALE_SERVER_URL from the container environment and
+      # overrides the server_url key in config.yaml at startup (native env-override).
+      # The config.yaml file uses a safe literal fallback; this env var is the
+      # operator-supplied value that actually matters at runtime.
+      # Must be set in .env.  :? guard fails fast with a clear message rather than
+      # starting with a blank coordinator URL that silently breaks all registrations.
       HEADSCALE_SERVER_URL: ${HEADSCALE_SERVER_URL:?set HEADSCALE_SERVER_URL in .env (e.g. http://YOUR_BOX_IP:8085)}
     volumes:
       # Config file: operator-tunable settings, DERP config, ACL path.
