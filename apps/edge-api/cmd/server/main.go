@@ -198,7 +198,9 @@ func main() {
 	if parakeetURL, fwURL := os.Getenv("PARAKEET_BASE_URL"), os.Getenv("FASTER_WHISPER_BASE_URL"); parakeetURL != "" || fwURL != "" {
 		audioHandler.WithSTT(stt.NewTieredClient(stt.Config{
 			ParakeetBaseURL:      parakeetURL,
+			ParakeetAPIKey:       os.Getenv("PARAKEET_API_KEY"),
 			FasterWhisperBaseURL: fwURL,
+			FasterWhisperAPIKey:  os.Getenv("FASTER_WHISPER_API_KEY"),
 		}))
 		log.Printf("voice STT enabled: parakeet=%q faster-whisper=%q", parakeetURL, fwURL)
 	}

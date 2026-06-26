@@ -275,11 +275,60 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech transcription is not available.", &code)
 		return
 	}
-	// Authorize before handing off; stt.TieredClient has no auth of its own.
-	if _, ok := h.authorize(w, r); !ok {
+	ctx := r.Context()
+
+	auth, ok := h.authorize(w, r)
+	if !ok {
 		return
 	}
-	h.stt.Transcribe(w, r)
+
+	// Reserve credits before dispatch — same pattern as handleMultipartAudio.
+	requestID := uuid.New().String()
+	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
+		AccountID:        auth.AccountID,
+		APIKeyID:         auth.APIKeyID,
+		RequestID:        requestID,
+		Endpoint:         "/v1/audio/transcriptions",
+		ModelAlias:       "stt",
+		EstimatedCredits: 500,
+	})
+	if err != nil {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+
+	rec := &reservationRecorder{ResponseWriter: w}
+	h.stt.Transcribe(rec, r)
+
+	if rec.status >= 200 && rec.status < 300 {
+		_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
+			AccountID:     auth.AccountID,
+			ReservationID: reservationID,
+			ActualCredits: 500,
+		})
+	} else {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+	}
+}
+
+// reservationRecorder wraps ResponseWriter to capture the status code written
+// by stt.TieredClient so the caller can decide whether to finalize or release.
+type reservationRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *reservationRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *reservationRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
 }
 
 // handleTranslation processes POST /v1/audio/translations.

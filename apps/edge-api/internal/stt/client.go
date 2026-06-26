@@ -29,11 +29,19 @@ type Config struct {
 	// Set via PARAKEET_BASE_URL.
 	ParakeetBaseURL string
 
+	// ParakeetAPIKey is the optional bearer token for Parakeet sidecar auth.
+	// Set via PARAKEET_API_KEY. Leave empty when sidecar runs without auth.
+	ParakeetAPIKey string
+
 	// FasterWhisperBaseURL is the base URL of the faster-whisper sidecar
-	// (e.g. http://faster-whisper:9000). Bangla and all other languages
+	// (e.g. http://faster-whisper:8000). Bangla and all other languages
 	// route here.
 	// Set via FASTER_WHISPER_BASE_URL.
 	FasterWhisperBaseURL string
+
+	// FasterWhisperAPIKey is the optional bearer token for faster-whisper auth.
+	// Set via FASTER_WHISPER_API_KEY. Leave empty when sidecar runs without auth.
+	FasterWhisperAPIKey string
 }
 
 // TieredClient dispatches transcription requests to the correct backend
@@ -63,33 +71,34 @@ func (c *TieredClient) Transcribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	language := strings.ToLower(strings.TrimSpace(r.FormValue("language")))
-	backendURL := c.selectBackend(language)
+	backendURL, apiKey := c.selectBackend(language)
 	if backendURL == "" {
 		code := "feature_unavailable"
 		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech transcription is not available.", &code)
 		return
 	}
 
-	c.forwardToBackend(w, r, backendURL)
+	c.forwardToBackend(w, r, backendURL, apiKey)
 }
 
-// selectBackend returns the base URL for the correct backend, or "" if not configured.
+// selectBackend returns the base URL and API key for the correct backend.
+// Returns ("", "") if the selected backend is not configured.
 // ponytail: English-only check; everything else (including auto-detect) goes to
 // faster-whisper which handles multilingual. If the English tier is not configured
 // and English is requested, we return "" (503) rather than silently falling back,
 // preserving explicit operator intent.
-func (c *TieredClient) selectBackend(language string) string {
+func (c *TieredClient) selectBackend(language string) (url, apiKey string) {
 	if language == "en" {
-		return strings.TrimRight(c.cfg.ParakeetBaseURL, "/")
+		return strings.TrimRight(c.cfg.ParakeetBaseURL, "/"), c.cfg.ParakeetAPIKey
 	}
-	return strings.TrimRight(c.cfg.FasterWhisperBaseURL, "/")
+	return strings.TrimRight(c.cfg.FasterWhisperBaseURL, "/"), c.cfg.FasterWhisperAPIKey
 }
 
 // forwardToBackend reconstructs the multipart body from r.MultipartForm (already
 // parsed by Transcribe) and streams it to the selected backend.
 // r.Body is drained after ParseMultipartForm, so we must rebuild — same pattern
 // as audio.Handler.handleMultipartAudio.
-func (c *TieredClient) forwardToBackend(w http.ResponseWriter, r *http.Request, backendBase string) {
+func (c *TieredClient) forwardToBackend(w http.ResponseWriter, r *http.Request, backendBase, apiKey string) {
 	upstreamURL := backendBase + "/v1/audio/transcriptions"
 
 	pr, pw := io.Pipe()
@@ -136,6 +145,9 @@ func (c *TieredClient) forwardToBackend(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
