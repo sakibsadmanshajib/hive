@@ -30,6 +30,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/middleware"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/proxy"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sovereign"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 	"github.com/google/uuid"
@@ -56,6 +57,12 @@ type storageConfig struct {
 }
 
 func main() {
+	// Sovereign-mode guard: fail fast before any service wiring when external
+	// provider keys are present. See apps/edge-api/internal/sovereign for tests.
+	if err := sovereign.Check(os.Getenv); err != nil {
+		log.Fatal(err)
+	}
+
 	// Root context cancels on SIGINT/SIGTERM so background goroutines
 	// rooted here (notably the jwx JWKS auto-refresher) exit cleanly
 	// instead of leaking through process shutdown — passing
