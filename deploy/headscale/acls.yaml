@@ -1,0 +1,68 @@
+# deploy/headscale/acls.yaml
+#
+# Headscale ACL (HuJSON) policy for Hive EnterpriseEdge.
+# This file is mounted into the headscale container and evaluated on every
+# network-map response.  The default posture is DENY-ALL; operators must
+# explicitly add their client devices to the "allowed-clients" group and
+# uncomment the permit rules they need.
+#
+# How to apply changes: restart the headscale container or send SIGHUP.
+#   docker compose -f deploy/docker/docker-compose.yml \
+#     -f deploy/docker/docker-compose.relay.yml --profile relay \
+#     restart headscale
+#
+# Headscale user model: every device that joins the relay does so under a
+# Headscale namespace/user.  The installer creates a "hive" user by default.
+# Devices registered under that user appear as hive@<hostname> in the ACL.
+#
+# Reference: https://headscale.net/stable/ref/acls/
+
+{
+  // ── Groups ────────────────────────────────────────────────────────────────
+  // Add device hostnames (exactly as shown in `headscale nodes list`) to the
+  // allowed-clients group to grant them access to edge services.
+  // Example: "group:allowed-clients": ["hive@laptop-alice", "hive@phone-bob"]
+  "groups": {
+    "group:allowed-clients": [],
+
+    // Edge services running on the box (the headscale node itself).
+    // No devices need to be added here; the box is self-registered.
+    "group:edge-services": []
+  },
+
+  // ── Hosts ─────────────────────────────────────────────────────────────────
+  // Friendly names for the edge box's WireGuard address.
+  // The box registers as "hive@edge-box" (or whatever hostname the installer
+  // uses).  Update this alias if you rename the node.
+  "hosts": {
+    "edge-box": "100.64.0.1/32"
+  },
+
+  // ── ACLs ──────────────────────────────────────────────────────────────────
+  // Default posture: no rules = deny all.
+  // Uncomment the block below once you have added at least one device to
+  // group:allowed-clients.  Leaving it commented out keeps the network
+  // fully dark until the operator is ready.
+  //
+  // "acls": [
+  //   {
+  //     // Allow registered client devices to reach the Hive API (port 8080)
+  //     // and the Web Console (port 3000) on the edge box.
+  //     "action": "accept",
+  //     "src": ["group:allowed-clients"],
+  //     "dst": ["edge-box:8080", "edge-box:3000", "edge-box:3003"]
+  //   },
+  //   {
+  //     // Allow registered clients to reach the control-plane directly
+  //     // (only needed for admin tooling; omit for end-user-only access).
+  //     "action": "accept",
+  //     "src": ["group:allowed-clients"],
+  //     "dst": ["edge-box:8081"]
+  //   }
+  // ],
+
+  // ── No SSH rules ─────────────────────────────────────────────────────────
+  // SSH access is NOT permitted over the relay by default.  Add explicit
+  // rules here only if you understand the security implications.
+  "ssh": []
+}
