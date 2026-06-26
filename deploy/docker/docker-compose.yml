@@ -421,6 +421,61 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  # Carl.sh Voice STT — Tier 1: Parakeet (English, fast, ONNX/CPU)
+  # Active under the `voice` profile, composable with `enterprise`.
+  # achetronic/parakeet: Go + ONNX Runtime, speaks OpenAI Whisper API on port
+  # 5092, CPU-capable, ffmpeg in image for non-WAV audio.
+  # Model files must be provided by the operator at PARAKEET_MODEL_DIR on the
+  # host; the directory is mounted read-only at /models inside the container.
+  # Port 5092 is NOT exposed on the host; LiteLLM reaches it over the internal
+  # Compose network at http://parakeet:5092.
+  # Bangla STT is NOT supported by parakeet-tdt-0.6b-v3; Bangla routes to
+  # faster-whisper (see below). Do not claim Bangla ASR via this service.
+  parakeet:
+    image: achetronic/parakeet:latest
+    profiles:
+      - voice
+    environment:
+      # Bearer auth for the Parakeet API. Leave blank to run without auth
+      # (acceptable on a private internal network; set for extra hardening).
+      PARAKEET_API_KEY: ${PARAKEET_API_KEY:-}
+    volumes:
+      # Owner-provided model directory (parakeet-tdt-0.6b-v3 ONNX files).
+      # Set PARAKEET_MODEL_DIR in .env to the host path before starting.
+      - ${PARAKEET_MODEL_DIR:-/tmp/parakeet-models}:/models:ro
+    # No host-port binding: internal network only.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5092/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  # Carl.sh Voice STT — Tier 2: faster-whisper (Bangla + multilingual)
+  # Active under the `voice` profile, composable with `enterprise`.
+  # Uses the faster-whisper server image which speaks the OpenAI Whisper API.
+  # All languages except English route here, including Bangla ("bn") and
+  # auto-detect (empty language field).
+  # Port 9000 is NOT exposed on the host; LiteLLM reaches it over the
+  # internal Compose network at http://faster-whisper:9000.
+  faster-whisper:
+    image: fedirz/faster-whisper-server:latest-cpu
+    profiles:
+      - voice
+    environment:
+      # Model to load at startup. large-v3 gives best Bangla accuracy.
+      # Override to a smaller model (e.g. base, small) on low-memory boxes.
+      WHISPER__MODEL: ${FASTER_WHISPER_MODEL:-large-v3}
+    # No host-port binding: internal network only.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:latest
     profiles:

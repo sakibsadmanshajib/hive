@@ -86,6 +86,34 @@ model_list:
     model_info:
       mode: embedding
 
+  # ── 5. STT Tier 1: Parakeet (English, voice profile) ────────────────────────
+  # achetronic/parakeet ONNX server speaks the OpenAI Whisper API natively.
+  # Active only when the `voice` Docker profile is enabled and PARAKEET_BASE_URL
+  # is set. English transcription requests route here via the edge-api stt
+  # package; LiteLLM is the upstream proxy for auth and metering.
+  # parakeet-tdt-0.6b-v3 supports 25 European languages; Bangla is NOT in the
+  # evaluated set. Do not route Bangla here.
+  - model_name: route-local-transcription-en
+    litellm_params:
+      model: openai/parakeet
+      api_base: http://parakeet:5092/v1
+      api_key: os.environ/PARAKEET_API_KEY
+    model_info:
+      mode: audio_transcription
+
+  # ── 6. STT Tier 2: faster-whisper (Bangla + multilingual, voice profile) ────
+  # faster-whisper server speaks the OpenAI Whisper API. Bangla ("bn") and all
+  # non-English languages route here, as does auto-detect (empty language field).
+  # large-v3 model gives best Bangla accuracy. Active only when the `voice`
+  # Docker profile is enabled and FASTER_WHISPER_BASE_URL is set.
+  - model_name: route-local-transcription-multi
+    litellm_params:
+      model: openai/faster-whisper
+      api_base: http://faster-whisper:9000/v1
+      api_key: none
+    model_info:
+      mode: audio_transcription
+
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries
 # exhaust. `cooldown_time` prevents hammering a model that just failed.
