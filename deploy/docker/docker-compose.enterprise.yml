@@ -75,7 +75,9 @@ services:
       GOTRUE_DB_DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}?search_path=auth"
       GOTRUE_SITE_URL: ${ENTERPRISE_SITE_URL:-http://localhost:3000}
       GOTRUE_URI_ALLOW_LIST: ${ENTERPRISE_REDIRECT_ALLOW_LIST:-}
-      GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-false}
+      # Default true: regulated deployments use admin-provisioned users only.
+      # Set ENTERPRISE_DISABLE_SIGNUP=false in .env to re-enable self-serve signup.
+      GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-true}
       GOTRUE_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env (openssl rand -base64 48)}
       GOTRUE_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
@@ -101,12 +103,20 @@ services:
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: "pg-functions://postgres/public/custom_access_token_hook"
       # Auth rate limits and password policy (OSFI B-10 / PIPEDA baseline).
-      # GOTRUE_RATE_LIMIT_EMAIL_SENT caps magic-link / OTP email sends per hour
-      # across the whole instance. Default GoTrue has no cap; on an air-gapped
-      # box this is the primary guard against credential-stuffing via signup.
+      # Units: requests per hour (GoTrue float64 rate). GoTrue source defaults:
+      #   EMAIL_SENT=30, VERIFY=30, OTP=30, TOKEN_REFRESH=150.
+      # We set all four explicitly so they are visible and tunable per deployment.
+      # GOTRUE_RATE_LIMIT_EMAIL_SENT: max magic-link/invite emails sent per hour.
       GOTRUE_RATE_LIMIT_EMAIL_SENT: ${ENTERPRISE_RATE_LIMIT_EMAIL_SENT:-30}
+      # GOTRUE_RATE_LIMIT_VERIFY: max OTP/magic-link verification attempts per hour.
+      GOTRUE_RATE_LIMIT_VERIFY: ${ENTERPRISE_RATE_LIMIT_VERIFY:-30}
+      # GOTRUE_RATE_LIMIT_OTP: max OTP generation requests per hour.
+      GOTRUE_RATE_LIMIT_OTP: ${ENTERPRISE_RATE_LIMIT_OTP:-30}
+      # GOTRUE_RATE_LIMIT_TOKEN_REFRESH: max token refresh requests per hour.
+      # GoTrue default is 150; tightened to 30 for regulated edge deployments.
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: ${ENTERPRISE_RATE_LIMIT_TOKEN_REFRESH:-30}
       # Minimum password length. GoTrue default is 6; regulated workloads
-      # (OSFI, PIPEDA) require at least 12 characters.
+      # (OSFI B-10, PIPEDA) require at least 12 characters.
       GOTRUE_PASSWORD_MIN_LENGTH: ${ENTERPRISE_PASSWORD_MIN_LENGTH:-12}
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9999/health || exit 1"]
