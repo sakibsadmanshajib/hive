@@ -1,0 +1,96 @@
+# docker-compose.relay.yml
+#
+# Optional self-hosted Headscale relay overlay for Hive EnterpriseEdge.
+# Licence: Headscale is BSD-3-Clause. No proprietary Tailscale SaaS components.
+#
+# This file is intentionally separate from docker-compose.yml so that operators
+# running --profile local or --profile enterprise never see interpolation errors
+# for HEADSCALE_* vars they have not set.  Compose evaluates ALL environment
+# blocks for ALL services in a file regardless of active profiles; keeping relay
+# services here isolates that surface.
+#
+# Usage (always pass both -f flags when relay is wanted):
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.relay.yml \
+#     --profile enterprise --profile relay up --build
+#
+# With the enterprise Supabase data plane too:
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.enterprise.yml \
+#     -f docker-compose.relay.yml \
+#     --profile enterprise --profile relay up --build
+#
+# The installer (scripts/install.sh --with-relay) sets the correct -f flags.
+#
+# Required vars (set in .env before running):
+#   HEADSCALE_SERVER_URL  Public URL clients connect to, e.g. http://192.168.1.10:8085
+#
+# Headscale quick-start:
+#   1. Bring the stack up with --profile relay.
+#   2. Create a user:     docker exec hive-headscale-1 headscale users create hive
+#   3. Create a key:      docker exec hive-headscale-1 headscale preauthkeys create --user hive --expiration 1h --reusable=false
+#   4. On a client:       tailscale up --login-server=<HEADSCALE_SERVER_URL> --authkey=<key>
+#   5. List nodes:        docker exec hive-headscale-1 headscale nodes list
+
+name: hive
+
+services:
+
+  # ── headscale ──────────────────────────────────────────────────────────────
+  # Self-hosted Tailscale control server with an embedded DERP relay.
+  # WireGuard data plane: no Tailscale SaaS, no external DERP servers.
+  # All relay coordination traffic stays on this box.
+  #
+  # Ports:
+  #   8085/tcp  Headscale control API + embedded DERP HTTPS relay
+  #   3478/udp  STUN endpoint for NAT traversal discovery
+  #   9091/tcp  Prometheus metrics (loopback-only; wire into monitoring if needed)
+  #
+  # The 8085 port is published on all interfaces so remote Tailscale clients
+  # can reach the control server and DERP relay.  If the box sits behind a
+  # router, forward tcp/8085 and udp/3478 from the router's WAN IP.
+  # For port-less access (the primary use case): deploy Headscale behind a
+  # reverse proxy (e.g. Caddy) on tcp/443 and udp/3478; clients connect
+  # outbound with no inbound firewall rules needed on the client side.
+  headscale:
+    image: headscale/headscale:0.23
+    profiles:
+      - relay
+    # No restart dependency on edge-api/control-plane: the relay is a
+    # fully independent service.  It comes up in parallel with the core stack.
+    command: serve
+    ports:
+      - "8085:8085"
+      - "3478:3478/udp"
+      # Metrics: loopback only so they are not publicly reachable.
+      - "127.0.0.1:9091:9091"
+    environment:
+      # HEADSCALE_SERVER_URL must be set in .env.  No default: an empty value
+      # causes Headscale to issue node maps with a blank coordinator URL, which
+      # breaks all client registrations.
+      HEADSCALE_SERVER_URL: ${HEADSCALE_SERVER_URL:?set HEADSCALE_SERVER_URL in .env (e.g. http://YOUR_BOX_IP:8085)}
+    volumes:
+      # Config file: operator-tunable settings, DERP config, ACL path.
+      - ../../deploy/headscale/config.yaml:/etc/headscale/config.yaml:ro
+      # ACL policy: default-deny, permit only explicitly allowed client devices.
+      - ../../deploy/headscale/acls.yaml:/etc/headscale/acls.yaml:ro
+      # Persistent state: SQLite DB, private keys, DERP server key.
+      # Without this volume every restart regenerates keys and all
+      # registered nodes must re-authenticate.
+      - headscale-data:/var/lib/headscale
+    healthcheck:
+      # ponytail: headscale/headscale image ships wget; /health returns 200 when ready.
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:8085/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+volumes:
+  # Persists the Headscale SQLite database, WireGuard private keys, and the
+  # DERP server private key across container recreates.  Loss of this volume
+  # requires all registered nodes to re-authenticate.
+  headscale-data:

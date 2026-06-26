@@ -59,6 +59,7 @@ fi
 HIVE_HOME="${HIVE_HOME:-/opt/hive}"
 HIVE_REPO="https://github.com/sakibsadmanshajib/hive.git"
 WITH_OLLAMA=false
+WITH_RELAY=false
 UNINSTALL=false
 NON_INTERACTIVE=false
 # Sovereign mode: zero external LLM egress. Rejects OPENROUTER_API_KEY and
@@ -76,6 +77,7 @@ parse_args() {
     for arg in "$@"; do
         case "$arg" in
             --with-ollama)    WITH_OLLAMA=true ;;
+            --with-relay)     WITH_RELAY=true ;;
             --uninstall)      UNINSTALL=true ;;
             --non-interactive) NON_INTERACTIVE=true ;;
             --sovereign)      SOVEREIGN=true ; WITH_OLLAMA=true ;;
@@ -86,6 +88,10 @@ parse_args() {
                 printf '  bash install.sh [flags]\n\n'
                 printf 'Flags:\n'
                 printf '  --with-ollama       Enable in-stack Ollama local inference\n'
+                printf '  --with-relay        Enable self-hosted Headscale relay with embedded DERP.\n'
+                printf '                      Adds the relay compose overlay (docker-compose.relay.yml)\n'
+                printf '                      and --profile relay. Requires HEADSCALE_SERVER_URL in .env.\n'
+                printf '                      Licence: Headscale BSD-3-Clause. No Tailscale SaaS used.\n'
                 printf '  --sovereign         Sovereign mode: zero external LLM egress.\n'
                 printf '                      Rejects OPENROUTER_API_KEY and GROQ_API_KEY.\n'
                 printf '                      Enforces OLLAMA_BASE_URL as the only provider.\n'
@@ -802,12 +808,26 @@ wait_healthy() {
 
 # ─── Start stack ──────────────────────────────────────────────────────────────
 start_stack() {
-    status "Starting Hive EnterpriseEdge stack (docker compose --profile enterprise)..."
+    if [ "$WITH_RELAY" = "true" ]; then
+        status "Starting Hive EnterpriseEdge stack with relay (--profile enterprise --profile relay)..."
+    else
+        status "Starting Hive EnterpriseEdge stack (docker compose --profile enterprise)..."
+    fi
     cd "$HIVE_HOME/deploy/docker"
+    # Build the compose -f list.  The relay overlay is appended only when
+    # --with-relay is set so the base stack is completely unchanged otherwise.
+    _RELAY_F=""
+    _RELAY_PROFILE=""
+    if [ "$WITH_RELAY" = "true" ]; then
+        _RELAY_F="-f $HIVE_HOME/deploy/docker/docker-compose.relay.yml"
+        _RELAY_PROFILE="--profile relay"
+    fi
+    # shellcheck disable=SC2086
     $SUDO docker compose \
         -f "$HIVE_HOME/deploy/docker/docker-compose.yml" \
         -f "$HIVE_HOME/deploy/docker/docker-compose.enterprise.yml" \
-        --env-file "$HIVE_HOME/.env" --profile enterprise up -d --build
+        ${_RELAY_F} \
+        --env-file "$HIVE_HOME/.env" --profile enterprise ${_RELAY_PROFILE} up -d --build
 
     success "Stack started."
 }
@@ -840,6 +860,20 @@ verify_and_banner() {
             if [ -n "${OLLAMA_MODEL:-}" ]; then
                 printf '  Ollama model:   %s\n' "$OLLAMA_MODEL"
             fi
+            printf '\n'
+        fi
+        if [ "$WITH_RELAY" = "true" ]; then
+            printf '  Headscale relay: %s (control + DERP)\n' "${HEADSCALE_SERVER_URL:-http://localhost:8085}"
+            printf '  STUN:            udp/3478\n'
+            printf '\n'
+            printf '  Relay quick-start:\n'
+            printf '    # Create a Headscale user and preauthkey:\n'
+            printf '    docker exec hive-headscale-1 headscale users create hive\n'
+            printf '    docker exec hive-headscale-1 headscale preauthkeys create --user hive --expiration 1h --reusable=false\n'
+            printf '    # On each client device (standard Tailscale client):\n'
+            printf '    tailscale up --login-server=%s --authkey=<key>\n' "${HEADSCALE_SERVER_URL:-http://localhost:8085}"
+            printf '    # List joined nodes:\n'
+            printf '    docker exec hive-headscale-1 headscale nodes list\n'
             printf '\n'
         fi
         printf '%s%s%s\n' "${GREEN}" "$(printf '%.0s=' $(seq 1 60))" "${RESET}"
