@@ -23,6 +23,7 @@ import (
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
+	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/images"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/limits"
@@ -89,7 +90,6 @@ func main() {
 		ControlPlaneURL: cpBaseURL,
 		TTL:             30 * time.Second,
 	})
-	_ = featureGate // consumed by future feature route registrations (#232-235)
 
 	dbPool := openOptionalDBPool(rootCtx)
 	if dbPool != nil {
@@ -208,6 +208,30 @@ func main() {
 	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler)
 
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
+
+	// RAG routes (#232): gated behind FeatureRAG, DB-backed when dbPool is available.
+	// ponytail: RAG handler skipped when dbPool is nil (API-key-only deployments).
+	if dbPool != nil {
+		ragEmbedBaseURL := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL"))
+		ragEmbedModel := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL"))
+		if ragEmbedBaseURL != "" {
+			if ragEmbedModel == "" {
+				ragEmbedModel = "bge-m3"
+			}
+			ragRepo := edgerag.NewRepo(dbPool)
+			ragEmbedder := edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel)
+			ragAudit := func(ctx context.Context, action, resourceType, resourceID string, after any) {
+				log.Printf("audit action=%s resource_type=%s resource_id=%s", action, resourceType, resourceID)
+			}
+			ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, nil)
+			ragMW := featureGate.Require(featuregate.FeatureRAG)
+			ragMux := http.NewServeMux()
+			ragHandler.Register(ragMux)
+			mux.Handle("/v1/rag/", ragMW(ragMux))
+		} else {
+			log.Printf("WARNING: RAG routes disabled (EMBEDDING_BASE_URL not set)")
+		}
+	}
 
 	// API routes
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
