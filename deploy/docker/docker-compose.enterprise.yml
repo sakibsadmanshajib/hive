@@ -35,7 +35,8 @@ services:
   # first startup and creates the required extensions, schemas, and roles
   # (including hive_app which RLS policies reference).
   supabase-db:
-    image: pgvector/pgvector:pg16
+    # Pinned to immutable digest. Refresh: docker pull pgvector/pgvector:pg16 && docker inspect --format='{{index .RepoDigests 0}}' pgvector/pgvector:pg16
+    image: pgvector/pgvector:pg16@sha256:131dcf7ff6a900545df8e7e092c270aa8c6db2f2c818e408cb45ec21316b74e6
     profiles:
       - enterprise
     environment:
@@ -58,7 +59,8 @@ services:
   # SUPABASE_JWKS_URL=http://supabase-auth:9999/.well-known/jwks.json.
   # Set ENTERPRISE_MAILER_AUTOCONFIRM=true for air-gapped installs without SMTP.
   supabase-auth:
-    image: supabase/gotrue:v2.170.0
+    # Pinned to immutable digest. Refresh: docker pull supabase/gotrue:v2.170.0 && docker inspect --format='{{index .RepoDigests 0}}' supabase/gotrue:v2.170.0
+    image: supabase/gotrue:v2.170.0@sha256:0cfa54e096dcae4ed30162811fa8794f7c443708c41973329e07f7d44c1cc3e7
     profiles:
       - enterprise
     depends_on:
@@ -73,7 +75,9 @@ services:
       GOTRUE_DB_DATABASE_URL: "postgres://${ENTERPRISE_DB_USER:-postgres}:${ENTERPRISE_DB_PASSWORD:?set ENTERPRISE_DB_PASSWORD in .env}@supabase-db:5432/${ENTERPRISE_DB_NAME:-postgres}?search_path=auth"
       GOTRUE_SITE_URL: ${ENTERPRISE_SITE_URL:-http://localhost:3000}
       GOTRUE_URI_ALLOW_LIST: ${ENTERPRISE_REDIRECT_ALLOW_LIST:-}
-      GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-false}
+      # Default true: regulated deployments use admin-provisioned users only.
+      # Set ENTERPRISE_DISABLE_SIGNUP=false in .env to re-enable self-serve signup.
+      GOTRUE_DISABLE_SIGNUP: ${ENTERPRISE_DISABLE_SIGNUP:-true}
       GOTRUE_JWT_SECRET: ${ENTERPRISE_JWT_SECRET:?set ENTERPRISE_JWT_SECRET in .env (openssl rand -base64 48)}
       GOTRUE_JWT_EXP: ${ENTERPRISE_JWT_EXP:-3600}
       GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
@@ -98,6 +102,22 @@ services:
       # without this flag GoTrue issues plain tokens and all RLS/authz middleware breaks.
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_ENABLED: "true"
       GOTRUE_HOOK_CUSTOM_ACCESS_TOKEN_URI: "pg-functions://postgres/public/custom_access_token_hook"
+      # Auth rate limits and password policy (OSFI B-10 / PIPEDA baseline).
+      # Units: requests per hour (GoTrue float64 rate). GoTrue source defaults:
+      #   EMAIL_SENT=30, VERIFY=30, OTP=30, TOKEN_REFRESH=150.
+      # We set all four explicitly so they are visible and tunable per deployment.
+      # GOTRUE_RATE_LIMIT_EMAIL_SENT: max magic-link/invite emails sent per hour.
+      GOTRUE_RATE_LIMIT_EMAIL_SENT: ${ENTERPRISE_RATE_LIMIT_EMAIL_SENT:-30}
+      # GOTRUE_RATE_LIMIT_VERIFY: max OTP/magic-link verification attempts per hour.
+      GOTRUE_RATE_LIMIT_VERIFY: ${ENTERPRISE_RATE_LIMIT_VERIFY:-30}
+      # GOTRUE_RATE_LIMIT_OTP: max OTP generation requests per hour.
+      GOTRUE_RATE_LIMIT_OTP: ${ENTERPRISE_RATE_LIMIT_OTP:-30}
+      # GOTRUE_RATE_LIMIT_TOKEN_REFRESH: max token refresh requests per hour.
+      # GoTrue default is 150; tightened to 30 for regulated edge deployments.
+      GOTRUE_RATE_LIMIT_TOKEN_REFRESH: ${ENTERPRISE_RATE_LIMIT_TOKEN_REFRESH:-30}
+      # Minimum password length. GoTrue default is 6; regulated workloads
+      # (OSFI B-10, PIPEDA) require at least 12 characters.
+      GOTRUE_PASSWORD_MIN_LENGTH: ${ENTERPRISE_PASSWORD_MIN_LENGTH:-12}
     healthcheck:
       test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:9999/health || exit 1"]
       interval: 5s
@@ -109,7 +129,8 @@ services:
   # ── supabase-rest (PostgREST) ──────────────────────────────────────────────
   # Auto REST API over local Postgres. control-plane uses this as SUPABASE_URL.
   supabase-rest:
-    image: postgrest/postgrest:v12.2.3
+    # Pinned to immutable digest. Refresh: docker pull postgrest/postgrest:v12.2.3 && docker inspect --format='{{index .RepoDigests 0}}' postgrest/postgrest:v12.2.3
+    image: postgrest/postgrest:v12.2.3@sha256:729bf65c733b73f5b52777f0e4b853f22ed73aa67a22d38269d289779b0a8401
     profiles:
       - enterprise
     depends_on:
@@ -138,7 +159,8 @@ services:
   # volume. No S3 call leaves the box.
   # S3_ENDPOINT for edge-api and control-plane: http://supabase-storage:5000/object/s3
   supabase-storage:
-    image: supabase/storage-api:v1.11.13
+    # Pinned to immutable digest. Refresh: docker pull supabase/storage-api:v1.11.13 && docker inspect --format='{{index .RepoDigests 0}}' supabase/storage-api:v1.11.13
+    image: supabase/storage-api:v1.11.13@sha256:1e85dad48e8b3e85890a555e5114dc7ee48c2e8be4cfd97dd4e3564b4f104fcd
     profiles:
       - enterprise
     depends_on:
@@ -176,7 +198,8 @@ services:
   # Bucket creation is idempotent: a 409 from an existing bucket is treated as
   # success (|| true) so re-runs after a container recreate do not fail.
   supabase-init:
-    image: curlimages/curl:8.7.1
+    # Pinned to immutable digest. Refresh: docker pull curlimages/curl:8.7.1 && docker inspect --format='{{index .RepoDigests 0}}' curlimages/curl:8.7.1
+    image: curlimages/curl:8.7.1@sha256:25d29daeb9b14b89e2fa8cc17c70e4b188bca1466086907c2d9a4b56b59d8e21
     profiles:
       - enterprise
     depends_on:
