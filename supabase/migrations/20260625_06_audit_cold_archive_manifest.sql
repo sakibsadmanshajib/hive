@@ -24,7 +24,11 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.audit_cold_archive_manifest (
     id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id       UUID         NOT NULL REFERENCES public.tenants(id) ON DELETE CASCADE,
+    -- ON DELETE RESTRICT: tenant deletion must not silently orphan or destroy
+    -- cold-archive objects. PHIPA / Law 25 require 10-year retention; a tenant
+    -- lifecycle event cannot override that. The tenant record must be retained
+    -- (or the manifest rows migrated) before the tenant row can be removed.
+    tenant_id       UUID         NOT NULL REFERENCES public.tenants(id) ON DELETE RESTRICT,
     -- Year-month of the archived partition (always the 1st of the month, UTC).
     partition_month TIMESTAMPTZ  NOT NULL,
     -- Path in cold storage (local filesystem via Supabase Storage S3 backend).

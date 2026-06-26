@@ -69,15 +69,22 @@ type Repository interface {
 	FetchOlderThan(ctx context.Context, cutoff time.Time, tenantID uuid.UUID) ([]AuditRow, error)
 	ManifestExists(ctx context.Context, tenantID uuid.UUID, month time.Time) (bool, error)
 	InsertManifest(ctx context.Context, entry ManifestEntry) error
-	DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time) (int64, error)
+	// DeleteArchived removes rows for (tenantID, month) that are strictly before
+	// cutoff. The cutoff bound prevents deleting rows in the same calendar month
+	// that were written after the archive pass started and were never fetched or
+	// archived. Passing cutoff here is the P0 safety invariant.
+	DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time, cutoff time.Time) (int64, error)
 	FetchExpiredManifests(ctx context.Context, now time.Time) ([]ManifestEntry, error)
 	DeleteManifest(ctx context.Context, id uuid.UUID) error
 }
 
 // ObjectStore abstracts local cold storage (Supabase Storage / local filesystem).
 // Zero external egress: the backing store must be the box's own filesystem.
+//
+// Put must return the number of bytes written to storage so the archiver can
+// verify the upload was complete before deleting source rows (P1 safety).
 type ObjectStore interface {
-	Put(ctx context.Context, key string, r io.Reader) error
+	Put(ctx context.Context, key string, r io.Reader) (written int64, err error)
 	Delete(ctx context.Context, key string) error
 }
 
@@ -127,7 +134,8 @@ func New(cfg Config) *Archiver {
 // crashes after writing the manifest but before deleting hot rows, the next
 // run detects ManifestExists and skips, leaving hot rows as a safe duplicate.
 func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
-	cutoff := now.Add(-time.Duration(a.cfg.HotRetentionDays) * 24 * time.Hour)
+	// AddDate is DST-safe; hour multiplication drifts across daylight boundaries.
+	cutoff := now.AddDate(0, 0, -a.cfg.HotRetentionDays)
 
 	tenants, err := a.cfg.Repo.FetchTenants(ctx)
 	if err != nil {
@@ -144,9 +152,12 @@ func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
 			continue
 		}
 
-		// Group rows by partition month.
+		// Group rows by partition month. Sort months so seq ranges in manifest
+		// are deterministic regardless of map iteration order.
 		byMonth := groupByMonth(rows)
-		for month, monthRows := range byMonth {
+		months := sortedMonths(byMonth)
+		for _, month := range months {
+			monthRows := byMonth[month]
 			exists, err := a.cfg.Repo.ManifestExists(ctx, tenantID, month)
 			if err != nil {
 				return total, fmt.Errorf("auditarchive: manifest check: %w", err)
@@ -157,7 +168,7 @@ func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
 				continue
 			}
 
-			n, err := a.archivePartition(ctx, now, tenantID, month, monthRows)
+			n, err := a.archivePartition(ctx, now, cutoff, tenantID, month, monthRows)
 			if err != nil {
 				return total, err
 			}
@@ -168,9 +179,12 @@ func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
 }
 
 // archivePartition handles one (tenant, month) batch.
+// cutoff is threaded through so DeleteArchived can exclude rows written after
+// the archive pass started (P0 boundary-month safety invariant).
 func (a *Archiver) archivePartition(
 	ctx context.Context,
 	now time.Time,
+	cutoff time.Time,
 	tenantID uuid.UUID,
 	month time.Time,
 	rows []AuditRow,
@@ -194,7 +208,8 @@ func (a *Archiver) archivePartition(
 	}
 
 	compressed := buf.Bytes()
-	sum := sha256.Sum256(compressed)
+	expectedSum := sha256.Sum256(compressed)
+	expectedSize := int64(len(compressed))
 
 	objectKey := fmt.Sprintf("%s/%s/%s.jsonl.gz",
 		a.cfg.ColdStorageBucket,
@@ -202,8 +217,14 @@ func (a *Archiver) archivePartition(
 		month.Format("2006-01"),
 	)
 
-	if err := a.cfg.Store.Put(ctx, objectKey, bytes.NewReader(compressed)); err != nil {
+	// P1: verify written byte count matches before trusting the upload.
+	written, err := a.cfg.Store.Put(ctx, objectKey, bytes.NewReader(compressed))
+	if err != nil {
 		return 0, fmt.Errorf("auditarchive: store put %s: %w", objectKey, err)
+	}
+	if written != expectedSize {
+		return 0, fmt.Errorf("auditarchive: store put %s: wrote %d bytes, expected %d (truncated upload)",
+			objectKey, written, expectedSize)
 	}
 
 	entry := ManifestEntry{
@@ -211,7 +232,7 @@ func (a *Archiver) archivePartition(
 		TenantID:       tenantID,
 		PartitionMonth: month,
 		ObjectKey:      objectKey,
-		SHA256Hash:     sum[:],
+		SHA256Hash:     expectedSum[:],
 		RowCount:       int64(len(rows)),
 		FirstSeq:       firstSeq,
 		LastSeq:        lastSeq,
@@ -222,8 +243,10 @@ func (a *Archiver) archivePartition(
 		return 0, fmt.Errorf("auditarchive: insert manifest: %w", err)
 	}
 
-	// Delete hot rows AFTER manifest is safely written.
-	deleted, err := a.cfg.Repo.DeleteArchived(ctx, tenantID, month)
+	// P0 + chain integrity: delete ONLY rows that were actually archived
+	// (ts < cutoff). Rows written to this month after the pass started are
+	// untouched; they will be archived in a future run.
+	deleted, err := a.cfg.Repo.DeleteArchived(ctx, tenantID, month, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("auditarchive: delete archived: %w", err)
 	}
@@ -262,30 +285,34 @@ func (a *Archiver) PurgeExpired(ctx context.Context, now time.Time) (int, error)
 	return purged, nil
 }
 
-// RunCron runs the archiver on a ticker until ctx is cancelled.
-// Fires immediately on first tick. Intended to be called in a goroutine.
+// RunCron runs the archiver on interval until ctx is cancelled.
+// Fires immediately at startup so the first pass does not wait a full interval.
 func (a *Archiver) RunCron(ctx context.Context, interval time.Duration) error {
+	run := func() {
+		now := time.Now().UTC()
+		n, err := a.RunOnce(ctx, now)
+		if err != nil {
+			slog.Error("auditarchive: cron run error", "err", err)
+			return
+		}
+		purged, err := a.PurgeExpired(ctx, now)
+		if err != nil {
+			slog.Error("auditarchive: purge error", "err", err)
+			return
+		}
+		if n > 0 || purged > 0 {
+			slog.Info("auditarchive: cron complete", "archived_rows", n, "purged_manifests", purged)
+		}
+	}
+	run() // immediate first pass
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case t := <-ticker.C:
-			now := t.UTC()
-			n, err := a.RunOnce(ctx, now)
-			if err != nil {
-				slog.Error("auditarchive: cron run error", "err", err)
-				continue
-			}
-			purged, err := a.PurgeExpired(ctx, now)
-			if err != nil {
-				slog.Error("auditarchive: purge error", "err", err)
-				continue
-			}
-			if n > 0 || purged > 0 {
-				slog.Info("auditarchive: cron complete", "archived_rows", n, "purged_manifests", purged)
-			}
+		case <-ticker.C:
+			run()
 		}
 	}
 }
@@ -298,4 +325,20 @@ func groupByMonth(rows []AuditRow) map[time.Time][]AuditRow {
 		out[m] = append(out[m], r)
 	}
 	return out
+}
+
+// sortedMonths returns the keys of m in ascending chronological order so
+// manifest first_seq/last_seq ranges are deterministic across runs.
+func sortedMonths(m map[time.Time][]AuditRow) []time.Time {
+	keys := make([]time.Time, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	// ponytail: simple insertion sort; N is number of distinct months per tenant per run, typically 1-3.
+	for i := 1; i < len(keys); i++ {
+		for j := i; j > 0 && keys[j].Before(keys[j-1]); j-- {
+			keys[j], keys[j-1] = keys[j-1], keys[j]
+		}
+	}
+	return keys
 }

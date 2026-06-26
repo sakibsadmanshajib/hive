@@ -615,7 +615,7 @@ func main() {
 		// 90-day hot window and 10-year cold retention if unset.
 		archiveCronInterval := parseDurationEnv("AUDIT_COLD_ARCHIVE_CRON_INTERVAL", 24*time.Hour)
 		archiveRepo := auditarchive.NewPgRepository(pool)
-		archiveStore := auditarchive.NewStorageObjectStore(storageClient, os.Getenv("AUDIT_COLD_ARCHIVE_BUCKET"))
+		archiveStore := auditarchive.NewStorageObjectStore(storageClient, os.Getenv("AUDIT_COLD_ARCHIVE_BUCKET"), strings.TrimSpace(os.Getenv("S3_ENDPOINT")))
 		archiver := auditarchive.New(auditarchive.Config{
 			HotRetentionDays:  parseIntEnv("AUDIT_COLD_ARCHIVE_HOT_DAYS", 90),
 			RetentionYears:    parseIntEnv("AUDIT_COLD_ARCHIVE_RETENTION_YEARS", 10),

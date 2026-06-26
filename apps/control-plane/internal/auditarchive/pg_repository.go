@@ -123,15 +123,16 @@ func (r *PgRepository) ManifestExists(ctx context.Context, tenantID uuid.UUID, m
 	return exists, nil
 }
 
-// InsertManifest inserts a new manifest entry. The unique index on
-// (tenant_id, partition_month) causes a duplicate to fail loudly rather than
-// silently overwrite, preserving immutability.
+// InsertManifest inserts a new manifest entry. ON CONFLICT DO NOTHING makes
+// concurrent/duplicate runs idempotent while still preventing any UPDATE that
+// would mutate an existing record (preserving write-once immutability).
 func (r *PgRepository) InsertManifest(ctx context.Context, entry ManifestEntry) error {
 	_, err := r.pool.Exec(ctx, `
 		INSERT INTO public.audit_cold_archive_manifest
 		  (id, tenant_id, partition_month, object_key, sha256_hash,
 		   row_count, first_seq, last_seq, archived_at, purge_after)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		ON CONFLICT (tenant_id, partition_month) DO NOTHING
 	`,
 		entry.ID, entry.TenantID, entry.PartitionMonth, entry.ObjectKey, entry.SHA256Hash,
 		entry.RowCount, entry.FirstSeq, entry.LastSeq, entry.ArchivedAt, entry.PurgeAfter,
@@ -142,14 +143,15 @@ func (r *PgRepository) InsertManifest(ctx context.Context, entry ManifestEntry) 
 	return nil
 }
 
-// DeleteArchived removes audit_log rows for the given (tenantID, month) after
-// the manifest has been safely written. Returns the number of rows deleted.
-func (r *PgRepository) DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time) (int64, error) {
-	monthEnd := month.AddDate(0, 1, 0)
+// DeleteArchived removes audit_log rows for the given (tenantID, month) that
+// are strictly before cutoff. The cutoff bound is the P0 safety invariant:
+// rows in the boundary month written AFTER the archive pass started are never
+// fetched or archived, so they must not be deleted here.
+func (r *PgRepository) DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time, cutoff time.Time) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `
 		DELETE FROM public.audit_log
 		 WHERE tenant_id = $1 AND ts >= $2 AND ts < $3
-	`, tenantID, month, monthEnd)
+	`, tenantID, month, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("auditarchive pg: delete archived: %w", err)
 	}
