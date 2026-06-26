@@ -13,6 +13,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 	"github.com/google/uuid"
 )
 
@@ -86,6 +87,7 @@ type Handler struct {
 	litellmBaseURL string
 	masterKey      string
 	httpClient     *http.Client
+	stt            *stt.TieredClient // non-nil when local STT backends are configured
 }
 
 // NewHandler creates a new audio Handler.
@@ -103,6 +105,13 @@ func NewHandler(
 		masterKey:      masterKey,
 		httpClient:     &http.Client{Timeout: 120 * time.Second},
 	}
+}
+
+// WithSTT attaches a two-tier local STT client to the handler. When set,
+// POST /v1/audio/transcriptions routes directly to the local backends
+// instead of LiteLLM. Call before serving requests.
+func (h *Handler) WithSTT(c *stt.TieredClient) {
+	h.stt = c
 }
 
 // authorize validates the request API key and writes a 401 on failure.
@@ -256,9 +265,70 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTranscription processes POST /v1/audio/transcriptions.
-// Audio files are forwarded in-flight via multipart — never written to disk or storage.
+// When local STT backends are configured (h.stt != nil), requests are dispatched
+// directly to the two-tier Parakeet/faster-whisper client — audio never leaves the
+// box. When no local backends are configured, a provider-blind 503 is returned;
+// we do NOT fall back to an external proxy on a sovereign edge box.
 func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
-	h.handleMultipartAudio(w, r, "/audio/transcriptions", "/v1/audio/transcriptions")
+	if h.stt == nil {
+		code := "feature_unavailable"
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech transcription is not available.", &code)
+		return
+	}
+	ctx := r.Context()
+
+	auth, ok := h.authorize(w, r)
+	if !ok {
+		return
+	}
+
+	// Reserve credits before dispatch — same pattern as handleMultipartAudio.
+	requestID := uuid.New().String()
+	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
+		AccountID:        auth.AccountID,
+		APIKeyID:         auth.APIKeyID,
+		RequestID:        requestID,
+		Endpoint:         "/v1/audio/transcriptions",
+		ModelAlias:       "stt",
+		EstimatedCredits: 500,
+	})
+	if err != nil {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+
+	rec := &reservationRecorder{ResponseWriter: w}
+	h.stt.Transcribe(rec, r)
+
+	if rec.status >= 200 && rec.status < 300 {
+		_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
+			AccountID:     auth.AccountID,
+			ReservationID: reservationID,
+			ActualCredits: 500,
+		})
+	} else {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+	}
+}
+
+// reservationRecorder wraps ResponseWriter to capture the status code written
+// by stt.TieredClient so the caller can decide whether to finalize or release.
+type reservationRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *reservationRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+func (r *reservationRecorder) Write(b []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.ResponseWriter.Write(b)
 }
 
 // handleTranslation processes POST /v1/audio/translations.

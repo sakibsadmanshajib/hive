@@ -13,6 +13,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 )
 
 // --- Test doubles ---
@@ -162,19 +163,22 @@ func TestSpeechContentTypePassthrough(t *testing.T) {
 }
 
 func TestTranscriptionForward(t *testing.T) {
-	respBody := `{"text":"hello world","duration":5.2}`
-	mock := newMockLiteLLMAudio([]byte(respBody), 200, "application/json")
-	defer mock.Close()
+	// Transcription now routes to the STT backend directly (not LiteLLM).
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"hello world","duration":5.2}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
 
-	h := buildAudioHandler(mock.server.URL)
+	h := buildHandlerWithSTT(sttBackend.URL, sttBackend.URL)
 
-	// Build multipart form
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("model", "whisper-1")
 	_ = mw.WriteField("language", "en")
 	fw, _ := mw.CreateFormFile("file", "audio.mp3")
-	fw.Write([]byte("fake-audio-bytes"))
+	fw.Write([]byte("fake-audio-bytes")) //nolint:errcheck
 	mw.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
@@ -187,14 +191,6 @@ func TestTranscriptionForward(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if mock.lastPath != "/audio/transcriptions" {
-		t.Errorf("expected path /audio/transcriptions, got %s", mock.lastPath)
-	}
-	// Outgoing request must be multipart (audio data forwarded as multipart to LiteLLM)
-	if !strings.Contains(mock.lastCT, "multipart/form-data") {
-		t.Errorf("expected multipart Content-Type to LiteLLM, got %s", mock.lastCT)
-	}
-	// Response must be JSON passthrough
 	var tr audio.TranscriptionResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &tr); err != nil {
 		t.Fatalf("could not decode transcription response: %v", err)
@@ -237,18 +233,23 @@ func TestTranslationForward(t *testing.T) {
 }
 
 func TestAudioModelAliasRewrite(t *testing.T) {
-	// Verify that the outgoing request to LiteLLM uses the LiteLLM model name from routing.
-	respBody := `{"text":"test transcription"}`
-	mock := newMockLiteLLMAudio([]byte(respBody), 200, "application/json")
-	defer mock.Close()
+	// Transcription goes to STT backend directly; model field is forwarded as-is.
+	var receivedBody []byte
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"test transcription"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
 
-	h := buildAudioHandler(mock.server.URL)
+	h := buildHandlerWithSTT(sttBackend.URL, sttBackend.URL)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("model", "whisper-1")
 	fw, _ := mw.CreateFormFile("file", "audio.mp3")
-	fw.Write([]byte("fake-audio"))
+	fw.Write([]byte("fake-audio")) //nolint:errcheck
 	mw.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
@@ -261,29 +262,27 @@ func TestAudioModelAliasRewrite(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-
-	// The outgoing body must contain the model field (forwarded in multipart).
-	// The mock routing stub echoes the alias as litellm model, so "whisper-1" passes through.
-	outgoingBody := string(mock.lastBody)
-	if !strings.Contains(outgoingBody, "whisper-1") {
-		t.Errorf("expected model 'whisper-1' in outgoing multipart, body: %s", outgoingBody)
+	if !strings.Contains(string(receivedBody), "whisper-1") {
+		t.Errorf("expected model field forwarded to STT backend, body: %s", receivedBody)
 	}
 }
 
 func TestAudioNoStorageInTranscription(t *testing.T) {
-	// Audio handler must NOT call any storage - no storage field on Handler.
-	// This test verifies the handler works correctly without storage configured.
-	respBody := `{"text":"no storage please"}`
-	mock := newMockLiteLLMAudio([]byte(respBody), 200, "application/json")
-	defer mock.Close()
+	// Transcription must work without any storage field (Handler has none).
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"no storage please"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
 
-	h := buildAudioHandler(mock.server.URL)
+	h := buildHandlerWithSTT(sttBackend.URL, sttBackend.URL)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	_ = mw.WriteField("model", "whisper-1")
 	fw, _ := mw.CreateFormFile("file", "audio.mp3")
-	fw.Write([]byte("audio-data"))
+	fw.Write([]byte("audio-data")) //nolint:errcheck
 	mw.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
@@ -293,7 +292,6 @@ func TestAudioNoStorageInTranscription(t *testing.T) {
 
 	h.ServeHTTP(w, req)
 
-	// If it reaches here without panicking on nil storage, the test passes.
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -336,11 +334,15 @@ func TestSpeechUpstreamFailureIsProviderBlind(t *testing.T) {
 }
 
 func TestTranscriptionUpstreamFailureIsProviderBlind(t *testing.T) {
-	raw := `{"error":{"message":"litellm.AuthenticationError: AuthenticationError: OpenrouterException: route-openrouter-default rejected openrouter/openrouter/free","type":"auth_error"}}`
-	mock := newMockLiteLLMAudio([]byte(raw), http.StatusUnauthorized, "application/json")
-	defer mock.Close()
+	// STT backend returns an error; response must be provider-blind.
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"internal model error","type":"server_error"}}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
 
-	h := buildAudioHandler(mock.server.URL)
+	h := buildHandlerWithSTT(sttBackend.URL, sttBackend.URL)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -356,12 +358,16 @@ func TestTranscriptionUpstreamFailureIsProviderBlind(t *testing.T) {
 
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d: %s", w.Code, w.Body.String())
+	if w.Code == http.StatusOK {
+		t.Fatal("expected non-200 on STT backend error")
 	}
-
 	resp := decodeAudioError(t, w)
-	assertAudioMessageProviderBlind(t, resp.Error.Message)
+	// Must not leak any backend identity.
+	for _, forbidden := range []string{"parakeet", "faster", "whisper", "stt"} {
+		if strings.Contains(strings.ToLower(resp.Error.Message), forbidden) {
+			t.Errorf("provider-blind violation: found %q in message %q", forbidden, resp.Error.Message)
+		}
+	}
 }
 
 func decodeAudioError(t *testing.T, w *httptest.ResponseRecorder) apierrors.OpenAIError {
@@ -390,5 +396,295 @@ func assertAudioMessageProviderBlind(t *testing.T, message string) {
 		if strings.Contains(lowerMessage, forbidden) {
 			t.Fatalf("expected provider-blind message, found %q in %q", forbidden, message)
 		}
+	}
+}
+
+// --- STT wiring tests ---
+
+// buildHandlerWithSTT creates an audio.Handler wired to a real stt.TieredClient
+// pointing at the given fake backend URL for English.
+func buildHandlerWithSTT(parakeetURL, fasterWhisperURL string) *audio.Handler {
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	accounting := &mockAudioAccounting{reservationID: "res-test"}
+	h := audio.NewHandler(auth, routing, accounting, "http://unused-litellm.example.com", "test-key")
+	h.WithSTT(stt.NewTieredClient(stt.Config{
+		ParakeetBaseURL:      parakeetURL,
+		FasterWhisperBaseURL: fasterWhisperURL,
+	}))
+	return h
+}
+
+// TestTranscriptionRoutesToSTTNotLiteLLM proves that when WithSTT is set,
+// POST /v1/audio/transcriptions hits the STT backend, not LiteLLM.
+func TestTranscriptionRoutesToSTTNotLiteLLM(t *testing.T) {
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"routed to stt"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	// LiteLLM must NOT be called; point it at a server that returns 500.
+	liteLLMShouldNotBeCalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("LiteLLM was called at path %s — transcription must go to STT backend", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer liteLLMShouldNotBeCalled.Close()
+
+	h := buildHandlerWithSTT(sttBackend.URL, sttBackend.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("language", "en")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("fake-audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "routed to stt") {
+		t.Errorf("expected STT response text, got: %s", w.Body.String())
+	}
+}
+
+// TestTranscriptionForwardedBodyIsNonEmpty proves the audio bytes reach the
+// backend (P2: drained-body fix).
+func TestTranscriptionForwardedBodyIsNonEmpty(t *testing.T) {
+	var receivedBody []byte
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"ok"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	h := buildHandlerWithSTT(sttBackend.URL, sttBackend.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("language", "en")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	audioPayload := []byte("not-empty-audio-bytes-12345")
+	fw.Write(audioPayload) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(receivedBody) == 0 {
+		t.Error("backend received empty body: drained-body bug not fixed")
+	}
+	if !strings.Contains(string(receivedBody), "not-empty-audio-bytes-12345") {
+		t.Errorf("audio bytes not present in forwarded body; got %d bytes", len(receivedBody))
+	}
+}
+
+// TestTranscriptionWithNoSTTReturns503 proves that when WithSTT is not called,
+// transcription returns 503 (no silent fallback to LiteLLM on sovereign box).
+func TestTranscriptionWithNoSTTReturns503(t *testing.T) {
+	// Handler without WithSTT — STT field is nil.
+	h := buildAudioHandler("http://should-not-be-called.example.com")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when STT not configured, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- Billing tests ---
+
+// buildHandlerWithSTTAndAccounting returns a handler wired to a real STT backend
+// and an accounting stub whose calls we can inspect.
+func buildHandlerWithSTTAndAccounting(sttURL string) (*audio.Handler, *mockAudioAccounting) {
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	acc := &mockAudioAccounting{reservationID: "res-billing-test"}
+	h := audio.NewHandler(auth, routing, acc, "http://unused-litellm.example.com", "test-key")
+	h.WithSTT(stt.NewTieredClient(stt.Config{
+		ParakeetBaseURL:      sttURL,
+		FasterWhisperBaseURL: sttURL,
+	}))
+	return h, acc
+}
+
+func TestTranscriptionReservationCreatedAndFinalizedOnSuccess(t *testing.T) {
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"billed ok"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	h, acc := buildHandlerWithSTTAndAccounting(sttBackend.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("language", "en")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !acc.finalizeCalled {
+		t.Error("expected FinalizeReservation called on success")
+	}
+	if acc.releaseCalled {
+		t.Error("expected ReleaseReservation NOT called on success")
+	}
+}
+
+func TestTranscriptionReservationReleasedOnBackendFailure(t *testing.T) {
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte(`{"error":{"message":"backend error"}}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	h, acc := buildHandlerWithSTTAndAccounting(sttBackend.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("language", "en")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusOK {
+		t.Fatal("expected non-200 on backend failure")
+	}
+	if !acc.releaseCalled {
+		t.Error("expected ReleaseReservation called on backend failure")
+	}
+	if acc.finalizeCalled {
+		t.Error("expected FinalizeReservation NOT called on backend failure")
+	}
+}
+
+// --- Bearer auth forwarding tests ---
+
+func TestParakeetAPIKeyForwardedWhenSet(t *testing.T) {
+	var receivedAuth string
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"auth ok"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	authSTT := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	acc := &mockAudioAccounting{reservationID: "res-auth-test"}
+	h := audio.NewHandler(authSTT, routing, acc, "http://unused.example.com", "test-key")
+	h.WithSTT(stt.NewTieredClient(stt.Config{
+		ParakeetBaseURL: sttBackend.URL,
+		ParakeetAPIKey:  "secret-parakeet-key",
+	}))
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("language", "en")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if receivedAuth != "Bearer secret-parakeet-key" {
+		t.Errorf("expected Authorization: Bearer secret-parakeet-key, got %q", receivedAuth)
+	}
+}
+
+func TestParakeetAPIKeyAbsentWhenNotConfigured(t *testing.T) {
+	var receivedAuth string
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"no auth ok"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	h, _ := buildHandlerWithSTTAndAccounting(sttBackend.URL)
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("language", "en")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if receivedAuth != "" {
+		t.Errorf("expected no Authorization header forwarded when key not configured, got %q", receivedAuth)
 	}
 }

@@ -86,6 +86,7 @@ model_list:
     model_info:
       mode: embedding
 
+
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries
 # exhaust. `cooldown_time` prevents hammering a model that just failed.
