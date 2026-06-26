@@ -1,0 +1,5 @@
+{
+  "$schema": "./license-allowlist.schema.json",
+  "comment": "Approved licence exceptions for the Hive sovereign edge. Each entry requires written justification and reviewer sign-off. See docs/license-allowlist.md.",
+  "packages": []
+}
