@@ -26,4 +26,10 @@ const (
 	EnableAuditSinkSentry   Key = "ENABLE_AUDIT_SINK_SENTRY"
 	EnableAdminConsole      Key = "ENABLE_ADMIN_CONSOLE"
 	EnableProviderCustom    Key = "ENABLE_PROVIDER_CUSTOM"
+
+	// Carl.sh sovereign workspace feature gates (issue #238).
+	EnableRAG    Key = "ENABLE_RAG"
+	EnableVoice  Key = "ENABLE_VOICE"
+	EnableRelay  Key = "ENABLE_RELAY"
+	EnableCowork Key = "ENABLE_COWORK"
 )
