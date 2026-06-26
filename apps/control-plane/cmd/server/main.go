@@ -19,6 +19,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditarchive"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditverifier"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditworker/sinks"
@@ -608,6 +609,30 @@ func main() {
 			}
 		}()
 		log.Println("phase-19 audit chain verifier scheduled (initial pass at startup, then daily)")
+
+		// Audit cold-archive cron (PHIPA 10-year / Quebec Law 25).
+		// Reads hot-retention window and retention years from env; defaults to
+		// 90-day hot window and 10-year cold retention if unset.
+		archiveCronInterval := parseDurationEnv("AUDIT_COLD_ARCHIVE_CRON_INTERVAL", 24*time.Hour)
+		archiveRepo := auditarchive.NewPgRepository(pool)
+		archiveStore := auditarchive.NewStorageObjectStore(storageClient, os.Getenv("AUDIT_COLD_ARCHIVE_BUCKET"), strings.TrimSpace(os.Getenv("S3_ENDPOINT")))
+		archiver := auditarchive.New(auditarchive.Config{
+			HotRetentionDays:  parseIntEnv("AUDIT_COLD_ARCHIVE_HOT_DAYS", 90),
+			RetentionYears:    parseIntEnv("AUDIT_COLD_ARCHIVE_RETENTION_YEARS", 10),
+			ColdStorageBucket: envOr("AUDIT_COLD_ARCHIVE_BUCKET", "hive-audit-cold"),
+			Repo:              archiveRepo,
+			Store:             archiveStore,
+		})
+		go func() {
+			if err := archiver.RunCron(runCtx, archiveCronInterval); err != nil && err != context.Canceled {
+				log.Printf("audit cold-archive cron exited: %v", err)
+			}
+		}()
+		log.Printf("audit cold-archive cron started (hot_days=%d, retention_years=%d, interval=%s)",
+			parseIntEnv("AUDIT_COLD_ARCHIVE_HOT_DAYS", 90),
+			parseIntEnv("AUDIT_COLD_ARCHIVE_RETENTION_YEARS", 10),
+			archiveCronInterval,
+		)
 	} else {
 		log.Println("WARNING: accounts routes not available — database pool not ready")
 	}
@@ -1143,4 +1168,38 @@ func loadStorageConfigFromEnv() (storageRuntimeConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// envOr returns the trimmed value of the named env var, or fallback if unset/empty.
+func envOr(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// parseIntEnv parses a base-10 integer from an env var; returns fallback on parse failure or absence.
+func parseIntEnv(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	var n int
+	if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// parseDurationEnv parses a Go duration string from an env var; returns fallback on failure.
+func parseDurationEnv(key string, fallback time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }

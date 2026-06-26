@@ -13,6 +13,11 @@ const ALLOWLIST_DIRS = [
   // can route through internal/audit.Log without a circular import.
   'apps/control-plane/internal/auditverifier/',
   'apps/edge-api/internal/chat/audit.go',
+  // auditarchive is the sanctioned PHIPA retention-deletion path: it DELETEs
+  // already-archived rows after writing an immutable manifest. This is
+  // lifecycle management, not an audit-event write; routing through
+  // internal/audit.Log would create a circular dependency and is not applicable.
+  'apps/control-plane/internal/auditarchive/',
   'supabase/migrations/',
   'tools/lint-no-direct-audit-write.mjs',
 ];

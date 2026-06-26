@@ -11,6 +11,7 @@ const ALLOWLIST_DIRS = [
   'apps/control-plane/internal/signup/',          // webhook receives user_id (not tenant_id) from Supabase
   'apps/control-plane/internal/tenant/settings/', // LISTEN/NOTIFY payload, not HTTP request
   'apps/edge-api/internal/auth/',                 // ctx writers
+  'apps/control-plane/internal/auditarchive/',    // system cron job; iterates ALL tenants cross-tenant — no request auth context, tenant_id is internal archive struct field not wire input
   'supabase/migrations/',
   'tools/lint-no-direct-tenant-id.mjs',
 ];
