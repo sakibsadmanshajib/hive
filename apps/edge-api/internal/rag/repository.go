@@ -128,24 +128,25 @@ func (r *Repo) ListDocuments(ctx context.Context, tenantID uuid.UUID) ([]DocRow,
 }
 
 // DeleteDocument deletes a document (chunks cascade via FK).
-func (r *Repo) DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) error {
+// Returns found=true when a row was actually removed, false when no row matched.
+func (r *Repo) DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) (bool, error) {
 	conn, err := r.pool.Acquire(ctx)
 	if err != nil {
-		return fmt.Errorf("rag.repo: acquire: %w", err)
+		return false, fmt.Errorf("rag.repo: acquire: %w", err)
 	}
 	defer conn.Release()
 
 	if _, err := conn.Exec(ctx,
 		"SELECT set_config('app.current_tenant_id', $1, true)",
 		tenantID.String()); err != nil {
-		return fmt.Errorf("rag.repo: set tenant: %w", err)
+		return false, fmt.Errorf("rag.repo: set tenant: %w", err)
 	}
 
-	_, err = conn.Exec(ctx, `DELETE FROM public.rag_documents WHERE id = $1`, docID)
+	tag, err := conn.Exec(ctx, `DELETE FROM public.rag_documents WHERE id = $1 AND tenant_id = $2`, docID, tenantID)
 	if err != nil {
-		return fmt.Errorf("rag.repo: delete: %w", err)
+		return false, fmt.Errorf("rag.repo: delete: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() > 0, nil
 }
 
 // SearchChunks performs cosine vector similarity search scoped to the tenant.

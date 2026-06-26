@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 )
 
@@ -22,6 +23,7 @@ type fakeStore struct {
 	chunks       []ChunkRow
 	insertCalled bool
 	deleteCalled bool
+	getErr       error // injected error for GetDocument
 }
 
 func newFakeStore() *fakeStore {
@@ -36,9 +38,12 @@ func (f *fakeStore) InsertDocument(_ context.Context, tenantID uuid.UUID, name, 
 }
 
 func (f *fakeStore) GetDocument(_ context.Context, _, docID uuid.UUID) (DocRow, error) {
+	if f.getErr != nil {
+		return DocRow{}, f.getErr
+	}
 	d, ok := f.docs[docID]
 	if !ok {
-		return DocRow{}, errors.New("not found")
+		return DocRow{}, pgx.ErrNoRows
 	}
 	return d, nil
 }
@@ -53,10 +58,14 @@ func (f *fakeStore) ListDocuments(_ context.Context, tenantID uuid.UUID) ([]DocR
 	return out, nil
 }
 
-func (f *fakeStore) DeleteDocument(_ context.Context, _, docID uuid.UUID) error {
+func (f *fakeStore) DeleteDocument(_ context.Context, _, docID uuid.UUID) (bool, error) {
 	f.deleteCalled = true
+	_, ok := f.docs[docID]
+	if !ok {
+		return false, nil
+	}
 	delete(f.docs, docID)
-	return nil
+	return true, nil
 }
 
 func (f *fakeStore) SearchChunks(_ context.Context, _ uuid.UUID, _ []float32, topK int) ([]ChunkRow, error) {
@@ -183,6 +192,60 @@ func TestHandleDelete_HappyPath(t *testing.T) {
 	}
 	if len(audits) != 1 || audits[0].Action != "RAG_DOCUMENT_DELETE" {
 		t.Errorf("expected RAG_DOCUMENT_DELETE audit, got %+v", audits)
+	}
+}
+
+func TestHandleGet_InfraError_Returns500(t *testing.T) {
+	store := newFakeStore()
+	store.getErr = errors.New("connection reset by peer") // non-ErrNoRows infra error
+	var audits []auditRecord
+	h := newTestHandler(store, &fakeEmbedder{}, &audits)
+
+	docID := uuid.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/rag/documents/"+docID.String(), nil)
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleGetDocument(w, req)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for infra error, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleGet_NotFound_Returns404(t *testing.T) {
+	store := newFakeStore() // empty — GetDocument returns pgx.ErrNoRows
+	var audits []auditRecord
+	h := newTestHandler(store, &fakeEmbedder{}, &audits)
+
+	docID := uuid.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/rag/documents/"+docID.String(), nil)
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleGetDocument(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for missing document, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestHandleDelete_NotFound_NoAudit(t *testing.T) {
+	store := newFakeStore() // empty — DeleteDocument returns found=false
+	var audits []auditRecord
+	h := newTestHandler(store, &fakeEmbedder{}, &audits)
+
+	docID := uuid.New()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/rag/documents/"+docID.String(), nil)
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleDelete(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 for missing document, got %d: %s", w.Code, w.Body.String())
+	}
+	for _, a := range audits {
+		if a.Action == "RAG_DOCUMENT_DELETE" {
+			t.Errorf("audit must not fire when no row was deleted, got %+v", a)
+		}
 	}
 }
 

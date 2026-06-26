@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
@@ -34,7 +35,9 @@ type Store interface {
 	InsertDocument(ctx context.Context, tenantID uuid.UUID, name, mimeType string, sizeBytes int64) (uuid.UUID, error)
 	GetDocument(ctx context.Context, tenantID, docID uuid.UUID) (DocRow, error)
 	ListDocuments(ctx context.Context, tenantID uuid.UUID) ([]DocRow, error)
-	DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) error
+	// DeleteDocument deletes the document and reports whether a row was found.
+	// found=false means no row matched (caller should 404); error means infra failure.
+	DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) (found bool, err error)
 	SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int) ([]ChunkRow, error)
 }
 
@@ -190,7 +193,12 @@ func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.store.GetDocument(r.Context(), user.TenantID, docID)
 	if err != nil {
-		apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "document not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "document not found")
+		} else {
+			log.Printf("rag: get document: %v", err)
+			apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "request failed")
+		}
 		return
 	}
 
@@ -211,12 +219,18 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.store.DeleteDocument(r.Context(), user.TenantID, docID); err != nil {
+	found, err := h.store.DeleteDocument(r.Context(), user.TenantID, docID)
+	if err != nil {
 		log.Printf("rag: delete document: %v", err)
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "delete failed")
 		return
 	}
+	if !found {
+		apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "document not found")
+		return
+	}
 
+	// Audit only fires when a row was actually removed (regulatory requirement).
 	h.audit(r.Context(), "RAG_DOCUMENT_DELETE", "rag_document", docID.String(), "INFO",
 		user.TenantID, user.ID, r.UserAgent(), nil)
 	w.WriteHeader(http.StatusNoContent)
