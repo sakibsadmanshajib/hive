@@ -56,6 +56,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/sovereign"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 	"github.com/jackc/pgx/v5"
@@ -166,6 +167,12 @@ func (a *accountsResolverAdapter) EnsureViewerContext(ctx context.Context) (uuid
 }
 
 func main() {
+	// Sovereign-mode guard: fail fast before any service wiring when external
+	// provider keys are present. See apps/control-plane/internal/sovereign for tests.
+	if err := sovereign.Check(os.Getenv); err != nil {
+		log.Fatal(err)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)
