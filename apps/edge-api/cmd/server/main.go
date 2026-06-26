@@ -21,6 +21,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/chat"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/images"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
@@ -75,7 +76,21 @@ func main() {
 	}
 	log.Printf("Loaded support matrix: %d endpoints", len(m.Endpoints))
 
-	catalogClient := catalog.NewClient(resolveControlPlaneBaseURL())
+	cpBaseURL := resolveControlPlaneBaseURL()
+	catalogClient := catalog.NewClient(cpBaseURL)
+
+	// Issue #238 — per-tenant feature gate. Lazy-resolves flags from control-plane
+	// with a 30 s in-memory cache per tenant (end-to-end revocation < 60 s).
+	// RAG/voice/relay/cowork route handlers (issues #232-235) call featureGate.Require(...)
+	// to wrap their http.Handler before registration on the mux.
+	// ponytail: featureGate used by RAG/voice/relay/cowork handlers (#232-235).
+	// Kept here so the gate is constructed once and shared across all feature routes.
+	featureGate := featuregate.New(featuregate.Config{
+		ControlPlaneURL: cpBaseURL,
+		TTL:             30 * time.Second,
+	})
+	_ = featureGate // consumed by future feature route registrations (#232-235)
+
 	dbPool := openOptionalDBPool(rootCtx)
 	if dbPool != nil {
 		defer dbPool.Close()

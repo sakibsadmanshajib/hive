@@ -52,7 +52,9 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signupguard"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
@@ -722,6 +724,16 @@ func main() {
 		})
 	}
 
+	// Issue #238 — feature gate handler. Resolves per-tenant flags from the
+	// tenant_settings table via a 30 s in-process cache (settings.Resolver).
+	// Edge-api calls GET /internal/featuregate/{tenant_id} to populate its own
+	// 30 s edge cache, giving end-to-end revocation in under 60 s.
+	var featureGateHandler *featuregate.Handler
+	if pool != nil {
+		settingsResolver := settings.NewResolver(pool, 30*time.Second)
+		featureGateHandler = featuregate.NewHandler(settingsResolver)
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:     authMiddleware,
 		AccountsHandler:    accountsHandler,
@@ -735,6 +747,7 @@ func main() {
 		ProfilesHandler:    profilesHandler,
 		ProvidersRouter:    providersHandler,
 		LiteLLMSyncHandler: litellmSyncHandler,
+		FeatureGateHandler: featureGateHandler,
 		RoutingHandler:     routingHandler,
 		UsageHandler:       usageHandler,
 		MetricsRegistry:    metricsRegistry,

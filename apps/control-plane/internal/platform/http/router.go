@@ -84,6 +84,10 @@ type RouterConfig struct {
 	// LiteLLMSyncHandler handles POST /internal/litellm/sync.
 	// Guarded by the shared-secret token. When nil the route is not registered.
 	LiteLLMSyncHandler http.Handler
+
+	// FeatureGateHandler handles GET /internal/featuregate/{tenant_id}.
+	// Guarded by the shared-secret token. When nil the route is not registered.
+	FeatureGateHandler http.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -242,6 +246,12 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			mux.Handle("/api/v1/admin/providers", adminProviders)
 			mux.Handle("/api/v1/admin/providers/", adminProviders)
 		}
+	}
+
+	// Issue #238 — per-tenant feature gate endpoint.
+	// GET /internal/featuregate/{tenant_id} returns flags for edge-api gate middleware.
+	if cfg.FeatureGateHandler != nil {
+		mux.Handle("/internal/featuregate/", internal(cfg.FeatureGateHandler))
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.
