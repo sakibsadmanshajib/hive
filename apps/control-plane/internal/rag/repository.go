@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -206,8 +207,11 @@ func (r *Repo) InsertChunks(ctx context.Context, tenantID, docID uuid.UUID, chun
 	}
 
 	for i, ch := range chunks {
-		vec := encodeVector(embeddings[i])
-		_, err := conn.Exec(ctx, `
+		vec, err := encodeVector(embeddings[i])
+		if err != nil {
+			return fmt.Errorf("rag.repo: encode chunk %d vector: %w", i, err)
+		}
+		_, err = conn.Exec(ctx, `
 			INSERT INTO public.rag_chunks
 			    (tenant_id, document_id, chunk_index, content, token_count, embedding)
 			VALUES ($1, $2, $3, $4, $5, $6::vector)`,
@@ -241,14 +245,20 @@ func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []
 		return nil, fmt.Errorf("rag.repo: set tenant: %w", err)
 	}
 
-	vec := encodeVector(queryVec)
+	vec, err := encodeVector(queryVec)
+	if err != nil {
+		return nil, fmt.Errorf("rag.repo: encode query vector: %w", err)
+	}
+	// Explicit tenant_id filter is defense-in-depth alongside RLS:
+	// protects against SECURITY DEFINER / superuser-bypass scenarios.
 	rows, err := conn.Query(ctx, `
 		SELECT id, tenant_id, document_id, chunk_index, content, token_count,
 		       (embedding <=> $1::vector)::float4 AS score
 		FROM public.rag_chunks
+		WHERE tenant_id = $3
 		ORDER BY embedding <=> $1::vector
 		LIMIT $2`,
-		vec, topK,
+		vec, topK, tenantID,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("rag.repo: search: %w", err)
@@ -267,20 +277,24 @@ func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []
 	return results, rows.Err()
 }
 
-// encodeVector serialises []float32 to the pgvector text format: '[v1,v2,...]'.
-// This lets us use the '::vector' cast in SQL without a third-party library.
-func encodeVector(v []float32) string {
+// encodeVector serialises []float32 to pgvector text format '[v1,v2,...]'.
+// Returns an error if any value is NaN or Inf — pgvector rejects those and
+// inserting them would silently corrupt ANN results.
+func encodeVector(v []float32) (string, error) {
 	if len(v) == 0 {
-		return "[]"
+		return "[]", nil
 	}
 	sb := strings.Builder{}
 	sb.WriteByte('[')
 	for i, f := range v {
+		if math.IsNaN(float64(f)) || math.IsInf(float64(f), 0) {
+			return "", fmt.Errorf("rag: vector[%d] is not finite (%v)", i, f)
+		}
 		if i > 0 {
 			sb.WriteByte(',')
 		}
 		sb.WriteString(fmt.Sprintf("%g", f))
 	}
 	sb.WriteByte(']')
-	return sb.String()
+	return sb.String(), nil
 }

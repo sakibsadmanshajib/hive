@@ -6,12 +6,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// mustParseUUID parses a UUID string and panics on invalid input.
-// Used only in Ingest where the caller is expected to pass valid uuid.UUID.String() values.
-func mustParseUUID(s string) uuid.UUID {
+// parseUUID parses a UUID string, returning an error for invalid input.
+// The async ingest path must not panic on bad input — callers propagate the error.
+func parseUUID(s string) (uuid.UUID, error) {
 	id, err := uuid.Parse(s)
 	if err != nil {
-		panic(fmt.Sprintf("rag: invalid uuid %q: %v", s, err))
+		return uuid.Nil, fmt.Errorf("rag: invalid uuid %q: %w", s, err)
 	}
-	return id
+	return id, nil
 }

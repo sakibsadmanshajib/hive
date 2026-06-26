@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,17 +16,21 @@ import (
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
-// AuditFunc emits an audit event. The shape avoids importing the audit package
-// here to prevent a cyclic dependency; main.go wires the real logger.
-type AuditFunc func(ctx context.Context, action, resourceType, resourceID string, after any)
+const maxTopK = 100
 
-// IngestFunc is called asynchronously after document registration to chunk,
-// embed, and store the document. In production main.go wires the control-plane
-// ingest worker via an HTTP call or direct function.
+// AuditFunc emits a durable audit event. main.go wires the real
+// chat.InsertAuditEvent; tests inject a recorder.
+// action, resourceType, resourceID, severity, actorID, tenantID, after.
+type AuditFunc func(ctx context.Context, action, resourceType, resourceID, severity string,
+	tenantID, actorID uuid.UUID, userAgent string, after any)
+
+// IngestFunc chunks, embeds, and stores a document asynchronously.
+// tenantID + docID are passed so the worker can scope its DB writes.
 type IngestFunc func(ctx context.Context, tenantID, docID uuid.UUID, content string)
 
-// store is the minimal interface the handler needs from Repo.
-type store interface {
+// Store is the minimal interface the handler needs from Repo.
+// Exported so main.go can declare a typed nil when the DB pool is absent.
+type Store interface {
 	InsertDocument(ctx context.Context, tenantID uuid.UUID, name, mimeType string, sizeBytes int64) (uuid.UUID, error)
 	GetDocument(ctx context.Context, tenantID, docID uuid.UUID) (DocRow, error)
 	ListDocuments(ctx context.Context, tenantID uuid.UUID) ([]DocRow, error)
@@ -33,28 +38,39 @@ type store interface {
 	SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int) ([]ChunkRow, error)
 }
 
+// store aliases Store for backward-compat with existing unexported references.
+type store = Store
+
 // Handler serves /v1/rag/* routes.
 type Handler struct {
-	store   store
-	embed   Embedder
-	audit   AuditFunc
-	ingest  IngestFunc
+	store      store
+	embed      Embedder
+	audit      AuditFunc
+	ingest     IngestFunc
+	serverCtx  context.Context // root context for background goroutines
+	wg         sync.WaitGroup  // tracks in-flight ingest goroutines
 }
 
-// NewHandler constructs a Handler. All fields required.
-func NewHandler(s store, embed Embedder, audit AuditFunc, ingest IngestFunc) *Handler {
-	return &Handler{store: s, embed: embed, audit: audit, ingest: ingest}
+// NewHandler constructs a Handler.
+// serverCtx must be the process-level context so ingest goroutines respect shutdown.
+func NewHandler(s store, embed Embedder, audit AuditFunc, ingest IngestFunc, serverCtx context.Context) *Handler {
+	if serverCtx == nil {
+		serverCtx = context.Background()
+	}
+	return &Handler{store: s, embed: embed, audit: audit, ingest: ingest, serverCtx: serverCtx}
 }
 
 // Register mounts all /v1/rag/* routes on mux.
-// Callers wrap the returned routes with featuregate.Require(FeatureRAG).
+// Callers wrap with featuregate.Require(FeatureRAG) before mounting.
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/rag/documents", h.routeDocuments)
 	mux.HandleFunc("/v1/rag/documents/", h.routeDocumentByID)
 	mux.HandleFunc("/v1/rag/search", h.handleSearch)
 }
 
-// routeDocuments dispatches POST (upload) and GET (list).
+// Shutdown waits for in-flight ingest goroutines to finish. Call on server shutdown.
+func (h *Handler) Shutdown() { h.wg.Wait() }
+
 func (h *Handler) routeDocuments(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
@@ -66,7 +82,6 @@ func (h *Handler) routeDocuments(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// routeDocumentByID dispatches GET (single doc) and DELETE.
 func (h *Handler) routeDocumentByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -78,7 +93,6 @@ func (h *Handler) routeDocumentByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleUpload handles POST /v1/rag/documents.
 func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
@@ -110,14 +124,21 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.audit(r.Context(), "RAG_DOCUMENT_UPLOAD", "rag_document", docID.String(), map[string]any{
-		"name":      req.Name,
-		"mime_type": req.MimeType,
-	})
+	h.audit(r.Context(), "RAG_DOCUMENT_UPLOAD", "rag_document", docID.String(), "INFO",
+		user.TenantID, user.ID, r.UserAgent(), map[string]any{"name": req.Name, "mime_type": req.MimeType})
 
-	// Ingest asynchronously so the upload call returns immediately.
 	if h.ingest != nil {
-		go h.ingest(context.Background(), user.TenantID, docID, req.Content)
+		content := req.Content // capture before request goes away
+		h.wg.Add(1)
+		go func() {
+			defer h.wg.Done()
+			defer func() {
+				if rec := recover(); rec != nil {
+					log.Printf("rag: ingest panic recovered doc=%s: %v", docID, rec)
+				}
+			}()
+			h.ingest(h.serverCtx, user.TenantID, docID, content)
+		}()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -132,7 +153,6 @@ func (h *Handler) handleUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleList handles GET /v1/rag/documents.
 func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
@@ -151,12 +171,10 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request) {
 	for i, d := range docs {
 		results[i] = docRowToResponse(d)
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"data": results, "object": "list"})
 }
 
-// handleGetDocument handles GET /v1/rag/documents/{id}.
 func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
@@ -180,7 +198,6 @@ func (h *Handler) handleGetDocument(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(docRowToResponse(doc))
 }
 
-// handleDelete handles DELETE /v1/rag/documents/{id}.
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	user, ok := auth.UserFrom(r.Context())
 	if !ok || user == nil {
@@ -200,12 +217,11 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.audit(r.Context(), "RAG_DOCUMENT_DELETE", "rag_document", docID.String(), nil)
-
+	h.audit(r.Context(), "RAG_DOCUMENT_DELETE", "rag_document", docID.String(), "INFO",
+		user.TenantID, user.ID, r.UserAgent(), nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleSearch handles POST /v1/rag/search.
 func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		apierrors.Write(w, http.StatusMethodNotAllowed, apierrors.CodeInvalidRequest, "method not allowed")
@@ -230,14 +246,16 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	if req.TopK <= 0 {
 		req.TopK = 5
 	}
+	// ponytail: cap prevents huge vector scans and audit event floods.
+	if req.TopK > maxTopK {
+		req.TopK = maxTopK
+	}
 
-	h.audit(r.Context(), "RAG_SEARCH", "rag_corpus", user.TenantID.String(), map[string]any{
-		"top_k": req.TopK,
-	})
+	h.audit(r.Context(), "RAG_SEARCH", "rag_document", user.TenantID.String(), "INFO",
+		user.TenantID, user.ID, r.UserAgent(), map[string]any{"top_k": req.TopK})
 
 	vec, err := h.embed.Embed(r.Context(), req.Query)
 	if err != nil {
-		// Provider-blind: do not expose embedding backend identity.
 		apierrors.Write(w, http.StatusServiceUnavailable, apierrors.CodeServiceUnavailable, "search service unavailable")
 		return
 	}
@@ -257,18 +275,18 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 			Content:    c.Content,
 			Score:      c.Score,
 		}
-		// RAG_CHUNK_RETRIEVED: one event per returned chunk (regulatory requirement).
-		h.audit(r.Context(), "RAG_CHUNK_RETRIEVED", "rag_chunk", c.ID.String(), map[string]any{
-			"score":       c.Score,
-			"document_id": c.DocumentID.String(),
-		})
+		// RAG_CHUNK_RETRIEVED: one event per chunk (Law 25 / PHIPA requirement).
+		h.audit(r.Context(), "RAG_CHUNK_RETRIEVED", "rag_chunk", c.ID.String(), "INFO",
+			user.TenantID, user.ID, r.UserAgent(), map[string]any{
+				"score":       c.Score,
+				"document_id": c.DocumentID.String(),
+			})
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(SearchResponse{Results: results})
 }
 
-// extractDocID parses the trailing UUID from a path like /v1/rag/documents/{id}.
 func extractDocID(path string) (uuid.UUID, error) {
 	trimmed := strings.TrimSuffix(path, "/")
 	idx := strings.LastIndex(trimmed, "/")

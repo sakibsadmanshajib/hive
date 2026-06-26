@@ -118,8 +118,14 @@ func NewIngester(repo *Repo, embed EmbedClient, batchSize int) *Ingester {
 // status is set to 'error' with a provider-blind message.
 func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ String() string }, text string) error {
 	// Avoid importing uuid here; accept fmt.Stringer so the caller passes uuid.UUID.
-	tid := mustParseUUID(tenantID.String())
-	did := mustParseUUID(docID.String())
+	tid, err := parseUUID(tenantID.String())
+	if err != nil {
+		return fmt.Errorf("rag.ingest: invalid tenantID: %w", err)
+	}
+	did, err := parseUUID(docID.String())
+	if err != nil {
+		return fmt.Errorf("rag.ingest: invalid docID: %w", err)
+	}
 
 	// Mark processing.
 	if err := ing.repo.UpdateDocumentStatus(ctx, tid, did, StatusProcessing, ""); err != nil {
