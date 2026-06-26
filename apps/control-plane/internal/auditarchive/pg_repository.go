@@ -123,11 +123,11 @@ func (r *PgRepository) ManifestExists(ctx context.Context, tenantID uuid.UUID, m
 	return exists, nil
 }
 
-// InsertManifest inserts a new manifest entry. ON CONFLICT DO NOTHING makes
-// concurrent/duplicate runs idempotent while still preventing any UPDATE that
-// would mutate an existing record (preserving write-once immutability).
-func (r *PgRepository) InsertManifest(ctx context.Context, entry ManifestEntry) error {
-	_, err := r.pool.Exec(ctx, `
+// InsertManifest inserts a new manifest entry. Returns (true, nil) when the row
+// was inserted, (false, nil) when a concurrent run already inserted it (ON
+// CONFLICT DO NOTHING). The caller treats false as "already done; skip delete".
+func (r *PgRepository) InsertManifest(ctx context.Context, entry ManifestEntry) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
 		INSERT INTO public.audit_cold_archive_manifest
 		  (id, tenant_id, partition_month, object_key, sha256_hash,
 		   row_count, first_seq, last_seq, archived_at, purge_after)
@@ -138,22 +138,25 @@ func (r *PgRepository) InsertManifest(ctx context.Context, entry ManifestEntry) 
 		entry.RowCount, entry.FirstSeq, entry.LastSeq, entry.ArchivedAt, entry.PurgeAfter,
 	)
 	if err != nil {
-		return fmt.Errorf("auditarchive pg: insert manifest: %w", err)
+		return false, fmt.Errorf("auditarchive pg: insert manifest: %w", err)
 	}
-	return nil
+	return tag.RowsAffected() == 1, nil
 }
 
-// DeleteArchived removes audit_log rows for the given (tenantID, month) that
-// are strictly before cutoff. The cutoff bound is the P0 safety invariant:
-// rows in the boundary month written AFTER the archive pass started are never
-// fetched or archived, so they must not be deleted here.
-func (r *PgRepository) DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time, cutoff time.Time) (int64, error) {
+// DeleteArchived removes ONLY the audit_log rows whose IDs were actually fetched
+// and archived. Deleting by primary key means no timestamp re-evaluation: rows
+// inserted after the fetch snapshot (late inserts, backfills) are unaffected
+// regardless of their ts value, and cross-month over-deletes are impossible.
+func (r *PgRepository) DeleteArchived(ctx context.Context, ids []int64) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	// pgx accepts a []int64 slice directly for = ANY($1).
 	tag, err := r.pool.Exec(ctx, `
-		DELETE FROM public.audit_log
-		 WHERE tenant_id = $1 AND ts >= $2 AND ts < $3
-	`, tenantID, month, cutoff)
+		DELETE FROM public.audit_log WHERE id = ANY($1)
+	`, ids)
 	if err != nil {
-		return 0, fmt.Errorf("auditarchive pg: delete archived: %w", err)
+		return 0, fmt.Errorf("auditarchive pg: delete archived by id: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

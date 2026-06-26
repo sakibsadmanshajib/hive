@@ -53,24 +53,26 @@ func (r *fakeRepo) ManifestExists(ctx context.Context, tenantID uuid.UUID, month
 	return false, nil
 }
 
-func (r *fakeRepo) InsertManifest(ctx context.Context, entry auditarchive.ManifestEntry) error {
-	// Idempotent: skip duplicate (matches ON CONFLICT DO NOTHING in PgRepository).
+func (r *fakeRepo) InsertManifest(ctx context.Context, entry auditarchive.ManifestEntry) (bool, error) {
 	for _, m := range r.manifest {
 		if m.TenantID == entry.TenantID && m.PartitionMonth.Equal(entry.PartitionMonth) {
-			return nil
+			return false, nil // duplicate; matches ON CONFLICT DO NOTHING
 		}
 	}
 	r.manifest = append(r.manifest, entry)
-	return nil
+	return true, nil
 }
 
-// DeleteArchived mirrors the P0 fix: only rows with ts < cutoff are removed.
-func (r *fakeRepo) DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time, cutoff time.Time) (int64, error) {
+// DeleteArchived removes only the rows whose IDs match the archived set.
+func (r *fakeRepo) DeleteArchived(ctx context.Context, ids []int64) (int64, error) {
+	idSet := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		idSet[id] = true
+	}
 	remaining := make([]auditarchive.AuditRow, 0, len(r.rows))
 	var count int64
 	for _, row := range r.rows {
-		rowMonth := time.Date(row.TS.Year(), row.TS.Month(), 1, 0, 0, 0, 0, time.UTC)
-		if row.TenantID == tenantID && rowMonth.Equal(month) && row.TS.Before(cutoff) {
+		if idSet[row.ID] {
 			count++
 		} else {
 			remaining = append(remaining, row)
@@ -137,12 +139,15 @@ func (s *fakeStore) Delete(ctx context.Context, key string) error {
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func makeRows(tenantID uuid.UUID, ts time.Time, n int) []auditarchive.AuditRow {
+// makeRows builds n rows starting at ID/Seq = startID.
+// Use distinct startIDs when combining rows from multiple calls so ID-based
+// delete in the fake repository does not collide across groups.
+func makeRows(tenantID uuid.UUID, ts time.Time, n int, startID int64) []auditarchive.AuditRow {
 	rows := make([]auditarchive.AuditRow, n)
 	for i := range rows {
 		rows[i] = auditarchive.AuditRow{
-			ID:       int64(i + 1),
-			Seq:      int64(i + 1),
+			ID:       startID + int64(i),
+			Seq:      startID + int64(i),
 			TenantID: tenantID,
 			Action:   "TEST_ACTION",
 			Severity: "INFO",
@@ -172,7 +177,7 @@ func TestArchiveSelectsOldRowsOnly(t *testing.T) {
 	fresh := now.AddDate(0, 0, -10)
 
 	repo := &fakeRepo{
-		rows: append(makeRows(tenantID, old, 3), makeRows(tenantID, fresh, 2)...),
+		rows: append(makeRows(tenantID, old, 3, 1), makeRows(tenantID, fresh, 2, 100)...),
 	}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
@@ -257,7 +262,7 @@ func TestArchiveWritesCompressedJSONL(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 5)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 5, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -297,7 +302,7 @@ func TestArchiveManifestRecorded(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 4)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 4, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -331,7 +336,7 @@ func TestArchiveIdempotent(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 3)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 3, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -341,7 +346,7 @@ func TestArchiveIdempotent(t *testing.T) {
 	}
 
 	// Restore rows to simulate they still exist; manifest already present.
-	repo.rows = makeRows(tenantID, old, 3)
+	repo.rows = makeRows(tenantID, old, 3, 1)
 
 	n2, err := arch.RunOnce(context.Background(), now)
 	if err != nil {
@@ -359,7 +364,7 @@ func TestArchiveChainIntegrityPreserved(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 6)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 6, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -386,7 +391,7 @@ func TestFailedWriteBlocksDelete(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 3)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 3, 1)}
 	store := newFakeStore()
 	store.failPut = true // simulate upload failure
 	arch := newArchiver(repo, store)
@@ -412,7 +417,7 @@ func TestPurgeExpiredColdObjects(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 2)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 2, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -444,7 +449,7 @@ func TestNoRowsNoArchive(t *testing.T) {
 	now := time.Now().UTC()
 	fresh := now.AddDate(0, 0, -5)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, fresh, 10)}
+	repo := &fakeRepo{rows: makeRows(tenantID, fresh, 10, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -466,7 +471,7 @@ func TestCronRun(t *testing.T) {
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
-	repo := &fakeRepo{rows: makeRows(tenantID, old, 2)}
+	repo := &fakeRepo{rows: makeRows(tenantID, old, 2, 1)}
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -486,4 +491,76 @@ func TestCronRun(t *testing.T) {
 	if len(repo.manifest) == 0 {
 		t.Error("cron did not produce manifest entry on immediate first pass")
 	}
+}
+
+// TestLateInsertNotDeleted is the exact-IDs regression test.
+// A row inserted into the same (tenant, month) window AFTER the fetch snapshot
+// must NOT be deleted, because it was never exported to cold storage.
+func TestLateInsertNotDeleted(t *testing.T) {
+	tenantID := uuid.New()
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -100)
+
+	// Start with 2 rows that will be fetched and archived.
+	fetchedRows := makeRows(tenantID, old, 2, 1)
+	repo := &fakeRepo{rows: fetchedRows}
+	store := newFakeStore()
+
+	// lateInsertID is the ID of a row inserted into the repo AFTER the
+	// archiver's fetch but before the delete. We simulate this by injecting
+	// it directly into the fakeRepo after the fetch is captured.
+	// The cleanest way: use a custom store whose Put injects the late row.
+	const lateInsertID int64 = 999
+	lateRow := auditarchive.AuditRow{
+		ID: lateInsertID, Seq: 999, TenantID: tenantID,
+		Action: "LATE_INSERT", Severity: "INFO", TS: old,
+	}
+
+	injectOnce := false
+	injector := &injectStore{
+		inner: store,
+		onPut: func() {
+			if !injectOnce {
+				injectOnce = true
+				repo.rows = append(repo.rows, lateRow)
+			}
+		},
+	}
+
+	arch := newArchiver(repo, injector)
+	_, err := arch.RunOnce(context.Background(), now)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+
+	// lateRow was NOT in the fetched set, so it must still be in the hot table.
+	found := false
+	for _, r := range repo.rows {
+		if r.ID == lateInsertID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("late-insert row was deleted even though it was never archived (exact-ID delete regression)")
+	}
+}
+
+// injectStore wraps fakeStore and calls onPut after each Put to simulate
+// a concurrent insert between fetch and delete.
+type injectStore struct {
+	inner *fakeStore
+	onPut func()
+}
+
+func (s *injectStore) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
+	n, err := s.inner.Put(ctx, key, r)
+	if err == nil {
+		s.onPut()
+	}
+	return n, err
+}
+
+func (s *injectStore) Delete(ctx context.Context, key string) error {
+	return s.inner.Delete(ctx, key)
 }

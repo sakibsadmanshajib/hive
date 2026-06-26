@@ -68,12 +68,15 @@ type Repository interface {
 	FetchTenants(ctx context.Context) ([]uuid.UUID, error)
 	FetchOlderThan(ctx context.Context, cutoff time.Time, tenantID uuid.UUID) ([]AuditRow, error)
 	ManifestExists(ctx context.Context, tenantID uuid.UUID, month time.Time) (bool, error)
-	InsertManifest(ctx context.Context, entry ManifestEntry) error
-	// DeleteArchived removes rows for (tenantID, month) that are strictly before
-	// cutoff. The cutoff bound prevents deleting rows in the same calendar month
-	// that were written after the archive pass started and were never fetched or
-	// archived. Passing cutoff here is the P0 safety invariant.
-	DeleteArchived(ctx context.Context, tenantID uuid.UUID, month time.Time, cutoff time.Time) (int64, error)
+	// InsertManifest inserts a manifest entry. Returns (true, nil) on insert,
+	// (false, nil) on duplicate (ON CONFLICT DO NOTHING), error otherwise.
+	InsertManifest(ctx context.Context, entry ManifestEntry) (inserted bool, err error)
+	// DeleteArchived removes ONLY the rows whose IDs were actually fetched and
+	// archived. Deleting by primary key eliminates both the over-delete-across-months
+	// bug (timestamp window spans multiple partitions) and the late-insert data-loss
+	// bug (rows inserted after fetch but before delete). Only what was archived is
+	// removed; nothing more.
+	DeleteArchived(ctx context.Context, ids []int64) (int64, error)
 	FetchExpiredManifests(ctx context.Context, now time.Time) ([]ManifestEntry, error)
 	DeleteManifest(ctx context.Context, id uuid.UUID) error
 }
@@ -168,7 +171,7 @@ func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
 				continue
 			}
 
-			n, err := a.archivePartition(ctx, now, cutoff, tenantID, month, monthRows)
+			n, err := a.archivePartition(ctx, now, tenantID, month, monthRows)
 			if err != nil {
 				return total, err
 			}
@@ -179,29 +182,34 @@ func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
 }
 
 // archivePartition handles one (tenant, month) batch.
-// cutoff is threaded through so DeleteArchived can exclude rows written after
-// the archive pass started (P0 boundary-month safety invariant).
+// Rows are sorted by Seq before encoding so the JSONL preserves chain order and
+// seq-range metadata is deterministic regardless of fetch order.
+// DeleteArchived receives the exact IDs that were archived — no timestamp
+// re-evaluation — so late inserts and cross-month over-deletes are impossible.
 func (a *Archiver) archivePartition(
 	ctx context.Context,
 	now time.Time,
-	cutoff time.Time,
 	tenantID uuid.UUID,
 	month time.Time,
 	rows []AuditRow,
 ) (int, error) {
-	// Build JSONL in memory.
+	// Sort by Seq so JSONL order and seq range are deterministic.
+	sortBySeq(rows)
+
+	// Capture IDs of the exact rows being archived. These are passed to
+	// DeleteArchived so the delete is scoped to this precise snapshot.
+	ids := make([]int64, len(rows))
+	for i, r := range rows {
+		ids[i] = r.ID
+	}
+
 	var buf bytes.Buffer
 	gz := gzip.NewWriter(&buf)
 	enc := json.NewEncoder(gz)
-	var firstSeq, lastSeq int64
-	for i, row := range rows {
+	for _, row := range rows {
 		if err := enc.Encode(row); err != nil {
 			return 0, fmt.Errorf("auditarchive: encode row %d: %w", row.ID, err)
 		}
-		if i == 0 {
-			firstSeq = row.Seq
-		}
-		lastSeq = row.Seq
 	}
 	if err := gz.Close(); err != nil {
 		return 0, fmt.Errorf("auditarchive: gzip close: %w", err)
@@ -234,19 +242,26 @@ func (a *Archiver) archivePartition(
 		ObjectKey:      objectKey,
 		SHA256Hash:     expectedSum[:],
 		RowCount:       int64(len(rows)),
-		FirstSeq:       firstSeq,
-		LastSeq:        lastSeq,
+		FirstSeq:       rows[0].Seq,
+		LastSeq:        rows[len(rows)-1].Seq,
 		ArchivedAt:     now,
 		PurgeAfter:     now.AddDate(a.cfg.RetentionYears, 0, 0),
 	}
-	if err := a.cfg.Repo.InsertManifest(ctx, entry); err != nil {
+	inserted, err := a.cfg.Repo.InsertManifest(ctx, entry)
+	if err != nil {
 		return 0, fmt.Errorf("auditarchive: insert manifest: %w", err)
 	}
+	if !inserted {
+		// Concurrent run already wrote this manifest; skip delete to stay idempotent.
+		slog.Info("auditarchive: manifest already present (concurrent run?), skipping delete",
+			"tenant_id", tenantID, "month", month.Format("2006-01"))
+		return 0, nil
+	}
 
-	// P0 + chain integrity: delete ONLY rows that were actually archived
-	// (ts < cutoff). Rows written to this month after the pass started are
-	// untouched; they will be archived in a future run.
-	deleted, err := a.cfg.Repo.DeleteArchived(ctx, tenantID, month, cutoff)
+	// Delete ONLY the exact rows that were archived, by primary key.
+	// No timestamp re-evaluation: rows inserted after the fetch snapshot
+	// are unaffected regardless of their ts value.
+	deleted, err := a.cfg.Repo.DeleteArchived(ctx, ids)
 	if err != nil {
 		return 0, fmt.Errorf("auditarchive: delete archived: %w", err)
 	}
@@ -325,6 +340,17 @@ func groupByMonth(rows []AuditRow) map[time.Time][]AuditRow {
 		out[m] = append(out[m], r)
 	}
 	return out
+}
+
+// sortBySeq sorts rows in-place by Seq ascending so JSONL order and seq
+// range metadata are deterministic regardless of fetch order.
+// ponytail: insertion sort; N is rows in one tenant-month, typically <10k; replace with sort.Slice if profiling shows hot.
+func sortBySeq(rows []AuditRow) {
+	for i := 1; i < len(rows); i++ {
+		for j := i; j > 0 && rows[j].Seq < rows[j-1].Seq; j-- {
+			rows[j], rows[j-1] = rows[j-1], rows[j]
+		}
+	}
 }
 
 // sortedMonths returns the keys of m in ascending chronological order so
