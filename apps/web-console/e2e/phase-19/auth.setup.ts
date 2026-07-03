@@ -12,7 +12,7 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
     return;
   }
   await page.goto(`${OWUI_URL}/`);
-  await page.getByRole("button", { name: /sign in with hive/i }).click();
+  await page.getByRole("button", { name: /continue with hive/i }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /next/i }).click();
   await page.getByLabel("Password").fill(password);
@@ -29,7 +29,7 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
     return;
   }
   await page.goto(`${OWUI_URL}/`);
-  await page.getByRole("button", { name: /sign in with hive/i }).click();
+  await page.getByRole("button", { name: /continue with hive/i }).click();
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /next/i }).click();
   await page.getByLabel("Password").fill(password);
