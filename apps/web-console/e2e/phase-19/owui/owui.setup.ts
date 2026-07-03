@@ -33,6 +33,12 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // origin from OWUI_URL, so this spec never calls page.goto with a relative
   // path past this point -- it only follows whatever the browser is
   // redirected to, which keeps it baseURL-agnostic.
+  // Without this wait, the fills below race the redirect chain and land on
+  // OWUI's own native login form instead of the web-console one.
+  await page.waitForURL(/\/(auth\/sign-in|oauth\/consent)/, {
+    timeout: 30_000,
+  });
+
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
