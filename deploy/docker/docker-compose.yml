@@ -355,14 +355,26 @@ services:
       PGVECTOR_DB_URL: ${SUPABASE_DB_URL:-}
       RAG_TOP_K: "5"
       ENABLE_RAG_HYBRID_SEARCH: "true"
-      ENABLE_PIPELINES: "true"
-      PIPELINES_URLS: "/app/pipelines/hive_jwt_forward.py"
       DATA_DIR: "/data"
       STATIC_DIR: "/data/static"
       OWUI_E2E_MODE: ${OWUI_E2E_MODE:-false}
     volumes:
       - owui-data:/data
-      - ./pipelines:/app/pipelines:ro
+      # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
+      # ./pipelines volume used to sit here. Those are not real Open WebUI
+      # config keys on this image; they belong to the separate, deprecated
+      # "Pipelines" microservice (ghcr.io/open-webui/pipelines), which this
+      # compose file never runs. deploy/docker/pipelines/hive_jwt_forward.py
+      # was therefore never loaded. It is installed instead as a native Open
+      # WebUI Function via the Functions REST API (Admin > Functions),
+      # which requires an authenticated admin session and cannot run at
+      # container boot with no user yet signed in. CI installs it from
+      # apps/web-console/e2e/phase-19/owui/owui.setup.ts right after the
+      # e2e user's first OIDC login (which auto-promotes to admin as the
+      # first user). Production/EnterpriseEdge deployments must install it
+      # once via the same API after the first admin signs in; see that
+      # file for the request shape. Tracked as follow-up: automate this for
+      # non-CI deployments too.
     healthcheck:
       test: ["CMD", "curl", "-fsSL", "http://localhost:8080/health"]
       interval: 10s

@@ -1,7 +1,88 @@
-import { test as setup, expect } from "@playwright/test";
+import { test as setup, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const STATE = "e2e/phase-19/owui/.auth/owui-user.json";
 const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
+
+// #269: hive_jwt_forward is an Open WebUI Function (Admin > Functions), not
+// a file the container auto-loads; there is no mount or env var that
+// installs it. It must be created via the Functions REST API by an admin
+// session. Open WebUI auto-promotes the very first signed-in user to admin,
+// which this setup's OIDC login just did, so the authenticated `page`
+// below carries an admin session cookie.
+const HIVE_JWT_FORWARD_ID = "hive_jwt_forward";
+const HIVE_JWT_FORWARD_SOURCE = path.resolve(
+  __dirname,
+  "../../../../../deploy/docker/pipelines/hive_jwt_forward.py",
+);
+
+interface OwuiFunctionState {
+  is_active: boolean;
+  is_global: boolean;
+}
+
+/**
+ * Installs (idempotently) and fully activates the hive_jwt_forward Open
+ * WebUI Filter function using the already-authenticated `page`'s session
+ * cookie. A filter only runs when it is both active and global (see
+ * open_webui.utils.filter.get_sorted_filter_ids upstream), so both toggles
+ * are required in addition to creation.
+ */
+async function installHiveJwtForwardFilter(
+  page: Page,
+  owuiOrigin: string,
+): Promise<void> {
+  const content = readFileSync(HIVE_JWT_FORWARD_SOURCE, "utf8");
+  const functionUrl = `${owuiOrigin}/api/v1/functions/id/${HIVE_JWT_FORWARD_ID}`;
+
+  const existing = await page.request.get(functionUrl);
+  let state: OwuiFunctionState | null = null;
+  if (existing.ok()) {
+    state = await existing.json();
+  } else if (existing.status() !== 401 && existing.status() !== 404) {
+    throw new Error(
+      `hive_jwt_forward: unexpected status checking existing function: ${existing.status()} ${await existing.text()}`,
+    );
+  }
+
+  if (!state) {
+    const created = await page.request.post(`${owuiOrigin}/api/v1/functions/create`, {
+      data: {
+        id: HIVE_JWT_FORWARD_ID,
+        name: "Hive JWT Forward",
+        content,
+        meta: {
+          description:
+            "Injects the signed-in user's OAuth access token into __metadata.upstream_auth for edge-api's OWUI unwrap middleware (#269).",
+        },
+      },
+    });
+    if (!created.ok()) {
+      throw new Error(
+        `hive_jwt_forward: failed to create function: ${created.status()} ${await created.text()}`,
+      );
+    }
+  }
+
+  if (!state?.is_active) {
+    const toggled = await page.request.post(`${functionUrl}/toggle`);
+    if (!toggled.ok()) {
+      throw new Error(
+        `hive_jwt_forward: failed to activate function: ${toggled.status()} ${await toggled.text()}`,
+      );
+    }
+  }
+
+  if (!state?.is_global) {
+    const toggledGlobal = await page.request.post(`${functionUrl}/toggle/global`);
+    if (!toggledGlobal.ok()) {
+      throw new Error(
+        `hive_jwt_forward: failed to globalize function: ${toggledGlobal.status()} ${await toggledGlobal.text()}`,
+      );
+    }
+  }
+}
 
 setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // Run 28681926134: consent can load first, then its client-side session
@@ -141,5 +222,6 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   await expect(
     page.getByRole("button", { name: /new chat/i }),
   ).toBeVisible({ timeout: 60_000 });
+  await installHiveJwtForwardFilter(page, owuiOrigin);
   await page.context().storageState({ path: STATE });
 });
