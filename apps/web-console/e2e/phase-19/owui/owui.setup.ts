@@ -64,9 +64,19 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // Same hydration race as the fills: a click that lands before React
   // attaches the handler is silently lost (run 28676903599: zero
   // /oauth/oidc/callback hits after this step, both attempts). Retry the
-  // click until the navigation actually happens.
+  // click until the navigation actually happens. A successful click can
+  // still outlast the 5s wait below -- check the URL first and guard the
+  // click itself so a stale retry never re-clicks a button that already
+  // navigated away.
   for (let i = 0; i < 5; i++) {
-    await page.getByRole("button", { name: /continue/i }).click();
+    if (/\/oauth\/consent/.test(page.url())) break;
+    try {
+      await page
+        .getByRole("button", { name: /continue/i })
+        .click({ timeout: 2_000 });
+    } catch {
+      // button may already be gone if a prior click's navigation landed late
+    }
     try {
       await page.waitForURL(/\/oauth\/consent/, { timeout: 5_000 });
       break;
@@ -77,14 +87,34 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   expect(page.url()).toMatch(/\/oauth\/consent/);
 
   // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
-  // client's requested scopes.
-  await page.getByRole("button", { name: /approve/i }).click();
+  // client's requested scopes. Same hydration-race guard as above: check
+  // first, click inside a try so a stale retry never re-clicks a button
+  // that already navigated away, then wait in short windows.
+  const owuiOrigin = new URL(OWUI_URL).origin;
+  for (let i = 0; i < 5; i++) {
+    if (new URL(page.url()).origin === owuiOrigin) break;
+    try {
+      await page
+        .getByRole("button", { name: /approve/i })
+        .click({ timeout: 2_000 });
+    } catch {
+      // button may already be gone if a prior click's navigation landed late
+    }
+    try {
+      await page.waitForURL((u) => u.origin === owuiOrigin, {
+        timeout: 5_000,
+      });
+      break;
+    } catch {
+      // retry
+    }
+  }
 
   // Run 28676421973: OAuth exchange itself verified fast and correct in
   // local repro, but OWUI's post-login SPA load (model-list fetch) can
   // outlast a short wait. Accept any OWUI-origin URL first, then give the
   // chat UI real time to finish loading.
-  await page.waitForURL((u) => u.origin === new URL(OWUI_URL).origin, {
+  await page.waitForURL((u) => u.origin === owuiOrigin, {
     timeout: 30_000,
   });
   await expect(page.getByPlaceholder(/message/i)).toBeVisible({
