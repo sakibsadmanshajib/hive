@@ -38,6 +38,18 @@ export async function middleware(request: NextRequest) {
 
   const { pathname } = request.nextUrl;
 
+  // Clickjacking defense, applied to every response this middleware returns.
+  // No route in this app (including /oauth/consent's Approve/Deny screen) is
+  // meant to be framed. Set here rather than next.config.ts headers()
+  // because @opennextjs/cloudflare's routing translation for next.config
+  // headers is not something we've verified; middleware always runs as part
+  // of the actual Next.js request pipeline on Workers.
+  const withSecurityHeaders = (res: NextResponse) => {
+    res.headers.set("X-Frame-Options", "DENY");
+    res.headers.set("Content-Security-Policy", "frame-ancestors 'none'");
+    return res;
+  };
+
   // Redirect while preserving any auth cookies getUser() refreshed onto
   // supabaseResponse. A bare NextResponse.redirect would drop the rotated
   // session cookies, so the next request would carry a stale token.
@@ -46,7 +58,7 @@ export async function middleware(request: NextRequest) {
     supabaseResponse.cookies.getAll().forEach((cookie) => {
       res.cookies.set(cookie);
     });
-    return res;
+    return withSecurityHeaders(res);
   };
 
   // Mirror the control-plane's email-verified rule (auth/client.go): the
@@ -87,7 +99,7 @@ export async function middleware(request: NextRequest) {
     return redirectTo("/console");
   }
 
-  return supabaseResponse;
+  return withSecurityHeaders(supabaseResponse);
 }
 
 export const config = {

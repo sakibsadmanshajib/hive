@@ -7,6 +7,8 @@ import { ArrowRight } from "lucide-react";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { resolveNextTarget } from "@/lib/auth/next-target";
+import { navigate } from "@/lib/navigate";
 
 export default function SignInPage() {
   const supabase = createClient();
@@ -36,7 +38,8 @@ export default function SignInPage() {
     // ran the next request before the document-cookie write had been
     // observed by the SSR pipeline, which made middleware see no user and
     // bounce /console back to /auth/sign-in.
-    window.location.assign("/console");
+    const next = new URLSearchParams(window.location.search).get("next");
+    navigate(resolveNextTarget(next));
   }
 
   return (
