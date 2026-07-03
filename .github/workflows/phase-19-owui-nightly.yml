@@ -30,6 +30,57 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Materialize .env.ci
+        # local/test profiles boot control-plane + edge-api + open-webui +
+        # web-console, all of which fail fast without real Supabase/S3/LLM
+        # provider credentials (see CLAUDE.md fail-fast rule). Mirrors the
+        # secret set already proven working in ci.yml's live-integration job.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+          S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+          S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+          S3_REGION: ${{ secrets.S3_REGION }}
+          S3_BUCKET_FILES: ${{ secrets.S3_BUCKET_FILES }}
+          S3_BUCKET_IMAGES: ${{ secrets.S3_BUCKET_IMAGES }}
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+          for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY HIVE_TEST_DB_URL \
+                   S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_REGION \
+                   OPENROUTER_API_KEY GROQ_API_KEY; do
+            val="${!v:-}"
+            if [ -z "$val" ]; then
+              echo "::error::$v is empty; cannot materialize .env.ci"
+              exit 1
+            fi
+          done
+          cat > .env.ci <<EOF
+          SUPABASE_URL=${SUPABASE_URL}
+          SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+          SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+          SUPABASE_DB_URL=${HIVE_TEST_DB_URL}
+          REDIS_URL=redis://redis:6379/0
+          S3_ENDPOINT=${S3_ENDPOINT}
+          S3_ACCESS_KEY=${S3_ACCESS_KEY}
+          S3_SECRET_KEY=${S3_SECRET_KEY}
+          S3_REGION=${S3_REGION}
+          S3_BUCKET_FILES=${S3_BUCKET_FILES:-hive-files}
+          S3_BUCKET_IMAGES=${S3_BUCKET_IMAGES:-hive-images}
+          LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-litellm-dev-key}
+          OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+          GROQ_API_KEY=${GROQ_API_KEY}
+          NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-$SUPABASE_URL}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-$SUPABASE_ANON_KEY}
+          OWUI_SHIM_KEY=$(openssl rand -base64 32)
+          EOF
+          chmod 600 .env.ci
       - name: Boot stack with test-owui + observability-langfuse profiles
         run: |
           cd deploy/docker
