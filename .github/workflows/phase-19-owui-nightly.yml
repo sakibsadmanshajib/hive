@@ -129,6 +129,9 @@ jobs:
           fi
       - name: Run OWUI Playwright suite
         run: |
+          if [ -z "${OWUI_E2E_EMAIL:-}" ] || [ -z "${OWUI_E2E_PASSWORD:-}" ]; then
+            echo "::warning::OWUI e2e skipped, OWUI_E2E_EMAIL/OWUI_E2E_PASSWORD secrets not provisioned"
+          fi
           npm i -g pnpm@9
           cd apps/web-console
           pnpm install
