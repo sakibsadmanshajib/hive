@@ -29,32 +29,42 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
-  // web-console runs in dev mode in CI; a fill that lands before React
-  // hydration finishes gets wiped when the controlled input mounts. Retry
-  // each fill and verify the value actually stuck before moving on.
   const emailBox = page.getByRole("textbox", { name: /email/i });
-  for (let i = 0; i < 3; i++) {
-    await emailBox.fill(email);
-    if ((await emailBox.inputValue()) === email) break;
-  }
-  await expect(emailBox).toHaveValue(email);
-  await page.getByRole("button", { name: /next/i }).click();
-
   const passwordBox = page.getByRole("textbox", { name: /password/i });
-  for (let i = 0; i < 3; i++) {
-    await passwordBox.fill(password);
-    if ((await passwordBox.inputValue()) === password) break;
+  // web-console runs in dev mode in CI; React hydration can remount the
+  // controlled input *after* a fill already verified as stuck, wiping it, so
+  // a submit fired after that remount hits an empty field (run 28680373668:
+  // "missing email or phone" alert, both textboxes empty). Fill and submit
+  // can never be separated safely -- fuse them into one retry unit so every
+  // submit attempt re-fills first.
+  for (let i = 0; i < 6; i++) {
+    if (await passwordBox.isVisible().catch(() => false)) break;
+    await emailBox.fill(email);
+    if ((await emailBox.inputValue()) !== email) continue;
+    try {
+      await page
+        .getByRole("button", { name: /next/i })
+        .click({ timeout: 2_000 });
+    } catch {
+      // button may already be gone if a prior click's navigation landed late
+    }
+    try {
+      await expect(passwordBox).toBeVisible({ timeout: 5_000 });
+      break;
+    } catch {
+      // retry
+    }
   }
-  await expect(passwordBox).toHaveValue(password);
+  await expect(passwordBox).toBeVisible();
 
-  // Same hydration race as the fills: a click that lands before React
-  // attaches the handler is silently lost. Retry the click until the
-  // navigation actually happens. A successful click can still outlast the
-  // 5s wait below -- check the URL first and guard the click itself so a
-  // stale retry never re-clicks a button that already navigated away.
+  // Same fusion, same reason: the password field can be wiped after a
+  // verified fill, so refill it on every sign-in attempt too (run
+  // 28680373668: "missing email or phone" alert, both textboxes empty).
   const owuiOrigin = new URL(OWUI_URL).origin;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     if (new URL(page.url()).origin === owuiOrigin) break;
+    await passwordBox.fill(password);
+    if ((await passwordBox.inputValue()) !== password) continue;
     try {
       await page
         .getByRole("button", { name: /sign in/i })
@@ -100,32 +110,42 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
-  // web-console runs in dev mode in CI; a fill that lands before React
-  // hydration finishes gets wiped when the controlled input mounts. Retry
-  // each fill and verify the value actually stuck before moving on.
   const emailBox = page.getByRole("textbox", { name: /email/i });
-  for (let i = 0; i < 3; i++) {
-    await emailBox.fill(email);
-    if ((await emailBox.inputValue()) === email) break;
-  }
-  await expect(emailBox).toHaveValue(email);
-  await page.getByRole("button", { name: /next/i }).click();
-
   const passwordBox = page.getByRole("textbox", { name: /password/i });
-  for (let i = 0; i < 3; i++) {
-    await passwordBox.fill(password);
-    if ((await passwordBox.inputValue()) === password) break;
+  // web-console runs in dev mode in CI; React hydration can remount the
+  // controlled input *after* a fill already verified as stuck, wiping it, so
+  // a submit fired after that remount hits an empty field (run 28680373668:
+  // "missing email or phone" alert, both textboxes empty). Fill and submit
+  // can never be separated safely -- fuse them into one retry unit so every
+  // submit attempt re-fills first.
+  for (let i = 0; i < 6; i++) {
+    if (await passwordBox.isVisible().catch(() => false)) break;
+    await emailBox.fill(email);
+    if ((await emailBox.inputValue()) !== email) continue;
+    try {
+      await page
+        .getByRole("button", { name: /next/i })
+        .click({ timeout: 2_000 });
+    } catch {
+      // button may already be gone if a prior click's navigation landed late
+    }
+    try {
+      await expect(passwordBox).toBeVisible({ timeout: 5_000 });
+      break;
+    } catch {
+      // retry
+    }
   }
-  await expect(passwordBox).toHaveValue(password);
+  await expect(passwordBox).toBeVisible();
 
-  // Same hydration race as the fills: a click that lands before React
-  // attaches the handler is silently lost. Retry the click until the
-  // navigation actually happens. A successful click can still outlast the
-  // 5s wait below -- check the URL first and guard the click itself so a
-  // stale retry never re-clicks a button that already navigated away.
+  // Same fusion, same reason: the password field can be wiped after a
+  // verified fill, so refill it on every sign-in attempt too (run
+  // 28680373668: "missing email or phone" alert, both textboxes empty).
   const owuiOrigin = new URL(OWUI_URL).origin;
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 6; i++) {
     if (new URL(page.url()).origin === owuiOrigin) break;
+    await passwordBox.fill(password);
+    if ((await passwordBox.inputValue()) !== password) continue;
     try {
       await page
         .getByRole("button", { name: /sign in/i })

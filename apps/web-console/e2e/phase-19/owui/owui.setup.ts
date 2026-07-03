@@ -45,31 +45,22 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // accessible name. getByRole("textbox", ...) excludes it by role.
   const emailBox = page.getByRole("textbox", { name: /email/i });
   const passwordBox = page.getByRole("textbox", { name: /password/i });
-  // web-console runs in dev mode in CI; a fill that lands before React
-  // hydration finishes gets wiped when the controlled input mounts. Retry
-  // both fills together and verify the values actually stuck.
-  for (let i = 0; i < 3; i++) {
+  // web-console runs in dev mode in CI; React hydration can remount the
+  // controlled inputs *after* a fill already verified as stuck, wiping them,
+  // so a submit fired after that remount hits an empty form (run 28680373668:
+  // "missing email or phone" alert, both textboxes empty). Fill and submit
+  // can never be separated safely -- fuse them into one retry unit so every
+  // submit attempt re-fills first.
+  for (let i = 0; i < 6; i++) {
+    if (/\/oauth\/consent/.test(page.url())) break;
     await emailBox.fill(email);
     await passwordBox.fill(password);
     if (
-      (await emailBox.inputValue()) === email &&
-      (await passwordBox.inputValue()) === password
+      (await emailBox.inputValue()) !== email ||
+      (await passwordBox.inputValue()) !== password
     ) {
-      break;
+      continue;
     }
-  }
-  await expect(emailBox).toHaveValue(email);
-  await expect(passwordBox).toHaveValue(password);
-
-  // Same hydration race as the fills: a click that lands before React
-  // attaches the handler is silently lost (run 28676903599: zero
-  // /oauth/oidc/callback hits after this step, both attempts). Retry the
-  // click until the navigation actually happens. A successful click can
-  // still outlast the 5s wait below -- check the URL first and guard the
-  // click itself so a stale retry never re-clicks a button that already
-  // navigated away.
-  for (let i = 0; i < 5; i++) {
-    if (/\/oauth\/consent/.test(page.url())) break;
     try {
       await page
         .getByRole("button", { name: /continue/i })
