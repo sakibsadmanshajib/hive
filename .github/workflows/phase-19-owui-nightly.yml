@@ -60,6 +60,13 @@ jobs:
         # web-console, all of which fail fast without real Supabase/S3/LLM
         # provider credentials (see CLAUDE.md fail-fast rule). Mirrors the
         # secret set already proven working in ci.yml's live-integration job.
+        #
+        # The model literals below (OPENROUTER_DEFAULT_MODEL, etc.) are model
+        # slugs, not secrets, and are hardcoded intentionally: without them
+        # LiteLLM boots with an empty model_list ("LLM Provider NOT provided.
+        # You passed model=") and OWUI's /api/models returns zero models, so
+        # no chat request can be sent (run 28684729556). Values mirror the
+        # free/cheap-tier defaults in .env.example and deploy/litellm/config.yaml.
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -103,6 +110,12 @@ jobs:
           LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-litellm-dev-key}
           OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
           GROQ_API_KEY=${GROQ_API_KEY}
+          OPENROUTER_DEFAULT_MODEL=openrouter/free
+          OPENROUTER_AUTO_MODEL=openrouter/free
+          OPENROUTER_EMBEDDING_MODEL=openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free
+          OPENROUTER_EMBEDDING_FALLBACK_MODEL=openrouter/qwen/qwen3-embedding-8b
+          GROQ_FAST_MODEL=groq/openai/gpt-oss-20b
+          GROQ_REASONING_MODEL=groq/openai/gpt-oss-120b
           NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL:-$SUPABASE_URL}
           NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-$SUPABASE_ANON_KEY}
           SUPABASE_OAUTH_CLIENT_ID=${SUPABASE_OAUTH_CLIENT_ID:-}
