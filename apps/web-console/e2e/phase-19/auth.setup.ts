@@ -20,9 +20,12 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.dispatchEvent("click");
-  await page.getByLabel("Email").fill(email);
+  // getByLabel("Password") is a strict-mode violation here: the browser's
+  // native password-reveal toggle button shares "Password" in its
+  // accessible name. getByRole("textbox", ...) excludes it by role.
+  await page.getByRole("textbox", { name: /email/i }).fill(email);
   await page.getByRole("button", { name: /next/i }).click();
-  await page.getByLabel("Password").fill(password);
+  await page.getByRole("textbox", { name: /password/i }).fill(password);
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/localhost:3003/, { timeout: 30_000 });
   await page.context().storageState({ path: STATE_A });
@@ -44,9 +47,12 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.dispatchEvent("click");
-  await page.getByLabel("Email").fill(email);
+  // getByLabel("Password") is a strict-mode violation here: the browser's
+  // native password-reveal toggle button shares "Password" in its
+  // accessible name. getByRole("textbox", ...) excludes it by role.
+  await page.getByRole("textbox", { name: /email/i }).fill(email);
   await page.getByRole("button", { name: /next/i }).click();
-  await page.getByLabel("Password").fill(password);
+  await page.getByRole("textbox", { name: /password/i }).fill(password);
   await page.getByRole("button", { name: /sign in/i }).click();
   await expect(page).toHaveURL(/localhost:3003/, { timeout: 30_000 });
   await page.context().storageState({ path: STATE_B });
