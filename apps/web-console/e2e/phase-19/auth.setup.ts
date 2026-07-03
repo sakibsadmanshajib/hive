@@ -12,7 +12,12 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
     return;
   }
   await page.goto(`${OWUI_URL}/`);
-  await page.getByRole("button", { name: /continue with hive/i }).click();
+  // ponytail: OWUI login page has a continuously animating element, so
+  // Playwright's click-stability check never settles; force-click after an
+  // explicit visibility wait instead.
+  const hiveButton = page.getByRole("button", { name: /continue with hive/i });
+  await expect(hiveButton).toBeVisible();
+  await hiveButton.click({ force: true });
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /next/i }).click();
   await page.getByLabel("Password").fill(password);
@@ -29,7 +34,12 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
     return;
   }
   await page.goto(`${OWUI_URL}/`);
-  await page.getByRole("button", { name: /continue with hive/i }).click();
+  // ponytail: OWUI login page has a continuously animating element, so
+  // Playwright's click-stability check never settles; force-click after an
+  // explicit visibility wait instead.
+  const hiveButton = page.getByRole("button", { name: /continue with hive/i });
+  await expect(hiveButton).toBeVisible();
+  await hiveButton.click({ force: true });
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /next/i }).click();
   await page.getByLabel("Password").fill(password);
