@@ -4,6 +4,11 @@ const STATE = "e2e/phase-19/owui/.auth/owui-user.json";
 const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 
 setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
+  // Run 28681926134: consent can load first, then its client-side session
+  // check bounces to sign-in -- give the retry-heavy journey below real
+  // time to survive that bounce instead of the 30s test default.
+  setup.setTimeout(180_000);
+
   const email = process.env.OWUI_E2E_EMAIL;
   const password = process.env.OWUI_E2E_PASSWORD;
   // SUPABASE_OAUTH_CLIENT_ID/SECRET are a separate, ops-provisioned pair
@@ -34,57 +39,54 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // origin from OWUI_URL, so this spec never calls page.goto with a relative
   // path past this point -- it only follows whatever the browser is
   // redirected to, which keeps it baseURL-agnostic.
-  // Without this wait, the fills below race the redirect chain and land on
-  // OWUI's own native login form instead of the web-console one. The
-  // sign-in URL carries the consent path inside its `next` query param
-  // (run 28681138594), so regex/substring matching on the full URL
-  // false-positives on the sign-in page too -- match pathname only.
-  await page.waitForURL(
-    (u) => u.pathname === "/auth/sign-in" || u.pathname === "/oauth/consent",
-    { timeout: 30_000 },
-  );
-
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
   const emailBox = page.getByRole("textbox", { name: /email/i });
   const passwordBox = page.getByRole("textbox", { name: /password/i });
-  // web-console runs in dev mode in CI; React hydration can remount the
-  // controlled inputs *after* a fill already verified as stuck, wiping them,
-  // so a submit fired after that remount hits an empty form (run 28680373668:
-  // "missing email or phone" alert, both textboxes empty). Fill and submit
-  // can never be separated safely -- fuse them into one retry unit so every
-  // submit attempt re-fills first.
-  // The sign-in URL carries the consent path inside its `next` query param
-  // (run 28681138594), so regex/substring matching on the full URL
-  // false-positives on the sign-in page too -- match pathname only.
-  for (let i = 0; i < 6; i++) {
-    if (new URL(page.url()).pathname === "/oauth/consent") break;
-    await emailBox.fill(email);
-    await passwordBox.fill(password);
-    if (
-      (await emailBox.inputValue()) !== email ||
-      (await passwordBox.inputValue()) !== password
-    ) {
-      continue;
-    }
-    try {
-      await page
-        .getByRole("button", { name: /continue/i })
-        .click({ timeout: 2_000 });
-    } catch {
-      // button may already be gone if a prior click's navigation landed late
-    }
-    try {
-      await page.waitForURL((u) => u.pathname === "/oauth/consent", {
-        timeout: 5_000,
-      });
-      break;
-    } catch {
-      // retry
+  const approveButton = page.getByRole("button", { name: /approve/i });
+  // Run 28681926134: consent loads first (200), then its client-side
+  // session check bounces to sign-in (200) -- a URL/pathname check can
+  // observe the transient consent pathname and wrongly decide login is
+  // done. Wait on the DOM instead: either we need to sign in (email box
+  // visible) or we're already on consent (Approve visible).
+  await expect(emailBox.or(approveButton)).toBeVisible({ timeout: 30_000 });
+
+  // Run 28681926134: same race means a URL check can't safely decide
+  // whether login is still needed -- ask the DOM (Approve visible) instead.
+  if (!(await approveButton.isVisible().catch(() => false))) {
+    // web-console runs in dev mode in CI; React hydration can remount the
+    // controlled inputs *after* a fill already verified as stuck, wiping
+    // them, so a submit fired after that remount hits an empty form (run
+    // 28680373668: "missing email or phone" alert, both textboxes empty).
+    // Fill and submit can never be separated safely -- fuse them into one
+    // retry unit so every submit attempt re-fills first. Exit condition is
+    // now Approve visible, not a URL/pathname check (run 28681926134).
+    for (let i = 0; i < 6; i++) {
+      await emailBox.fill(email);
+      await passwordBox.fill(password);
+      if (
+        (await emailBox.inputValue()) !== email ||
+        (await passwordBox.inputValue()) !== password
+      ) {
+        continue;
+      }
+      try {
+        await page
+          .getByRole("button", { name: /continue/i })
+          .click({ timeout: 2_000 });
+      } catch {
+        // button may already be gone if a prior click's navigation landed late
+      }
+      try {
+        await expect(approveButton).toBeVisible({ timeout: 5_000 });
+        break;
+      } catch {
+        // retry
+      }
     }
   }
-  expect(new URL(page.url()).pathname).toBe("/oauth/consent");
+  await expect(approveButton).toBeVisible({ timeout: 15_000 });
 
   // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
   // client's requested scopes. Same hydration-race guard as above: check

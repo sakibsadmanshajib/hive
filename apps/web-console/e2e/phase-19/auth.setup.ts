@@ -5,6 +5,11 @@ const STATE_A = "e2e/phase-19/.auth/user-a.json";
 const STATE_B = "e2e/phase-19/.auth/user-b.json";
 
 setup("authenticate user A (tenant T1)", async ({ page }) => {
+  // Run 28681926134: consent can load first, then its client-side session
+  // check bounces to sign-in -- give the retry-heavy journey below real
+  // time to survive that bounce instead of the 30s test default.
+  setup.setTimeout(180_000);
+
   const email = process.env.E2E_USER_A_EMAIL;
   const password = process.env.E2E_USER_A_PASSWORD;
   if (!email || !password) {
@@ -20,21 +25,18 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.dispatchEvent("click");
-  // Without this wait, the fills below race the redirect chain and land on
-  // OWUI's own native login form instead of the web-console one. The
-  // sign-in URL carries the consent path inside its `next` query param
-  // (run 28681138594), so regex/substring matching on the full URL
-  // false-positives on the sign-in page too -- match pathname only.
-  await page.waitForURL(
-    (u) => u.pathname === "/auth/sign-in" || u.pathname === "/oauth/consent",
-    { timeout: 30_000 },
-  );
 
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
   const emailBox = page.getByRole("textbox", { name: /email/i });
   const passwordBox = page.getByRole("textbox", { name: /password/i });
+  // Run 28681926134: consent can load first, then its client-side session
+  // check bounces to sign-in -- a URL/pathname wait can resolve on that
+  // transient consent page. Wait for the email field itself instead of
+  // guessing from the URL.
+  await expect(emailBox).toBeVisible({ timeout: 30_000 });
+
   // web-console runs in dev mode in CI; React hydration can remount the
   // controlled input *after* a fill already verified as stuck, wiping it, so
   // a submit fired after that remount hits an empty field (run 28680373668:
@@ -90,6 +92,11 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
 });
 
 setup("authenticate user B (tenant T2)", async ({ page }) => {
+  // Run 28681926134: consent can load first, then its client-side session
+  // check bounces to sign-in -- give the retry-heavy journey below real
+  // time to survive that bounce instead of the 30s test default.
+  setup.setTimeout(180_000);
+
   const email = process.env.E2E_USER_B_EMAIL;
   const password = process.env.E2E_USER_B_PASSWORD;
   if (!email || !password) {
@@ -105,21 +112,18 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.dispatchEvent("click");
-  // Without this wait, the fills below race the redirect chain and land on
-  // OWUI's own native login form instead of the web-console one. The
-  // sign-in URL carries the consent path inside its `next` query param
-  // (run 28681138594), so regex/substring matching on the full URL
-  // false-positives on the sign-in page too -- match pathname only.
-  await page.waitForURL(
-    (u) => u.pathname === "/auth/sign-in" || u.pathname === "/oauth/consent",
-    { timeout: 30_000 },
-  );
 
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
   const emailBox = page.getByRole("textbox", { name: /email/i });
   const passwordBox = page.getByRole("textbox", { name: /password/i });
+  // Run 28681926134: consent can load first, then its client-side session
+  // check bounces to sign-in -- a URL/pathname wait can resolve on that
+  // transient consent page. Wait for the email field itself instead of
+  // guessing from the URL.
+  await expect(emailBox).toBeVisible({ timeout: 30_000 });
+
   // web-console runs in dev mode in CI; React hydration can remount the
   // controlled input *after* a fill already verified as stuck, wiping it, so
   // a submit fired after that remount hits an empty field (run 28680373668:
