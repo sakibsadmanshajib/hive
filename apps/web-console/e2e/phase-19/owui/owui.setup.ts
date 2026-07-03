@@ -1,6 +1,7 @@
 import { test as setup, expect } from "@playwright/test";
 
 const STATE = "e2e/phase-19/owui/.auth/owui-user.json";
+const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 
 setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   const email = process.env.OWUI_E2E_EMAIL;
@@ -59,20 +60,35 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   }
   await expect(emailBox).toHaveValue(email);
   await expect(passwordBox).toHaveValue(password);
-  await page.getByRole("button", { name: /continue/i }).click();
 
-  // A failed submit (e.g. a field silently wiped again) should surface here
-  // as a clear URL-wait timeout instead of a dangling Approve-button wait.
-  await page.waitForURL(/\/oauth\/consent/, { timeout: 30_000 });
+  // Same hydration race as the fills: a click that lands before React
+  // attaches the handler is silently lost (run 28676903599: zero
+  // /oauth/oidc/callback hits after this step, both attempts). Retry the
+  // click until the navigation actually happens.
+  for (let i = 0; i < 5; i++) {
+    await page.getByRole("button", { name: /continue/i }).click();
+    try {
+      await page.waitForURL(/\/oauth\/consent/, { timeout: 5_000 });
+      break;
+    } catch {
+      // retry
+    }
+  }
+  expect(page.url()).toMatch(/\/oauth\/consent/);
 
   // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
   // client's requested scopes.
   await page.getByRole("button", { name: /approve/i }).click();
 
-  // approveAuthorization()'s redirect_url sends the browser back to OWUI's
-  // OIDC callback, completing sign-in.
-  await expect(page.getByPlaceholder(/message/i)).toBeVisible({
+  // Run 28676421973: OAuth exchange itself verified fast and correct in
+  // local repro, but OWUI's post-login SPA load (model-list fetch) can
+  // outlast a short wait. Accept any OWUI-origin URL first, then give the
+  // chat UI real time to finish loading.
+  await page.waitForURL((u) => u.origin === new URL(OWUI_URL).origin, {
     timeout: 30_000,
+  });
+  await expect(page.getByPlaceholder(/message/i)).toBeVisible({
+    timeout: 60_000,
   });
   await page.context().storageState({ path: STATE });
 });

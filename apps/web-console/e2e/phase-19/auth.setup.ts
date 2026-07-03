@@ -46,8 +46,22 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
     if ((await passwordBox.inputValue()) === password) break;
   }
   await expect(passwordBox).toHaveValue(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/localhost:3003/, { timeout: 30_000 });
+
+  // Same hydration race as the fills: a click that lands before React
+  // attaches the handler is silently lost. Retry the click until the
+  // navigation actually happens.
+  for (let i = 0; i < 5; i++) {
+    await page.getByRole("button", { name: /sign in/i }).click();
+    try {
+      await page.waitForURL((u) => u.origin === new URL(OWUI_URL).origin, {
+        timeout: 5_000,
+      });
+      break;
+    } catch {
+      // retry
+    }
+  }
+  expect(new URL(page.url()).origin).toBe(new URL(OWUI_URL).origin);
   await page.context().storageState({ path: STATE_A });
 });
 
@@ -93,7 +107,21 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
     if ((await passwordBox.inputValue()) === password) break;
   }
   await expect(passwordBox).toHaveValue(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/localhost:3003/, { timeout: 30_000 });
+
+  // Same hydration race as the fills: a click that lands before React
+  // attaches the handler is silently lost. Retry the click until the
+  // navigation actually happens.
+  for (let i = 0; i < 5; i++) {
+    await page.getByRole("button", { name: /sign in/i }).click();
+    try {
+      await page.waitForURL((u) => u.origin === new URL(OWUI_URL).origin, {
+        timeout: 5_000,
+      });
+      break;
+    } catch {
+      // retry
+    }
+  }
+  expect(new URL(page.url()).origin).toBe(new URL(OWUI_URL).origin);
   await page.context().storageState({ path: STATE_B });
 });
