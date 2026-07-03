@@ -50,6 +50,15 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
       const sessionResult = await supabase.auth.getSession();
       if (cancelled) return;
 
+      if (sessionResult.error) {
+        // A transient session-refresh failure is not "no session" -- treat
+        // it as a hard error instead of redirecting to sign-in, which would
+        // just loop back here with the same stale/broken session.
+        setError(sessionResult.error.message);
+        setStatus("error");
+        return;
+      }
+
       if (!sessionResult.data.session) {
         navigate(buildSignInRedirect(authorizationId));
         return;

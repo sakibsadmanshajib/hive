@@ -5,8 +5,14 @@ const STATE = "e2e/phase-19/owui/.auth/owui-user.json";
 setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   const email = process.env.OWUI_E2E_EMAIL;
   const password = process.env.OWUI_E2E_PASSWORD;
-  if (!email || !password) {
-    setup.skip(true, "OWUI_E2E_* env not set");
+  // SUPABASE_OAUTH_CLIENT_ID/SECRET are a separate, ops-provisioned pair
+  // (Supabase OAuth App registration) -- without them the "Sign in with
+  // Hive" button on OWUI has no functional OAuth client behind it, so this
+  // whole journey cannot run yet. Skip cleanly rather than hard-fail.
+  const oauthClientId = process.env.SUPABASE_OAUTH_CLIENT_ID;
+  const oauthClientSecret = process.env.SUPABASE_OAUTH_CLIENT_SECRET;
+  if (!email || !password || !oauthClientId || !oauthClientSecret) {
+    setup.skip(true, "OWUI_E2E_*/SUPABASE_OAUTH_CLIENT_* env not set");
     return;
   }
 

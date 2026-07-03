@@ -105,6 +105,20 @@ describe("ConsentPanel", () => {
     expect(mockGetAuthorizationDetails).not.toHaveBeenCalled();
   });
 
+  it("surfaces a getSession error instead of redirecting to sign-in (avoids a refresh-failure loop)", async () => {
+    mockGetSession.mockResolvedValue({
+      data: { session: null },
+      error: { message: "session refresh failed" },
+    });
+
+    render(<ConsentPanel authorizationId={AUTH_ID} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("session refresh failed");
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(mockGetAuthorizationDetails).not.toHaveBeenCalled();
+  });
+
   it("renders client name and requested scopes when consent is needed", async () => {
     mockGetSession.mockResolvedValue(AUTHENTICATED_SESSION);
     mockGetAuthorizationDetails.mockResolvedValue(CONSENT_NEEDED_DETAILS);
