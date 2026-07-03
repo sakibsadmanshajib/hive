@@ -1,5 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// ponytail: without creds, owui.setup.ts skips and never writes storageState.
+// Match zero spec files for the dependent projects in that case so the run
+// exits clean (0 failed) instead of every spec ENOENT-ing on the missing
+// storageState file.
+const hasCreds = Boolean(
+  process.env.OWUI_E2E_EMAIL && process.env.OWUI_E2E_PASSWORD,
+);
+
 export default defineConfig({
   testDir: "./",
   timeout: 30_000,
@@ -20,13 +28,13 @@ export default defineConfig({
     { name: "owui-setup", testMatch: /owui\.setup\.ts$/ },
     {
       name: "owui",
-      testMatch: /\d{2}-.*\.spec\.ts$/,
+      testMatch: hasCreds ? /\d{2}-.*\.spec\.ts$/ : [],
       dependencies: ["owui-setup"],
       use: { ...devices["Desktop Chrome"] },
     },
     {
       name: "owui-perf",
-      testMatch: /performance\/.*\.spec\.ts$/,
+      testMatch: hasCreds ? /performance\/.*\.spec\.ts$/ : [],
       dependencies: ["owui-setup"],
       use: { ...devices["Desktop Chrome"] },
     },
