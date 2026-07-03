@@ -42,9 +42,28 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
   // accessible name. getByRole("textbox", ...) excludes it by role.
-  await page.getByRole("textbox", { name: /email/i }).fill(email);
-  await page.getByRole("textbox", { name: /password/i }).fill(password);
+  const emailBox = page.getByRole("textbox", { name: /email/i });
+  const passwordBox = page.getByRole("textbox", { name: /password/i });
+  // web-console runs in dev mode in CI; a fill that lands before React
+  // hydration finishes gets wiped when the controlled input mounts. Retry
+  // both fills together and verify the values actually stuck.
+  for (let i = 0; i < 3; i++) {
+    await emailBox.fill(email);
+    await passwordBox.fill(password);
+    if (
+      (await emailBox.inputValue()) === email &&
+      (await passwordBox.inputValue()) === password
+    ) {
+      break;
+    }
+  }
+  await expect(emailBox).toHaveValue(email);
+  await expect(passwordBox).toHaveValue(password);
   await page.getByRole("button", { name: /continue/i }).click();
+
+  // A failed submit (e.g. a field silently wiped again) should surface here
+  // as a clear URL-wait timeout instead of a dangling Approve-button wait.
+  await page.waitForURL(/\/oauth\/consent/, { timeout: 30_000 });
 
   // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
   // client's requested scopes.
