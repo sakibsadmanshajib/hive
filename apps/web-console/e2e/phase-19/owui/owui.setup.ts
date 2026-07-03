@@ -52,64 +52,80 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // visible) or we're already on consent (Approve visible).
   await expect(emailBox.or(approveButton)).toBeVisible({ timeout: 30_000 });
 
-  // Run 28681926134: same race means a URL check can't safely decide
-  // whether login is still needed -- ask the DOM (Approve visible) instead.
-  if (!(await approveButton.isVisible().catch(() => false))) {
-    // web-console runs in dev mode in CI; React hydration can remount the
-    // controlled inputs *after* a fill already verified as stuck, wiping
-    // them, so a submit fired after that remount hits an empty form (run
-    // 28680373668: "missing email or phone" alert, both textboxes empty).
-    // Fill and submit can never be separated safely -- fuse them into one
-    // retry unit so every submit attempt re-fills first. Exit condition is
-    // now Approve visible, not a URL/pathname check (run 28681926134).
-    for (let i = 0; i < 6; i++) {
-      await emailBox.fill(email);
-      await passwordBox.fill(password);
-      if (
-        (await emailBox.inputValue()) !== email ||
-        (await passwordBox.inputValue()) !== password
-      ) {
-        continue;
-      }
-      try {
-        await page
-          .getByRole("button", { name: /continue/i })
-          .click({ timeout: 2_000 });
-      } catch {
-        // button may already be gone if a prior click's navigation landed late
-      }
-      try {
-        await expect(approveButton).toBeVisible({ timeout: 5_000 });
-        break;
-      } catch {
-        // retry
-      }
+  // web-console runs in dev mode in CI; React hydration can remount the
+  // controlled inputs *after* a fill already verified as stuck, wiping
+  // them, so a submit fired after that remount hits an empty form (run
+  // 28680373668: "missing email or phone" alert, both textboxes empty).
+  // Fill and submit can never be separated safely -- fuse them into one
+  // retry unit so every submit attempt re-fills first.
+  for (let i = 0; i < 6; i++) {
+    // Run 28682845959: a successful submit can move the page past sign-in
+    // -- straight to consent, or straight past consent too if this
+    // user+client already has a grant -- before the Approve-visible wait
+    // below resolves. An unguarded refill on the next attempt then fills a
+    // detached email box and hangs until the test timeout.
+    if (!(await emailBox.isVisible().catch(() => false))) break;
+    await emailBox.fill(email, { timeout: 2_000 });
+    await passwordBox.fill(password, { timeout: 2_000 });
+    if (
+      (await emailBox.inputValue()) !== email ||
+      (await passwordBox.inputValue()) !== password
+    ) {
+      continue;
     }
-  }
-  await expect(approveButton).toBeVisible({ timeout: 15_000 });
-
-  // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
-  // client's requested scopes. Same hydration-race guard as above: check
-  // first, click inside a try so a stale retry never re-clicks a button
-  // that already navigated away, then wait in short windows.
-  const owuiOrigin = new URL(OWUI_URL).origin;
-  for (let i = 0; i < 5; i++) {
-    if (new URL(page.url()).origin === owuiOrigin) break;
     try {
       await page
-        .getByRole("button", { name: /approve/i })
+        .getByRole("button", { name: /continue/i })
         .click({ timeout: 2_000 });
     } catch {
       // button may already be gone if a prior click's navigation landed late
     }
     try {
-      await page.waitForURL((u) => u.origin === owuiOrigin, {
-        timeout: 5_000,
-      });
+      await expect(approveButton).toBeVisible({ timeout: 5_000 });
       break;
     } catch {
       // retry
     }
+  }
+
+  // Run 28682845959: trace shows password grant 200, consent 200, straight
+  // to the OWUI callback with no Approve click -- Supabase auto-approves a
+  // previously-granted client+user pair, so the consent screen appears at
+  // most once per user+client (first-ever run). Poll for either outcome
+  // instead of asserting Approve will always show.
+  const owuiOrigin = new URL(OWUI_URL).origin;
+  const approvePollDeadline = Date.now() + 30_000;
+  while (
+    new URL(page.url()).origin !== owuiOrigin &&
+    Date.now() < approvePollDeadline
+  ) {
+    if (await approveButton.isVisible().catch(() => false)) {
+      // Lands back on /oauth/consent, now authenticated, showing the Hive
+      // Chat client's requested scopes. Same hydration-race guard as
+      // above: check first, click inside a try so a stale retry never
+      // re-clicks a button that already navigated away, then wait in
+      // short windows.
+      for (let i = 0; i < 5; i++) {
+        if (new URL(page.url()).origin === owuiOrigin) break;
+        try {
+          await page
+            .getByRole("button", { name: /approve/i })
+            .click({ timeout: 2_000 });
+        } catch {
+          // button may already be gone if a prior click's navigation landed late
+        }
+        try {
+          await page.waitForURL((u) => u.origin === owuiOrigin, {
+            timeout: 5_000,
+          });
+          break;
+        } catch {
+          // retry
+        }
+      }
+      break;
+    }
+    await page.waitForTimeout(500);
   }
 
   // Run 28676421973: OAuth exchange itself verified fast and correct in

@@ -43,9 +43,13 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   // "missing email or phone" alert, both textboxes empty). Fill and submit
   // can never be separated safely -- fuse them into one retry unit so every
   // submit attempt re-fills first.
+  // Run 28682845959: a successful submit can move the page past this step
+  // before the next-field wait below resolves. An unguarded refill on the
+  // next attempt then fills a detached email box and hangs until the test
+  // timeout -- check the email box is still there before touching it.
   for (let i = 0; i < 6; i++) {
-    if (await passwordBox.isVisible().catch(() => false)) break;
-    await emailBox.fill(email);
+    if (!(await emailBox.isVisible().catch(() => false))) break;
+    await emailBox.fill(email, { timeout: 2_000 });
     if ((await emailBox.inputValue()) !== email) continue;
     try {
       await page
@@ -66,10 +70,13 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   // Same fusion, same reason: the password field can be wiped after a
   // verified fill, so refill it on every sign-in attempt too (run
   // 28680373668: "missing email or phone" alert, both textboxes empty).
+  // Run 28682845959: same hang risk as the step above -- a successful
+  // submit can move the page on before the origin wait below resolves, so
+  // check the password box is still there before refilling it.
   const owuiOrigin = new URL(OWUI_URL).origin;
   for (let i = 0; i < 6; i++) {
-    if (new URL(page.url()).origin === owuiOrigin) break;
-    await passwordBox.fill(password);
+    if (!(await passwordBox.isVisible().catch(() => false))) break;
+    await passwordBox.fill(password, { timeout: 2_000 });
     if ((await passwordBox.inputValue()) !== password) continue;
     try {
       await page
@@ -130,9 +137,13 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   // "missing email or phone" alert, both textboxes empty). Fill and submit
   // can never be separated safely -- fuse them into one retry unit so every
   // submit attempt re-fills first.
+  // Run 28682845959: a successful submit can move the page past this step
+  // before the next-field wait below resolves. An unguarded refill on the
+  // next attempt then fills a detached email box and hangs until the test
+  // timeout -- check the email box is still there before touching it.
   for (let i = 0; i < 6; i++) {
-    if (await passwordBox.isVisible().catch(() => false)) break;
-    await emailBox.fill(email);
+    if (!(await emailBox.isVisible().catch(() => false))) break;
+    await emailBox.fill(email, { timeout: 2_000 });
     if ((await emailBox.inputValue()) !== email) continue;
     try {
       await page
@@ -153,10 +164,13 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   // Same fusion, same reason: the password field can be wiped after a
   // verified fill, so refill it on every sign-in attempt too (run
   // 28680373668: "missing email or phone" alert, both textboxes empty).
+  // Run 28682845959: same hang risk as the step above -- a successful
+  // submit can move the page on before the origin wait below resolves, so
+  // check the password box is still there before refilling it.
   const owuiOrigin = new URL(OWUI_URL).origin;
   for (let i = 0; i < 6; i++) {
-    if (new URL(page.url()).origin === owuiOrigin) break;
-    await passwordBox.fill(password);
+    if (!(await passwordBox.isVisible().catch(() => false))) break;
+    await passwordBox.fill(password, { timeout: 2_000 });
     if ((await passwordBox.inputValue()) !== password) continue;
     try {
       await page
