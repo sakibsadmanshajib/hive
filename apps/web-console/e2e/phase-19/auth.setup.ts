@@ -46,8 +46,32 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
     if ((await passwordBox.inputValue()) === password) break;
   }
   await expect(passwordBox).toHaveValue(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/localhost:3003/, { timeout: 30_000 });
+
+  // Same hydration race as the fills: a click that lands before React
+  // attaches the handler is silently lost. Retry the click until the
+  // navigation actually happens. A successful click can still outlast the
+  // 5s wait below -- check the URL first and guard the click itself so a
+  // stale retry never re-clicks a button that already navigated away.
+  const owuiOrigin = new URL(OWUI_URL).origin;
+  for (let i = 0; i < 5; i++) {
+    if (new URL(page.url()).origin === owuiOrigin) break;
+    try {
+      await page
+        .getByRole("button", { name: /sign in/i })
+        .click({ timeout: 2_000 });
+    } catch {
+      // button may already be gone if a prior click's navigation landed late
+    }
+    try {
+      await page.waitForURL((u) => u.origin === owuiOrigin, {
+        timeout: 5_000,
+      });
+      break;
+    } catch {
+      // retry
+    }
+  }
+  expect(new URL(page.url()).origin).toBe(owuiOrigin);
   await page.context().storageState({ path: STATE_A });
 });
 
@@ -93,7 +117,31 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
     if ((await passwordBox.inputValue()) === password) break;
   }
   await expect(passwordBox).toHaveValue(password);
-  await page.getByRole("button", { name: /sign in/i }).click();
-  await expect(page).toHaveURL(/localhost:3003/, { timeout: 30_000 });
+
+  // Same hydration race as the fills: a click that lands before React
+  // attaches the handler is silently lost. Retry the click until the
+  // navigation actually happens. A successful click can still outlast the
+  // 5s wait below -- check the URL first and guard the click itself so a
+  // stale retry never re-clicks a button that already navigated away.
+  const owuiOrigin = new URL(OWUI_URL).origin;
+  for (let i = 0; i < 5; i++) {
+    if (new URL(page.url()).origin === owuiOrigin) break;
+    try {
+      await page
+        .getByRole("button", { name: /sign in/i })
+        .click({ timeout: 2_000 });
+    } catch {
+      // button may already be gone if a prior click's navigation landed late
+    }
+    try {
+      await page.waitForURL((u) => u.origin === owuiOrigin, {
+        timeout: 5_000,
+      });
+      break;
+    } catch {
+      // retry
+    }
+  }
+  expect(new URL(page.url()).origin).toBe(owuiOrigin);
   await page.context().storageState({ path: STATE_B });
 });
