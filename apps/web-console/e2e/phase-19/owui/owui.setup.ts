@@ -135,8 +135,11 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   await page.waitForURL((u) => u.origin === owuiOrigin, {
     timeout: 30_000,
   });
-  await expect(page.getByPlaceholder(/message/i)).toBeVisible({
-    timeout: 60_000,
-  });
+  // Run 28683831193: the chat input carries no "message" placeholder in
+  // OWUI 0.9.5 -- the sidebar New Chat button is the post-login readiness
+  // signal instead (present in the failure snapshot alongside the greeting).
+  await expect(
+    page.getByRole("button", { name: /new chat/i }),
+  ).toBeVisible({ timeout: 60_000 });
   await page.context().storageState({ path: STATE });
 });
