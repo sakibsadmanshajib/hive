@@ -18,8 +18,6 @@ jobs:
     timeout-minutes: 30
     env:
       OWUI_URL: http://localhost:3003
-      OWUI_E2E_EMAIL: ${{ secrets.OWUI_E2E_EMAIL }}
-      OWUI_E2E_PASSWORD: ${{ secrets.OWUI_E2E_PASSWORD }}
       OWUI_E2E_MAX_USD_PER_RUN: '1'
       OWUI_E2E_MODE: 'true'
       LANGFUSE_HOST: ${{ secrets.LANGFUSE_HOST }}
@@ -108,6 +106,26 @@ jobs:
           OWUI_SHIM_KEY=$(openssl rand -base64 32)
           EOF
           chmod 600 .env.ci
+      - name: Seed OWUI e2e test user
+        # Self-provisions the owui-e2e tenant, GoTrue user, and membership
+        # directly against the Supabase project (idempotent, password
+        # rotated every run). Removes the need for hand-managed
+        # OWUI_E2E_EMAIL / OWUI_E2E_PASSWORD repo secrets.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          out=$(python3 scripts/seed-owui-e2e-user.py)
+          email=$(printf '%s\n' "$out" | grep '^EMAIL=' | cut -d= -f2-)
+          password=$(printf '%s\n' "$out" | grep '^PASSWORD=' | cut -d= -f2-)
+          if [ -z "$email" ] || [ -z "$password" ]; then
+            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD"
+            exit 1
+          fi
+          echo "::add-mask::$password"
+          echo "OWUI_E2E_EMAIL=$email" >> "$GITHUB_ENV"
+          echo "OWUI_E2E_PASSWORD=$password" >> "$GITHUB_ENV"
       - name: Boot stack with test-owui + observability-langfuse profiles
         run: |
           cd deploy/docker
@@ -128,10 +146,11 @@ jobs:
             exit 1
           fi
       - name: Run OWUI Playwright suite
+        # OWUI_E2E_EMAIL/PASSWORD are always provisioned by the "Seed OWUI
+        # e2e test user" step above (schedule, workflow_dispatch, and
+        # labeled pull_request runs all reach this step), so the suite no
+        # longer has a credential-missing skip path.
         run: |
-          if [ -z "${OWUI_E2E_EMAIL:-}" ] || [ -z "${OWUI_E2E_PASSWORD:-}" ]; then
-            echo "::warning::OWUI e2e skipped, OWUI_E2E_EMAIL/OWUI_E2E_PASSWORD secrets not provisioned"
-          fi
           npm i -g pnpm@9
           cd apps/web-console
           pnpm install
