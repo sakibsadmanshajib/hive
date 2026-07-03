@@ -8,7 +8,10 @@ test("switch model and confirm subsequent request goes to it", async ({
   await page.goto("/");
   await page.getByTestId("model-selector").click();
   await page.getByRole("option", { name: /claude-3-haiku/i }).click();
-  await page.getByPlaceholder(/message/i).fill("hi");
+  // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
+  // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
+  // "message" placeholder exists (run 28683831193).
+  await page.locator("#chat-input").fill("hi");
   const [req] = await Promise.all([
     page.waitForRequest(
       (r) =>

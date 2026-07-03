@@ -15,7 +15,10 @@ test("ask grounded question and receive citation", async ({ page }) => {
   };
 
   await page.goto("/");
-  await page.getByPlaceholder(/message/i).fill(expected.prompt);
+  // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
+  // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
+  // "message" placeholder exists (run 28683831193).
+  await page.locator("#chat-input").fill(expected.prompt);
   await page.keyboard.press("Enter");
   const reply = page.locator('[data-role="assistant"]').last();
   await expect(reply).toContainText(new RegExp(expected.anchor, "i"), {
