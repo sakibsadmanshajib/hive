@@ -28,7 +28,10 @@ test("upload image and vision model returns content-aware answer", async ({
     page.locator('[data-attachment-name*="cat"], img[alt*="cat" i], [data-role="attachment"]').first(),
   ).toBeVisible({ timeout: 15_000 });
 
-  await page.getByPlaceholder(/message/i).fill("What animal is in this image?");
+  // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
+  // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
+  // "message" placeholder exists (run 28683831193).
+  await page.locator("#chat-input").fill("What animal is in this image?");
   await page.keyboard.press("Enter");
   await expect(page.locator('[data-role="assistant"]').last()).toContainText(
     /cat/i,

@@ -15,7 +15,10 @@ function budgetMs(envName: string, fallback: number): number {
 test("first-token latency under budget", async ({ page }) => {
   const budget = budgetMs("OWUI_TTFB_BUDGET_MS", 8000);
   await page.goto("/");
-  await page.getByPlaceholder(/message/i).fill("one word.");
+  // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
+  // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
+  // "message" placeholder exists (run 28683831193).
+  await page.locator("#chat-input").fill("one word.");
 
   // Bind the response wait to the specific request triggered by this
   // Enter keystroke. The previous URL+ok() predicate could latch onto
