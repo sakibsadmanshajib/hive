@@ -55,6 +55,31 @@ jobs:
           url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
           echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
           echo "reconstructed DB URL (host=${SUPABASE_DB_HOST}, port=${SUPABASE_DB_PORT}, user=${SUPABASE_DB_USER}, db=${SUPABASE_DB_NAME})"
+      - name: Seed OWUI e2e test user
+        # Self-provisions the owui-e2e tenant, GoTrue user, membership, and a
+        # real "hk_" Hive API key used as OWUI_SHIM_KEY (idempotent, password
+        # and key rotated every run). Runs BEFORE "Materialize .env.ci" now
+        # (moved from after it) because that step consumes the minted
+        # OWUI_SHIM_KEY. Removes the need for hand-managed OWUI_E2E_EMAIL /
+        # OWUI_E2E_PASSWORD repo secrets.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          out=$(python3 scripts/seed-owui-e2e-user.py)
+          email=$(printf '%s\n' "$out" | grep '^EMAIL=' | cut -d= -f2-)
+          password=$(printf '%s\n' "$out" | grep '^PASSWORD=' | cut -d= -f2-)
+          shim_key=$(printf '%s\n' "$out" | grep '^SHIM_KEY=' | cut -d= -f2-)
+          if [ -z "$email" ] || [ -z "$password" ] || [ -z "$shim_key" ]; then
+            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD/SHIM_KEY"
+            exit 1
+          fi
+          echo "::add-mask::$password"
+          echo "::add-mask::$shim_key"
+          echo "OWUI_E2E_EMAIL=$email" >> "$GITHUB_ENV"
+          echo "OWUI_E2E_PASSWORD=$password" >> "$GITHUB_ENV"
+          echo "OWUI_SHIM_KEY=$shim_key" >> "$GITHUB_ENV"
       - name: Materialize .env.ci
         # local/test profiles boot control-plane + edge-api + open-webui +
         # web-console, all of which fail fast without real Supabase/S3/LLM
@@ -67,6 +92,18 @@ jobs:
         # You passed model=") and OWUI's /api/models returns zero models, so
         # no chat request can be sent (run 28684729556). Values mirror the
         # free/cheap-tier defaults in .env.example and deploy/litellm/config.yaml.
+        #
+        # SUPABASE_JWT_ISSUER/AUDIENCE/JWKS_URL were previously omitted here,
+        # which silently disabled edge-api's whole phase-19 JWT + OWUI-unwrap
+        # wiring ("WARNING: phase-19 JWT auth wiring skipped", run
+        # 28685935882) -- every /v1/* call fell back to the raw API-key path
+        # instead of per-user JWT auth. Derived from SUPABASE_URL per the
+        # documented convention in .env.example; no new secret needed.
+        # OWUI_SHIM_KEY now comes from the "Seed OWUI e2e test user" step
+        # (a real hk_ Hive API key) instead of a random, unregistered value --
+        # see that step and scripts/seed-owui-e2e-user.py for why a random
+        # shim value can never authenticate OWUI's bodyless GET /v1/models
+        # connection probe.
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -88,7 +125,7 @@ jobs:
           set -euo pipefail
           for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL \
                    S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_REGION \
-                   OPENROUTER_API_KEY GROQ_API_KEY; do
+                   OPENROUTER_API_KEY GROQ_API_KEY OWUI_SHIM_KEY; do
             val="${!v:-}"
             if [ -z "$val" ]; then
               echo "::error::$v is empty; cannot materialize .env.ci"
@@ -100,6 +137,9 @@ jobs:
           SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
           SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
           SUPABASE_DB_URL=${SUPABASE_DB_URL}
+          SUPABASE_JWT_ISSUER=${SUPABASE_URL}/auth/v1
+          SUPABASE_JWT_AUDIENCE=authenticated
+          SUPABASE_JWKS_URL=${SUPABASE_URL}/auth/v1/.well-known/jwks.json
           REDIS_URL=redis://redis:6379/0
           S3_ENDPOINT=${S3_ENDPOINT}
           S3_ACCESS_KEY=${S3_ACCESS_KEY}
@@ -120,29 +160,9 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY:-$SUPABASE_ANON_KEY}
           SUPABASE_OAUTH_CLIENT_ID=${SUPABASE_OAUTH_CLIENT_ID:-}
           SUPABASE_OAUTH_CLIENT_SECRET=${SUPABASE_OAUTH_CLIENT_SECRET:-}
-          OWUI_SHIM_KEY=$(openssl rand -base64 32)
+          OWUI_SHIM_KEY=${OWUI_SHIM_KEY}
           EOF
           chmod 600 .env.ci
-      - name: Seed OWUI e2e test user
-        # Self-provisions the owui-e2e tenant, GoTrue user, and membership
-        # directly against the Supabase project (idempotent, password
-        # rotated every run). Removes the need for hand-managed
-        # OWUI_E2E_EMAIL / OWUI_E2E_PASSWORD repo secrets.
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-        run: |
-          set -euo pipefail
-          out=$(python3 scripts/seed-owui-e2e-user.py)
-          email=$(printf '%s\n' "$out" | grep '^EMAIL=' | cut -d= -f2-)
-          password=$(printf '%s\n' "$out" | grep '^PASSWORD=' | cut -d= -f2-)
-          if [ -z "$email" ] || [ -z "$password" ]; then
-            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD"
-            exit 1
-          fi
-          echo "::add-mask::$password"
-          echo "OWUI_E2E_EMAIL=$email" >> "$GITHUB_ENV"
-          echo "OWUI_E2E_PASSWORD=$password" >> "$GITHUB_ENV"
       - name: Boot stack with test-owui + observability-langfuse profiles
         run: |
           cd deploy/docker
@@ -162,6 +182,28 @@ jobs:
             docker compose ps
             exit 1
           fi
+      - name: Diagnose model catalog layers
+        # Non-fatal (set +e / || true throughout): attributes an empty OWUI
+        # model list to one of three layers in a single glance --
+        # 1) LiteLLM has no model_list (env/config problem upstream of Hive)
+        # 2) edge-api /v1/models rejects the OWUI shim credential (auth problem)
+        # 3) both return models but OWUI still shows none (OWUI-side problem)
+        # Prints only counts/status codes, never secrets or response bodies.
+        env:
+          LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
+        run: |
+          set +e
+          litellm_status=$(curl -s -o /tmp/litellm-models.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${LITELLM_MASTER_KEY:-litellm-dev-key}" \
+            http://localhost:4000/v1/models)
+          litellm_count=$(jq -r 'if (.data | type) == "array" then (.data | length) else "parse-error" end' /tmp/litellm-models.json 2>/dev/null)
+          edge_status=$(curl -s -o /tmp/edge-models.json -w '%{http_code}' \
+            -H "Authorization: Bearer ${OWUI_SHIM_KEY}" \
+            http://localhost:8080/v1/models)
+          edge_count=$(jq -r 'if (.data | type) == "array" then (.data | length) else "parse-error" end' /tmp/edge-models.json 2>/dev/null)
+          echo "layer 1 (litellm /v1/models):  status=${litellm_status} count=${litellm_count:-parse-error}"
+          echo "layer 2 (edge-api /v1/models): status=${edge_status} count=${edge_count:-parse-error}"
+          exit 0
       - name: Probe Supabase token endpoint from OWUI container
         # Diagnostic only, non-fatal (|| true). Leading hypothesis for the
         # run 28676421973 callback hang: runner egress stall (IPv6/DNS

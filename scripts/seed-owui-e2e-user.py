@@ -7,13 +7,30 @@ re-run: the tenant and membership rows are upserted, the GoTrue user is
 found-or-created, and its password is always rotated to a fresh random
 value so no run reuses a prior credential.
 
+Also mints a real, resolvable Hive API key to use as OWUI_SHIM_KEY. OWUI's
+own GET /v1/models connection probe sends OPENAI_API_KEY with no request
+body, so edge-api's OWUIUnwrap middleware (which only swaps in a per-user
+JWT when the body carries __metadata) can never rewrite it -- see
+deploy/docker/pipelines/hive_jwt_forward.py's inlet comment. A random,
+unregistered shim value therefore always 401s model listing even on a
+healthy stack (run 28685935882). A real "hk_"-prefixed key routes straight
+through the existing API-key path for that bodyless call. This key lives on
+its own throwaway "owui-e2e-shim" billing account (the older accounts/
+api_keys schema, unrelated to the tenants/tenant_users rows below) with
+allow_all_models=true -- listing is not billable, so there is no reason to
+depend on default-policy-group alias membership. Rotated every run the same
+way the GoTrue password is.
+
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 
-Prints exactly two lines to stdout (and nothing else):
+Prints exactly three lines to stdout (and nothing else):
   EMAIL=<email>
   PASSWORD=<password>
+  SHIM_KEY=<hk_ api key>
 Everything else (progress, errors) goes to stderr.
 """
+import base64
+import hashlib
 import json
 import os
 import secrets
@@ -25,6 +42,9 @@ import urllib.request
 
 TENANT_SLUG = "owui-e2e"
 TENANT_NAME = "OWUI E2E"
+SHIM_ACCOUNT_SLUG = "owui-e2e-shim"
+SHIM_ACCOUNT_NAME = "OWUI E2E Shim"
+SHIM_KEY_NICKNAME = "owui-e2e-shim-key"
 # ponytail: no Go code branches on tenants.deployment today (grep confirmed
 # clean). ENTERPRISE_EDGE picked as the closer conceptual fit for a
 # self-hosted OWUI chat front-end; revisit if that ever becomes load-bearing.
@@ -73,6 +93,16 @@ def random_password() -> str:
     # policy with room to spare, well under bcrypt's 72-byte limit.
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
     return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
+
+
+def random_api_key() -> tuple[str, str, str]:
+    """Mirrors generateSecret() in apps/control-plane/internal/apikeys/service.go:
+    32 random bytes, base64url (no padding), "hk_" prefix, sha256 hex hash.
+    Returns (raw_secret, token_hash, redacted_suffix)."""
+    encoded = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+    raw_secret = "hk_" + encoded
+    token_hash = hashlib.sha256(raw_secret.encode()).hexdigest()
+    return raw_secret, token_hash, raw_secret[-6:]
 
 
 def main() -> None:
@@ -156,8 +186,64 @@ def main() -> None:
         print(f"error: membership upsert failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
 
+    # 4. Upsert the throwaway shim billing account (older accounts/api_keys
+    # schema -- separate from the tenants/tenant_users rows above).
+    status, body = request(
+        rest, headers, "POST", "/accounts",
+        body={
+            "slug": SHIM_ACCOUNT_SLUG,
+            "display_name": SHIM_ACCOUNT_NAME,
+            "account_type": "business",
+            "owner_user_id": user_id,
+        },
+        params={"on_conflict": "slug"},
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    if status not in (200, 201) or not body:
+        print(f"error: shim account upsert failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    shim_account_id = body[0]["id"]
+
+    # 5. Rotate the shim API key: drop any previous key(s) for this account
+    # (cascades to their policy rows) then mint a fresh one, same rotate-
+    # every-run posture as the GoTrue password above.
+    status, body = request(
+        rest, headers, "DELETE", "/api_keys",
+        params={"account_id": f"eq.{shim_account_id}"},
+    )
+    if status not in (200, 204):
+        print(f"error: shim key cleanup failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+
+    raw_secret, token_hash, redacted_suffix = random_api_key()
+    status, body = request(
+        rest, headers, "POST", "/api_keys",
+        body={
+            "account_id": shim_account_id,
+            "nickname": SHIM_KEY_NICKNAME,
+            "token_hash": token_hash,
+            "redacted_suffix": redacted_suffix,
+            "status": "active",
+            "created_by_user_id": user_id,
+        },
+        prefer="return=representation",
+    )
+    if status not in (200, 201) or not body:
+        print(f"error: shim key create failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    shim_key_id = body[0]["id"]
+
+    status, body = request(
+        rest, headers, "POST", "/api_key_policies",
+        body={"api_key_id": shim_key_id, "allow_all_models": True},
+    )
+    if status not in (200, 201, 204):
+        print(f"error: shim key policy create failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+
     print(f"EMAIL={USER_EMAIL}")
     print(f"PASSWORD={password}")
+    print(f"SHIM_KEY={raw_secret}")
 
 
 if __name__ == "__main__":
