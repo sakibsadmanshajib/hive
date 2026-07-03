@@ -149,6 +149,37 @@ jobs:
             docker compose ps
             exit 1
           fi
+      - name: Probe Supabase token endpoint from OWUI container
+        # Diagnostic only, non-fatal (|| true). Leading hypothesis for the
+        # run 28676421973 callback hang: runner egress stall (IPv6/DNS
+        # connect) reaching Supabase from inside the container -- local
+        # repro with the identical image and endpoints completes in under
+        # 3s (~1.3s per call). Credentials are read from env and never
+        # printed; only status code and elapsed time are logged.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_OAUTH_CLIENT_ID: ${{ secrets.SUPABASE_OAUTH_CLIENT_ID }}
+          SUPABASE_OAUTH_CLIENT_SECRET: ${{ secrets.SUPABASE_OAUTH_CLIENT_SECRET }}
+        run: |
+          cd deploy/docker
+          docker compose --env-file ../../.env.ci exec -T \
+            -e SUPABASE_URL -e SUPABASE_OAUTH_CLIENT_ID -e SUPABASE_OAUTH_CLIENT_SECRET \
+            open-webui python3 -c "
+          import os, time, httpx
+          t = time.time()
+          r = httpx.post(
+              os.environ['SUPABASE_URL'] + '/auth/v1/oauth/token',
+              data={
+                  'grant_type': 'authorization_code',
+                  'code': 'bogus',
+                  'redirect_uri': 'http://localhost:3003/oauth/oidc/callback',
+                  'code_verifier': 'bogus',
+              },
+              auth=(os.environ['SUPABASE_OAUTH_CLIENT_ID'], os.environ['SUPABASE_OAUTH_CLIENT_SECRET']),
+              timeout=20,
+          )
+          print('token-endpoint', r.status_code, round(time.time() - t, 2), 's')
+          " || true
       - name: Run OWUI Playwright suite
         # OWUI_E2E_EMAIL/PASSWORD are always provisioned by the "Seed OWUI
         # e2e test user" step above (schedule, workflow_dispatch, and
