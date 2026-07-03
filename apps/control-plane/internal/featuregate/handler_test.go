@@ -55,6 +55,11 @@ func TestHandler_InvalidTenantID_Returns400(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
 	}
+	// The body is a JSON object; Content-Type must say so (issue #253 P2:
+	// http.Error forces text/plain, which mismatches a JSON body).
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", ct)
+	}
 }
 
 func TestHandler_MethodNotAllowed(t *testing.T) {
@@ -64,6 +69,9 @@ func TestHandler_MethodNotAllowed(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("expected 405, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("expected Content-Type application/json, got %q", ct)
 	}
 }
 

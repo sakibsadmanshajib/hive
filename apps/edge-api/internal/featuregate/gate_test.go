@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -20,11 +22,15 @@ import (
 type mockCP struct {
 	flags      featuregate.FlagsResponse
 	calls      atomic.Int32
-	statusCode int // overrides 200 when non-zero
+	statusCode int           // overrides 200 when non-zero
+	delay      time.Duration // artificial upstream latency, for stampede tests
 }
 
 func (m *mockCP) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.calls.Add(1)
+	if m.delay > 0 {
+		time.Sleep(m.delay)
+	}
 	code := http.StatusOK
 	if m.statusCode != 0 {
 		code = m.statusCode
@@ -94,6 +100,44 @@ func TestCacheExpiry(t *testing.T) {
 	}
 }
 
+// ---- cache stampede: concurrent miss dedup (issue #253) --------------------
+
+// TestFetch_ConcurrentMiss_SingleUpstreamCall reproduces the cold-cache
+// stampede: N goroutines call Fetch for the same tenant before the first
+// upstream response returns. Only one upstream request should fire; the rest
+// must wait for and share that result (singleflight).
+func TestFetch_ConcurrentMiss_SingleUpstreamCall(t *testing.T) {
+	tid := uuid.New()
+	cp := &mockCP{flags: featuregate.FlagsResponse{RAGEnabled: true}}
+	cp.delay = 50 * time.Millisecond
+	srv := httptest.NewServer(cp)
+	defer srv.Close()
+
+	g := featuregate.New(featuregate.Config{ControlPlaneURL: srv.URL, TTL: 30 * time.Second})
+
+	const n = 20
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			flags, err := g.Fetch(newRequest(tid).Context(), tid)
+			if err != nil {
+				t.Errorf("Fetch: %v", err)
+				return
+			}
+			if !flags.RAGEnabled {
+				t.Error("expected shared result to have RAGEnabled=true")
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := cp.calls.Load(); got != 1 {
+		t.Errorf("expected 1 upstream call under concurrent cold-cache miss, got %d", got)
+	}
+}
+
 // ---- fail-closed on upstream errors ----------------------------------------
 
 func TestFetch_FailsClosed_On500(t *testing.T) {
@@ -151,7 +195,7 @@ func TestMiddleware_Disabled_Returns403(t *testing.T) {
 	// Provider-blind: no feature name in body.
 	body := rec.Body.String()
 	for _, banned := range []string{"rag", "RAG", "voice", "relay", "cowork", "feature"} {
-		if strContains(body, banned) {
+		if strings.Contains(body, banned) {
 			t.Errorf("response body leaks %q in: %s", banned, body)
 		}
 	}
@@ -275,7 +319,7 @@ func TestMiddleware_SSO_Disabled_Returns403(t *testing.T) {
 	// Provider-blind: body must not leak "sso" or "saml" or "oidc".
 	body := rec.Body.String()
 	for _, banned := range []string{"sso", "SSO", "saml", "SAML", "oidc", "OIDC", "feature"} {
-		if strContains(body, banned) {
+		if strings.Contains(body, banned) {
 			t.Errorf("response body leaks %q: %s", banned, body)
 		}
 	}
@@ -311,15 +355,4 @@ func TestFetch_SSOFlag_False_OnZeroResponse(t *testing.T) {
 	if flags.SSOEnabled {
 		t.Error("SSOEnabled must default to false")
 	}
-}
-
-// ---- control-plane handler tests -------------------------------------------
-
-func strContains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
