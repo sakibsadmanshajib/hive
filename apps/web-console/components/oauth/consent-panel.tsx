@@ -101,22 +101,32 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
     setError(null);
 
     const supabase = createClient();
-    const decisionResult =
-      action === "approve"
-        ? await supabase.auth.oauth.approveAuthorization(authorizationId, {
-            skipBrowserRedirect: true,
-          })
-        : await supabase.auth.oauth.denyAuthorization(authorizationId, {
-            skipBrowserRedirect: true,
-          });
 
-    if (decisionResult.error) {
-      setError(decisionResult.error.message);
+    try {
+      const decisionResult =
+        action === "approve"
+          ? await supabase.auth.oauth.approveAuthorization(authorizationId, {
+              skipBrowserRedirect: true,
+            })
+          : await supabase.auth.oauth.denyAuthorization(authorizationId, {
+              skipBrowserRedirect: true,
+            });
+
+      if (decisionResult.error) {
+        setError(decisionResult.error.message);
+        return;
+      }
+
+      navigate(decisionResult.data.redirect_url);
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to submit your decision.",
+      );
+    } finally {
       setDeciding(false);
-      return;
     }
-
-    navigate(decisionResult.data.redirect_url);
   }
 
   if (status === "loading") {

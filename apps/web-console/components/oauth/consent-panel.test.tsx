@@ -209,4 +209,38 @@ describe("ConsentPanel", () => {
     expect(alert.textContent).toContain("network error");
     expect(mockNavigate).not.toHaveBeenCalled();
   });
+
+  it("surfaces a deny error as an alert instead of redirecting", async () => {
+    mockGetSession.mockResolvedValue(AUTHENTICATED_SESSION);
+    mockGetAuthorizationDetails.mockResolvedValue(CONSENT_NEEDED_DETAILS);
+    mockDenyAuthorization.mockResolvedValue({
+      data: null,
+      error: { message: "network error" },
+    });
+
+    render(<ConsentPanel authorizationId={AUTH_ID} />);
+    await screen.findByRole("button", { name: /deny/i });
+    fireEvent.click(screen.getByRole("button", { name: /deny/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("network error");
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("recovers from a thrown rejection (e.g. network failure) instead of leaving the button disabled forever", async () => {
+    mockGetSession.mockResolvedValue(AUTHENTICATED_SESSION);
+    mockGetAuthorizationDetails.mockResolvedValue(CONSENT_NEEDED_DETAILS);
+    mockApproveAuthorization.mockRejectedValue(new Error("fetch failed"));
+
+    render(<ConsentPanel authorizationId={AUTH_ID} />);
+    await screen.findByRole("button", { name: /approve/i });
+    fireEvent.click(screen.getByRole("button", { name: /approve/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("fetch failed");
+    expect(mockNavigate).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("button", { name: /approve/i }).hasAttribute("disabled"),
+    ).toBe(false);
+  });
 });
