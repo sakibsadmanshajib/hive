@@ -4,7 +4,7 @@ import { defineConfig, devices } from "@playwright/test";
 // Match zero spec files for the dependent projects in that case so the run
 // exits clean (0 failed) instead of every spec ENOENT-ing on the missing
 // storageState file. SUPABASE_OAUTH_CLIENT_ID/SECRET gate the OAuth-backed
-// "Sign in with Hive" journey the same way OWUI_E2E_EMAIL/PASSWORD gate the
+// "Continue with Hive" journey the same way OWUI_E2E_EMAIL/PASSWORD gate the
 // seeded test user -- both must mirror owui.setup.ts's own skip condition.
 const hasCreds = Boolean(
   process.env.OWUI_E2E_EMAIL &&
