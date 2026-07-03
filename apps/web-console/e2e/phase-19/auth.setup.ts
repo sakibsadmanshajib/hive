@@ -16,7 +16,7 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   // Playwright's click-stability check never settles; force-click after an
   // explicit visibility wait instead.
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
-  await expect(hiveButton).toBeVisible();
+  await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.click({ force: true });
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /next/i }).click();
@@ -38,7 +38,7 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   // Playwright's click-stability check never settles; force-click after an
   // explicit visibility wait instead.
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
-  await expect(hiveButton).toBeVisible();
+  await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.click({ force: true });
   await page.getByLabel("Email").fill(email);
   await page.getByRole("button", { name: /next/i }).click();

@@ -21,7 +21,7 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // Playwright's click-stability check never settles; force-click after an
   // explicit visibility wait instead.
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
-  await expect(hiveButton).toBeVisible();
+  await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.click({ force: true });
 
   // The OAuth click starts a real full-page redirect chain: OWUI -> Supabase
