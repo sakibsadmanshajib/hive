@@ -1,9 +1,32 @@
 """
-hive_jwt_forward - Open WebUI pipeline filter.
+hive_jwt_forward: Open WebUI Filter function.
 
-For every outgoing OpenAI-compatible request, copy the signed-in user's
-Supabase token into request metadata so the edge-api JWT path can validate the
-real user instead of the static Open WebUI shim key.
+For every outgoing OpenAI-compatible request, copies the signed-in user's
+OAuth access token into request metadata so edge-api's OWUI unwrap
+middleware (apps/edge-api/internal/auth/owui_unwrap.go) can validate the
+real user instead of the static Open WebUI shim key. Without this, every
+chat/embeddings request originating from OWUI carries the shim key in
+Authorization, routes through the API-key path, and binds to the shim's
+principal, defeating per-user audit attribution, RLS, and tenant scoping.
+
+Install target (#269): Open WebUI's native Functions system (Admin >
+Functions), NOT the separate, deprecated "Pipelines" microservice
+(ghcr.io/open-webui/pipelines) this file's name and prior docstring
+suggested. Open WebUI detects a Function's type purely by class name at
+exec time, one of `Filter`, `Pipe`, `Action`, or `Event` (see
+open_webui.utils.plugin.load_function_module_by_id), so a class named
+`Pipeline` is never picked up at all. The ENABLE_PIPELINES/PIPELINES_URLS
+docker-compose env vars this file used to be mounted alongside are also
+not real Open WebUI config keys on this image. Both facts combined meant
+this filter never ran, in production or in CI.
+
+Functions are installed via a database row created through the Functions
+REST API (POST /api/v1/functions/create, then POST .../toggle and
+.../toggle/global), authenticated as an Open WebUI admin; there is no
+file-mount or env-var based auto-load. See
+apps/web-console/e2e/phase-19/owui/owui.setup.ts for the reference
+installer used in CI, which runs right after the e2e user's first OIDC
+login (Open WebUI auto-promotes the very first signed-in user to admin).
 """
 
 from __future__ import annotations
@@ -11,45 +34,40 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from pydantic import BaseModel
 
-class Pipeline:
-    class Valves:
+
+class Filter:
+    class Valves(BaseModel):
         priority: int = 0
 
     def __init__(self) -> None:
-        self.name = "hive_jwt_forward"
         self.valves = self.Valves()
         self.e2e_mode = os.environ.get("OWUI_E2E_MODE", "").lower() in ("1", "true")
 
-    async def on_startup(self) -> None:
-        return None
-
-    async def on_shutdown(self) -> None:
-        return None
-
-    async def inlet(self, body: dict[str, Any], user: dict[str, Any] | None = None) -> dict[str, Any]:
+    async def inlet(
+        self,
+        body: dict[str, Any],
+        __oauth_token__: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not isinstance(body, dict):
             return body
 
-        # Forward ONLY the access_token. The previous code fell back to
-        # id_token, which carries different `aud` and lifetime semantics
-        # than an access_token and is intended for OIDC identity
-        # assertions — not resource-server authorization. Using id_token
-        # for API calls invites confused-deputy / audience-mismatch
-        # attacks. If no access_token is available we leave the body
-        # untouched; edge-api's OWUI unwrap then logs a warning and the
-        # selector routes the shim-key Authorization to the API-key
-        # path, which 401s loudly.
-        token = None
-        if user is not None:
-            oauth = user.get("oauth_sub") or {}
-            if isinstance(oauth, dict):
-                token = oauth.get("access_token")
-            token = token or user.get("token")
-
-        metadata = body.setdefault("__metadata", {})
-        if isinstance(metadata, dict) and token:
-            metadata["upstream_auth"] = f"Bearer {token}"
+        # __oauth_token__ is resolved by Open WebUI's OAuthManager from the
+        # signed-in user's stored OAuth session, auto-refreshing it if
+        # expired (see open_webui.utils.middleware.get_system_oauth_token).
+        # Forward ONLY the access_token. An id_token carries different `aud`
+        # and lifetime semantics than an access_token and is intended for
+        # OIDC identity assertions, not resource-server authorization; using
+        # it here would invite confused-deputy / audience-mismatch attacks.
+        # If no OAuth session is available (e.g. a non-OAuth admin account)
+        # leave the body untouched; edge-api's OWUI unwrap then logs a
+        # warning and the selector routes the shim-key Authorization to the
+        # API-key path, which 401s loudly instead of silently misattributing
+        # the request.
+        token = (__oauth_token__ or {}).get("access_token")
+        if token:
+            body.setdefault("__metadata", {})["upstream_auth"] = f"Bearer {token}"
 
         if self.e2e_mode:
             body.setdefault("temperature", 0)
@@ -57,7 +75,7 @@ class Pipeline:
 
         return body
 
-    async def outlet(self, body: Any, user: dict[str, Any] | None = None) -> Any:
+    async def outlet(self, body: Any) -> Any:
         # Strip the upstream auth header so the bearer token does not survive
         # into Open WebUI's response-side logging or get echoed back to the
         # browser. The inlet injects it; the outlet erases it.
