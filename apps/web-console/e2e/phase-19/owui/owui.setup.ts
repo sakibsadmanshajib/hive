@@ -33,8 +33,11 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // origin from OWUI_URL, so this spec never calls page.goto with a relative
   // path past this point -- it only follows whatever the browser is
   // redirected to, which keeps it baseURL-agnostic.
-  await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(password);
+  // getByLabel("Password") is a strict-mode violation here: the browser's
+  // native password-reveal toggle button shares "Password" in its
+  // accessible name. getByRole("textbox", ...) excludes it by role.
+  await page.getByRole("textbox", { name: /email/i }).fill(email);
+  await page.getByRole("textbox", { name: /password/i }).fill(password);
   await page.getByRole("button", { name: /continue/i }).click();
 
   // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
