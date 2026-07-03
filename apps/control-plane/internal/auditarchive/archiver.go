@@ -84,10 +84,14 @@ type Repository interface {
 // ObjectStore abstracts local cold storage (Supabase Storage / local filesystem).
 // Zero external egress: the backing store must be the box's own filesystem.
 //
-// Put must return the number of bytes written to storage so the archiver can
-// verify the upload was complete before deleting source rows (P1 safety).
+// Put receives the exact size of r up front (the caller already knows it,
+// having built the compressed payload) so implementations can stream the
+// payload straight to the backing store instead of buffering it a second
+// time. Put must return the number of bytes written to storage so the
+// archiver can verify the upload was complete before deleting source rows
+// (P1 safety).
 type ObjectStore interface {
-	Put(ctx context.Context, key string, r io.Reader) (written int64, err error)
+	Put(ctx context.Context, key string, r io.Reader, size int64) (written int64, err error)
 	Delete(ctx context.Context, key string) error
 }
 
@@ -99,8 +103,14 @@ type Config struct {
 	RetentionYears int
 	// ColdStorageBucket: bucket name (or path prefix) in the ObjectStore.
 	ColdStorageBucket string
-	Repo              Repository
-	Store             ObjectStore
+	// MaxRowsPerPartition: log a warning when a single (tenant, month) batch
+	// exceeds this many rows (default 250,000). The batch is still archived
+	// in full as one manifest entry; this is an operator signal, not a cap.
+	// ponytail: warn-only threshold; upgrade to a paged/multi-object manifest
+	// (needs a manifest schema change) if a real tenant approaches this.
+	MaxRowsPerPartition int
+	Repo                Repository
+	Store               ObjectStore
 }
 
 // Archiver runs the cold-archive lifecycle.
@@ -118,6 +128,9 @@ func New(cfg Config) *Archiver {
 	}
 	if cfg.ColdStorageBucket == "" {
 		cfg.ColdStorageBucket = "hive-audit-cold"
+	}
+	if cfg.MaxRowsPerPartition <= 0 {
+		cfg.MaxRowsPerPartition = 250_000
 	}
 	return &Archiver{cfg: cfg}
 }
@@ -169,6 +182,15 @@ func (a *Archiver) RunOnce(ctx context.Context, now time.Time) (int, error) {
 				slog.Info("auditarchive: partition already archived, skipping",
 					"tenant_id", tenantID, "month", month.Format("2006-01"))
 				continue
+			}
+
+			if len(monthRows) > a.cfg.MaxRowsPerPartition {
+				slog.Warn("auditarchive: partition row count exceeds configured threshold",
+					"tenant_id", tenantID,
+					"month", month.Format("2006-01"),
+					"rows", len(monthRows),
+					"threshold", a.cfg.MaxRowsPerPartition,
+				)
 			}
 
 			n, err := a.archivePartition(ctx, now, tenantID, month, monthRows)
@@ -226,7 +248,7 @@ func (a *Archiver) archivePartition(
 	)
 
 	// P1: verify written byte count matches before trusting the upload.
-	written, err := a.cfg.Store.Put(ctx, objectKey, bytes.NewReader(compressed))
+	written, err := a.cfg.Store.Put(ctx, objectKey, bytes.NewReader(compressed), expectedSize)
 	if err != nil {
 		return 0, fmt.Errorf("auditarchive: store put %s: %w", objectKey, err)
 	}
@@ -277,6 +299,15 @@ func (a *Archiver) archivePartition(
 
 // PurgeExpired deletes cold objects and manifest entries whose purge_after has passed.
 // Returns the number of manifest entries purged.
+//
+// Store.Delete runs before Repo.DeleteManifest so a crash between the two
+// self-heals on retry: FetchExpiredManifests returns the same manifest row
+// again next pass, and Store.Delete on an already-deleted key must be
+// idempotent (S3 DELETE returns success for a missing key by protocol, so
+// StorageObjectStore satisfies this without extra code). If DeleteManifest
+// itself fails after a successful Store.Delete, the manifest row becomes an
+// orphan pointing at a deleted object -- logged loudly below so an operator
+// can confirm the retry cleared it.
 func (a *Archiver) PurgeExpired(ctx context.Context, now time.Time) (int, error) {
 	entries, err := a.cfg.Repo.FetchExpiredManifests(ctx, now)
 	if err != nil {
@@ -288,6 +319,12 @@ func (a *Archiver) PurgeExpired(ctx context.Context, now time.Time) (int, error)
 			return purged, fmt.Errorf("auditarchive: delete cold object %s: %w", m.ObjectKey, err)
 		}
 		if err := a.cfg.Repo.DeleteManifest(ctx, m.ID); err != nil {
+			slog.Warn("auditarchive: cold object deleted but manifest delete failed, orphan manifest row",
+				"manifest_id", m.ID,
+				"tenant_id", m.TenantID,
+				"object_key", m.ObjectKey,
+				"err", err,
+			)
 			return purged, fmt.Errorf("auditarchive: delete manifest %s: %w", m.ID, err)
 		}
 		slog.Info("auditarchive: expired cold object purged",
@@ -333,10 +370,14 @@ func (a *Archiver) RunCron(ctx context.Context, interval time.Duration) error {
 }
 
 // groupByMonth partitions rows by their UTC year-month (normalised to the 1st at midnight).
+// r.TS.UTC() is mandatory here: Time.Year()/Month() report the year/month in
+// the time's own Location, so a row whose TS carries a non-UTC Location would
+// otherwise be bucketed by the wrong calendar month on hosts not set to UTC.
 func groupByMonth(rows []AuditRow) map[time.Time][]AuditRow {
 	out := map[time.Time][]AuditRow{}
 	for _, r := range rows {
-		m := time.Date(r.TS.Year(), r.TS.Month(), 1, 0, 0, 0, 0, time.UTC)
+		ts := r.TS.UTC()
+		m := time.Date(ts.Year(), ts.Month(), 1, 0, 0, 0, 0, time.UTC)
 		out[m] = append(out[m], r)
 	}
 	return out
