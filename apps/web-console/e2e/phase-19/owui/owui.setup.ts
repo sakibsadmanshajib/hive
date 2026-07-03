@@ -35,10 +35,14 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // path past this point -- it only follows whatever the browser is
   // redirected to, which keeps it baseURL-agnostic.
   // Without this wait, the fills below race the redirect chain and land on
-  // OWUI's own native login form instead of the web-console one.
-  await page.waitForURL(/\/(auth\/sign-in|oauth\/consent)/, {
-    timeout: 30_000,
-  });
+  // OWUI's own native login form instead of the web-console one. The
+  // sign-in URL carries the consent path inside its `next` query param
+  // (run 28681138594), so regex/substring matching on the full URL
+  // false-positives on the sign-in page too -- match pathname only.
+  await page.waitForURL(
+    (u) => u.pathname === "/auth/sign-in" || u.pathname === "/oauth/consent",
+    { timeout: 30_000 },
+  );
 
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
@@ -51,8 +55,11 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // "missing email or phone" alert, both textboxes empty). Fill and submit
   // can never be separated safely -- fuse them into one retry unit so every
   // submit attempt re-fills first.
+  // The sign-in URL carries the consent path inside its `next` query param
+  // (run 28681138594), so regex/substring matching on the full URL
+  // false-positives on the sign-in page too -- match pathname only.
   for (let i = 0; i < 6; i++) {
-    if (/\/oauth\/consent/.test(page.url())) break;
+    if (new URL(page.url()).pathname === "/oauth/consent") break;
     await emailBox.fill(email);
     await passwordBox.fill(password);
     if (
@@ -69,13 +76,15 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
       // button may already be gone if a prior click's navigation landed late
     }
     try {
-      await page.waitForURL(/\/oauth\/consent/, { timeout: 5_000 });
+      await page.waitForURL((u) => u.pathname === "/oauth/consent", {
+        timeout: 5_000,
+      });
       break;
     } catch {
       // retry
     }
   }
-  expect(page.url()).toMatch(/\/oauth\/consent/);
+  expect(new URL(page.url()).pathname).toBe("/oauth/consent");
 
   // Lands back on /oauth/consent, now authenticated, showing the Hive Chat
   // client's requested scopes. Same hydration-race guard as above: check

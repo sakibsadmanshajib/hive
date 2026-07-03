@@ -21,10 +21,14 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.dispatchEvent("click");
   // Without this wait, the fills below race the redirect chain and land on
-  // OWUI's own native login form instead of the web-console one.
-  await page.waitForURL(/\/(auth\/sign-in|oauth\/consent)/, {
-    timeout: 30_000,
-  });
+  // OWUI's own native login form instead of the web-console one. The
+  // sign-in URL carries the consent path inside its `next` query param
+  // (run 28681138594), so regex/substring matching on the full URL
+  // false-positives on the sign-in page too -- match pathname only.
+  await page.waitForURL(
+    (u) => u.pathname === "/auth/sign-in" || u.pathname === "/oauth/consent",
+    { timeout: 30_000 },
+  );
 
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
@@ -102,10 +106,14 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
   await hiveButton.dispatchEvent("click");
   // Without this wait, the fills below race the redirect chain and land on
-  // OWUI's own native login form instead of the web-console one.
-  await page.waitForURL(/\/(auth\/sign-in|oauth\/consent)/, {
-    timeout: 30_000,
-  });
+  // OWUI's own native login form instead of the web-console one. The
+  // sign-in URL carries the consent path inside its `next` query param
+  // (run 28681138594), so regex/substring matching on the full URL
+  // false-positives on the sign-in page too -- match pathname only.
+  await page.waitForURL(
+    (u) => u.pathname === "/auth/sign-in" || u.pathname === "/oauth/consent",
+    { timeout: 30_000 },
+  );
 
   // getByLabel("Password") is a strict-mode violation here: the browser's
   // native password-reveal toggle button shares "Password" in its
