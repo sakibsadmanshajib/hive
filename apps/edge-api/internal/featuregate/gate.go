@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
+	"golang.org/x/sync/singleflight"
 )
 
 // Feature is an opaque token identifying a gateable capability.
@@ -91,6 +92,10 @@ type Gate struct {
 
 	mu    sync.RWMutex
 	cache map[uuid.UUID]entry
+
+	// group collapses concurrent cache misses for the same tenant into a
+	// single upstream fetch (issue #253: cold-cache stampede).
+	group singleflight.Group
 }
 
 // New constructs a Gate. TTL defaults to 30 s when zero.
@@ -121,7 +126,14 @@ func (g *Gate) Fetch(ctx context.Context, tenantID uuid.UUID) (FlagsResponse, er
 	if ok && time.Since(e.loaded) < g.ttl {
 		return e.flags, nil
 	}
-	return g.refresh(ctx, tenantID)
+
+	v, err, _ := g.group.Do(tenantID.String(), func() (any, error) {
+		return g.refresh(ctx, tenantID)
+	})
+	if err != nil {
+		return FlagsResponse{}, err
+	}
+	return v.(FlagsResponse), nil
 }
 
 func (g *Gate) refresh(ctx context.Context, tenantID uuid.UUID) (FlagsResponse, error) {

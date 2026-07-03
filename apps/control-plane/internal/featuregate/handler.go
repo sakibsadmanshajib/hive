@@ -53,17 +53,20 @@ func NewHandler(resolver Resolver) *Handler {
 // ServeHTTP handles GET /internal/featuregate/{tenant_id}.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
-	// Extract {tenant_id} from the trailing path segment.
-	// Route is registered as "/internal/featuregate/" so the mux strips the prefix.
+	// Extract {tenant_id} from the trailing path segment. The mux is
+	// registered with the prefix pattern "/internal/featuregate/" (see
+	// router.go), but net/http's ServeMux does not strip that prefix from
+	// r.URL.Path for a plain (non-StripPrefix) handler registration; this
+	// handler strips it itself.
 	raw := strings.TrimPrefix(r.URL.Path, "/internal/featuregate/")
 	raw = strings.Trim(raw, "/")
 	tenantID, err := uuid.Parse(raw)
 	if err != nil {
-		http.Error(w, `{"error":"invalid tenant_id"}`, http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "invalid tenant_id")
 		return
 	}
 
@@ -83,4 +86,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(flags)
+}
+
+// writeError emits a JSON error body with a matching Content-Type header.
+// http.Error always forces "text/plain", which mismatches the JSON body this
+// handler otherwise returns; kept in sync with the provider-blind JSON error
+// pattern used elsewhere in control-plane (e.g. internal/providers/http.go).
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error string `json:"error"`
+	}{Error: message})
 }
