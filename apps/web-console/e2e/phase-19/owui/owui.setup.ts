@@ -18,11 +18,13 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
 
   await page.goto("/");
   // ponytail: OWUI login page has a continuously animating element, so
-  // Playwright's click-stability check never settles; force-click after an
-  // explicit visibility wait instead.
+  // Playwright's click-stability check never settles, and its force-click still
+  // requires the element in the viewport, which fails during the same
+  // animation. dispatchEvent fires the DOM click handler directly, regardless of
+  // geometry, stability, or overlays.
   const hiveButton = page.getByRole("button", { name: /continue with hive/i });
   await expect(hiveButton).toBeVisible({ timeout: 30_000 });
-  await hiveButton.click({ force: true });
+  await hiveButton.dispatchEvent("click");
 
   // The OAuth click starts a real full-page redirect chain: OWUI -> Supabase
   // authorize -> /oauth/consent (web-console origin, unauthenticated) ->
