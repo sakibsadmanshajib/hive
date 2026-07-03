@@ -128,7 +128,13 @@ func (g *Gate) Fetch(ctx context.Context, tenantID uuid.UUID) (FlagsResponse, er
 	}
 
 	v, err, _ := g.group.Do(tenantID.String(), func() (any, error) {
-		return g.refresh(ctx, tenantID)
+		// Detach from the winning caller's context. singleflight runs this
+		// closure once and shares its result with every waiter on the key; if
+		// the winner's request is cancelled mid-flight (client disconnect), a
+		// captured ctx would fail the shared refresh and hand the same error to
+		// every waiter, causing a burst of spurious fail-closed 403s. The HTTP
+		// client's own 5s timeout still bounds the fetch (issue #253 review).
+		return g.refresh(context.WithoutCancel(ctx), tenantID)
 	})
 	if err != nil {
 		return FlagsResponse{}, err
