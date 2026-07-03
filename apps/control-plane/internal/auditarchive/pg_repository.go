@@ -43,7 +43,16 @@ func (r *PgRepository) FetchTenants(ctx context.Context) ([]uuid.UUID, error) {
 }
 
 // FetchOlderThan returns all audit_log rows for tenantID with ts < cutoff,
-// ordered by seq ASC so the JSONL preserves chain order.
+// ordered so the JSONL preserves chain order.
+//
+// Ordering by (ts, seq) rather than seq alone lets the planner satisfy the
+// sort directly from the audit_log_tenant_ts_seq_idx composite index instead
+// of adding an explicit sort node over the full matched row set -- the
+// bottleneck flagged for high-volume tenants. seq is assigned monotonically
+// with ts at insert time (same assumption already relied on for the ts-based
+// hot/cold and month-partition boundaries elsewhere in this package), so this
+// produces the same row order as ORDER BY seq ASC for any row set actually
+// written by the audit pipeline, with seq only breaking ties on equal ts.
 func (r *PgRepository) FetchOlderThan(ctx context.Context, cutoff time.Time, tenantID uuid.UUID) ([]AuditRow, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, seq, tenant_id, actor_id, actor_type, action,
@@ -52,7 +61,7 @@ func (r *PgRepository) FetchOlderThan(ctx context.Context, cutoff time.Time, ten
 		       deploy_sha, env, prev_hash, row_hash, ts
 		  FROM public.audit_log
 		 WHERE tenant_id = $1 AND ts < $2
-		 ORDER BY seq ASC
+		 ORDER BY ts ASC, seq ASC
 	`, tenantID, cutoff)
 	if err != nil {
 		return nil, fmt.Errorf("auditarchive pg: fetch older than: %w", err)

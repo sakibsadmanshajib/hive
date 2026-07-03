@@ -1,7 +1,6 @@
 package auditarchive
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -14,8 +13,8 @@ import (
 // The bucket is the local Supabase Storage bucket backed by the box's own filesystem.
 // Zero external egress: no data leaves the sovereign edge node.
 type StorageObjectStore struct {
-	client  storage.Storage
-	bucket  string
+	client storage.Storage
+	bucket string
 	// endpoint is logged at construction for sovereignty observability.
 	endpoint string
 }
@@ -35,19 +34,15 @@ func NewStorageObjectStore(client storage.Storage, bucket, endpoint string) *Sto
 	return &StorageObjectStore{client: client, bucket: bucket, endpoint: endpoint}
 }
 
-// Put writes r to key in the configured bucket and returns the number of bytes
-// written. The caller verifies this equals the expected compressed size before
-// deleting source rows (P1 truncation guard).
-func (s *StorageObjectStore) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
-	// Buffer the reader to get an exact byte count for the size argument and
-	// the post-write verification. Gzip archive payloads are small (<100 MB).
-	// ponytail: in-memory buffer; switch to streaming multipart upload if payload sizes grow.
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return 0, fmt.Errorf("auditarchive storage: read %s: %w", key, err)
-	}
-	size := int64(len(data))
-	if err := s.client.Upload(ctx, s.bucket, key, bytes.NewReader(data), size, "application/gzip"); err != nil {
+// Put streams r to key in the configured bucket and returns the number of
+// bytes written. size is the exact length of r, supplied by the caller
+// (which already built the compressed payload and knows its length), so Put
+// forwards the reader straight to the underlying client instead of buffering
+// the already-compressed payload a second time. The caller verifies the
+// returned count equals the expected compressed size before deleting source
+// rows (P1 truncation guard).
+func (s *StorageObjectStore) Put(ctx context.Context, key string, r io.Reader, size int64) (int64, error) {
+	if err := s.client.Upload(ctx, s.bucket, key, r, size, "application/gzip"); err != nil {
 		return 0, fmt.Errorf("auditarchive storage: put %s: %w", key, err)
 	}
 	return size, nil

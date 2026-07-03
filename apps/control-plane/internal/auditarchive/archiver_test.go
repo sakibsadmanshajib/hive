@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +23,10 @@ import (
 type fakeRepo struct {
 	rows     []auditarchive.AuditRow
 	manifest []auditarchive.ManifestEntry
+	// onInsert, if set, runs synchronously right after a successful (non-duplicate)
+	// InsertManifest. Tests use this instead of a fixed sleep to learn deterministically
+	// when a background RunCron pass has produced its first manifest entry.
+	onInsert func()
 }
 
 func (r *fakeRepo) FetchOlderThan(ctx context.Context, cutoff time.Time, tenantID uuid.UUID) ([]auditarchive.AuditRow, error) {
@@ -60,6 +67,9 @@ func (r *fakeRepo) InsertManifest(ctx context.Context, entry auditarchive.Manife
 		}
 	}
 	r.manifest = append(r.manifest, entry)
+	if r.onInsert != nil {
+		r.onInsert()
+	}
 	return true, nil
 }
 
@@ -117,7 +127,7 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{objects: map[string][]byte{}}
 }
 
-func (s *fakeStore) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
+func (s *fakeStore) Put(ctx context.Context, key string, r io.Reader, size int64) (int64, error) {
 	if s.failPut {
 		// Simulate a partial write: drain the reader but report 0 bytes written.
 		_, _ = io.ReadAll(r)
@@ -126,6 +136,9 @@ func (s *fakeStore) Put(ctx context.Context, key string, r io.Reader) (int64, er
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return 0, err
+	}
+	if int64(len(data)) != size {
+		return 0, fmt.Errorf("fakeStore: caller-supplied size %d does not match actual bytes read %d", size, len(data))
 	}
 	s.objects[key] = data
 	return int64(len(data)), nil
@@ -197,19 +210,25 @@ func TestArchiveSelectsOldRowsOnly(t *testing.T) {
 // TestBoundaryMonthNoUnarchivedDelete is the P0 regression test.
 //
 // Setup: two rows share the same calendar month.
-//   oldRow.TS = cutoff - 10 days  (fetched and archived)
-//   newRow.TS = cutoff + 1 day    (never fetched; must survive the delete pass)
 //
-// With exact-ID delete the month boundary is irrelevant: only the IDs returned
-// by FetchOlderThan are ever deleted, so newRow is safe even when it shares a
-// calendar month with oldRow.
+//	oldRow.TS = cutoff - 10 days  (fetched and archived)
+//	newRow.TS = cutoff + 1 day    (never fetched; must survive the delete pass)
+//
+// now is a fixed, synthetic instant (not time.Now()) chosen so cutoff-10d and
+// cutoff+1d always land in the same calendar month regardless of which day
+// the suite runs on: a wall-clock now could push the two dates across a
+// month boundary depending on where in the month the test happened to run,
+// silently changing what the test exercises without a skip window or retry.
 func TestBoundaryMonthNoUnarchivedDelete(t *testing.T) {
 	tenantID := uuid.New()
-	now := time.Now().UTC()
+	now := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)
 	cutoff := now.AddDate(0, 0, -90)
 
 	oldTS := cutoff.AddDate(0, 0, -10)
 	newTS := cutoff.AddDate(0, 0, 1)
+	if oldTS.Month() != newTS.Month() || oldTS.Year() != newTS.Year() {
+		t.Fatalf("test fixture invariant broken: oldTS %v and newTS %v must share a calendar month", oldTS, newTS)
+	}
 
 	oldRow := auditarchive.AuditRow{ID: 1, Seq: 1, TenantID: tenantID, Action: "A", Severity: "INFO", TS: oldTS}
 	newRow := auditarchive.AuditRow{ID: 2, Seq: 2, TenantID: tenantID, Action: "B", Severity: "INFO", TS: newTS}
@@ -314,6 +333,18 @@ func TestArchiveManifestRecorded(t *testing.T) {
 	diff := m.PurgeAfter.Sub(expectedPurge)
 	if diff < -time.Second || diff > time.Second {
 		t.Errorf("purge_after %v, want ~%v", m.PurgeAfter, expectedPurge)
+	}
+
+	// The manifest's digest must match the actual bytes archived to storage,
+	// not just be present and 32 bytes long -- a wrong hash would silently
+	// break chain re-verification without ever failing this test otherwise.
+	archived, ok := store.objects[m.ObjectKey]
+	if !ok {
+		t.Fatalf("no stored object found for manifest object_key %q", m.ObjectKey)
+	}
+	wantSum := sha256.Sum256(archived)
+	if !bytes.Equal(m.SHA256Hash, wantSum[:]) {
+		t.Errorf("manifest SHA256Hash %x does not match sha256 of archived bytes %x", m.SHA256Hash, wantSum)
 	}
 }
 
@@ -453,12 +484,21 @@ func TestNoRowsNoArchive(t *testing.T) {
 }
 
 // TestCronRun: smoke test the scheduler (fires immediately at startup).
+//
+// Waits on a channel closed by fakeRepo.onInsert instead of a fixed sleep:
+// a fixed sleep either wastes time when the pass is fast or flakes under
+// slow/loaded CI when the pass is slow. The channel close happens inside the
+// archiver goroutine and is only ever observed after being received here, so
+// the wait is both deterministic and race-free.
 func TestCronRun(t *testing.T) {
 	tenantID := uuid.New()
 	now := time.Now().UTC()
 	old := now.AddDate(0, 0, -100)
 
 	repo := &fakeRepo{rows: makeRows(tenantID, old, 2, 1)}
+	firstPass := make(chan struct{})
+	var once sync.Once
+	repo.onInsert = func() { once.Do(func() { close(firstPass) }) }
 	store := newFakeStore()
 	arch := newArchiver(repo, store)
 
@@ -470,8 +510,11 @@ func TestCronRun(t *testing.T) {
 		doneCh <- arch.RunCron(ctx, time.Hour) // long interval; first pass fires immediately
 	}()
 
-	// Immediate first pass; no sleep needed beyond a short yield.
-	time.Sleep(100 * time.Millisecond)
+	select {
+	case <-firstPass:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for cron's immediate first pass to write a manifest entry")
+	}
 	cancel()
 	<-doneCh
 
@@ -533,6 +576,73 @@ func TestLateInsertNotDeleted(t *testing.T) {
 	}
 }
 
+// TestGroupByMonthUsesUTCNotLocalTime is the deferred #261 regression test:
+// a row whose TS carries a non-UTC Location must be bucketed by its UTC
+// calendar month, not the month implied by the timestamp's own Location, so
+// partitioning is deterministic on hosts not set to UTC.
+func TestGroupByMonthUsesUTCNotLocalTime(t *testing.T) {
+	tenantID := uuid.New()
+	now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
+
+	// UTC-6: local wall-clock Jan 31 23:00 is Feb 1 05:00 in UTC. A grouping
+	// bug that reads Year()/Month() off the row's own Location buckets this
+	// as January; the UTC-correct bucket is February.
+	tz := time.FixedZone("UTC-6", -6*60*60)
+	localTS := time.Date(2026, 1, 31, 23, 0, 0, 0, tz)
+
+	row := auditarchive.AuditRow{
+		ID: 1, Seq: 1, TenantID: tenantID, Action: "A", Severity: "INFO", TS: localTS,
+	}
+	repo := &fakeRepo{rows: []auditarchive.AuditRow{row}}
+	store := newFakeStore()
+	arch := newArchiver(repo, store)
+
+	if _, err := arch.RunOnce(context.Background(), now); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if len(repo.manifest) != 1 {
+		t.Fatalf("got %d manifest entries, want 1", len(repo.manifest))
+	}
+
+	wantMonth := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	gotMonth := repo.manifest[0].PartitionMonth
+	if !gotMonth.Equal(wantMonth) {
+		t.Errorf("partition_month = %v, want %v (UTC month of %v)", gotMonth, wantMonth, localTS)
+	}
+}
+
+// TestLargePartitionStillArchivesAllRows: exceeding MaxRowsPerPartition only
+// logs an operator warning, it must not truncate or otherwise change what
+// gets archived.
+func TestLargePartitionStillArchivesAllRows(t *testing.T) {
+	tenantID := uuid.New()
+	now := time.Now().UTC()
+	old := now.AddDate(0, 0, -100)
+
+	const rowCount = 10
+	repo := &fakeRepo{rows: makeRows(tenantID, old, rowCount, 1)}
+	store := newFakeStore()
+	arch := auditarchive.New(auditarchive.Config{
+		HotRetentionDays:    90,
+		RetentionYears:      10,
+		Repo:                repo,
+		Store:               store,
+		ColdStorageBucket:   "hive-audit-cold",
+		MaxRowsPerPartition: 1, // force every row over threshold
+	})
+
+	n, err := arch.RunOnce(context.Background(), now)
+	if err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	if n != rowCount {
+		t.Errorf("archived %d rows, want %d (threshold must warn, not truncate)", n, rowCount)
+	}
+	if len(repo.manifest) != 1 || repo.manifest[0].RowCount != rowCount {
+		t.Errorf("manifest row_count = %+v, want single entry with RowCount %d", repo.manifest, rowCount)
+	}
+}
+
 // injectStore wraps fakeStore and calls onPut after each Put to simulate
 // a concurrent insert between fetch and delete.
 type injectStore struct {
@@ -540,8 +650,8 @@ type injectStore struct {
 	onPut func()
 }
 
-func (s *injectStore) Put(ctx context.Context, key string, r io.Reader) (int64, error) {
-	n, err := s.inner.Put(ctx, key, r)
+func (s *injectStore) Put(ctx context.Context, key string, r io.Reader, size int64) (int64, error) {
+	n, err := s.inner.Put(ctx, key, r, size)
 	if err == nil {
 		s.onPut()
 	}
