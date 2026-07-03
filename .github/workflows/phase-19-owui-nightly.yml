@@ -173,6 +173,16 @@ jobs:
           pnpm exec playwright install --with-deps chromium
           pnpm e2e:owui
           pnpm e2e:owui:perf
+      - name: Dump container logs on failure
+        # The OWUI OAuth callback can hang with no visible error on the
+        # Playwright side (e.g. run 28676421973's 30s hang after the token
+        # exchange). The Playwright report has no insight into what the
+        # backend containers were doing, so pull their logs directly.
+        if: failure()
+        run: |
+          cd deploy/docker
+          docker compose --env-file ../../.env.ci logs --no-color --tail 300 \
+            open-webui litellm edge-api control-plane > $GITHUB_WORKSPACE/compose-logs.txt 2>&1 || true
       - name: SOC2 coverage report
         if: always()
         run: |
@@ -183,6 +193,11 @@ jobs:
         with:
           name: owui-playwright-report
           path: apps/web-console/playwright-report-owui
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: owui-compose-logs
+          path: compose-logs.txt
       - name: Slack on failure
         if: failure() && env.SLACK_WEBHOOK_URL != ''
         env:
