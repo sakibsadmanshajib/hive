@@ -6,7 +6,7 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   const email = process.env.OWUI_E2E_EMAIL;
   const password = process.env.OWUI_E2E_PASSWORD;
   // SUPABASE_OAUTH_CLIENT_ID/SECRET are a separate, ops-provisioned pair
-  // (Supabase OAuth App registration) -- without them the "Sign in with
+  // (Supabase OAuth App registration) -- without them the "Continue with
   // Hive" button on OWUI has no functional OAuth client behind it, so this
   // whole journey cannot run yet. Skip cleanly rather than hard-fail.
   const oauthClientId = process.env.SUPABASE_OAUTH_CLIENT_ID;
@@ -17,7 +17,7 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   }
 
   await page.goto("/");
-  await page.getByRole("button", { name: /sign in with hive/i }).click();
+  await page.getByRole("button", { name: /continue with hive/i }).click();
 
   // The OAuth click starts a real full-page redirect chain: OWUI -> Supabase
   // authorize -> /oauth/consent (web-console origin, unauthenticated) ->
