@@ -19,6 +19,14 @@ test("second turn references first turn context", async ({ page }) => {
   // between, proving the session carried across both turns end-to-end.
   // Free-tier verbosity is also unbounded per-turn (see 01/05), so both
   // prompts ask for a one-sentence reply to bound generation time.
+  //
+  // Run 28694759536: a page-wide Copy-button count never reached 2 --
+  // OWUI's message action bar (Edit/Copy/Read Aloud/...) only renders on
+  // the LAST rendered listitem, not on every historical turn (confirmed
+  // in the failure snapshot: turn 1's older listitem has no action
+  // buttons at all once turn 2 lands). `getByRole("listitem").last()` is
+  // the correct scope, same as 01 and 05 -- checking it twice, once per
+  // turn, is the structural proof both turns completed in one thread.
   test.setTimeout(360_000);
   await page.goto("/");
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
@@ -32,18 +40,18 @@ test("second turn references first turn context", async ({ page }) => {
   // button, so its visibility is a structural proof the pipeline
   // delivered a response -- free-tier model output content is not
   // asserted (#269).
-  await expect(page.getByRole("button", { name: "Copy" })).toHaveCount(1, {
-    timeout: 150_000,
-  });
+  await expect(
+    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
+  ).toBeVisible({ timeout: 150_000 });
 
   await page.locator("#chat-input").fill(
     "What is my favourite colour? Reply in one short sentence.",
   );
   await page.keyboard.press("Enter");
   // Structural proof turn 2 also completed, in the SAME chat thread as
-  // turn 1 (no reload/new-chat happened in between): a second Copy button
-  // appears alongside the first.
-  await expect(page.getByRole("button", { name: "Copy" })).toHaveCount(2, {
-    timeout: 150_000,
-  });
+  // turn 1 (no reload/new-chat happened in between): the new last listitem
+  // grows its own Copy button once turn 2 finishes.
+  await expect(
+    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
+  ).toBeVisible({ timeout: 150_000 });
 });
