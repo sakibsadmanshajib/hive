@@ -17,12 +17,14 @@ const testShimKey = "owui-shim-key"
 type capturedRequest struct {
 	authorization string
 	body          []byte
+	unwrapped     bool
 }
 
 func newCaptureHandler() (http.Handler, *capturedRequest) {
 	captured := &capturedRequest{}
 	h := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		captured.authorization = r.Header.Get("Authorization")
+		captured.unwrapped = auth.IsOWUIUnwrapped(r.Context())
 		if r.Body != nil {
 			captured.body, _ = io.ReadAll(r.Body)
 			_ = r.Body.Close()
@@ -87,6 +89,36 @@ func TestOWUIUnwrap_RewritesShimKeyToJWT(t *testing.T) {
 	}
 	if _, ok := got["messages"]; !ok {
 		t.Fatalf("expected messages preserved: %v", got)
+	}
+	if !captured.unwrapped {
+		t.Fatalf("expected IsOWUIUnwrapped(ctx) true after a successful rewrite")
+	}
+}
+
+// TestOWUIUnwrap_NoShimKey_DoesNotMarkUnwrapped guards the #269 tenant_id
+// fallback boundary: a request that never presented the shim key (real
+// API key, unrelated JWT) must never carry the OWUI-unwrapped marker,
+// however it got here -- JWTMiddleware's DB fallback is gated on it.
+func TestOWUIUnwrap_NoShimKey_DoesNotMarkUnwrapped(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrap(t, map[string]any{"model": "gpt-4o"}, "Bearer hk_real_api_key")
+	mw(next).ServeHTTP(httptest.NewRecorder(), req)
+	if captured.unwrapped {
+		t.Fatalf("non-shim request must not be marked unwrapped")
+	}
+}
+
+// TestOWUIUnwrap_ShimKeyWithoutMetadata_DoesNotMarkUnwrapped covers the
+// no-token fall-through path: the shim key was presented but no
+// upstream_auth was injected, so nothing was actually rewritten.
+func TestOWUIUnwrap_ShimKeyWithoutMetadata_DoesNotMarkUnwrapped(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrap(t, map[string]any{"model": "gpt-4o"}, "Bearer "+testShimKey)
+	mw(next).ServeHTTP(httptest.NewRecorder(), req)
+	if captured.unwrapped {
+		t.Fatalf("no-metadata fall-through must not be marked unwrapped")
 	}
 }
 

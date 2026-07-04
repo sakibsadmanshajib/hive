@@ -27,7 +27,7 @@ func TestJWTMiddleware_NilValidator_FailsClosed_503(t *testing.T) {
 	var auditedAction string
 	mw := auth.JWTMiddleware(nil, func(action, _, _ string) {
 		auditedAction = action
-	})
+	}, nil)
 	rr := httptest.NewRecorder()
 	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatalf("downstream handler must not run with nil validator")
