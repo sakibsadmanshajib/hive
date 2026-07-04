@@ -7,8 +7,12 @@ test("switch model and confirm subsequent request goes to it", async ({
 }) => {
   await page.goto("/");
   // OWUI 0.9.5 has no data-testid on the model trigger; the real control is
-  // the "Select a model" button (run 28684729556 failure snapshot).
-  await page.getByRole("button", { name: /select a model/i }).click();
+  // a button that reads "Select a model" only when no model is picked yet.
+  // The e2e tenant has a default model configured, so the button instead
+  // reads "Selected model: <name>" (run 28688154897 failure snapshot) --
+  // match both forms without also matching the neighbouring "Add Model"
+  // button.
+  await page.getByRole("button", { name: /^select(ed)? .*model/i }).click();
   // route-groq-fast is one of the routes configured in
   // deploy/litellm/config.yaml / .env.ci for the nightly run.
   await page.getByRole("option", { name: /route-groq-fast/i }).click();
