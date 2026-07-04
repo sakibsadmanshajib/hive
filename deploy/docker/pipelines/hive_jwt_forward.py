@@ -31,34 +31,10 @@ login (Open WebUI auto-promotes the very first signed-in user to admin).
 
 from __future__ import annotations
 
-import base64
-import json
 import os
 from typing import Any
 
 from pydantic import BaseModel
-
-
-def _log_claim_keys(token: str) -> None:
-    """#269 diagnostic (e2e-mode only): logs which top-level claims are
-    present on the forwarded access_token, never the token itself or any
-    claim value. edge-api's jwtMiddleware 401s with "missing principal
-    claims" whenever `sub` or `tenant_id` fails to parse (see
-    apps/edge-api/internal/auth/middleware.go); this tells us, from a real
-    OWUI-issued OAuth token, which one is actually missing without ever
-    printing the token or its contents. Uses print() (not logging) so it
-    reaches container stdout regardless of OWUI's logger configuration.
-    """
-    try:
-        payload_b64 = token.split(".")[1]
-        padded = payload_b64 + "=" * (-len(payload_b64) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(padded))
-        print(
-            f"hive_jwt_forward diagnostic: claim_keys={sorted(claims.keys())!r}",
-            flush=True,
-        )
-    except Exception as exc:  # noqa: BLE001 -- diagnostic only, never fatal
-        print(f"hive_jwt_forward diagnostic: decode failed: {exc}", flush=True)
 
 
 class Filter:
@@ -92,8 +68,6 @@ class Filter:
         token = (__oauth_token__ or {}).get("access_token")
         if token:
             body.setdefault("__metadata", {})["upstream_auth"] = f"Bearer {token}"
-            if self.e2e_mode:
-                _log_claim_keys(token)
 
         if self.e2e_mode:
             body.setdefault("temperature", 0)
