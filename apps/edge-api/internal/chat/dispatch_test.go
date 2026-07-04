@@ -257,6 +257,38 @@ func TestDispatchUnknownAliasReturns404(t *testing.T) {
 	require.Equal(t, http.StatusNotFound, rec.Code)
 }
 
+// TestDispatchRoutingBackendFailureReturns503 covers a control-plane
+// failure that is NOT "alias not found" (e.g. an internal error) -- this
+// must surface as 503, not 404, so a transient routing outage is never
+// misreported as a missing model (#289 review).
+func TestDispatchRoutingBackendFailureReturns503(t *testing.T) {
+	routing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer routing.Close()
+
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    inference.NewRoutingClient(routing.URL),
+		LiteLLMURL: "http://unused",
+		DeploySHA:  "test",
+		Env:        "test",
+	})
+
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		strings.NewReader(`{"model":"hive-fast","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{
+		ID: uuid.New(), TenantID: uuid.New(), Role: "member",
+	}))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
 func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -105,7 +106,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Warn("dispatch route selection failed", "err", err, "alias", parsed.Model)
-		apierr.Write(w, http.StatusNotFound, apierr.CodeInvalidRequest, "model not found")
+		if errors.Is(err, inference.ErrRouteNotFound) {
+			apierr.Write(w, http.StatusNotFound, apierr.CodeInvalidRequest, "model not found")
+		} else {
+			// Transport failure or unexpected control-plane status --
+			// not a verdict on the alias itself. Reporting 404 here
+			// would misrepresent a transient routing outage as a
+			// missing model (#289 review).
+			apierr.Write(w, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "routing unavailable")
+		}
 		return
 	}
 	clientModel := parsed.Model

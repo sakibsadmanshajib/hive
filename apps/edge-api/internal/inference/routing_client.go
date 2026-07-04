@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,13 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
+
+// ErrRouteNotFound wraps a SelectRoute failure caused by the control-plane
+// returning 404 (the alias itself does not resolve to any route). Callers
+// use errors.Is against this to tell a genuine "unknown model" apart from
+// a transport failure or unexpected upstream status, which should surface
+// as a provider-blind 5xx rather than 404 (#289 review).
+var ErrRouteNotFound = errors.New("routing: alias not found")
 
 // SelectRouteInput mirrors the control-plane routing.SelectionInput.
 type SelectRouteInput struct {
@@ -77,6 +85,9 @@ func (c *RoutingClient) SelectRoute(ctx context.Context, input SelectRouteInput)
 
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 
+	if resp.StatusCode == http.StatusNotFound {
+		return SelectRouteResult{}, fmt.Errorf("%w: %s", ErrRouteNotFound, strings.TrimSpace(string(respBody)))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return SelectRouteResult{}, fmt.Errorf("routing: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
