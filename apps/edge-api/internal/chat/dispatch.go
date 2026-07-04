@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -11,14 +12,20 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
 
 type Deps struct {
-	Pool       *pgxpool.Pool
+	Pool *pgxpool.Pool
+	// Routing resolves a Hive catalog alias (e.g. "hive-fast") to the
+	// underlying LiteLLM route. Required: LiteLLM only knows route names
+	// (e.g. "route-groq-fast"), never Hive aliases, so forwarding
+	// parsed.Model unresolved 400s upstream on every real request (#269).
+	Routing    *inference.RoutingClient
 	LiteLLMURL string
 	LiteLLMKey string
 	DeploySHA  string
@@ -88,6 +95,30 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest, "missing model or messages")
 		return
 	}
+	// Resolve the client-facing alias (e.g. "hive-fast") to the concrete
+	// LiteLLM route (e.g. "route-groq-fast"). LiteLLM's model_list only
+	// contains route names; sending the alias straight through 400s
+	// upstream with "Invalid model name passed in model=<alias>" (#269).
+	route, err := h.deps.Routing.SelectRoute(r.Context(), inference.SelectRouteInput{
+		AliasID:             parsed.Model,
+		NeedChatCompletions: true,
+		NeedStreaming:       true,
+	})
+	if err != nil {
+		slog.Warn("dispatch route selection failed", "err", err, "alias", parsed.Model)
+		if errors.Is(err, inference.ErrRouteNotFound) {
+			apierr.Write(w, http.StatusNotFound, apierr.CodeInvalidRequest, "model not found")
+		} else {
+			// Transport failure or unexpected control-plane status --
+			// not a verdict on the alias itself. Reporting 404 here
+			// would misrepresent a transient routing outage as a
+			// missing model (#289 review).
+			apierr.Write(w, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "routing unavailable")
+		}
+		return
+	}
+	clientModel := parsed.Model
+	parsed.Model = route.LiteLLMModelName
 	requestID := uuid.New()
 	parsed.Stream = true
 	body, err := json.Marshal(parsed)
@@ -121,7 +152,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
 		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		apierr.WriteProviderBlindUpstreamError(w, parsed.Model, resp.StatusCode, string(rawBody))
+		apierr.WriteProviderBlindUpstreamError(w, clientModel, resp.StatusCode, string(rawBody))
 		return
 	}
 
@@ -184,19 +215,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	streamErr := scanner.Err()
 	if streamErr != nil {
 		slog.Warn("dispatch SSE stream aborted",
-			"err", streamErr, "request_id", requestID, "model", parsed.Model)
+			"err", streamErr, "request_id", requestID, "model", clientModel)
 		finishReason = "stream_error"
 	}
 
 	latency := int(time.Since(started).Milliseconds())
-	provider := guessProvider(parsed.Model)
 	costCredits := int64(totalTokens)
 	if traceErr := InsertTrace(r.Context(), h.deps.Pool, TraceRow{
 		TenantID:       user.TenantID,
 		UserID:         user.ID,
 		RequestID:      requestID,
-		Model:          parsed.Model,
-		Provider:       provider,
+		Model:          clientModel,
+		Provider:       route.Provider,
 		InTokens:       inTokens,
 		OutTokens:      outTokens,
 		LatencyMs:      latency,
@@ -219,7 +249,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		DeploySHA:   h.deps.DeploySHA,
 		Environment: h.deps.Env,
 		After: map[string]any{
-			"model":         parsed.Model,
+			"model":         clientModel,
 			"in_tokens":     inTokens,
 			"out_tokens":    outTokens,
 			"latency_ms":    latency,
@@ -234,20 +264,5 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func flush(flusher http.Flusher) {
 	if flusher != nil {
 		flusher.Flush()
-	}
-}
-
-func guessProvider(model string) string {
-	switch {
-	case strings.HasPrefix(model, "openrouter/"):
-		return "openrouter"
-	case strings.HasPrefix(model, "groq/"):
-		return "groq"
-	case strings.HasPrefix(model, "gpt-"):
-		return "openai"
-	case strings.HasPrefix(model, "claude-"):
-		return "anthropic"
-	default:
-		return "unknown"
 	}
 }

@@ -16,6 +16,7 @@ package auth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -24,6 +25,21 @@ import (
 	"strconv"
 	"strings"
 )
+
+// owuiUnwrappedKey marks a request context as having had its Authorization
+// header rewritten by OWUIUnwrap. It is only ever set below, on the server
+// side, from the cloned request -- never derived from any client-supplied
+// header -- so it cannot be spoofed by an inbound request.
+type owuiUnwrappedKey struct{}
+
+// IsOWUIUnwrapped reports whether ctx belongs to a request whose
+// Authorization header OWUIUnwrap rewrote from the shim key to a per-user
+// token. JWTMiddleware uses this to scope its tenant_id fallback (#269,
+// see TenantFallback) to the OWUI shim path only.
+func IsOWUIUnwrapped(ctx context.Context) bool {
+	v, _ := ctx.Value(owuiUnwrappedKey{}).(bool)
+	return v
+}
 
 // maxOWUIUnwrapBody caps the body we buffer for metadata extraction.
 // OWUI chat-completions bodies are typically small (~kilobytes); a 2 MiB
@@ -140,6 +156,7 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 			r2.Header.Set("Content-Length", strconv.Itoa(len(rewritten)))
 			if token != "" {
 				r2.Header.Set("Authorization", "Bearer "+token)
+				r2 = r2.WithContext(context.WithValue(r2.Context(), owuiUnwrappedKey{}, true))
 			}
 			next.ServeHTTP(w, r2)
 		})

@@ -9,7 +9,9 @@ test("signout clears session and lands on signin page", async ({ page }) => {
   // visible in the header regardless of collapsed/expanded sidebar state
   // (verified against the run 28684729556 failure snapshot).
   await page.getByRole("img", { name: /open user profile menu/i }).click();
-  await page.getByRole("menuitem", { name: /sign out/i }).click();
+  // OWUI 0.9.5 renders "Sign Out" as a <button>, not a menuitem-role node
+  // (run 28688154897 failure snapshot).
+  await page.getByRole("button", { name: /sign out/i }).click();
   await expect(
     page.getByRole("button", { name: /continue with hive/i }),
   ).toBeVisible();

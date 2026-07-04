@@ -12,6 +12,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
@@ -23,19 +26,16 @@ import (
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
-	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/images"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/limits"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/matrix"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/middleware"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/proxy"
+	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sovereign"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 )
 
 // jwtAuthEnv collects the Supabase JWT validator configuration sourced
@@ -144,6 +144,7 @@ func main() {
 	inferenceHandler := inference.NewHandler(orchestrator)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
 		Pool:       dbPool,
+		Routing:    routingClient,
 		LiteLLMURL: resolveLiteLLMBaseURL(),
 		LiteLLMKey: resolveLiteLLMMasterKey(),
 		DeploySHA:  os.Getenv("DEPLOY_SHA"),
@@ -316,7 +317,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("failed to initialize Supabase JWT validator: %v", err)
 		}
-		jwtMW = auth.JWTMiddleware(jwtValidator, jwtAuditLogger())
+		jwtMW = auth.JWTMiddleware(jwtValidator, jwtAuditLogger(), auth.NewTenantFallback(dbPool))
 	}
 
 	var handler http.Handler = mux

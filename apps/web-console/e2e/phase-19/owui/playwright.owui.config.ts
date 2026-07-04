@@ -15,7 +15,12 @@ const hasCreds = Boolean(
 
 export default defineConfig({
   testDir: "./",
-  timeout: 30_000,
+  // 60s (not the default 30s): the per-assertion timeouts in the chat
+  // specs run up to 45s to absorb real free-tier OpenRouter/Groq latency
+  // now that auth+routing succeed end-to-end (run 28691819361) -- the
+  // test-level timeout governs the whole test function and would
+  // otherwise cut those assertions off before they get their own budget.
+  timeout: 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
