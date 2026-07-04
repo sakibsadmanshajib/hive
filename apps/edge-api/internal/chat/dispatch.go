@@ -104,6 +104,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		NeedStreaming:       true,
 	})
 	if err != nil {
+		slog.Warn("dispatch route selection failed", "err", err, "alias", parsed.Model)
 		apierr.Write(w, http.StatusNotFound, apierr.CodeInvalidRequest, "model not found")
 		return
 	}

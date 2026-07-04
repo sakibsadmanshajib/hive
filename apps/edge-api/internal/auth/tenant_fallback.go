@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,16 @@ type TenantFallback struct {
 	pool *pgxpool.Pool
 }
 
+// TenantFallbackResolver is the subset of *TenantFallback that
+// JWTMiddleware depends on. It exists so tests can substitute a fake
+// resolver and exercise the fallback gate's success/miss/error branches
+// without a real DB connection.
+type TenantFallbackResolver interface {
+	Resolve(ctx context.Context, userID uuid.UUID) (tenantID uuid.UUID, role string, ok bool, err error)
+}
+
+var _ TenantFallbackResolver = (*TenantFallback)(nil)
+
 // NewTenantFallback returns a resolver backed by pool. A nil pool is
 // valid: Resolve then always reports "not found", equivalent to the
 // fallback being disabled (e.g. deployments with no DB configured).
@@ -51,6 +62,13 @@ func (f *TenantFallback) Resolve(ctx context.Context, userID uuid.UUID) (tenantI
 		WHERE tu.user_id = $1 AND tu.status = 'ACTIVE' AND t.archived_at IS NULL
 		ORDER BY tu.joined_at ASC, tu.tenant_id ASC
 		LIMIT 1`
+	// The request context carries no deadline on the SSE dispatch path
+	// (server read/write timeouts are 0 there), so an unbounded QueryRow
+	// would hold this goroutine (and a pool connection) open for as long
+	// as the client keeps the connection alive. Bind a short timeout
+	// local to this lookup.
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
 	row := f.pool.QueryRow(ctx, q, userID)
 	if scanErr := row.Scan(&tenantID, &role); scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {

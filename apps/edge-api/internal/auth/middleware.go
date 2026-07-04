@@ -11,6 +11,7 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -36,8 +37,11 @@ type AuditFailFunc func(action, reason, ip string)
 // token otherwise validates but lacks the tenant_id custom claim, and is
 // consulted only when IsOWUIUnwrapped(r.Context()) is true (#269) --
 // ordinary JWT auth is unaffected. A nil tenantFallback disables this
-// entirely (Resolve on a nil *TenantFallback always reports "not found").
-func JWTMiddleware(v *SupabaseJWTValidator, auditFail AuditFailFunc, tenantFallback *TenantFallback) func(http.Handler) http.Handler {
+// entirely (Resolve on a nil *TenantFallback, or a nil interface value,
+// always reports "not found"). tenantFallback is typed as the
+// TenantFallbackResolver interface rather than the concrete *TenantFallback
+// so tests can substitute a fake backed by no DB.
+func JWTMiddleware(v *SupabaseJWTValidator, auditFail AuditFailFunc, tenantFallback TenantFallbackResolver) func(http.Handler) http.Handler {
 	if v == nil {
 		return func(_ http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -103,8 +107,15 @@ func JWTMiddleware(v *SupabaseJWTValidator, auditFail AuditFailFunc, tenantFallb
 			// tokens. Recover it from the DB, but only for requests that
 			// already passed OWUIUnwrap's shim-key check; every other JWT
 			// path keeps failing closed exactly as before.
-			if claims.TenantID == uuid.Nil && IsOWUIUnwrapped(r.Context()) {
-				if tenantID, role, found, ferr := tenantFallback.Resolve(r.Context(), claims.Sub); ferr == nil && found {
+			if claims.TenantID == uuid.Nil && IsOWUIUnwrapped(r.Context()) && tenantFallback != nil {
+				tenantID, role, found, ferr := tenantFallback.Resolve(r.Context(), claims.Sub)
+				if ferr != nil {
+					// Treated as a miss below (claims.TenantID stays Nil ->
+					// request fails closed); logged so operators can tell a
+					// DB/timeout problem apart from a genuine "no active
+					// membership" miss. Never log token contents.
+					slog.Warn("tenant fallback resolve failed", "err", ferr, "user_id", claims.Sub)
+				} else if found {
 					claims.TenantID = tenantID
 					claims.Role = role
 				}
