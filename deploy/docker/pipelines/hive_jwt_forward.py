@@ -37,6 +37,26 @@ from typing import Any
 from pydantic import BaseModel
 
 
+def _log_oauth_token_shape(oauth_token: dict[str, Any] | None) -> None:
+    """#269 diagnostic (e2e-mode only, temporary): logs the SHAPE of the
+    __oauth_token__ OWUI resolved for this request -- never the token
+    value itself. Disambiguates "OWUI never had an OAuth session for this
+    call" (oauth_token is None) from "session found but no access_token
+    field" (dict without access_token) from "token present" (has it,
+    length only). See open_webui.utils.middleware.get_system_oauth_token /
+    utils.oauth.OAuthManager.get_oauth_token upstream.
+    """
+    if oauth_token is None:
+        print("hive_jwt_forward diagnostic: __oauth_token__ is None", flush=True)
+        return
+    token = oauth_token.get("access_token")
+    print(
+        f"hive_jwt_forward diagnostic: __oauth_token__ keys={sorted(oauth_token.keys())!r} "
+        f"has_access_token={bool(token)} access_token_len={len(token) if token else 0}",
+        flush=True,
+    )
+
+
 class Filter:
     class Valves(BaseModel):
         priority: int = 0
@@ -65,6 +85,8 @@ class Filter:
         # warning and the selector routes the shim-key Authorization to the
         # API-key path, which 401s loudly instead of silently misattributing
         # the request.
+        if self.e2e_mode:
+            _log_oauth_token_shape(__oauth_token__)
         token = (__oauth_token__ or {}).get("access_token")
         if token:
             body.setdefault("__metadata", {})["upstream_auth"] = f"Bearer {token}"
