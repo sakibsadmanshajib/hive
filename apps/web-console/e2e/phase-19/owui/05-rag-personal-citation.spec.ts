@@ -14,10 +14,14 @@ test("ask grounded question and receive citation", async ({ page }) => {
     anchor: string;
   };
   // RAG adds retrieval + embedding on top of a plain chat completion; both
-  // 01 and 02's plain-chat waits already need up to 90s of real free-tier
-  // latency, so this needs its own, larger budget (run 28692939239: both
-  // attempts timed out at the previous 45s Copy-button wait).
-  test.setTimeout(150_000);
+  // 01 and 02's plain-chat waits already need real headroom against
+  // free-tier latency (run 28692939239: both attempts timed out at the
+  // previous 45s Copy-button wait). Run 28693654419: both attempts timed
+  // out at 90s even though the grounded answer was a long, fully-formed,
+  // multi-table response -- the model just took over 90s to fully
+  // generate it. Needs a larger budget for genuinely long completions,
+  // not more retries.
+  test.setTimeout(240_000);
 
   await page.goto("/");
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
@@ -33,7 +37,7 @@ test("ask grounded question and receive citation", async ({ page }) => {
   // text (expected.anchor), so that is no longer asserted (#269).
   await expect(
     page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
-  ).toBeVisible({ timeout: 90_000 });
+  ).toBeVisible({ timeout: 150_000 });
   // Run 28693277109: first attempt failed here at 10s (retry passed) --
   // the citation badge renders after the Copy button, on its own follow-up
   // tick, and 10s was too tight a margin for that under load.

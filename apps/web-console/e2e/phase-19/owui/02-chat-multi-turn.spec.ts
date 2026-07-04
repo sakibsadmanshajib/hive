@@ -10,8 +10,11 @@ test("second turn references first turn context", async ({ page }) => {
   // latency -- this needs a much larger ceiling, and `waitForResponse`
   // resolves at response-header time (not full stream completion), so the
   // Copy-button wait after it still needs a full round-trip-sized budget,
-  // not just a short DOM-settle margin.
-  test.setTimeout(360_000);
+  // not just a short DOM-settle margin. Run 28693654419: even a 90s
+  // response wait timed out outright on turn 1 (same free-tier
+  // slow/cold-start variance seen in 01), so both round trips need the
+  // same 150s-class headroom 01 and 05 needed.
+  test.setTimeout(420_000);
   await page.goto("/");
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
   // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
@@ -26,7 +29,7 @@ test("second turn references first turn context", async ({ page }) => {
   // wait is generous.
   await page.waitForResponse(
     (r) => r.url().includes("/api/chat/completions") && r.ok(),
-    { timeout: 90_000 },
+    { timeout: 150_000 },
   );
   // `[data-role="assistant"]` never matches anything real (see 01); a
   // completed assistant turn is the only one that grows a "Copy" button.
@@ -35,11 +38,14 @@ test("second turn references first turn context", async ({ page }) => {
   ).toBeVisible({ timeout: 90_000 });
 
   // OWUI also fires background /api/chat/completions calls (title/tag
-  // generation) around the same time as a real turn, with an empty or
-  // unrelated `messages` array -- a plain URL+method predicate can catch
-  // one of those instead of the real second-turn request (run 28692939239:
-  // a 14s retry captured `messages: []`). Requiring the just-typed text to
-  // appear in the payload is what actually identifies the real request.
+  // generation) around the same time as a real turn -- run 28692939239's
+  // 14s retry captured one with `messages: []`, and run 28693654419
+  // captured one with a non-empty but unrelated `messages` array (a
+  // title/tag prompt that embeds the raw conversation text in a field
+  // Playwright sees when it stringifies the whole payload, even though
+  // `messages` itself carries no such text). A whole-payload substring
+  // match catches both false positives. Only a message whose own content
+  // contains the just-typed text identifies the real second-turn request.
   const secondTurnText = "What is my favourite colour?";
   const [secondReq] = await Promise.all([
     // This resolves at request-send time, not response time, so 30s is
@@ -51,7 +57,10 @@ test("second turn references first turn context", async ({ page }) => {
           return false;
         }
         try {
-          return JSON.stringify(r.postDataJSON()).includes(secondTurnText);
+          const data = r.postDataJSON() as { messages?: { content?: unknown }[] };
+          return (data.messages ?? []).some(
+            (m) => typeof m?.content === "string" && m.content.includes(secondTurnText),
+          );
         } catch {
           return false;
         }
