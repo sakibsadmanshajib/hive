@@ -14,10 +14,10 @@ test("ask grounded question and receive citation", async ({ page }) => {
     anchor: string;
   };
   // RAG adds retrieval + embedding on top of a plain chat completion; both
-  // 01 and 02's plain-chat waits already need up to 60s of real free-tier
+  // 01 and 02's plain-chat waits already need up to 90s of real free-tier
   // latency, so this needs its own, larger budget (run 28692939239: both
   // attempts timed out at the previous 45s Copy-button wait).
-  test.setTimeout(120_000);
+  test.setTimeout(150_000);
 
   await page.goto("/");
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
@@ -34,5 +34,8 @@ test("ask grounded question and receive citation", async ({ page }) => {
   await expect(
     page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
   ).toBeVisible({ timeout: 90_000 });
-  await expect(page.getByText(/policy\.pdf/i)).toBeVisible({ timeout: 10_000 });
+  // Run 28693277109: first attempt failed here at 10s (retry passed) --
+  // the citation badge renders after the Copy button, on its own follow-up
+  // tick, and 10s was too tight a margin for that under load.
+  await expect(page.getByText(/policy\.pdf/i)).toBeVisible({ timeout: 30_000 });
 });

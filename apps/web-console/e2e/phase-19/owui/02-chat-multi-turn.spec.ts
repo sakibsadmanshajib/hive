@@ -3,10 +3,15 @@ import { test, expect } from "@playwright/test";
 test.use({ storageState: "e2e/phase-19/owui/.auth/owui-user.json" });
 
 test("second turn references first turn context", async ({ page }) => {
-  // Two sequential real-model waits (45s each) can exceed the project's
-  // default 60s test timeout in the worst case; this test needs its own
-  // budget rather than shrinking either wait.
-  test.setTimeout(120_000);
+  // Run 28693277109: attempt 1 failed at 1.1m (the 60s response wait for
+  // turn 1 timed out outright), attempt 2 failed at exactly the old 120s
+  // test-level cap while still waiting on turn 2's request. Two full
+  // sequential model round trips do not fit in 120s of real free-tier
+  // latency -- this needs a much larger ceiling, and `waitForResponse`
+  // resolves at response-header time (not full stream completion), so the
+  // Copy-button wait after it still needs a full round-trip-sized budget,
+  // not just a short DOM-settle margin.
+  test.setTimeout(360_000);
   await page.goto("/");
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
   // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
@@ -21,13 +26,13 @@ test("second turn references first turn context", async ({ page }) => {
   // wait is generous.
   await page.waitForResponse(
     (r) => r.url().includes("/api/chat/completions") && r.ok(),
-    { timeout: 60_000 },
+    { timeout: 90_000 },
   );
   // `[data-role="assistant"]` never matches anything real (see 01); a
   // completed assistant turn is the only one that grows a "Copy" button.
   await expect(
     page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
-  ).toBeVisible({ timeout: 45_000 });
+  ).toBeVisible({ timeout: 90_000 });
 
   // OWUI also fires background /api/chat/completions calls (title/tag
   // generation) around the same time as a real turn, with an empty or
@@ -37,16 +42,22 @@ test("second turn references first turn context", async ({ page }) => {
   // appear in the payload is what actually identifies the real request.
   const secondTurnText = "What is my favourite colour?";
   const [secondReq] = await Promise.all([
-    page.waitForRequest((r) => {
-      if (!r.url().includes("/api/chat/completions") || r.method() !== "POST") {
-        return false;
-      }
-      try {
-        return JSON.stringify(r.postDataJSON()).includes(secondTurnText);
-      } catch {
-        return false;
-      }
-    }),
+    // This resolves at request-send time, not response time, so 30s is
+    // ample even under real latency -- it only has to observe the browser
+    // dispatching the fetch, which happens immediately after Enter.
+    page.waitForRequest(
+      (r) => {
+        if (!r.url().includes("/api/chat/completions") || r.method() !== "POST") {
+          return false;
+        }
+        try {
+          return JSON.stringify(r.postDataJSON()).includes(secondTurnText);
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 30_000 },
+    ),
     (async () => {
       await page.locator("#chat-input").fill(secondTurnText);
       await page.keyboard.press("Enter");
@@ -59,7 +70,10 @@ test("second turn references first turn context", async ({ page }) => {
   // assistant turn completes at all.
   const body = secondReq.postDataJSON() as { messages?: { content?: unknown }[] };
   expect(JSON.stringify(body.messages ?? [])).toMatch(/purple/i);
+  // `waitForRequest` above resolved when the browser sent turn 2's request,
+  // not when the model finished replying -- this still needs the full
+  // round-trip budget, same as turn 1's Copy wait.
   await expect(
     page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
-  ).toBeVisible({ timeout: 45_000 });
+  ).toBeVisible({ timeout: 90_000 });
 });
