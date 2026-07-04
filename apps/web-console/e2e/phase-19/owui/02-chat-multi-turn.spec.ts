@@ -21,7 +21,7 @@ test("second turn references first turn context", async ({ page }) => {
   // wait is generous.
   await page.waitForResponse(
     (r) => r.url().includes("/api/chat/completions") && r.ok(),
-    { timeout: 45_000 },
+    { timeout: 60_000 },
   );
   // `[data-role="assistant"]` never matches anything real (see 01); a
   // completed assistant turn is the only one that grows a "Copy" button.
@@ -29,13 +29,26 @@ test("second turn references first turn context", async ({ page }) => {
     page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
   ).toBeVisible({ timeout: 45_000 });
 
+  // OWUI also fires background /api/chat/completions calls (title/tag
+  // generation) around the same time as a real turn, with an empty or
+  // unrelated `messages` array -- a plain URL+method predicate can catch
+  // one of those instead of the real second-turn request (run 28692939239:
+  // a 14s retry captured `messages: []`). Requiring the just-typed text to
+  // appear in the payload is what actually identifies the real request.
+  const secondTurnText = "What is my favourite colour?";
   const [secondReq] = await Promise.all([
-    page.waitForRequest(
-      (r) =>
-        r.url().includes("/api/chat/completions") && r.method() === "POST",
-    ),
+    page.waitForRequest((r) => {
+      if (!r.url().includes("/api/chat/completions") || r.method() !== "POST") {
+        return false;
+      }
+      try {
+        return JSON.stringify(r.postDataJSON()).includes(secondTurnText);
+      } catch {
+        return false;
+      }
+    }),
     (async () => {
-      await page.locator("#chat-input").fill("What is my favourite colour?");
+      await page.locator("#chat-input").fill(secondTurnText);
       await page.keyboard.press("Enter");
     })(),
   ]);
