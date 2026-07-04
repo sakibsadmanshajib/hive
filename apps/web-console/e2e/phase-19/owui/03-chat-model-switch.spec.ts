@@ -13,9 +13,14 @@ test("switch model and confirm subsequent request goes to it", async ({
   // match both forms without also matching the neighbouring "Add Model"
   // button.
   await page.getByRole("button", { name: /^select(ed)? .*model/i }).click();
-  // route-groq-fast is one of the routes configured in
-  // deploy/litellm/config.yaml / .env.ci for the nightly run.
-  await page.getByRole("option", { name: /route-groq-fast/i }).click();
+  // OWUI's model list comes from edge-api's catalog, which exposes Hive
+  // model ALIASES (model_aliases.alias_id, e.g. "hive-fast"), never the
+  // underlying LiteLLM route name ("route-groq-fast") that the alias maps
+  // to (supabase/migrations/20260331_02_routing_policy.sql). The alias id
+  // is also exactly what OWUI sends back as `model` in the outgoing
+  // request body (run 28688900087 failure snapshot showed the trigger
+  // button read "Selected model: hive-auto", not a route name).
+  await page.getByRole("option", { name: /hive-fast/i }).click();
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
   // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
   // "message" placeholder exists (run 28683831193).
@@ -28,5 +33,5 @@ test("switch model and confirm subsequent request goes to it", async ({
     page.keyboard.press("Enter"),
   ]);
   const body = req.postDataJSON() as { model?: string };
-  expect(body.model).toMatch(/route-groq-fast/i);
+  expect(body.model).toMatch(/hive-fast/i);
 });

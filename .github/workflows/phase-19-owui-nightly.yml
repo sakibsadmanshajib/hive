@@ -267,7 +267,12 @@ jobs:
         if: failure()
         run: |
           cd deploy/docker
-          docker compose --env-file ../../.env.ci logs --no-color --tail 300 \
+          # #269: a full owui project run generates enough per-request HTTP
+          # access-log noise (open-webui) to push earlier diagnostic lines
+          # (e.g. the hive_jwt_forward JWT-claims probe) out of a 300-line
+          # tail before this step runs (run 28688900087). 2000 covers a full
+          # 6-spec run with room to spare.
+          docker compose --env-file ../../.env.ci logs --no-color --tail 2000 \
             open-webui litellm edge-api control-plane > $GITHUB_WORKSPACE/compose-logs.txt 2>&1 || true
       - name: SOC2 coverage report
         if: always()
