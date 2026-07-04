@@ -10,5 +10,9 @@ test("chat message streams a response", async ({ page }) => {
   await page.locator("#chat-input").fill("Say hello.");
   await page.keyboard.press("Enter");
   const reply = page.locator('[data-role="assistant"]').last();
-  await expect(reply).toContainText(/.+/, { timeout: 20_000 });
+  // Real upstream (free-tier OpenRouter/Groq) latency can run well past
+  // 20s once auth/routing actually succeed end-to-end (run 28691819361:
+  // no assistant bubble rendered within 20s even though edge-api and
+  // LiteLLM both logged a real 200 for the request).
+  await expect(reply).toContainText(/.+/, { timeout: 45_000 });
 });

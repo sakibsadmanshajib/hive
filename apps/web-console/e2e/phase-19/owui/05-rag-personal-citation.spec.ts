@@ -21,8 +21,10 @@ test("ask grounded question and receive citation", async ({ page }) => {
   await page.locator("#chat-input").fill(expected.prompt);
   await page.keyboard.press("Enter");
   const reply = page.locator('[data-role="assistant"]').last();
+  // Real upstream (free-tier OpenRouter/Groq) latency can run well past
+  // 30s once auth/routing actually succeed end-to-end (run 28691819361).
   await expect(reply).toContainText(new RegExp(expected.anchor, "i"), {
-    timeout: 30_000,
+    timeout: 45_000,
   });
   await expect(page.getByText(/policy\.pdf/i)).toBeVisible();
 });

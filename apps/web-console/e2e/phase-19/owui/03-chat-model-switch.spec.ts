@@ -25,10 +25,15 @@ test("switch model and confirm subsequent request goes to it", async ({
   // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
   // "message" placeholder exists (run 28683831193).
   await page.locator("#chat-input").fill("hi");
+  // The browser calls OWUI's OWN backend route ("/api/chat/completions"),
+  // never edge-api's "/v1/chat/completions" directly -- OWUI's backend
+  // proxies to edge-api server-side, so this only ever observes the
+  // former (run 28691819361 timed out waiting on the latter, which the
+  // browser never requests).
   const [req] = await Promise.all([
     page.waitForRequest(
       (r) =>
-        r.url().includes("/v1/chat/completions") && r.method() === "POST",
+        r.url().includes("/api/chat/completions") && r.method() === "POST",
     ),
     page.keyboard.press("Enter"),
   ]);
