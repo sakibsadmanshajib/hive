@@ -144,6 +144,7 @@ func main() {
 	inferenceHandler := inference.NewHandler(orchestrator)
 	chatDispatchHandler := chat.NewDispatch(chat.Deps{
 		Pool:       dbPool,
+		Routing:    routingClient,
 		LiteLLMURL: resolveLiteLLMBaseURL(),
 		LiteLLMKey: resolveLiteLLMMasterKey(),
 		DeploySHA:  os.Getenv("DEPLOY_SHA"),
