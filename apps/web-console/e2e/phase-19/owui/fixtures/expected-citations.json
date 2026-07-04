@@ -1,4 +1,4 @@
 {
-  "prompt": "What is the password rotation policy?",
+  "prompt": "What is the password rotation policy? Answer in one short sentence.",
   "anchor": "90 days"
 }

@@ -16,11 +16,15 @@ test("ask grounded question and receive citation", async ({ page }) => {
   // RAG adds retrieval + embedding on top of a plain chat completion; both
   // 01 and 02's plain-chat waits already need real headroom against
   // free-tier latency (run 28692939239: both attempts timed out at the
-  // previous 45s Copy-button wait). Run 28693654419: both attempts timed
-  // out at 90s even though the grounded answer was a long, fully-formed,
-  // multi-table response -- the model just took over 90s to fully
-  // generate it. Needs a larger budget for genuinely long completions,
-  // not more retries.
+  // previous 45s Copy-button wait). Run 28693654419 and 28694246853: both
+  // attempts timed out at 90s and then 150s even though the grounded
+  // answer was a long, fully-formed, multi-table response each time -- an
+  // unconstrained grounded question lets the model write an essay instead
+  // of an answer. The fixture prompt now asks for one short sentence
+  // (see fixtures/expected-citations.json) so generation time stops
+  // scaling with however much the model decides to write; this budget
+  // stays generous as a floor against real free-tier latency, not
+  // against unbounded verbosity.
   test.setTimeout(240_000);
 
   await page.goto("/");
