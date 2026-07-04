@@ -9,10 +9,15 @@ test("chat message streams a response", async ({ page }) => {
   // "message" placeholder exists (run 28683831193).
   await page.locator("#chat-input").fill("Say hello.");
   await page.keyboard.press("Enter");
-  const reply = page.locator('[data-role="assistant"]').last();
-  // Real upstream (free-tier OpenRouter/Groq) latency can run well past
-  // 20s once auth/routing actually succeed end-to-end (run 28691819361:
-  // no assistant bubble rendered within 20s even though edge-api and
-  // LiteLLM both logged a real 200 for the request).
-  await expect(reply).toContainText(/.+/, { timeout: 45_000 });
+  // `[data-role="assistant"]` never matches anything: OWUI's Messages.svelte
+  // renders the conversation as role="log" > listitem, with no data-role
+  // attribute anywhere in its component tree (confirmed against source;
+  // every run showed "element(s) not found", never a text mismatch, even
+  // once LiteLLM was confirmed returning real 200s). A completed assistant
+  // turn is the only one that grows a "Copy" action button, so its
+  // visibility is a structural proof the pipeline delivered a response --
+  // free-tier model output content is not asserted (#269).
+  await expect(
+    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
+  ).toBeVisible({ timeout: 45_000 });
 });

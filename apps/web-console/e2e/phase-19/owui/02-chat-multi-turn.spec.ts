@@ -23,11 +23,30 @@ test("second turn references first turn context", async ({ page }) => {
     (r) => r.url().includes("/api/chat/completions") && r.ok(),
     { timeout: 45_000 },
   );
+  // `[data-role="assistant"]` never matches anything real (see 01); a
+  // completed assistant turn is the only one that grows a "Copy" button.
+  await expect(
+    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
+  ).toBeVisible({ timeout: 45_000 });
 
-  await page.locator("#chat-input").fill("What is my favourite colour?");
-  await page.keyboard.press("Enter");
-  await expect(page.locator('[data-role="assistant"]').last()).toContainText(
-    /purple/i,
-    { timeout: 45_000 },
-  );
+  const [secondReq] = await Promise.all([
+    page.waitForRequest(
+      (r) =>
+        r.url().includes("/api/chat/completions") && r.method() === "POST",
+    ),
+    (async () => {
+      await page.locator("#chat-input").fill("What is my favourite colour?");
+      await page.keyboard.press("Enter");
+    })(),
+  ]);
+  // Real signal per #269: assert the second turn's OUTGOING request
+  // carries the first turn's message, proving multi-turn context is wired
+  // end-to-end. Free-tier models cannot reliably recall/repeat "purple" in
+  // their own reply, so that is no longer asserted -- only that a second
+  // assistant turn completes at all.
+  const body = secondReq.postDataJSON() as { messages?: { content?: unknown }[] };
+  expect(JSON.stringify(body.messages ?? [])).toMatch(/purple/i);
+  await expect(
+    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
+  ).toBeVisible({ timeout: 45_000 });
 });
