@@ -60,3 +60,6 @@ supabase/.temp/
 /v-*.png
 /r1-*.png
 /rev-*.png
+
+# OpenWolf token ledger: machine generated, grows every session
+.wolf/token-ledger.json
