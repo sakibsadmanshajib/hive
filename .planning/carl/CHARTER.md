@@ -1,5 +1,17 @@
 # Carl.sh — Sovereign Workspace Leadership Charter
 
+> ## Amendment 2026-07-07
+>
+> This block was added on 2026-07-07 and governs on any conflict with the historical charter text below. The original text is preserved for the record and retains its historical naming; the historical sections are not rewritten.
+>
+> **Product naming.** The product is now **Hive** (cloud, us-hosted) and **Hive Enterprise** (customer-hosted). The "Carl" and "Carl.sh" names are retired. The one-command installer remains `scripts/install.sh` and carries no product branding. All "Carl" and "Carl.sh" naming below is historical.
+>
+> **Sovereignty posture.** The locked decision "zero external API keys at the edge, `install --sovereign` refuses external provider keys" (decision 2 plus the Meeting 1 sovereign egress hardening) is superseded by three inference postures: cloud (external providers); enterprise default (local models, where an admin may knowingly opt in to add external provider keys); and strict-sovereign lockdown (the `HIVE_SOVEREIGN` guard from #245, now an optional toggle for buyers who need a provable air gap, rather than an always-on default). The Grok and free-model test-only rule (decision 8) is unchanged: test-time conveniences, never shipped runtime dependencies.
+>
+> **Tenancy.** A single organization is a single tenant. Departments are separated by RBAC inside that one tenant, not by additional tenants. The multi-tenant schema exists for extensibility only.
+>
+> **Chat client.** Open WebUI is the v1 chat client, per the PR #291 decision, which supersedes the Meeting 1 choice of Lobe Chat recorded below. PR #291 was open at the time of this amendment.
+
 Initiative: a single one-command tool (`Carl.sh`) that stands up a fully self-hosted AI workspace
 (a co-work ChatGPT with RAG) on a target machine, exposing OpenAI-compatible and
 Anthropic-compatible APIs over the existing Hive control plane. Built by gap-closing the existing
@@ -70,14 +82,9 @@ Not provided and not needed: Tailscale key, Daytona account, Anthropic API key.
 Leadership team aligned on the following binding decisions:
 
 ### Web client and user-facing shell
-**Superseded 2026-07-06 (owner decision, final)**: OWUI is the accepted v1 client. The owner
-reviewed the post-2025 branding-retention clause described below and knowingly accepted the resale
-risk. The Lobe Chat evaluation is closed; the `apps/chat-app` fork scaffolded under the original
-mandate never shipped and has been removed.
-
-Original 2026-06-25 mandate (superseded, kept for record): the shipped web client shell was to be
-Lobe Chat (MIT license), with Open WebUI dropped as the standard shipped shell due to a post-2025
-branding retention clause that creates resale risk for regulated government buyers.
+The shipped web client shell is Lobe Chat (MIT license). Open WebUI is dropped as the standard
+shipped shell due to a post-2025 branding retention clause that creates resale risk for regulated
+government buyers. Lobe Chat is MIT-licensed, open-source, and has no external branding obligations.
 
 ### Edge data plane and storage
 The self-hosted edge data plane is a Supabase stack (Postgres with pgvector extension, GoTrue
@@ -121,7 +128,7 @@ systems.
 ### Client phasing recommendation (pending owner ratification)
 Based on the feature set and shipping timeline:
 
-- **Ship in v1 (Wave 1–2)**: Full-featured web console (OWUI, superseded from Lobe Chat 2026-07-06), thin Word plugin.
+- **Ship in v1 (Wave 1–2)**: Full-featured web console (Lobe Chat), thin Word plugin.
 - **Defer to v1.x**: Mobile apps, LibreOffice/Google Docs integrations, desktop client, multi-user cowork workspace.
 
 Rationale: the web client covers the largest user population and enables all core features (chat,
