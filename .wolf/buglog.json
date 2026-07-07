@@ -1,0 +1,1776 @@
+{
+  "version": 1,
+  "bugs": [
+    {
+      "id": "bug-001",
+      "timestamp": "2026-06-12T03:51:55.203Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a1d5f0532292929a3/apps/control-plane/cmd/server/main.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 13\u219223 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-12T03:51:55.203Z"
+    },
+    {
+      "id": "bug-002",
+      "timestamp": "2026-06-12T03:51:59.669Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a1d5f0532292929a3/apps/control-plane/internal/litellmconfig/generator.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 7\u219212 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-12T03:51:59.669Z"
+    },
+    {
+      "id": "bug-003",
+      "timestamp": "2026-06-12T03:52:01.513Z",
+      "error_message": "Incorrect value in code",
+      "file": ".claude/worktrees/agent-a1d5f0532292929a3/apps/control-plane/internal/litellmconfig/restart.go",
+      "root_cause": "Had `^[a-zA-Z0-9][a-zA-Z0-9_./-]*$`",
+      "fix": "Changed to `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-12T03:52:01.513Z"
+    },
+    {
+      "id": "bug-004",
+      "timestamp": "2026-06-12T03:55:00Z",
+      "error_message": "deploy-staging run 27392766395 failed; reported as staging 502 regression",
+      "file": "packages/sdk-tests/js/tests/chat-completions/chat-completions.test.ts",
+      "root_cause": "SDK replay tests still asserted pre-phase-20 unconditional 400 for tools/response_format; PR #206 shipped capability passthrough so requests succeed and tests fail with promise resolved instead of rejecting. Health endpoints were 200 the whole time.",
+      "fix": "PR #211 updates both tests to assert tool_calls finish_reason and parseable JSON output",
+      "tags": [
+        "deploy-staging",
+        "sdk-tests",
+        "phase-20",
+        "tools",
+        "stale-test"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-12T03:55:00Z"
+    },
+    {
+      "id": "bug-005",
+      "timestamp": "2026-06-13T08:44:00.078Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a33bf105ae05398d9/apps/control-plane/internal/litellmconfig/sync_integration_test.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 12\u219214 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T08:44:00.078Z"
+    },
+    {
+      "id": "bug-006",
+      "timestamp": "2026-06-13T08:44:03.339Z",
+      "error_message": "Wrong reference: mockRestarter should be integMockRestarter",
+      "file": ".claude/worktrees/agent-a33bf105ae05398d9/apps/control-plane/internal/litellmconfig/sync_integration_test.go",
+      "root_cause": "Used \"mockRestarter\" instead of \"integMockRestarter\"",
+      "fix": "Changed mockRestarter \u2192 integMockRestarter",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T08:44:03.339Z"
+    },
+    {
+      "id": "bug-007",
+      "timestamp": "2026-06-13T08:51:42.784Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-aa27e96f8e15eb950/apps/control-plane/internal/providers/integration_test.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 18\u219235 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T08:51:42.784Z"
+    },
+    {
+      "id": "bug-008",
+      "timestamp": "2026-06-13T09:37:37.499Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "../.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+      "root_cause": "Code path had no error handling \u2014 exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T09:37:37.499Z"
+    },
+    {
+      "id": "bug-009",
+      "timestamp": "2026-06-13T10:28:29.437Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a2e35737dbb42549b/apps/control-plane/cmd/server/main.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 25\u219236 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T10:28:29.437Z"
+    },
+    {
+      "id": "bug-010",
+      "timestamp": "2026-06-13T10:38:03.025Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a42a92a2b90af54a5/deploy/docker/buildx.sh",
+      "root_cause": "7 lines replaced/restructured",
+      "fix": "Rewrote 12\u219220 lines (7 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T10:38:03.025Z"
+    },
+    {
+      "id": "bug-011",
+      "timestamp": "2026-06-13T10:38:10.262Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a42a92a2b90af54a5/deploy/oci/catch-a1.sh",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 11\u219223 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T10:38:10.262Z"
+    },
+    {
+      "id": "bug-012",
+      "timestamp": "2026-06-13T10:38:16.912Z",
+      "error_message": "Incorrect value in code",
+      "file": ".claude/worktrees/agent-a42a92a2b90af54a5/deploy/oci/catch-a1.sh",
+      "root_cause": "Had \"{\\\"",
+      "fix": "Changed to \"$(jq -n --arg k \"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T10:38:16.912Z"
+    },
+    {
+      "id": "bug-013",
+      "timestamp": "2026-06-13T12:10:07.486Z",
+      "error_message": "Incorrect value in code",
+      "file": ".claude/worktrees/agent-ac8486d870776d3c9/website/sovereign/package.json",
+      "root_cause": "Had \"^19.2.7\"",
+      "fix": "Changed to \"^19.2.17\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "json"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T12:10:07.486Z"
+    },
+    {
+      "id": "bug-014",
+      "timestamp": "2026-06-13T12:15:54.268Z",
+      "error_message": "Missing await",
+      "file": ".claude/worktrees/agent-ac8486d870776d3c9/website/sovereign/src/pages/pricing.astro",
+      "root_cause": "Async call without await \u2014 returned Promise instead of value",
+      "fix": "Added await to async call",
+      "tags": [
+        "auto-detected",
+        "async-fix",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T12:15:54.268Z"
+    },
+    {
+      "id": "bug-015",
+      "timestamp": "2026-06-13T12:24:08.661Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae547274b88e323bf/website/sovereign/src/integrations/content-lint.ts",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 4\u219210 lines (2 removed) | Also: // 2. Sovereignty wording only in scope:onprem pag; if (scope !== 'onprem') {",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-13T12:24:21.047Z"
+    },
+    {
+      "id": "bug-016",
+      "timestamp": "2026-06-13T12:24:29.677Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae547274b88e323bf/website/sovereign/SPEC.md",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 7\u219211 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T12:24:29.677Z"
+    },
+    {
+      "id": "bug-017",
+      "timestamp": "2026-06-13T12:25:01.029Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae547274b88e323bf/website/sovereign/tailwind.config.ts",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 5\u21927 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T12:25:01.029Z"
+    },
+    {
+      "id": "bug-018",
+      "timestamp": "2026-06-13T12:25:58.109Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae547274b88e323bf/website/sovereign/astro.config.mjs",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 3\u21926 lines (3 removed) | Also: vite: {; plugins: [tailwindcss()],",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "mjs"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-13T12:26:02.331Z"
+    },
+    {
+      "id": "bug-019",
+      "timestamp": "2026-06-13T12:26:52.275Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae547274b88e323bf/website/sovereign/src/styles/global.css",
+      "root_cause": "9 lines replaced/restructured",
+      "fix": "Rewrote 13\u219255 lines (9 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "css"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T12:26:52.275Z"
+    },
+    {
+      "id": "bug-020",
+      "timestamp": "2026-06-13T20:05:06.574Z",
+      "error_message": "Wrong reference: production should be example",
+      "file": ".claude/worktrees/agent-a6e2bb346c404e627/website/sovereign/.gitignore",
+      "root_cause": "Used \"production\" instead of \"example\"",
+      "fix": "Changed production \u2192 example",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "unknown"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T20:05:06.574Z"
+    },
+    {
+      "id": "bug-021",
+      "timestamp": "2026-06-13T20:06:09.033Z",
+      "error_message": "Type error",
+      "file": ".claude/worktrees/agent-a6e2bb346c404e627/website/sovereign/src/integrations/content-lint.ts",
+      "root_cause": "Missing or incorrect type annotation",
+      "fix": "Added type assertion/annotation",
+      "tags": [
+        "auto-detected",
+        "type-fix",
+        "ts"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T20:06:09.033Z"
+    },
+    {
+      "id": "bug-022",
+      "timestamp": "2026-06-13T20:07:20.089Z",
+      "error_message": "CSS fix: --font-mono",
+      "file": ".claude/worktrees/agent-a6e2bb346c404e627/website/sovereign/src/styles/tokens.css",
+      "root_cause": "--font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace \u2192 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace",
+      "fix": "Changed --font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace \u2192 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "css"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T20:07:20.089Z"
+    },
+    {
+      "id": "bug-023",
+      "timestamp": "2026-06-13T20:25:05.835Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ab5a490baec38f8dc/deploy/gcp/provision.sh",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 3\u21927 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T20:25:05.835Z"
+    },
+    {
+      "id": "bug-024",
+      "timestamp": "2026-06-13T20:25:47.541Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ab5a490baec38f8dc/deploy/gcp/README.md",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 14\u219225 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T20:25:47.541Z"
+    },
+    {
+      "id": "bug-025",
+      "timestamp": "2026-06-13T20:26:05.770Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ade02a7f88703169c/scripts/seed-demo/main.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 10\u219218 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T20:26:05.770Z"
+    },
+    {
+      "id": "bug-026",
+      "timestamp": "2026-06-13T22:48:03.953Z",
+      "error_message": "Wrong reference: span should be Technology",
+      "file": "website/sovereign/src/components/Footer.astro",
+      "root_cause": "Used \"span\" instead of \"Technology\"",
+      "fix": "Changed span \u2192 Technology",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T22:48:03.953Z"
+    },
+    {
+      "id": "bug-027",
+      "timestamp": "2026-06-13T22:48:08.804Z",
+      "error_message": "Wrong reference: dark should be light",
+      "file": "website/sovereign/src/styles/global.css",
+      "root_cause": "Used \"dark\" instead of \"light\"",
+      "fix": "Changed dark \u2192 light",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "css"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T22:48:08.804Z"
+    },
+    {
+      "id": "bug-028",
+      "timestamp": "2026-06-13T22:48:16.018Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/layouts/Base.astro",
+      "root_cause": "Had \"#0a0e16\"",
+      "fix": "Changed to \"#f8f7f4\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T22:48:16.018Z"
+    },
+    {
+      "id": "bug-029",
+      "timestamp": "2026-06-13T22:52:24.902Z",
+      "error_message": "Wrong reference: 1a1205 should be var",
+      "file": "website/sovereign/src/components/Nav.astro",
+      "root_cause": "Used \"1a1205\" instead of \"var\"",
+      "fix": "Changed 1a1205 \u2192 var",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T22:52:24.902Z"
+    },
+    {
+      "id": "bug-030",
+      "timestamp": "2026-06-13T23:37:43.278Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 10\u219211 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-13T23:37:43.278Z"
+    },
+    {
+      "id": "bug-031",
+      "timestamp": "2026-06-14T00:46:48.654Z",
+      "error_message": "Null/undefined access in ",
+      "file": "website/sovereign/src/layouts/Base.astro",
+      "root_cause": "Property access on potentially null/undefined value",
+      "fix": "Added null safety (optional chaining or null check)",
+      "tags": [
+        "auto-detected",
+        "null-safety",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T00:46:48.654Z"
+    },
+    {
+      "id": "bug-032",
+      "timestamp": "2026-06-14T01:10:48.505Z",
+      "error_message": "CSS fix: --text-muted, --text-faint",
+      "file": "website/sovereign/src/styles/tokens.css",
+      "root_cause": "--text-muted: #6b7585 \u2192 #4a515e; --text-faint: #8b93a1 \u2192 #707886",
+      "fix": "Changed --text-muted: #6b7585 \u2192 #4a515e; --text-faint: #8b93a1 \u2192 #707886",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "css"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-14T01:10:52.414Z"
+    },
+    {
+      "id": "bug-033",
+      "timestamp": "2026-06-14T01:47:18.833Z",
+      "error_message": "Incorrect value in code",
+      "file": ".tmp-gallery/logos.html",
+      "root_cause": "Had \"file:///home/sakib/hive/website/sovereign/src/ass",
+      "fix": "Changed to \"/website/sovereign/src/assets/brand/concepts/\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "html"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T01:47:18.833Z"
+    },
+    {
+      "id": "bug-034",
+      "timestamp": "2026-06-14T02:01:50.914Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/components/Nav.astro",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 6\u219216 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:01:50.914Z"
+    },
+    {
+      "id": "bug-035",
+      "timestamp": "2026-06-14T02:02:32.013Z",
+      "error_message": "Incorrect value in code",
+      "file": "../../../tmp/gen-favicons.mjs",
+      "root_cause": "Had 'sharp'",
+      "fix": "Changed to 'node:module'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "mjs"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:02:32.013Z"
+    },
+    {
+      "id": "bug-036",
+      "timestamp": "2026-06-14T02:02:44.611Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "Had '../assets/generated/slot1-hero3.jpg'",
+      "fix": "Changed to '../assets/generated/heroB/product-render-1-1.jpg'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:02:44.611Z"
+    },
+    {
+      "id": "bug-037",
+      "timestamp": "2026-06-14T02:17:13.674Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/components/Figure.astro",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 8\u219216 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:17:13.674Z"
+    },
+    {
+      "id": "bug-038",
+      "timestamp": "2026-06-14T02:17:26.196Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 13\u219219 lines (4 removed) | Also: /* Product render placed directly on the off-white; frame. The render already sits on a seamless off-w | Also: animation does not run. transform-origin keeps the; transform-origin: center; | Also: /* Hero collapses to a single column. The render m; runs full width on off-white at its natural height",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-06-14T02:17:54.508Z"
+    },
+    {
+      "id": "bug-039",
+      "timestamp": "2026-06-14T02:35:40.633Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/pricing.astro",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 7\u21929 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:35:40.633Z"
+    },
+    {
+      "id": "bug-040",
+      "timestamp": "2026-06-14T02:43:50.246Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/security.astro",
+      "root_cause": "Had \"card\"",
+      "fix": "Changed to \"card card--static\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-14T02:43:53.856Z"
+    },
+    {
+      "id": "bug-041",
+      "timestamp": "2026-06-14T02:44:04.470Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/pricing.astro",
+      "root_cause": "Had \"card\"",
+      "fix": "Changed to \"card card--static\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-06-14T02:44:13.427Z"
+    },
+    {
+      "id": "bug-042",
+      "timestamp": "2026-06-14T02:55:21.418Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "Had '../assets/generated/heroB/product-render-1-1.jpg'",
+      "fix": "Changed to '../assets/generated/heroB2/ink-cinematic-1.jpg'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:55:21.418Z"
+    },
+    {
+      "id": "bug-043",
+      "timestamp": "2026-06-14T02:55:32.569Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 5\u21928 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T02:55:32.569Z"
+    },
+    {
+      "id": "bug-044",
+      "timestamp": "2026-06-14T07:49:09.011Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/assets/diagrams/data-boundary.svg",
+      "root_cause": "Had \"d-surface\"",
+      "fix": "Changed to \"d-grey-stroke\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "svg"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T07:49:09.011Z"
+    },
+    {
+      "id": "bug-045",
+      "timestamp": "2026-06-14T07:51:50.098Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 8\u219214 lines (4 removed) | Also: <div class=\"ds__bleed\">; <Image | Also: // Curated photographic images, optimized by astro; import sectionImg from '../assets/generated/slot6- | Also: 06 CONTINUOUS IMPROVEMENT  (photo inside Figure fr; .improve__img {",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-06-14T07:55:42.930Z"
+    },
+    {
+      "id": "bug-046",
+      "timestamp": "2026-06-14T07:53:16.556Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/components/TrustStrip.astro",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 20\u219234 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T07:53:16.556Z"
+    },
+    {
+      "id": "bug-047",
+      "timestamp": "2026-06-14T07:54:52.873Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "Had \"/use-cases\"",
+      "fix": "Changed to \"/use-cases#finance\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-06-14T07:55:07.248Z"
+    },
+    {
+      "id": "bug-048",
+      "timestamp": "2026-06-14T19:12:07.118Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "Had \"Sovereign On-Prem AI\"",
+      "fix": "Changed to \"On-Premises AI for Regulated Industries\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 5,
+      "last_seen": "2026-06-14T19:12:33.438Z"
+    },
+    {
+      "id": "bug-049",
+      "timestamp": "2026-06-14T19:12:49.634Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/layouts/Base.astro",
+      "root_cause": "Had \"en\"",
+      "fix": "Changed to \"en-CA\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:12:49.634Z"
+    },
+    {
+      "id": "bug-050",
+      "timestamp": "2026-06-14T19:13:11.142Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/components/StructuredData.astro",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 19\u219228 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:13:11.142Z"
+    },
+    {
+      "id": "bug-051",
+      "timestamp": "2026-06-14T19:13:14.478Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/components/StructuredData.astro",
+      "root_cause": "Had 'Worldwide'",
+      "fix": "Changed to 'Canada'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:13:14.478Z"
+    },
+    {
+      "id": "bug-052",
+      "timestamp": "2026-06-14T19:14:51.744Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/use-cases.astro",
+      "root_cause": "Had \"Use Cases\"",
+      "fix": "Changed to \"On-Prem AI for Finance, Healthcare and Legal\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:14:51.744Z"
+    },
+    {
+      "id": "bug-053",
+      "timestamp": "2026-06-14T19:15:03.686Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/how-you-run-hive.astro",
+      "root_cause": "Had \"How You Run Hive\"",
+      "fix": "Changed to \"Self-Hosted AI Deployment Options\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:15:03.686Z"
+    },
+    {
+      "id": "bug-054",
+      "timestamp": "2026-06-14T19:19:44.076Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "Had '../assets/generated/heroB2/ink-cinematic-1.jpg'",
+      "fix": "Changed to '../assets/generated/heroC/hero-final.png'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:19:44.076Z"
+    },
+    {
+      "id": "bug-055",
+      "timestamp": "2026-06-14T19:20:14.098Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "24 lines replaced/restructured",
+      "fix": "Rewrote 59\u219249 lines (24 removed) | Also: HERO  (cinematic ink band: real two-column grid, e; left, seamless full-bleed appliance on the right) | Also: /* Ink panel settles in: scale 1.02 to 1 over ~620; Starts near-full (0.85) so content is never hidden",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-06-14T19:21:43.439Z"
+    },
+    {
+      "id": "bug-056",
+      "timestamp": "2026-06-14T19:31:21.937Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "10 lines replaced/restructured",
+      "fix": "Rewrote 65\u2192114 lines (10 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:31:21.937Z"
+    },
+    {
+      "id": "bug-057",
+      "timestamp": "2026-06-14T19:31:35.397Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/assets/diagrams/cost-crossover.svg",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 14\u219218 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "svg"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:31:35.397Z"
+    },
+    {
+      "id": "bug-058",
+      "timestamp": "2026-06-14T19:36:22.631Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/components/Nav.astro",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 18\u219223 lines (3 removed) | Also: /* details becomes a block container that spans th; position: relative;",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-14T19:37:33.584Z"
+    },
+    {
+      "id": "bug-059",
+      "timestamp": "2026-06-14T19:56:17.663Z",
+      "error_message": "CSS fix: color-scheme",
+      "file": "website/sovereign/src/styles/global.css",
+      "root_cause": "color-scheme: light \u2192 dark",
+      "fix": "Changed color-scheme: light \u2192 dark",
+      "tags": [
+        "auto-detected",
+        "style-fix",
+        "css"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:56:17.663Z"
+    },
+    {
+      "id": "bug-060",
+      "timestamp": "2026-06-14T19:56:23.411Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/layouts/Base.astro",
+      "root_cause": "Had \"#f8f7f4\"",
+      "fix": "Changed to \"#0c0e12\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:56:23.411Z"
+    },
+    {
+      "id": "bug-061",
+      "timestamp": "2026-06-14T19:56:37.401Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/public/site.webmanifest",
+      "root_cause": "Had \"#f8f7f4\"",
+      "fix": "Changed to \"#0c0e12\"",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "webmanifest"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:56:37.401Z"
+    },
+    {
+      "id": "bug-062",
+      "timestamp": "2026-06-14T19:56:42.814Z",
+      "error_message": "Incorrect value in code",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "Had '../assets/generated/heroC/hero-final.png'",
+      "fix": "Changed to '../assets/generated/heroDark/hero-dark-final.png'",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-14T19:56:46.648Z"
+    },
+    {
+      "id": "bug-063",
+      "timestamp": "2026-06-14T19:56:54.163Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 10\u219212 lines (2 removed) | Also: Inline attributes in the SVGs already paint the co; :global hooks let the assets re-tint cleanly from  | Also: color: var(--bg);; border-color: var(--text-faint);",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-06-14T19:58:23.485Z"
+    },
+    {
+      "id": "bug-064",
+      "timestamp": "2026-06-14T19:58:39.050Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/components/Nav.astro",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 33\u219254 lines (6 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T19:58:39.050Z"
+    },
+    {
+      "id": "bug-065",
+      "timestamp": "2026-06-14T20:15:35.852Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/pages/index.astro",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 12\u219223 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "astro"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T20:15:35.852Z"
+    },
+    {
+      "id": "bug-066",
+      "timestamp": "2026-06-14T20:15:52.907Z",
+      "error_message": "Significant refactor of ",
+      "file": "website/sovereign/src/assets/diagrams/data-boundary.svg",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 7\u219210 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "svg"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-14T20:15:52.907Z"
+    },
+    {
+      "id": "bug-067",
+      "timestamp": "2026-06-25T21:38:04.965Z",
+      "error_message": "Wrong reference: __E__ should be 231",
+      "file": "../../../tmp/claude-1001/-home-sakib-hive/4422c273-7623-4109-8443-8f64b8d0e4a1/scratchpad/issueB.md",
+      "root_cause": "Used \"__E__\" instead of \"231\"",
+      "fix": "Changed __E__ \u2192 231",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T21:38:04.965Z"
+    },
+    {
+      "id": "bug-068",
+      "timestamp": "2026-06-25T21:38:09.198Z",
+      "error_message": "Wrong reference: __B__ should be 232",
+      "file": "../../../tmp/claude-1001/-home-sakib-hive/4422c273-7623-4109-8443-8f64b8d0e4a1/scratchpad/issueE.md",
+      "root_cause": "Used \"__B__\" instead of \"232\"",
+      "fix": "Changed __B__ \u2192 232",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T21:38:09.198Z"
+    },
+    {
+      "id": "bug-069",
+      "timestamp": "2026-06-25T21:38:13.208Z",
+      "error_message": "Wrong reference: __B__ should be 232",
+      "file": "../../../tmp/claude-1001/-home-sakib-hive/4422c273-7623-4109-8443-8f64b8d0e4a1/scratchpad/issueF.md",
+      "root_cause": "Used \"__B__\" instead of \"232\"",
+      "fix": "Changed __B__ \u2192 232",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-25T21:38:17.733Z"
+    },
+    {
+      "id": "bug-070",
+      "timestamp": "2026-06-25T21:57:17.287Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a7b10e71ea2d33500/apps/edge-api/internal/anthropic/stream.go",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 15\u219230 lines (6 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T21:57:17.287Z"
+    },
+    {
+      "id": "bug-071",
+      "timestamp": "2026-06-25T21:59:27.073Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a7b10e71ea2d33500/apps/edge-api/cmd/server/main.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 9\u21926 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T21:59:27.073Z"
+    },
+    {
+      "id": "bug-072",
+      "timestamp": "2026-06-25T22:09:09.901Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a442347ecfb509263/deploy/docker/docker-compose.yml",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 12\u21928 lines (5 removed) | Also: ANON_KEY: ${ENTERPRISE_ANON_KEY:-}; SERVICE_KEY: ${ENTERPRISE_SERVICE_ROLE_KEY:-} | Also: # These services activate ONLY under the `enterpri; # The cloud/local/chat profiles continue to use ho",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-06-25T22:10:30.805Z"
+    },
+    {
+      "id": "bug-073",
+      "timestamp": "2026-06-25T22:09:31.285Z",
+      "error_message": "Wrong reference: entrypoint should be set",
+      "file": ".claude/worktrees/agent-a442347ecfb509263/deploy/docker/docker-compose.yml",
+      "root_cause": "Used \"entrypoint\" instead of \"set\"",
+      "fix": "Changed entrypoint \u2192 set",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:09:31.285Z"
+    },
+    {
+      "id": "bug-074",
+      "timestamp": "2026-06-25T22:10:23.400Z",
+      "error_message": "Wrong reference: ActionLLMResponse should be audit",
+      "file": ".claude/worktrees/agent-abd95b839d1d4f4e8/apps/control-plane/internal/audit/actions_test.go",
+      "root_cause": "Used \"ActionLLMResponse\" instead of \"audit\"",
+      "fix": "Changed ActionLLMResponse \u2192 audit",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-25T22:10:31.124Z"
+    },
+    {
+      "id": "bug-075",
+      "timestamp": "2026-06-25T22:13:25.953Z",
+      "error_message": "Wrong reference: 20260625_01_audit_taxonomy_extension should be 20260625_03_audit_taxonomy_extension",
+      "file": ".claude/worktrees/agent-abd95b839d1d4f4e8/supabase/migrations/20260625_03_audit_taxonomy_extension.sql",
+      "root_cause": "Used \"20260625_01_audit_taxonomy_extension\" instead of \"20260625_03_audit_taxonomy_extension\"",
+      "fix": "Changed 20260625_01_audit_taxonomy_extension \u2192 20260625_03_audit_taxonomy_extension",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "sql"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:13:25.953Z"
+    },
+    {
+      "id": "bug-076",
+      "timestamp": "2026-06-25T22:16:29.574Z",
+      "error_message": "Incorrect value in code",
+      "file": ".claude/worktrees/agent-a442347ecfb509263/scripts/install.sh",
+      "root_cause": "Had '    docker compose --env-file %s/.env --profile e",
+      "fix": "Changed to '    docker compose -f %s/deploy/docker/docker-com",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-25T22:16:36.861Z"
+    },
+    {
+      "id": "bug-077",
+      "timestamp": "2026-06-25T22:24:34.537Z",
+      "error_message": "Wrong reference: start_stack should be patch_sovereign_config",
+      "file": ".claude/worktrees/agent-a9006a563f7dcf922/scripts/install.sh",
+      "root_cause": "Used \"start_stack\" instead of \"patch_sovereign_config\"",
+      "fix": "Changed start_stack \u2192 patch_sovereign_config",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:24:34.537Z"
+    },
+    {
+      "id": "bug-078",
+      "timestamp": "2026-06-25T22:25:29.254Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a9006a563f7dcf922/apps/control-plane/cmd/server/audit_sinks_gate_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 7\u21925 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:25:29.254Z"
+    },
+    {
+      "id": "bug-079",
+      "timestamp": "2026-06-25T22:26:57.596Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a442347ecfb509263/deploy/docker/docker-compose.enterprise.yml",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 16\u219220 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:26:57.596Z"
+    },
+    {
+      "id": "bug-080",
+      "timestamp": "2026-06-25T22:29:43.665Z",
+      "error_message": "Missing error handling in unknown",
+      "file": ".claude/worktrees/agent-a9006a563f7dcf922/scripts/install.sh",
+      "root_cause": "Code path had no error handling \u2014 exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:29:43.665Z"
+    },
+    {
+      "id": "bug-081",
+      "timestamp": "2026-06-25T22:30:06.081Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a7b10e71ea2d33500/apps/edge-api/internal/anthropic/handler_test.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 19\u219254 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:30:06.081Z"
+    },
+    {
+      "id": "bug-082",
+      "timestamp": "2026-06-25T22:31:13.282Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a7b10e71ea2d33500/apps/edge-api/internal/anthropic/translate_request.go",
+      "root_cause": "12 lines replaced/restructured",
+      "fix": "Rewrote 32\u219245 lines (12 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:31:13.282Z"
+    },
+    {
+      "id": "bug-083",
+      "timestamp": "2026-06-25T22:44:16.745Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a0601818c191bc2f3/.github/workflows/ci.yml",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 7\u219211 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-25T22:44:16.745Z"
+    },
+    {
+      "id": "bug-084",
+      "timestamp": "2026-06-25T23:10:31.121Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a442347ecfb509263/deploy/docker/docker-compose.yml",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 11\u21923 lines (6 removed) | Also: # Enterprise profile: wait for local Postgres befo; # so the DB connection pool succeeds at boot.",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-25T23:10:44.128Z"
+    },
+    {
+      "id": "bug-085",
+      "timestamp": "2026-06-26T00:09:46.716Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-af26bf44e2dbb6621/deploy/headscale/config.yaml",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 13\u219217 lines (5 removed) | Also: nameservers:; - 1.1.1.1",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yaml"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-26T00:09:54.015Z"
+    },
+    {
+      "id": "bug-086",
+      "timestamp": "2026-06-26T00:10:10.393Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-af26bf44e2dbb6621/deploy/docker/docker-compose.relay.yml",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 5\u21928 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:10:10.393Z"
+    },
+    {
+      "id": "bug-087",
+      "timestamp": "2026-06-26T00:11:10.504Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a288cd6ab6f43002d/apps/edge-api/internal/audio/handler.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 5\u219217 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:11:10.504Z"
+    },
+    {
+      "id": "bug-088",
+      "timestamp": "2026-06-26T00:11:29.922Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a288cd6ab6f43002d/apps/edge-api/internal/stt/client.go",
+      "root_cause": "6 lines replaced/restructured",
+      "fix": "Rewrote 14\u219251 lines (6 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:11:29.923Z"
+    },
+    {
+      "id": "bug-089",
+      "timestamp": "2026-06-26T00:15:01.690Z",
+      "error_message": "Wrong operator: != should be ==",
+      "file": ".claude/worktrees/agent-a288cd6ab6f43002d/apps/edge-api/internal/audio/handler_test.go",
+      "root_cause": "Used \"!=\" instead of \"==\"",
+      "fix": "Changed operator != \u2192 ==",
+      "tags": [
+        "auto-detected",
+        "operator-fix",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:15:01.690Z"
+    },
+    {
+      "id": "bug-090",
+      "timestamp": "2026-06-26T00:22:41.177Z",
+      "error_message": "Incorrect value in code",
+      "file": ".claude/worktrees/agent-af26bf44e2dbb6621/scripts/install.sh",
+      "root_cause": "Had \"http://$(hostname -I 2>/dev/null | awk '",
+      "fix": "Changed to \"$(hostname -I 2>/dev/null | awk '",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "sh"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:22:41.177Z"
+    },
+    {
+      "id": "bug-091",
+      "timestamp": "2026-06-26T00:22:48.937Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-af26bf44e2dbb6621/deploy/headscale/config.yaml",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 4\u21926 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yaml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:22:48.937Z"
+    },
+    {
+      "id": "bug-092",
+      "timestamp": "2026-06-26T00:30:42.071Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a3df8e27ee45b377a/deploy/docker/docker-compose.enterprise.yml",
+      "root_cause": "4 lines replaced/restructured",
+      "fix": "Rewrote 8\u219216 lines (4 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "yml"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:30:42.071Z"
+    },
+    {
+      "id": "bug-093",
+      "timestamp": "2026-06-26T00:43:47.967Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/edge-api/internal/rag/repository.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 9\u219215 lines (2 removed) | Also: func encodeVector(v []float32) string {; return \"[]\" | Also: vec := encodeVector(queryVec); vec, topK, | Also: // encodeVector serialises []float32 to the pgvect; // This lets us use the '::vector' cast in SQL wit",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 4,
+      "last_seen": "2026-06-26T00:44:31.394Z"
+    },
+    {
+      "id": "bug-094",
+      "timestamp": "2026-06-26T00:45:00.359Z",
+      "error_message": "Function not marked async",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/control-plane/internal/rag/uuidutil.go",
+      "root_cause": "Function uses await but wasn't declared async",
+      "fix": "Added async modifier",
+      "tags": [
+        "auto-detected",
+        "async-fix",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:45:00.359Z"
+    },
+    {
+      "id": "bug-095",
+      "timestamp": "2026-06-26T00:47:31.006Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/control-plane/internal/rag/ingest.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 4\u219210 lines (2 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:47:31.006Z"
+    },
+    {
+      "id": "bug-096",
+      "timestamp": "2026-06-26T00:47:48.372Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/edge-api/cmd/server/main.go",
+      "root_cause": "9 lines replaced/restructured",
+      "fix": "Rewrote 23\u219243 lines (9 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:47:48.373Z"
+    },
+    {
+      "id": "bug-097",
+      "timestamp": "2026-06-26T00:48:03.056Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/edge-api/internal/rag/handler.go",
+      "root_cause": "2 lines replaced/restructured",
+      "fix": "Rewrote 8\u219212 lines (2 removed) | Also: // Authorize before handing off; stt.TieredClient ; if _, ok := h.authorize(w, r); !ok {",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-26T00:52:09.637Z"
+    },
+    {
+      "id": "bug-098",
+      "timestamp": "2026-06-26T00:52:36.767Z",
+      "error_message": "Wrong reference: string should be apiKey",
+      "file": ".claude/worktrees/agent-a288cd6ab6f43002d/apps/edge-api/internal/stt/client.go",
+      "root_cause": "Used \"string\" instead of \"apiKey\"",
+      "fix": "Changed string \u2192 apiKey",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:52:36.767Z"
+    },
+    {
+      "id": "bug-099",
+      "timestamp": "2026-06-26T00:53:55.893Z",
+      "error_message": "Wrong return value",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/edge-api/internal/rag/handler_test.go",
+      "root_cause": "Was returning: nil",
+      "fix": "Now returns: false, nil",
+      "tags": [
+        "auto-detected",
+        "return-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:53:55.893Z"
+    },
+    {
+      "id": "bug-100",
+      "timestamp": "2026-06-26T00:54:19.740Z",
+      "error_message": "Wrong reference: handleGet should be handleGetDocument",
+      "file": ".claude/worktrees/agent-aa9cf13c698c444ac/apps/edge-api/internal/rag/handler_test.go",
+      "root_cause": "Used \"handleGet\" instead of \"handleGetDocument\"",
+      "fix": "Changed handleGet \u2192 handleGetDocument",
+      "tags": [
+        "auto-detected",
+        "wrong-reference",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T00:54:19.740Z"
+    },
+    {
+      "id": "bug-101",
+      "timestamp": "2026-06-26T01:00:21.830Z",
+      "error_message": "Missing error handling in unknown",
+      "file": "../.claude/projects/-home-sakib-hive/memory/project_carl_sovereign_edge.md",
+      "root_cause": "Code path had no error handling \u2014 exceptions would propagate uncaught",
+      "fix": "Added try/catch block",
+      "tags": [
+        "auto-detected",
+        "error-handling",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T01:00:21.830Z"
+    },
+    {
+      "id": "bug-102",
+      "timestamp": "2026-06-26T01:02:34.453Z",
+      "error_message": "Incorrect value in code",
+      "file": ".claude/worktrees/agent-a95daadb99dbeadf4/apps/edge-api/cmd/server/main.go",
+      "root_cause": "Had \"github.com/sakibsadmanshajib/hive/apps/edge-api/i",
+      "fix": "Changed to \"github.com/sakibsadmanshajib/hive/apps/edge-api/i",
+      "tags": [
+        "auto-detected",
+        "wrong-value",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 3,
+      "last_seen": "2026-06-26T01:04:46.535Z"
+    },
+    {
+      "id": "bug-103",
+      "timestamp": "2026-06-26T01:12:08.238Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae621fbbf21eec699/apps/control-plane/internal/auditarchive/archiver.go",
+      "root_cause": "5 lines replaced/restructured",
+      "fix": "Rewrote 69\u219281 lines (5 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T01:12:08.238Z"
+    },
+    {
+      "id": "bug-104",
+      "timestamp": "2026-06-26T01:13:13.447Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae621fbbf21eec699/apps/control-plane/internal/auditarchive/storage_store.go",
+      "root_cause": "11 lines replaced/restructured",
+      "fix": "Rewrote 45\u219262 lines (11 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T01:13:13.447Z"
+    },
+    {
+      "id": "bug-105",
+      "timestamp": "2026-06-26T01:30:16.503Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-a64406852579252da/docs/enterprise-sso.md",
+      "root_cause": "10 lines replaced/restructured",
+      "fix": "Rewrote 18\u219253 lines (10 removed) | Also: create their `public.tenant_users` membership row.; 1. Admin creates or confirms the tenant row in `pu",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "md"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-06-26T01:34:36.372Z"
+    },
+    {
+      "id": "bug-106",
+      "timestamp": "2026-06-26T01:33:03.083Z",
+      "error_message": "Wrong operator: >= should be ==",
+      "file": ".claude/worktrees/agent-ae621fbbf21eec699/apps/control-plane/internal/auditarchive/pg_repository.go",
+      "root_cause": "Used \">=\" instead of \"==\"",
+      "fix": "Changed operator >= \u2192 ==",
+      "tags": [
+        "auto-detected",
+        "operator-fix",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T01:33:03.083Z"
+    },
+    {
+      "id": "bug-107",
+      "timestamp": "2026-06-26T01:34:53.835Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae621fbbf21eec699/apps/control-plane/internal/auditarchive/archiver_test.go",
+      "root_cause": "3 lines replaced/restructured",
+      "fix": "Rewrote 14\u219217 lines (3 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T01:34:53.835Z"
+    },
+    {
+      "id": "bug-108",
+      "timestamp": "2026-06-26T01:40:52.291Z",
+      "error_message": "Significant refactor of ",
+      "file": ".claude/worktrees/agent-ae621fbbf21eec699/apps/control-plane/internal/auditarchive/archiver_test.go",
+      "root_cause": "18 lines replaced/restructured",
+      "fix": "Rewrote 29\u219216 lines (18 removed)",
+      "tags": [
+        "auto-detected",
+        "refactor",
+        "go"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-06-26T01:40:52.291Z"
+    },
+    {
+      "date": "2026-07-03",
+      "error_message": "phase-19-owui-nightly: couldn't find env file /home/runner/work/hive/hive/.env.ci (exit 1, 7 consecutive nightly fails since 2026-06-26)",
+      "root_cause": "workflow referenced ../../.env.ci but no step created it; file never in tree, never gitignored, no other workflow uses it",
+      "fix": "PR #262: Materialize .env.ci step before compose boot, built from GH secrets (mirrors live-integration secret set), chmod 600, hard-fail loop on empty required externals, OWUI_SHIM_KEY generated per run",
+      "tags": [
+        "ci",
+        "nightly",
+        "env-file",
+        "github-actions",
+        "owui"
+      ]
+    },
+    {
+      "date": "2026-07-03",
+      "error_message": "OWUI Playwright nightly: all 14 specs ENOENT e2e/phase-19/owui/.auth/owui-user.json; suite never green in history",
+      "root_cause": "OWUI_E2E_EMAIL/OWUI_E2E_PASSWORD repo secrets never provisioned; owui.setup.ts setup.skip() on missing creds does not stop dependent projects, storageState file never written",
+      "fix": "PR #266: playwright.owui.config.ts gates owui/owui-perf projects with testMatch [] when creds absent (clean skip, exit 0) + workflow ::warning:: annotation. Real coverage still requires provisioning the two secrets",
+      "tags": [
+        "e2e",
+        "playwright",
+        "owui",
+        "nightly",
+        "secrets",
+        "ci"
+      ]
+    },
+    {
+      "date": "2026-07-03",
+      "error_message": "OWUI nightly setup: 'Sign in with Hive' OIDC button never renders; locator.click timeout 30s at owui.setup.ts:14 (run 28646650000)",
+      "root_cause": "OWUI OAUTH_CLIENT_ID/SECRET map to SUPABASE_OAUTH_CLIENT_ID/SECRET which default empty; nightly .env.ci materialization never writes them and no repo secret exists; empty client id means OWUI never registers OIDC provider, only native login card renders",
+      "fix": "Issue #269 filed. Needs owner: add SUPABASE_OAUTH_CLIENT_ID/SECRET repo secrets (values from GoTrue OAuth app registered for OWUI in SSO #259 setup), then wire into .env.ci block + readiness assert",
+      "tags": [
+        "e2e",
+        "owui",
+        "oidc",
+        "nightly",
+        "secrets",
+        "compose"
+      ]
+    }
+  ]
+}

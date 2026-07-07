@@ -75,8 +75,6 @@ services:
       OPENROUTER_EMBEDDING_FALLBACK_MODEL: ${OPENROUTER_EMBEDDING_FALLBACK_MODEL}
       GROQ_FAST_MODEL: ${GROQ_FAST_MODEL}
       GROQ_REASONING_MODEL: ${GROQ_REASONING_MODEL}
-      NVIDIA_NIM_API_KEY: ${NVIDIA_NIM_API_KEY}
-      NVIDIA_NIM_EMBEDDING_MODEL: ${NVIDIA_NIM_EMBEDDING_MODEL}
       # EnterpriseEdge: set to http://ollama:11434 when using the enterprise
       # profile with the in-stack Ollama service. Consumed by the commented
       # ollama_chat/ model entries in deploy/litellm/config.yaml.

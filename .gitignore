@@ -47,3 +47,16 @@ CLAUDE.local.md
 # Caveman compression backups
 *.original.md
 .planning/staging/oci-resources.env
+
+# local caches and scratch
+graphify-out/cache/
+.tmp-gallery/
+.tmp-shots/
+.playwright-mcp/
+gh-cli-cache/
+node-compile-cache/
+supabase/.temp/
+/q-*.png
+/v-*.png
+/r1-*.png
+/rev-*.png
