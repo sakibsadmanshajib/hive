@@ -30,7 +30,6 @@ bypassed from the CLI or UI.
 
 These are the jobs in `.github/workflows/ci.yml`, which runs on every
 same-repo pull request with no path filter (so it never deadlocks a PR).
-`chat-app-ci.yml` jobs are path-filtered and therefore **not** required.
 `strict` is `false`: checks must pass, but a PR is not forced to be rebased
 onto the latest `main` first.
 

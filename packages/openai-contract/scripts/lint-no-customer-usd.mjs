@@ -6,7 +6,7 @@
 //
 // Phase 17 (FX-17-06): extends `--all` mode to scan repo-wide source classes:
 //   - Go struct field tags in apps/control-plane + apps/edge-api
-//   - TS/TSX interface fields in apps/web-console + apps/chat-app/client
+//   - TS/TSX interface fields in apps/web-console
 //   - OpenAPI YAML in packages/openai-contract/spec/paths
 //
 // BD regulatory rule: BDT-only on every wire shape consumed by a Bangladesh
@@ -139,7 +139,6 @@ function listTsFiles() {
     join(REPO_ROOT, "apps", "web-console", "app"),
     join(REPO_ROOT, "apps", "web-console", "components"),
     join(REPO_ROOT, "apps", "web-console", "lib"),
-    join(REPO_ROOT, "apps", "chat-app", "client", "src"),
   ];
   const accept = (full, name) => {
     if (!/\.(ts|tsx|jsx)$/.test(name)) return false;
