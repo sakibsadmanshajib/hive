@@ -172,7 +172,7 @@ Planning artifacts in `.planning/`:
 - `.planning/ROADMAP.md` — full phase breakdown (phases 11–14 listed there belong to v1.1)
 - `.planning/REQUIREMENTS.md` — requirement traceability
 - `.planning/UAT-REPORT.md` — runtime test results
-- `.planning/v1.0-MILESTONE-AUDIT.md` — earlier launch readiness audit (dated 2026-04-15; superseded by Phase 10 UAT + v1.1-DEFERRED-SCOPE.md)
+- `.planning/milestones/v1.0-MILESTONE-AUDIT.md` — earlier launch readiness audit (dated 2026-04-15; superseded by Phase 10 UAT + v1.1-DEFERRED-SCOPE.md)
 - `.planning/v1.1-DEFERRED-SCOPE.md` — deferred scope for next milestone
 
 ---

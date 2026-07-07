@@ -1,0 +1,68 @@
+{
+  "_doc": "Fleet registry. Update on EVERY dispatch, completion, failure (state failed, reason, relaunched_as). Sweep ground truth every turn agents fly; >20min wait-state silence = dead. Subagent briefs FORBID git clean anywhere. Backup .wolf/ to ~/.hive-wolf-backup.tar after writes. Rebuilt 2026-06-12 after .wolf wipe incident.",
+  "agents": [
+    {
+      "task": "finish PR 204",
+      "agent": "af41279fb379f0239",
+      "expected": "PR 204 merged",
+      "state": "dead-stale",
+      "note": "resolving threads now | swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+    },
+    {
+      "task": "finish PR 209",
+      "agent": "ae3a9f54fc43cff29",
+      "expected": "PR 209 merged",
+      "state": "dead-stale",
+      "note": "swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+    },
+    {
+      "task": "phase 25 chat staging audit",
+      "agent": "af8ff2af7432ee3a0",
+      "expected": "PR docs/phase-25-staging-audit, chat URL live",
+      "state": "dead-stale",
+      "note": "swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+    },
+    {
+      "task": "investor demo script",
+      "agent": "a9fcaf6a318022c37",
+      "expected": "PR docs/investor-demo-script",
+      "state": "dead-stale",
+      "note": "swept 2026-06-12 setup session: owning session ended, >20min silence rule. Verify PR ground truth (gh pr view) before relaunch."
+    },
+    {
+      "task": "finish PR 205 (attempt 3)",
+      "agent": "tbd",
+      "expected": "PR 205 merged",
+      "state": "needs-ground-truth-check",
+      "note": "swept 2026-06-12: never dispatched. Check gh pr view / DNS / DB rows before attempt."
+    },
+    {
+      "task": "deploy hive.scubed.co (attempt 3)",
+      "agent": "tbd",
+      "expected": "hive.scubed.co 200",
+      "state": "needs-ground-truth-check",
+      "note": "swept 2026-06-12: never dispatched. Check gh pr view / DNS / DB rows before attempt."
+    },
+    {
+      "task": "seed tools_supported + smoke (attempt 2)",
+      "agent": "tbd",
+      "expected": "rows true, tools smoke not-400",
+      "state": "needs-ground-truth-check",
+      "note": "swept 2026-06-12: never dispatched. Check gh pr view / DNS / DB rows before attempt."
+    }
+  ],
+  "failed_history": [
+    {
+      "task": "finish PR 205 (attempt 2)",
+      "reason": "died silently, threads untouched"
+    },
+    {
+      "task": "deploy hive.scubed.co (attempt 2)",
+      "reason": "died, no DNS no deployment"
+    },
+    {
+      "task": "seed tools_supported (attempt 1)",
+      "reason": "died after smoke ping, rows unverified"
+    }
+  ]
+}
