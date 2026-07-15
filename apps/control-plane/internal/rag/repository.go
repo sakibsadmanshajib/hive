@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -54,26 +55,49 @@ type Repo struct {
 // NewRepo creates a Repo backed by the given pool.
 func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 
+// withTenantTx runs fn inside an explicit transaction with the RLS session
+// variable set LOCAL (transaction-scoped) to tenantID. hive_app is NOT
+// BYPASSRLS (20260518_04_phase19_audit_rls_and_indexes.sql), so every query
+// against public.rag_documents / public.rag_chunks must see
+// app.current_tenant_id set to the caller's tenant.
+//
+// A bare conn.Exec(set_config(..., true)) followed by a separate
+// conn.QueryRow/Exec with no transaction does not work: LOCAL resets the
+// instant the Exec's own implicit (autocommit) transaction ends, so the
+// following query sees current_setting() back at NULL and the RLS policy
+// denies everything (reads return zero rows, writes fail WITH CHECK).
+// Wrapping in Begin/Commit makes LOCAL correct: it applies for exactly this
+// transaction's statements and is guaranteed to clear at Commit or Rollback,
+// so nothing survives onto the pooled connection for the next borrower.
+// Mirrors apps/control-plane/internal/egress/repository.go.
+func (r *Repo) withTenantTx(ctx context.Context, tenantID uuid.UUID, fn func(tx pgx.Tx) error) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("rag.repo: begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
+		return fmt.Errorf("rag.repo: set tenant: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // InsertDocument creates a new rag_document row and returns the assigned id.
 func (r *Repo) InsertDocument(ctx context.Context, d Document) (uuid.UUID, error) {
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", d.TenantID.String()); err != nil {
-		return uuid.Nil, fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
 	var id uuid.UUID
-	err = conn.QueryRow(ctx, `
-		INSERT INTO public.rag_documents
-		    (tenant_id, name, mime_type, size_bytes, status, storage_path)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id`,
-		d.TenantID, d.Name, d.MimeType, d.SizeBytes, StatusPending, d.StoragePath,
-	).Scan(&id)
+	err := r.withTenantTx(ctx, d.TenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			INSERT INTO public.rag_documents
+			    (tenant_id, name, mime_type, size_bytes, status, storage_path)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			RETURNING id`,
+			d.TenantID, d.Name, d.MimeType, d.SizeBytes, StatusPending, d.StoragePath,
+		).Scan(&id)
+	})
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("rag.repo: insert document: %w", err)
 	}
@@ -82,26 +106,18 @@ func (r *Repo) InsertDocument(ctx context.Context, d Document) (uuid.UUID, error
 
 // GetDocument fetches a single document by id, scoped to tenantID via RLS.
 func (r *Repo) GetDocument(ctx context.Context, tenantID, docID uuid.UUID) (Document, error) {
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return Document{}, fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
-		return Document{}, fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
 	var d Document
-	err = conn.QueryRow(ctx, `
-		SELECT id, tenant_id, name, mime_type, size_bytes, status,
-		       COALESCE(error_msg,''), COALESCE(storage_path,''),
-		       created_at, updated_at
-		FROM public.rag_documents
-		WHERE id = $1`,
-		docID,
-	).Scan(&d.ID, &d.TenantID, &d.Name, &d.MimeType, &d.SizeBytes,
-		&d.Status, &d.ErrorMsg, &d.StoragePath, &d.CreatedAt, &d.UpdatedAt)
+	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT id, tenant_id, name, mime_type, size_bytes, status,
+			       COALESCE(error_msg,''), COALESCE(storage_path,''),
+			       created_at, updated_at
+			FROM public.rag_documents
+			WHERE id = $1`,
+			docID,
+		).Scan(&d.ID, &d.TenantID, &d.Name, &d.MimeType, &d.SizeBytes,
+			&d.Status, &d.ErrorMsg, &d.StoragePath, &d.CreatedAt, &d.UpdatedAt)
+	})
 	if err != nil {
 		return Document{}, fmt.Errorf("rag.repo: get document: %w", err)
 	}
@@ -110,83 +126,63 @@ func (r *Repo) GetDocument(ctx context.Context, tenantID, docID uuid.UUID) (Docu
 
 // ListDocuments returns all documents for a tenant, newest first.
 func (r *Repo) ListDocuments(ctx context.Context, tenantID uuid.UUID) ([]Document, error) {
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
-		return nil, fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
-	rows, err := conn.Query(ctx, `
-		SELECT id, tenant_id, name, mime_type, size_bytes, status,
-		       COALESCE(error_msg,''), COALESCE(storage_path,''),
-		       created_at, updated_at
-		FROM public.rag_documents
-		ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("rag.repo: list documents: %w", err)
-	}
-	defer rows.Close()
-
 	var docs []Document
-	for rows.Next() {
-		var d Document
-		if err := rows.Scan(&d.ID, &d.TenantID, &d.Name, &d.MimeType, &d.SizeBytes,
-			&d.Status, &d.ErrorMsg, &d.StoragePath, &d.CreatedAt, &d.UpdatedAt); err != nil {
-			return nil, fmt.Errorf("rag.repo: scan document: %w", err)
+	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, tenant_id, name, mime_type, size_bytes, status,
+			       COALESCE(error_msg,''), COALESCE(storage_path,''),
+			       created_at, updated_at
+			FROM public.rag_documents
+			ORDER BY created_at DESC`)
+		if err != nil {
+			return fmt.Errorf("rag.repo: list documents: %w", err)
 		}
-		docs = append(docs, d)
+		defer rows.Close()
+
+		for rows.Next() {
+			var d Document
+			if err := rows.Scan(&d.ID, &d.TenantID, &d.Name, &d.MimeType, &d.SizeBytes,
+				&d.Status, &d.ErrorMsg, &d.StoragePath, &d.CreatedAt, &d.UpdatedAt); err != nil {
+				return fmt.Errorf("rag.repo: scan document: %w", err)
+			}
+			docs = append(docs, d)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return docs, rows.Err()
+	return docs, nil
 }
 
 // UpdateDocumentStatus updates the status (and optionally error_msg) of a document.
 func (r *Repo) UpdateDocumentStatus(ctx context.Context, tenantID, docID uuid.UUID, status, errMsg string) error {
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
-		return fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
-	_, err = conn.Exec(ctx, `
-		UPDATE public.rag_documents
-		SET status = $1, error_msg = NULLIF($2,''), updated_at = now()
-		WHERE id = $3`,
-		status, errMsg, docID,
-	)
-	if err != nil {
-		return fmt.Errorf("rag.repo: update document status: %w", err)
-	}
-	return nil
+	return r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE public.rag_documents
+			SET status = $1, error_msg = NULLIF($2,''), updated_at = now()
+			WHERE id = $3`,
+			status, errMsg, docID,
+		)
+		if err != nil {
+			return fmt.Errorf("rag.repo: update document status: %w", err)
+		}
+		return nil
+	})
 }
 
 // DeleteDocument deletes a document and cascades to its chunks.
 func (r *Repo) DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) error {
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
-		return fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
-	_, err = conn.Exec(ctx,
-		`DELETE FROM public.rag_documents WHERE id = $1`,
-		docID,
-	)
-	if err != nil {
-		return fmt.Errorf("rag.repo: delete document: %w", err)
-	}
-	return nil
+	return r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`DELETE FROM public.rag_documents WHERE id = $1`,
+			docID,
+		)
+		if err != nil {
+			return fmt.Errorf("rag.repo: delete document: %w", err)
+		}
+		return nil
+	})
 }
 
 // InsertChunks bulk-inserts chunk rows. Embeddings are stored via pgvector
@@ -196,32 +192,24 @@ func (r *Repo) InsertChunks(ctx context.Context, tenantID, docID uuid.UUID, chun
 		return fmt.Errorf("rag.repo: chunks/embeddings length mismatch: %d vs %d", len(chunks), len(embeddings))
 	}
 
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
-		return fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
-	for i, ch := range chunks {
-		vec, err := encodeVector(embeddings[i])
-		if err != nil {
-			return fmt.Errorf("rag.repo: encode chunk %d vector: %w", i, err)
+	return r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		for i, ch := range chunks {
+			vec, err := encodeVector(embeddings[i])
+			if err != nil {
+				return fmt.Errorf("rag.repo: encode chunk %d vector: %w", i, err)
+			}
+			_, err = tx.Exec(ctx, `
+				INSERT INTO public.rag_chunks
+				    (tenant_id, document_id, chunk_index, content, token_count, embedding)
+				VALUES ($1, $2, $3, $4, $5, $6::vector)`,
+				tenantID, docID, ch.Index, ch.Content, ch.TokenCount, vec,
+			)
+			if err != nil {
+				return fmt.Errorf("rag.repo: insert chunk %d: %w", i, err)
+			}
 		}
-		_, err = conn.Exec(ctx, `
-			INSERT INTO public.rag_chunks
-			    (tenant_id, document_id, chunk_index, content, token_count, embedding)
-			VALUES ($1, $2, $3, $4, $5, $6::vector)`,
-			tenantID, docID, ch.Index, ch.Content, ch.TokenCount, vec,
-		)
-		if err != nil {
-			return fmt.Errorf("rag.repo: insert chunk %d: %w", i, err)
-		}
-	}
-	return nil
+		return nil
+	})
 }
 
 // SearchChunks runs a cosine-distance vector search returning up to topK
@@ -235,46 +223,43 @@ func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []
 		topK = 5
 	}
 
-	conn, err := r.pool.Acquire(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("rag.repo: acquire: %w", err)
-	}
-	defer conn.Release()
-
-	if _, err := conn.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
-		return nil, fmt.Errorf("rag.repo: set tenant: %w", err)
-	}
-
 	vec, err := encodeVector(queryVec)
 	if err != nil {
 		return nil, fmt.Errorf("rag.repo: encode query vector: %w", err)
 	}
-	// Explicit tenant_id filter is defense-in-depth alongside RLS:
-	// protects against SECURITY DEFINER / superuser-bypass scenarios.
-	rows, err := conn.Query(ctx, `
-		SELECT id, tenant_id, document_id, chunk_index, content, token_count,
-		       (embedding <=> $1::vector)::float4 AS score
-		FROM public.rag_chunks
-		WHERE tenant_id = $3
-		ORDER BY embedding <=> $1::vector
-		LIMIT $2`,
-		vec, topK, tenantID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("rag.repo: search: %w", err)
-	}
-	defer rows.Close()
 
 	var results []ChunkRow
-	for rows.Next() {
-		var c ChunkRow
-		if err := rows.Scan(&c.ID, &c.TenantID, &c.DocumentID,
-			&c.ChunkIndex, &c.Content, &c.TokenCount, &c.Score); err != nil {
-			return nil, fmt.Errorf("rag.repo: scan chunk: %w", err)
+	err = r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		// Explicit tenant_id filter is defense-in-depth alongside RLS:
+		// protects against SECURITY DEFINER / superuser-bypass scenarios.
+		rows, err := tx.Query(ctx, `
+			SELECT id, tenant_id, document_id, chunk_index, content, token_count,
+			       (embedding <=> $1::vector)::float4 AS score
+			FROM public.rag_chunks
+			WHERE tenant_id = $3
+			ORDER BY embedding <=> $1::vector
+			LIMIT $2`,
+			vec, topK, tenantID,
+		)
+		if err != nil {
+			return fmt.Errorf("rag.repo: search: %w", err)
 		}
-		results = append(results, c)
+		defer rows.Close()
+
+		for rows.Next() {
+			var c ChunkRow
+			if err := rows.Scan(&c.ID, &c.TenantID, &c.DocumentID,
+				&c.ChunkIndex, &c.Content, &c.TokenCount, &c.Score); err != nil {
+				return fmt.Errorf("rag.repo: scan chunk: %w", err)
+			}
+			results = append(results, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
 	}
-	return results, rows.Err()
+	return results, nil
 }
 
 // encodeVector serialises []float32 to pgvector text format '[v1,v2,...]'.
