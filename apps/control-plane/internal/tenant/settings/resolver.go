@@ -94,10 +94,26 @@ func (r *Resolver) refresh(ctx context.Context, tenantID uuid.UUID, key Key) (en
 	return e, true
 }
 
-// AllEnabled resolves every gate key registered in public.feature_gate_keys
-// for tenantID in a single query, returning enabled=false for any key with
-// no tenant_settings row. This backs the featuregate handler's dynamic
-// response (issue #293): adding a new gate key is a migration-only change
+// clientVisibleGateCategories is the allowlist of feature_gate_keys.category
+// values that are safe to expose to an authenticated end user or OWUI Function
+// (issue #293 security review). It covers only capability gates a client needs
+// to adapt its own UI: carl (the RAG/voice/relay/cowork feature keys) and sso.
+// The admin, billing, and audit_sink categories are deliberately excluded:
+// exposing them would leak the deployment's commercial and operational posture
+// to any authenticated user, the same information-disclosure class the
+// 20260715_04 migration avoided by not granting feature_gate_keys to the
+// authenticated role. Fail-closed: a newly added category is excluded here
+// until it is explicitly listed, so a new admin/billing key never leaks by
+// default while a new carl/sso key is exposed automatically.
+var clientVisibleGateCategories = []string{"carl", "sso"}
+
+// AllEnabled resolves every client-visible gate key (those whose
+// feature_gate_keys.category is in clientVisibleGateCategories) registered in
+// public.feature_gate_keys for tenantID in a single query, returning
+// enabled=false for any key with no tenant_settings row. This backs the
+// featuregate handler's dynamic response consumed by edge-api and, through the
+// /v1/featuregate read endpoint, by Open WebUI; it must never emit non
+// client-visible gates. Adding a new gate key is a migration-only change
 // (INSERT INTO feature_gate_keys, plus ALTER TYPE ... ADD VALUE for a
 // genuinely new tenant_setting_key) — this method never changes.
 //
@@ -111,8 +127,9 @@ func (r *Resolver) AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]
 		SELECT k.key, COALESCE(s.enabled, false) AS enabled
 		  FROM public.feature_gate_keys k
 		  LEFT JOIN public.tenant_settings s
-		    ON s.tenant_id = $1 AND s.key = k.key`,
-		tenantID)
+		    ON s.tenant_id = $1 AND s.key = k.key
+		 WHERE k.category = ANY($2::text[])`,
+		tenantID, clientVisibleGateCategories)
 	if err != nil {
 		return nil, fmt.Errorf("settings: query feature gate keys: %w", err)
 	}
