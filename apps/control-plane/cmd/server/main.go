@@ -763,9 +763,13 @@ func main() {
 	// Edge-api calls GET /internal/featuregate/{tenant_id} to populate its own
 	// 30 s edge cache, giving end-to-end revocation in under 60 s.
 	var featureGateHandler *featuregate.Handler
+	var featureGateAdminHandler *featuregate.AdminHandler
 	if pool != nil {
 		settingsResolver := settings.NewResolver(pool, 30*time.Second)
 		featureGateHandler = featuregate.NewHandler(settingsResolver)
+		// Issue #292 (blueprint Step 1.2) — admin feature-gate CRUD reuses the
+		// same resolver so a PUT invalidates the cache the internal GET reads.
+		featureGateAdminHandler = featuregate.NewAdminHandler(settingsResolver)
 	}
 
 	// Issue #308 — egress policy single source of truth. Admin CRUD is
@@ -780,27 +784,28 @@ func main() {
 	}
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:      authMiddleware,
-		AccountsHandler:     accountsHandler,
-		IdentityHandler:     identityHandler,
-		AccountingHandler:   accountingHandler,
-		APIKeysHandler:      apikeysHandler,
-		BudgetsHandler:      budgetsHandler,
-		CatalogHandler:      catalogHandler,
-		LedgerHandler:       ledgerHandler,
-		PaymentsHandler:     paymentsHandler,
-		ProfilesHandler:     profilesHandler,
-		ProvidersRouter:     providersHandler,
-		LiteLLMSyncHandler:  litellmSyncHandler,
-		FeatureGateHandler:  featureGateHandler,
-		EgressPolicyHandler: egressPolicyHandler,
-		RoutingHandler:      routingHandler,
-		UsageHandler:        usageHandler,
-		MetricsRegistry:     metricsRegistry,
-		PrometheusRegistry:  promRegistry,
-		Mux:                 routerMux,
-		InternalToken:       cfg.InternalToken,
-		RoleSvc:             roleSvc,
+		AuthMiddleware:          authMiddleware,
+		AccountsHandler:         accountsHandler,
+		IdentityHandler:         identityHandler,
+		AccountingHandler:       accountingHandler,
+		APIKeysHandler:          apikeysHandler,
+		BudgetsHandler:          budgetsHandler,
+		CatalogHandler:          catalogHandler,
+		LedgerHandler:           ledgerHandler,
+		PaymentsHandler:         paymentsHandler,
+		ProfilesHandler:         profilesHandler,
+		ProvidersRouter:         providersHandler,
+		LiteLLMSyncHandler:      litellmSyncHandler,
+		FeatureGateHandler:      featureGateHandler,
+		FeatureGateAdminHandler: featureGateAdminHandler,
+		EgressPolicyHandler:     egressPolicyHandler,
+		RoutingHandler:          routingHandler,
+		UsageHandler:            usageHandler,
+		MetricsRegistry:         metricsRegistry,
+		PrometheusRegistry:      promRegistry,
+		Mux:                     routerMux,
+		InternalToken:           cfg.InternalToken,
+		RoleSvc:                 roleSvc,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.

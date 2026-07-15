@@ -90,6 +90,16 @@ type RouterConfig struct {
 	// Guarded by the shared-secret token. When nil the route is not registered.
 	FeatureGateHandler http.Handler
 
+	// FeatureGateAdminHandler exposes the owner-gated admin feature-gate CRUD
+	// surface (issue #292, agent-subsystem blueprint Step 1.2): AdminMux()
+	// routes GET/PUT under /api/v1/admin/feature-gates. Mounted behind
+	// AuthMiddleware.Require + RoleSvc.RequirePlatformAdmin (JWT path). A narrow
+	// interface avoids an import cycle between platform/http and featuregate.
+	// When nil (or RoleSvc/AuthMiddleware nil) the routes are not registered.
+	FeatureGateAdminHandler interface {
+		AdminMux() http.Handler
+	}
+
 	// EgressPolicyHandler serves the egress-policy single source of truth
 	// (issue #308): the owner-gated admin CRUD surface at
 	// /api/v1/egress-policy/ and the shared-secret-guarded read surface at
@@ -259,6 +269,18 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// GET /internal/featuregate/{tenant_id} returns flags for edge-api gate middleware.
 	if cfg.FeatureGateHandler != nil {
 		mux.Handle("/internal/featuregate/", internal(cfg.FeatureGateHandler))
+	}
+
+	// Issue #292 (blueprint Step 1.2) — admin feature-gate CRUD, platform-admin
+	// gated (JWT path). GET lists the registry joined with the caller's tenant
+	// enablement; PUT toggles one gate for the caller's selected tenant. Mirrors
+	// the /api/v1/admin/providers gating above.
+	if cfg.FeatureGateAdminHandler != nil && cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
+		adminFeatureGates := cfg.AuthMiddleware.Require(
+			cfg.RoleSvc.RequirePlatformAdmin(cfg.FeatureGateAdminHandler.AdminMux()),
+		)
+		mux.Handle("/api/v1/admin/feature-gates", adminFeatureGates)
+		mux.Handle("/api/v1/admin/feature-gates/", adminFeatureGates)
 	}
 
 	// Issue #308 — egress policy single source of truth. Admin CRUD is
