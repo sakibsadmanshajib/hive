@@ -15,6 +15,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
@@ -29,10 +32,13 @@ import (
 	batchexecutor "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 	bkashRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/bkash"
@@ -47,22 +53,17 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signupguard"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/sovereign"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
@@ -896,6 +897,32 @@ func main() {
 		routerMux.Handle("/api/v1/invoices/", protectedInvoices)
 		log.Println("invoices routes registered (Phase 14)")
 	}
+
+	// Issue #304 (D9) -- licensing entitlement seam. LICENSE_FILE_PATH set
+	// selects Hive Enterprise mode (offline signed file, re-verified on a
+	// schedule, no phone-home); empty selects Hive Cloud mode (sync-path
+	// placeholder). Both satisfy licensing.Source identically, so the
+	// handler never branches on deployment mode.
+	var licenseSource licensing.Source
+	if cfg.LicenseFilePath != "" {
+		licenseSource = licensing.FileSource{
+			Path:         cfg.LicenseFilePath,
+			PublicKeyB64: cfg.LicensePublicKeyB64,
+		}
+	} else {
+		licenseSource = licensing.CloudSource{Entitlement: licensing.DefaultCloudEntitlement(time.Now())}
+	}
+	scheduledLicenseSource := &licensing.ScheduledSource{
+		Inner:    licenseSource,
+		Interval: time.Duration(cfg.LicenseRevalidateIntervalSeconds) * time.Second,
+	}
+	var licenseRecorder licensing.Recorder
+	if pool != nil {
+		licenseRecorder = licensing.PgxRecorder{Pool: pool}
+	}
+	licenseHandler := licensing.NewHandler(scheduledLicenseSource, licenseRecorder)
+	routerMux.Handle("/internal/license/entitlement", platformhttp.RequireInternalToken(cfg.InternalToken, licenseHandler))
+	log.Println("licensing entitlement route registered (issue #304)")
 
 	// Phase 14 — register credit grant routes. Admin surface gated via
 	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
