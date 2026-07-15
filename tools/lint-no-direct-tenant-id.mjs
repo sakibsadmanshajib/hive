@@ -12,6 +12,7 @@ const ALLOWLIST_DIRS = [
   'apps/control-plane/internal/tenant/settings/', // LISTEN/NOTIFY payload, not HTTP request
   'apps/edge-api/internal/auth/',                 // ctx writers
   'apps/control-plane/internal/auditarchive/',    // system cron job; iterates ALL tenants cross-tenant — no request auth context, tenant_id is internal archive struct field not wire input
+  'apps/control-plane/internal/egress/',          // tenant_id in these structs is RESPONSE wire shape (egress-policy read/CRUD JSON output); the handler always resolves tenant_id by parsing the URL path segment via uuid.Parse, never FormValue/Query/Header/request-body — no violation of the auth.TenantID(ctx) input rule this lint enforces
   'supabase/migrations/',
   'tools/lint-no-direct-tenant-id.mjs',
 ];

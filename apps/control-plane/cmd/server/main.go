@@ -32,6 +32,7 @@ import (
 	batchexecutor "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/egress"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
@@ -767,27 +768,39 @@ func main() {
 		featureGateHandler = featuregate.NewHandler(settingsResolver)
 	}
 
+	// Issue #308 — egress policy single source of truth. Admin CRUD is
+	// owner-gated via roleSvc.IsWorkspaceOwner (constructed above, in scope
+	// whenever pool != nil). Neither the server-side OpenHands allowed_hosts
+	// consumer nor the desktop firewall rule generator is wired here.
+	var egressPolicyHandler *egress.Handler
+	if pool != nil && roleSvc != nil {
+		egressRepo := egress.NewPgxRepository(pool)
+		egressSvc := egress.NewService(egressRepo, roleSvc)
+		egressPolicyHandler = egress.NewHandler(egressSvc)
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:     authMiddleware,
-		AccountsHandler:    accountsHandler,
-		IdentityHandler:    identityHandler,
-		AccountingHandler:  accountingHandler,
-		APIKeysHandler:     apikeysHandler,
-		BudgetsHandler:     budgetsHandler,
-		CatalogHandler:     catalogHandler,
-		LedgerHandler:      ledgerHandler,
-		PaymentsHandler:    paymentsHandler,
-		ProfilesHandler:    profilesHandler,
-		ProvidersRouter:    providersHandler,
-		LiteLLMSyncHandler: litellmSyncHandler,
-		FeatureGateHandler: featureGateHandler,
-		RoutingHandler:     routingHandler,
-		UsageHandler:       usageHandler,
-		MetricsRegistry:    metricsRegistry,
-		PrometheusRegistry: promRegistry,
-		Mux:                routerMux,
-		InternalToken:      cfg.InternalToken,
-		RoleSvc:            roleSvc,
+		AuthMiddleware:      authMiddleware,
+		AccountsHandler:     accountsHandler,
+		IdentityHandler:     identityHandler,
+		AccountingHandler:   accountingHandler,
+		APIKeysHandler:      apikeysHandler,
+		BudgetsHandler:      budgetsHandler,
+		CatalogHandler:      catalogHandler,
+		LedgerHandler:       ledgerHandler,
+		PaymentsHandler:     paymentsHandler,
+		ProfilesHandler:     profilesHandler,
+		ProvidersRouter:     providersHandler,
+		LiteLLMSyncHandler:  litellmSyncHandler,
+		FeatureGateHandler:  featureGateHandler,
+		EgressPolicyHandler: egressPolicyHandler,
+		RoutingHandler:      routingHandler,
+		UsageHandler:        usageHandler,
+		MetricsRegistry:     metricsRegistry,
+		PrometheusRegistry:  promRegistry,
+		Mux:                 routerMux,
+		InternalToken:       cfg.InternalToken,
+		RoleSvc:             roleSvc,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
