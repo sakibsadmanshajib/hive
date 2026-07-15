@@ -460,6 +460,111 @@ export async function getViewer(): Promise<Viewer> {
   };
 }
 
+// FeatureGate is one row of the admin feature-gate table (issue #292): a
+// gate key, its human label + category, and whether it is enabled for the
+// current tenant.
+export interface FeatureGate {
+  key: string;
+  label: string;
+  category: string;
+  enabled: boolean;
+}
+
+// FeatureGates is the control-plane response for the admin feature-gate list.
+// Gates are scoped server-side to the caller's selected tenant; the tenant id
+// is deliberately not echoed on the wire.
+export interface FeatureGates {
+  gates: FeatureGate[];
+}
+
+function decodeFeatureGates(payload: JsonObject): FeatureGates | null {
+  const gatesValue = readArrayField(payload, "gates");
+  if (gatesValue === null) {
+    return null;
+  }
+
+  const gates: FeatureGate[] = [];
+  for (const item of gatesValue) {
+    if (!isJsonObject(item)) {
+      return null;
+    }
+    const key = readStringField(item, "key");
+    const label = readStringField(item, "label");
+    const category = readStringField(item, "category");
+    const enabled = readBooleanField(item, "enabled");
+    if (key === null || label === null || category === null || enabled === null) {
+      return null;
+    }
+    gates.push({ key, label, category, enabled });
+  }
+
+  return { gates };
+}
+
+// getFeatureGates lists every registered feature gate joined with the current
+// tenant's enablement. Server-only (uses the session bearer); the control-plane
+// gates this on platform-admin and returns 403 for non-admins, surfaced here as
+// a ControlPlaneError so the caller can render an access state.
+export async function getFeatureGates(): Promise<FeatureGates> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/admin/feature-gates`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to load feature gates");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse feature gates response");
+  }
+
+  const decoded = decodeFeatureGates(payload);
+  if (!decoded) {
+    throw new Error("Failed to parse feature gates response");
+  }
+
+  return decoded;
+}
+
+// setFeatureGate toggles a single gate for the current tenant. Server-only;
+// throws ControlPlaneError so a Route Handler can map the upstream status to a
+// customer-safe message.
+export async function setFeatureGate(
+  key: string,
+  enabled: boolean,
+): Promise<{ key: string; enabled: boolean }> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/admin/feature-gates/${encodeURIComponent(key)}`,
+    {
+      method: "PUT",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({ enabled }),
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update feature gate");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse feature gate response");
+  }
+
+  const outKey = readStringField(payload, "key");
+  const outEnabled = readBooleanField(payload, "enabled");
+  if (outKey === null || outEnabled === null) {
+    throw new Error("Failed to parse feature gate response");
+  }
+
+  return { key: outKey, enabled: outEnabled };
+}
+
 export async function getAccountProfile(): Promise<AccountProfile> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/profile`, {

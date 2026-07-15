@@ -9,6 +9,7 @@ import {
   Users,
   Settings,
   Wallet,
+  ToggleRight,
   LogOut,
 } from "lucide-react";
 
@@ -33,6 +34,16 @@ const NAV_GROUPS: ReadonlyArray<{
       { href: "/console/billing", label: "Billing", icon: <Wallet size={14} /> },
       { href: "/console/members", label: "Members", icon: <Users size={14} /> },
       { href: "/console/settings/profile", label: "Settings", icon: <Settings size={14} /> },
+    ],
+  },
+  {
+    label: "Admin",
+    items: [
+      {
+        href: "/console/feature-gates",
+        label: "Feature gates",
+        icon: <ToggleRight size={14} />,
+      },
     ],
   },
 ];
