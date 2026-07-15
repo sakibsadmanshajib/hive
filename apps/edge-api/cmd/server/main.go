@@ -279,6 +279,13 @@ func main() {
 	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
+	// Feature-gate read seam for Open WebUI (issue #293). OWUI has no in-repo
+	// fork; its only extendable surface is a native Function that talks to
+	// edge-api. This endpoint lets that Function (or any authenticated client)
+	// read the tenant's live gate map at session start and gate its own UI,
+	// reusing the same per-tenant Gate and request auth as Require().
+	mux.Handle("/v1/featuregate", featuregate.NewStateHandler(featureGate))
+
 	// Apply middleware: CompatHeaders (outermost) -> Metrics -> BudgetGate -> UnsupportedEndpoint (inner)
 	//
 	// Phase 14 — BudgetGate sits between metrics and unsupported-endpoint detection.

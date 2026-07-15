@@ -14,14 +14,14 @@ import (
 )
 
 // stubResolver returns a fixed map of enabled keys, or a fixed error, from a
-// single AllEnabled call (issue #293 — the handler no longer calls IsEnabled
-// per known field, so this stub proves the dynamic contract).
+// single ClientVisibleEnabled call (issue #293 — the handler no longer calls
+// IsEnabled per known field, so this stub proves the dynamic contract).
 type stubResolver struct {
 	enabled map[settings.Key]bool
 	err     error
 }
 
-func (s *stubResolver) AllEnabled(_ context.Context, _ uuid.UUID) (map[settings.Key]bool, error) {
+func (s *stubResolver) ClientVisibleEnabled(_ context.Context, _ uuid.UUID) (map[settings.Key]bool, error) {
 	if s.err != nil {
 		return nil, s.err
 	}

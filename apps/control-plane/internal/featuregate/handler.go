@@ -5,10 +5,12 @@
 // GET /internal/featuregate/{tenant_id}
 //
 // The tenant_id path segment is the UUID of the requesting tenant. The
-// handler resolves every known gate key from the tenant_settings table via
-// the shared settings.Resolver (which carries its own short cache) in a
+// handler resolves the client-visible gate keys (categories carl and sso)
+// from the tenant_settings table via the shared settings.Resolver in a
 // single call. The response is a flat key->bool map; unknown/unset keys
-// default to false.
+// default to false. Admin, billing, and audit_sink gates are deliberately
+// excluded here (issue #293 security review): this endpoint feeds edge-api
+// and, through /v1/featuregate, Open WebUI, so it must never expose them.
 //
 // Data-model rework (issue #293): this used to be a hardcoded five-field
 // FlagsResponse struct, so every new gate cost a change here plus a matching
@@ -39,10 +41,12 @@ type FlagsResponse struct {
 }
 
 // Resolver is the narrow interface the handler needs from settings.Resolver.
-// AllEnabled resolves every registered gate key for tenantID in one call;
-// see settings.Resolver.AllEnabled for the query shape.
+// ClientVisibleEnabled resolves only the client-visible gate keys (carl, sso)
+// for tenantID in one call; see settings.Resolver.ClientVisibleEnabled. The
+// full set (settings.Resolver.AllEnabled) is intentionally not used here so
+// admin/billing/audit_sink gates cannot leak to the client.
 type Resolver interface {
-	AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[settings.Key]bool, error)
+	ClientVisibleEnabled(ctx context.Context, tenantID uuid.UUID) (map[settings.Key]bool, error)
 }
 
 // Handler serves GET /internal/featuregate/{tenant_id}.
@@ -75,7 +79,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	enabled, err := h.resolver.AllEnabled(r.Context(), tenantID)
+	enabled, err := h.resolver.ClientVisibleEnabled(r.Context(), tenantID)
 	if err != nil {
 		// Provider-blind: the upstream error (DB outage, query failure) never
 		// reaches the response body.
