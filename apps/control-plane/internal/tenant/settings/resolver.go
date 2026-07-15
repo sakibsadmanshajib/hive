@@ -107,29 +107,47 @@ func (r *Resolver) refresh(ctx context.Context, tenantID uuid.UUID, key Key) (en
 // default while a new carl/sso key is exposed automatically.
 var clientVisibleGateCategories = []string{"carl", "sso"}
 
-// AllEnabled resolves every client-visible gate key (those whose
-// feature_gate_keys.category is in clientVisibleGateCategories) registered in
-// public.feature_gate_keys for tenantID in a single query, returning
-// enabled=false for any key with no tenant_settings row. This backs the
-// featuregate handler's dynamic response consumed by edge-api and, through the
-// /v1/featuregate read endpoint, by Open WebUI; it must never emit non
-// client-visible gates. Adding a new gate key is a migration-only change
-// (INSERT INTO feature_gate_keys, plus ALTER TYPE ... ADD VALUE for a
-// genuinely new tenant_setting_key) — this method never changes.
+// AllEnabled resolves every gate key registered in public.feature_gate_keys
+// for tenantID in a single query, returning enabled=false for any key with no
+// tenant_settings row. It is the FULL set across all categories and is for
+// internal/admin callers (e.g. the admin console toggle UI) that must see
+// every gate regardless of category. The client-facing featuregate endpoint
+// uses ClientVisibleEnabled instead, so admin/billing/audit_sink gates never
+// reach an end user; do not swap this method into that path (issue #293).
 //
 // Unlike IsEnabled, this bypasses the per-key in-memory cache: it always
-// issues one fresh, indexed (tenant_id) query. The edge-api Gate already
-// caches the whole response per tenant for 30s with singleflight dedup on
-// cold misses, so a second cache layer here would add complexity without a
-// measurable latency win at this call volume.
+// issues one fresh, indexed (tenant_id) query.
 func (r *Resolver) AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]bool, error) {
+	return r.gateMap(ctx, tenantID, nil)
+}
+
+// ClientVisibleEnabled resolves only the gate keys whose
+// feature_gate_keys.category is in clientVisibleGateCategories (carl, sso):
+// the subset safe to expose to an authenticated end user or OWUI Function
+// (issue #293 security review). It backs the control-plane featuregate
+// endpoint, which feeds edge-api's Gate/Require and the /v1/featuregate read
+// surface, so admin, billing, and audit_sink gates never leave control-plane.
+// Fail-closed: a new category is excluded until added to the allowlist, so a
+// new admin/billing key never leaks by default while a new carl/sso key is
+// exposed automatically.
+func (r *Resolver) ClientVisibleEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]bool, error) {
+	return r.gateMap(ctx, tenantID, clientVisibleGateCategories)
+}
+
+// gateMap resolves feature_gate_keys left-joined against tenant_settings for
+// tenantID. When categories is non-nil the result is restricted to those
+// feature_gate_keys.category values; nil returns every registered key. It
+// always issues one fresh, indexed (tenant_id) query and bypasses the per-key
+// cache (the edge-api Gate already caches the whole response per tenant for
+// 30s with singleflight dedup on cold misses).
+func (r *Resolver) gateMap(ctx context.Context, tenantID uuid.UUID, categories []string) (map[Key]bool, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT k.key, COALESCE(s.enabled, false) AS enabled
 		  FROM public.feature_gate_keys k
 		  LEFT JOIN public.tenant_settings s
 		    ON s.tenant_id = $1 AND s.key = k.key
-		 WHERE k.category = ANY($2::text[])`,
-		tenantID, clientVisibleGateCategories)
+		 WHERE $2::text[] IS NULL OR k.category = ANY($2::text[])`,
+		tenantID, categories)
 	if err != nil {
 		return nil, fmt.Errorf("settings: query feature gate keys: %w", err)
 	}

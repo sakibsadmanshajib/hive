@@ -43,13 +43,13 @@ func TestResolver_IsEnabled_ReadsValue(t *testing.T) {
 	require.True(t, r.IsEnabled(ctx, tid, settings.EnableCreditPool))
 }
 
-// TestResolver_AllEnabled_ExcludesNonClientVisibleCategories is the #293
-// security-review guard: AllEnabled backs the featuregate response that reaches
-// Open WebUI via GET /v1/featuregate, so it must expose only client-visible
-// categories (carl, sso). Enabling one key in each sensitive category proves
-// none of admin, billing, or audit_sink ever appears in the map, closing the
-// information-disclosure blind spot.
-func TestResolver_AllEnabled_ExcludesNonClientVisibleCategories(t *testing.T) {
+// TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories is the #293
+// security-review guard: ClientVisibleEnabled backs the featuregate response
+// that reaches Open WebUI via GET /v1/featuregate, so it must expose only
+// client-visible categories (carl, sso). Enabling one key in each sensitive
+// category proves none of admin, billing, or audit_sink ever appears in the
+// map, closing the information-disclosure blind spot.
+func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -73,7 +73,7 @@ func TestResolver_AllEnabled_ExcludesNonClientVisibleCategories(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	gates, err := r.AllEnabled(ctx, tid)
+	gates, err := r.ClientVisibleEnabled(ctx, tid)
 	require.NoError(t, err)
 
 	// Client-visible categories are returned.
@@ -94,6 +94,45 @@ func TestResolver_AllEnabled_ExcludesNonClientVisibleCategories(t *testing.T) {
 	} {
 		_, present := gates[k]
 		require.Falsef(t, present, "non-client-visible gate %q must not be exposed", k)
+	}
+}
+
+// TestResolver_AllEnabled_ReturnsFullSet proves AllEnabled stays unfiltered so
+// internal callers (the #323 admin console toggle UI) see every gate,
+// including admin, billing, and audit_sink, not just the client-visible subset.
+func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	pool, teardown := newTestPool(t, ctx)
+	defer teardown()
+
+	r := settings.NewResolver(pool, 30*time.Second)
+	tid := mustTenant(t, ctx, pool, "fg-full-set", "HIVE_CLOUD")
+
+	for _, k := range []settings.Key{
+		settings.EnableAdminConsole,    // admin
+		settings.EnableStripe,          // billing
+		settings.EnableAuditSinkSentry, // audit_sink
+		settings.EnableRAG,             // carl
+	} {
+		_, err := pool.Exec(ctx,
+			`INSERT INTO public.tenant_settings(tenant_id, key, enabled) VALUES ($1, $2::public.tenant_setting_key, true)`,
+			tid, string(k))
+		require.NoError(t, err)
+	}
+
+	gates, err := r.AllEnabled(ctx, tid)
+	require.NoError(t, err)
+
+	// Every category is present in the full set, including sensitive ones.
+	for _, k := range []settings.Key{
+		settings.EnableAdminConsole,
+		settings.EnableStripe,
+		settings.EnableAuditSinkSentry,
+		settings.EnableRAG,
+	} {
+		require.Truef(t, gates[k], "AllEnabled must expose %q to internal callers", k)
 	}
 }
 
