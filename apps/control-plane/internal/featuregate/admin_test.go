@@ -55,8 +55,7 @@ type gateRow struct {
 }
 
 type gatesResp struct {
-	TenantID string    `json:"tenant_id"`
-	Gates    []gateRow `json:"gates"`
+	Gates []gateRow `json:"gates"`
 }
 
 func adminViewer() auth.Viewer {
@@ -88,9 +87,6 @@ func TestAdmin_List_MergesRegistryAndEnablement(t *testing.T) {
 	var resp gatesResp
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
-	}
-	if resp.TenantID != v.TenantID.String() {
-		t.Errorf("tenant_id = %q, want %q", resp.TenantID, v.TenantID.String())
 	}
 	if len(resp.Gates) != 2 {
 		t.Fatalf("expected 2 gates, got %d", len(resp.Gates))

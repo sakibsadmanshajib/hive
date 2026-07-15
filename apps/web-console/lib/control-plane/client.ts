@@ -470,17 +470,16 @@ export interface FeatureGate {
   enabled: boolean;
 }
 
-// FeatureGates is the control-plane response for the admin feature-gate list:
-// the tenant the gates apply to plus the gate rows.
+// FeatureGates is the control-plane response for the admin feature-gate list.
+// Gates are scoped server-side to the caller's selected tenant; the tenant id
+// is deliberately not echoed on the wire.
 export interface FeatureGates {
-  tenant_id: string;
   gates: FeatureGate[];
 }
 
 function decodeFeatureGates(payload: JsonObject): FeatureGates | null {
-  const tenantId = readStringField(payload, "tenant_id");
   const gatesValue = readArrayField(payload, "gates");
-  if (tenantId === null || gatesValue === null) {
+  if (gatesValue === null) {
     return null;
   }
 
@@ -499,7 +498,7 @@ function decodeFeatureGates(payload: JsonObject): FeatureGates | null {
     gates.push({ key, label, category, enabled });
   }
 
-  return { tenant_id: tenantId, gates };
+  return { gates };
 }
 
 // getFeatureGates lists every registered feature gate joined with the current

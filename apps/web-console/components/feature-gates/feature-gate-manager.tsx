@@ -74,6 +74,15 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
       if (!response.ok) {
         throw new Error("request failed");
       }
+      // Reconcile with the state the server actually applied, in case it
+      // diverged from the request (e.g. a concurrent admin edit), rather than
+      // trusting the optimistic value.
+      const result: { key?: string; enabled?: boolean } = await response.json();
+      const appliedKey = result.key ?? gate.key;
+      const applied = typeof result.enabled === "boolean" ? result.enabled : next;
+      setGates((prev) =>
+        prev.map((g) => (g.key === appliedKey ? { ...g, enabled: applied } : g)),
+      );
       setStatus((prev) => ({ ...prev, [gate.key]: "idle" }));
     } catch {
       setGates((prev) =>

@@ -68,8 +68,7 @@ type adminGate struct {
 }
 
 type adminGatesResponse struct {
-	TenantID string      `json:"tenant_id"`
-	Gates    []adminGate `json:"gates"`
+	Gates []adminGate `json:"gates"`
 }
 
 type setGateRequest struct {
@@ -116,7 +115,7 @@ func (h *AdminHandler) handleCollection(w http.ResponseWriter, r *http.Request) 
 		})
 	}
 
-	writeJSON(w, http.StatusOK, adminGatesResponse{TenantID: tenantID.String(), Gates: gates})
+	writeJSON(w, http.StatusOK, adminGatesResponse{Gates: gates})
 }
 
 // handleItem serves PUT /api/v1/admin/feature-gates/{key}.
