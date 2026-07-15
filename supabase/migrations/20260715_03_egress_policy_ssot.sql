@@ -49,10 +49,21 @@ BEGIN
         WHERE schemaname = 'public' AND tablename = 'egress_policies'
           AND policyname = 'egress_policies_tenant_isolation'
     ) THEN
+        -- NULLIF(..., '') guards a Postgres GUC placeholder quirk: once a
+        -- session has called set_config('app.current_tenant_id', ..., true)
+        -- at least once, current_setting(name, true) on that same
+        -- connection returns '' (not NULL) after the LOCAL scope ends,
+        -- rather than reverting to "never defined". Casting '' straight to
+        -- ::uuid raises invalid input syntax instead of cleanly filtering
+        -- rows, which turns a bare/unscoped query on a reused pooled
+        -- connection into a 500 instead of a fail-closed empty result.
+        -- NULLIF folds that '' case to NULL first so the comparison (and
+        -- therefore the whole USING/WITH CHECK expression) evaluates to
+        -- NULL, which Postgres treats as false — deny by default either way.
         CREATE POLICY egress_policies_tenant_isolation
             ON public.egress_policies AS PERMISSIVE FOR ALL TO hive_app
-            USING      (tenant_id = current_setting('app.current_tenant_id', true)::uuid)
-            WITH CHECK (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+            USING      (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid)
+            WITH CHECK (tenant_id = NULLIF(current_setting('app.current_tenant_id', true), '')::uuid);
     END IF;
 END$$;
 

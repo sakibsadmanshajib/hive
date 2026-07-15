@@ -132,3 +132,45 @@ func TestPgxRepository_RLS_CrossTenantContextCannotReadRows(t *testing.T) {
 		t.Fatalf("RLS did not block cross-tenant read: got %d row(s) for tenant A while session claimed tenant B", count)
 	}
 }
+
+// TestPgxRepository_RLS_NoSessionLeakAcrossBorrows proves the tenant context
+// set by one repository call does not survive onto the pooled connection for
+// whoever borrows it next. The pool is pinned to MaxConns=1, so this test's
+// second query physically reuses the exact same connection
+// UpsertTenantDefault just ran on and committed — with no set_config call of
+// its own (a "bare borrow", simulating a future request that reuses the
+// connection before its own tenant-scoping code runs). Two prior repository
+// implementations failed this: LOCAL-with-no-transaction (which failed a
+// different way, RLS saw NULL) and session-scoped set_config (is_local=false)
+// (which would have current_setting still returning tenant A's id here,
+// since nothing ever cleared it — the leak this test exists to catch).
+func TestPgxRepository_RLS_NoSessionLeakAcrossBorrows(t *testing.T) {
+	pool := newRLSTestPool(t)
+	tenantA := uuid.New()
+	seedTenant(t, tenantA)
+
+	repo := egress.NewPgxRepository(pool)
+	ctx := context.Background()
+	if _, err := repo.UpsertTenantDefault(ctx, tenantA, []string{"tenant-a-only.example"}); err != nil {
+		t.Fatalf("seed tenant A row: %v", err)
+	}
+
+	// Bare borrow: no set_config call at all on this connection.
+	var setting string
+	if err := pool.QueryRow(ctx, "SELECT current_setting('app.current_tenant_id', true)").Scan(&setting); err != nil {
+		t.Fatalf("read current_setting: %v", err)
+	}
+	if setting != "" {
+		t.Fatalf("session leak: app.current_tenant_id still %q after UpsertTenantDefault committed, want empty", setting)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.egress_policies WHERE tenant_id = $1 AND user_id IS NULL`,
+		tenantA).Scan(&count); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("session leak: bare borrow saw %d row(s) for tenant A with no tenant context set (RLS should fail-closed on NULL)", count)
+	}
+}
