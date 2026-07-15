@@ -23,48 +23,42 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-// Feature is an opaque token identifying a gateable capability.
+// Feature identifies a gateable capability. Its string value is the
+// tenant_setting_key it mirrors on the control-plane side (e.g. "ENABLE_RAG"),
+// so a Feature constant is a compile-checked label over a Gates map key, not
+// a separate enum requiring its own translation logic.
 type Feature string
 
 const (
-	FeatureRAG    Feature = "rag"
-	FeatureVoice  Feature = "voice"
-	FeatureRelay  Feature = "relay"
-	FeatureCowork Feature = "cowork"
-	// FeatureSSO gates GoTrue-native SAML 2.0 and OIDC provider login (issue #237).
-	// Set when any of ENABLE_SSO_SAML, ENABLE_SSO_GOOGLE, or ENABLE_SSO_MICROSOFT
-	// is enabled for the tenant in control-plane.
-	FeatureSSO Feature = "sso"
+	FeatureRAG    Feature = "ENABLE_RAG"
+	FeatureVoice  Feature = "ENABLE_VOICE"
+	FeatureRelay  Feature = "ENABLE_RELAY"
+	FeatureCowork Feature = "ENABLE_COWORK"
+	// SSO login (issue #237) is gated on any one of three provider keys being
+	// enabled, not a single key — use Gate.RequireAny with these three rather
+	// than a composite Feature constant.
+	FeatureSSOGoogle    Feature = "ENABLE_SSO_GOOGLE"
+	FeatureSSOMicrosoft Feature = "ENABLE_SSO_MICROSOFT"
+	FeatureSSOSaml      Feature = "ENABLE_SSO_SAML"
 )
 
 // FlagsResponse is the JSON body returned by the control-plane
-// GET /internal/featuregate/{tenant_id} endpoint.
+// GET /internal/featuregate/{tenant_id} endpoint: every gate key the
+// control-plane knows about, mapped to its enabled state for the tenant.
+//
+// Data-model rework (issue #293): this replaced a hardcoded five-boolean
+// struct. Gates is generic on purpose — a brand new gate key needs no change
+// to this type, to isEnabled, or to Require; see gate_test.go
+// TestRequire_NewGateKey_NoCodeChangeNeeded.
 type FlagsResponse struct {
-	RAGEnabled    bool `json:"rag_enabled"`
-	VoiceEnabled  bool `json:"voice_enabled"`
-	RelayEnabled  bool `json:"relay_enabled"`
-	CoworkEnabled bool `json:"cowork_enabled"`
-	// SSOEnabled is true when at least one SSO provider (SAML, Google OIDC, or
-	// Microsoft OIDC) is enabled for the tenant.
-	SSOEnabled bool `json:"sso_enabled"`
+	Gates map[string]bool `json:"gates"`
 }
 
-// isEnabled returns whether f is enabled for this response.
+// isEnabled returns whether f is enabled for this response. A missing key
+// (nil map, or key absent) reads as false: Go's zero-value map lookup, no
+// special-casing required.
 func (r FlagsResponse) isEnabled(f Feature) bool {
-	switch f {
-	case FeatureRAG:
-		return r.RAGEnabled
-	case FeatureVoice:
-		return r.VoiceEnabled
-	case FeatureRelay:
-		return r.RelayEnabled
-	case FeatureCowork:
-		return r.CoworkEnabled
-	case FeatureSSO:
-		return r.SSOEnabled
-	default:
-		return false // ponytail: unknown feature = deny
-	}
+	return r.Gates[string(f)]
 }
 
 // Config holds Gate construction parameters.
@@ -176,6 +170,30 @@ func (g *Gate) refresh(ctx context.Context, tenantID uuid.UUID) (FlagsResponse, 
 // for the authenticated tenant. Disabled or unauthenticated requests receive
 // 403 with a provider-blind body (no feature name, no internal detail).
 func (g *Gate) Require(feat Feature) func(http.Handler) http.Handler {
+	return g.requireFunc(func(flags FlagsResponse) bool {
+		return flags.isEnabled(feat)
+	})
+}
+
+// RequireAny returns middleware that gates the next handler on any one of
+// feats being enabled (logical OR). Used where a capability has multiple
+// backing keys, e.g. SSO login is enabled when any configured provider key
+// (Google, Microsoft, SAML) is on for the tenant.
+func (g *Gate) RequireAny(feats ...Feature) func(http.Handler) http.Handler {
+	return g.requireFunc(func(flags FlagsResponse) bool {
+		for _, f := range feats {
+			if flags.isEnabled(f) {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+// requireFunc is the shared gate mechanism behind Require and RequireAny:
+// fetch the tenant's flags, deny on fetch error or unauthenticated request,
+// otherwise defer the allow/deny decision to allowed.
+func (g *Gate) requireFunc(allowed func(FlagsResponse) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			user, ok := auth.UserFrom(r.Context())
@@ -185,7 +203,7 @@ func (g *Gate) Require(feat Feature) func(http.Handler) http.Handler {
 			}
 
 			flags, err := g.Fetch(r.Context(), user.TenantID)
-			if err != nil || !flags.isEnabled(feat) {
+			if err != nil || !allowed(flags) {
 				writeDenied(w)
 				return
 			}

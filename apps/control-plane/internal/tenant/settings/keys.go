@@ -2,6 +2,15 @@ package settings
 
 // Key is a tenant-setting identifier. It must mirror the
 // public.tenant_setting_key Postgres enum exactly.
+//
+// Dynamic gate exposure (issue #293): the set of keys featuregate returns to
+// edge-api is driven by the public.feature_gate_keys table, not by this Go
+// const list. Adding a new gate key that should be exposed through
+// featuregate is a migration-only change (INSERT INTO feature_gate_keys, and
+// ALTER TYPE ... ADD VALUE for a genuinely new enum value). A Key const here
+// remains useful as a typed, compile-checked symbol for call sites elsewhere
+// in control-plane that read a specific setting (billing, SSO, audit sinks),
+// but is not required to make a key visible through featuregate.
 type Key string
 
 const (

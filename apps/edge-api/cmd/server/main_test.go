@@ -264,6 +264,12 @@ func TestSharedStorageClientSatisfiesFilesStorageBackend(t *testing.T) {
 	}
 }
 
+// identityMiddleware is a no-op http.Handler wrapper. Route-registration
+// tests use it in place of the real Voice featuregate.Require middleware so
+// they exercise mux wiring only; gate enforcement itself is covered by
+// apps/edge-api/internal/featuregate's own tests.
+func identityMiddleware(h http.Handler) http.Handler { return h }
+
 func TestRegisterMediaFileBatchRoutesRegistersAllPublicPaths(t *testing.T) {
 	mux := http.NewServeMux()
 	registerMediaFileBatchRoutes(
@@ -272,6 +278,7 @@ func TestRegisterMediaFileBatchRoutesRegistersAllPublicPaths(t *testing.T) {
 		testRouteHandler("audio"),
 		testRouteHandler("files"),
 		testRouteHandler("batches"),
+		identityMiddleware,
 	)
 
 	tests := []struct {
@@ -301,6 +308,53 @@ func TestRegisterMediaFileBatchRoutesRegistersAllPublicPaths(t *testing.T) {
 			}
 			if got := rr.Header().Get("X-Test-Handler"); got != tt.wantHeader {
 				t.Fatalf("%s matched handler %q, want %q", tt.path, got, tt.wantHeader)
+			}
+		})
+	}
+}
+
+// TestRegisterMediaFileBatchRoutesAppliesVoiceGateToAudioOnly is the
+// acceptance-check test for issue #293's Voice route-enforcement gap: the
+// voiceMW middleware passed to registerMediaFileBatchRoutes must wrap every
+// /v1/audio/* route and no other route.
+func TestRegisterMediaFileBatchRoutesAppliesVoiceGateToAudioOnly(t *testing.T) {
+	tagging := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Voice-Gate", "applied")
+			h.ServeHTTP(w, r)
+		})
+	}
+
+	mux := http.NewServeMux()
+	registerMediaFileBatchRoutes(
+		mux,
+		testRouteHandler("images"),
+		testRouteHandler("audio"),
+		testRouteHandler("files"),
+		testRouteHandler("batches"),
+		tagging,
+	)
+
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/v1/audio/speech", want: "applied"},
+		{path: "/v1/audio/transcriptions", want: "applied"},
+		{path: "/v1/audio/translations", want: "applied"},
+		{path: "/v1/images/generations", want: ""},
+		{path: "/v1/files", want: ""},
+		{path: "/v1/batches", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			handler, _ := mux.Handler(req)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if got := rec.Header().Get("X-Voice-Gate"); got != tt.want {
+				t.Errorf("%s: X-Voice-Gate = %q, want %q", tt.path, got, tt.want)
 			}
 		})
 	}
