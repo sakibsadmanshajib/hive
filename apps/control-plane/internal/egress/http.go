@@ -194,7 +194,14 @@ func (h *Handler) handleDeleteUserOverride(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// maxHostsBodyBytes caps the request body a caller may submit to
+// PUT /api/v1/egress-policy/... — an allowlist has no legitimate reason to
+// approach this size; it exists to stop an oversized body from being decoded
+// into memory at all.
+const maxHostsBodyBytes = 1 << 20 // 1 MiB
+
 func decodeHostsBody(w http.ResponseWriter, r *http.Request) ([]string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxHostsBodyBytes)
 	var body struct {
 		AllowedHosts []string `json:"allowed_hosts"`
 	}

@@ -174,6 +174,37 @@ func TestService_SetTenantDefault_RejectsWhitespaceHost(t *testing.T) {
 	}
 }
 
+func TestService_SetTenantDefault_RejectsWildcardAndCIDR(t *testing.T) {
+	tenantID, callerID := uuid.New(), uuid.New()
+	svc := egress.NewService(newFakeRepo(), &fakeOwner{isOwner: true})
+
+	for _, bad := range []string{
+		"*",
+		"*.example.com",
+		"github.*",
+		"0.0.0.0/0",
+		"::/0",
+		"10.0.0.0/8",
+	} {
+		if _, err := svc.SetTenantDefault(context.Background(), callerID, tenantID, []string{bad}); !errors.Is(err, egress.ErrInvalidHosts) {
+			t.Errorf("host %q: expected ErrInvalidHosts, got %v", bad, err)
+		}
+	}
+}
+
+func TestService_SetTenantDefault_AcceptsConcreteHostnamesAndIPs(t *testing.T) {
+	tenantID, callerID := uuid.New(), uuid.New()
+	svc := egress.NewService(newFakeRepo(), &fakeOwner{isOwner: true})
+
+	p, err := svc.SetTenantDefault(context.Background(), callerID, tenantID, []string{"pypi.org", "192.0.2.1", "2001:db8::1"})
+	if err != nil {
+		t.Fatalf("expected concrete hosts/IPs to be accepted, got %v", err)
+	}
+	if len(p.AllowedHosts) != 3 {
+		t.Fatalf("expected 3 hosts, got %v", p.AllowedHosts)
+	}
+}
+
 func TestService_SetTenantDefault_DropsEmptyAndDupesHosts(t *testing.T) {
 	repo := newFakeRepo()
 	tenantID, callerID := uuid.New(), uuid.New()

@@ -3,10 +3,17 @@ package egress
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+// hostCharPattern restricts an allowlist entry to hostname/IPv4/IPv6
+// characters only. Combined with the wildcard/CIDR rejection below, this
+// keeps every stored entry a concrete, single address — an egress ALLOWLIST
+// with a glob or a "0.0.0.0/0"-shaped CIDR is an allow-all in disguise.
+var hostCharPattern = regexp.MustCompile(`^[a-zA-Z0-9.:-]+$`)
 
 // OwnerChecker is the narrow port the service uses to verify the caller owns
 // the workspace being configured. *platform.RoleService satisfies this
@@ -126,10 +133,13 @@ func (s *Service) requireOwner(ctx context.Context, callerID, tenantID uuid.UUID
 	return nil
 }
 
-// normalizeHosts trims, drops empties, and dedupes hostnames while rejecting
-// any entry that still contains whitespace after trimming (a host/glob
-// pattern has no legitimate use for embedded whitespace; catching it here is
-// cheaper than debugging a firewall rule generator choking on it later).
+// normalizeHosts trims, drops empties, dedupes, and validates hostnames.
+// Rejects: embedded whitespace, any wildcard ("*", "*.example.com", ...),
+// any CIDR notation ("0.0.0.0/0", "::/0", or any other "/"-bearing entry —
+// this package does not support CIDR ranges), and any character outside the
+// hostname/IPv4/IPv6 charset. This is an egress ALLOWLIST: a wildcard or a
+// broad CIDR is an allow-all in disguise and defeats the control entirely,
+// so every entry must resolve to one concrete host or IP, never a pattern.
 func normalizeHosts(hosts []string) ([]string, error) {
 	seen := make(map[string]struct{}, len(hosts))
 	out := make([]string, 0, len(hosts))
@@ -139,6 +149,12 @@ func normalizeHosts(hosts []string) ([]string, error) {
 			continue
 		}
 		if strings.ContainsAny(h, " \t\n\r") {
+			return nil, ErrInvalidHosts
+		}
+		if strings.Contains(h, "*") || strings.Contains(h, "/") {
+			return nil, ErrInvalidHosts
+		}
+		if !hostCharPattern.MatchString(h) {
 			return nil, ErrInvalidHosts
 		}
 		if _, dup := seen[h]; dup {
