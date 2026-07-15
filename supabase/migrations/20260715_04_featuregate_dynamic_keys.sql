@@ -61,9 +61,16 @@ INSERT INTO public.feature_gate_keys (key, label, category) VALUES
   ('ENABLE_COWORK',              'Carl.sh cowork capability',   'carl')
 ON CONFLICT (key) DO NOTHING;
 
--- Read-only, non-tenant-scoped metadata (no tenant_id column); safe to expose
--- to any authenticated caller, e.g. the Step 1.2 admin gate UI enumerating
--- toggleable keys. RLS is not applicable (no per-tenant rows to isolate).
-GRANT SELECT ON public.feature_gate_keys TO authenticated;
+-- No GRANT to authenticated. Nothing in this PR reads this table as that
+-- role: apps/control-plane/internal/tenant/settings.Resolver.AllEnabled
+-- queries it via the service-role pool (bypass-RLS, same posture as
+-- tenant_settings), and edge-api never queries Postgres directly, it
+-- consumes the resolved Gates map over the wire. Every capability-key label
+-- (billing, admin, audit-sink names) would otherwise be readable by any
+-- authenticated user of any tenant, wrong default for a data-sovereign
+-- product. The Step 1.2 admin gate UI reads this list through a control-plane
+-- endpoint, not a direct table grant; add a narrower admin-only grant or RLS
+-- policy then, if that endpoint ever needs to run as the authenticated role
+-- instead of service role.
 
 COMMIT;
