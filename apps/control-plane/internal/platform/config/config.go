@@ -48,13 +48,25 @@ type Config struct {
 	// PrecheckMaxConcurrent is the global concurrent-request ceiling for the
 	// precheck handler (default 100). PrecheckTimeoutSeconds is the per-request
 	// deadline in seconds (default 8).
-	SignupRateLimitPerWindow   int
-	SignupRateLimitWindow      time.Duration
-	SignupRateLimitFailOpen    bool
-	TurnstileSecretKey         string
-	TrustedProxyCIDRs          []*net.IPNet
-	PrecheckMaxConcurrent      int
-	PrecheckTimeoutSeconds     int
+	SignupRateLimitPerWindow int
+	SignupRateLimitWindow    time.Duration
+	SignupRateLimitFailOpen  bool
+	TurnstileSecretKey       string
+	TrustedProxyCIDRs        []*net.IPNet
+	PrecheckMaxConcurrent    int
+	PrecheckTimeoutSeconds   int
+
+	// Licensing entitlement seam (issue #304, D9). LicenseFilePath set means
+	// Hive Enterprise mode: an offline signed license file is read from this
+	// path and verified with LicensePublicKeyB64 (a base64 std-encoded
+	// Ed25519 public key). LicenseFilePath empty means Hive Cloud mode: the
+	// sync-path placeholder (licensing.CloudSource) is wired instead.
+	// LicenseRevalidateIntervalSeconds is how often the license is
+	// re-validated ("validated locally on a schedule", the NVIDIA Delegated
+	// License Server pattern -- no phone-home).
+	LicenseFilePath                  string
+	LicensePublicKeyB64              string
+	LicenseRevalidateIntervalSeconds int
 }
 
 // Load reads configuration from environment variables and returns a validated Config.
@@ -78,24 +90,33 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid TRUSTED_PROXY_CIDRS: %w", err)
 	}
 
+	licenseFilePath := os.Getenv("LICENSE_FILE_PATH")
+	licensePublicKeyB64 := os.Getenv("LICENSE_PUBLIC_KEY")
+	if licenseFilePath != "" && licensePublicKeyB64 == "" {
+		return nil, fmt.Errorf("LICENSE_PUBLIC_KEY is required when LICENSE_FILE_PATH is set")
+	}
+
 	return &Config{
-		Port:                       port,
-		SupabaseURL:                supabaseURL,
-		SupabaseAnonKey:            os.Getenv("SUPABASE_ANON_KEY"),
-		SupabaseDBURL:              os.Getenv("SUPABASE_DB_URL"),
-		RedisURL:                   os.Getenv("REDIS_URL"),
-		InternalToken:              os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"),
-		BatchExecutorConcurrency:   intEnv("BATCH_EXECUTOR_CONCURRENCY", 8),
-		BatchExecutorMaxRetries:    intEnv("BATCH_EXECUTOR_MAX_RETRIES", 3),
-		BatchExecutorLineTimeoutMs: intEnv("BATCH_EXECUTOR_LINE_TIMEOUT_MS", 60000),
-		BatchExecutorKind:          stringEnv("BATCH_EXECUTOR_KIND", "auto"),
-		SignupRateLimitPerWindow:   intEnv("SIGNUP_RATE_LIMIT_PER_WINDOW", 5),
-		SignupRateLimitWindow:      time.Duration(intEnv("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", 3600)) * time.Second,
-		SignupRateLimitFailOpen:    boolEnv("RATE_LIMIT_FAIL_OPEN", false),
-		TurnstileSecretKey:         os.Getenv("TURNSTILE_SECRET_KEY"),
-		TrustedProxyCIDRs:          trustedCIDRs,
-		PrecheckMaxConcurrent:      intEnv("SIGNUP_PRECHECK_MAX_CONCURRENT", 100),
-		PrecheckTimeoutSeconds:     intEnv("SIGNUP_PRECHECK_TIMEOUT_SECONDS", 8),
+		Port:                             port,
+		SupabaseURL:                      supabaseURL,
+		SupabaseAnonKey:                  os.Getenv("SUPABASE_ANON_KEY"),
+		SupabaseDBURL:                    os.Getenv("SUPABASE_DB_URL"),
+		RedisURL:                         os.Getenv("REDIS_URL"),
+		InternalToken:                    os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"),
+		BatchExecutorConcurrency:         intEnv("BATCH_EXECUTOR_CONCURRENCY", 8),
+		BatchExecutorMaxRetries:          intEnv("BATCH_EXECUTOR_MAX_RETRIES", 3),
+		BatchExecutorLineTimeoutMs:       intEnv("BATCH_EXECUTOR_LINE_TIMEOUT_MS", 60000),
+		BatchExecutorKind:                stringEnv("BATCH_EXECUTOR_KIND", "auto"),
+		SignupRateLimitPerWindow:         intEnv("SIGNUP_RATE_LIMIT_PER_WINDOW", 5),
+		SignupRateLimitWindow:            time.Duration(intEnv("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", 3600)) * time.Second,
+		SignupRateLimitFailOpen:          boolEnv("RATE_LIMIT_FAIL_OPEN", false),
+		TurnstileSecretKey:               os.Getenv("TURNSTILE_SECRET_KEY"),
+		TrustedProxyCIDRs:                trustedCIDRs,
+		PrecheckMaxConcurrent:            intEnv("SIGNUP_PRECHECK_MAX_CONCURRENT", 100),
+		PrecheckTimeoutSeconds:           intEnv("SIGNUP_PRECHECK_TIMEOUT_SECONDS", 8),
+		LicenseFilePath:                  licenseFilePath,
+		LicensePublicKeyB64:              licensePublicKeyB64,
+		LicenseRevalidateIntervalSeconds: intEnv("LICENSE_REVALIDATE_INTERVAL_SECONDS", 300),
 	}, nil
 }
 

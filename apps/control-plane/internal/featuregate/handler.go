@@ -1,13 +1,22 @@
 // Package featuregate exposes an internal service-to-service endpoint that
-// returns per-tenant feature flags so edge-api can gate capabilities without
+// returns per-tenant feature gates so edge-api can gate capabilities without
 // querying the database directly.
 //
 // GET /internal/featuregate/{tenant_id}
 //
 // The tenant_id path segment is the UUID of the requesting tenant. The
-// handler resolves flags from the tenant_settings table via the shared
-// settings.Resolver (which carries its own short cache). The response is
-// a flat JSON object; all unknown/unset flags default to false.
+// handler resolves every known gate key from the tenant_settings table via
+// the shared settings.Resolver (which carries its own short cache) in a
+// single call. The response is a flat key->bool map; unknown/unset keys
+// default to false.
+//
+// Data-model rework (issue #293): this used to be a hardcoded five-field
+// FlagsResponse struct, so every new gate cost a change here plus a matching
+// change in apps/edge-api/internal/featuregate/gate.go. Both sides now carry
+// a dynamic map keyed by the tenant_setting_key string, so a new gate key
+// never touches this file: add it to public.feature_gate_keys (and, for a
+// genuinely new key, ALTER TYPE public.tenant_setting_key ADD VALUE) in a
+// migration, and it appears here automatically.
 //
 // Auth: guarded upstream by RequireInternalToken (all /internal/* routes).
 package featuregate
@@ -22,22 +31,18 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
 )
 
-// FlagsResponse is the JSON body returned to the edge-api.
+// FlagsResponse is the JSON body returned to the edge-api: every gate key
+// known to public.feature_gate_keys mapped to its enabled state for the
+// requesting tenant.
 type FlagsResponse struct {
-	RAGEnabled    bool `json:"rag_enabled"`
-	VoiceEnabled  bool `json:"voice_enabled"`
-	RelayEnabled  bool `json:"relay_enabled"`
-	CoworkEnabled bool `json:"cowork_enabled"`
-	// SSOEnabled is true when at least one SSO provider key is enabled for the
-	// tenant: ENABLE_SSO_SAML, ENABLE_SSO_GOOGLE, or ENABLE_SSO_MICROSOFT.
-	// The edge-api gate uses this single flag; provider selection is GoTrue's
-	// responsibility, not the gate's.
-	SSOEnabled bool `json:"sso_enabled"`
+	Gates map[string]bool `json:"gates"`
 }
 
 // Resolver is the narrow interface the handler needs from settings.Resolver.
+// AllEnabled resolves every registered gate key for tenantID in one call;
+// see settings.Resolver.AllEnabled for the query shape.
 type Resolver interface {
-	IsEnabled(ctx context.Context, tenantID uuid.UUID, key settings.Key) bool
+	AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[settings.Key]bool, error)
 }
 
 // Handler serves GET /internal/featuregate/{tenant_id}.
@@ -70,22 +75,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	flags := FlagsResponse{
-		RAGEnabled:    h.resolver.IsEnabled(ctx, tenantID, settings.EnableRAG),
-		VoiceEnabled:  h.resolver.IsEnabled(ctx, tenantID, settings.EnableVoice),
-		RelayEnabled:  h.resolver.IsEnabled(ctx, tenantID, settings.EnableRelay),
-		CoworkEnabled: h.resolver.IsEnabled(ctx, tenantID, settings.EnableCowork),
-		// SSOEnabled is the logical OR of all three SSO provider keys so the
-		// edge-api needs only one gate check regardless of which IdP is configured.
-		SSOEnabled: h.resolver.IsEnabled(ctx, tenantID, settings.EnableSSOSaml) ||
-			h.resolver.IsEnabled(ctx, tenantID, settings.EnableSSOGoogle) ||
-			h.resolver.IsEnabled(ctx, tenantID, settings.EnableSSOMicrosoft),
+	enabled, err := h.resolver.AllEnabled(r.Context(), tenantID)
+	if err != nil {
+		// Provider-blind: the upstream error (DB outage, query failure) never
+		// reaches the response body.
+		writeError(w, http.StatusInternalServerError, "failed to resolve feature gates")
+		return
+	}
+
+	gates := make(map[string]bool, len(enabled))
+	for key, on := range enabled {
+		gates[string(key)] = on
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(flags)
+	_ = json.NewEncoder(w).Encode(FlagsResponse{Gates: gates})
 }
 
 // writeError emits a JSON error body with a matching Content-Type header.
