@@ -13,6 +13,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/egress"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
@@ -29,17 +30,17 @@ type healthResponse struct {
 
 // RouterConfig holds dependencies for building the HTTP router.
 type RouterConfig struct {
-	AuthMiddleware    *auth.Middleware
-	AccountsHandler   *accounts.Handler
-	AccountingHandler *accounting.Handler
-	APIKeysHandler    *apikeys.Handler
+	AuthMiddleware           *auth.Middleware
+	AccountsHandler          *accounts.Handler
+	AccountingHandler        *accounting.Handler
+	APIKeysHandler           *apikeys.Handler
 	CatalogHandler           *catalog.Handler
 	CatalogVisibilityHandler *catalog.VisibilityHandler
-	LedgerHandler     *ledger.Handler
-	PaymentsHandler   *payments.Handler
-	ProfilesHandler   *profiles.Handler
-	RoutingHandler    *routing.Handler
-	UsageHandler      *usage.Handler
+	LedgerHandler            *ledger.Handler
+	PaymentsHandler          *payments.Handler
+	ProfilesHandler          *profiles.Handler
+	RoutingHandler           *routing.Handler
+	UsageHandler             *usage.Handler
 
 	// IdentityHandler finalizes email verification for the authenticated caller
 	// (issue #112). Registered under /api/v1 behind the auth middleware.
@@ -88,6 +89,12 @@ type RouterConfig struct {
 	// FeatureGateHandler handles GET /internal/featuregate/{tenant_id}.
 	// Guarded by the shared-secret token. When nil the route is not registered.
 	FeatureGateHandler http.Handler
+
+	// EgressPolicyHandler serves the egress-policy single source of truth
+	// (issue #308): the owner-gated admin CRUD surface at
+	// /api/v1/egress-policy/ and the shared-secret-guarded read surface at
+	// /internal/egress-policy/. When nil neither route is registered.
+	EgressPolicyHandler *egress.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -252,6 +259,18 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// GET /internal/featuregate/{tenant_id} returns flags for edge-api gate middleware.
 	if cfg.FeatureGateHandler != nil {
 		mux.Handle("/internal/featuregate/", internal(cfg.FeatureGateHandler))
+	}
+
+	// Issue #308 — egress policy single source of truth. Admin CRUD is
+	// owner-gated (auth middleware; the handler itself checks
+	// IsWorkspaceOwner). The internal read surface is the single resolution
+	// both the OpenHands allowed_hosts config and the desktop firewall rule
+	// generator will consume (neither is wired yet).
+	if cfg.EgressPolicyHandler != nil {
+		mux.Handle("/internal/egress-policy/", internal(cfg.EgressPolicyHandler.InternalMux()))
+		if cfg.AuthMiddleware != nil {
+			mux.Handle("/api/v1/egress-policy/", cfg.AuthMiddleware.Require(cfg.EgressPolicyHandler.AdminMux()))
+		}
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.

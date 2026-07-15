@@ -15,6 +15,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	goredis "github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
@@ -29,10 +32,13 @@ import (
 	batchexecutor "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/batchstore/executor"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/egress"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/filestore"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/grants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 	bkashRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/bkash"
@@ -47,22 +53,17 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signupguard"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/featuregate"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/sovereign"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/spendalerts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenant/settings"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-	goredis "github.com/redis/go-redis/v9"
 )
 
 // ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
@@ -766,27 +767,39 @@ func main() {
 		featureGateHandler = featuregate.NewHandler(settingsResolver)
 	}
 
+	// Issue #308 — egress policy single source of truth. Admin CRUD is
+	// owner-gated via roleSvc.IsWorkspaceOwner (constructed above, in scope
+	// whenever pool != nil). Neither the server-side OpenHands allowed_hosts
+	// consumer nor the desktop firewall rule generator is wired here.
+	var egressPolicyHandler *egress.Handler
+	if pool != nil && roleSvc != nil {
+		egressRepo := egress.NewPgxRepository(pool)
+		egressSvc := egress.NewService(egressRepo, roleSvc)
+		egressPolicyHandler = egress.NewHandler(egressSvc)
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:     authMiddleware,
-		AccountsHandler:    accountsHandler,
-		IdentityHandler:    identityHandler,
-		AccountingHandler:  accountingHandler,
-		APIKeysHandler:     apikeysHandler,
-		BudgetsHandler:     budgetsHandler,
-		CatalogHandler:     catalogHandler,
-		LedgerHandler:      ledgerHandler,
-		PaymentsHandler:    paymentsHandler,
-		ProfilesHandler:    profilesHandler,
-		ProvidersRouter:    providersHandler,
-		LiteLLMSyncHandler: litellmSyncHandler,
-		FeatureGateHandler: featureGateHandler,
-		RoutingHandler:     routingHandler,
-		UsageHandler:       usageHandler,
-		MetricsRegistry:    metricsRegistry,
-		PrometheusRegistry: promRegistry,
-		Mux:                routerMux,
-		InternalToken:      cfg.InternalToken,
-		RoleSvc:            roleSvc,
+		AuthMiddleware:      authMiddleware,
+		AccountsHandler:     accountsHandler,
+		IdentityHandler:     identityHandler,
+		AccountingHandler:   accountingHandler,
+		APIKeysHandler:      apikeysHandler,
+		BudgetsHandler:      budgetsHandler,
+		CatalogHandler:      catalogHandler,
+		LedgerHandler:       ledgerHandler,
+		PaymentsHandler:     paymentsHandler,
+		ProfilesHandler:     profilesHandler,
+		ProvidersRouter:     providersHandler,
+		LiteLLMSyncHandler:  litellmSyncHandler,
+		FeatureGateHandler:  featureGateHandler,
+		EgressPolicyHandler: egressPolicyHandler,
+		RoutingHandler:      routingHandler,
+		UsageHandler:        usageHandler,
+		MetricsRegistry:     metricsRegistry,
+		PrometheusRegistry:  promRegistry,
+		Mux:                 routerMux,
+		InternalToken:       cfg.InternalToken,
+		RoleSvc:             roleSvc,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
