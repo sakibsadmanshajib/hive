@@ -224,7 +224,10 @@ func main() {
 	batchesAccounting := batches.NewAccountingAdapter(accountingClient)
 	batchesHandler := batches.NewHandler(batchesAuthorizer, batchClient, batchesFileClient, storageClient, batchesAccounting, storageCfg.FilesBucket)
 
-	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler)
+	// Issue #293: Voice previously had a gate constant with no enforcing route
+	// check. Wire it here, at the one real route it protects.
+	voiceMW := featureGate.Require(featuregate.FeatureVoice)
+	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler, voiceMW)
 
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
 
@@ -448,9 +451,13 @@ const (
 	audioMaxBody      = 26 << 20                              // transcription/translation audio (~25 MiB)
 )
 
-func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandler, filesHandler, batchesHandler http.Handler) {
+// voiceMW gates every /v1/audio/* route on featuregate.FeatureVoice (issue
+// #293: Voice had a gate constant but no route ever called it). Images,
+// files, and batches are ungated here by design — their own gate keys, if
+// any, are out of this step's scope.
+func registerMediaFileBatchRoutes(mux *http.ServeMux, imagesHandler, audioHandler, filesHandler, batchesHandler http.Handler, voiceMW func(http.Handler) http.Handler) {
 	images := http.MaxBytesHandler(imagesHandler, imagesMaxBody)
-	audio := http.MaxBytesHandler(audioHandler, audioMaxBody)
+	audio := voiceMW(http.MaxBytesHandler(audioHandler, audioMaxBody))
 	mux.Handle("/v1/images/generations", images)
 	mux.Handle("/v1/images/edits", images)
 	mux.Handle("/v1/images/variations", images)
