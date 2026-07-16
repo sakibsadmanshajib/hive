@@ -1,0 +1,35 @@
+# AppArmor profile granting the bundled Hive bwrap binary permission to
+# create unprivileged user namespaces on distributions that restrict this
+# by default (Ubuntu 24.04+: kernel.apparmor_restrict_unprivileged_userns=1
+# blocks CLONE_NEWUSER for any process that is either fully unconfined or
+# confined by a profile that does not explicitly grant `userns`).
+#
+# Without this profile, bubblewrap's `--unshare-user` fails on stock
+# Ubuntu 24.04, which is the mandatory mitigation condition from security
+# spike #307 for the Linux desktop backend (see VENDORING.md).
+#
+# Install (adjust the path to wherever the desktop app packages the
+# vendored bwrap binary; the profile path in the `profile` line below must
+# be updated to match):
+#
+#   sudo install -m 0644 hive-bwrap-userns /etc/apparmor.d/hive-bwrap-userns
+#   sudo apparmor_parser -r /etc/apparmor.d/hive-bwrap-userns
+#
+# Verify it loaded:
+#
+#   sudo aa-status | grep hive-bwrap-userns
+#
+# LAB VALIDATION STATUS: this profile has not been loaded and exercised
+# against a stock Ubuntu 24.04 box with apparmor_restrict_unprivileged_userns
+# enabled in this session (no such box in this environment). It follows the
+# documented Ubuntu AppArmor userns-restriction pattern (a named profile
+# that explicitly grants `userns,` for the target binary), but must be
+# verified in the lab before this mitigation is considered closed. Track
+# with the Wave 4.2 follow-up in VENDORING.md.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile hive-bwrap-userns /opt/hive/desktop/resources/bwrap flags=(unconfined) {
+  userns,
+}

@@ -21,6 +21,11 @@
 node_modules/
 package-lock.json
 
+# Rust (apps/desktop-sandbox) — Cargo.lock is committed for reproducible
+# builds of the codex-bwrap binary; only the build output is ignored.
+/apps/desktop-sandbox/target/
+/apps/desktop-sandbox/*/target/
+
 # IDE
 .idea/
 .vscode/
