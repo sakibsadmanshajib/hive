@@ -30,6 +30,14 @@ RUN cd apps/control-plane && go mod download
 COPY apps/control-plane/ ./apps/control-plane/
 COPY packages/storage/ ./packages/storage/
 COPY packages/audit-canonical/ ./packages/audit-canonical/
+# apps/agent-engine is a real module dependency of control-plane, not just a
+# manifest for module-cache warmup: apps/control-plane/go.mod replaces
+# github.com/sakibsadmanshajib/hive/apps/agent-engine with a local path
+# (../agent-engine), and cmd/server/main.go imports its engineapi package
+# (added by #332, the host-to-agent-server control channel). Only the
+# go.mod/go.sum were copied above; without the actual source, `go build`
+# fails with "no required module provides package ... engineapi".
+COPY apps/agent-engine/ ./apps/agent-engine/
 
 WORKDIR /src/apps/control-plane
 
