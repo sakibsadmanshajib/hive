@@ -7,9 +7,11 @@ FROM rust:1.82-bookworm
 
 # The bookworm base image's pinned Rust is older than the edition2024
 # feature some transitive Tauri Linux dependencies (e.g. dlopen2_derive)
-# now require; update in place instead of pulling a newer base tag over
-# an unreliable registry connection.
-RUN rustup update stable && rustup default stable
+# now require. Install an explicit pinned version (not a floating "stable"
+# channel) instead of pulling a newer base tag over an unreliable registry
+# connection; apps/desktop/src-tauri/rust-toolchain.toml pins the same
+# version so `cargo` picks it up automatically whenever it runs there.
+RUN rustup toolchain install 1.97.1 --profile minimal && rustup default 1.97.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libwebkit2gtk-4.1-dev \

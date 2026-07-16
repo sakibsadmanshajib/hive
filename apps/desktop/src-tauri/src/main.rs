@@ -21,8 +21,8 @@ fn main() {
             // See entitlements.rs: Step 4.3's fetch belongs right here.
             let _entitlements = entitlements::fetch_stub();
 
-            let target = match &saved_console_url {
-                Some(url) => WebviewUrl::External(url.parse()?),
+            let target = match settings::resolved_target_url(saved_console_url) {
+                Some(url) => WebviewUrl::External(url),
                 None => WebviewUrl::App("index.html".into()),
             };
 

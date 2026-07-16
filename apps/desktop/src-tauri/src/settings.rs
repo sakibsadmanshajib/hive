@@ -68,6 +68,14 @@ pub fn load(data_dir: &Path) -> Option<String> {
     Some(parsed.console_url)
 }
 
+/// Resolves the saved console URL string into an actual `Url` for
+/// `main.rs` to open, falling back to "unconfigured" (`None`) if the
+/// string itself doesn't parse (e.g. valid JSON but a hand-edited or
+/// otherwise corrupt URL value) rather than propagating a startup error.
+pub fn resolved_target_url(saved: Option<String>) -> Option<Url> {
+    saved.and_then(|s| Url::parse(&s).ok())
+}
+
 pub fn save(data_dir: &Path, normalized_url: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(data_dir)?;
     let payload = StoredSettings {
@@ -191,6 +199,28 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    // -- resolved_target_url ------------------------------------------------
+
+    #[test]
+    fn resolved_target_url_none_when_unconfigured() {
+        assert_eq!(resolved_target_url(None), None);
+    }
+
+    #[test]
+    fn resolved_target_url_falls_back_on_corrupt_saved_string() {
+        // Valid JSON, invalid URL value -- e.g. a hand-edited settings file.
+        assert_eq!(resolved_target_url(Some("not a url".to_string())), None);
+    }
+
+    #[test]
+    fn resolved_target_url_parses_valid_saved_string() {
+        let url = resolved_target_url(Some(
+            "https://hive.example.com/agent-workspace".to_string(),
+        ))
+        .unwrap();
+        assert_eq!(url.as_str(), "https://hive.example.com/agent-workspace");
     }
 
     #[test]
