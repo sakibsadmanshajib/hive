@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -276,7 +277,28 @@ func main() {
 		ragIngestClient := edgerag.NewIngestClient(resolveControlPlaneBaseURL())
 		ragIngest := ragIngestClient.AsIngestFunc(log.Printf)
 
-		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx)
+		// Grounded generation (#325): POST /v1/rag/chat reuses the same
+		// routingClient + litellmClient already wired above for
+		// /v1/chat/completions. ragSelectRoute adapts inference.RoutingClient
+		// to the rag package's decoupled RouteSelectFunc so rag does not need
+		// to import inference's Orchestrator/billing types; litellmClient's
+		// ChatCompletion method value satisfies ChatDispatchFunc directly.
+		ragSelectRoute := func(ctx context.Context, aliasID string) (string, error) {
+			route, err := routingClient.SelectRoute(ctx, inference.SelectRouteInput{
+				AliasID:             aliasID,
+				NeedChatCompletions: true,
+			})
+			if err != nil {
+				if errors.Is(err, inference.ErrRouteNotFound) {
+					return "", edgerag.ErrRouteNotFound
+				}
+				return "", err
+			}
+			return route.LiteLLMModelName, nil
+		}
+
+		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx).
+			WithChat(ragSelectRoute, litellmClient.ChatCompletion)
 		ragMW := featureGate.Require(featuregate.FeatureRAG)
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)
