@@ -12,14 +12,15 @@
 
 # Demo budget posture — paid-route count
 # ──────────────────────────────────────
-# The demo caps paid-provider usage. Of the five routes below, only ONE is a
+# The demo caps paid-provider usage. Of the six routes below, only ONE is a
 # hard-coded paid model: route-openrouter-embedding-fallback (qwen3-embedding-8b),
 # the last resort in the embedding cascade after the free Nemotron-Embed primary.
-# The flagship (route-openrouter-default) and vision (route-openrouter-auto)
-# routes resolve their slug from env vars that default to `openrouter/free` in
-# .env.example, so out of the box they cost nothing; an operator opts into a paid
-# flagship only by setting OPENROUTER_DEFAULT_MODEL to a paid slug. The Groq fast
-# route is free-tier. Net: 1 hard-coded paid route, within the demo cap of 2.
+# The flagship (route-openrouter-default) and the two vision routes
+# (route-openrouter-auto, route-doc-vlm) resolve their slug from env vars that
+# default to `openrouter/free` in .env.example, so out of the box they cost
+# nothing; an operator opts into a paid flagship only by setting
+# OPENROUTER_DEFAULT_MODEL to a paid slug. The Groq fast route is free-tier.
+# Net: 1 hard-coded paid route, within the demo cap of 2.
 # OpenRouter exposes no embedding models on /api/v1/models (embeddings ride the
 # openai/ generic adapter), so there is no verified free embedding slug to swap
 # the fallback to; it stays paid by necessity and is documented here.
@@ -62,7 +63,24 @@ model_list:
           allow_fallbacks: false
           sort: throughput
 
-  # ── 4. Embedding (OpenRouter free pool, with paid fallback) ─────────────────
+  # ── 4. Doc-layout vision (OpenRouter free pool, same model as route-openrouter-auto) ─
+  # Blueprint Wave 3, Step 3.2 (issue #300): the doc-layout knowledge-work-pack
+  # skill (apps/agent-engine/internal/docvlm) sends contract/PDF page images
+  # here for structured layout extraction. Named as its own route (rather than
+  # reusing route-openrouter-auto directly) so the doc-layout skill's model
+  # choice can be tuned or swapped independently of the general vision route
+  # edge-api's capability selector uses; today both point at the same
+  # OpenRouter free-pool vision model.
+  - model_name: route-doc-vlm
+    litellm_params:
+      model: os.environ/OPENROUTER_AUTO_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          sort: throughput
+
+  # ── 5. Embedding (OpenRouter free pool, with paid fallback) ─────────────────
   # LiteLLM's native `openrouter/` provider does NOT map the /embeddings
   # endpoint. We use the `openai/` generic adapter with `api_base` pointing
   # at OpenRouter's base URL so the model slug is passed through directly.
