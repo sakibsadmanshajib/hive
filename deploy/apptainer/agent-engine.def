@@ -1,0 +1,86 @@
+Bootstrap: docker
+From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
+# Debian (bookworm) base per repo decision, never Alpine: the vendored
+# OpenHands packages (vendor/openhands) need glibc-linked native wheels and a
+# real apt package set. This tag is confirmed to exist on Docker Hub as of
+# 2026-07-16. Apptainer resolves whichever architecture it is built on
+# (x86-64 per the ratified server-arch decision for this box).
+
+%files
+    ../../vendor/openhands /opt/hive/vendor/openhands
+    ../../apps/agent-engine/packs /opt/hive/packs
+
+%post
+    set -eu
+
+    # Distro Chromium via apt, not a bundled Playwright download: this is
+    # the one browser-install path that is guaranteed to exist for whatever
+    # architecture this image is built on, and it stays correct even if the
+    # target host architecture changes later.
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        chromium \
+        ca-certificates \
+        git \
+        build-essential
+    rm -rf /var/lib/apt/lists/*
+
+    # Point Playwright/browser-using tools at the distro binary instead of
+    # trying to download a bundled one.
+    echo 'export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium' >> /etc/profile.d/hive-agent-engine.sh
+    echo 'export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1' >> /etc/profile.d/hive-agent-engine.sh
+
+    python3 -m pip install --no-cache-dir --upgrade pip
+
+    # Install the vendored, patched packages in dependency order.
+    # --no-deps on the three library packages: their own inter-package
+    # version pins are already satisfied by these local installs, and we
+    # do not want pip re-resolving them from PyPI and silently picking up
+    # the unpatched upstream openhands-workspace.
+    python3 -m pip install --no-cache-dir --no-deps \
+        /opt/hive/vendor/openhands/openhands-sdk \
+        /opt/hive/vendor/openhands/openhands-tools \
+        /opt/hive/vendor/openhands/openhands-workspace
+
+    # openhands-agent-server pulls its remaining third-party dependencies
+    # (fastapi, uvicorn, pydantic, ...) normally; its self-referential deps
+    # on the three packages above are already satisfied.
+    python3 -m pip install --no-cache-dir \
+        /opt/hive/vendor/openhands/openhands-agent-server
+
+    mkdir -p /workspace
+    chmod 0777 /workspace
+
+%environment
+    export RUNTIME=process
+    export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
+    export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+%runscript
+    # Mirrors the entrypoint upstream's ApptainerWorkspace._start_container()
+    # expects to run (`apptainer run ... <sif> --host 0.0.0.0 --port <n>`):
+    # apps/agent-engine/internal/sandbox.BuildArgv appends `--host`/`--port`
+    # after the SIF path, which land here as "$@".
+    exec python3 -m openhands.agent_server.server "$@"
+
+%labels
+    maintainer Hive (apps/agent-engine)
+    hive.issue 305,308
+    hive.source vendor/openhands (OpenHands/software-agent-sdk @ 51c102b9c0348bbdd4e6a84b1ac4199e0d77f827)
+
+%help
+    Hive agent-engine sandbox image: coding-pack and knowledge-work-pack
+    sessions run inside a container built from this definition, launched via
+    apps/agent-engine/internal/sandbox.BuildArgv, which unconditionally adds
+    --pid and --containall (security spike #307) and routes all HTTP/HTTPS
+    egress through a per-session allowlist proxy scoped to the tenant/user's
+    effective egress policy (apps/control-plane/internal/egress, issue
+    #308).
+
+    Build (on a host with apptainer installed):
+        apptainer build agent-engine.sif deploy/apptainer/agent-engine.def
+
+    This build has not been run in this repo's dev environment: WSL2 has no
+    rootless user-namespace Apptainer support. See
+    apps/agent-engine/internal/sandbox/apptainer_integration_test.go for the
+    HIVE_APPTAINER_TEST=1-gated live launch test that exercises a built SIF.
