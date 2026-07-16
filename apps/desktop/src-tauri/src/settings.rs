@@ -92,7 +92,10 @@ pub fn save(data_dir: &Path, normalized_url: &str) -> std::io::Result<()> {
     let payload = StoredSettings {
         console_url: normalized_url.to_string(),
     };
-    std::fs::write(settings_path(data_dir), serde_json::to_vec_pretty(&payload)?)
+    std::fs::write(
+        settings_path(data_dir),
+        serde_json::to_vec_pretty(&payload)?,
+    )
 }
 
 pub fn remove(data_dir: &Path) -> std::io::Result<()> {
@@ -183,8 +186,7 @@ mod tests {
 
     #[test]
     fn strips_user_provided_path_query_and_fragment() {
-        let out =
-            validate_and_normalize("https://hive.example.com/some/path?x=1#frag").unwrap();
+        let out = validate_and_normalize("https://hive.example.com/some/path?x=1#frag").unwrap();
         assert_eq!(out, "https://hive.example.com/agent-workspace");
     }
 
@@ -227,10 +229,8 @@ mod tests {
 
     #[test]
     fn resolved_target_url_parses_valid_saved_string() {
-        let url = resolved_target_url(Some(
-            "https://hive.example.com/agent-workspace".to_string(),
-        ))
-        .unwrap();
+        let url = resolved_target_url(Some("https://hive.example.com/agent-workspace".to_string()))
+            .unwrap();
         assert_eq!(url.as_str(), "https://hive.example.com/agent-workspace");
     }
 
