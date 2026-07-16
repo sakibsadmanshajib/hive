@@ -99,7 +99,11 @@ type Config struct {
 	// conversation uses (see the package doc's "known gap" section).
 	AgentProfileID uuid.UUID
 
-	// SessionAPIKey, when set, is sent as controlclient.SessionAPIKeyHeader.
+	// SessionAPIKey, when set, is both passed to the sandbox
+	// (sandbox.LaunchConfig.SessionAPIKey, actually enforced server-side)
+	// and sent by the control client as controlclient.SessionAPIKeyHeader.
+	// Optional: empty means the control socket's filesystem permissions are
+	// the only trust boundary.
 	SessionAPIKey string
 
 	// ControlReadyTimeout bounds how long Launch waits for the in-SIF shim
@@ -147,6 +151,8 @@ type session struct {
 	proc           process
 	proxySrv       *http.Server
 	proxyListener  net.Listener
+	sessionDir     string // removed on Cancel; holds only Unix sockets
+	workingDir     string // removed on Cancel; the sandbox's /workspace bind mount
 }
 
 // SandboxEngine launches, polls, and cancels agent-engine sandbox sessions.
@@ -209,6 +215,29 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	}
 	controlDir := filepath.Join(sessionDir, "c")
 	workingDir := filepath.Join(e.cfg.WorkspaceRoot, t.ID.String())
+
+	// Single deferred cleanup for every failure branch below: closes
+	// whatever got started so far and removes both directories. succeeded
+	// flips true only on the return at the very end of this function.
+	var (
+		proxySrv *http.Server
+		proc     process
+	)
+	succeeded := false
+	defer func() {
+		if succeeded {
+			return
+		}
+		if proc != nil {
+			_ = proc.Kill()
+		}
+		if proxySrv != nil {
+			_ = proxySrv.Close()
+		}
+		_ = os.RemoveAll(sessionDir)
+		_ = os.RemoveAll(workingDir)
+	}()
+
 	for _, dir := range []string{controlDir, workingDir} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", fmt.Errorf("engine: create session directory %s: %w", dir, err)
@@ -220,16 +249,11 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	if err != nil {
 		return "", fmt.Errorf("engine: start egress proxy listener: %w", err)
 	}
-	proxySrv := &http.Server{Handler: egressproxy.New(allowedHosts)}
+	proxySrv = &http.Server{Handler: egressproxy.New(allowedHosts)}
 	go func() { _ = proxySrv.Serve(proxyListener) }()
-
-	cleanupProxy := func() {
-		_ = proxySrv.Close()
-	}
 
 	hostPort, err := freePort()
 	if err != nil {
-		cleanupProxy()
 		return "", err
 	}
 
@@ -245,17 +269,16 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		HostPort:         hostPort,
 		ProxySocketPath:  egressSocketPath,
 		ControlSocketDir: controlDir,
+		SessionAPIKey:    e.cfg.SessionAPIKey,
 	}
 
 	argv, err := sandbox.BuildArgv(lc)
 	if err != nil {
-		cleanupProxy()
 		return "", fmt.Errorf("engine: build sandbox argv: %w", err)
 	}
 
-	proc, err := e.start(argv)
+	proc, err = e.start(argv)
 	if err != nil {
-		cleanupProxy()
 		return "", err
 	}
 
@@ -263,8 +286,6 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	defer cancel()
 	controlSocketPath := sandbox.ControlSocketPath(lc)
 	if err := controlclient.WaitReady(readyCtx, controlSocketPath); err != nil {
-		_ = proc.Kill()
-		cleanupProxy()
 		return "", err
 	}
 
@@ -282,13 +303,9 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	}
 	convo, err := client.StartConversation(ctx, req)
 	if err != nil {
-		_ = proc.Kill()
-		cleanupProxy()
 		return "", fmt.Errorf("engine: start conversation: %w", err)
 	}
 	if err := client.Run(ctx, convo.ID); err != nil {
-		_ = proc.Kill()
-		cleanupProxy()
 		return "", fmt.Errorf("engine: run conversation: %w", err)
 	}
 
@@ -298,11 +315,14 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		proc:           proc,
 		proxySrv:       proxySrv,
 		proxyListener:  proxyListener,
+		sessionDir:     sessionDir,
+		workingDir:     workingDir,
 	}
 	e.mu.Lock()
 	e.sessions[convo.ID.String()] = sess
 	e.mu.Unlock()
 
+	succeeded = true
 	return convo.ID.String(), nil
 }
 
@@ -354,6 +374,8 @@ func (e *SandboxEngine) Cancel(ctx context.Context, sessionRef string) error {
 	interruptErr := sess.client.Interrupt(ctx, id)
 	killErr := sess.proc.Kill()
 	_ = sess.proxySrv.Close()
+	_ = os.RemoveAll(sess.sessionDir)
+	_ = os.RemoveAll(sess.workingDir)
 
 	e.mu.Lock()
 	delete(e.sessions, sessionRef)

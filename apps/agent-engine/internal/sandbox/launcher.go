@@ -125,6 +125,16 @@ type LaunchConfig struct {
 	// apps/agent-engine/internal/controlclient.
 	ControlSocketDir string
 
+	// SessionAPIKey, when set, is passed to the agent-server as the
+	// SESSION_API_KEY env var (vendor/openhands/openhands-agent-server's
+	// openhands/agent_server/config.py V0_SESSION_API_KEY_ENV), so it
+	// actually enforces apps/agent-engine/internal/controlclient's
+	// X-Session-API-Key header instead of that header being a no-op.
+	// Optional: empty means the agent-server enforces no session key at
+	// all — the control socket's filesystem permissions are the only trust
+	// boundary in that case.
+	SessionAPIKey string
+
 	// MCPConfigPath is the host path of the generated OpenHands-native
 	// {"mcpServers": {...}} JSON document (issue #309, blueprint Step 2.3;
 	// see apps/agent-engine/internal/marketplaceclient.BuildConfig and
@@ -282,6 +292,13 @@ func BuildArgv(cfg LaunchConfig) (argv []string, err error) {
 		"--bind", cfg.ControlSocketDir + ":" + ControlSocketContainerDir,
 		"--bind", cfg.Pack.ConfigDir + ":/opt/hive/pack:ro",
 		"--bind", cfg.Pack.WorkingDir + ":/workspace",
+	}
+
+	// Optional: when set, actually enforces
+	// apps/agent-engine/internal/controlclient's X-Session-API-Key header
+	// (see LaunchConfig.SessionAPIKey's doc comment).
+	if cfg.SessionAPIKey != "" {
+		argv = append(argv, "--env", "SESSION_API_KEY="+cfg.SessionAPIKey)
 	}
 
 	// Issue #309 (blueprint Step 2.3) — bind-mount the tenant's enabled MCP

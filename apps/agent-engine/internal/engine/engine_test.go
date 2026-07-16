@@ -365,6 +365,48 @@ func TestSandboxEngine_Status_UnknownSessionRef(t *testing.T) {
 	}
 }
 
+func TestSandboxEngine_Launch_CleansUpDirsOnFailure(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	e.start = func(argv []string) (process, error) {
+		return nil, errors.New("boom")
+	}
+
+	if _, err := e.Launch(context.Background(), testTask()); err == nil {
+		t.Fatal("expected Launch to fail")
+	}
+
+	assertDirEmpty(t, e.cfg.RunDir)
+	assertDirEmpty(t, e.cfg.WorkspaceRoot)
+}
+
+func TestSandboxEngine_Cancel_CleansUpDirs(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	sessionRef, err := e.Launch(context.Background(), testTask())
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	if err := e.Cancel(context.Background(), sessionRef); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	assertDirEmpty(t, e.cfg.RunDir)
+	assertDirEmpty(t, e.cfg.WorkspaceRoot)
+}
+
+func assertDirEmpty(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir %s: %v", dir, err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected %s empty, got %v", dir, entries)
+	}
+}
+
 func TestSandboxEngine_Cancel_InterruptsAndKillsProcess(t *testing.T) {
 	var fake *fakeAgentServer
 	e := newTestEngine(t, &fake)

@@ -91,6 +91,28 @@ func TestBuildArgv_WiresControlSocket(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_OmitsSessionAPIKeyEnvWhenUnset(t *testing.T) {
+	argv, err := sandbox.BuildArgv(validConfig())
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	if strings.Contains(strings.Join(argv, " "), "SESSION_API_KEY=") {
+		t.Fatalf("expected no SESSION_API_KEY env when unset, got argv: %v", argv)
+	}
+}
+
+func TestBuildArgv_WiresSessionAPIKeyEnvWhenSet(t *testing.T) {
+	cfg := validConfig()
+	cfg.SessionAPIKey = "s3cr3t"
+	argv, err := sandbox.BuildArgv(cfg)
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	if !strings.Contains(strings.Join(argv, " "), "SESSION_API_KEY=s3cr3t") {
+		t.Fatalf("expected SESSION_API_KEY=s3cr3t in argv, got: %v", argv)
+	}
+}
+
 func TestControlSocketPath(t *testing.T) {
 	cfg := validConfig()
 	got := sandbox.ControlSocketPath(cfg)

@@ -45,6 +45,9 @@ const SessionAPIKeyHeader = "X-Session-API-Key"
 // here are never actually resolved over the network.
 const controlBaseURL = "http://agent-server.control"
 
+// maxSuccessBodyBytes caps a 2xx response body this client decodes.
+const maxSuccessBodyBytes = 10 << 20 // 10 MiB
+
 // Client talks to one agent-server instance over a Unix socket.
 type Client struct {
 	http          *http.Client
@@ -288,7 +291,10 @@ func (c *Client) doJSON(ctx context.Context, method, path string, body, out any)
 	if out == nil {
 		return nil
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	// maxSuccessBodyBytes: a conversation's own state is small JSON; capped
+	// the same way the error path already is so a misbehaving agent-server
+	// can't make this client buffer an unbounded response.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxSuccessBodyBytes)).Decode(out); err != nil {
 		return fmt.Errorf("controlclient: decode response: %w", err)
 	}
 	return nil
