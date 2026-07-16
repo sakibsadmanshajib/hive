@@ -22,6 +22,30 @@
   }
   respond @adminMutation 404
 
+  # Blueprint Step 3.1 (#311) agent console sidecar. Path-prefixed, not a
+  # subdomain, so it shares this listener and the /admin, /signup, and
+  # mutation blocks above without any new Caddy site block or cert.
+  #
+  # Collision analysis: Open WebUI has no route under /agent-workspace (its
+  # own paths are the SPA root, /api/*, /ws, and /static/*), and Caddy
+  # directives of the same name run in the order they're written in this
+  # file (documented Caddyfile behaviour for repeated directives), so this
+  # matched reverse_proxy is always evaluated -- and can intercept --
+  # before the unmatched catch-all below ever sees the request. OWUI's own
+  # websocket traffic is untouched since it lives on a different path.
+  # Matches both the bare entry URL (/agent-workspace, no trailing slash --
+  # what a freshly-typed or bookmarked link looks like) and everything
+  # under it. The bare path proxies straight to the Next.js app's own root
+  # route, which (via basePath) redirects to /agent-workspace/tasks itself
+  # (apps/agent-console/app/page.tsx) -- no separate Caddy redirect needed.
+  @agentConsole path /agent-workspace /agent-workspace/*
+  reverse_proxy @agentConsole agent-console:3000 {
+    transport http {
+      response_header_timeout 60s
+      dial_timeout 5s
+    }
+  }
+
   reverse_proxy open-webui:8080 {
     transport http {
       response_header_timeout 60s
