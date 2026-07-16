@@ -73,6 +73,16 @@ func (f *fakeRepository) Transition(_ context.Context, tenantID, userID, id uuid
 	return t, nil
 }
 
+func (f *fakeRepository) ListActive(context.Context) ([]agenttask.Task, error) {
+	var out []agenttask.Task
+	for _, t := range f.tasks {
+		if (t.Status == agenttask.StatusQueued || t.Status == agenttask.StatusRunning) && t.EngineSessionRef != "" {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
 // fakeEngine is a hand-built agenttask.Engine stub.
 type fakeEngine struct {
 	sessionRef string

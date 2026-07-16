@@ -18,6 +18,11 @@ type Repository interface {
 	// Transition updates status (and the fields that go with it) for a task
 	// already scoped to (tenantID, userID) by the caller.
 	Transition(ctx context.Context, tenantID, userID, id uuid.UUID, status Status, sessionRef, resultSummaryRef, errMsg string) (Task, error)
+	// ListActive returns every task across all tenants that is queued or
+	// running with a non-empty EngineSessionRef (i.e. actually launched
+	// somewhere) — the Poller's input. Cross-tenant by design; see
+	// 20260716_05_agent_tasks_service_scan.sql.
+	ListActive(ctx context.Context) ([]Task, error)
 }
 
 type pgxRepository struct {
@@ -130,19 +135,25 @@ func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uui
 	var t Task
 	var notFound, terminal bool
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		// tenantID is not a bind parameter here (tenant scoping is enforced
+		// solely by RLS via the app.current_tenant_id session variable
+		// withTenantTx already sets, same as Get/List): pgx's extended query
+		// protocol cannot infer a type for a parameter the query text never
+		// references, and fails closed with "could not determine data type
+		// of parameter" (SQLSTATE 42P18) rather than silently ignoring it.
 		row := tx.QueryRow(ctx, `
 			UPDATE public.agent_tasks
-			   SET status = $4,
-			       engine_session_ref = CASE WHEN $5 <> '' THEN $5 ELSE engine_session_ref END,
-			       result_summary_ref = CASE WHEN $6 <> '' THEN $6 ELSE result_summary_ref END,
-			       error_message = $7,
-			       started_at = CASE WHEN started_at IS NULL AND $4 = 'running' THEN now() ELSE started_at END,
-			       finished_at = CASE WHEN finished_at IS NULL AND $4 IN ('succeeded', 'failed', 'cancelled') THEN now() ELSE finished_at END,
+			   SET status = $3,
+			       engine_session_ref = CASE WHEN $4 <> '' THEN $4 ELSE engine_session_ref END,
+			       result_summary_ref = CASE WHEN $5 <> '' THEN $5 ELSE result_summary_ref END,
+			       error_message = $6,
+			       started_at = CASE WHEN started_at IS NULL AND $3 = 'running' THEN now() ELSE started_at END,
+			       finished_at = CASE WHEN finished_at IS NULL AND $3 IN ('succeeded', 'failed', 'cancelled') THEN now() ELSE finished_at END,
 			       updated_at = now()
 			 WHERE id = $1 AND user_id = $2
 			   AND status NOT IN ('succeeded', 'failed', 'cancelled')
 			RETURNING id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
-		`, id, userID, tenantID, string(status), sessionRef, resultSummaryRef, errMsg)
+		`, id, userID, string(status), sessionRef, resultSummaryRef, errMsg)
 		var err error
 		t, err = scanTask(row)
 		if err == nil {
@@ -180,6 +191,37 @@ func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uui
 		return Task{}, ErrTerminalState
 	}
 	return t, nil
+}
+
+// ListActive calls public.agent_tasks_list_active() — a SECURITY DEFINER
+// function (20260716_05_agent_tasks_service_scan.sql), NOT a table policy:
+// this is deliberately the only cross-tenant read path against
+// public.agent_tasks. An earlier version of this migration used a blanket
+// PERMISSIVE SELECT policy instead, which Postgres OR-combines with
+// agent_tasks_tenant_isolation and would have cancelled it for every
+// hive_app SELECT (a cross-tenant leak on the ordinary Get/List path) — see
+// the migration's own comment for the full account. Called outside
+// withTenantTx: no single app.current_tenant_id value could see every
+// tenant's rows, which is exactly why the function exists.
+func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
+	rows, err := r.pool.Query(ctx, `SELECT * FROM public.agent_tasks_list_active()`)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask: list active query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agenttask: list active: %w", err)
+	}
+	return out, nil
 }
 
 type scanner interface {

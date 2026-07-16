@@ -238,6 +238,103 @@ func TestRepository_RLS_CrossTenantContextCannotReadRows(t *testing.T) {
 	}
 }
 
+// TestRepository_RLS_ActiveTaskStillHiddenAcrossTenants is the regression
+// guard for the reviewed CRITICAL finding on
+// 20260716_05_agent_tasks_service_scan.sql: a blanket PERMISSIVE SELECT
+// policy would have OR-combined with agent_tasks_tenant_isolation and
+// defeated it for every hive_app SELECT, including this ordinary Get/List
+// path. The fix (a SECURITY DEFINER function, agent_tasks_list_active,
+// scoped to exactly the poller's own query) must not touch this path at
+// all.
+//
+// Deliberately uses the SAME userID for both calls: Get/List already filter
+// on user_id in application-layer SQL
+// (`WHERE id = $1 AND user_id = $2`/`WHERE user_id = $1`), so two different
+// users would make this pass even against the broken blanket-policy
+// migration — the user_id mismatch alone would explain the denial, RLS
+// would never be exercised. Only changing tenant context while user_id
+// stays fixed isolates what this test is actually for: the
+// agent_tasks_tenant_isolation policy itself, independent of that
+// application-layer filter. Exercises exactly the row shape the poller's
+// cross-tenant read targets — running, with an engine_session_ref — since
+// that is the case most likely to regress if the table-level fix is ever
+// loosened again.
+func TestRepository_RLS_ActiveTaskStillHiddenAcrossTenants(t *testing.T) {
+	pool := newRLSTestPool(t)
+	repo := agenttask.NewPgxRepository(pool)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.New(), uuid.New()
+	seedTenant(t, tenantA)
+	seedTenant(t, tenantB)
+	userID := seedUser(t)
+
+	created, err := repo.Create(ctx, tenantA, userID, agenttask.PackCoding, "")
+	if err != nil {
+		t.Fatalf("seed tenant A task: %v", err)
+	}
+	if _, err := repo.Transition(ctx, tenantA, userID, created.ID, agenttask.StatusRunning, "session-abc", "", ""); err != nil {
+		t.Fatalf("transition to running: %v", err)
+	}
+
+	if _, err := repo.Get(ctx, tenantB, userID, created.ID); err == nil {
+		t.Fatal("expected Get to fail under tenant B's context, even for the same user and an active task with a session ref")
+	}
+	list, err := repo.List(ctx, tenantB, userID)
+	if err != nil {
+		t.Fatalf("List(tenantB): %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("expected the task list under tenant B's context to be empty, got %d (cross-tenant leak)", len(list))
+	}
+}
+
+// TestRepository_ListActive_ReturnsAcrossTenants proves
+// agent_tasks_list_active's SECURITY DEFINER cross-tenant read actually
+// works: the poller's whole point is seeing every tenant's active tasks in
+// one call.
+func TestRepository_ListActive_ReturnsAcrossTenants(t *testing.T) {
+	pool := newRLSTestPool(t)
+	repo := agenttask.NewPgxRepository(pool)
+	ctx := context.Background()
+
+	tenantA, tenantB := uuid.New(), uuid.New()
+	seedTenant(t, tenantA)
+	seedTenant(t, tenantB)
+	userA := seedUser(t)
+	userB := seedUser(t)
+
+	taskA, err := repo.Create(ctx, tenantA, userA, agenttask.PackCoding, "")
+	if err != nil {
+		t.Fatalf("seed tenant A task: %v", err)
+	}
+	if _, err := repo.Transition(ctx, tenantA, userA, taskA.ID, agenttask.StatusRunning, "session-a", "", ""); err != nil {
+		t.Fatalf("transition tenant A task: %v", err)
+	}
+	taskB, err := repo.Create(ctx, tenantB, userB, agenttask.PackKnowledgeWork, "")
+	if err != nil {
+		t.Fatalf("seed tenant B task: %v", err)
+	}
+	if _, err := repo.Transition(ctx, tenantB, userB, taskB.ID, agenttask.StatusRunning, "session-b", "", ""); err != nil {
+		t.Fatalf("transition tenant B task: %v", err)
+	}
+
+	active, err := repo.ListActive(ctx)
+	if err != nil {
+		t.Fatalf("ListActive: %v", err)
+	}
+	seen := make(map[uuid.UUID]bool, len(active))
+	for _, task := range active {
+		seen[task.ID] = true
+	}
+	if !seen[taskA.ID] {
+		t.Errorf("expected tenant A's active task %s in ListActive result", taskA.ID)
+	}
+	if !seen[taskB.ID] {
+		t.Errorf("expected tenant B's active task %s in ListActive result", taskB.ID)
+	}
+}
+
 // TestRepository_ScopedByUser_OtherUserCannotSeeOrCancel proves the
 // application-layer user_id filter (not RLS) keeps a task private to the
 // user who started it within the same tenant.
