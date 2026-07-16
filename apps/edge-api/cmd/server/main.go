@@ -18,6 +18,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
 	edgeagenttask "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/artifacts"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
@@ -340,10 +341,16 @@ func main() {
 	// for operators to catch.
 	jwtCfg, jwtCfgErr := loadJWTAuthEnv()
 	var jwtMW func(http.Handler) http.Handler
+	// Hoisted out of the else-branch (rather than :=-scoped to it) so the
+	// artifacts wiring below can reuse the same validator instance to
+	// optionally resolve a viewer's tenant on its anonymous-reachable
+	// serving routes. Stays nil when JWT wiring is skipped.
+	var jwtValidator *auth.SupabaseJWTValidator
 	if jwtCfgErr != nil {
 		log.Printf("WARNING: phase-19 JWT auth wiring skipped (%v)", jwtCfgErr)
 	} else {
-		jwtValidator, err := auth.NewSupabaseJWTValidator(rootCtx, auth.SupabaseJWTConfig{
+		var err error
+		jwtValidator, err = auth.NewSupabaseJWTValidator(rootCtx, auth.SupabaseJWTConfig{
 			Issuer:      jwtCfg.Issuer,
 			JWKSURL:     jwtCfg.JWKSURL,
 			JWTAudience: jwtCfg.Audience,
@@ -352,6 +359,49 @@ func main() {
 			log.Fatalf("failed to initialize Supabase JWT validator: %v", err)
 		}
 		jwtMW = auth.JWTMiddleware(jwtValidator, jwtAuditLogger(), auth.NewTenantFallback(dbPool))
+	}
+
+	// Artifacts hosting (#312, agent-subsystem blueprint Step 3.3).
+	// Management routes (/v1/artifacts/*) sit inside the /v1/ prefix, so
+	// they go through the JWT selector above exactly like RAG. The serving
+	// routes (/artifacts/{id}, /artifacts/{id}/v/{n}) sit outside it by
+	// design: a shared artifact must be reachable with no Authorization
+	// header at all, so the handler resolves an optional viewer tenant
+	// itself from the same jwtValidator instance and falls back to
+	// anonymous-only (public artifacts) when Supabase JWT env vars are
+	// absent, mirroring the jwtCfgErr graceful-degradation path.
+	{
+		var artifactsStore artifacts.Store
+		if dbPool != nil {
+			artifactsStore = artifacts.NewRepo(dbPool)
+		}
+		var artifactsClaimsParser artifacts.ClaimsParser
+		if jwtValidator != nil {
+			artifactsClaimsParser = jwtValidator
+		}
+		artifactsAudit := func(ctx context.Context, action, resourceType, resourceID, severity string,
+			tenantID, actorID uuid.UUID, userAgent string, after any) {
+			if dbPool == nil {
+				return
+			}
+			if err := chat.InsertAuditEvent(ctx, dbPool, chat.AuditEvent{
+				TenantID:     tenantID,
+				ActorID:      actorID,
+				Action:       action,
+				Severity:     severity,
+				ResourceType: resourceType,
+				ResourceID:   resourceID,
+				UserAgent:    userAgent,
+				After:        after,
+				DeploySHA:    os.Getenv("DEPLOY_SHA"),
+				Environment:  os.Getenv("HIVE_ENV"),
+			}); err != nil {
+				log.Printf("artifacts audit write failed: %v", err)
+			}
+		}
+		artifactsHandler := artifacts.NewHandler(artifactsStore, storageClient, storageCfg.FilesBucket,
+			artifactsClaimsParser, os.Getenv("ARTIFACTS_FRAME_ANCESTOR"), artifactsAudit)
+		artifactsHandler.Register(mux)
 	}
 
 	var handler http.Handler = mux
