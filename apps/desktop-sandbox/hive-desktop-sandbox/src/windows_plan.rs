@@ -68,13 +68,29 @@ fn parent_dir(hook_config_dir: &Path) -> PathBuf {
     let raw = hook_config_dir.to_string_lossy();
     let trimmed = raw.trim_end_matches(['\\', '/']);
     match trimmed.rfind(['\\', '/']) {
-        Some(idx) if idx > 0 => PathBuf::from(&trimmed[..idx]),
+        Some(idx) if idx > 0 => {
+            let parent = &trimmed[..idx];
+            // "C:" alone means "current directory on drive C" to Win32,
+            // not the drive root; keep the separator so the ACE target is
+            // the unambiguous root "C:\", not a relative-to-cwd path.
+            if is_bare_drive_letter(parent) {
+                PathBuf::from(format!("{parent}\\"))
+            } else {
+                PathBuf::from(parent)
+            }
+        }
         // No separator, or only a drive-root separator (e.g. "C:\"): there
         // is no parent to ascend to. Falling back to the dir itself keeps
         // the ACE somewhere rather than producing an empty path, and
         // `protect_dacl_from_inheritance` still applies to it.
         _ => hook_config_dir.to_path_buf(),
     }
+}
+
+/// True for a bare drive letter with no trailing separator, e.g. `"C:"`.
+fn is_bare_drive_letter(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 #[cfg(test)]
@@ -145,6 +161,22 @@ mod tests {
         .expect("valid policy");
 
         let plan = WindowsConfinementPlan::for_policy(&policy);
+        assert_eq!(plan.acl_deny_write_parent_dir, PathBuf::from(r"C:\"));
+    }
+
+    #[test]
+    fn plan_for_hook_config_dir_one_level_below_drive_root_keeps_root_separator() {
+        let policy = SandboxPolicy::build(
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\hooks"),
+            NetworkPolicy::DenyAll,
+        )
+        .expect("valid policy");
+
+        let plan = WindowsConfinementPlan::for_policy(&policy);
+        // Must be "C:\" (the drive root), not "C:" (Win32's "current
+        // directory on drive C", a different and non-deterministic path).
         assert_eq!(plan.acl_deny_write_parent_dir, PathBuf::from(r"C:\"));
     }
 }

@@ -20,7 +20,8 @@
 use crate::policy::NetworkPolicy;
 use crate::{LaunchError, SandboxPolicy};
 use landlock::{
-    ABI, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
+    ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
+    RulesetCreatedAttr,
 };
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 use std::convert::TryInto;
@@ -149,7 +150,13 @@ fn apply_landlock_ruleset(policy: &SandboxPolicy) -> Result<(), String> {
     let access_all = AccessFs::from_all(abi);
     let access_read = AccessFs::from_read(abi);
 
+    // CompatLevel::HardRequirement, not the crate's BestEffort default:
+    // Linux is the demo-live confinement path, so a kernel that can't
+    // enforce the ruleset we ask for must fail loudly here rather than
+    // silently return `RulesetStatus::NotEnforced`/`PartiallyEnforced` and
+    // let the sandboxed process run unconfined.
     let mut ruleset = Ruleset::default()
+        .set_compatibility(CompatLevel::HardRequirement)
         .handle_access(access_all)
         .map_err(|err| format!("{err:?}"))?
         .create()
@@ -288,5 +295,47 @@ mod tests {
         let err = launch(&p, &["true".to_string()], Path::new("/tmp"))
             .expect_err("AllowHosts must not launch silently");
         assert!(matches!(err, LaunchError::AllowHostsNotYetImplemented));
+    }
+
+    // ponytail: calls Ruleset::restrict_self, a one-way, per-thread kernel
+    // restriction (like seccomp, Landlock confines the calling thread, not
+    // sibling threads already running), so it is safe to run inline here
+    // rather than in a separate `tests/` process: no other test in this
+    // binary performs real filesystem I/O. If a future test needs real FS
+    // access and cargo's thread pool happens to reuse this OS thread, move
+    // this test to its own `tests/` integration binary instead.
+    #[test]
+    fn landlock_hard_requirement_never_silently_no_ops() {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let hooks = tempfile::tempdir().expect("tempdir");
+        let outside = tempfile::tempdir().expect("tempdir");
+        let p = policy(
+            vec![workspace.path().to_path_buf()],
+            vec![],
+            hooks.path().to_path_buf(),
+        );
+
+        match apply_landlock_ruleset(&p) {
+            Ok(()) => {
+                // CompatLevel::HardRequirement means Ok(()) here only
+                // happens when the kernel actually enforced the ruleset.
+                // Prove it behaviorally rather than trusting the return
+                // value alone.
+                let blocked = outside.path().join("blocked");
+                assert!(
+                    std::fs::write(&blocked, b"x").is_err(),
+                    "landlock reported success but did not confine writes \
+                     outside the writable roots"
+                );
+                let allowed = workspace.path().join("allowed");
+                std::fs::write(&allowed, b"x").expect("writable root must stay writable");
+            }
+            Err(_) => {
+                // Acceptable under CompatLevel::HardRequirement on a kernel
+                // without Landlock support: a loud error, never a silent
+                // no-op. That is exactly the fail-closed behavior under
+                // test.
+            }
+        }
     }
 }

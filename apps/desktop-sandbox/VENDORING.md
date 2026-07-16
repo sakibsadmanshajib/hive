@@ -94,37 +94,69 @@ crate deliberately does not inherit the workspace's Apache-2.0
 - Not done: an actual behavioral run of `windows.rs` on Windows. See "Open
   risks" below.
 
+### Security review follow-up (same PR, second pass)
+
+- `linux.rs`'s Landlock ruleset now sets `CompatLevel::HardRequirement`
+  (was the `landlock` crate's `BestEffort` default, which silently no-ops on
+  a kernel without Landlock support instead of erroring). Linux is the
+  demo-live confinement path, so a kernel that can't enforce the requested
+  ruleset must fail loudly rather than let the sandboxed process run
+  unconfined. Added `landlock_hard_requirement_never_silently_no_ops`,
+  which behaviorally proves enforcement (write outside the writable roots
+  fails, write inside succeeds) whenever the kernel does support Landlock,
+  and accepts a loud error as the only other valid outcome.
+- `windows_plan.rs`'s `parent_dir` had a second edge case: for a hook/config
+  dir one level below a drive root (e.g. `C:\hooks`), it returned `"C:"`,
+  which Win32 treats as "current directory on drive C", not the drive root;
+  fixed to return `"C:\"` .
+- `windows::launch` is now disabled outright; see Open risks #1.
+
 ## Open risks / follow-up (not this wave's scope)
 
-1. **Windows backend is untested on real Windows.** `windows.rs` now
+1. **Windows sandbox `launch` is disabled (security review on PR #335).**
+   `create_restricted_token` builds a restricted token, but nothing applies
+   it to the spawned process: `std::process::Command` has no
+   `CreateProcessAsUserW`/`CreateProcessWithTokenW` equivalent, so a child
+   spawned through it always inherits the *caller's* full token. Shipping
+   that silently would mean this crate's own docs describe a confinement
+   layer that doesn't exist. `windows::launch` therefore always returns
+   `LaunchError::Confinement` before spawning anything, rather than
+   launching a process under a false confinement claim. The fix is to call
+   `CreateProcessAsUserW` (or `CreateProcessWithTokenW`) directly with
+   `restricted_token` instead of going through `std::process::Command`,
+   which would also let it fix item 3 below (`CREATE_SUSPENDED` +
+   `ResumeThread`) in the same pass, since both need the raw `CreateProcessW`
+   call. Do not re-enable the launch path without this wired and a
+   behavioral lab run (item 2).
+2. **Windows backend is untested on real Windows.** `windows.rs` now
    type-checks and lints clean cross-compiled to `x86_64-pc-windows-gnu`, but
    has never been compiled with the MSVC toolchain or run. Needs
    `cargo check --target x86_64-pc-windows-msvc` plus a behavioral run in the
    lab (`win11vm`) before it is trusted, per the module's own doc comment.
-2. **`NetworkPolicy::AllowHosts` is not enforced.** Both `linux::launch` and
+3. **`NetworkPolicy::AllowHosts` is not enforced.** Both `linux::launch` and
    `windows::launch` reject it outright (`LaunchError::AllowHostsNotYetImplemented`)
    rather than silently downgrading to allow-all or deny-all. The egress SSOT
    shape (#308/#319) round-trips through `SandboxPolicy` today; wiring actual
    enforcement (`--unshare-net` + a userspace proxy on Linux, WFP or a
    generated Firewall rule on Windows) is blueprint Step 4.4.
-3. **Windows Job Object assignment race.** The sandboxed child is spawned via
-   `std::process::Command` then assigned to the Job Object immediately after
-   `spawn()`, not atomically via `CREATE_SUSPENDED` + `ResumeThread` (`Command`
-   doesn't expose the primary thread handle needed to resume a suspended
-   process). A future revision calling `CreateProcessW` directly can close
-   this gap.
-4. **AppArmor userns profile (`assets/apparmor/hive-bwrap-userns`) is
+4. **Windows Job Object assignment race.** Dormant while `launch` is disabled
+   (item 1), but still true of the written-but-uncalled code: the sandboxed
+   child would be assigned to the Job Object immediately after `spawn()`, not
+   atomically via `CREATE_SUSPENDED` + `ResumeThread` (`Command` doesn't
+   expose the primary thread handle needed to resume a suspended process).
+   Closed by the same `CreateProcessW`-direct rewrite as item 1.
+5. **AppArmor userns profile (`assets/apparmor/hive-bwrap-userns`) is
    untested in the lab.** Needed for Ubuntu 24.04+'s
    `kernel.apparmor_restrict_unprivileged_userns=1`, which otherwise blocks
    bubblewrap's `--unshare-user` for any process without an explicit `userns`
    grant. Written against the documented Ubuntu pattern but not loaded and
    exercised against a real restricted-userns box in this session.
-5. **Windows restricted token is the base variant only.** No SIDs disabled,
+6. **Windows restricted token is the base variant only.** No SIDs disabled,
    no privileges deleted beyond `CreateRestrictedToken`'s own defaults, and it
    restricts the *current* process's token rather than provisioning a
    dedicated low-privilege sandbox OS user. `codex-rs/windows-sandbox-rs`'s
    elevated-helper-user pattern (see above) is the precedent for that
-   variant when it's prioritized.
+   variant when it's prioritized. Moot until item 1 is wired.
 
 ## Updating this vendor copy
 

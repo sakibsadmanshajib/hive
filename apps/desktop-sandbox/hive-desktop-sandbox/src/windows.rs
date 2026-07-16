@@ -1,6 +1,27 @@
 //! Windows desktop sandbox backend: restricted token, directory-level ACL,
 //! and a Job Object.
 //!
+//! ## Launch is currently disabled (security review on PR #335)
+//!
+//! [`launch`] always returns [`LaunchError::Confinement`] before spawning
+//! anything. `create_restricted_token` below builds a restricted token, but
+//! nothing applies it to the spawned process: `std::process::Command` has
+//! no `CreateProcessAsUserW`/`CreateProcessWithTokenW` equivalent, so a
+//! child spawned through it always runs under the *caller's* full token,
+//! not the restricted one. Shipping that silently would mean this crate's
+//! own docs describe a Windows confinement layer that does not exist. The
+//! directory ACL and Job Object are real, independently-applied mitigations
+//! (see their own doc comments), but "restricted token" is the module's
+//! third pillar and it is currently a no-op, so the whole launch path
+//! refuses to run rather than launch anything under a false confinement
+//! claim. See `VENDORING.md` "Open risks" #1 for the fix (wire
+//! `restricted_token` into process creation via `CreateProcessAsUserW`) and
+//! do not re-enable this path without it.
+//!
+//! `apply_directory_acl`, `create_restricted_token`, and `create_job_object`
+//! stay in this file, unused for now (`#![allow(dead_code)]` below), as the
+//! starting point for that wiring.
+//!
 //! ## Verification status (read before trusting this file)
 //!
 //! This module is compiled only on Windows (`cfg(windows)`) and this
@@ -42,12 +63,17 @@
 //! `CreateProcessW` directly (bypassing `std::process::Command`) can close
 //! this gap.
 
+// apply_directory_acl / create_restricted_token / create_job_object are not
+// called from `launch` yet (see the module docs above); kept as the
+// starting point for the CreateProcessAsUserW wiring tracked in
+// VENDORING.md "Open risks" #1.
+#![allow(dead_code)]
+
 use crate::policy::NetworkPolicy;
 use crate::windows_plan::WindowsConfinementPlan;
 use crate::{LaunchError, SandboxPolicy};
-use std::os::windows::io::AsRawHandle;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::Child;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::{
     BuildTrusteeWithSidW, DENY_ACCESS, EXPLICIT_ACCESS_W, SE_FILE_OBJECT, SetEntriesInAclW,
@@ -60,48 +86,31 @@ use windows::Win32::Security::{
 };
 use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows::Win32::System::JobObjects::{
-    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-    JobObjectExtendedLimitInformation, SetInformationJobObject,
+    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
 };
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 use windows::core::{PCWSTR, PWSTR};
 
 pub(crate) fn launch(
     policy: &SandboxPolicy,
-    command: &[String],
-    cwd: &Path,
+    _command: &[String],
+    _cwd: &Path,
 ) -> Result<Child, LaunchError> {
     if matches!(policy.network(), NetworkPolicy::AllowHosts(_)) {
         return Err(LaunchError::AllowHostsNotYetImplemented);
     }
-    let plan = WindowsConfinementPlan::for_policy(policy);
 
-    apply_directory_acl(&plan)
-        .map_err(|err| LaunchError::Confinement(format!("directory ACL: {err}")))?;
-    let _restricted_token = create_restricted_token()
-        .map_err(|err| LaunchError::Confinement(format!("restricted token: {err}")))?;
-    let job = create_job_object(&plan)
-        .map_err(|err| LaunchError::Confinement(format!("job object: {err}")))?;
-
-    let (program, args) = command.split_first().ok_or_else(|| {
-        LaunchError::Confinement("command must have at least a program name".to_string())
-    })?;
-
-    let child = Command::new(program).args(args).current_dir(cwd).spawn()?;
-
-    // Known race: see module docs "Known race". Assigning immediately after
-    // spawn rather than atomically via CREATE_SUSPENDED.
-    let process_handle = HANDLE(child.as_raw_handle());
-    let assign_result = unsafe { AssignProcessToJobObject(job, process_handle) };
-    unsafe {
-        let _ = CloseHandle(job);
-        let _ = CloseHandle(_restricted_token);
-    }
-    assign_result
-        .map_err(|err| LaunchError::Confinement(format!("assign to job object: {err}")))?;
-
-    Ok(child)
+    // MANDATORY guard (security review on PR #335, see module docs above):
+    // refuse to spawn rather than launch a process under a restricted
+    // token that is never actually applied to it.
+    Err(LaunchError::Confinement(
+        "Windows sandbox launch is not production-ready: the restricted \
+         token is created but never applied to the spawned process, so it \
+         provides no confinement. See VENDORING.md Open risks #1."
+            .to_string(),
+    ))
 }
 
 /// Sets a protected, deny-write ACE for the current user on
