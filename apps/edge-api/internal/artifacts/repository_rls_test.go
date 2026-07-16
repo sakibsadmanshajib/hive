@@ -244,4 +244,78 @@ func TestRepo_RLS_NoSessionLeakAcrossBorrows(t *testing.T) {
 	}
 }
 
+// TestRepo_RLS_CrossTenantCannotMutateOtherTenantArtifact proves the
+// tenant-isolation policy blocks writes too, not just reads: tenant B's
+// session cannot add a version to, or flip the share flag on, tenant A's
+// artifact, because the row is invisible under tenant B's RLS context in
+// the first place (the mutating queries are WHERE id = $1 scoped, and RLS
+// filters that row out before the WHERE clause ever matches it).
+func TestRepo_RLS_CrossTenantCannotMutateOtherTenantArtifact(t *testing.T) {
+	pool := newRLSTestPool(t)
+	tenantA, tenantB := uuid.New(), uuid.New()
+	seedArtifactTenant(t, tenantA)
+	seedArtifactTenant(t, tenantB)
+
+	repo := NewRepo(pool)
+	ctx := context.Background()
+	artifactID, err := repo.CreateArtifact(ctx, tenantA, "tenant-a-only")
+	if err != nil {
+		t.Fatalf("CreateArtifact: %v", err)
+	}
+	if _, err := repo.AddVersion(ctx, tenantA, artifactID, "v1.html", 1); err != nil {
+		t.Fatalf("AddVersion (tenant A): %v", err)
+	}
+
+	if _, err := repo.AddVersion(ctx, tenantB, artifactID, "hijacked.html", 999); err != ErrNotFound {
+		t.Fatalf("AddVersion under tenant B context: err = %v, want ErrNotFound", err)
+	}
+	if err := repo.SetPublic(ctx, tenantB, artifactID, true); err != ErrNotFound {
+		t.Fatalf("SetPublic under tenant B context: err = %v, want ErrNotFound", err)
+	}
+
+	// Tenant A's artifact must be untouched by tenant B's rejected attempts.
+	got, err := repo.GetVersion(ctx, tenantA, artifactID, nil)
+	if err != nil {
+		t.Fatalf("GetVersion (tenant A, after rejected tenant B writes): %v", err)
+	}
+	if got.Version != 1 || got.StoragePath != "v1.html" || got.IsPublic {
+		t.Fatalf("tenant A's artifact was mutated by a rejected cross-tenant write: %+v", got)
+	}
+}
+
+// TestRepo_RLS_ShareRevocationBlocksAnonymousRead proves that unsetting
+// is_public immediately closes the anonymous-read RLS policy again: a
+// previously public artifact stops being readable with no tenant context
+// the moment its owner revokes the share.
+func TestRepo_RLS_ShareRevocationBlocksAnonymousRead(t *testing.T) {
+	pool := newRLSTestPool(t)
+	tenantID := uuid.New()
+	seedArtifactTenant(t, tenantID)
+
+	repo := NewRepo(pool)
+	ctx := context.Background()
+	artifactID, err := repo.CreateArtifact(ctx, tenantID, "revocable")
+	if err != nil {
+		t.Fatalf("CreateArtifact: %v", err)
+	}
+	if _, err := repo.AddVersion(ctx, tenantID, artifactID, "shared.html", 1); err != nil {
+		t.Fatalf("AddVersion: %v", err)
+	}
+	if err := repo.SetPublic(ctx, tenantID, artifactID, true); err != nil {
+		t.Fatalf("SetPublic(true): %v", err)
+	}
+
+	if _, err := repo.GetVersion(ctx, uuid.Nil, artifactID, nil); err != nil {
+		t.Fatalf("anonymous read while public: %v", err)
+	}
+
+	if err := repo.SetPublic(ctx, tenantID, artifactID, false); err != nil {
+		t.Fatalf("SetPublic(false): %v", err)
+	}
+
+	if _, err := repo.GetVersion(ctx, uuid.Nil, artifactID, nil); err != ErrNotFound {
+		t.Fatalf("anonymous read after share revoked: err = %v, want ErrNotFound", err)
+	}
+}
+
 func intPtr(v int) *int { return &v }
