@@ -1,0 +1,23 @@
+# Artifacts hosting reverse proxy (issue #312).
+#
+# Origin isolation is the actual security boundary here, not just the CSP
+# header edge-api sets on the response body: this Caddyfile answers on
+# ARTIFACTS_DOMAIN, a hostname distinct from HIVE_CHAT_URL/OWUI, so a
+# browser's same-origin policy alone stops artifact HTML from ever reading
+# the main app's cookies or session storage, regardless of what the
+# artifact's own script tries. Only the /artifacts/* serving path is
+# proxied through; the /v1/artifacts/* management API stays on the main
+# edge-api origin and is never reachable from this host.
+{$ARTIFACTS_DOMAIN:artifacts.localhost} {
+  handle /artifacts/* {
+    reverse_proxy edge-api:8080 {
+      transport http {
+        response_header_timeout 30s
+        dial_timeout 5s
+      }
+    }
+  }
+  handle {
+    respond 404
+  }
+}

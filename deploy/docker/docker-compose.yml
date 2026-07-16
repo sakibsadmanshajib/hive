@@ -435,6 +435,32 @@ services:
       - caddy-config:/config
     restart: unless-stopped
 
+  # Artifacts hosting (#312) -- separate container, separate origin
+  # (ARTIFACTS_DOMAIN) from caddy-owui on purpose: the isolation guarantee
+  # that a served artifact's HTML cannot read the main app's cookies or
+  # session storage comes from the browser's same-origin policy, which only
+  # holds if this never shares a host with HIVE_CHAT_URL/OWUI. Same image
+  # and volume pattern as caddy-owui; own named volumes so cert/config state
+  # never mixes between the two origins.
+  caddy-artifacts:
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    profiles:
+      - local
+      - enterprise
+      - chat
+    ports:
+      - "3004:80"
+    environment:
+      ARTIFACTS_DOMAIN: ${ARTIFACTS_DOMAIN:-artifacts.localhost}
+    depends_on:
+      edge-api:
+        condition: service_healthy
+    volumes:
+      - ./Caddyfile.artifacts:/etc/caddy/Caddyfile:ro
+      - caddy-artifacts-data:/data
+      - caddy-artifacts-config:/config
+    restart: unless-stopped
+
   # Hive EnterpriseEdge — optional local Ollama inference backend.
   # Active only under the `enterprise` profile. Serves keyless local models
   # (e.g. llama3, mistral) via the Ollama HTTP API on port 11434.
@@ -579,6 +605,8 @@ volumes:
   owui-data:
   caddy-data:
   caddy-config:
+  caddy-artifacts-data:
+  caddy-artifacts-config:
   # ollama-models persists pulled model weights across container recreates.
   # Active only when the `enterprise` profile is used.
   ollama-models:
