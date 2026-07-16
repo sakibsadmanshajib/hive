@@ -50,6 +50,7 @@ type Task struct {
 	TenantID         uuid.UUID
 	UserID           uuid.UUID
 	Pack             Pack
+	Instructions     string
 	Status           Status
 	EngineSessionRef string
 	ResultSummaryRef string

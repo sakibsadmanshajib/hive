@@ -27,14 +27,22 @@
 //     sandbox's own isolated netns, to that bind-mounted socket. HTTP_PROXY
 //     and HTTPS_PROXY point at that loopback port.
 //
-// Known follow-up (Wave 3, not this PR): with --network none the host can
-// no longer reach the agent-server's own --host/--port over TCP either,
-// since that TCP path required the network-namespace sharing this package
-// now deliberately removes. Nothing in this repo today calls the
-// agent-server's HTTP API (cmd/agent-engine only execs and waits on the
-// process), so this is not a regression yet, but Wave 3's task-lifecycle
-// wiring will need its own bind-mounted Unix socket (uvicorn supports
-// uds=... natively) rather than --host/--port for that control channel.
+// Host <-> agent-server control channel (issue #305, closing the Wave 3 gap
+// the paragraph above used to describe): with --network none the host
+// cannot reach the agent-server's own --host/--port over TCP, since that
+// path required the network-namespace sharing this package deliberately
+// removes. The control channel mirrors the egress relay but in the opposite
+// direction: LaunchConfig.ControlSocketDir is a host directory, empty at
+// launch time and bind-mounted (read-write — see ControlSocketContainerDir's
+// doc comment for why it cannot be read-only) into the sandbox. The in-SIF
+// shim (deploy/apptainer/agent-engine.def) creates its own listening Unix
+// socket inside that mounted directory, forwarding each connection to
+// 127.0.0.1:<HostPort> (the agent-server's own loopback bind) inside the
+// sandbox's netns. Because the mount is a directory, not a single
+// pre-existing file, the socket file the shim creates becomes visible at the
+// mirrored host path once the shim starts, and the host can dial it
+// directly with no route through the egress proxy at all. See
+// apps/agent-engine/internal/controlclient for the host-side client.
 //
 // BuildArgv also refuses to launch if any bind mount or working directory in
 // the constructed command references the Docker socket (spike rows 8/9,
@@ -45,6 +53,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -61,6 +70,33 @@ const ProxyShimPort = 3128
 // ProxySocketContainerPath is the fixed path, inside the sandbox, that the
 // host's per-session egressproxy.Proxy Unix socket is bind-mounted to.
 const ProxySocketContainerPath = "/opt/hive/egress.sock"
+
+// ControlSocketContainerDir is the fixed path, inside the sandbox, that
+// LaunchConfig.ControlSocketDir is bind-mounted to. Unlike
+// ProxySocketContainerPath (a single socket file the host creates before
+// launch), this bind mount is a directory and must stay read-write: the
+// in-SIF shim creates its listening socket file inside it only after the
+// sandbox starts, and creating a new directory entry needs write access to
+// the directory itself. ValidateSecurityDefaults still asserts the mount is
+// scoped to exactly this one directory pair — a read-write directory bind
+// is only as safe as what else lives in it, and nothing else is bind-mounted
+// there.
+const ControlSocketContainerDir = "/opt/hive/control"
+
+// ControlSocketFileName is the file name the in-SIF shim binds its listening
+// Unix socket to, inside ControlSocketContainerDir. The mirrored host path
+// (for apps/agent-engine/internal/controlclient to dial) is
+// filepath.Join(cfg.ControlSocketDir, ControlSocketFileName); see
+// ControlSocketPath.
+const ControlSocketFileName = "agent.sock"
+
+// ControlSocketPath returns the host-side path of the control channel's Unix
+// socket for cfg: the path apps/agent-engine/internal/controlclient dials
+// once the in-SIF shim has created it. The file does not exist until the
+// sandbox process has started and the shim has run.
+func ControlSocketPath(cfg LaunchConfig) string {
+	return filepath.Join(cfg.ControlSocketDir, ControlSocketFileName)
+}
 
 // Pack identifies which microagent pack config the sandbox mounts. Coding
 // and knowledge-work packs share the identical sandbox trust tier — both may
@@ -80,8 +116,14 @@ type LaunchConfig struct {
 	UserID          uuid.UUID
 	Pack            Pack
 	SIFPath         string
-	HostPort        int    // passed to the agent-server's own --host/--port; not yet reachable from the host, see package doc
+	HostPort        int    // passed to the agent-server's own --host/--port; reachable from the host only via ControlSocketDir, see package doc
 	ProxySocketPath string // host path of the per-session egressproxy.Proxy's Unix socket listener
+
+	// ControlSocketDir is a host directory, created empty by the caller
+	// before launch, bind-mounted read-write into the sandbox at
+	// ControlSocketContainerDir. See the package doc and
+	// apps/agent-engine/internal/controlclient.
+	ControlSocketDir string
 
 	// MCPConfigPath is the host path of the generated OpenHands-native
 	// {"mcpServers": {...}} JSON document (issue #309, blueprint Step 2.3;
@@ -97,13 +139,14 @@ type LaunchConfig struct {
 const MCPConfigContainerPath = "/opt/hive/mcp_config.json"
 
 var (
-	ErrMissingSIFPath         = errors.New("sandbox: SIFPath is required")
-	ErrMissingProxySocketPath = errors.New("sandbox: ProxySocketPath is required")
-	ErrMissingConfigDir       = errors.New("sandbox: Pack.ConfigDir is required")
-	ErrMissingWorkingDir      = errors.New("sandbox: Pack.WorkingDir is required")
-	ErrInvalidHostPort        = errors.New("sandbox: HostPort must be positive")
-	ErrNilTenant              = errors.New("sandbox: TenantID must not be uuid.Nil")
-	ErrNilUser                = errors.New("sandbox: UserID must not be uuid.Nil")
+	ErrMissingSIFPath          = errors.New("sandbox: SIFPath is required")
+	ErrMissingProxySocketPath  = errors.New("sandbox: ProxySocketPath is required")
+	ErrMissingControlSocketDir = errors.New("sandbox: ControlSocketDir is required")
+	ErrMissingConfigDir        = errors.New("sandbox: Pack.ConfigDir is required")
+	ErrMissingWorkingDir       = errors.New("sandbox: Pack.WorkingDir is required")
+	ErrInvalidHostPort         = errors.New("sandbox: HostPort must be positive")
+	ErrNilTenant               = errors.New("sandbox: TenantID must not be uuid.Nil")
+	ErrNilUser                 = errors.New("sandbox: UserID must not be uuid.Nil")
 
 	// ErrDockerSocketReferenced is returned when a constructed command
 	// references the Docker socket by path or well-known env var — this
@@ -121,6 +164,8 @@ func (c LaunchConfig) validate() error {
 		return ErrMissingSIFPath
 	case c.ProxySocketPath == "":
 		return ErrMissingProxySocketPath
+	case c.ControlSocketDir == "":
+		return ErrMissingControlSocketDir
 	case c.Pack.ConfigDir == "":
 		return ErrMissingConfigDir
 	case c.Pack.WorkingDir == "":
@@ -155,6 +200,9 @@ func ValidateSecurityDefaults(argv []string) error {
 	if !hasAdjacentPair(argv, "--network", "none") {
 		missing = append(missing, `--network none`)
 	}
+	if !hasBindTargetingContainerPath(argv, ControlSocketContainerDir) {
+		missing = append(missing, "--bind <dir>:"+ControlSocketContainerDir)
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf("sandbox: missing required security flags: %s", strings.Join(missing, ", "))
 	}
@@ -166,6 +214,23 @@ func ValidateSecurityDefaults(argv []string) error {
 func hasAdjacentPair(argv []string, flag, value string) bool {
 	for i := 0; i+1 < len(argv); i++ {
 		if argv[i] == flag && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+// hasBindTargetingContainerPath reports whether argv contains a --bind
+// <host>:<containerPath>[:opts] pair whose container-side target is exactly
+// containerPath. Used to assert the control-socket bind mount is present
+// without hard-coding the host-side directory, which varies per launch.
+func hasBindTargetingContainerPath(argv []string, containerPath string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] != "--bind" {
+			continue
+		}
+		parts := strings.SplitN(argv[i+1], ":", 3)
+		if len(parts) >= 2 && parts[1] == containerPath {
 			return true
 		}
 	}
@@ -212,7 +277,9 @@ func BuildArgv(cfg LaunchConfig) (argv []string, err error) {
 		"--env", "HTTP_PROXY=" + proxyURL,
 		"--env", "HTTPS_PROXY=" + proxyURL,
 		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--env", "HIVE_CONTROL_TARGET_PORT=" + strconv.Itoa(cfg.HostPort),
 		"--bind", cfg.ProxySocketPath + ":" + ProxySocketContainerPath,
+		"--bind", cfg.ControlSocketDir + ":" + ControlSocketContainerDir,
 		"--bind", cfg.Pack.ConfigDir + ":/opt/hive/pack:ro",
 		"--bind", cfg.Pack.WorkingDir + ":/workspace",
 	}

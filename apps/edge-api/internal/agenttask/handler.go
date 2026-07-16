@@ -16,7 +16,7 @@ import (
 // TaskClient is the minimal interface the handler needs from Client.
 // Exported so tests can inject a fake without a real control-plane.
 type TaskClient interface {
-	Create(ctx context.Context, tenantID, userID uuid.UUID, pack string) (Task, error)
+	Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string) (Task, error)
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	Get(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
 	Cancel(ctx context.Context, tenantID, userID, taskID uuid.UUID) (Task, error)
@@ -74,7 +74,8 @@ func (h *Handler) routeTaskByID(w http.ResponseWriter, r *http.Request) {
 }
 
 type createTaskRequest struct {
-	Pack string `json:"pack"`
+	Pack         string `json:"pack"`
+	Instructions string `json:"instructions"`
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +86,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createTaskRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&req); err != nil {
+	if err := json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&req); err != nil {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "invalid request body")
 		return
 	}
@@ -94,7 +95,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack)
+	task, err := h.client.Create(r.Context(), user.TenantID, user.ID, req.Pack, req.Instructions)
 	if err != nil {
 		writeTaskError(w, err)
 		return

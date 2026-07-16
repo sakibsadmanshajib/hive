@@ -13,10 +13,12 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     set -eu
 
     apt-get update
-    # socat: the shim in %runscript forwarding the sandbox's own loopback
-    # (its only interface once launched with --net --network none) to the
-    # bind-mounted egress-proxy Unix socket. This is the one relay path;
-    # see apps/agent-engine/internal/sandbox package doc.
+    # socat: the two shims in %runscript. One forwards the sandbox's own
+    # loopback (its only interface once launched with --net --network none)
+    # to the bind-mounted egress-proxy Unix socket — the one relay path out.
+    # The other listens on the bind-mounted control-channel Unix socket and
+    # forwards into the agent-server's own loopback port — the one relay
+    # path in. See apps/agent-engine/internal/sandbox package doc.
     apt-get install -y --no-install-recommends ca-certificates git build-essential socat
     rm -rf /var/lib/apt/lists/*
 
@@ -54,16 +56,25 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     # (apps/agent-engine/internal/sandbox): its only interface is loopback.
     # This shim forwards that loopback port (ProxyShimPort, 3128) to the
     # egress-proxy Unix socket bind-mounted at ProxySocketContainerPath —
-    # the one relay path HTTP_PROXY/HTTPS_PROXY route through. Backgrounded
-    # so the agent-server below still becomes PID 1 inside --pid.
+    # the one relay path out (HTTP_PROXY/HTTPS_PROXY route through it).
+    # Backgrounded so the agent-server below still becomes PID 1 inside --pid.
     socat TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/opt/hive/egress.sock &
+
+    # Host <-> agent-server control channel (issue #305): the reverse
+    # direction of the shim above. HIVE_CONTROL_TARGET_PORT is set by
+    # apps/agent-engine/internal/sandbox.BuildArgv to the same --port value
+    # passed to openhands.agent_server below. unlink-early removes any
+    # stale socket file left at that path (should not happen — each session
+    # gets a fresh empty ControlSocketDir — but a stale file would otherwise
+    # make this bind fail rather than fail loud). The host dials the
+    # bind-mounted directory side of this same socket directly; see
+    # apps/agent-engine/internal/controlclient.
+    socat UNIX-LISTEN:/opt/hive/control/agent.sock,fork,unlink-early TCP-CONNECT:127.0.0.1:${HIVE_CONTROL_TARGET_PORT} &
 
     # Mirrors the entrypoint upstream's ApptainerWorkspace._start_container()
     # expects to run (`apptainer run ... <sif> --host 0.0.0.0 --port <n>`):
     # apps/agent-engine/internal/sandbox.BuildArgv appends `--host`/`--port`
-    # after the SIF path, which land here as "$@". Not yet reachable from the
-    # host with network isolation on — see the sandbox package doc for the
-    # Wave 3 follow-up (a bind-mounted Unix socket control channel).
+    # after the SIF path, which land here as "$@".
     exec python3 -m openhands.agent_server "$@"
 
 %labels
@@ -77,11 +88,14 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     apps/agent-engine/internal/sandbox.BuildArgv, which unconditionally adds
     --pid, --containall, and --net --network none (security spike #307 plus
     team-lead security review of this package), leaving the sandbox with no
-    network interface but loopback. The only relay to the outside world is
-    the socat shim in %runscript, forwarding that loopback to a bind-mounted
-    Unix socket where a per-session allowlist proxy enforces the tenant/
-    user's effective egress policy (apps/control-plane/internal/egress,
-    issue #308).
+    network interface but loopback. Two socat shims in %runscript relay
+    across that isolation in each direction: one forwards the loopback to a
+    bind-mounted Unix socket where a per-session allowlist proxy enforces
+    the tenant/user's effective egress policy (apps/control-plane/internal/
+    egress, issue #308); the other listens on a second bind-mounted Unix
+    socket (the control channel, issue #305) and forwards into the
+    agent-server's own loopback port, so the host can reach its REST API
+    (apps/agent-engine/internal/controlclient) despite --network none.
 
     Build (on a host with apptainer installed):
         apptainer build agent-engine.sif deploy/apptainer/agent-engine.def

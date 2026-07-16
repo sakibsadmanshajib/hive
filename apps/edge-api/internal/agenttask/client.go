@@ -32,10 +32,11 @@ func NewClient(controlPlaneURL string) *Client {
 }
 
 // Create posts a new task. POST /internal/agent-tasks/{tenant_id}/{user_id}.
-func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack string) (Task, error) {
+func (c *Client) Create(ctx context.Context, tenantID, userID uuid.UUID, pack, instructions string) (Task, error) {
 	body, err := json.Marshal(struct {
-		Pack string `json:"pack"`
-	}{Pack: pack})
+		Pack         string `json:"pack"`
+		Instructions string `json:"instructions"`
+	}{Pack: pack, Instructions: instructions})
 	if err != nil {
 		return Task{}, fmt.Errorf("agenttask.client: marshal: %w", err)
 	}

@@ -22,9 +22,9 @@ func newFakeRepository() *fakeRepository {
 	return &fakeRepository{tasks: make(map[uuid.UUID]agenttask.Task)}
 }
 
-func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack) (agenttask.Task, error) {
+func (f *fakeRepository) Create(_ context.Context, tenantID, userID uuid.UUID, pack agenttask.Pack, instructions string) (agenttask.Task, error) {
 	t := agenttask.Task{
-		ID: uuid.New(), TenantID: tenantID, UserID: userID, Pack: pack,
+		ID: uuid.New(), TenantID: tenantID, UserID: userID, Pack: pack, Instructions: instructions,
 		Status: agenttask.StatusQueued, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}
 	f.tasks[t.ID] = t
@@ -85,7 +85,7 @@ func (f *fakeEngine) Launch(context.Context, agenttask.Task) (string, error) {
 
 func TestService_CreateTask_InvalidPack(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{})
-	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"))
+	_, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.Pack("not-a-pack"), "")
 	if !errors.Is(err, agenttask.ErrInvalidPack) {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
 	}
@@ -93,7 +93,7 @@ func TestService_CreateTask_InvalidPack(t *testing.T) {
 
 func TestService_CreateTask_EngineNotConfigured_StaysQueued(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
-	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding)
+	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestService_CreateTask_EngineNotConfigured_StaysQueued(t *testing.T) {
 
 func TestService_CreateTask_NilEngineDefaultsToNotConfigured(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), nil)
-	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackKnowledgeWork)
+	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackKnowledgeWork, "")
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestService_CreateTask_NilEngineDefaultsToNotConfigured(t *testing.T) {
 
 func TestService_CreateTask_EngineLaunchSucceeds_TransitionsToRunning(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-123"})
-	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding)
+	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestService_CreateTask_EngineLaunchSucceeds_TransitionsToRunning(t *testing
 
 func TestService_CreateTask_EngineLaunchFails_TransitionsToFailed(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{err: errors.New("sandbox unavailable")})
-	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding)
+	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestService_Get_WrongUserReturnsNotFound(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{})
 	tenantID, ownerID, otherID := uuid.New(), uuid.New(), uuid.New()
 
-	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding)
+	created, err := svc.CreateTask(context.Background(), tenantID, ownerID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("seed CreateTask: %v", err)
 	}
@@ -165,10 +165,10 @@ func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 	svc := agenttask.NewService(repo, &fakeEngine{})
 	tenantID, userA, userB := uuid.New(), uuid.New(), uuid.New()
 
-	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userA, agenttask.PackCoding, ""); err != nil {
 		t.Fatalf("seed userA task: %v", err)
 	}
-	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding); err != nil {
+	if _, err := svc.CreateTask(context.Background(), tenantID, userB, agenttask.PackCoding, ""); err != nil {
 		t.Fatalf("seed userB task: %v", err)
 	}
 
@@ -184,7 +184,7 @@ func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 func TestService_Cancel_FromQueued(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
 	tenantID, userID := uuid.New(), uuid.New()
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding)
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("seed CreateTask: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestService_Cancel_FromQueued(t *testing.T) {
 func TestService_Cancel_TerminalStateRejected(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "s1"})
 	tenantID, userID := uuid.New(), uuid.New()
-	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding)
+	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("seed CreateTask: %v", err)
 	}

@@ -118,7 +118,7 @@ func TestRepository_CreateGetTransition_RoundTrip(t *testing.T) {
 	seedTenant(t, tenantID)
 	userID := seedUser(t)
 
-	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding)
+	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -176,7 +176,7 @@ func TestRepository_Transition_AtomicGuardRejectsAlreadyTerminal(t *testing.T) {
 	seedTenant(t, tenantID)
 	userID := seedUser(t)
 
-	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding)
+	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestRepository_RLS_CrossTenantContextCannotReadRows(t *testing.T) {
 	seedTenant(t, tenantB)
 	userID := seedUser(t)
 
-	created, err := repo.Create(ctx, tenantA, userID, agenttask.PackCoding)
+	created, err := repo.Create(ctx, tenantA, userID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("seed tenant A task: %v", err)
 	}
@@ -251,7 +251,7 @@ func TestRepository_ScopedByUser_OtherUserCannotSeeOrCancel(t *testing.T) {
 	owner := seedUser(t)
 	other := seedUser(t)
 
-	created, err := repo.Create(ctx, tenantID, owner, agenttask.PackKnowledgeWork)
+	created, err := repo.Create(ctx, tenantID, owner, agenttask.PackKnowledgeWork, "")
 	if err != nil {
 		t.Fatalf("seed owner task: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestRepository_RLS_NoSessionLeakAcrossBorrows(t *testing.T) {
 	seedTenant(t, tenantID)
 	userID := seedUser(t)
 
-	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding)
+	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("seed task: %v", err)
 	}

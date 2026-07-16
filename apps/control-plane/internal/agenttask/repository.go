@@ -12,7 +12,7 @@ import (
 
 // Repository is the narrow data-access port for public.agent_tasks.
 type Repository interface {
-	Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack) (Task, error)
+	Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error)
 	Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Task, error)
 	List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task, error)
 	// Transition updates status (and the fields that go with it) for a task
@@ -52,14 +52,14 @@ func (r *pgxRepository) withTenantTx(ctx context.Context, tenantID uuid.UUID, fn
 	return tx.Commit(ctx)
 }
 
-func (r *pgxRepository) Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack) (Task, error) {
+func (r *pgxRepository) Create(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error) {
 	var t Task
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			INSERT INTO public.agent_tasks (tenant_id, user_id, pack)
-			VALUES ($1, $2, $3)
-			RETURNING id, tenant_id, user_id, pack, status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
-		`, tenantID, userID, string(pack))
+			INSERT INTO public.agent_tasks (tenant_id, user_id, pack, instructions)
+			VALUES ($1, $2, $3, NULLIF($4, ''))
+			RETURNING id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
+		`, tenantID, userID, string(pack), instructions)
 		var err error
 		t, err = scanTask(row)
 		return err
@@ -74,7 +74,7 @@ func (r *pgxRepository) Get(ctx context.Context, tenantID, userID, id uuid.UUID)
 	var t Task
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
-			SELECT id, tenant_id, user_id, pack, status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
+			SELECT id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
 			  FROM public.agent_tasks
 			 WHERE id = $1 AND user_id = $2
 		`, id, userID)
@@ -95,7 +95,7 @@ func (r *pgxRepository) List(ctx context.Context, tenantID, userID uuid.UUID) ([
 	var out []Task
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, `
-			SELECT id, tenant_id, user_id, pack, status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
+			SELECT id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
 			  FROM public.agent_tasks
 			 WHERE user_id = $1
 			 ORDER BY created_at DESC
@@ -141,7 +141,7 @@ func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uui
 			       updated_at = now()
 			 WHERE id = $1 AND user_id = $2
 			   AND status NOT IN ('succeeded', 'failed', 'cancelled')
-			RETURNING id, tenant_id, user_id, pack, status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
+			RETURNING id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
 		`, id, userID, tenantID, string(status), sessionRef, resultSummaryRef, errMsg)
 		var err error
 		t, err = scanTask(row)
@@ -189,7 +189,7 @@ type scanner interface {
 func scanTask(s scanner) (Task, error) {
 	var t Task
 	var pack, status string
-	if err := s.Scan(&t.ID, &t.TenantID, &t.UserID, &pack, &status,
+	if err := s.Scan(&t.ID, &t.TenantID, &t.UserID, &pack, &t.Instructions, &status,
 		&t.EngineSessionRef, &t.ResultSummaryRef, &t.ErrorMessage,
 		&t.CreatedAt, &t.UpdatedAt, &t.StartedAt, &t.FinishedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

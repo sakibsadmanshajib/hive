@@ -19,9 +19,10 @@ func validConfig() sandbox.LaunchConfig {
 			ConfigDir:  "/srv/hive/packs/coding-pack",
 			WorkingDir: "/srv/hive/workspaces/t1",
 		},
-		SIFPath:         "/srv/hive/sif/agent-server.sif",
-		HostPort:        38080,
-		ProxySocketPath: "/srv/hive/run/t1/egress.sock",
+		SIFPath:          "/srv/hive/sif/agent-server.sif",
+		HostPort:         38080,
+		ProxySocketPath:  "/srv/hive/run/t1/egress.sock",
+		ControlSocketDir: "/srv/hive/run/t1/control",
 	}
 }
 
@@ -70,6 +71,35 @@ func TestBuildArgv_WiresProxyEnv(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_WiresControlSocket(t *testing.T) {
+	cfg := validConfig()
+	argv, err := sandbox.BuildArgv(cfg)
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	joined := strings.Join(argv, " ")
+	wantBind := cfg.ControlSocketDir + ":" + sandbox.ControlSocketContainerDir
+	if !strings.Contains(joined, wantBind) {
+		t.Fatalf("expected control socket bind mount %s, got argv: %v", wantBind, argv)
+	}
+	wantEnv := fmt.Sprintf("HIVE_CONTROL_TARGET_PORT=%d", cfg.HostPort)
+	if !strings.Contains(joined, wantEnv) {
+		t.Fatalf("expected control target port env %s, got argv: %v", wantEnv, argv)
+	}
+	if err := sandbox.ValidateSecurityDefaults(argv); err != nil {
+		t.Fatalf("expected control socket bind to satisfy ValidateSecurityDefaults: %v", err)
+	}
+}
+
+func TestControlSocketPath(t *testing.T) {
+	cfg := validConfig()
+	got := sandbox.ControlSocketPath(cfg)
+	want := cfg.ControlSocketDir + "/" + sandbox.ControlSocketFileName
+	if got != want {
+		t.Fatalf("ControlSocketPath = %q, want %q", got, want)
+	}
+}
+
 func TestBuildArgv_OmitsMCPConfigBindWhenPathEmpty(t *testing.T) {
 	argv, err := sandbox.BuildArgv(validConfig())
 	if err != nil {
@@ -111,6 +141,7 @@ func TestBuildArgv_RejectsInvalidConfig(t *testing.T) {
 		{"nil user", func(c *sandbox.LaunchConfig) { c.UserID = uuid.Nil }, sandbox.ErrNilUser},
 		{"empty SIF path", func(c *sandbox.LaunchConfig) { c.SIFPath = "" }, sandbox.ErrMissingSIFPath},
 		{"empty proxy socket path", func(c *sandbox.LaunchConfig) { c.ProxySocketPath = "" }, sandbox.ErrMissingProxySocketPath},
+		{"empty control socket dir", func(c *sandbox.LaunchConfig) { c.ControlSocketDir = "" }, sandbox.ErrMissingControlSocketDir},
 		{"empty pack config dir", func(c *sandbox.LaunchConfig) { c.Pack.ConfigDir = "" }, sandbox.ErrMissingConfigDir},
 		{"empty pack working dir", func(c *sandbox.LaunchConfig) { c.Pack.WorkingDir = "" }, sandbox.ErrMissingWorkingDir},
 		{"zero host port", func(c *sandbox.LaunchConfig) { c.HostPort = 0 }, sandbox.ErrInvalidHostPort},
@@ -151,6 +182,14 @@ func TestBuildArgv_RejectsDockerSocketInProxySocketPath(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_RejectsDockerSocketInControlSocketDir(t *testing.T) {
+	cfg := validConfig()
+	cfg.ControlSocketDir = "/var/run/docker.sock"
+	if _, err := sandbox.BuildArgv(cfg); !errors.Is(err, sandbox.ErrDockerSocketReferenced) {
+		t.Fatalf("expected ErrDockerSocketReferenced, got %v", err)
+	}
+}
+
 func TestValidateSecurityDefaults_CatchesMissingFlags(t *testing.T) {
 	// Proves the validator would have caught the exact gap security spike
 	// #307 found in upstream's ApptainerWorkspace._start_container(), which
@@ -167,7 +206,10 @@ func TestValidateSecurityDefaults_CatchesMissingFlags(t *testing.T) {
 }
 
 func TestValidateSecurityDefaults_PassesCompleteArgv(t *testing.T) {
-	argv := []string{"apptainer", "run", "--pid", "--containall", "--net", "--network", "none"}
+	argv := []string{
+		"apptainer", "run", "--pid", "--containall", "--net", "--network", "none",
+		"--bind", "/srv/hive/run/t1/control:" + sandbox.ControlSocketContainerDir,
+	}
 	if err := sandbox.ValidateSecurityDefaults(argv); err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -195,6 +237,20 @@ func TestValidateSecurityDefaults_RejectsNonNoneNetwork(t *testing.T) {
 	argv := []string{"apptainer", "run", "--pid", "--containall", "--net", "--network", "bridge"}
 	if err := sandbox.ValidateSecurityDefaults(argv); err == nil {
 		t.Fatal("expected error for --network bridge (only \"none\" is permitted)")
+	}
+}
+
+func TestValidateSecurityDefaults_CatchesMissingControlSocketBind(t *testing.T) {
+	// Proves the validator would catch a future edit accidentally dropping
+	// the control-channel bind mount (issue #305 Wave 3 gap) the same way it
+	// already catches a dropped --pid/--containall/--network isolation flag.
+	argv := []string{"apptainer", "run", "--pid", "--containall", "--net", "--network", "none"}
+	err := sandbox.ValidateSecurityDefaults(argv)
+	if err == nil {
+		t.Fatal("expected error for argv missing the control socket bind mount")
+	}
+	if !strings.Contains(err.Error(), sandbox.ControlSocketContainerDir) {
+		t.Fatalf("expected error to name the missing control socket bind target, got: %v", err)
 	}
 }
 

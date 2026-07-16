@@ -26,6 +26,7 @@ Task, as returned by every endpoint below:
 {
   "id": "uuid",
   "pack": "coding-pack | knowledge-work-pack",
+  "instructions": "string, empty when none were given",
   "status": "queued | running | succeeded | failed | cancelled",
   "engine_session_ref": "string, empty until running",
   "result_summary_ref": "string, empty until succeeded (or failed with partial output)",
@@ -37,6 +38,15 @@ Task, as returned by every endpoint below:
 }
 ```
 
+`instructions` (issue #311 contract gap, closed alongside issue #305's Engine)
+is the free-text prompt/goal the task's conversation starts from — passed as
+the agent-server conversation's `initial_message` (see the Engine seam
+section below). Optional: an empty string means the task carries no prompt.
+Stored as a nullable column (`public.agent_tasks.instructions`); the read
+path always returns `""` for `NULL`, never `null`, so every consumer of this
+contract can treat it as a plain string. Skills (issue #300) route on a
+`"Skill: X"` prefix inside this text; no separate skill field exists.
+
 `tenant_id` and `user_id` never appear in a response body: both are implied
 by the authenticated caller, never round-tripped.
 
@@ -45,7 +55,7 @@ by the authenticated caller, never round-tripped.
 
 | Method | Path | Body | Notes |
 |---|---|---|---|
-| POST | `/v1/agent/tasks` | `{"pack": "..."}` | 201 with the created Task |
+| POST | `/v1/agent/tasks` | `{"pack": "...", "instructions": "..."}` | 201 with the created Task; `instructions` is optional |
 | GET | `/v1/agent/tasks` | — | `{"tasks": [Task, ...]}`, newest first, scoped to the caller |
 | GET | `/v1/agent/tasks/{id}` | — | 404 if the task belongs to a different user or does not exist |
 | POST | `/v1/agent/tasks/{id}/cancel` | — | 409 if the task already reached a terminal state |
@@ -70,22 +80,46 @@ untrusted client input.
 
 | Method | Path | Body |
 |---|---|---|
-| POST | `/internal/agent-tasks/{tenant_id}/{user_id}` | `{"pack": "..."}` |
+| POST | `/internal/agent-tasks/{tenant_id}/{user_id}` | `{"pack": "...", "instructions": "..."}` |
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}` | — |
 | GET | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}` | — |
 | POST | `/internal/agent-tasks/{tenant_id}/{user_id}/{task_id}/cancel` | — |
 
-## Engine seam (known gap)
+## Engine seam
 
 `Service.CreateTask` calls `Engine.Launch(ctx, task)` right after persisting
-a `queued` row. The only `Engine` wired today is `NotConfiguredEngine`,
-which returns `ErrEngineNotConfigured` and leaves the task `queued` — that is
-treated as an open seam, not a task failure. `apps/agent-engine`'s Wave 2.2
-CLI binds a host port for one sandbox session, but the control channel this
-package needs (submit a task, get a session reference back, later learn
-success/failure) requires a second host <-> agent-server channel that the
-sandbox's `--network none` egress profile currently cuts off. Wiring a real
-`Engine` that talks to that channel is Wave 4 work (desktop control channel)
-or a follow-up once a server-side equivalent exists; `Service` and the HTTP
-surface do not need to change when that lands, only the `Engine`
-implementation passed to `NewService`.
+a `queued` row. Issue #305 closes the control-channel half of this gap:
+`apps/agent-engine/internal/sandbox` bind-mounts a second Unix socket (the
+control channel) alongside the existing egress-proxy one, so the host can
+now reach the agent-server's REST API inside the sandbox
+(`apps/agent-engine/internal/controlclient`), and
+`apps/agent-engine/internal/engine.SandboxEngine` composes that into a full
+Launch/Status/Cancel session lifecycle, mapped onto this package's
+queued/running/succeeded/failed/cancelled vocabulary.
+`apps/agent-engine/engineapi` re-exports that type for cross-module use (Go's
+internal-package visibility does not cross module boundaries, the same
+limitation `apps/agent-engine/internal/egressclient`'s doc comment already
+covers), and `apps/control-plane/internal/agentengine.Engine` adapts it to
+this package's `Engine` interface, translating `agenttask.Task` (including
+`Instructions`, passed through as the conversation's `initial_message`) into
+`engineapi.Task` and back.
+
+That adapter is wired in `cmd/server/main.go` only when
+`HIVE_AGENT_ENGINE_SIF_PATH` is set: the real `SandboxEngine` execs
+Apptainer, which requires an Apptainer install and a built SIF on whatever
+host runs this process — not true of every `control-plane` deployment today
+(task tracked separately: "Live Apptainer validation of agent-engine on
+x86-64 host"). Without that env var, `NotConfiguredEngine` is still wired,
+preserving today's queued-forever-but-not-failed behavior exactly. `Service`
+and the HTTP surface do not change either way; only the `Engine`
+implementation passed to `NewService` does.
+
+`Service`/`Status` polling from a queued/running task back to
+succeeded/failed/cancelled is not wired by this package itself yet: nothing
+here calls `SandboxEngine.Status`/`Cancel` on a timer. `Handler.handleGet`
+returns whatever `Repository.Get` currently has persisted; a background
+sync loop (or a webhook the engine calls back on) that periodically calls
+the adapter's `Status` and writes the result via `Repository.Transition` is
+the next piece needed to make status advance past `running` in production —
+tracked as a follow-up, same as the Status/Cancel plumbing on the engine
+side is already real and unit-tested.

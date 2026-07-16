@@ -42,9 +42,10 @@ func (h *Handler) InternalMux() http.Handler {
 const internalPrefix = "/internal/agent-tasks/"
 
 // maxBodyBytes caps request bodies this handler decodes. A create request
-// carries one field (pack); there is no legitimate reason for it to
-// approach this size.
-const maxBodyBytes = 4 << 10 // 4 KiB
+// carries pack plus a free-text instructions/prompt field, which needs more
+// headroom than a bare pack name; other bodies on this handler (cancel) send
+// none at all.
+const maxBodyBytes = 64 << 10 // 64 KiB
 
 func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, internalPrefix), "/")
@@ -102,7 +103,8 @@ func (h *Handler) serveInternal(w http.ResponseWriter, r *http.Request) {
 }
 
 type createRequest struct {
-	Pack string `json:"pack"`
+	Pack         string `json:"pack"`
+	Instructions string `json:"instructions"`
 }
 
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID, userID uuid.UUID) {
@@ -112,7 +114,7 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request, tenantID,
 		writeJSON(w, http.StatusBadRequest, errBody("invalid JSON body"))
 		return
 	}
-	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack))
+	task, err := h.svc.CreateTask(r.Context(), tenantID, userID, Pack(req.Pack), req.Instructions)
 	if err != nil {
 		writeTaskError(w, err)
 		return
@@ -170,6 +172,7 @@ func writeTaskError(w http.ResponseWriter, err error) {
 type taskWire struct {
 	ID               string     `json:"id"`
 	Pack             string     `json:"pack"`
+	Instructions     string     `json:"instructions"`
 	Status           string     `json:"status"`
 	EngineSessionRef string     `json:"engine_session_ref"`
 	ResultSummaryRef string     `json:"result_summary_ref"`
@@ -188,6 +191,7 @@ func newTaskWire(t Task) taskWire {
 	return taskWire{
 		ID:               t.ID.String(),
 		Pack:             string(t.Pack),
+		Instructions:     t.Instructions,
 		Status:           string(t.Status),
 		EngineSessionRef: t.EngineSessionRef,
 		ResultSummaryRef: t.ResultSummaryRef,

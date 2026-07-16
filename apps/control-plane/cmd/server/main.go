@@ -18,8 +18,10 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agentengine"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
@@ -780,9 +782,10 @@ func main() {
 	// whenever pool != nil). Neither the server-side OpenHands allowed_hosts
 	// consumer nor the desktop firewall rule generator is wired here.
 	var egressPolicyHandler *egress.Handler
+	var egressSvc *egress.Service
 	if pool != nil && roleSvc != nil {
 		egressRepo := egress.NewPgxRepository(pool)
-		egressSvc := egress.NewService(egressRepo, roleSvc)
+		egressSvc = egress.NewService(egressRepo, roleSvc)
 		egressPolicyHandler = egress.NewHandler(egressSvc)
 	}
 
@@ -798,16 +801,16 @@ func main() {
 		marketplaceHandler = marketplace.NewHandler(marketplaceSvc)
 	}
 
-	// Issue #311 (blueprint Step 3.4) — agent task persistence, web side. No
-	// live agent-engine control channel exists yet (Wave 3 gap: the sandbox's
-	// --network none profile cuts off the host <-> agent-server channel this
-	// would need), so agenttask.NotConfiguredEngine is wired: task creation
-	// still succeeds and persists, it just stays queued until a real Engine
-	// lands. See apps/control-plane/internal/agenttask/SYNC_CONTRACT.md.
+	// Issue #311 (blueprint Step 3.4) — agent task persistence, web side.
+	// Issue #305 closes the control-channel half of the Wave 3 gap; see
+	// buildAgentEngine's doc comment and
+	// apps/control-plane/internal/agenttask/SYNC_CONTRACT.md's Engine seam
+	// section for why the real Engine is still conditional on deployment
+	// env vars rather than unconditionally wired.
 	var agentTaskHandler *agenttask.Handler
 	if pool != nil {
 		agentTaskRepo := agenttask.NewPgxRepository(pool)
-		agentTaskSvc := agenttask.NewService(agentTaskRepo, agenttask.NotConfiguredEngine{})
+		agentTaskSvc := agenttask.NewService(agentTaskRepo, buildAgentEngine(egressSvc))
 		agentTaskHandler = agenttask.NewHandler(agentTaskSvc)
 	}
 
@@ -1300,4 +1303,48 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// buildAgentEngine wires the real host<->agent-server control channel
+// (issue #305) when its deployment-specific paths are all configured via
+// env, falling back to agenttask.NotConfiguredEngine{} (today's safe
+// default: task creation still succeeds and persists, it just stays queued)
+// otherwise. The real SandboxEngine (apps/agent-engine/engineapi) execs
+// Apptainer directly, which requires an Apptainer install and a built SIF
+// on whatever host runs this process — not true of every control-plane
+// deployment yet (tracked separately: "Live Apptainer validation of
+// agent-engine on x86-64 host"). egressSvc is reused in-process rather than
+// calling apps/agent-engine/internal/egressclient's HTTP round-trip, since
+// the real Engine now runs inside this same control-plane process.
+func buildAgentEngine(egressSvc *egress.Service) agenttask.Engine {
+	sifPath := os.Getenv("HIVE_AGENT_ENGINE_SIF_PATH")
+	packsDir := os.Getenv("HIVE_AGENT_ENGINE_PACKS_DIR")
+	workspaceRoot := os.Getenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT")
+	runDir := os.Getenv("HIVE_AGENT_ENGINE_RUN_DIR")
+	profileIDRaw := os.Getenv("HIVE_AGENT_ENGINE_PROFILE_ID")
+	if egressSvc == nil || sifPath == "" || packsDir == "" || workspaceRoot == "" || runDir == "" || profileIDRaw == "" {
+		return agenttask.NotConfiguredEngine{}
+	}
+	profileID, err := uuid.Parse(profileIDRaw)
+	if err != nil {
+		log.Printf("control-plane: HIVE_AGENT_ENGINE_PROFILE_ID invalid, agent-engine stays unconfigured: %v", err)
+		return agenttask.NotConfiguredEngine{}
+	}
+
+	sandbox := engineapi.New(engineapi.Config{
+		SIFPath:       sifPath,
+		PacksDir:      packsDir,
+		WorkspaceRoot: workspaceRoot,
+		RunDir:        runDir,
+		ResolveEgressHosts: func(ctx context.Context, tenantID, userID uuid.UUID) ([]string, error) {
+			policy, err := egressSvc.Effective(ctx, tenantID, userID)
+			if err != nil {
+				return nil, err
+			}
+			return policy.AllowedHosts, nil
+		},
+		AgentProfileID: profileID,
+		SessionAPIKey:  os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
+	})
+	return agentengine.New(sandbox)
 }

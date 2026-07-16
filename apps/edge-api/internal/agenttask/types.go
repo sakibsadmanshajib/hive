@@ -18,6 +18,7 @@ import (
 type Task struct {
 	ID               string     `json:"id"`
 	Pack             string     `json:"pack"`
+	Instructions     string     `json:"instructions"`
 	Status           string     `json:"status"`
 	EngineSessionRef string     `json:"engine_session_ref"`
 	ResultSummaryRef string     `json:"result_summary_ref"`
