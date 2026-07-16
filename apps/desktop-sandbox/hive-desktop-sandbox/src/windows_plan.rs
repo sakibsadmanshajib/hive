@@ -77,25 +77,44 @@ impl WindowsConfinementPlan {
 /// remove every rule this crate ever generated for one task by prefix.
 const RULE_NAME_PREFIX: &str = "Hive-Sandbox";
 
-/// Generates the `netsh advfirewall` command lines implementing `plan`:
-/// one deny-outbound rule first, then one allow-outbound rule per host in
-/// `firewall_allow_outbound_hosts`. Pure text generation -- see the module
+/// Generates the `netsh advfirewall` command lines implementing `plan`,
+/// scoped to `program_path` (the sandboxed task's own executable) via
+/// `netsh`'s `program=` parameter so the rules only ever affect that one
+/// process, never the whole host. Pure text generation -- see the module
 /// doc and `firewall_deny_outbound`'s doc comment for why this is never
-/// applied by this crate. `task_id` scopes the rule names so concurrent
+/// applied by this crate. `task_id` scopes the rule *names* so concurrent
 /// sandboxed tasks (if this is ever wired to run more than one at a time)
 /// don't collide or shadow each other's rules.
-pub fn allow_hosts_firewall_script(plan: &WindowsConfinementPlan, task_id: &str) -> Vec<String> {
+///
+/// Known incomplete design, not yet a working allowlist: Windows Firewall
+/// evaluates `Block` rules ahead of `Allow` rules regardless of
+/// specificity, so the single `action=block` rule below always wins over
+/// every per-host `action=allow` rule that follows it -- the net effect if
+/// this were ever applied is a strict deny-all, not the requested
+/// `AllowHosts`. `netsh` has no "allow overrides block" priority to ask
+/// for; a real allowlist needs either a single block rule built from an
+/// inverted (everything-except-the-allowed-hosts) IP range, or dropping
+/// `netsh` for the Windows Filtering Platform (WFP) directly. Tracked as a
+/// follow-up (see the crate's issue tracker); do not wire this to a real
+/// `netsh`/WFP call without fixing the precedence problem first, and note
+/// that `windows::launch` refuses to run at all today regardless of
+/// network policy, so nothing calls this for a live effect yet either way.
+pub fn allow_hosts_firewall_script(
+    plan: &WindowsConfinementPlan,
+    task_id: &str,
+    program_path: &str,
+) -> Vec<String> {
     let mut lines = Vec::with_capacity(1 + plan.firewall_allow_outbound_hosts.len());
     if plan.firewall_deny_outbound {
         lines.push(format!(
             "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-deny\" \
-             dir=out action=block enable=yes"
+             dir=out action=block program=\"{program_path}\" enable=yes"
         ));
     }
     for host in &plan.firewall_allow_outbound_hosts {
         lines.push(format!(
             "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-allow-{host}\" \
-             dir=out action=allow remoteip={host} enable=yes"
+             dir=out action=allow program=\"{program_path}\" remoteip={host} enable=yes"
         ));
     }
     lines
@@ -234,12 +253,18 @@ mod tests {
         .expect("valid policy");
         let plan = WindowsConfinementPlan::for_policy(&policy);
 
-        let lines = allow_hosts_firewall_script(&plan, "task-123");
+        let lines = allow_hosts_firewall_script(&plan, "task-123", r"C:\hive\sandboxed-task.exe");
         assert_eq!(lines.len(), 3, "one deny rule plus one allow rule per host");
         assert!(lines[0].contains("action=block"));
         assert!(lines[0].contains("task-123"));
         assert!(lines[1].contains("action=allow") && lines[1].contains("api.openrouter.ai"));
         assert!(lines[2].contains("action=allow") && lines[2].contains("example.com"));
+        for line in &lines {
+            assert!(
+                line.contains(r#"program="C:\hive\sandboxed-task.exe""#),
+                "every rule must be scoped to the sandboxed task's own executable, not the whole host: {line}"
+            );
+        }
     }
 
     #[test]
@@ -253,9 +278,10 @@ mod tests {
         .expect("valid policy");
         let plan = WindowsConfinementPlan::for_policy(&policy);
 
-        let lines = allow_hosts_firewall_script(&plan, "task-456");
+        let lines = allow_hosts_firewall_script(&plan, "task-456", r"C:\hive\sandboxed-task.exe");
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains("action=block"));
+        assert!(lines[0].contains(r#"program="C:\hive\sandboxed-task.exe""#));
     }
 
     #[test]

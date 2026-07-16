@@ -37,17 +37,29 @@ use std::process::{Child, Command};
 /// Landlock rule portability). Constructing one always starts a real proxy
 /// (see [`setup_egress`]) -- there is no variant that carries an allowlist
 /// without a live enforcement point behind it.
+///
+/// Owns `dir` (the temp directory holding the socket) and `proxy` until
+/// [`EgressBind::leak_for_process_lifetime`] is called. `launch` calls that
+/// only after `cmd.spawn()` has actually produced a `Child` -- if anything
+/// fails first (locating the shim binary, `cmd.spawn()` itself), this value
+/// is simply dropped instead, which shuts the proxy down
+/// (`AllowlistProxy`'s own `Drop`) and removes the temp directory
+/// (`TempDir`'s `Drop`) rather than leaking either for a launch that never
+/// happened.
 struct EgressBind {
     socket_path: PathBuf,
     shim_path: PathBuf,
+    dir: tempfile::TempDir,
+    proxy: AllowlistProxy,
 }
 
 impl EgressBind {
     /// The wrapped command bwrap should actually exec: the shim binary
     /// first (argv-safe -- never a shell string), which bridges the
     /// bind-mounted socket to a loopback HTTP_PROXY inside the sandbox's
-    /// own netns before exec'ing into `real_command`. See
-    /// `src/bin/hive-egress-shim.rs`'s module doc for the exact contract.
+    /// own netns before spawning `real_command` as its own child (see
+    /// `src/bin/hive-egress-shim.rs`'s module doc for the exact contract
+    /// and why it spawns rather than execs).
     fn wrap_command(&self, real_command: &[String]) -> Vec<String> {
         let mut wrapped = vec![
             self.shim_path.to_string_lossy().into_owned(),
@@ -57,43 +69,62 @@ impl EgressBind {
         wrapped.extend(real_command.iter().cloned());
         wrapped
     }
+
+    /// Leaks the temp directory and the proxy for the rest of the
+    /// process's life. Call only once a real sandboxed `Child` exists for
+    /// them to serve -- see the struct doc.
+    fn leak_for_process_lifetime(self) {
+        std::mem::forget(self.dir);
+        self.proxy.leak_for_process_lifetime();
+    }
 }
 
 /// Starts the host-side [`AllowlistProxy`] for `hosts` and resolves the
-/// `hive-egress-shim` binary's location. The proxy is intentionally leaked
-/// for the sandboxed process's lifetime (see
-/// [`AllowlistProxy::leak_for_process_lifetime`]'s doc comment): the temp
-/// directory holding its socket is leaked alongside it for the same
-/// reason, rather than being cleaned up as soon as this function returns.
+/// `hive-egress-shim` binary's location. Neither is leaked here -- see
+/// [`EgressBind`]'s struct doc for why that is `launch`'s call to make, not
+/// this function's.
 fn setup_egress(hosts: &[String]) -> Result<EgressBind, LaunchError> {
     let dir = tempfile::Builder::new()
         .prefix("hive-egress-")
         .tempdir()
         .map_err(|e| LaunchError::Confinement(format!("egress temp dir: {e}")))?;
     let socket_path = dir.path().join("egress.sock");
-    // ponytail: leaked alongside the proxy below -- see
-    // AllowlistProxy::leak_for_process_lifetime's doc comment for why a
-    // real per-task teardown is follow-up work, not this crate's job.
-    std::mem::forget(dir);
 
     let proxy = AllowlistProxy::spawn(&socket_path, hosts.to_vec())
         .map_err(|e| LaunchError::Confinement(format!("egress proxy: {e}")))?;
-    proxy.leak_for_process_lifetime();
+
+    let shim_path = locate_egress_shim_binary().ok_or_else(|| {
+        LaunchError::Confinement(
+            "hive-egress-shim binary not found (set HIVE_EGRESS_SHIM_PATH, bundle it next to \
+             the executable, or install it on PATH)"
+                .to_string(),
+        )
+    })?;
 
     Ok(EgressBind {
         socket_path,
-        shim_path: locate_egress_shim_binary(),
+        shim_path,
+        dir,
+        proxy,
     })
 }
 
 /// Locates the bundled `hive-egress-shim` binary, mirroring
-/// [`locate_bwrap_binary`]'s exact search order (env override, then bundled
-/// next to the running executable, then `PATH`).
-fn locate_egress_shim_binary() -> PathBuf {
+/// [`locate_bwrap_binary`]'s search order (env override, then bundled next
+/// to the running executable) with one deliberate difference in the last
+/// resort: this result is used as a bwrap `--ro-bind` *source* path, not
+/// (only) as something `Command::new` execs. `Command::new` resolves a
+/// bare name through `PATH` itself (`execvp` semantics), but bwrap's
+/// `--ro-bind` does not -- it opens the literal path given, so a bare
+/// `"hive-egress-shim"` would fail there even when the binary is
+/// legitimately on `PATH`. This resolves `PATH` itself instead of
+/// returning an unusable relative name, and returns `None` (rather than a
+/// path that would silently fail later) when nothing is found anywhere.
+fn locate_egress_shim_binary() -> Option<PathBuf> {
     if let Ok(path) = std::env::var("HIVE_EGRESS_SHIM_PATH") {
         let path = PathBuf::from(path);
         if path.is_file() {
-            return path;
+            return Some(path);
         }
     }
     if let Ok(exe) = std::env::current_exe()
@@ -101,10 +132,14 @@ fn locate_egress_shim_binary() -> PathBuf {
     {
         let bundled = dir.join("hive-egress-shim");
         if bundled.is_file() {
-            return bundled;
+            return Some(bundled);
         }
     }
-    PathBuf::from("hive-egress-shim")
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join("hive-egress-shim"))
+            .find(|candidate| candidate.is_file())
+    })
 }
 
 /// Syscalls denied unconditionally for every sandboxed task, on top of
@@ -159,7 +194,16 @@ pub(crate) fn launch(
             Ok(())
         });
     }
-    cmd.spawn().map_err(LaunchError::from)
+
+    let child = cmd.spawn().map_err(LaunchError::from)?;
+    // Only now, with a real sandboxed Child in hand, hand the proxy and its
+    // temp directory over to that process's lifetime. Any earlier return
+    // above (setup_egress failing, cmd.spawn() failing) drops `egress`
+    // normally instead of reaching here -- see EgressBind's struct doc.
+    if let Some(bind) = egress {
+        bind.leak_for_process_lifetime();
+    }
+    Ok(child)
 }
 
 /// Locates the bundled static bwrap binary. Priority: `HIVE_BWRAP_PATH`
@@ -345,10 +389,37 @@ mod tests {
     use super::*;
     use crate::policy::SandboxPolicy;
     use pretty_assertions::assert_eq;
+    use std::sync::Mutex;
+
+    /// `cargo test` runs `#[test]` functions on multiple threads by
+    /// default, but `std::env::set_var`/`remove_var` mutate whole-process
+    /// state. Every test in this module that touches `PATH` or
+    /// `HIVE_EGRESS_SHIM_PATH` holds this lock for the duration of that
+    /// mutation so two such tests can never interleave their env changes.
+    static ENV_MUTATION_LOCK: Mutex<()> = Mutex::new(());
 
     fn policy(writable: Vec<PathBuf>, readonly: Vec<PathBuf>, hook: PathBuf) -> SandboxPolicy {
         SandboxPolicy::build(writable, readonly, hook, NetworkPolicy::DenyAll)
             .expect("valid policy")
+    }
+
+    /// Builds a real `EgressBind` for argv-construction tests: a real temp
+    /// directory and a real (but unused by these tests) `AllowlistProxy`,
+    /// with the given `socket_path`/`shim_path` overriding what
+    /// `build_bwrap_argv`/`wrap_command` actually read. Real values rather
+    /// than fakes because `EgressBind` owns its resources now (see the
+    /// struct doc) -- there is no longer a way to construct one without a
+    /// live proxy behind it.
+    fn test_egress_bind(socket_path: PathBuf, shim_path: PathBuf) -> EgressBind {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let proxy_socket = dir.path().join("unused.sock");
+        let proxy = AllowlistProxy::spawn(&proxy_socket, vec![]).expect("spawn test proxy");
+        EgressBind {
+            socket_path,
+            shim_path,
+            dir,
+            proxy,
+        }
     }
 
     #[test]
@@ -393,10 +464,10 @@ mod tests {
             NetworkPolicy::AllowHosts(vec!["example.com".to_string()]),
         )
         .expect("valid policy");
-        let bind = EgressBind {
-            socket_path: PathBuf::from("/tmp/hive-egress-test/egress.sock"),
-            shim_path: PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
-        };
+        let bind = test_egress_bind(
+            PathBuf::from("/tmp/hive-egress-test/egress.sock"),
+            PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
+        );
         let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), Some(&bind));
         assert!(argv.contains(&"--unshare-net".to_string()));
     }
@@ -442,10 +513,10 @@ mod tests {
     #[test]
     fn egress_bind_adds_ro_bind_shim_and_bind_socket() {
         let p = policy(vec![], vec![], PathBuf::from("/home/agent/.hive/hooks"));
-        let bind = EgressBind {
-            socket_path: PathBuf::from("/tmp/hive-egress-test/egress.sock"),
-            shim_path: PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
-        };
+        let bind = test_egress_bind(
+            PathBuf::from("/tmp/hive-egress-test/egress.sock"),
+            PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
+        );
         let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), Some(&bind));
 
         let shim_str = bind.shim_path.to_string_lossy().into_owned();
@@ -470,10 +541,10 @@ mod tests {
 
     #[test]
     fn egress_bind_wraps_command_with_shim_and_separator() {
-        let bind = EgressBind {
-            socket_path: PathBuf::from("/tmp/hive-egress-test/egress.sock"),
-            shim_path: PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
-        };
+        let bind = test_egress_bind(
+            PathBuf::from("/tmp/hive-egress-test/egress.sock"),
+            PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
+        );
         let real_command = vec!["echo".to_string(), "hi".to_string()];
         let wrapped = bind.wrap_command(&real_command);
 
@@ -487,6 +558,83 @@ mod tests {
                 "hi".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn dropping_an_egress_bind_before_leaking_cleans_up_the_proxy_and_socket() {
+        // Simulates launch() returning early (a failed locate_egress_shim_binary
+        // or cmd.spawn() call) before leak_for_process_lifetime is ever
+        // reached: the review finding this test guards against was that
+        // setup_egress used to leak the proxy and temp directory
+        // unconditionally, even when the launch it was for never happened.
+        //
+        // setup_egress also calls locate_egress_shim_binary, which finds
+        // nothing in a plain `cargo test` environment (the real binary is
+        // only ever bundled next to a packaged desktop app) -- point it at
+        // a dummy file via the env override this test doesn't need to be a
+        // real executable for, since this test never spawns bwrap.
+        let shim_dir = tempfile::tempdir().expect("tempdir");
+        let dummy_shim = shim_dir.path().join("hive-egress-shim");
+        std::fs::write(&dummy_shim, b"").expect("write dummy shim");
+        let bind = {
+            let _env_guard = ENV_MUTATION_LOCK
+                .lock()
+                .expect("env mutation lock poisoned");
+            // SAFETY: held under ENV_MUTATION_LOCK, restored before the
+            // guard drops.
+            unsafe {
+                std::env::set_var("HIVE_EGRESS_SHIM_PATH", &dummy_shim);
+            }
+            let bind = setup_egress(&["example.com".to_string()]).expect("setup_egress");
+            unsafe {
+                std::env::remove_var("HIVE_EGRESS_SHIM_PATH");
+            }
+            bind
+        };
+        let socket_path = bind.socket_path.clone();
+        assert!(
+            std::os::unix::net::UnixStream::connect(&socket_path).is_ok(),
+            "proxy must be listening while EgressBind is alive"
+        );
+
+        drop(bind);
+
+        assert!(
+            std::os::unix::net::UnixStream::connect(&socket_path).is_err(),
+            "dropping EgressBind before it is leaked must stop the proxy \
+             instead of leaking it for a launch that never happened"
+        );
+    }
+
+    #[test]
+    fn locate_egress_shim_binary_resolves_a_bare_path_entry_to_an_absolute_file() {
+        // The bug this guards: --ro-bind's source path is opened directly
+        // by bwrap (no PATH search, unlike Command::new/execvp), so the old
+        // fallback (a bare "hive-egress-shim") would silently fail even
+        // when a real install existed on PATH.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shim = dir.path().join("hive-egress-shim");
+        std::fs::write(&shim, b"").expect("write dummy shim");
+
+        let _env_guard = ENV_MUTATION_LOCK
+            .lock()
+            .expect("env mutation lock poisoned");
+        let original_path = std::env::var_os("PATH");
+        // SAFETY: held under ENV_MUTATION_LOCK; PATH is restored before the
+        // guard drops.
+        unsafe {
+            std::env::remove_var("HIVE_EGRESS_SHIM_PATH");
+            std::env::set_var("PATH", dir.path());
+        }
+        let found = locate_egress_shim_binary();
+        unsafe {
+            match &original_path {
+                Some(p) => std::env::set_var("PATH", p),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        assert_eq!(found, Some(shim));
     }
 
     // No test here calls the real launch() end to end (i.e. all the way

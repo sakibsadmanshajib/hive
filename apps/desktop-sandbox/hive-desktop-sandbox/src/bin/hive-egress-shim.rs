@@ -9,9 +9,19 @@
 //! every other bind mount `build_bwrap_argv` constructs). On start: bind an
 //! ephemeral loopback TCP port relaying to the socket
 //! (`hive_desktop_sandbox::shim::start_loopback_bridge`), export
-//! `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` pointing at it, then `execvp` into
-//! the real command, replacing this process so PID/signal handling stay
-//! exactly as if the real command had been launched directly.
+//! `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` pointing at it, then spawn the real
+//! command as a child and wait for it, propagating its exit code.
+//!
+//! This does NOT `execvp` into the real command (an earlier version of this
+//! file did, and that was a real bug caught in review): `execve` replaces
+//! the whole process image, including tearing down every other thread in
+//! the calling process, and `start_loopback_bridge`'s accept loop runs on
+//! its own thread. Exec'ing would kill that thread the instant it starts,
+//! so the real command would inherit `HTTP_PROXY` env vars pointing at a
+//! bridge that no longer accepts connections -- egress would silently stop
+//! working the moment the sandboxed command tried to use it. Spawning a
+//! child and waiting keeps this process (and its bridge thread) alive for
+//! the real command's entire run.
 //!
 //! This binary only ever runs on Linux (it is only ever bind-mounted and
 //! exec'd by `linux::launch`). `main` is split into a real,
@@ -23,7 +33,6 @@
 
 #[cfg(target_os = "linux")]
 fn main() {
-    use std::os::unix::process::CommandExt;
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -59,12 +68,24 @@ fn main() {
         }
     }
 
-    // Never returns on success: replaces this process image entirely, so
-    // the real command inherits this process's PID and becomes the direct
-    // child bwrap/Landlock/seccomp confined in the first place.
-    let err = Command::new(&command[0]).args(&command[1..]).exec();
-    eprintln!("hive-egress-shim: exec failed: {err}");
-    std::process::exit(1);
+    // Spawn (not exec) so this process, and its loopback bridge thread,
+    // stay alive for the real command's whole run. Propagate its exit
+    // status so a caller checking this process's own exit code sees
+    // exactly what the real command would have reported.
+    let mut child = match Command::new(&command[0]).args(&command[1..]).spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("hive-egress-shim: failed to spawn {}: {e}", command[0]);
+            std::process::exit(1);
+        }
+    };
+    match child.wait() {
+        Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("hive-egress-shim: failed to wait on {}: {e}", command[0]);
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(not(target_os = "linux"))]

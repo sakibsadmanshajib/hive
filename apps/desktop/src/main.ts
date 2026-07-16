@@ -94,17 +94,29 @@ function initLocalTasks(): void {
   const form = byId<HTMLFormElement>("local-task-form");
   const instructions = byId<HTMLTextAreaElement>("local-task-instructions");
 
+  const localTaskError = byId<HTMLParagraphElement>("local-task-error");
+
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
+    localTaskError.hidden = true;
+    localTaskError.textContent = "";
     const request = buildCreateRequest(packSelect.value as TaskPack, instructions.value);
     try {
       await invoke("create_local_task", { ...request });
       instructions.value = "";
       await refreshLocalTasks();
-    } catch {
-      // Best-effort UI: a failed local task still shows up via
-      // refreshLocalTasks() as a "Failed" entry once list_local_tasks is
-      // called again, so there is no separate error banner here.
+    } catch (err) {
+      // create_local_task can reject before state.create() ever runs
+      // (e.g. the workspace directory couldn't be created), in which case
+      // no task entry exists for refreshLocalTasks() to show as "Failed" --
+      // show the error directly so a rejection is never silent, then still
+      // refresh in case a task was recorded after all.
+      localTaskError.textContent =
+        typeof err === "string" ? err : "Could not start local task.";
+      localTaskError.hidden = false;
+      await refreshLocalTasks().catch(() => {
+        // Non-fatal: worst case the list just doesn't update this time.
+      });
     }
   });
 
