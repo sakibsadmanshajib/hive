@@ -1,0 +1,92 @@
+Bootstrap: docker
+From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
+# linux/amd64 only (owner decision 2026-07-16, task #5): Debian (bookworm)
+# base, never Alpine, since the vendored OpenHands packages
+# (vendor/openhands) need glibc-linked native wheels and a real apt package
+# set. This tag is confirmed to exist on Docker Hub as of 2026-07-16.
+
+%files
+    ../../vendor/openhands /opt/hive/vendor/openhands
+    ../../apps/agent-engine/packs /opt/hive/packs
+
+%post
+    set -eu
+
+    apt-get update
+    # socat: the shim in %runscript forwarding the sandbox's own loopback
+    # (its only interface once launched with --net --network none) to the
+    # bind-mounted egress-proxy Unix socket. This is the one relay path;
+    # see apps/agent-engine/internal/sandbox package doc.
+    apt-get install -y --no-install-recommends ca-certificates git build-essential socat
+    rm -rf /var/lib/apt/lists/*
+
+    python3 -m pip install --no-cache-dir --upgrade pip
+
+    # Install the vendored, patched packages in dependency order.
+    # --no-deps on the three library packages: their own inter-package
+    # version pins are already satisfied by these local installs, and we
+    # do not want pip re-resolving them from PyPI and silently picking up
+    # the unpatched upstream openhands-workspace.
+    python3 -m pip install --no-cache-dir --no-deps \
+        /opt/hive/vendor/openhands/openhands-sdk \
+        /opt/hive/vendor/openhands/openhands-tools \
+        /opt/hive/vendor/openhands/openhands-workspace
+
+    # openhands-agent-server pulls its remaining third-party dependencies
+    # (fastapi, uvicorn, pydantic, ...) normally; its self-referential deps
+    # on the three packages above are already satisfied.
+    python3 -m pip install --no-cache-dir \
+        /opt/hive/vendor/openhands/openhands-agent-server
+
+    # x86-64 only, so Playwright's own bundled Chromium download works
+    # normally: no distro-Chromium workaround needed (that was only ever
+    # required for arm64, which this box does not target).
+    python3 -m playwright install --with-deps chromium
+
+    mkdir -p /workspace
+    chmod 0777 /workspace
+
+%environment
+    export RUNTIME=process
+
+%runscript
+    # The sandbox launches with --net --network none
+    # (apps/agent-engine/internal/sandbox): its only interface is loopback.
+    # This shim forwards that loopback port (ProxyShimPort, 3128) to the
+    # egress-proxy Unix socket bind-mounted at ProxySocketContainerPath —
+    # the one relay path HTTP_PROXY/HTTPS_PROXY route through. Backgrounded
+    # so the agent-server below still becomes PID 1 inside --pid.
+    socat TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/opt/hive/egress.sock &
+
+    # Mirrors the entrypoint upstream's ApptainerWorkspace._start_container()
+    # expects to run (`apptainer run ... <sif> --host 0.0.0.0 --port <n>`):
+    # apps/agent-engine/internal/sandbox.BuildArgv appends `--host`/`--port`
+    # after the SIF path, which land here as "$@". Not yet reachable from the
+    # host with network isolation on — see the sandbox package doc for the
+    # Wave 3 follow-up (a bind-mounted Unix socket control channel).
+    exec python3 -m openhands.agent_server "$@"
+
+%labels
+    maintainer Hive (apps/agent-engine)
+    hive.issue 305,308
+    hive.source vendor/openhands (OpenHands/software-agent-sdk @ 51c102b9c0348bbdd4e6a84b1ac4199e0d77f827)
+
+%help
+    Hive agent-engine sandbox image: coding-pack and knowledge-work-pack
+    sessions run inside a container built from this definition, launched via
+    apps/agent-engine/internal/sandbox.BuildArgv, which unconditionally adds
+    --pid, --containall, and --net --network none (security spike #307 plus
+    team-lead security review of this package), leaving the sandbox with no
+    network interface but loopback. The only relay to the outside world is
+    the socat shim in %runscript, forwarding that loopback to a bind-mounted
+    Unix socket where a per-session allowlist proxy enforces the tenant/
+    user's effective egress policy (apps/control-plane/internal/egress,
+    issue #308).
+
+    Build (on a host with apptainer installed):
+        apptainer build agent-engine.sif deploy/apptainer/agent-engine.def
+
+    This build has not been run in this repo's dev environment: WSL2 has no
+    rootless user-namespace Apptainer support. See
+    apps/agent-engine/internal/sandbox/apptainer_integration_test.go for the
+    HIVE_APPTAINER_TEST=1-gated live launch test that exercises a built SIF.

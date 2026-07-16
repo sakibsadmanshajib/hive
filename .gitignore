@@ -10,7 +10,14 @@
 *.dylib
 
 # Dependencies
-/vendor/
+# /vendor/* (not /vendor/, so git still traverses into vendor/ to evaluate
+# the negation below — a parent directory that is itself excluded cannot
+# have its children re-included).
+/vendor/*
+# apps/agent-engine (issue #305/#308) intentionally vendors and commits a
+# trimmed, patched copy of OpenHands's software-agent-sdk; see
+# vendor/openhands/VENDORING.md.
+!/vendor/openhands/
 node_modules/
 package-lock.json
 

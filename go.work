@@ -9,3 +9,5 @@ use ./apps/control-plane
 use ./packages/storage
 
 use ./packages/audit-canonical
+
+use ./apps/agent-engine
