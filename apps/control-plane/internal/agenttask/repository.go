@@ -187,16 +187,18 @@ func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uui
 	return t, nil
 }
 
-// ListActive queries across all tenants (agent_tasks_service_scan,
-// 20260716_05_agent_tasks_service_scan.sql), deliberately outside
+// ListActive calls public.agent_tasks_list_active() — a SECURITY DEFINER
+// function (20260716_05_agent_tasks_service_scan.sql), NOT a table policy:
+// this is deliberately the only cross-tenant read path against
+// public.agent_tasks. An earlier version of this migration used a blanket
+// PERMISSIVE SELECT policy instead, which Postgres OR-combines with
+// agent_tasks_tenant_isolation and would have cancelled it for every
+// hive_app SELECT (a cross-tenant leak on the ordinary Get/List path) — see
+// the migration's own comment for the full account. Called outside
 // withTenantTx: no single app.current_tenant_id value could see every
-// tenant's rows.
+// tenant's rows, which is exactly why the function exists.
 func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
-		  FROM public.agent_tasks
-		 WHERE status IN ('queued', 'running') AND engine_session_ref <> ''
-	`)
+	rows, err := r.pool.Query(ctx, `SELECT * FROM public.agent_tasks_list_active()`)
 	if err != nil {
 		return nil, fmt.Errorf("agenttask: list active query: %w", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -137,21 +138,28 @@ func TestPoller_RunOnce_EngineErrorIsRetriedNotFailed(t *testing.T) {
 	}
 }
 
+// raceRepo simulates a task that ListActive still reports as active (it was
+// queued/running at the moment the poller listed it) but whose Transition
+// call loses a race to a concurrent Cancel landing in between — the actual
+// scenario Repository.Transition's atomic "not already terminal" guard
+// exists for.
+type raceRepo struct {
+	*fakeRepository
+	active agenttask.Task
+}
+
+func (r *raceRepo) ListActive(context.Context) ([]agenttask.Task, error) {
+	return []agenttask.Task{r.active}, nil
+}
+
+func (r *raceRepo) Transition(context.Context, uuid.UUID, uuid.UUID, uuid.UUID, agenttask.Status, string, string, string) (agenttask.Task, error) {
+	return agenttask.Task{}, agenttask.ErrTerminalState
+}
+
 func TestPoller_RunOnce_SwallowsTerminalStateRace(t *testing.T) {
-	repo := newFakeRepository()
-	// Simulates a concurrent Cancel winning the race before this pass's
-	// Transition call lands.
-	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
-	if _, err := repo.Transition(context.Background(), task.TenantID, task.UserID, task.ID, agenttask.StatusCancelled, "", "", ""); err != nil {
-		t.Fatalf("seed cancel: %v", err)
-	}
-	// The fake repo's ListActive filters on status queued/running, so a
-	// cancelled task would never surface here in practice; call RunOnce's
-	// building block directly isn't exposed, so instead exercise the same
-	// path ListActive would have skipped, confirming Transition's own
-	// ErrTerminalState guard (not RunOnce) is what protects a genuine race
-	// where the task was still active when listed but terminal by the time
-	// Transition runs.
+	inner := newFakeRepository()
+	task := newActiveTask(inner, agenttask.StatusRunning, "session-1")
+	repo := &raceRepo{fakeRepository: inner, active: task}
 	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
 		"session-1": {status: agenttask.StatusFailed, errMessage: "too late"},
 	}}
@@ -163,6 +171,33 @@ func TestPoller_RunOnce_SwallowsTerminalStateRace(t *testing.T) {
 	}
 	if advanced != 0 {
 		t.Fatalf("advanced=%d want 0 (task was already terminal, not re-counted)", advanced)
+	}
+}
+
+func TestPoller_RunOnce_SanitizesErrorMessageBeforePersisting(t *testing.T) {
+	repo := newFakeRepository()
+	task := newActiveTask(repo, agenttask.StatusRunning, "session-1")
+	rawDetail := "raw provider detail: dial tcp 10.0.0.5:443: connection refused"
+	checker := &fakeStatusChecker{responses: map[string]checkerResponse{
+		"session-1": {status: agenttask.StatusFailed, errMessage: rawDetail},
+	}}
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Logger: quietPollerLogger()})
+
+	if _, err := p.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce: %v", err)
+	}
+	got, err := repo.Get(context.Background(), task.TenantID, task.UserID, task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status != agenttask.StatusFailed {
+		t.Fatalf("status=%q want failed", got.Status)
+	}
+	if strings.Contains(got.ErrorMessage, "10.0.0.5") || strings.Contains(got.ErrorMessage, "dial tcp") {
+		t.Fatalf("error_message leaked raw engine/provider detail (provider-blind violation): %q", got.ErrorMessage)
+	}
+	if got.ErrorMessage == "" {
+		t.Fatal("expected a generic non-empty error_message, got empty")
 	}
 }
 
@@ -197,8 +232,11 @@ func TestPoller_StartStop_TicksAtInterval(t *testing.T) {
 	time.Sleep(80 * time.Millisecond)
 	p.Stop()
 
-	if calls := checker.Calls(); calls < 1 {
-		t.Fatalf("expected at least the eager first pass to have run, got %d calls", calls)
+	// Eager first pass + at least 2 tick-driven passes within 80ms at a 20ms
+	// interval: >=1 would also pass on the eager pass alone and never prove
+	// the ticker itself fires.
+	if calls := checker.Calls(); calls < 2 {
+		t.Fatalf("expected >=2 calls within window (eager pass + ticks), got %d", calls)
 	}
 }
 
@@ -215,6 +253,77 @@ func TestPoller_Start_DoubleCallIsNoop(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	p.Stop()
 	p.Stop() // double-stop also safe
+}
+
+// blockingStatusChecker blocks each Status call on release, and records
+// whether more than one call was ever in flight at once — the signal a
+// concurrent Start racing an in-progress Stop would produce (a second loop
+// launched while the first pass is still running).
+type blockingStatusChecker struct {
+	mu          sync.Mutex
+	inFlight    int
+	maxInFlight int
+	release     <-chan struct{}
+	entered     chan<- struct{}
+}
+
+func (b *blockingStatusChecker) Status(context.Context, string) (agenttask.Status, string, string, error) {
+	b.mu.Lock()
+	b.inFlight++
+	if b.inFlight > b.maxInFlight {
+		b.maxInFlight = b.inFlight
+	}
+	b.mu.Unlock()
+
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	<-b.release
+
+	b.mu.Lock()
+	b.inFlight--
+	b.mu.Unlock()
+	return agenttask.StatusRunning, "", "", nil
+}
+
+func (b *blockingStatusChecker) maxConcurrent() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.maxInFlight
+}
+
+func TestPoller_Stop_BlocksConcurrentStartUntilLoopExits(t *testing.T) {
+	repo := newFakeRepository()
+	newActiveTask(repo, agenttask.StatusRunning, "session-1")
+
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	checker := &blockingStatusChecker{release: release, entered: entered}
+	// Long interval: only the eager first pass should ever run in this test.
+	p := agenttask.NewPoller(repo, checker, agenttask.PollerConfig{Interval: time.Hour, Logger: quietPollerLogger()})
+
+	p.Start(context.Background())
+	<-entered // eager first pass is now blocked inside Status
+
+	stopDone := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(stopDone)
+	}()
+
+	// Give Stop time to reach its <-doneCh wait, then try Start again: with
+	// started cleared only after that wait, this must stay a no-op while
+	// the original pass is still blocked.
+	time.Sleep(20 * time.Millisecond)
+	p.Start(context.Background())
+
+	close(release) // let the blocked pass finish
+	<-stopDone
+
+	if max := checker.maxConcurrent(); max > 1 {
+		t.Fatalf("expected at most 1 concurrent Status call, got %d (a concurrent Start raced Stop-in-progress and launched a second loop)", max)
+	}
 }
 
 func TestNewPoller_PanicsOnNilDependencies(t *testing.T) {

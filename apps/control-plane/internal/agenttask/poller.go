@@ -93,6 +93,17 @@ func (p *Poller) RunOnce(ctx context.Context) (advanced int, err error) {
 			continue
 		}
 
+		// Provider-blind boundary: errMessage came from StatusChecker, an
+		// interface this package does not control the implementation of.
+		// error_message is customer-visible (Handler.handleGet), so a raw
+		// engine/provider detail must never reach it — log the real detail
+		// server-side, persist a generic message instead.
+		if errMessage != "" {
+			p.logger.WarnContext(ctx, "agenttask: task failed, engine detail",
+				"task_id", t.ID, "engine_detail", errMessage)
+			errMessage = "agent task failed"
+		}
+
 		if _, transErr := p.repo.Transition(ctx, t.TenantID, t.UserID, t.ID, status, "", resultSummary, errMessage); transErr != nil {
 			if errors.Is(transErr, ErrTerminalState) {
 				// Lost a race with a concurrent Cancel (or a previous pass
@@ -132,7 +143,12 @@ func (p *Poller) Start(parent context.Context) {
 }
 
 // Stop signals the loop to exit and waits for the in-flight pass to finish.
-// Safe to call multiple times.
+// Safe to call multiple times. started/cancel/doneCh are cleared only AFTER
+// the wait: clearing them first would let a concurrent Start launch a
+// second loop while the previous pass is still running (duplicate status
+// checks, competing terminal transitions). The p.doneCh == doneCh check
+// guards a concurrent second Stop from clearing state a subsequent
+// Start/Stop cycle has already replaced.
 func (p *Poller) Stop() {
 	p.mu.Lock()
 	if !p.started {
@@ -141,13 +157,18 @@ func (p *Poller) Stop() {
 	}
 	cancel := p.cancel
 	doneCh := p.doneCh
-	p.started = false
-	p.cancel = nil
-	p.doneCh = nil
 	p.mu.Unlock()
 
 	cancel()
 	<-doneCh
+
+	p.mu.Lock()
+	if p.doneCh == doneCh {
+		p.started = false
+		p.cancel = nil
+		p.doneCh = nil
+	}
+	p.mu.Unlock()
 }
 
 // loop ticks RunOnce on p.interval, doubling the delay (capped at
