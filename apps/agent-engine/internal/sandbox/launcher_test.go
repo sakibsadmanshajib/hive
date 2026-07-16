@@ -3,6 +3,7 @@ package sandbox_test
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -219,9 +220,18 @@ func TestCheckDockerSocketUnreachable(t *testing.T) {
 }
 
 func TestAssertNoDockerSocketReachable_PassesInThisEnvironment(t *testing.T) {
-	// The toolchain container this test runs in never mounts or runs Docker
-	// inside the agent-engine process itself (security spike #307 rows
-	// 8/9); this is the standing regression guard for that fact.
+	// This asserts a fact about the real host's filesystem
+	// (/var/run/docker.sock), not about agent-engine's own isolation: it is
+	// only meaningful on a target host that mirrors the actual deployed
+	// environment (no Docker installed alongside agent-engine), the same
+	// class of environment TestApptainerLaunch_Live requires. A stock
+	// GitHub Actions runner (and most dev laptops) has Docker installed for
+	// unrelated reasons and legitimately has this socket present, which is
+	// not a regression; gated identically to the live Apptainer tests in
+	// apptainer_integration_test.go rather than unconditionally in CI.
+	if os.Getenv("HIVE_APPTAINER_TEST") != "1" {
+		t.Skip("set HIVE_APPTAINER_TEST=1 on a target host with no Docker installed alongside agent-engine to run this test")
+	}
 	if err := sandbox.AssertNoDockerSocketReachable(); err != nil {
 		t.Fatalf("docker socket must not be reachable from agent-engine: %v", err)
 	}
