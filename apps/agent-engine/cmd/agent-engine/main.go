@@ -41,6 +41,7 @@ func main() {
 	sifPath := flag.String("sif", os.Getenv("HIVE_AGENT_SIF_PATH"), "path to the built agent-server SIF")
 	workingDir := flag.String("workspace", "", "host directory bind-mounted as /workspace")
 	hostPort := flag.Int("port", 38080, "host port the agent-server listens on")
+	controlSocketDir := flag.String("control-socket-dir", "", "host directory bind-mounted for the host<->agent-server control channel (issue #305); auto-created under a temp dir when empty")
 	controlPlaneURL := flag.String("control-plane-url", envOr("CONTROL_PLANE_URL", "http://control-plane:8081"), "control-plane base URL")
 	controlPlaneToken := flag.String("control-plane-token", os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"), "shared internal-service token")
 	dryRun := flag.Bool("dry-run", false, "print the constructed apptainer argv and exit without launching")
@@ -116,6 +117,20 @@ func main() {
 	// configured.
 	mcpConfigPath := resolveMCPConfigPath(ctx, *controlPlaneURL, *controlPlaneToken, tenant, sockDir)
 
+	// Host<->agent-server control channel (issue #305): a directory, empty
+	// at launch time, bind-mounted read-write into the sandbox so the
+	// in-SIF shim can create its listening socket inside it after start.
+	// See apps/agent-engine/internal/sandbox's package doc and
+	// apps/agent-engine/internal/controlclient.
+	ctlDir := *controlSocketDir
+	if ctlDir == "" {
+		ctlDir, err = os.MkdirTemp("", "hive-agent-engine-control-*")
+		if err != nil {
+			log.Fatalf("agent-engine: could not create control socket dir: %v", err)
+		}
+		defer os.RemoveAll(ctlDir)
+	}
+
 	cfg := sandbox.LaunchConfig{
 		TenantID: tenant,
 		UserID:   user,
@@ -124,10 +139,11 @@ func main() {
 			ConfigDir:  "packs/" + *pack,
 			WorkingDir: *workingDir,
 		},
-		SIFPath:         *sifPath,
-		HostPort:        *hostPort,
-		ProxySocketPath: proxySocketPath,
-		MCPConfigPath:   mcpConfigPath,
+		SIFPath:          *sifPath,
+		HostPort:         *hostPort,
+		ProxySocketPath:  proxySocketPath,
+		ControlSocketDir: ctlDir,
+		MCPConfigPath:    mcpConfigPath,
 	}
 
 	argv, err := sandbox.BuildArgv(cfg)

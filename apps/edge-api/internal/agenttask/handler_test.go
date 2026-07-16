@@ -24,12 +24,12 @@ func newFakeClient() *fakeClient {
 	return &fakeClient{tasks: make(map[uuid.UUID]Task)}
 }
 
-func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack string) (Task, error) {
+func (f *fakeClient) Create(_ context.Context, _, _ uuid.UUID, pack, instructions string) (Task, error) {
 	if f.createErr != nil {
 		return Task{}, f.createErr
 	}
 	id := uuid.New()
-	t := Task{ID: id.String(), Pack: pack, Status: "queued"}
+	t := Task{ID: id.String(), Pack: pack, Instructions: instructions, Status: "queued"}
 	f.tasks[id] = t
 	return t, nil
 }

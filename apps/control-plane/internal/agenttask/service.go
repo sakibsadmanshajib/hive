@@ -30,12 +30,12 @@ func NewService(repo Repository, engine Engine) *Service {
 // failed — that is a documented seam gap, not a task failure. Any other
 // Launch error transitions the task straight to StatusFailed so the caller
 // never has to poll a task that can never progress.
-func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack) (Task, error) {
+func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error) {
 	if !pack.Valid() {
 		return Task{}, ErrInvalidPack
 	}
 
-	t, err := s.repo.Create(ctx, tenantID, userID, pack)
+	t, err := s.repo.Create(ctx, tenantID, userID, pack, instructions)
 	if err != nil {
 		return Task{}, err
 	}

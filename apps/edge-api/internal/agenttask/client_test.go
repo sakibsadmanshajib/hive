@@ -33,7 +33,7 @@ func TestClient_Create_PostsExpectedPathAndBody(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	task, err := client.Create(context.Background(), tenantID, userID, "coding-pack")
+	task, err := client.Create(context.Background(), tenantID, userID, "coding-pack", "")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -64,7 +64,7 @@ func TestClient_Create_BadRequestMapsToErrInvalidPack(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL)
-	_, err := client.Create(context.Background(), uuid.New(), uuid.New(), "not-a-pack")
+	_, err := client.Create(context.Background(), uuid.New(), uuid.New(), "not-a-pack", "")
 	if err != ErrInvalidPack {
 		t.Fatalf("expected ErrInvalidPack, got %v", err)
 	}
