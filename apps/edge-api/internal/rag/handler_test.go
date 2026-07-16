@@ -25,6 +25,7 @@ type fakeStore struct {
 	insertCalled bool
 	deleteCalled bool
 	getErr       error // injected error for GetDocument
+	lastTopK     int   // records the topK SearchChunks actually received, for cap assertions
 }
 
 func newFakeStore() *fakeStore {
@@ -70,6 +71,7 @@ func (f *fakeStore) DeleteDocument(_ context.Context, _, docID uuid.UUID) (bool,
 }
 
 func (f *fakeStore) SearchChunks(_ context.Context, _ uuid.UUID, _ []float32, topK int) ([]ChunkRow, error) {
+	f.lastTopK = topK
 	if topK > len(f.chunks) {
 		topK = len(f.chunks)
 	}
@@ -92,11 +94,12 @@ func (e *fakeEmbedder) Embed(_ context.Context, _ string) ([]float32, error) {
 type auditRecord struct {
 	Action   string
 	Severity string
+	After    any
 }
 
 func makeAuditCapture(records *[]auditRecord) AuditFunc {
-	return func(_ context.Context, action, _, _, severity string, _, _ uuid.UUID, _ string, _ any) {
-		*records = append(*records, auditRecord{Action: action, Severity: severity})
+	return func(_ context.Context, action, _, _, severity string, _, _ uuid.UUID, _ string, after any) {
+		*records = append(*records, auditRecord{Action: action, Severity: severity, After: after})
 	}
 }
 

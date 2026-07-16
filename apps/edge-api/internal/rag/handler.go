@@ -46,12 +46,14 @@ type store = Store
 
 // Handler serves /v1/rag/* routes.
 type Handler struct {
-	store      store
-	embed      Embedder
-	audit      AuditFunc
-	ingest     IngestFunc
-	serverCtx  context.Context // root context for background goroutines
-	wg         sync.WaitGroup  // tracks in-flight ingest goroutines
+	store       store
+	embed       Embedder
+	audit       AuditFunc
+	ingest      IngestFunc
+	serverCtx   context.Context  // root context for background goroutines
+	wg          sync.WaitGroup   // tracks in-flight ingest goroutines
+	selectRoute RouteSelectFunc  // nil until WithChat is called; POST /v1/rag/chat returns 503
+	dispatch    ChatDispatchFunc // nil until WithChat is called; POST /v1/rag/chat returns 503
 }
 
 // NewHandler constructs a Handler.
@@ -69,6 +71,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/v1/rag/documents", h.routeDocuments)
 	mux.HandleFunc("/v1/rag/documents/", h.routeDocumentByID)
 	mux.HandleFunc("/v1/rag/search", h.handleSearch)
+	mux.HandleFunc("/v1/rag/chat", h.handleChat)
 }
 
 // Shutdown waits for in-flight ingest goroutines to finish. Call on server shutdown.

@@ -51,3 +51,48 @@ type ChunkResult struct {
 type SearchResponse struct {
 	Results []ChunkResult `json:"results"`
 }
+
+// ChatMessage is a single OpenAI-style message (role + plain-text content).
+// Multi-part content (images, tool calls) is not supported by grounded
+// generation; only the last "user" message drives retrieval.
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+// ChatRequest is the JSON body for POST /v1/rag/chat.
+type ChatRequest struct {
+	Model    string        `json:"model"`
+	Messages []ChatMessage `json:"messages"`
+	TopK     int           `json:"top_k"` // defaults to 5 when zero, capped at maxTopK
+	// Stream is accepted but rejected with 400: SSE grounded generation is
+	// deferred (issue #325 scope note); a client that already sends
+	// stream:true gets a clear error instead of a silently ignored flag.
+	Stream bool `json:"stream,omitempty"`
+}
+
+// ChatChoice is a single choice in a ChatResponse.
+type ChatChoice struct {
+	Index        int         `json:"index"`
+	Message      ChatMessage `json:"message"`
+	FinishReason *string     `json:"finish_reason"`
+}
+
+// ChatUsage mirrors the OpenAI usage object (token counts only).
+type ChatUsage struct {
+	PromptTokens     int64 `json:"prompt_tokens"`
+	CompletionTokens int64 `json:"completion_tokens"`
+	TotalTokens      int64 `json:"total_tokens"`
+}
+
+// ChatResponse is the JSON body returned by POST /v1/rag/chat.
+// Citations reuses ChunkResult so callers get the same shape as
+// POST /v1/rag/search for the retrieved sources grounding the answer.
+type ChatResponse struct {
+	ID        string        `json:"id"`
+	Object    string        `json:"object"`
+	Model     string        `json:"model"`
+	Choices   []ChatChoice  `json:"choices"`
+	Usage     *ChatUsage    `json:"usage,omitempty"`
+	Citations []ChunkResult `json:"citations"`
+}

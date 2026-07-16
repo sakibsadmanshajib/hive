@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -276,7 +277,42 @@ func main() {
 		ragIngestClient := edgerag.NewIngestClient(resolveControlPlaneBaseURL())
 		ragIngest := ragIngestClient.AsIngestFunc(log.Printf)
 
-		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx)
+		// Grounded generation (#325): POST /v1/rag/chat reuses the same
+		// routingClient + litellmClient already wired above for
+		// /v1/chat/completions. ragSelectRoute adapts inference.RoutingClient
+		// to the rag package's decoupled RouteSelectFunc so rag does not need
+		// to import inference's Orchestrator/billing types; litellmClient's
+		// ChatCompletion method value satisfies ChatDispatchFunc directly.
+		//
+		// Deliberately NOT wired through inference.Orchestrator: this route
+		// is JWT-session authenticated (auth.UserFrom, same as every other
+		// /v1/rag/* endpoint), and Orchestrator.Authorize only resolves
+		// "hk_..." API keys (internal/authz/authorizer.go) — calling it here
+		// would 401 every legitimate RAG request. The BudgetGate wrapped
+		// around this whole mux below has the identical limitation today
+		// (see the "Phase 19"/Plan 03 comment further down: JWT traffic is
+		// pre-billing by design, tracked separately, and affects every
+		// JWT-session inference route, not just this one). RAG chat records
+		// its own usage-accounting signal instead (RAG_CHAT_COMPLETED audit
+		// event in chat_handler.go), matching what internal/chat/dispatch.go
+		// already does (an llm_traces row) for the equivalent JWT-session
+		// /v1/chat/completions path.
+		ragSelectRoute := func(ctx context.Context, aliasID string) (string, error) {
+			route, err := routingClient.SelectRoute(ctx, inference.SelectRouteInput{
+				AliasID:             aliasID,
+				NeedChatCompletions: true,
+			})
+			if err != nil {
+				if errors.Is(err, inference.ErrRouteNotFound) {
+					return "", edgerag.ErrRouteNotFound
+				}
+				return "", err
+			}
+			return route.LiteLLMModelName, nil
+		}
+
+		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx).
+			WithChat(ragSelectRoute, litellmClient.ChatCompletion)
 		ragMW := featureGate.Require(featuregate.FeatureRAG)
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)
