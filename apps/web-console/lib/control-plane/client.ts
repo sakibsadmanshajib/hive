@@ -565,6 +565,225 @@ export async function setFeatureGate(
   return { key: outKey, enabled: outEnabled };
 }
 
+// MarketplaceEntryConfig is the kind-specific config blob for a marketplace
+// catalog entry (issue #309): an MCP server's command/args/env or
+// url/transport fields, or a free-form rule/skill/prompt-template body.
+export type MarketplaceEntryConfig = JsonObject;
+
+// MarketplaceEntry is one row of the admin-curated MCP and skills
+// marketplace catalog, joined with this tenant's enablement.
+export interface MarketplaceEntry {
+  id: string;
+  kind: string;
+  name: string;
+  description: string;
+  config: MarketplaceEntryConfig;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MarketplaceEntries {
+  entries: MarketplaceEntry[];
+}
+
+export interface CreateMarketplaceEntryInput {
+  kind: string;
+  name: string;
+  description: string;
+  config: MarketplaceEntryConfig;
+}
+
+export interface UpdateMarketplaceEntryInput {
+  name: string;
+  description: string;
+  config: MarketplaceEntryConfig;
+}
+
+function decodeMarketplaceEntry(value: JsonValue | null): MarketplaceEntry | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const id = readStringField(value, "id");
+  const kind = readStringField(value, "kind");
+  const name = readStringField(value, "name");
+  const description = readStringField(value, "description");
+  const config = readObjectField(value, "config");
+  const enabled = readBooleanField(value, "enabled");
+  const createdAt = readStringField(value, "created_at");
+  const updatedAt = readStringField(value, "updated_at");
+  if (
+    id === null ||
+    kind === null ||
+    name === null ||
+    description === null ||
+    config === null ||
+    enabled === null ||
+    createdAt === null ||
+    updatedAt === null
+  ) {
+    return null;
+  }
+  return {
+    id,
+    kind,
+    name,
+    description,
+    config,
+    enabled,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  };
+}
+
+function decodeMarketplaceEntries(payload: JsonObject): MarketplaceEntries | null {
+  const entriesValue = readArrayField(payload, "entries");
+  if (entriesValue === null) {
+    return null;
+  }
+  const entries: MarketplaceEntry[] = [];
+  for (const item of entriesValue) {
+    const decoded = decodeMarketplaceEntry(item);
+    if (!decoded) {
+      return null;
+    }
+    entries.push(decoded);
+  }
+  return { entries };
+}
+
+// getMarketplaceEntries lists the full catalog joined with this tenant's
+// enablement (issue #309). Server-only; the control-plane gates this on
+// platform-admin and returns 403 for non-admins, surfaced as a
+// ControlPlaneError so the caller can render an access state.
+export async function getMarketplaceEntries(): Promise<MarketplaceEntries> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/admin/marketplace`, {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to load marketplace catalog");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse marketplace catalog response");
+  }
+
+  const decoded = decodeMarketplaceEntries(payload);
+  if (!decoded) {
+    throw new Error("Failed to parse marketplace catalog response");
+  }
+  return decoded;
+}
+
+// createMarketplaceEntry curates a new catalog entry. Server-only; throws
+// ControlPlaneError so a Route Handler can map the upstream status to a
+// customer-safe message.
+export async function createMarketplaceEntry(
+  input: CreateMarketplaceEntryInput,
+): Promise<MarketplaceEntry> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(`${baseUrl}/api/v1/admin/marketplace`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to create marketplace entry");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  const decoded = decodeMarketplaceEntry(payload);
+  if (!decoded) {
+    throw new Error("Failed to parse marketplace entry response");
+  }
+  return decoded;
+}
+
+// updateMarketplaceEntry edits an existing catalog entry's mutable fields.
+export async function updateMarketplaceEntry(
+  id: string,
+  input: UpdateMarketplaceEntryInput,
+): Promise<MarketplaceEntry> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/admin/marketplace/${encodeURIComponent(id)}`,
+    {
+      method: "PUT",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify(input),
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update marketplace entry");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  const decoded = decodeMarketplaceEntry(payload);
+  if (!decoded) {
+    throw new Error("Failed to parse marketplace entry response");
+  }
+  return decoded;
+}
+
+// deleteMarketplaceEntry removes a catalog entry. Every tenant's enablement
+// of it is removed too (ON DELETE CASCADE).
+export async function deleteMarketplaceEntry(id: string): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/admin/marketplace/${encodeURIComponent(id)}`,
+    {
+      method: "DELETE",
+      headers,
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to delete marketplace entry");
+  }
+}
+
+// setMarketplaceEntryEnabled enables or disables one catalog entry for the
+// current tenant.
+export async function setMarketplaceEntryEnabled(
+  id: string,
+  enabled: boolean,
+): Promise<{ id: string; enabled: boolean }> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/admin/marketplace/${encodeURIComponent(id)}/enable`,
+    {
+      method: "PUT",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({ enabled }),
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update marketplace entry");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse marketplace entry response");
+  }
+  const outId = readStringField(payload, "id");
+  const outEnabled = readBooleanField(payload, "enabled");
+  if (outId === null || outEnabled === null) {
+    throw new Error("Failed to parse marketplace entry response");
+  }
+  return { id: outId, enabled: outEnabled };
+}
+
 export async function getAccountProfile(): Promise<AccountProfile> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/profile`, {

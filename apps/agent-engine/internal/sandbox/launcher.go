@@ -82,7 +82,19 @@ type LaunchConfig struct {
 	SIFPath         string
 	HostPort        int    // passed to the agent-server's own --host/--port; not yet reachable from the host, see package doc
 	ProxySocketPath string // host path of the per-session egressproxy.Proxy's Unix socket listener
+
+	// MCPConfigPath is the host path of the generated OpenHands-native
+	// {"mcpServers": {...}} JSON document (issue #309, blueprint Step 2.3;
+	// see apps/agent-engine/internal/marketplaceclient.BuildConfig and
+	// cmd/agent-engine/main.go). Optional: empty means no marketplace MCP
+	// servers are bind-mounted for this session. When set, it is bind-mounted
+	// read-only at MCPConfigContainerPath.
+	MCPConfigPath string
 }
+
+// MCPConfigContainerPath is the fixed path, inside the sandbox, that
+// LaunchConfig.MCPConfigPath is bind-mounted to when set.
+const MCPConfigContainerPath = "/opt/hive/mcp_config.json"
 
 var (
 	ErrMissingSIFPath         = errors.New("sandbox: SIFPath is required")
@@ -203,10 +215,22 @@ func BuildArgv(cfg LaunchConfig) (argv []string, err error) {
 		"--bind", cfg.ProxySocketPath + ":" + ProxySocketContainerPath,
 		"--bind", cfg.Pack.ConfigDir + ":/opt/hive/pack:ro",
 		"--bind", cfg.Pack.WorkingDir + ":/workspace",
+	}
+
+	// Issue #309 (blueprint Step 2.3) — bind-mount the tenant's enabled MCP
+	// server config, when the caller resolved one, read-only next to the
+	// pack config. Optional: an empty MCPConfigPath means this tenant has no
+	// marketplace MCP servers enabled, or the caller could not reach
+	// control-plane (marketplaceclient fails open — see cmd/agent-engine).
+	if cfg.MCPConfigPath != "" {
+		argv = append(argv, "--bind", cfg.MCPConfigPath+":"+MCPConfigContainerPath+":ro")
+	}
+
+	argv = append(argv,
 		cfg.SIFPath,
 		"--host", "0.0.0.0",
 		"--port", strconv.Itoa(cfg.HostPort),
-	}
+	)
 
 	if containsDockerSocketReference(argv) {
 		return nil, ErrDockerSocketReferenced
