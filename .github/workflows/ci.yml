@@ -60,6 +60,8 @@ jobs:
             path: ./apps/control-plane
           - module: storage
             path: ./packages/storage
+          - module: agent-engine
+            path: ./apps/agent-engine
     steps:
       - uses: actions/checkout@v4
 
@@ -70,6 +72,7 @@ jobs:
             apps/edge-api/go.sum
             apps/control-plane/go.sum
             packages/storage/go.sum
+            apps/agent-engine/go.sum
 
       - name: go vet
         working-directory: ${{ matrix.path }}
