@@ -314,7 +314,7 @@ func (h *Handler) routeServe(w http.ResponseWriter, r *http.Request) {
 	}
 	defer blob.Close()
 
-	h.writeArtifactHeaders(w)
+	h.writeArtifactHeaders(w, row.IsPublic)
 	w.WriteHeader(http.StatusOK)
 	if r.Method == http.MethodGet {
 		_, _ = io.Copy(w, blob)
@@ -369,9 +369,17 @@ func (h *Handler) optionalViewerTenant(r *http.Request) uuid.UUID {
 // the configured panel origin (or 'none' if unconfigured). The consuming
 // iframe (Wave 3.1/3.2 OWUI panel) must additionally set
 // sandbox="allow-scripts" with no allow-same-origin, per issue #312.
-func (h *Handler) writeArtifactHeaders(w http.ResponseWriter) {
+func (h *Handler) writeArtifactHeaders(w http.ResponseWriter, isPublic bool) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if isPublic {
+		w.Header().Set("Cache-Control", "public, max-age=300")
+	} else {
+		// Private artifact served only because the viewer authenticated as
+		// the owning tenant: must never be cached by a shared proxy or
+		// left in a browser disk cache.
+		w.Header().Set("Cache-Control", "private, no-store")
+	}
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "+
 			"img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'; "+

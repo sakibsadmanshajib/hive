@@ -459,6 +459,9 @@ func TestRouteServe_CSPAndNoSniffHeaders(t *testing.T) {
 	if !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") {
 		t.Fatalf("Content-Type = %q, want text/html", rec.Header().Get("Content-Type"))
 	}
+	if rec.Header().Get("Cache-Control") != "public, max-age=300" {
+		t.Fatalf("Cache-Control = %q, want public, max-age=300 for a public artifact", rec.Header().Get("Cache-Control"))
+	}
 }
 
 func TestRouteServe_CustomFrameAncestors(t *testing.T) {
@@ -567,6 +570,9 @@ func TestRouteServe_PrivateArtifact_AuthenticatedSameTenantOK(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 for same-tenant authenticated viewer, body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Cache-Control") != "private, no-store" {
+		t.Fatalf("Cache-Control = %q, want private, no-store for a private artifact", rec.Header().Get("Cache-Control"))
 	}
 }
 
