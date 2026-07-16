@@ -55,6 +55,7 @@ import (
 	platformredis "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/redis"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/providers"
+	cprag "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/routing"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signupguard"
@@ -903,6 +904,29 @@ func main() {
 				return platformhttp.RequireInternalToken(cfg.InternalToken, h)
 			})
 			log.Println("filestore routes registered")
+		}
+
+		// RAG ingestion (#232): edge-api registers the rag_documents row, then
+		// calls this internal endpoint to chunk, embed, and store the content.
+		// Requires an embedding backend; without one the route is not mounted
+		// and uploaded documents simply stay "pending" (no partial pipeline).
+		ragEmbedBaseURL := strings.TrimSpace(os.Getenv("EMBEDDING_BASE_URL"))
+		ragEmbedModel := strings.TrimSpace(os.Getenv("EMBEDDING_MODEL"))
+		if ragEmbedModel == "" {
+			ragEmbedModel = "bge-m3"
+		}
+		if ragEmbedBaseURL == "" {
+			log.Println("WARNING: EMBEDDING_BASE_URL not set; rag ingest route not registered (uploaded documents will stay pending)")
+		} else {
+			ragRepo := cprag.NewRepo(pool)
+			ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel)
+			ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0)
+			cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
+				return ragIngester.Ingest(ctx, tenantID, docID, content)
+			}, func(h http.Handler) http.Handler {
+				return platformhttp.RequireInternalToken(cfg.InternalToken, h)
+			})
+			log.Println("rag ingest route registered")
 		}
 	}
 

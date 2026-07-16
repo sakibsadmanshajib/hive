@@ -268,7 +268,13 @@ func main() {
 				log.Printf("rag audit write failed: %v", err)
 			}
 		}
-		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, nil, rootCtx)
+		// Ingestion (chunk + embed + store) runs in control-plane, not here --
+		// edge-api calls the internal service-to-service endpoint the same way
+		// filestoreClient calls control-plane for file metadata (issue #232).
+		ragIngestClient := edgerag.NewIngestClient(resolveControlPlaneBaseURL())
+		ragIngest := ragIngestClient.AsIngestFunc(log.Printf)
+
+		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx)
 		ragMW := featureGate.Require(featuregate.FeatureRAG)
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)

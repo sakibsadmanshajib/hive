@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -406,5 +407,41 @@ func TestExtractDocID_TrailingSlash(t *testing.T) {
 	got, err := extractDocID("/v1/rag/documents/" + id.String() + "/")
 	if err != nil || got != id {
 		t.Errorf("extractDocID with trailing slash failed: err=%v", err)
+	}
+}
+
+// TestHandleUpload_IngestUsesAuthenticatedTenantOnly proves the tenant_id
+// forwarded to IngestFunc (and from there into the control-plane ingest
+// request body) always comes from the resolved auth context, never from
+// client input: UploadRequest has no tenant_id field at all, so there is no
+// wire path for a caller to influence which tenant the ingest call carries.
+func TestHandleUpload_IngestUsesAuthenticatedTenantOnly(t *testing.T) {
+	store := newFakeStore()
+	var audits []auditRecord
+	var mu sync.Mutex
+	var gotTenant uuid.UUID
+	var called bool
+	ingest := func(_ context.Context, tenantID, _ uuid.UUID, _ string) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotTenant, called = tenantID, true
+	}
+	h := NewHandler(store, &fakeEmbedder{}, makeAuditCapture(&audits), ingest, context.Background())
+
+	authTenant := uuid.New()
+	body, _ := json.Marshal(UploadRequest{Name: "doc.txt", Content: "hello world"})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/documents", bytes.NewReader(body))
+	req = req.WithContext(userCtx(authTenant))
+	w := httptest.NewRecorder()
+	h.handleUpload(w, req)
+	h.Shutdown() // wait for the async ingest goroutine before asserting
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !called {
+		t.Fatal("expected ingest to be called")
+	}
+	if gotTenant != authTenant {
+		t.Fatalf("ingest tenant_id = %v, want authenticated tenant %v", gotTenant, authTenant)
 	}
 }

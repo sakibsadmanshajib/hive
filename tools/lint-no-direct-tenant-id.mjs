@@ -13,6 +13,8 @@ const ALLOWLIST_DIRS = [
   'apps/edge-api/internal/auth/',                 // ctx writers
   'apps/control-plane/internal/auditarchive/',    // system cron job; iterates ALL tenants cross-tenant — no request auth context, tenant_id is internal archive struct field not wire input
   'apps/control-plane/internal/egress/',          // tenant_id in these structs is RESPONSE wire shape (egress-policy read/CRUD JSON output); the handler always resolves tenant_id by parsing the URL path segment via uuid.Parse, never FormValue/Query/Header/request-body — no violation of the auth.TenantID(ctx) input rule this lint enforces
+  'apps/control-plane/internal/rag/http.go',      // internal service-to-service /internal/rag/ingest endpoint, gated by RequireInternalToken shared secret (not a customer-facing route); tenant_id crosses the process boundary in the body because the authenticated user's request context cannot cross processes -- edge-api (the only caller) populates it solely from auth.TenantID(ctx), see TestHandleUpload_IngestUsesAuthenticatedTenantOnly; same trust shape as filestore's account_id-in-body pattern
+  'apps/edge-api/internal/rag/ingestclient.go',   // client-side counterpart of the above: marshals the tenant_id already resolved from auth.TenantID(ctx) by the caller into the internal ingest request body -- not a wire-input path, no client ever supplies this value (UploadRequest has no tenant_id field)
   'supabase/migrations/',
   'tools/lint-no-direct-tenant-id.mjs',
 ];
