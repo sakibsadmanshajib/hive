@@ -62,9 +62,12 @@ func (c *IngestClient) Ingest(ctx context.Context, tenantID, docID uuid.UUID, co
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	// Drain and discard: the response body may carry control-plane's raw
+	// failure detail, which must not be threaded into this error (provider-blind
+	// boundary) or surfaced to whatever ends up logging it.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("rag.ingestclient: status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return fmt.Errorf("rag.ingestclient: ingest failed (status %d)", resp.StatusCode)
 	}
 	return nil
 }

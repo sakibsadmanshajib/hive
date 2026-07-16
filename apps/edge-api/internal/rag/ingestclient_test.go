@@ -8,16 +8,21 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
 func TestIngestClient_Ingest_PostsExpectedBody(t *testing.T) {
+	cpauth.SetTokenForTest("test-internal-token")
+	defer cpauth.SetTokenForTest("")
+
 	tenantID, docID := uuid.New(), uuid.New()
-	var gotPath, gotMethod string
+	var gotPath, gotMethod, gotToken string
 	var gotBody ingestRequestBody
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		gotMethod = r.Method
+		gotToken = r.Header.Get(cpauth.Header)
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode request body: %v", err)
 		}
@@ -37,6 +42,9 @@ func TestIngestClient_Ingest_PostsExpectedBody(t *testing.T) {
 	}
 	if gotPath != "/internal/rag/ingest" {
 		t.Errorf("path = %q, want /internal/rag/ingest", gotPath)
+	}
+	if gotToken != "test-internal-token" {
+		t.Errorf("internal auth header = %q, want %q", gotToken, "test-internal-token")
 	}
 	if gotBody.TenantID != tenantID.String() {
 		t.Errorf("tenant_id = %q, want %q", gotBody.TenantID, tenantID.String())

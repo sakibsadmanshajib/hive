@@ -3,11 +3,18 @@ package rag
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/google/uuid"
 )
+
+// maxIngestBodyBytes bounds the ingest request body the same way edge-api's
+// own /v1/rag/documents upload handler bounds its body (10 MiB), so a caller
+// cannot force unbounded memory use and embedding work on control-plane.
+const maxIngestBodyBytes = 10 * 1024 * 1024
 
 // IngestFunc chunks, embeds, and stores a document. It matches the method
 // value of (*Ingester).Ingest, kept as a func type so tests can inject a fake
@@ -38,8 +45,14 @@ func (h *IngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBodyBytes)
 	var req ingestRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "request body too large"})
+			return
+		}
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
@@ -60,7 +73,11 @@ func (h *IngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.ingest(r.Context(), tenantID, docID, req.Content); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		// Provider-blind: log the real cause server-side, never echo it back --
+		// Ingester wraps some errors (e.g. DB failures) that are not yet
+		// sanitized text, so this boundary must not trust err.Error() as safe.
+		log.Printf("rag: ingest failed tenant=%s doc=%s: %v", tenantID, docID, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "ingest failed"})
 		return
 	}
 

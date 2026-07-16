@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -104,6 +105,27 @@ func TestHandleIngest(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHandleIngest_RejectsOversizedBody(t *testing.T) {
+	var called bool
+	h := NewIngestHandler(func(context.Context, uuid.UUID, uuid.UUID, string) error {
+		called = true
+		return nil
+	})
+
+	oversized := strings.Repeat("a", maxIngestBodyBytes+1024)
+	body := `{"tenant_id":"` + uuid.New().String() + `","document_id":"` + uuid.New().String() + `","content":"` + oversized + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/internal/rag/ingest", bytes.NewBufferString(body))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusRequestEntityTooLarge)
+	}
+	if called {
+		t.Fatal("ingest must not be called for an oversized body")
 	}
 }
 
