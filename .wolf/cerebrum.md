@@ -43,3 +43,8 @@
 
 [2026-06-12] code-review-graph uninstalled, replaced by graphify. Use graphify query/path/explain against graphify-out/; rebuild via graphify update (post-commit hook installed). mcp__code-review-graph__* tools no longer exist.
 - OWNER ACTION (2026-06-12): Cloudflare scubed.co zone (id fbe80ca310492206988c6fa6d5eb0622) free plan. To prevent recurring error 1010 on api-hive/cp-hive (Browser Integrity Check / Bot Fight Mode blocks non-browser API clients), confirm both OFF in dashboard (Security > Settings > Browser Integrity Check; Security > Bots > Bot Fight Mode). Current CLOUDFLARE_API_TOKEN has zone:read only, cannot script it. Global key correctly removed from .env (rotated). API hostnames must never sit behind browser-challenge security.
+
+## D8 task portability decision (2026-07-16, CTO call, owner veto open)
+- D8 residual RESOLVED: keep documented direction. Web/server tasks sync everywhere; desktop-local tasks stay OFF cloud sync by default; per-task local-vs-server prompt on desktop.
+- Evidence (July 2026 research, sourced): Claude Code Remote Control is opt-in, off by default, live-steering not upload; teleport is one-way web to local; Codex cloud delegation is an explicit per-task push, transcripts local by default; Cowork Projects have no cloud sync. No vendor auto-uploads local sessions. Industry practice matches Hive direction exactly.
+- Unblocks Step 4.4 (desktop firewall + portability, last Wave 4 demo step). Sources logged in vault log-2026-07-15-wave1-spike-execution.

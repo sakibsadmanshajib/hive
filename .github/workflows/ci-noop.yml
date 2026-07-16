@@ -42,6 +42,7 @@ jobs:
           - module: edge-api
           - module: control-plane
           - module: storage
+          - module: agent-engine
     steps:
       - run: echo "Skipped (docs-only change)"
 
