@@ -20,6 +20,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditarchive"
@@ -39,8 +40,8 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
-	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 	bkashRail "github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments/bkash"
@@ -797,6 +798,19 @@ func main() {
 		marketplaceHandler = marketplace.NewHandler(marketplaceSvc)
 	}
 
+	// Issue #311 (blueprint Step 3.4) — agent task persistence, web side. No
+	// live agent-engine control channel exists yet (Wave 3 gap: the sandbox's
+	// --network none profile cuts off the host <-> agent-server channel this
+	// would need), so agenttask.NotConfiguredEngine is wired: task creation
+	// still succeeds and persists, it just stays queued until a real Engine
+	// lands. See apps/control-plane/internal/agenttask/SYNC_CONTRACT.md.
+	var agentTaskHandler *agenttask.Handler
+	if pool != nil {
+		agentTaskRepo := agenttask.NewPgxRepository(pool)
+		agentTaskSvc := agenttask.NewService(agentTaskRepo, agenttask.NotConfiguredEngine{})
+		agentTaskHandler = agenttask.NewHandler(agentTaskSvc)
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:          authMiddleware,
 		AccountsHandler:         accountsHandler,
@@ -814,6 +828,7 @@ func main() {
 		FeatureGateAdminHandler: featureGateAdminHandler,
 		EgressPolicyHandler:     egressPolicyHandler,
 		MarketplaceHandler:      marketplaceHandler,
+		AgentTaskHandler:        agentTaskHandler,
 		RoutingHandler:          routingHandler,
 		UsageHandler:            usageHandler,
 		MetricsRegistry:         metricsRegistry,
