@@ -2,11 +2,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod entitlements;
+mod local_tasks;
 mod settings;
 
 use std::sync::Mutex;
 
 use entitlements::Entitlements;
+use local_tasks::LocalTaskStore;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 fn main() {
@@ -25,11 +27,25 @@ fn main() {
             settings::set_server_url,
             settings::reset_server_url,
             entitlements::get_entitlements,
+            local_tasks::create_local_task,
+            local_tasks::list_local_tasks,
         ])
         .setup(|app| {
             let handle = app.handle();
             let data_dir = handle.path().app_data_dir()?;
             let saved_console_url = settings::load(&data_dir);
+
+            // Blueprint Step 4.4 (#308/#311): local (never-synced) task
+            // execution. hook_config_dir is always read-only inside the
+            // sandbox regardless of what else the policy grants (see
+            // hive_desktop_sandbox::SandboxPolicy::build) -- created here,
+            // once, rather than per task.
+            let hook_config_dir = data_dir.join("local-task-hooks");
+            std::fs::create_dir_all(&hook_config_dir)?;
+            app.manage(LocalTaskStore::new(
+                Box::new(local_tasks::RealLauncher),
+                hook_config_dir,
+            ));
 
             // Step 4.3 (#310): startup gate fetch. Unauthenticated by design
             // -- see entitlements.rs module doc for the auth-timing decision

@@ -22,6 +22,27 @@
         <button type="submit">Continue</button>
       </form>
       <p id="server-error" role="alert" hidden></p>
+
+      <section aria-label="Start a local task">
+        <h2>Run a task locally</h2>
+        <p>
+          Runs sandboxed on this machine and never syncs to the cloud task
+          list. To run a task on the server instead, continue to the console
+          above.
+        </p>
+        <form id="local-task-form" novalidate>
+          <label for="local-task-pack">Pack</label>
+          <select id="local-task-pack" name="local-task-pack"></select>
+          <label for="local-task-instructions">Instructions</label>
+          <textarea
+            id="local-task-instructions"
+            name="local-task-instructions"
+            placeholder="What should this task do?"
+          ></textarea>
+          <button type="submit">Run locally</button>
+        </form>
+        <ul id="local-task-list" aria-label="Local tasks"></ul>
+      </section>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
