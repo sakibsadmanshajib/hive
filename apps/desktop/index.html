@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hive</title>
+  </head>
+  <body>
+    <main id="app">
+      <h1>Hive</h1>
+      <p>Enter your organization's Hive server address to continue.</p>
+      <form id="server-form" novalidate>
+        <label for="server-url">Server URL</label>
+        <input
+          id="server-url"
+          name="server-url"
+          type="text"
+          placeholder="https://hive.example.com"
+          autocomplete="off"
+          required
+        />
+        <button type="submit">Continue</button>
+      </form>
+      <p id="server-error" role="alert" hidden></p>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
