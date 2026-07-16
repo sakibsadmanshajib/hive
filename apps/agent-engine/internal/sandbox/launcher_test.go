@@ -70,6 +70,37 @@ func TestBuildArgv_WiresProxyEnv(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_OmitsMCPConfigBindWhenPathEmpty(t *testing.T) {
+	argv, err := sandbox.BuildArgv(validConfig())
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	if strings.Contains(strings.Join(argv, " "), sandbox.MCPConfigContainerPath) {
+		t.Fatalf("expected no MCP config bind mount when MCPConfigPath is empty, got argv: %v", argv)
+	}
+}
+
+func TestBuildArgv_BindsMCPConfigWhenPathSet(t *testing.T) {
+	cfg := validConfig()
+	cfg.MCPConfigPath = "/srv/hive/run/t1/mcp_config.json"
+	argv, err := sandbox.BuildArgv(cfg)
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	wantBind := cfg.MCPConfigPath + ":" + sandbox.MCPConfigContainerPath + ":ro"
+	if !strings.Contains(strings.Join(argv, " "), wantBind) {
+		t.Fatalf("expected MCP config bind mount %s, got argv: %v", wantBind, argv)
+	}
+}
+
+func TestBuildArgv_RejectsDockerSocketInMCPConfigPath(t *testing.T) {
+	cfg := validConfig()
+	cfg.MCPConfigPath = "/var/run/docker.sock"
+	if _, err := sandbox.BuildArgv(cfg); !errors.Is(err, sandbox.ErrDockerSocketReferenced) {
+		t.Fatalf("expected ErrDockerSocketReferenced, got %v", err)
+	}
+}
+
 func TestBuildArgv_RejectsInvalidConfig(t *testing.T) {
 	cases := []struct {
 		name    string

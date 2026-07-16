@@ -10,6 +10,7 @@ import {
   Settings,
   Wallet,
   ToggleRight,
+  Store,
   LogOut,
 } from "lucide-react";
 
@@ -43,6 +44,11 @@ const NAV_GROUPS: ReadonlyArray<{
         href: "/console/feature-gates",
         label: "Feature gates",
         icon: <ToggleRight size={14} />,
+      },
+      {
+        href: "/console/marketplace",
+        label: "Marketplace",
+        icon: <Store size={14} />,
       },
     ],
   },

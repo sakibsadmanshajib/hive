@@ -23,6 +23,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressproxy"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/marketplaceclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/quota"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/sandbox"
 )
@@ -106,6 +107,15 @@ func main() {
 	go func() { _ = proxySrv.Serve(proxyListener) }()
 	defer proxySrv.Close()
 
+	// Issue #309 (blueprint Step 2.3) — resolve this tenant's enabled MCP
+	// marketplace servers and bind-mount the resulting OpenHands-native
+	// config next to the pack. Unlike the egress policy above, this fails
+	// open: the marketplace is an additive capability, so a control-plane
+	// outage or a tenant with nothing enabled must not block the sandbox
+	// from launching at all, it just launches with no MCP servers
+	// configured.
+	mcpConfigPath := resolveMCPConfigPath(ctx, *controlPlaneURL, *controlPlaneToken, tenant, sockDir)
+
 	cfg := sandbox.LaunchConfig{
 		TenantID: tenant,
 		UserID:   user,
@@ -117,6 +127,7 @@ func main() {
 		SIFPath:         *sifPath,
 		HostPort:        *hostPort,
 		ProxySocketPath: proxySocketPath,
+		MCPConfigPath:   mcpConfigPath,
 	}
 
 	argv, err := sandbox.BuildArgv(cfg)
@@ -135,6 +146,37 @@ func main() {
 	if err := cmd.Run(); err != nil {
 		log.Fatalf("agent-engine: apptainer run failed: %v", err)
 	}
+}
+
+// resolveMCPConfigPath fetches tenant's enabled MCP marketplace servers
+// (issue #309), writes the resulting OpenHands-native mcpServers JSON into
+// dir, and returns the file path for sandbox.LaunchConfig.MCPConfigPath. It
+// fails open: any error (unreachable control-plane, no servers enabled)
+// logs a warning and returns "", which sandbox.BuildArgv treats as "mount
+// nothing" rather than refusing to launch.
+func resolveMCPConfigPath(ctx context.Context, controlPlaneURL, controlPlaneToken string, tenant uuid.UUID, dir string) string {
+	client := marketplaceclient.New(controlPlaneURL, controlPlaneToken)
+	entries, err := client.Enabled(ctx, tenant)
+	if err != nil {
+		log.Printf("agent-engine: could not resolve marketplace MCP servers, launching with none configured: %v", err)
+		return ""
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+
+	config, err := marketplaceclient.BuildConfig(entries)
+	if err != nil {
+		log.Printf("agent-engine: could not build MCP config, launching with none configured: %v", err)
+		return ""
+	}
+
+	path := filepath.Join(dir, "mcp_config.json")
+	if err := os.WriteFile(path, config, 0o600); err != nil {
+		log.Printf("agent-engine: could not write MCP config, launching with none configured: %v", err)
+		return ""
+	}
+	return path
 }
 
 func envOr(key, fallback string) string {

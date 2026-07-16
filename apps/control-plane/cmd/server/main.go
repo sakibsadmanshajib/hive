@@ -39,6 +39,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/litellmconfig"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/owui"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
@@ -784,6 +785,18 @@ func main() {
 		egressPolicyHandler = egress.NewHandler(egressSvc)
 	}
 
+	// Issue #309 (blueprint Step 2.3) — MCP and skills marketplace, admin-
+	// curated baseline. Admin CRUD + per-tenant enablement is platform-admin
+	// gated (RoleSvc, mirrors feature-gates/providers below); the internal
+	// read surface is the seam apps/agent-engine/internal/marketplaceclient
+	// consumes to build a session's MCP config.
+	var marketplaceHandler *marketplace.Handler
+	if pool != nil {
+		marketplaceRepo := marketplace.NewPgxRepository(pool)
+		marketplaceSvc := marketplace.NewService(marketplaceRepo)
+		marketplaceHandler = marketplace.NewHandler(marketplaceSvc)
+	}
+
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
 		AuthMiddleware:          authMiddleware,
 		AccountsHandler:         accountsHandler,
@@ -800,6 +813,7 @@ func main() {
 		FeatureGateHandler:      featureGateHandler,
 		FeatureGateAdminHandler: featureGateAdminHandler,
 		EgressPolicyHandler:     egressPolicyHandler,
+		MarketplaceHandler:      marketplaceHandler,
 		RoutingHandler:          routingHandler,
 		UsageHandler:            usageHandler,
 		MetricsRegistry:         metricsRegistry,

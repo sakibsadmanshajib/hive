@@ -16,6 +16,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/egress"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/identity"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/payments"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/metrics"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/profiles"
@@ -105,6 +106,13 @@ type RouterConfig struct {
 	// /api/v1/egress-policy/ and the shared-secret-guarded read surface at
 	// /internal/egress-policy/. When nil neither route is registered.
 	EgressPolicyHandler *egress.Handler
+
+	// MarketplaceHandler serves the admin-curated MCP and skills marketplace
+	// (issue #309, agent-subsystem blueprint Step 2.3): the owner-gated admin
+	// CRUD + per-tenant enable/disable surface at /api/v1/admin/marketplace/
+	// and the shared-secret-guarded read surface at /internal/marketplace/
+	// that apps/agent-engine consumes. When nil neither route is registered.
+	MarketplaceHandler *marketplace.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -292,6 +300,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux.Handle("/internal/egress-policy/", internal(cfg.EgressPolicyHandler.InternalMux()))
 		if cfg.AuthMiddleware != nil {
 			mux.Handle("/api/v1/egress-policy/", cfg.AuthMiddleware.Require(cfg.EgressPolicyHandler.AdminMux()))
+		}
+	}
+
+	// Issue #309 (blueprint Step 2.3) — MCP and skills marketplace, admin-
+	// curated baseline. The internal read surface is the seam
+	// apps/agent-engine/internal/marketplaceclient consumes to build a
+	// session's MCP config; the admin surface is platform-admin gated,
+	// mirroring the /api/v1/admin/feature-gates and /api/v1/admin/providers
+	// gating above.
+	if cfg.MarketplaceHandler != nil {
+		mux.Handle("/internal/marketplace/", internal(cfg.MarketplaceHandler.InternalMux()))
+		if cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
+			adminMarketplace := cfg.AuthMiddleware.Require(
+				cfg.RoleSvc.RequirePlatformAdmin(cfg.MarketplaceHandler.AdminMux()),
+			)
+			mux.Handle("/api/v1/admin/marketplace", adminMarketplace)
+			mux.Handle("/api/v1/admin/marketplace/", adminMarketplace)
 		}
 	}
 
