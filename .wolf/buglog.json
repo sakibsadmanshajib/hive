@@ -1771,6 +1771,113 @@
         "secrets",
         "compose"
       ]
+    },
+    {
+      "id": "bug-003",
+      "timestamp": "2026-07-07T08:12:21.335123Z",
+      "error_message": "TS2307 cannot find module 'recharts' in web-console CI (PR #314)",
+      "file": "apps/web-console/package.json",
+      "root_cause": "Dead-code grep scoped to apps/web-console/src only; recharts imports live in apps/web-console/components/analytics/{error,spend,usage}-chart.tsx, so the dep was wrongly judged unused and removed",
+      "fix": "Reverted package.json + package-lock.json to origin/main byte-identical; rule: dependency-usage grep must cover the whole package dir (components/, app/, tests/), never just src/",
+      "tags": [
+        "ci",
+        "web-console",
+        "dead-code",
+        "false-positive",
+        "grep-scope"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-07T08:12:21.335123Z"
+    },
+    {
+      "id": "bug-004",
+      "timestamp": "2026-07-07T08:12:21.335123Z",
+      "error_message": "gh pr edit / gh issue view fail: classic Projects GraphQL field deprecated (projectCards)",
+      "file": "gh CLI vs sakibsadmanshajib/hive",
+      "root_cause": "Repo linked to classic Projects; default gh commands query deprecated projectCards GraphQL field",
+      "fix": "Use gh issue view --json <fields> and gh api PATCH /repos/.../pulls/N instead of gh pr edit",
+      "tags": [
+        "gh-cli",
+        "github-api",
+        "workaround"
+      ],
+      "related_bugs": [],
+      "occurrences": 2,
+      "last_seen": "2026-07-07T08:12:21.335123Z"
+    },
+    {
+      "id": "bug-005",
+      "timestamp": "2026-07-07T08:12:21.335123Z",
+      "error_message": "git pull --ff-only aborts: untracked working tree files would be overwritten by merge (.wolf/, .planning/carl/, spec)",
+      "file": "/home/sakib/hive (shared checkout)",
+      "root_cause": "PR #314 committed snapshots of files that existed locally as untracked; pull refuses to overwrite untracked paths",
+      "fix": "Verify backup (diff -rq) then move collision paths aside, pull, restore live .wolf copy over tracked snapshot (drift shows as M, committed next .wolf pass)",
+      "tags": [
+        "git",
+        "pull-collision",
+        "wolf",
+        "workflow"
+      ],
+      "related_bugs": [],
+      "occurrences": 1,
+      "last_seen": "2026-07-07T08:12:21.335123Z"
+    },
+    {
+      "date": "2026-07-16",
+      "error_message": "gh pr merge failed: Pull Request has merge conflicts (mergePullRequest); second PR editing tools/lint-no-direct-tenant-id.mjs allowlist conflicted after first PR merged",
+      "root_cause": "Parallel builder PRs (#324, #326) both appended entries to the same ALLOWLIST_DIRS block in the tenant-id lint script; first squash merge made the second PR conflict.",
+      "fix": "Fresh worktree from remote branch, git merge origin/main, union both allowlist entries with their justification comments, push, re-gate, merge. Prevention: treat lint allowlist files as a known shared-file hotspot for parallel PR waves; assign allowlist edits line-disjoint or merge serially.",
+      "tags": [
+        "merge-conflict",
+        "parallel-builders",
+        "repo-policy-lint",
+        "allowlist",
+        "orchestration"
+      ]
+    },
+    {
+      "date": "2026-07-16",
+      "error_message": "cannot delete branch used by worktree / premature local cleanup while PR still OPEN after failed merge",
+      "root_cause": "Orchestrator compound command ran worktree remove + branch -D in the same command as gh pr merge, so cleanup executed even when the merge failed (conflict), destroying the builder local state early.",
+      "fix": "Sequence strictly: merge, verify state==MERGED via gh pr view, only then remove worktree and delete local branch. Remote branch preserved recovery this time.",
+      "tags": [
+        "git-worktree",
+        "merge-gate",
+        "orchestration",
+        "process"
+      ]
+    },
+    {
+      "date": "2026-07-16",
+      "error_message": "Cross-tenant data leak via permissive service-scan RLS policy USING(true) TO hive_app on agent_tasks (PR #333, caught in review pre-merge)",
+      "root_cause": "Postgres OR-combines all PERMISSIVE policies for a role+command. A blanket USING(true) SELECT policy added for a background worker cancels the tenant_isolation policy for EVERY hive_app SELECT, because Get/List filter tenant via RLS only (not in SQL WHERE). Third occurrence of this class (egress #308, RAG #232 prior).",
+      "fix": "Never add a blanket table RLS policy to the shared app role for a cross-tenant background job. Use a SECURITY DEFINER function scoped to exactly the job query, or a dedicated BYPASSRLS role/connection. Always add a regression test: a 2-tenant authenticated user still cannot Get/List another tenant row after the migration.",
+      "tags": [
+        "rls",
+        "cross-tenant",
+        "multi-tenant",
+        "postgres",
+        "permissive-policy",
+        "security",
+        "recurring"
+      ]
+    },
+    {
+      "date": "2026-07-16",
+      "error_message": "Web E2E (full stack) CI: container hive-control-plane-1 is unhealthy; air build fails: no required module provides package .../apps/agent-engine/engineapi; container exit 127 loop",
+      "root_cause": "PR #332 added agent-engine import to control-plane main.go (local go.mod replace), but deploy/docker/Dockerfile.control-plane copied only agent-engine go.mod/go.sum for cache warmup, never the source tree. Control-plane builds at container boot via air, so gap surfaced only at runtime in E2E, not in build-time images or go-tests.",
+      "fix": "Add COPY apps/agent-engine/ ./apps/agent-engine/ to Dockerfile.control-plane, matching existing pattern for control-plane/storage/audit-canonical local modules. PR #340.",
+      "tags": [
+        "ci",
+        "e2e",
+        "docker",
+        "go.work",
+        "control-plane",
+        "agent-engine",
+        "air",
+        "healthcheck"
+      ]
     }
   ]
 }
