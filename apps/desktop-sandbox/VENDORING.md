@@ -133,12 +133,29 @@ crate deliberately does not inherit the workspace's Apache-2.0
    has never been compiled with the MSVC toolchain or run. Needs
    `cargo check --target x86_64-pc-windows-msvc` plus a behavioral run in the
    lab (`win11vm`) before it is trusted, per the module's own doc comment.
-3. **`NetworkPolicy::AllowHosts` is not enforced.** Both `linux::launch` and
-   `windows::launch` reject it outright (`LaunchError::AllowHostsNotYetImplemented`)
-   rather than silently downgrading to allow-all or deny-all. The egress SSOT
-   shape (#308/#319) round-trips through `SandboxPolicy` today; wiring actual
-   enforcement (`--unshare-net` + a userspace proxy on Linux, WFP or a
-   generated Firewall rule on Windows) is blueprint Step 4.4.
+3. **`NetworkPolicy::AllowHosts` enforcement -- Linux closed, Windows still
+   codegen-only (blueprint Step 4.4, #308/#311).** `linux::launch` now
+   always `--unshare-net`s (for `AllowHosts` too, not only `DenyAll`) and
+   bind-mounts a real allowlist-enforcing proxy
+   (`egress_proxy.rs`'s `AllowlistProxy`, a CONNECT-only forward proxy on a
+   Unix socket) plus a tiny relay binary (`src/bin/hive-egress-shim.rs`,
+   `shim.rs`) that bridges that socket to a loopback `HTTP_PROXY` inside the
+   sandbox's own netns. Real, live-tested in this crate's own test suite
+   (`egress_proxy.rs`, `shim.rs`): an unlisted host gets a 403 and is never
+   dialed. Not exercised end-to-end with a real bwrap process in this
+   repo's test suite (no test here spawns real bwrap at all, for either
+   network variant -- that gap predates this pass); the proxy/relay layer
+   itself is the actual policy-enforcement point and is real.
+   `windows::launch` is unchanged: it still refuses to run at all,
+   regardless of network policy (item 1), so `AllowHosts` stays fully
+   unenforced there. `windows_plan.rs` now also computes the Windows
+   Firewall rule text for `AllowHosts` (`allow_hosts_firewall_script`,
+   deny-outbound-by-default plus a per-host `netsh advfirewall` allow
+   exception) as pure, unit-tested codegen -- explicitly not applied by
+   this crate, since there is no live Windows launch path to apply it to
+   yet. Do not treat the existence of that codegen as Windows enforcement:
+   there is none until item 1 is closed and this rule text is actually
+   wired to `netsh`/WFP and lab-verified.
 4. **Windows Job Object assignment race.** Dormant while `launch` is disabled
    (item 1), but still true of the written-but-uncalled code: the sandboxed
    child would be assigned to the Job Object immediately after `spawn()`, not
@@ -157,6 +174,24 @@ crate deliberately does not inherit the workspace's Apache-2.0
    dedicated low-privilege sandbox OS user. `codex-rs/windows-sandbox-rs`'s
    elevated-helper-user pattern (see above) is the precedent for that
    variant when it's prioritized. Moot until item 1 is wired.
+7. **`linux::launch`'s real `Command::spawn()` + `pre_exec` path is a
+   post-fork allocator-deadlock hazard, discovered this pass (#308/#311).**
+   `pre_exec`'s closure runs in a raw-`fork()`ed child (required so it can
+   run arbitrary code before `exec`); `apply_landlock_ruleset` and
+   `apply_seccomp_denylist` both allocate (`Vec`, `PathFd::new`, `format!`).
+   Allocating in a forked child of a multithreaded parent risks the classic
+   post-fork malloc deadlock (another thread can hold the allocator's lock
+   at the instant of `fork()`, and the single surviving child thread then
+   blocks on it forever) -- and because Rust's `pre_exec` machinery makes
+   the *parent's* `spawn()` block on a pipe read until the child execs or
+   reports an error, that hang propagates back to the caller too. Directly
+   observed this pass: an end-to-end `launch()` test (removed, see
+   `linux.rs`'s test module comment) hung `cargo test` for 15+ minutes in
+   this crate's own (multithreaded) test binary. Pre-existing: no test
+   before this pass ever exercised the real spawn path, so nothing
+   surfaced it earlier; it is not new in this pass, only newly visible.
+   Fix needs either an alloc-free `pre_exec` closure or moving off
+   fork+pre_exec toward a `posix_spawn`-style API -- out of scope here.
 
 ## Updating this vendor copy
 

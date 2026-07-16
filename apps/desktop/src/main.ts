@@ -1,6 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { validateServerUrl } from "./settings";
+import {
+  buildCreateRequest,
+  formatStatus,
+  isLocalTaskView,
+  packLabel,
+  PACKS,
+  type LocalTaskView,
+  type TaskPack,
+} from "./local-tasks";
 
 /** Mirrors src-tauri/src/entitlements.rs EntitlementsView. */
 interface EntitlementsView {
@@ -47,9 +56,80 @@ async function showUnreachableBannerIfNeeded(): Promise<void> {
   );
 }
 
+/**
+ * Blueprint Step 4.4 (#308/#311): the "start a task, local or server"
+ * prompt lives on this first-party page, not inside the remote
+ * agent-console webview -- see local-tasks.ts's module doc for why (this
+ * page already has ordinary Tauri IPC; the remote page's capability
+ * intentionally has none, per PR #337's capabilities/default.json note).
+ * "Server" is deliberately not a Tauri command: it just navigates to the
+ * existing, unmodified agent-console task flow (D8's server-task-syncs
+ * half), which already works today.
+ */
+function renderLocalTasks(tasks: LocalTaskView[]): void {
+  const list = byId<HTMLUListElement>("local-task-list");
+  list.replaceChildren(
+    ...tasks.map((task) => {
+      const item = document.createElement("li");
+      item.textContent = `[${formatStatus(task.status)}] ${packLabel(task.pack)}: ${task.instructions || "(no instructions)"}`;
+      return item;
+    }),
+  );
+}
+
+async function refreshLocalTasks(): Promise<void> {
+  const tasks = await invoke<unknown[]>("list_local_tasks");
+  renderLocalTasks(tasks.filter(isLocalTaskView));
+}
+
+function initLocalTasks(): void {
+  const packSelect = byId<HTMLSelectElement>("local-task-pack");
+  for (const { value, label } of PACKS) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    packSelect.appendChild(option);
+  }
+
+  const form = byId<HTMLFormElement>("local-task-form");
+  const instructions = byId<HTMLTextAreaElement>("local-task-instructions");
+
+  const localTaskError = byId<HTMLParagraphElement>("local-task-error");
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    localTaskError.hidden = true;
+    localTaskError.textContent = "";
+    const request = buildCreateRequest(packSelect.value as TaskPack, instructions.value);
+    try {
+      await invoke("create_local_task", { ...request });
+      instructions.value = "";
+      await refreshLocalTasks();
+    } catch (err) {
+      // create_local_task can reject before state.create() ever runs
+      // (e.g. the workspace directory couldn't be created), in which case
+      // no task entry exists for refreshLocalTasks() to show as "Failed" --
+      // show the error directly so a rejection is never silent, then still
+      // refresh in case a task was recorded after all.
+      localTaskError.textContent =
+        typeof err === "string" ? err : "Could not start local task.";
+      localTaskError.hidden = false;
+      await refreshLocalTasks().catch(() => {
+        // Non-fatal: worst case the list just doesn't update this time.
+      });
+    }
+  });
+
+  refreshLocalTasks().catch(() => {
+    // Non-fatal: worst case the list just starts empty.
+  });
+}
+
 function init(): void {
   const form = byId<HTMLFormElement>("server-form");
   const input = byId<HTMLInputElement>("server-url");
+
+  initLocalTasks();
 
   showUnreachableBannerIfNeeded().catch(() => {
     // Non-fatal: worst case the form just shows no banner.

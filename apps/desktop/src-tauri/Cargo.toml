@@ -34,6 +34,14 @@ futures-util = "0.3"
 # rustls::crypto::ring::default_provider().install_default() once at
 # startup, before entitlements::build_client ever runs.
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Blueprint Step 4.4 (#308/#311): local (desktop-side, never-synced) task
+# execution under the platform-native sandbox. Path dependency on a sibling
+# app's crate, not a shared workspace member (apps/desktop-sandbox has its
+# own, separate Cargo workspace with its own pinned toolchain) -- Cargo
+# supports this directly; hive-desktop-sandbox resolves its own
+# `workspace = true` fields against apps/desktop-sandbox/Cargo.toml
+# regardless of which crate depends on it.
+hive-desktop-sandbox = { path = "../../desktop-sandbox/hive-desktop-sandbox" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

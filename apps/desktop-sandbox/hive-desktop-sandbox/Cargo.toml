@@ -11,6 +11,15 @@ name = "hive_desktop_sandbox"
 path = "src/lib.rs"
 doctest = false
 
+# src/bin/hive-egress-shim.rs is auto-discovered by Cargo's default
+# `autobins`. Runs inside the sandbox for a NetworkPolicy::AllowHosts
+# launch; see that file's module doc. Its real logic is
+# `#[cfg(target_os = "linux")]`-gated internally (matching egress_proxy.rs
+# and shim.rs), with a no-op stub on other platforms so this bin target
+# still compiles as part of `cargo clippy --all-targets` cross-checked to
+# Windows (VENDORING.md's verification step) without needing any
+# target-conditional [[bin]] table (Cargo has none).
+
 [lints]
 workspace = true
 
@@ -21,6 +30,10 @@ codex-process-hardening = { path = "../codex-process-hardening" }
 landlock = { workspace = true }
 seccompiler = { workspace = true }
 libc = { workspace = true }
+# Real (not dev-only) dependency here: linux::launch creates a per-launch
+# temp directory to hold the egress_proxy.rs Unix socket for a real
+# AllowHosts task, not just in tests.
+tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 # Restricted token + directory ACL + Job Object only. Windows Firewall

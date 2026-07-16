@@ -15,7 +15,11 @@ pub mod policy;
 pub mod windows_plan;
 
 #[cfg(target_os = "linux")]
+pub mod egress_proxy;
+#[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "linux")]
+pub mod shim;
 #[cfg(windows)]
 mod windows;
 
@@ -34,9 +38,16 @@ use std::process::Child;
 /// [`SandboxPolicy`].
 #[derive(Debug)]
 pub enum LaunchError {
-    /// The policy requested [`NetworkPolicy::AllowHosts`], which this crate
-    /// does not enforce yet (see VENDORING.md "Open risks"). Reject rather
-    /// than silently launching with full network access or full denial.
+    /// Windows-only now (blueprint Step 4.4, #308/#311, closed the Linux
+    /// side): the policy requested [`NetworkPolicy::AllowHosts`], which
+    /// `windows::launch` does not enforce (see VENDORING.md "Open risks" --
+    /// `windows::launch` refuses to run at all today regardless of network
+    /// policy, so this variant is effectively unreachable there too, but
+    /// kept as the more specific error for when the Windows launch path is
+    /// eventually re-enabled). `linux::launch` no longer returns this: a
+    /// real allowlist-enforcing proxy (`egress_proxy.rs`) backs
+    /// `AllowHosts` there. Reject rather than silently launching with full
+    /// network access or full denial.
     AllowHostsNotYetImplemented,
     /// Spawning the sandboxed process failed.
     Io(std::io::Error),
