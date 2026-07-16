@@ -318,6 +318,28 @@ services:
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
 
+  # Blueprint Step 3.1 (#311, #305) — standalone agent console sidecar.
+  # Ratified 2026-07-16: extends nothing in Open WebUI; OWUI stays a pinned
+  # upstream image. Reached only through caddy-owui's /agent-workspace/*
+  # route (Caddyfile.owui) alongside OWUI on port 3003 -- no direct host
+  # port here, same posture as open-webui below.
+  agent-console:
+    image: hive-agent-console:ci
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.agent-console
+    profiles:
+      - chat
+      - enterprise
+    depends_on:
+      edge-api:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      EDGE_API_INTERNAL_BASE_URL: http://edge-api:8080
+      NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-http://localhost:8080}
+
   # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge and cloud chat users.
   # Profiles:
   #   local      - developer laptop with in-stack redis.

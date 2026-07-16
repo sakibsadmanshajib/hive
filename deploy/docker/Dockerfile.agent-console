@@ -1,0 +1,15 @@
+# Mirrors deploy/docker/Dockerfile.web-console: plain Node dev-server image,
+# not a Cloudflare Workers build. Ships in the chat/enterprise compose
+# profiles only (see docker-compose.yml's agent-console service).
+FROM node:22-slim
+
+WORKDIR /app/apps/agent-console
+
+COPY apps/agent-console/package.json apps/agent-console/package-lock.json* ./
+RUN npm install
+
+COPY apps/agent-console/ ./
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev", "--", "--hostname", "0.0.0.0", "--port", "3000"]

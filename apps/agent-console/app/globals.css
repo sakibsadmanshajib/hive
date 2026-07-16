@@ -1,0 +1,6 @@
+@import "tailwindcss";
+
+/* ponytail: plain Tailwind palette, no custom design-system theme. This is
+   a utility sidecar opened in its own tab, not a branded surface -- add
+   Hive's @theme tokens (see apps/web-console/app/globals.css) if/when this
+   app needs visual parity with the console. */
