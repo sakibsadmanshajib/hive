@@ -9,6 +9,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/apikeys"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/budgets"
@@ -113,6 +114,13 @@ type RouterConfig struct {
 	// and the shared-secret-guarded read surface at /internal/marketplace/
 	// that apps/agent-engine consumes. When nil neither route is registered.
 	MarketplaceHandler *marketplace.Handler
+
+	// AgentTaskHandler serves agent task persistence (issue #311, agent-
+	// subsystem blueprint Step 3.4): the shared-secret-guarded
+	// service-to-service surface at /internal/agent-tasks/ that edge-api's
+	// customer-facing /v1/agent/tasks routes call into. When nil the route
+	// is not registered.
+	AgentTaskHandler *agenttask.Handler
 }
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
@@ -318,6 +326,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 			mux.Handle("/api/v1/admin/marketplace", adminMarketplace)
 			mux.Handle("/api/v1/admin/marketplace/", adminMarketplace)
 		}
+	}
+
+	// Issue #311 (blueprint Step 3.4) — agent task persistence, web side.
+	// Service-to-service only: edge-api's /v1/agent/tasks routes are the
+	// customer-facing surface, this is the internal store they call into.
+	if cfg.AgentTaskHandler != nil {
+		mux.Handle("/internal/agent-tasks/", internal(cfg.AgentTaskHandler.InternalMux()))
 	}
 
 	// Wrap the mux with Prometheus HTTP instrumentation if a metrics registry is provided.

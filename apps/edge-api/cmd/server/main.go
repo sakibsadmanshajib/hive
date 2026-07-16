@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/docs"
+	edgeagenttask "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/agenttask"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/audio"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
@@ -279,6 +280,23 @@ func main() {
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)
 		mux.Handle("/v1/rag/", ragMW(ragMux))
+	}
+
+	// Agent task lifecycle routes (#311, agent-subsystem blueprint Step 3.4):
+	// always registered behind FeatureCowork so the gate returns 403 (not
+	// 404) regardless of whether control-plane's agent-task store is
+	// reachable. Persistence lives in control-plane
+	// (apps/control-plane/internal/agenttask); this is the customer-facing
+	// auth boundary and wire-shape translator that calls into it, mirroring
+	// the RAG block above.
+	{
+		agentTaskClient := edgeagenttask.NewClient(resolveControlPlaneBaseURL())
+		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient)
+		agentTaskMW := featureGate.Require(featuregate.FeatureCowork)
+		agentTaskMux := http.NewServeMux()
+		agentTaskHandler.Register(agentTaskMux)
+		mux.Handle("/v1/agent/tasks", agentTaskMW(agentTaskMux))
+		mux.Handle("/v1/agent/tasks/", agentTaskMW(agentTaskMux))
 	}
 
 	// API routes
