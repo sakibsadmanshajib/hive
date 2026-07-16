@@ -17,6 +17,7 @@
 //! which blocks unprivileged bubblewrap's `--unshare-user`. See
 //! `assets/apparmor/hive-bwrap-userns` and its install doc in `README.md`.
 
+use crate::egress_proxy::AllowlistProxy;
 use crate::policy::NetworkPolicy;
 use crate::{LaunchError, SandboxPolicy};
 use landlock::{
@@ -28,6 +29,83 @@ use std::convert::TryInto;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
+
+/// Bind-mount sources for a [`NetworkPolicy::AllowHosts`] launch: the
+/// [`AllowlistProxy`]'s Unix socket and the `hive-egress-shim` binary, both
+/// bind-mounted source-path-equals-destination-path (see
+/// [`build_bwrap_argv`]'s doc comment on why that convention matters for
+/// Landlock rule portability). Constructing one always starts a real proxy
+/// (see [`setup_egress`]) -- there is no variant that carries an allowlist
+/// without a live enforcement point behind it.
+struct EgressBind {
+    socket_path: PathBuf,
+    shim_path: PathBuf,
+}
+
+impl EgressBind {
+    /// The wrapped command bwrap should actually exec: the shim binary
+    /// first (argv-safe -- never a shell string), which bridges the
+    /// bind-mounted socket to a loopback HTTP_PROXY inside the sandbox's
+    /// own netns before exec'ing into `real_command`. See
+    /// `src/bin/hive-egress-shim.rs`'s module doc for the exact contract.
+    fn wrap_command(&self, real_command: &[String]) -> Vec<String> {
+        let mut wrapped = vec![
+            self.shim_path.to_string_lossy().into_owned(),
+            self.socket_path.to_string_lossy().into_owned(),
+            "--".to_string(),
+        ];
+        wrapped.extend(real_command.iter().cloned());
+        wrapped
+    }
+}
+
+/// Starts the host-side [`AllowlistProxy`] for `hosts` and resolves the
+/// `hive-egress-shim` binary's location. The proxy is intentionally leaked
+/// for the sandboxed process's lifetime (see
+/// [`AllowlistProxy::leak_for_process_lifetime`]'s doc comment): the temp
+/// directory holding its socket is leaked alongside it for the same
+/// reason, rather than being cleaned up as soon as this function returns.
+fn setup_egress(hosts: &[String]) -> Result<EgressBind, LaunchError> {
+    let dir = tempfile::Builder::new()
+        .prefix("hive-egress-")
+        .tempdir()
+        .map_err(|e| LaunchError::Confinement(format!("egress temp dir: {e}")))?;
+    let socket_path = dir.path().join("egress.sock");
+    // ponytail: leaked alongside the proxy below -- see
+    // AllowlistProxy::leak_for_process_lifetime's doc comment for why a
+    // real per-task teardown is follow-up work, not this crate's job.
+    std::mem::forget(dir);
+
+    let proxy = AllowlistProxy::spawn(&socket_path, hosts.to_vec())
+        .map_err(|e| LaunchError::Confinement(format!("egress proxy: {e}")))?;
+    proxy.leak_for_process_lifetime();
+
+    Ok(EgressBind {
+        socket_path,
+        shim_path: locate_egress_shim_binary(),
+    })
+}
+
+/// Locates the bundled `hive-egress-shim` binary, mirroring
+/// [`locate_bwrap_binary`]'s exact search order (env override, then bundled
+/// next to the running executable, then `PATH`).
+fn locate_egress_shim_binary() -> PathBuf {
+    if let Ok(path) = std::env::var("HIVE_EGRESS_SHIM_PATH") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return path;
+        }
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let bundled = dir.join("hive-egress-shim");
+        if bundled.is_file() {
+            return bundled;
+        }
+    }
+    PathBuf::from("hive-egress-shim")
+}
 
 /// Syscalls denied unconditionally for every sandboxed task, on top of
 /// bubblewrap's own namespace isolation. None of these are needed by
@@ -48,12 +126,21 @@ pub(crate) fn launch(
     command: &[String],
     cwd: &Path,
 ) -> Result<Child, LaunchError> {
-    if matches!(policy.network(), NetworkPolicy::AllowHosts(_)) {
-        return Err(LaunchError::AllowHostsNotYetImplemented);
-    }
+    let egress = match policy.network() {
+        NetworkPolicy::DenyAll => None,
+        NetworkPolicy::AllowHosts(hosts) => Some(setup_egress(hosts)?),
+    };
+    let wrapped_command = match &egress {
+        Some(bind) => bind.wrap_command(command),
+        None => command.to_vec(),
+    };
+    let extra_landlock_paths: Vec<PathBuf> = match &egress {
+        Some(bind) => vec![bind.socket_path.clone(), bind.shim_path.clone()],
+        None => Vec::new(),
+    };
 
     let bwrap_path = locate_bwrap_binary();
-    let argv = build_bwrap_argv(policy, command, cwd);
+    let argv = build_bwrap_argv(policy, &wrapped_command, cwd, egress.as_ref());
     let policy_for_child = policy.clone();
 
     let mut cmd = Command::new(bwrap_path);
@@ -65,7 +152,7 @@ pub(crate) fn launch(
     unsafe {
         cmd.pre_exec(move || {
             codex_process_hardening::pre_main_hardening();
-            apply_landlock_ruleset(&policy_for_child)
+            apply_landlock_ruleset(&policy_for_child, &extra_landlock_paths)
                 .map_err(|err| std::io::Error::other(format!("landlock: {err}")))?;
             apply_seccomp_denylist()
                 .map_err(|err| std::io::Error::other(format!("seccomp: {err}")))?;
@@ -98,22 +185,41 @@ fn locate_bwrap_binary() -> PathBuf {
     PathBuf::from("bwrap")
 }
 
-fn build_bwrap_argv(policy: &SandboxPolicy, command: &[String], cwd: &Path) -> Vec<String> {
+/// Builds bwrap's argv. Every bind mount uses the same source-path-equals-
+/// destination-path convention (`--bind SRC SRC`, never `--bind SRC DST`
+/// with `SRC != DST`): Landlock rules (`apply_landlock_ruleset`) are
+/// attached to the *object* a path resolves to at rule-creation time, on
+/// the host's own mount namespace, before bwrap's `pre_exec`-applied
+/// ruleset is inherited across its later `execve` into the sandboxed
+/// command. Keeping the in-sandbox path identical to the host path avoids
+/// ever needing to reason about whether a Landlock rule survives being
+/// exposed at a *different* path after a bind mount -- it never has to.
+///
+/// `egress` is `Some` only for a [`NetworkPolicy::AllowHosts`] launch: it
+/// always unshares the network namespace (previously only `DenyAll` did --
+/// AllowHosts used to leave the host network namespace fully shared, which
+/// this closes) and additionally bind-mounts the [`EgressBind`]'s socket
+/// (read-write: the sandboxed command's `hive-egress-shim` needs to both
+/// read and write it as a normal client socket) and shim binary
+/// (`--ro-bind`: the sandboxed side never needs to write its own relay).
+fn build_bwrap_argv(
+    policy: &SandboxPolicy,
+    command: &[String],
+    cwd: &Path,
+    egress: Option<&EgressBind>,
+) -> Vec<String> {
     let mut argv: Vec<String> = vec![
         "--unshare-user".to_string(),
         "--unshare-pid".to_string(),
         "--unshare-ipc".to_string(),
         "--unshare-uts".to_string(),
+        "--unshare-net".to_string(),
         "--die-with-parent".to_string(),
         "--proc".to_string(),
         "/proc".to_string(),
         "--dev".to_string(),
         "/dev".to_string(),
     ];
-
-    if matches!(policy.network(), NetworkPolicy::DenyAll) {
-        argv.push("--unshare-net".to_string());
-    }
 
     // Hook/config dir first so a caller-supplied readonly root can never
     // shadow it: bwrap applies bind rules in argv order and the last rule
@@ -132,6 +238,18 @@ fn build_bwrap_argv(policy: &SandboxPolicy, command: &[String], cwd: &Path) -> V
         argv.push(path_str);
     }
 
+    if let Some(bind) = egress {
+        let shim_str = bind.shim_path.to_string_lossy().into_owned();
+        argv.push("--ro-bind".to_string());
+        argv.push(shim_str.clone());
+        argv.push(shim_str);
+
+        let socket_str = bind.socket_path.to_string_lossy().into_owned();
+        argv.push("--bind".to_string());
+        argv.push(socket_str.clone());
+        argv.push(socket_str);
+    }
+
     argv.push("--chdir".to_string());
     argv.push(cwd.to_string_lossy().into_owned());
     argv.push("--".to_string());
@@ -145,7 +263,19 @@ fn read_only_paths(policy: &SandboxPolicy) -> impl Iterator<Item = &Path> {
         .chain(policy.readonly_roots().iter().map(PathBuf::as_path))
 }
 
-fn apply_landlock_ruleset(policy: &SandboxPolicy) -> Result<(), String> {
+/// `extra_full_access` grants the same (full) access level as
+/// `policy.writable_roots()` -- used for the egress socket and shim binary
+/// paths on an `AllowHosts` launch (see [`setup_egress`]). These are not
+/// part of the confinement boundary the rest of this ruleset protects (no
+/// data the sandboxed process shouldn't see or corrupt lives behind them):
+/// the actual write protection for the shim binary is bwrap's `--ro-bind`
+/// mount flag in [`build_bwrap_argv`], a stronger guarantee than Landlock
+/// could add on top since it applies inside the sandbox's own mount
+/// namespace, not just to the host-side process this ruleset restricts.
+fn apply_landlock_ruleset(
+    policy: &SandboxPolicy,
+    extra_full_access: &[PathBuf],
+) -> Result<(), String> {
     let abi = ABI::V5;
     let access_all = AccessFs::from_all(abi);
     let access_read = AccessFs::from_read(abi);
@@ -169,7 +299,11 @@ fn apply_landlock_ruleset(policy: &SandboxPolicy) -> Result<(), String> {
             .map_err(|err| format!("{err:?}"))?;
     }
 
-    for path in policy.writable_roots() {
+    for path in policy
+        .writable_roots()
+        .iter()
+        .chain(extra_full_access.iter())
+    {
         let fd = PathFd::new(path).map_err(|err| format!("open {}: {err:?}", path.display()))?;
         ruleset = ruleset
             .add_rule(PathBeneath::new(fd, access_all))
@@ -221,7 +355,7 @@ mod tests {
     fn hook_config_dir_is_always_ro_bound_ahead_of_readonly_roots() {
         let hook = PathBuf::from("/home/agent/.hive/hooks");
         let p = policy(vec![], vec![PathBuf::from("/usr")], hook.clone());
-        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"));
+        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), None);
 
         let hook_str = hook.to_string_lossy().into_owned();
         let hook_idx = argv
@@ -241,7 +375,29 @@ mod tests {
     #[test]
     fn deny_all_network_adds_unshare_net() {
         let p = policy(vec![], vec![], PathBuf::from("/home/agent/.hive/hooks"));
-        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"));
+        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), None);
+        assert!(argv.contains(&"--unshare-net".to_string()));
+    }
+
+    #[test]
+    fn allow_hosts_also_unshares_net_now_that_the_egress_proxy_gates_it() {
+        // Previously AllowHosts left the host network namespace fully
+        // shared (dead code, since launch() rejected it outright). Now
+        // that a real proxy enforces the allowlist, the sandbox gets no
+        // network route except the bind-mounted socket, exactly like
+        // DenyAll -- see build_bwrap_argv's doc comment.
+        let p = SandboxPolicy::build(
+            vec![],
+            vec![],
+            PathBuf::from("/home/agent/.hive/hooks"),
+            NetworkPolicy::AllowHosts(vec!["example.com".to_string()]),
+        )
+        .expect("valid policy");
+        let bind = EgressBind {
+            socket_path: PathBuf::from("/tmp/hive-egress-test/egress.sock"),
+            shim_path: PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
+        };
+        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), Some(&bind));
         assert!(argv.contains(&"--unshare-net".to_string()));
     }
 
@@ -253,7 +409,7 @@ mod tests {
             vec![],
             PathBuf::from("/home/agent/.hive/hooks"),
         );
-        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"));
+        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), None);
 
         let workspace_str = workspace.to_string_lossy().into_owned();
         assert!(
@@ -274,6 +430,7 @@ mod tests {
             &p,
             &["echo".to_string(), "hi".to_string()],
             Path::new("/tmp"),
+            None,
         );
         let sep = argv
             .iter()
@@ -283,19 +440,85 @@ mod tests {
     }
 
     #[test]
-    fn allow_hosts_policy_is_rejected_at_launch_not_silently_downgraded() {
-        let p = SandboxPolicy::build(
-            vec![],
-            vec![],
-            PathBuf::from("/home/agent/.hive/hooks"),
-            NetworkPolicy::AllowHosts(vec!["example.com".to_string()]),
-        )
-        .expect("shape is constructible");
+    fn egress_bind_adds_ro_bind_shim_and_bind_socket() {
+        let p = policy(vec![], vec![], PathBuf::from("/home/agent/.hive/hooks"));
+        let bind = EgressBind {
+            socket_path: PathBuf::from("/tmp/hive-egress-test/egress.sock"),
+            shim_path: PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
+        };
+        let argv = build_bwrap_argv(&p, &["true".to_string()], Path::new("/tmp"), Some(&bind));
 
-        let err = launch(&p, &["true".to_string()], Path::new("/tmp"))
-            .expect_err("AllowHosts must not launch silently");
-        assert!(matches!(err, LaunchError::AllowHostsNotYetImplemented));
+        let shim_str = bind.shim_path.to_string_lossy().into_owned();
+        let socket_str = bind.socket_path.to_string_lossy().into_owned();
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--ro-bind" && w[1] == shim_str),
+            "shim binary must be ro-bound: {argv:?}"
+        );
+        assert!(
+            argv.windows(2)
+                .any(|w| w[0] == "--bind" && w[1] == socket_str),
+            "egress socket must be bound read-write: {argv:?}"
+        );
+        assert!(
+            !argv
+                .windows(2)
+                .any(|w| w[0] == "--ro-bind" && w[1] == socket_str),
+            "egress socket must not be ro-bound: {argv:?}"
+        );
     }
+
+    #[test]
+    fn egress_bind_wraps_command_with_shim_and_separator() {
+        let bind = EgressBind {
+            socket_path: PathBuf::from("/tmp/hive-egress-test/egress.sock"),
+            shim_path: PathBuf::from("/tmp/hive-egress-test/hive-egress-shim"),
+        };
+        let real_command = vec!["echo".to_string(), "hi".to_string()];
+        let wrapped = bind.wrap_command(&real_command);
+
+        assert_eq!(
+            wrapped,
+            vec![
+                "/tmp/hive-egress-test/hive-egress-shim".to_string(),
+                "/tmp/hive-egress-test/egress.sock".to_string(),
+                "--".to_string(),
+                "echo".to_string(),
+                "hi".to_string(),
+            ]
+        );
+    }
+
+    // No test here calls the real launch() end to end (i.e. all the way
+    // through Command::spawn()'s pre_exec) -- and that is deliberate, not
+    // an oversight. This crate's own test binary is multithreaded (many
+    // concurrent #[test] functions, plus AllowlistProxy's own leaked
+    // accept-loop threads from earlier tests); pre_exec's closure runs in
+    // the forked child via a raw fork() (required so pre_exec can run
+    // arbitrary code before exec), and `apply_landlock_ruleset` /
+    // `apply_seccomp_denylist` both allocate (Vec, PathFd::new, format!).
+    // Allocating in a fork()ed child of a multithreaded process is a
+    // textbook post-fork deadlock hazard: if another thread held the
+    // allocator's lock at the instant of fork, the single surviving child
+    // thread can block on malloc forever, and because Rust's pre_exec
+    // machinery has the parent's spawn() block on a pipe read until the
+    // child either execs or reports an error, THAT hangs too -- observed
+    // directly in this session (a first attempt at an end-to-end launch()
+    // test hung `cargo test` for 15+ minutes; `timeout` plus
+    // `--test-threads=1` plus reading `/proc/<pid>/task/*/comm` confirmed
+    // it was blocked inside the forked child, not anywhere in this crate's
+    // own logic). Fixing pre_exec to be genuinely alloc-free (or moving off
+    // fork+pre_exec entirely, e.g. toward `posix_spawn`-style APIs) is a
+    // real, pre-existing gap this discovery surfaced -- out of scope for
+    // this pass; tracked as a VENDORING.md open risk. Argv construction
+    // (`egress_bind_adds_ro_bind_shim_and_bind_socket`,
+    // `egress_bind_wraps_command_with_shim_and_separator`,
+    // `allow_hosts_also_unshares_net_now_that_the_egress_proxy_gates_it`
+    // above) and the actual enforcement point (`egress_proxy.rs`'s own
+    // tests, which never fork) are both real and tested; only the
+    // OS-process-spawn plumbing in between is untested here, matching this
+    // crate's pre-existing posture (no test before this pass exercised
+    // launch()'s real spawn path either).
 
     // ponytail: calls Ruleset::restrict_self, a one-way, per-thread kernel
     // restriction (like seccomp, Landlock confines the calling thread, not
@@ -315,7 +538,7 @@ mod tests {
             hooks.path().to_path_buf(),
         );
 
-        match apply_landlock_ruleset(&p) {
+        match apply_landlock_ruleset(&p, &[]) {
             Ok(()) => {
                 // CompatLevel::HardRequirement means Ok(()) here only
                 // happens when the kernel actually enforced the ruleset.

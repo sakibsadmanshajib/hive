@@ -36,25 +36,69 @@ pub struct WindowsConfinementPlan {
     /// closes is still required so no sandboxed process outlives its
     /// workspace/ACL lifetime.
     pub job_object_kill_on_close: bool,
-    /// `true` for [`NetworkPolicy::DenyAll`]. This is a signal for
-    /// blueprint Step 4.4 ("desktop firewall and task portability"), which
-    /// owns generating the actual Windows Firewall rule from the egress
-    /// SSOT (#308/#319); this crate computes the intent but does not call
-    /// the Firewall API itself. The launch path rejects
-    /// [`NetworkPolicy::AllowHosts`] outright (see `windows.rs::launch`)
-    /// rather than expressing "no rule yet" as a silent allow-all.
+    /// `true` for both [`NetworkPolicy`] variants: a Windows Firewall
+    /// deny-outbound-by-default rule, with [`firewall_allow_outbound_hosts`]
+    /// carrying the per-host exceptions for `AllowHosts`. Blueprint Step
+    /// 4.4 (#308/#311) computes this plan and the rule text
+    /// ([`allow_hosts_firewall_script`]) but does not call the Firewall API
+    /// -- `windows::launch` refuses to run at all regardless of network
+    /// policy (see its module doc), so nothing here is ever actually
+    /// applied on a real Windows host today. Marked explicitly untrusted:
+    /// this is codegen only, verified by pure unit tests on Linux CI, never
+    /// exercised against the real `netsh`/WFP surface.
+    ///
+    /// [`firewall_allow_outbound_hosts`]: WindowsConfinementPlan::firewall_allow_outbound_hosts
     pub firewall_deny_outbound: bool,
+
+    /// Per-host outbound allow exceptions for [`NetworkPolicy::AllowHosts`],
+    /// layered on top of `firewall_deny_outbound`. Empty for
+    /// [`NetworkPolicy::DenyAll`] (nothing to allow).
+    pub firewall_allow_outbound_hosts: Vec<String>,
 }
 
 impl WindowsConfinementPlan {
     pub fn for_policy(policy: &SandboxPolicy) -> Self {
+        let firewall_allow_outbound_hosts = match policy.network() {
+            NetworkPolicy::DenyAll => Vec::new(),
+            NetworkPolicy::AllowHosts(hosts) => hosts.clone(),
+        };
         Self {
             acl_deny_write_parent_dir: parent_dir(policy.hook_config_dir()),
             protect_dacl_from_inheritance: true,
             job_object_kill_on_close: true,
-            firewall_deny_outbound: matches!(policy.network(), NetworkPolicy::DenyAll),
+            firewall_deny_outbound: true,
+            firewall_allow_outbound_hosts,
         }
     }
+}
+
+/// Rule-name prefix for every generated rule, so a caller (or a human
+/// reading `netsh advfirewall firewall show rule name=all`) can find and
+/// remove every rule this crate ever generated for one task by prefix.
+const RULE_NAME_PREFIX: &str = "Hive-Sandbox";
+
+/// Generates the `netsh advfirewall` command lines implementing `plan`:
+/// one deny-outbound rule first, then one allow-outbound rule per host in
+/// `firewall_allow_outbound_hosts`. Pure text generation -- see the module
+/// doc and `firewall_deny_outbound`'s doc comment for why this is never
+/// applied by this crate. `task_id` scopes the rule names so concurrent
+/// sandboxed tasks (if this is ever wired to run more than one at a time)
+/// don't collide or shadow each other's rules.
+pub fn allow_hosts_firewall_script(plan: &WindowsConfinementPlan, task_id: &str) -> Vec<String> {
+    let mut lines = Vec::with_capacity(1 + plan.firewall_allow_outbound_hosts.len());
+    if plan.firewall_deny_outbound {
+        lines.push(format!(
+            "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-deny\" \
+             dir=out action=block enable=yes"
+        ));
+    }
+    for host in &plan.firewall_allow_outbound_hosts {
+        lines.push(format!(
+            "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-allow-{host}\" \
+             dir=out action=allow remoteip={host} enable=yes"
+        ));
+    }
+    lines
 }
 
 /// Computes the parent of a Windows-style path using explicit `\`/`/`
@@ -147,7 +191,71 @@ mod tests {
         )
         .expect("valid policy");
 
-        assert!(WindowsConfinementPlan::for_policy(&policy).firewall_deny_outbound);
+        let plan = WindowsConfinementPlan::for_policy(&policy);
+        assert!(plan.firewall_deny_outbound);
+        assert!(
+            plan.firewall_allow_outbound_hosts.is_empty(),
+            "DenyAll must not carry any allow exceptions"
+        );
+    }
+
+    #[test]
+    fn plan_requests_deny_outbound_and_per_host_exceptions_for_allow_hosts_network() {
+        let policy = SandboxPolicy::build(
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
+            NetworkPolicy::AllowHosts(vec!["api.openrouter.ai".to_string()]),
+        )
+        .expect("valid policy");
+
+        let plan = WindowsConfinementPlan::for_policy(&policy);
+        // Blueprint Step 4.4 (#308/#311): deny-outbound-by-default now
+        // applies to AllowHosts too, not just DenyAll -- the exceptions
+        // below are what makes it an *allow*list rather than a full block.
+        assert!(plan.firewall_deny_outbound);
+        assert_eq!(
+            plan.firewall_allow_outbound_hosts,
+            vec!["api.openrouter.ai".to_string()]
+        );
+    }
+
+    #[test]
+    fn allow_hosts_firewall_script_orders_deny_rule_before_allow_exceptions() {
+        let policy = SandboxPolicy::build(
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
+            NetworkPolicy::AllowHosts(vec![
+                "api.openrouter.ai".to_string(),
+                "example.com".to_string(),
+            ]),
+        )
+        .expect("valid policy");
+        let plan = WindowsConfinementPlan::for_policy(&policy);
+
+        let lines = allow_hosts_firewall_script(&plan, "task-123");
+        assert_eq!(lines.len(), 3, "one deny rule plus one allow rule per host");
+        assert!(lines[0].contains("action=block"));
+        assert!(lines[0].contains("task-123"));
+        assert!(lines[1].contains("action=allow") && lines[1].contains("api.openrouter.ai"));
+        assert!(lines[2].contains("action=allow") && lines[2].contains("example.com"));
+    }
+
+    #[test]
+    fn allow_hosts_firewall_script_for_deny_all_is_just_the_deny_rule() {
+        let policy = SandboxPolicy::build(
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
+            NetworkPolicy::DenyAll,
+        )
+        .expect("valid policy");
+        let plan = WindowsConfinementPlan::for_policy(&policy);
+
+        let lines = allow_hosts_firewall_script(&plan, "task-456");
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("action=block"));
     }
 
     #[test]
