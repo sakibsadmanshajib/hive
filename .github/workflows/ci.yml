@@ -50,6 +50,29 @@ jobs:
   go-tests:
     name: Go tests (${{ matrix.module }})
     runs-on: ubuntu-latest
+    # Ephemeral Postgres for HIVE_TEST_DB_URL-gated RLS suites (issue #311
+    # follow-up). Version pin: no supabase/config.toml or other in-repo
+    # pin exists, so this tracks Supabase's current default managed
+    # Postgres major (17) as the closest available reference — bump this
+    # tag if that default changes. pgvector/pgvector (not the plain
+    # postgres image) because 20260625_01_enable_pgvector.sql needs the
+    # vector extension pre-built; the image is otherwise a drop-in
+    # postgres. Runs for every matrix leg (services: is job-level, not
+    # matrix-scoped in GitHub Actions) but only control-plane/edge-api
+    # actually use it below.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: hive_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
     strategy:
       fail-fast: false
       matrix:
@@ -81,6 +104,55 @@ jobs:
       - name: go test
         working-directory: ${{ matrix.path }}
         run: go test -count=1 -short -race -timeout 5m ./...
+
+      # ------------------------------------------------------------------
+      # Bootstrap the ephemeral Postgres above with the real schema
+      # (supabase/migrations/, applied in order) plus a CI-only stand-in
+      # for the Supabase-managed objects (roles, auth schema) those
+      # migrations assume already exist on a real project. Only
+      # control-plane and edge-api have HIVE_TEST_DB_URL-gated RLS suites;
+      # the other two matrix legs skip this and the step below.
+      #
+      # Verified locally against a scratch pgvector/pgvector:pg17
+      # container before wiring this in: the full migration chain applies
+      # and every suite below passes for real, not skipped.
+      # ------------------------------------------------------------------
+
+      - name: Bootstrap live Postgres schema (control-plane, edge-api only)
+        if: matrix.module == 'control-plane' || matrix.module == 'edge-api'
+        run: |
+          set -euo pipefail
+          dsn="postgresql://postgres:postgres@127.0.0.1:5432/hive_test?sslmode=disable"
+          psql "$dsn" -v ON_ERROR_STOP=1 -f .github/ci/test-db-bootstrap.sql
+          for f in supabase/migrations/*.sql; do
+            name=$(basename "$f")
+            # Pre-existing migration-ordering defect, tracked separately
+            # (not fixed here — CI wiring only, no product-code changes):
+            # 20260516_04_phase19_audit_log.sql and this later file both
+            # create a table named public.audit_cold_archive_manifest with
+            # different column shapes. CREATE TABLE IF NOT EXISTS here
+            # silently no-ops against the earlier (stale) shape on any
+            # from-scratch replay, so a later ALTER in this same file then
+            # fails against columns that don't exist. This drop is CI-only,
+            # against this run's throwaway database, never a real
+            # environment, and only unblocks this ephemeral replay.
+            if [ "$name" = "20260625_06_audit_cold_archive_manifest.sql" ]; then
+              psql "$dsn" -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS public.audit_cold_archive_manifest CASCADE;"
+            fi
+            psql "$dsn" -v ON_ERROR_STOP=1 -f "$f"
+          done
+          echo "HIVE_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
+
+      - name: go test — RLS suites against live Postgres (control-plane, edge-api only)
+        if: matrix.module == 'control-plane' || matrix.module == 'edge-api'
+        working-directory: ${{ matrix.path }}
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.module }}" = "control-plane" ]; then
+            go test -count=1 -v ./internal/agenttask/... ./internal/egress/... ./internal/rag/...
+          else
+            go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
+          fi
 
   # ------------------------------------------------------------------
   # Rust tests — desktop sandbox backends (issue #306). Toolchain version
