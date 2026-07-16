@@ -1,16 +1,40 @@
 // Package sandbox constructs the Apptainer rootless launch command for a
 // coding-pack or knowledge-work-pack agent-engine session (issue #305/#308).
-// Every invocation this package builds carries two enforced defaults proven
-// necessary by security spike #307:
+// Every invocation this package builds carries the enforced defaults proven
+// necessary by security spike #307 and by team-lead security review of this
+// package:
 //
 //   - --pid and --containall: Apptainer's default shares the host PID
 //     namespace (spike implementation condition 1) — the upstream
 //     ApptainerWorkspace this package wraps (vendor/openhands) does not
 //     pass either by default.
-//   - egress is bounded by routing all sandbox HTTP/HTTPS traffic through a
-//     per-session egressproxy.Proxy scoped to the tenant/user's effective
-//     allowed_hosts (apps/control-plane/internal/egress, issue #308), never
-//     the host's unrestricted network.
+//   - --net --network none: the sandbox gets an isolated network namespace
+//     with only a loopback interface, no route to the host network at all.
+//     An earlier version of this package bound egress only by setting
+//     HTTP_PROXY/HTTPS_PROXY — advisory only, since a raw socket or any
+//     proxy-unaware library inside the sandbox could dial out directly.
+//     With --network none there is no interface to dial out on except
+//     loopback, so the only way traffic leaves the sandbox at all is via
+//     the one relay path below. "none" is the only network configuration
+//     Apptainer permits non-privileged (rootless) users to request
+//     (https://apptainer.org/docs/user/main/networking.html, verified
+//     2026-07-16); no CNI plugin or setuid installation is required.
+//   - the one relay path: a per-session egressproxy.Proxy listens on a Unix
+//     socket on the host (network namespaces don't affect bind mounts,
+//     which are a filesystem operation), bind-mounted into the sandbox. A
+//     socat shim baked into the SIF (deploy/apptainer/agent-engine.def)
+//     forwards a fixed loopback port, reachable only from inside the
+//     sandbox's own isolated netns, to that bind-mounted socket. HTTP_PROXY
+//     and HTTPS_PROXY point at that loopback port.
+//
+// Known follow-up (Wave 3, not this PR): with --network none the host can
+// no longer reach the agent-server's own --host/--port over TCP either,
+// since that TCP path required the network-namespace sharing this package
+// now deliberately removes. Nothing in this repo today calls the
+// agent-server's HTTP API (cmd/agent-engine only execs and waits on the
+// process), so this is not a regression yet, but Wave 3's task-lifecycle
+// wiring will need its own bind-mounted Unix socket (uvicorn supports
+// uds=... natively) rather than --host/--port for that control channel.
 //
 // BuildArgv also refuses to launch if any bind mount or working directory in
 // the constructed command references the Docker socket (spike rows 8/9,
@@ -26,6 +50,17 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// ProxyShimPort is the fixed loopback port, inside the sandbox's own
+// isolated network namespace, that the SIF's socat shim listens on and
+// forwards to the bind-mounted egress-proxy Unix socket. It only needs to be
+// unique within that one sandbox's own netns, so a fixed value is fine: no
+// two sandbox sessions ever share a network namespace.
+const ProxyShimPort = 3128
+
+// ProxySocketContainerPath is the fixed path, inside the sandbox, that the
+// host's per-session egressproxy.Proxy Unix socket is bind-mounted to.
+const ProxySocketContainerPath = "/opt/hive/egress.sock"
 
 // Pack identifies which microagent pack config the sandbox mounts. Coding
 // and knowledge-work packs share the identical sandbox trust tier — both may
@@ -45,18 +80,18 @@ type LaunchConfig struct {
 	UserID    uuid.UUID
 	Pack      Pack
 	SIFPath   string
-	HostPort  int
-	ProxyAddr string // host:port of the per-session egressproxy.Proxy
+	HostPort  int    // passed to the agent-server's own --host/--port; not yet reachable from the host, see package doc
+	ProxySocketPath string // host path of the per-session egressproxy.Proxy's Unix socket listener
 }
 
 var (
-	ErrMissingSIFPath    = errors.New("sandbox: SIFPath is required")
-	ErrMissingProxyAddr  = errors.New("sandbox: ProxyAddr is required")
-	ErrMissingConfigDir  = errors.New("sandbox: Pack.ConfigDir is required")
-	ErrMissingWorkingDir = errors.New("sandbox: Pack.WorkingDir is required")
-	ErrInvalidHostPort   = errors.New("sandbox: HostPort must be positive")
-	ErrNilTenant         = errors.New("sandbox: TenantID must not be uuid.Nil")
-	ErrNilUser           = errors.New("sandbox: UserID must not be uuid.Nil")
+	ErrMissingSIFPath        = errors.New("sandbox: SIFPath is required")
+	ErrMissingProxySocketPath = errors.New("sandbox: ProxySocketPath is required")
+	ErrMissingConfigDir      = errors.New("sandbox: Pack.ConfigDir is required")
+	ErrMissingWorkingDir     = errors.New("sandbox: Pack.WorkingDir is required")
+	ErrInvalidHostPort       = errors.New("sandbox: HostPort must be positive")
+	ErrNilTenant             = errors.New("sandbox: TenantID must not be uuid.Nil")
+	ErrNilUser               = errors.New("sandbox: UserID must not be uuid.Nil")
 
 	// ErrDockerSocketReferenced is returned when a constructed command
 	// references the Docker socket by path or well-known env var — this
@@ -72,8 +107,8 @@ func (c LaunchConfig) validate() error {
 		return ErrNilUser
 	case c.SIFPath == "":
 		return ErrMissingSIFPath
-	case c.ProxyAddr == "":
-		return ErrMissingProxyAddr
+	case c.ProxySocketPath == "":
+		return ErrMissingProxySocketPath
 	case c.Pack.ConfigDir == "":
 		return ErrMissingConfigDir
 	case c.Pack.WorkingDir == "":
@@ -84,13 +119,16 @@ func (c LaunchConfig) validate() error {
 	return nil
 }
 
-// RequiredSecurityFlags are the flags security spike #307 proved must always
-// be present on every Apptainer invocation this package (or any future
-// patched vendor copy of the upstream ApptainerWorkspace) constructs.
-var RequiredSecurityFlags = []string{"--pid", "--containall"}
+// RequiredSecurityFlags are the standalone flags security spike #307 and
+// team-lead security review proved must always be present on every
+// Apptainer invocation this package (or any future patched vendor copy of
+// the upstream ApptainerWorkspace) constructs. "--network none" is checked
+// separately (ValidateSecurityDefaults) since it is a flag+value pair, not
+// a standalone token.
+var RequiredSecurityFlags = []string{"--pid", "--containall", "--net"}
 
 // ValidateSecurityDefaults reports an error if argv is missing any flag in
-// RequiredSecurityFlags.
+// RequiredSecurityFlags, or is missing the adjacent "--network" "none" pair.
 func ValidateSecurityDefaults(argv []string) error {
 	present := make(map[string]bool, len(argv))
 	for _, a := range argv {
@@ -102,10 +140,24 @@ func ValidateSecurityDefaults(argv []string) error {
 			missing = append(missing, f)
 		}
 	}
+	if !hasAdjacentPair(argv, "--network", "none") {
+		missing = append(missing, `--network none`)
+	}
 	if len(missing) > 0 {
 		return fmt.Errorf("sandbox: missing required security flags: %s", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// hasAdjacentPair reports whether argv contains flag immediately followed
+// by value at some position i, i+1.
+func hasAdjacentPair(argv []string, flag, value string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
 }
 
 const dockerSocketPath = "/var/run/docker.sock"
@@ -124,27 +176,31 @@ func containsDockerSocketReference(parts []string) bool {
 }
 
 // BuildArgv constructs the `apptainer run` argv for cfg. Every returned argv
-// unconditionally includes --pid and --containall and wires
-// HTTP_PROXY/HTTPS_PROXY at cfg.ProxyAddr so all sandbox egress is bound by
-// the caller's egressproxy.Proxy allowlist. BuildArgv refuses
-// (ErrDockerSocketReferenced) if the resulting command would reference the
-// Docker socket in any form.
+// unconditionally includes --pid, --containall, and --net --network none,
+// and bind-mounts cfg.ProxySocketPath as the sandbox's only relay to the
+// outside world: HTTP_PROXY/HTTPS_PROXY point at the SIF's socat shim
+// (ProxyShimPort), which forwards to that bind-mounted socket. BuildArgv
+// refuses (ErrDockerSocketReferenced) if the resulting command would
+// reference the Docker socket in any form.
 func BuildArgv(cfg LaunchConfig) (argv []string, err error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 
-	proxyURL := "http://" + cfg.ProxyAddr
+	proxyURL := fmt.Sprintf("http://127.0.0.1:%d", ProxyShimPort)
 
 	argv = []string{
 		"apptainer", "run",
 		"--pid",
 		"--containall",
+		"--net",
+		"--network", "none",
 		"--no-mount", "hostfs",
 		"--no-mount", "bind-paths",
 		"--env", "HTTP_PROXY=" + proxyURL,
 		"--env", "HTTPS_PROXY=" + proxyURL,
 		"--env", "NO_PROXY=127.0.0.1,localhost",
+		"--bind", cfg.ProxySocketPath + ":" + ProxySocketContainerPath,
 		"--bind", cfg.Pack.ConfigDir + ":/opt/hive/pack:ro",
 		"--bind", cfg.Pack.WorkingDir + ":/workspace",
 		cfg.SIFPath,
@@ -156,7 +212,7 @@ func BuildArgv(cfg LaunchConfig) (argv []string, err error) {
 		return nil, ErrDockerSocketReferenced
 	}
 	// Kept as a live assertion (not just a test): if a future edit ever
-	// drops --pid/--containall from the literal argv above, BuildArgv fails
+	// drops a required flag from the literal argv above, BuildArgv fails
 	// closed instead of the gap only being caught by a test running later.
 	if err := ValidateSecurityDefaults(argv); err != nil {
 		return nil, err

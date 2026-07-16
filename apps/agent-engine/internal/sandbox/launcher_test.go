@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -18,9 +19,9 @@ func validConfig() sandbox.LaunchConfig {
 			ConfigDir:  "/srv/hive/packs/coding-pack",
 			WorkingDir: "/srv/hive/workspaces/t1",
 		},
-		SIFPath:   "/srv/hive/sif/agent-server.sif",
-		HostPort:  38080,
-		ProxyAddr: "127.0.0.1:38081",
+		SIFPath:         "/srv/hive/sif/agent-server.sif",
+		HostPort:        38080,
+		ProxySocketPath: "/srv/hive/run/t1/egress.sock",
 	}
 }
 
@@ -34,6 +35,21 @@ func TestBuildArgv_AlwaysIncludesPidAndContainall(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_AlwaysIsolatesNetwork(t *testing.T) {
+	// The core fix for the "raw socket bypasses HTTP_PROXY" security review
+	// finding: --net --network none is the only rootless-permitted network
+	// config (verified against Apptainer docs 2026-07-16), and it leaves the
+	// sandbox with no interface to dial out on except loopback.
+	argv, err := sandbox.BuildArgv(validConfig())
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	joined := strings.Join(argv, " ")
+	if !strings.Contains(joined, "--net --network none") {
+		t.Fatalf("expected --net --network none present as an adjacent pair, got argv: %v", argv)
+	}
+}
+
 func TestBuildArgv_WiresProxyEnv(t *testing.T) {
 	cfg := validConfig()
 	argv, err := sandbox.BuildArgv(cfg)
@@ -41,11 +57,16 @@ func TestBuildArgv_WiresProxyEnv(t *testing.T) {
 		t.Fatalf("BuildArgv: %v", err)
 	}
 	joined := strings.Join(argv, " ")
-	if !strings.Contains(joined, "HTTP_PROXY=http://"+cfg.ProxyAddr) {
-		t.Fatalf("expected HTTP_PROXY wired to %s, got argv: %v", cfg.ProxyAddr, argv)
+	wantProxy := fmt.Sprintf("http://127.0.0.1:%d", sandbox.ProxyShimPort)
+	if !strings.Contains(joined, "HTTP_PROXY="+wantProxy) {
+		t.Fatalf("expected HTTP_PROXY wired to %s, got argv: %v", wantProxy, argv)
 	}
-	if !strings.Contains(joined, "HTTPS_PROXY=http://"+cfg.ProxyAddr) {
-		t.Fatalf("expected HTTPS_PROXY wired to %s, got argv: %v", cfg.ProxyAddr, argv)
+	if !strings.Contains(joined, "HTTPS_PROXY="+wantProxy) {
+		t.Fatalf("expected HTTPS_PROXY wired to %s, got argv: %v", wantProxy, argv)
+	}
+	wantBind := cfg.ProxySocketPath + ":" + sandbox.ProxySocketContainerPath
+	if !strings.Contains(joined, wantBind) {
+		t.Fatalf("expected proxy socket bind mount %s, got argv: %v", wantBind, argv)
 	}
 }
 
@@ -58,7 +79,7 @@ func TestBuildArgv_RejectsInvalidConfig(t *testing.T) {
 		{"nil tenant", func(c *sandbox.LaunchConfig) { c.TenantID = uuid.Nil }, sandbox.ErrNilTenant},
 		{"nil user", func(c *sandbox.LaunchConfig) { c.UserID = uuid.Nil }, sandbox.ErrNilUser},
 		{"empty SIF path", func(c *sandbox.LaunchConfig) { c.SIFPath = "" }, sandbox.ErrMissingSIFPath},
-		{"empty proxy addr", func(c *sandbox.LaunchConfig) { c.ProxyAddr = "" }, sandbox.ErrMissingProxyAddr},
+		{"empty proxy socket path", func(c *sandbox.LaunchConfig) { c.ProxySocketPath = "" }, sandbox.ErrMissingProxySocketPath},
 		{"empty pack config dir", func(c *sandbox.LaunchConfig) { c.Pack.ConfigDir = "" }, sandbox.ErrMissingConfigDir},
 		{"empty pack working dir", func(c *sandbox.LaunchConfig) { c.Pack.WorkingDir = "" }, sandbox.ErrMissingWorkingDir},
 		{"zero host port", func(c *sandbox.LaunchConfig) { c.HostPort = 0 }, sandbox.ErrInvalidHostPort},
@@ -91,6 +112,14 @@ func TestBuildArgv_RejectsDockerSocketInConfigDir(t *testing.T) {
 	}
 }
 
+func TestBuildArgv_RejectsDockerSocketInProxySocketPath(t *testing.T) {
+	cfg := validConfig()
+	cfg.ProxySocketPath = "/var/run/docker.sock"
+	if _, err := sandbox.BuildArgv(cfg); !errors.Is(err, sandbox.ErrDockerSocketReferenced) {
+		t.Fatalf("expected ErrDockerSocketReferenced, got %v", err)
+	}
+}
+
 func TestValidateSecurityDefaults_CatchesMissingFlags(t *testing.T) {
 	// Proves the validator would have caught the exact gap security spike
 	// #307 found in upstream's ApptainerWorkspace._start_container(), which
@@ -107,9 +136,34 @@ func TestValidateSecurityDefaults_CatchesMissingFlags(t *testing.T) {
 }
 
 func TestValidateSecurityDefaults_PassesCompleteArgv(t *testing.T) {
-	argv := []string{"apptainer", "run", "--pid", "--containall"}
+	argv := []string{"apptainer", "run", "--pid", "--containall", "--net", "--network", "none"}
 	if err := sandbox.ValidateSecurityDefaults(argv); err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+}
+
+func TestValidateSecurityDefaults_CatchesMissingNetworkIsolation(t *testing.T) {
+	// Proves the validator catches an argv that has --pid/--containall but
+	// no network isolation at all — the gap the security review flagged:
+	// HTTP_PROXY/HTTPS_PROXY alone is advisory and a raw socket bypasses it.
+	argv := []string{"apptainer", "run", "--pid", "--containall"}
+	err := sandbox.ValidateSecurityDefaults(argv)
+	if err == nil {
+		t.Fatal("expected error for argv missing --net --network none")
+	}
+	if !strings.Contains(err.Error(), "--network none") {
+		t.Fatalf("expected error to name the missing network isolation flag, got: %v", err)
+	}
+}
+
+func TestValidateSecurityDefaults_RejectsNonNoneNetwork(t *testing.T) {
+	// "none" is the only network config Apptainer permits rootless users to
+	// request; any other value (bridge, ptp, ...) either requires setuid
+	// configuration or reintroduces a routable interface, so it must not
+	// satisfy the validator even though "--network" is present.
+	argv := []string{"apptainer", "run", "--pid", "--containall", "--net", "--network", "bridge"}
+	if err := sandbox.ValidateSecurityDefaults(argv); err == nil {
+		t.Fatal("expected error for --network bridge (only \"none\" is permitted)")
 	}
 }
 

@@ -13,7 +13,11 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     set -eu
 
     apt-get update
-    apt-get install -y --no-install-recommends ca-certificates git build-essential
+    # socat: the shim in %runscript forwarding the sandbox's own loopback
+    # (its only interface once launched with --net --network none) to the
+    # bind-mounted egress-proxy Unix socket. This is the one relay path;
+    # see apps/agent-engine/internal/sandbox package doc.
+    apt-get install -y --no-install-recommends ca-certificates git build-essential socat
     rm -rf /var/lib/apt/lists/*
 
     python3 -m pip install --no-cache-dir --upgrade pip
@@ -46,11 +50,21 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     export RUNTIME=process
 
 %runscript
+    # The sandbox launches with --net --network none
+    # (apps/agent-engine/internal/sandbox): its only interface is loopback.
+    # This shim forwards that loopback port (ProxyShimPort, 3128) to the
+    # egress-proxy Unix socket bind-mounted at ProxySocketContainerPath —
+    # the one relay path HTTP_PROXY/HTTPS_PROXY route through. Backgrounded
+    # so the agent-server below still becomes PID 1 inside --pid.
+    socat TCP-LISTEN:3128,bind=127.0.0.1,fork,reuseaddr UNIX-CONNECT:/opt/hive/egress.sock &
+
     # Mirrors the entrypoint upstream's ApptainerWorkspace._start_container()
     # expects to run (`apptainer run ... <sif> --host 0.0.0.0 --port <n>`):
     # apps/agent-engine/internal/sandbox.BuildArgv appends `--host`/`--port`
-    # after the SIF path, which land here as "$@".
-    exec python3 -m openhands.agent_server.server "$@"
+    # after the SIF path, which land here as "$@". Not yet reachable from the
+    # host with network isolation on — see the sandbox package doc for the
+    # Wave 3 follow-up (a bind-mounted Unix socket control channel).
+    exec python3 -m openhands.agent_server "$@"
 
 %labels
     maintainer Hive (apps/agent-engine)
@@ -61,10 +75,13 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     Hive agent-engine sandbox image: coding-pack and knowledge-work-pack
     sessions run inside a container built from this definition, launched via
     apps/agent-engine/internal/sandbox.BuildArgv, which unconditionally adds
-    --pid and --containall (security spike #307) and routes all HTTP/HTTPS
-    egress through a per-session allowlist proxy scoped to the tenant/user's
-    effective egress policy (apps/control-plane/internal/egress, issue
-    #308).
+    --pid, --containall, and --net --network none (security spike #307 plus
+    team-lead security review of this package), leaving the sandbox with no
+    network interface but loopback. The only relay to the outside world is
+    the socat shim in %runscript, forwarding that loopback to a bind-mounted
+    Unix socket where a per-session allowlist proxy enforces the tenant/
+    user's effective egress policy (apps/control-plane/internal/egress,
+    issue #308).
 
     Build (on a host with apptainer installed):
         apptainer build agent-engine.sif deploy/apptainer/agent-engine.def

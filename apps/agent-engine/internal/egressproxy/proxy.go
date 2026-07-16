@@ -8,6 +8,8 @@
 package egressproxy
 
 import (
+	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -57,7 +59,17 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dest, err := net.Dial("tcp", r.Host)
+	// Resolve once and dial the literal pinned address rather than r.Host
+	// again: dialing by hostname would trigger a second, independent DNS
+	// resolution, leaving a window for a short-TTL DNS-rebind response
+	// between the allowlist check above and the actual connection.
+	pinned, err := resolvePinnedAddr(r.Context(), r.Host)
+	if err != nil {
+		http.Error(w, "egress: dns lookup failed", http.StatusBadGateway)
+		return
+	}
+
+	dest, err := net.Dial("tcp", pinned)
 	if err != nil {
 		http.Error(w, "egress: dial failed", http.StatusBadGateway)
 		return
@@ -103,6 +115,24 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+// resolvePinnedAddr resolves hostport's host component exactly once and
+// returns "resolvedIP:port", so the caller can dial that literal address
+// instead of triggering a second resolution.
+func resolvePinnedAddr(ctx context.Context, hostport string) (string, error) {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host, port = hostport, "443"
+	}
+	ips, err := net.DefaultResolver.LookupHost(ctx, host)
+	if err != nil {
+		return "", fmt.Errorf("egressproxy: could not resolve %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return "", fmt.Errorf("egressproxy: no addresses found for %q", host)
+	}
+	return net.JoinHostPort(ips[0], port), nil
 }
 
 func relay(a, b net.Conn) {

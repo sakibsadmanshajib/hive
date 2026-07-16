@@ -57,11 +57,11 @@ services:
     # This container builds and runs the Go control binary (quota, egress
     # allowlist enforcement, apptainer argv construction) only. It does not
     # bundle the `apptainer` binary or a rootless user-namespace: Apptainer
-    # rootless sandboxes are launched by this binary on the host it runs on
-    # (the OCI A1 host in production), not nested inside another container.
-    # In this repo's dev environment (WSL2) `apptainer` is unavailable, so
-    # sandbox launches here fail at the `exec.LookPath("apptainer")` step;
-    # see apps/agent-engine/internal/sandbox/apptainer_integration_test.go
+    # rootless sandboxes are launched by this binary on the linux/amd64 host
+    # it runs on in production, not nested inside another container. In this
+    # repo's dev environment (WSL2) `apptainer` is unavailable, so sandbox
+    # launches here fail at the `exec.LookPath("apptainer")` step; see
+    # apps/agent-engine/internal/sandbox/apptainer_integration_test.go
     # (HIVE_APPTAINER_TEST=1) for the gated live-launch proof.
     volumes:
       - gomodcache:/go/pkg/mod
@@ -69,6 +69,9 @@ services:
     environment:
       CONTROL_PLANE_URL: ${CONTROL_PLANE_URL:-http://control-plane:8081}
       CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:-hive-local-internal-token}
+      # Local/dev only: agent-engine refuses to start with the known default
+      # token unless this is set (see cmd/agent-engine/main.go).
+      HIVE_AGENT_ENGINE_ALLOW_DEFAULT_TOKEN: ${HIVE_AGENT_ENGINE_ALLOW_DEFAULT_TOKEN:-1}
       HIVE_AGENT_SIF_PATH: ${HIVE_AGENT_SIF_PATH:-}
       HIVE_QUOTA_TENANT_CONCURRENCY: ${HIVE_QUOTA_TENANT_CONCURRENCY:-4}
       HIVE_QUOTA_USER_CONCURRENCY: ${HIVE_QUOTA_USER_CONCURRENCY:-2}

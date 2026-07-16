@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,6 +26,12 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/quota"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/sandbox"
 )
+
+// insecureDefaultToken is docker-compose.yml's local/dev fallback value for
+// CONTROL_PLANE_INTERNAL_TOKEN. Starting with it (or with an empty token)
+// outside local/dev would silently accept requests to the control-plane's
+// internal endpoints under a token every clone of this repo knows.
+const insecureDefaultToken = "hive-local-internal-token"
 
 func main() {
 	tenantID := flag.String("tenant", "", "tenant UUID")
@@ -52,6 +59,9 @@ func main() {
 	if *sifPath == "" {
 		log.Fatal("agent-engine: -sif (or HIVE_AGENT_SIF_PATH) is required")
 	}
+	if (*controlPlaneToken == "" || *controlPlaneToken == insecureDefaultToken) && os.Getenv("HIVE_AGENT_ENGINE_ALLOW_DEFAULT_TOKEN") != "1" {
+		log.Fatal("agent-engine: CONTROL_PLANE_INTERNAL_TOKEN is empty or the known local/dev default; refusing to start. Set HIVE_AGENT_ENGINE_ALLOW_DEFAULT_TOKEN=1 only for local/dev.")
+	}
 
 	limits := quota.Limits{TenantConcurrency: envInt("HIVE_QUOTA_TENANT_CONCURRENCY", 4), UserConcurrency: envInt("HIVE_QUOTA_USER_CONCURRENCY", 2)}
 	q, err := quota.New(limits)
@@ -76,11 +86,22 @@ func main() {
 		log.Fatalf("agent-engine: could not resolve egress policy, refusing to launch: %v", err)
 	}
 
-	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	// The proxy listens on a Unix socket, not a TCP port: the sandbox launches
+	// with --net --network none (internal/sandbox), so a TCP loopback
+	// listener on the host would not be reachable from inside it anyway.
+	// Bind mounts cross the network-namespace boundary because they are a
+	// filesystem operation, not a network one.
+	sockDir, err := os.MkdirTemp("", "hive-agent-engine-egress-*")
+	if err != nil {
+		log.Fatalf("agent-engine: could not create egress proxy socket dir: %v", err)
+	}
+	defer os.RemoveAll(sockDir)
+	proxySocketPath := filepath.Join(sockDir, "egress.sock")
+
+	proxyListener, err := net.Listen("unix", proxySocketPath)
 	if err != nil {
 		log.Fatalf("agent-engine: could not start egress proxy listener: %v", err)
 	}
-	proxyAddr := proxyListener.Addr().String()
 	proxySrv := &http.Server{Handler: egressproxy.New(allowedHosts)}
 	go func() { _ = proxySrv.Serve(proxyListener) }()
 	defer proxySrv.Close()
@@ -93,9 +114,9 @@ func main() {
 			ConfigDir:  "packs/" + *pack,
 			WorkingDir: *workingDir,
 		},
-		SIFPath:   *sifPath,
-		HostPort:  *hostPort,
-		ProxyAddr: proxyAddr,
+		SIFPath:         *sifPath,
+		HostPort:        *hostPort,
+		ProxySocketPath: proxySocketPath,
 	}
 
 	argv, err := sandbox.BuildArgv(cfg)

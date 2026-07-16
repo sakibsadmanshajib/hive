@@ -118,6 +118,22 @@ func TestProxy_BlocksNonAllowlistedPlainHTTPHost(t *testing.T) {
 	}
 }
 
+func TestProxy_UnresolvableAllowlistedHostFailsCleanly(t *testing.T) {
+	// Exercises the resolve-once-and-pin path's error branch (DNS-rebind
+	// mitigation): an allowlisted host that simply cannot be resolved must
+	// fail the CONNECT cleanly rather than falling through to any default
+	// route.
+	const unresolvable = "this-host-does-not-exist.invalid"
+	proxy := httptest.NewServer(egressproxy.New([]string{unresolvable}))
+	defer proxy.Close()
+
+	client := clientThroughProxy(t, proxy.URL)
+	_, err := client.Get("https://" + unresolvable)
+	if err == nil {
+		t.Fatal("expected request to an unresolvable allowlisted host to fail")
+	}
+}
+
 func hostOf(t *testing.T, rawURL string) string {
 	t.Helper()
 	u, err := url.Parse(rawURL)
