@@ -1,10 +1,9 @@
 Bootstrap: docker
 From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
-# Debian (bookworm) base per repo decision, never Alpine: the vendored
-# OpenHands packages (vendor/openhands) need glibc-linked native wheels and a
-# real apt package set. This tag is confirmed to exist on Docker Hub as of
-# 2026-07-16. Apptainer resolves whichever architecture it is built on
-# (x86-64 per the ratified server-arch decision for this box).
+# linux/amd64 only (owner decision 2026-07-16, task #5): Debian (bookworm)
+# base, never Alpine, since the vendored OpenHands packages
+# (vendor/openhands) need glibc-linked native wheels and a real apt package
+# set. This tag is confirmed to exist on Docker Hub as of 2026-07-16.
 
 %files
     ../../vendor/openhands /opt/hive/vendor/openhands
@@ -13,22 +12,9 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
 %post
     set -eu
 
-    # Distro Chromium via apt, not a bundled Playwright download: this is
-    # the one browser-install path that is guaranteed to exist for whatever
-    # architecture this image is built on, and it stays correct even if the
-    # target host architecture changes later.
     apt-get update
-    apt-get install -y --no-install-recommends \
-        chromium \
-        ca-certificates \
-        git \
-        build-essential
+    apt-get install -y --no-install-recommends ca-certificates git build-essential
     rm -rf /var/lib/apt/lists/*
-
-    # Point Playwright/browser-using tools at the distro binary instead of
-    # trying to download a bundled one.
-    echo 'export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium' >> /etc/profile.d/hive-agent-engine.sh
-    echo 'export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1' >> /etc/profile.d/hive-agent-engine.sh
 
     python3 -m pip install --no-cache-dir --upgrade pip
 
@@ -48,13 +34,16 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     python3 -m pip install --no-cache-dir \
         /opt/hive/vendor/openhands/openhands-agent-server
 
+    # x86-64 only, so Playwright's own bundled Chromium download works
+    # normally: no distro-Chromium workaround needed (that was only ever
+    # required for arm64, which this box does not target).
+    python3 -m playwright install --with-deps chromium
+
     mkdir -p /workspace
     chmod 0777 /workspace
 
 %environment
     export RUNTIME=process
-    export PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
-    export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
 %runscript
     # Mirrors the entrypoint upstream's ApptainerWorkspace._start_container()
