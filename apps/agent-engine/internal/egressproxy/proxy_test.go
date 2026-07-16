@@ -118,6 +118,29 @@ func TestProxy_BlocksNonAllowlistedPlainHTTPHost(t *testing.T) {
 	}
 }
 
+func TestProxy_UnresolvablePlainHTTPHostFailsCleanly(t *testing.T) {
+	// Same pinning fix as the CONNECT path, applied to handleForward's
+	// custom transport DialContext.
+	const unresolvable = "this-host-does-not-exist.invalid"
+	proxy := httptest.NewServer(egressproxy.New([]string{unresolvable}))
+	defer proxy.Close()
+
+	proxyURLParsed, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatalf("parse proxy url: %v", err)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURLParsed)}}
+
+	resp, err := client.Get("http://" + unresolvable)
+	if err != nil {
+		t.Fatalf("request failed transport-level: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("expected 502 for unresolvable host, got %d", resp.StatusCode)
+	}
+}
+
 func TestProxy_UnresolvableAllowlistedHostFailsCleanly(t *testing.T) {
 	// Exercises the resolve-once-and-pin path's error branch (DNS-rebind
 	// mitigation): an allowlisted host that simply cannot be resolved must

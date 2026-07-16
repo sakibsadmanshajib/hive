@@ -76,22 +76,22 @@ type Pack struct {
 // LaunchConfig is everything BuildArgv needs to construct one sandbox
 // invocation.
 type LaunchConfig struct {
-	TenantID  uuid.UUID
-	UserID    uuid.UUID
-	Pack      Pack
-	SIFPath   string
-	HostPort  int    // passed to the agent-server's own --host/--port; not yet reachable from the host, see package doc
+	TenantID        uuid.UUID
+	UserID          uuid.UUID
+	Pack            Pack
+	SIFPath         string
+	HostPort        int    // passed to the agent-server's own --host/--port; not yet reachable from the host, see package doc
 	ProxySocketPath string // host path of the per-session egressproxy.Proxy's Unix socket listener
 }
 
 var (
-	ErrMissingSIFPath        = errors.New("sandbox: SIFPath is required")
+	ErrMissingSIFPath         = errors.New("sandbox: SIFPath is required")
 	ErrMissingProxySocketPath = errors.New("sandbox: ProxySocketPath is required")
-	ErrMissingConfigDir      = errors.New("sandbox: Pack.ConfigDir is required")
-	ErrMissingWorkingDir     = errors.New("sandbox: Pack.WorkingDir is required")
-	ErrInvalidHostPort       = errors.New("sandbox: HostPort must be positive")
-	ErrNilTenant             = errors.New("sandbox: TenantID must not be uuid.Nil")
-	ErrNilUser               = errors.New("sandbox: UserID must not be uuid.Nil")
+	ErrMissingConfigDir       = errors.New("sandbox: Pack.ConfigDir is required")
+	ErrMissingWorkingDir      = errors.New("sandbox: Pack.WorkingDir is required")
+	ErrInvalidHostPort        = errors.New("sandbox: HostPort must be positive")
+	ErrNilTenant              = errors.New("sandbox: TenantID must not be uuid.Nil")
+	ErrNilUser                = errors.New("sandbox: UserID must not be uuid.Nil")
 
 	// ErrDockerSocketReferenced is returned when a constructed command
 	// references the Docker socket by path or well-known env var — this

@@ -19,7 +19,8 @@ import (
 // Proxy is an allowlist-enforcing HTTP/HTTPS forward proxy. It implements
 // http.Handler so callers run it with an ordinary http.Server.
 type Proxy struct {
-	allowed map[string]struct{}
+	allowed   map[string]struct{}
+	transport *http.Transport
 }
 
 // New builds a Proxy that permits egress only to the given hosts (hostname
@@ -31,7 +32,21 @@ func New(allowedHosts []string) *Proxy {
 	for _, h := range allowedHosts {
 		allowed[strings.ToLower(h)] = struct{}{}
 	}
-	return &Proxy{allowed: allowed}
+	return &Proxy{
+		allowed: allowed,
+		// Plain-HTTP path (handleForward) must pin the resolved IP exactly
+		// like the CONNECT path: DialContext resolves once here instead of
+		// letting the transport's default dialer resolve addr itself.
+		transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				pinned, err := resolvePinnedAddr(ctx, addr, "80")
+				if err != nil {
+					return nil, err
+				}
+				return (&net.Dialer{}).DialContext(ctx, network, pinned)
+			},
+		},
+	}
 }
 
 func (p *Proxy) isAllowed(hostport string) bool {
@@ -63,7 +78,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// again: dialing by hostname would trigger a second, independent DNS
 	// resolution, leaving a window for a short-TTL DNS-rebind response
 	// between the allowlist check above and the actual connection.
-	pinned, err := resolvePinnedAddr(r.Context(), r.Host)
+	pinned, err := resolvePinnedAddr(r.Context(), r.Host, "443")
 	if err != nil {
 		http.Error(w, "egress: dns lookup failed", http.StatusBadGateway)
 		return
@@ -101,7 +116,7 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 
 	outReq := r.Clone(r.Context())
 	outReq.RequestURI = ""
-	resp, err := http.DefaultTransport.RoundTrip(outReq)
+	resp, err := p.transport.RoundTrip(outReq)
 	if err != nil {
 		http.Error(w, "egress: upstream request failed", http.StatusBadGateway)
 		return
@@ -119,11 +134,12 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 
 // resolvePinnedAddr resolves hostport's host component exactly once and
 // returns "resolvedIP:port", so the caller can dial that literal address
-// instead of triggering a second resolution.
-func resolvePinnedAddr(ctx context.Context, hostport string) (string, error) {
+// instead of triggering a second resolution. defaultPort is used when
+// hostport carries no port of its own.
+func resolvePinnedAddr(ctx context.Context, hostport, defaultPort string) (string, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
-		host, port = hostport, "443"
+		host, port = hostport, defaultPort
 	}
 	ips, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err != nil {
