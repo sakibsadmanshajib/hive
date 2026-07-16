@@ -69,7 +69,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd="pg_isready -U postgres"
+          --health-cmd="pg_isready -U postgres -h 127.0.0.1"
           --health-interval=5s
           --health-timeout=5s
           --health-retries=10
@@ -151,7 +151,7 @@ jobs:
           if [ "${{ matrix.module }}" = "control-plane" ]; then
             go test -count=1 -v ./internal/agenttask/... ./internal/egress/... ./internal/rag/...
           else
-            go test -count=1 -v ./internal/artifacts/...
+            go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
           fi
 
   # ------------------------------------------------------------------
