@@ -1,6 +1,7 @@
 package docvlm
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -79,6 +80,48 @@ func TestBuildRequest_RejectsPageMissingMimeType(t *testing.T) {
 	pages := []Page{{Index: 0, ImageB64: "Zm9v", MimeType: ""}}
 	if _, err := BuildRequest(pages, "extract layout"); err == nil {
 		t.Fatal("expected error for page with empty MimeType, got nil")
+	}
+}
+
+func TestBuildRequest_RejectsOversizeImage(t *testing.T) {
+	oversize := base64.StdEncoding.EncodeToString(make([]byte, MaxImageBytes+1))
+	pages := []Page{{Index: 0, ImageB64: oversize, MimeType: "image/png"}}
+	if _, err := BuildRequest(pages, "extract layout"); err == nil {
+		t.Fatal("expected error for an oversize image, got nil")
+	}
+}
+
+func TestBuildRequest_MimeTypeAllowlist(t *testing.T) {
+	cases := []struct {
+		name     string
+		mimeType string
+		wantErr  bool
+	}{
+		{"png allowed", "image/png", false},
+		{"jpeg allowed", "image/jpeg", false},
+		{"webp allowed", "image/webp", false},
+		{"gif rejected", "image/gif", true},
+		{"pdf rejected", "application/pdf", true},
+		{"empty rejected", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			pages := []Page{{Index: 0, ImageB64: "Zm9v", MimeType: tc.mimeType}}
+			_, err := BuildRequest(pages, "extract layout")
+			if tc.wantErr && err == nil {
+				t.Fatalf("mime type %q: expected error, got nil", tc.mimeType)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("mime type %q: unexpected error: %v", tc.mimeType, err)
+			}
+		})
+	}
+}
+
+func TestBuildRequest_RejectsInvalidBase64(t *testing.T) {
+	pages := []Page{{Index: 0, ImageB64: "not-valid-base64!!!", MimeType: "image/png"}}
+	if _, err := BuildRequest(pages, "extract layout"); err == nil {
+		t.Fatal("expected error for invalid base64 image data, got nil")
 	}
 }
 

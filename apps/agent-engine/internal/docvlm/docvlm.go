@@ -4,11 +4,12 @@
 // understanding. It only builds and validates the request; the agent's own
 // shell/HTTP tool inside the sandbox issues the actual call against Hive's
 // OpenAI-compatible chat completions endpoint (see
-// apps/agent-engine/packs/knowledge-work-pack/skills/doc-layout/SKILL.md for
+// apps/agent-engine/packs/knowledge-work-pack/skills/doc-layout/AGENTS.md for
 // the exact invocation and the response JSON shape the model is asked for).
 package docvlm
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -18,6 +19,17 @@ import (
 // targets. It must name a vision-capable route (see
 // TestLiteLLMConfigHasDocVLMRoute).
 const ModelName = "route-doc-vlm"
+
+// MaxImageBytes bounds one page's decoded image size (10 MiB), mirroring
+// apps/edge-api/internal/artifacts.MaxHTMLSize's request-body-cap pattern.
+const MaxImageBytes = 10 << 20
+
+// allowedMimeTypes are the image types the doc-layout vision route accepts.
+var allowedMimeTypes = map[string]bool{
+	"image/png":  true,
+	"image/jpeg": true,
+	"image/webp": true,
+}
 
 // systemPrompt frames the model's task: return structured layout, never
 // prose. Kept in code (not a template file) so it stays byte-for-byte in
@@ -91,11 +103,18 @@ func BuildRequest(pages []Page, instructions string) (Request, error) {
 	userParts := make([]ContentPart, 0, len(pages)+1)
 	userParts = append(userParts, ContentPart{Type: "text", Text: instructions})
 	for _, p := range pages {
-		if strings.TrimSpace(p.ImageB64) == "" {
+		if !allowedMimeTypes[p.MimeType] {
+			return Request{}, fmt.Errorf("docvlm: page %d has unsupported mime type %q (allowed: image/png, image/jpeg, image/webp)", p.Index, p.MimeType)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(p.ImageB64)
+		if err != nil {
+			return Request{}, fmt.Errorf("docvlm: page %d has invalid base64 image data: %w", p.Index, err)
+		}
+		if len(decoded) == 0 {
 			return Request{}, fmt.Errorf("docvlm: page %d has no image bytes", p.Index)
 		}
-		if strings.TrimSpace(p.MimeType) == "" {
-			return Request{}, fmt.Errorf("docvlm: page %d has no mime type", p.Index)
+		if len(decoded) > MaxImageBytes {
+			return Request{}, fmt.Errorf("docvlm: page %d image is %d bytes, exceeds the %d byte cap", p.Index, len(decoded), MaxImageBytes)
 		}
 		userParts = append(userParts, ContentPart{
 			Type:     "image_url",
