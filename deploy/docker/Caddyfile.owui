@@ -33,7 +33,12 @@
   # matched reverse_proxy is always evaluated -- and can intercept --
   # before the unmatched catch-all below ever sees the request. OWUI's own
   # websocket traffic is untouched since it lives on a different path.
-  @agentConsole path /agent-workspace/*
+  # Matches both the bare entry URL (/agent-workspace, no trailing slash --
+  # what a freshly-typed or bookmarked link looks like) and everything
+  # under it. The bare path proxies straight to the Next.js app's own root
+  # route, which (via basePath) redirects to /agent-workspace/tasks itself
+  # (apps/agent-console/app/page.tsx) -- no separate Caddy redirect needed.
+  @agentConsole path /agent-workspace /agent-workspace/*
   reverse_proxy @agentConsole agent-console:3000 {
     transport http {
       response_header_timeout 60s

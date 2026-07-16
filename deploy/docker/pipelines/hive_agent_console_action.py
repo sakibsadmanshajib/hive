@@ -44,16 +44,24 @@ unverified upstream behaviour instead of guessing silently):
     find documented; instead the gate is checked at click time and an error
     is shown in place of the link. Functionally equivalent for the demo
     (the workspace never opens when disabled) but not a hidden button.
+  * `aiohttp` availability: not a declared dependency of this repo. Assumed
+    present because Open WebUI's own backend uses aiohttp internally for
+    its HTTP client paths, and Functions execute in the same interpreter/
+    dependency set as the main app (no separate requirements file, no
+    per-Function venv) -- not confirmed by reading the pinned image's
+    installed package list directly. If this assumption is wrong, the fix
+    is swapping to stdlib `urllib.request` in `_cowork_enabled` only; the
+    test in test_hive_agent_console_action.py exercises the real import
+    path so a bad assumption here fails loudly instead of silently
+    (see the CRITICAL bug this exact gap caused, fixed in review).
 """
 
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
-import urllib.request
 from typing import Any, Awaitable, Callable, Optional
 
+import aiohttp
 from pydantic import BaseModel
 
 

@@ -328,6 +328,13 @@ services:
     build:
       context: ../../
       dockerfile: deploy/docker/Dockerfile.agent-console
+      # NEXT_PUBLIC_* are baked into the client bundle by `next build`
+      # (Dockerfile.agent-console runs a production build, not `next dev`),
+      # so they must travel as build args, not runtime `environment:`.
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-http://localhost:8080}
     profiles:
       - chat
       - enterprise
@@ -335,10 +342,7 @@ services:
       edge-api:
         condition: service_healthy
     environment:
-      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       EDGE_API_INTERNAL_BASE_URL: http://edge-api:8080
-      NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-http://localhost:8080}
 
   # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge and cloud chat users.
   # Profiles:
