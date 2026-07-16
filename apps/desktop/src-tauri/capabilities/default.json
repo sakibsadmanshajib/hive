@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability for the main window, which is first-party local content only (the local launcher/settings page or, once configured, tauri://localhost never loads remote agent-console content into this capability's scope -- the remote page is a plain window navigation with no elevated IPC grant).",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

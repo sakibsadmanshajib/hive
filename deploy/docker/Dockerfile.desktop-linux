@@ -1,0 +1,31 @@
+# Build environment for apps/desktop's Linux Tauri targets (deb, AppImage).
+# Not part of the runtime stack -- this only produces desktop installers.
+# See apps/desktop/README-desktop.md for build commands and the Windows
+# packaging note (msi/nsis needs a Windows host or cross toolchain, not
+# covered here).
+FROM rust:1.82-bookworm
+
+# The bookworm base image's pinned Rust is older than the edition2024
+# feature some transitive Tauri Linux dependencies (e.g. dlopen2_derive)
+# now require. Install an explicit pinned version (not a floating "stable"
+# channel) instead of pulling a newer base tag over an unreliable registry
+# connection; apps/desktop/src-tauri/rust-toolchain.toml pins the same
+# version so `cargo` picks it up automatically whenever it runs there.
+RUN rustup toolchain install 1.97.1 --profile minimal && rustup default 1.97.1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    librsvg2-dev \
+    libayatana-appindicator3-dev \
+    libssl-dev \
+    build-essential \
+    curl \
+    wget \
+    file \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+ENTRYPOINT ["/bin/sh", "-c"]
