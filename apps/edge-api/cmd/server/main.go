@@ -283,6 +283,20 @@ func main() {
 		// to the rag package's decoupled RouteSelectFunc so rag does not need
 		// to import inference's Orchestrator/billing types; litellmClient's
 		// ChatCompletion method value satisfies ChatDispatchFunc directly.
+		//
+		// Deliberately NOT wired through inference.Orchestrator: this route
+		// is JWT-session authenticated (auth.UserFrom, same as every other
+		// /v1/rag/* endpoint), and Orchestrator.Authorize only resolves
+		// "hk_..." API keys (internal/authz/authorizer.go) — calling it here
+		// would 401 every legitimate RAG request. The BudgetGate wrapped
+		// around this whole mux below has the identical limitation today
+		// (see the "Phase 19"/Plan 03 comment further down: JWT traffic is
+		// pre-billing by design, tracked separately, and affects every
+		// JWT-session inference route, not just this one). RAG chat records
+		// its own usage-accounting signal instead (RAG_CHAT_COMPLETED audit
+		// event in chat_handler.go), matching what internal/chat/dispatch.go
+		// already does (an llm_traces row) for the equivalent JWT-session
+		// /v1/chat/completions path.
 		ragSelectRoute := func(ctx context.Context, aliasID string) (string, error) {
 			route, err := routingClient.SelectRoute(ctx, inference.SelectRouteInput{
 				AliasID:             aliasID,
