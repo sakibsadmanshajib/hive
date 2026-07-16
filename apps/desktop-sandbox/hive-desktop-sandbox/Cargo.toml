@@ -1,0 +1,40 @@
+[package]
+name = "hive-desktop-sandbox"
+version.workspace = true
+edition.workspace = true
+# Proprietary Hive code; deliberately does not inherit the Apache-2.0
+# workspace default used by the vendored codex-bwrap / codex-process-hardening
+# crates. See VENDORING.md.
+
+[lib]
+name = "hive_desktop_sandbox"
+path = "src/lib.rs"
+doctest = false
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+codex-process-hardening = { path = "../codex-process-hardening" }
+landlock = { workspace = true }
+seccompiler = { workspace = true }
+libc = { workspace = true }
+
+[target.'cfg(windows)'.dependencies]
+# Restricted token + directory ACL + Job Object only. Windows Firewall
+# deny-outbound rule generation from the egress SSOT is blueprint Step 4.4's
+# scope, not this crate's; see `windows_plan.rs` and VENDORING.md.
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+pretty_assertions = { workspace = true }

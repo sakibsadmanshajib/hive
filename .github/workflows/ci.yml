@@ -83,6 +83,44 @@ jobs:
         run: go test -count=1 -short -race -timeout 5m ./...
 
   # ------------------------------------------------------------------
+  # Rust tests — desktop sandbox backends (issue #306). Toolchain version
+  # comes from apps/desktop-sandbox/rust-toolchain.toml; ubuntu-latest ships
+  # rustup preinstalled, which reads that file automatically from the
+  # working directory below. Intended to become a required check once this
+  # job has a track record on main (see VENDORING.md).
+  # ------------------------------------------------------------------
+
+  rust-tests:
+    name: Rust tests (desktop-sandbox)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop-sandbox
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcap headers
+        # codex-bwrap's build.rs compiles vendored bubblewrap against libcap.
+        run: sudo apt-get update && sudo apt-get install -y libcap-dev pkg-config
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop-sandbox/target
+          key: rust-desktop-sandbox-${{ hashFiles('apps/desktop-sandbox/Cargo.lock') }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test
+
+  # ------------------------------------------------------------------
   # Repo-policy lints — tenancy + audit guards that apply across the
   # whole tree. Each script lives under tools/ and is the source of
   # truth for which packages are allowed to write the protected

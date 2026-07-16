@@ -1,0 +1,28 @@
+[workspace]
+resolver = "2"
+members = [
+    "codex-bwrap",
+    "codex-process-hardening",
+    "hive-desktop-sandbox",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+libc = "0.2"
+cc = "1"
+pkg-config = "0.3"
+pretty_assertions = "1"
+tempfile = "3"
+
+# Not pinned by codex-rs; these are the same crates.io libraries Codex itself
+# builds on for the OS-primitive mechanics (see VENDORING.md).
+landlock = "0.4"
+seccompiler = "0.5"
+
+[workspace.lints.rust]
+
+[workspace.lints.clippy]
