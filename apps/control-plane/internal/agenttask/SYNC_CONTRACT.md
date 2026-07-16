@@ -114,12 +114,24 @@ preserving today's queued-forever-but-not-failed behavior exactly. `Service`
 and the HTTP surface do not change either way; only the `Engine`
 implementation passed to `NewService` does.
 
-`Service`/`Status` polling from a queued/running task back to
-succeeded/failed/cancelled is not wired by this package itself yet: nothing
-here calls `SandboxEngine.Status`/`Cancel` on a timer. `Handler.handleGet`
-returns whatever `Repository.Get` currently has persisted; a background
-sync loop (or a webhook the engine calls back on) that periodically calls
-the adapter's `Status` and writes the result via `Repository.Transition` is
-the next piece needed to make status advance past `running` in production —
-tracked as a follow-up, same as the Status/Cancel plumbing on the engine
-side is already real and unit-tested.
+**Implemented** (issue #311 follow-up): `Poller` (`poller.go`) periodically
+advances every active task past `running`. It lists queued/running tasks
+with a non-empty `engine_session_ref` across every tenant
+(`Repository.ListActive`, cross-tenant by design — see
+`20260716_05_agent_tasks_service_scan.sql`'s `agent_tasks_service_scan`
+policy), calls `StatusChecker.Status(ctx, sessionRef)` for each (a narrow
+interface `apps/control-plane/internal/agentengine.Engine` already
+satisfies structurally, no adapter code needed), and atomically
+`Repository.Transition`s the terminal ones. A per-task engine error is
+logged and left for the next pass (retried, not failed); a concurrent
+`Cancel` winning the same task's `Transition` race returns
+`ErrTerminalState`, silently swallowed. The loop backs off exponentially
+(capped at 5 minutes) after a pass that had any error, resetting to the
+configured interval on the next clean pass.
+
+Wired in `cmd/server/main.go` behind the same `HIVE_AGENT_ENGINE_SIF_PATH`
+gate as the `Engine` itself (the poller needs a real `StatusChecker`, which
+only exists once the real `SandboxEngine` is configured) — interval via
+`HIVE_AGENT_TASK_POLL_INTERVAL` (Go duration string, default 15s), bound to
+the same process-lifetime context the other background workers use so it
+stops cleanly on shutdown.

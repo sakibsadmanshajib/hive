@@ -2,6 +2,7 @@
   "required_status_checks": {
     "strict": false,
     "contexts": [
+      "Go tests (agent-engine)",
       "Go tests (control-plane)",
       "Go tests (edge-api)",
       "Go tests (storage)",

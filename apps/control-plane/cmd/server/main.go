@@ -810,8 +810,25 @@ func main() {
 	var agentTaskHandler *agenttask.Handler
 	if pool != nil {
 		agentTaskRepo := agenttask.NewPgxRepository(pool)
-		agentTaskSvc := agenttask.NewService(agentTaskRepo, buildAgentEngine(egressSvc))
+		agentEngine, agentEngineStatus := buildAgentEngine(egressSvc)
+		agentTaskSvc := agenttask.NewService(agentTaskRepo, agentEngine)
 		agentTaskHandler = agenttask.NewHandler(agentTaskSvc)
+
+		// Poller needs a real StatusChecker to poll — NotConfiguredEngine has
+		// no Status method — so it is only started when the engine itself
+		// is (same HIVE_AGENT_ENGINE_* gate; see SYNC_CONTRACT.md's Engine
+		// seam section).
+		if agentEngineStatus != nil {
+			poller := agenttask.NewPoller(agentTaskRepo, agentEngineStatus, agenttask.PollerConfig{
+				Interval: parseDurationEnv("HIVE_AGENT_TASK_POLL_INTERVAL", 15*time.Second),
+				Logger:   slog.Default(),
+			})
+			// Bound to runCtx so it stops cleanly on shutdown, same as the
+			// other background workers below (spend-alert cron, WAL drainer).
+			poller.Start(runCtx)
+			defer poller.Stop()
+			log.Println("agent task status poller started")
+		}
 	}
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
@@ -1316,19 +1333,23 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 // agent-engine on x86-64 host"). egressSvc is reused in-process rather than
 // calling apps/agent-engine/internal/egressclient's HTTP round-trip, since
 // the real Engine now runs inside this same control-plane process.
-func buildAgentEngine(egressSvc *egress.Service) agenttask.Engine {
+// buildAgentEngine's second return value is the same *agentengine.Engine as
+// a agenttask.StatusChecker (nil when unconfigured) — the seam
+// cmd/server/main.go's poller wiring uses, since NotConfiguredEngine has no
+// Status method to poll.
+func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.StatusChecker) {
 	sifPath := os.Getenv("HIVE_AGENT_ENGINE_SIF_PATH")
 	packsDir := os.Getenv("HIVE_AGENT_ENGINE_PACKS_DIR")
 	workspaceRoot := os.Getenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT")
 	runDir := os.Getenv("HIVE_AGENT_ENGINE_RUN_DIR")
 	profileIDRaw := os.Getenv("HIVE_AGENT_ENGINE_PROFILE_ID")
 	if egressSvc == nil || sifPath == "" || packsDir == "" || workspaceRoot == "" || runDir == "" || profileIDRaw == "" {
-		return agenttask.NotConfiguredEngine{}
+		return agenttask.NotConfiguredEngine{}, nil
 	}
 	profileID, err := uuid.Parse(profileIDRaw)
 	if err != nil {
 		log.Printf("control-plane: HIVE_AGENT_ENGINE_PROFILE_ID invalid, agent-engine stays unconfigured: %v", err)
-		return agenttask.NotConfiguredEngine{}
+		return agenttask.NotConfiguredEngine{}, nil
 	}
 
 	sandbox := engineapi.New(engineapi.Config{
@@ -1346,5 +1367,6 @@ func buildAgentEngine(egressSvc *egress.Service) agenttask.Engine {
 		AgentProfileID: profileID,
 		SessionAPIKey:  os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
 	})
-	return agentengine.New(sandbox)
+	real := agentengine.New(sandbox)
+	return real, real
 }

@@ -18,6 +18,11 @@ type Repository interface {
 	// Transition updates status (and the fields that go with it) for a task
 	// already scoped to (tenantID, userID) by the caller.
 	Transition(ctx context.Context, tenantID, userID, id uuid.UUID, status Status, sessionRef, resultSummaryRef, errMsg string) (Task, error)
+	// ListActive returns every task across all tenants that is queued or
+	// running with a non-empty EngineSessionRef (i.e. actually launched
+	// somewhere) — the Poller's input. Cross-tenant by design; see
+	// 20260716_05_agent_tasks_service_scan.sql.
+	ListActive(ctx context.Context) ([]Task, error)
 }
 
 type pgxRepository struct {
@@ -180,6 +185,35 @@ func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uui
 		return Task{}, ErrTerminalState
 	}
 	return t, nil
+}
+
+// ListActive queries across all tenants (agent_tasks_service_scan,
+// 20260716_05_agent_tasks_service_scan.sql), deliberately outside
+// withTenantTx: no single app.current_tenant_id value could see every
+// tenant's rows.
+func (r *pgxRepository) ListActive(ctx context.Context) ([]Task, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, tenant_id, user_id, pack, COALESCE(instructions, ''), status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
+		  FROM public.agent_tasks
+		 WHERE status IN ('queued', 'running') AND engine_session_ref <> ''
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("agenttask: list active query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Task
+	for rows.Next() {
+		t, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("agenttask: list active: %w", err)
+	}
+	return out, nil
 }
 
 type scanner interface {
