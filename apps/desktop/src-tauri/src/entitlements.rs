@@ -35,16 +35,25 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 /// tenant_setting_key mirrored from apps/edge-api/internal/featuregate/gate.go
 /// FeatureCowork. Kept as a local constant (not imported -- there is no Rust
-/// binding to the Go package) so a rename on either side is a one-line diff
-/// away from being caught by a test, not a silent drift.
+/// binding to the Go package): if the Go side ever renames this key, nothing
+/// here catches the drift automatically. A rename has to be grepped for and
+/// updated by hand on both sides.
 const GATE_COWORK: &str = "ENABLE_COWORK";
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Response body cap for `fetch`, mirroring edge-api's own
+/// `io.LimitReader(resp.Body, 4096)` in `featuregate/gate.go`. A gate map is
+/// a handful of booleans; anything past this is not a legitimate response,
+/// whether or not the server sent a Content-Length to check up front (a
+/// chunked response has none).
+const MAX_BODY_BYTES: usize = 4096;
 
 /// Body shape of `GET {origin}/v1/featuregate`: identical to edge-api's
 /// `FlagsResponse` (`{"gates": {key: bool}}`).
@@ -86,6 +95,15 @@ impl Entitlements {
         }
     }
 
+    /// State used when `build_client` itself fails -- rare (TLS backend or
+    /// config init only; ordinary network conditions are classified inside
+    /// `fetch`), but still fail-safe rather than a startup panic.
+    pub fn unreachable(reason: impl std::fmt::Display) -> Self {
+        Entitlements {
+            status: GateStatus::Unreachable(reason.to_string()),
+        }
+    }
+
     pub fn cowork_enabled(&self) -> bool {
         matches!(&self.status, GateStatus::Known(gates) if *gates.get(GATE_COWORK).unwrap_or(&false))
     }
@@ -117,16 +135,18 @@ pub struct EntitlementsView {
 }
 
 /// Builds the HTTP client used for the startup fetch. A dedicated builder
-/// (rather than `Client::new()` inline at the call site) so the timeout
-/// policy has one place to change.
-pub fn build_client() -> Client {
+/// (rather than `Client::new()` inline at the call site) so the timeout and
+/// redirect policy have one place to change. Never follows redirects: this
+/// request only ever has one legitimate destination (the configured
+/// server's own /v1/featuregate), so a redirect is treated as a transport
+/// error rather than silently followed. Fallible instead of panicking --
+/// the whole point of the fail-safe design below is that a startup problem
+/// here becomes `Unreachable`, not a crash.
+pub fn build_client() -> Result<Client, reqwest::Error> {
     Client::builder()
         .timeout(FETCH_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        // ponytail: Client::builder() only fails on TLS backend init or
-        // invalid config we don't set here; treated as a startup-fatal
-        // misconfiguration rather than threaded through as a runtime error.
-        .expect("failed to build entitlements HTTP client")
 }
 
 /// Fetches gate state from `{origin}/v1/featuregate`, unauthenticated. See
@@ -144,7 +164,15 @@ pub async fn fetch(client: &Client, origin: &str) -> Entitlements {
 
     let status = resp.status();
     if status.is_success() {
-        return match resp.json::<FlagsResponse>().await {
+        let body = match read_capped_body(resp).await {
+            Ok(b) => b,
+            Err(reason) => {
+                return Entitlements {
+                    status: GateStatus::Unreachable(reason),
+                }
+            }
+        };
+        return match serde_json::from_slice::<FlagsResponse>(&body) {
             Ok(flags) => Entitlements {
                 status: GateStatus::Known(flags.gates),
             },
@@ -161,6 +189,32 @@ pub async fn fetch(client: &Client, origin: &str) -> Entitlements {
     Entitlements {
         status: GateStatus::Unreachable(format!("unexpected status {status}")),
     }
+}
+
+/// Reads `resp`'s body up to `MAX_BODY_BYTES`, erroring instead of buffering
+/// further. Streamed rather than a single `.bytes()` call so an oversized or
+/// slow-drip body is rejected as soon as the cap is crossed, not after it's
+/// already fully buffered.
+///
+/// ponytail: the cap is enforced between chunks, so one oversized chunk can
+/// still be materialized in full before this rejects it (hyper's own
+/// internal per-read buffer bounds how large that one chunk can practically
+/// be, unlike Go's io.LimitReader which truncates the read call itself).
+/// Good enough against our own server misbehaving; a hostile TLS peer has
+/// other ways to cost this client memory regardless. Upgrade to a
+/// size-limiting reader wrapper (e.g. tokio_util::io::StreamReader) only if
+/// that gap ever actually matters here.
+async fn read_capped_body(resp: reqwest::Response) -> Result<Vec<u8>, String> {
+    let mut buf = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        if buf.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(format!("response body exceeds {MAX_BODY_BYTES} byte limit"));
+        }
+        buf.extend_from_slice(&chunk);
+    }
+    Ok(buf)
 }
 
 /// Reads the entitlements state `main.rs` fetched at startup.
@@ -183,18 +237,21 @@ mod tests {
     /// response with the given status line and body (Content-Length
     /// computed from `body`, never hand-counted) to the first connection it
     /// accepts, then returns the "http://host:port" origin to hit. One
-    /// connection is all a single `fetch` call needs.
-    fn mock_server(status_line: &'static str, body: &'static str) -> String {
+    /// connection is all a single `fetch` call needs. The response is
+    /// formatted before spawning so the thread only ever owns a `String`,
+    /// letting callers (e.g. the oversized-body test) pass a borrowed,
+    /// dynamically built body instead of a `&'static str` literal.
+    fn mock_server(status_line: &str, body: &str) -> String {
+        let response = format!(
+            "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
+            body.len()
+        );
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
             if let Ok((mut stream, _)) = listener.accept() {
                 let mut buf = [0u8; 1024];
                 let _ = stream.read(&mut buf);
-                let response = format!(
-                    "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
-                    body.len()
-                );
                 let _ = stream.write_all(response.as_bytes());
             }
         });
@@ -273,7 +330,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_parses_200_gates_body() {
         let origin = mock_server("HTTP/1.1 200 OK", "{\"gates\":{\"ENABLE_COWORK\":true}}");
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         match &e.status {
             GateStatus::Known(gates) => assert_eq!(gates.get("ENABLE_COWORK"), Some(&true)),
@@ -285,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_reports_cowork_disabled_when_gate_false() {
         let origin = mock_server("HTTP/1.1 200 OK", "{\"gates\":{\"ENABLE_COWORK\":false}}");
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         match &e.status {
             GateStatus::Known(gates) => assert_eq!(gates.get("ENABLE_COWORK"), Some(&false)),
@@ -299,7 +356,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_treats_401_as_awaiting_session() {
         let origin = mock_server("HTTP/1.1 401 Unauthorized", "");
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         assert_eq!(e.status, GateStatus::AwaitingSession);
         assert!(!e.is_unreachable());
@@ -308,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_treats_403_as_awaiting_session() {
         let origin = mock_server("HTTP/1.1 403 Forbidden", "");
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         assert_eq!(e.status, GateStatus::AwaitingSession);
     }
@@ -316,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_treats_500_as_unreachable() {
         let origin = mock_server("HTTP/1.1 500 Internal Server Error", "");
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         assert!(e.is_unreachable());
     }
@@ -324,7 +381,7 @@ mod tests {
     #[tokio::test]
     async fn fetch_treats_malformed_json_body_as_unreachable() {
         let origin = mock_server("HTTP/1.1 200 OK", "not json!");
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         assert!(e.is_unreachable());
         assert!(!e.cowork_enabled());
@@ -333,9 +390,42 @@ mod tests {
     #[tokio::test]
     async fn fetch_treats_connection_refused_as_unreachable() {
         let origin = unreachable_origin();
-        let client = build_client();
+        let client = build_client().unwrap();
         let e = fetch(&client, &origin).await;
         assert!(e.is_unreachable());
         assert!(!e.cowork_enabled());
+    }
+
+    #[tokio::test]
+    async fn fetch_treats_oversized_body_as_unreachable() {
+        let body = format!("{{\"pad\":\"{}\"}}", "x".repeat(MAX_BODY_BYTES + 100));
+        let origin = mock_server("HTTP/1.1 200 OK", &body);
+        let client = build_client().unwrap();
+        let e = fetch(&client, &origin).await;
+        assert!(e.is_unreachable());
+        assert!(!e.cowork_enabled());
+    }
+
+    // -- crypto provider (BLOCKER fix regression) ------------------------------
+
+    /// Mirrors main.rs's startup call. rustls 0.23 panics on the first TLS
+    /// handshake if more than one crypto provider is linked (both ring and
+    /// aws-lc-rs are, via Cargo feature unification -- see Cargo.toml) and
+    /// none was installed as the process default. cargo test runs every
+    /// test in this file in one process, so this may run after another test
+    /// already installed one; install_default's Err in that case is exactly
+    /// as fine as it is in main.rs, hence the same `let _ =`.
+    ///
+    /// A full HTTPS round-trip against a local TLS test server (the
+    /// reviewer's stronger option) is deliberately skipped: it needs a
+    /// self-signed cert plus a cert-generation dependency neither this
+    /// crate nor its dev-dependencies carry today, disproportionate for a
+    /// gap already closed by the single explicit install_default() call
+    /// this test exercises directly.
+    #[test]
+    fn crypto_provider_installs_and_client_builds_deterministically() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+        assert!(build_client().is_ok());
     }
 }

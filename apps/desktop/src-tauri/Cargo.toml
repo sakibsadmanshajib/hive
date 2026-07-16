@@ -13,10 +13,22 @@ tauri = { version = "2.11.5", features = [] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 url = "2.5.8"
-# default-tls (native-tls): schannel on Windows, OpenSSL on Linux (already
-# present in deploy/docker/Dockerfile.desktop-linux via libssl-dev). Avoids
-# rustls's separate process-wide crypto-provider bootstrap on both targets.
-reqwest = { version = "0.13", features = ["json"] }
+# Resolves to the rustls/hyper-rustls stack transitively (pulled in by Tauri
+# itself), not native-tls -- confirmed via Cargo.lock, not assumed. `stream`
+# lets fetch() cap the response body size (read_capped_body) instead of
+# buffering it unbounded; the response is deserialized with serde_json
+# directly, so reqwest's own `json` feature is unused and left off.
+reqwest = { version = "0.13", features = ["stream"] }
+# StreamExt, to drive reqwest's bytes_stream() in read_capped_body. Already
+# resolved transitively via reqwest/tauri; declared directly so entitlements.rs
+# can `use` the trait.
+futures-util = "0.3"
+# Cargo's feature unification already links both the ring and aws-lc-rs
+# crypto provider crates transitively (Tauri's own deps pull one, ours pull
+# the other), and rustls 0.23 panics on first handshake if more than one is
+# linked and none was explicitly installed as the process default. `ring`
+# picked here only to make main.rs's install_default() call deterministic.
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

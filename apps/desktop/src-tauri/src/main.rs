@@ -10,6 +10,15 @@ use entitlements::Entitlements;
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 
 fn main() {
+    // Cargo's feature unification links both the ring and aws-lc-rs crypto
+    // provider crates transitively (see Cargo.toml). rustls 0.23 panics on
+    // the first TLS handshake if more than one provider is linked and none
+    // was installed as the process default, so pick one explicitly before
+    // any HTTP client (entitlements::build_client) is ever constructed.
+    // Err means something else already installed a default first -- fine,
+    // some provider is installed either way.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             settings::get_server_url,
@@ -26,13 +35,15 @@ fn main() {
             // -- see entitlements.rs module doc for the auth-timing decision
             // and why there is no license fetch here.
             let entitlements = match saved_console_url.as_deref().map(settings::origin) {
-                Some(origin) => {
-                    let client = entitlements::build_client();
-                    let origin = origin.to_string();
-                    tauri::async_runtime::block_on(async move {
-                        entitlements::fetch(&client, &origin).await
-                    })
-                }
+                Some(origin) => match entitlements::build_client() {
+                    Ok(client) => {
+                        let origin = origin.to_string();
+                        tauri::async_runtime::block_on(async move {
+                            entitlements::fetch(&client, &origin).await
+                        })
+                    }
+                    Err(e) => Entitlements::unreachable(e),
+                },
                 None => Entitlements::unconfigured(),
             };
             let unreachable = entitlements.is_unreachable();
