@@ -28,8 +28,10 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use hive_desktop_sandbox::{NetworkPolicy, SandboxPolicy};
 use serde::Serialize;
@@ -69,13 +71,71 @@ pub trait SandboxLauncher: Send + Sync {
     fn launch(&self, policy: &SandboxPolicy, command: &[String], cwd: &Path) -> Result<(), String>;
 }
 
+/// Timeout guard for the real OS-level spawn (VENDORING.md open risk #7,
+/// `apps/desktop-sandbox`): `hive_desktop_sandbox::launch`'s `pre_exec`
+/// closure allocates inside a raw-`fork()`ed child of this (multithreaded)
+/// process, a known post-fork allocator-deadlock hazard. That hazard hung
+/// `cargo test` for 15+ minutes when first exercised end to end (see that
+/// crate's `linux.rs` test module comment) -- this is the same call, now on
+/// a live path (every "Run a task locally" click). This is a containment
+/// guard, not the fix: it stops one stuck spawn from hanging the whole
+/// app, it does not make `pre_exec` alloc-free. The real fix (pre-allocate
+/// before fork, or move off fork+pre_exec) is tracked as a follow-up, not
+/// attempted here.
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Something `spawn_with_timeout` can kill if the underlying spawn call
+/// resolves after the caller already gave up on it. Generic so tests can
+/// exercise the timeout path without a real OS process.
+pub trait Killable {
+    fn kill_best_effort(&mut self);
+}
+
+impl Killable for std::process::Child {
+    fn kill_best_effort(&mut self) {
+        let _ = self.kill();
+    }
+}
+
+/// Runs `spawn` (the actual OS-level launch attempt) on a dedicated thread
+/// and waits up to `timeout`. On timeout, returns an error immediately
+/// instead of blocking the caller -- a second, detached thread keeps
+/// waiting for `spawn` to finish and kills whatever it eventually produces,
+/// since the caller has already given up on it and nothing else will.
+fn spawn_with_timeout<K, F>(timeout: Duration, spawn: F) -> Result<(), String>
+where
+    K: Killable + Send + 'static,
+    F: FnOnce() -> Result<K, String> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(spawn());
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(Ok(_child)) => Ok(()),
+        Ok(Err(e)) => Err(e),
+        Err(_) => {
+            thread::spawn(move || {
+                if let Ok(Ok(mut child)) = rx.recv() {
+                    child.kill_best_effort();
+                }
+            });
+            Err("sandbox launch timed out".to_string())
+        }
+    }
+}
+
 pub struct RealLauncher;
 
 impl SandboxLauncher for RealLauncher {
     fn launch(&self, policy: &SandboxPolicy, command: &[String], cwd: &Path) -> Result<(), String> {
-        hive_desktop_sandbox::launch(policy, command, cwd)
-            .map(|_child| ())
-            .map_err(|e| e.to_string())
+        let policy = policy.clone();
+        let command = command.to_vec();
+        let cwd = cwd.to_path_buf();
+        spawn_with_timeout(SPAWN_TIMEOUT, move || {
+            hive_desktop_sandbox::launch(&policy, &command, &cwd).map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -113,7 +173,13 @@ impl LocalTaskStore {
     /// needs the same id to name the task's workspace directory. Generating
     /// it here instead would mint a second, different id for the same
     /// task.
-    fn create(&self, id: String, pack: String, instructions: String, workspace: &Path) -> LocalTask {
+    fn create(
+        &self,
+        id: String,
+        pack: String,
+        instructions: String,
+        workspace: &Path,
+    ) -> LocalTask {
         let policy = SandboxPolicy::build(
             vec![workspace.to_path_buf()],
             vec![],
@@ -207,7 +273,12 @@ mod tests {
     }
 
     impl SandboxLauncher for FakeLauncher {
-        fn launch(&self, _policy: &SandboxPolicy, _command: &[String], _cwd: &Path) -> Result<(), String> {
+        fn launch(
+            &self,
+            _policy: &SandboxPolicy,
+            _command: &[String],
+            _cwd: &Path,
+        ) -> Result<(), String> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             if self.fail {
                 Err("fake launch failure".to_string())
@@ -240,7 +311,12 @@ mod tests {
 
         let workspace = temp_dir("workspace-ok");
         let id = store.next_task_id();
-        let task = store.create(id, "coding-pack".to_string(), "do the thing".to_string(), &workspace);
+        let task = store.create(
+            id,
+            "coding-pack".to_string(),
+            "do the thing".to_string(),
+            &workspace,
+        );
 
         assert_eq!(task.status, LocalTaskStatus::Running);
         assert_eq!(task.pack, "coding-pack");
@@ -280,9 +356,19 @@ mod tests {
         let workspace = temp_dir("workspace-list");
 
         let id1 = store.next_task_id();
-        store.create(id1, "coding-pack".to_string(), "first".to_string(), &workspace);
+        store.create(
+            id1,
+            "coding-pack".to_string(),
+            "first".to_string(),
+            &workspace,
+        );
         let id2 = store.next_task_id();
-        store.create(id2, "knowledge-work-pack".to_string(), "second".to_string(), &workspace);
+        store.create(
+            id2,
+            "knowledge-work-pack".to_string(),
+            "second".to_string(),
+            &workspace,
+        );
 
         let tasks = store.list();
         assert_eq!(tasks.len(), 2);
@@ -309,5 +395,62 @@ mod tests {
         // per-user egress-policy fetch is wired, this must never resolve
         // to AllowHosts.
         assert_eq!(resolve_local_network_policy(), NetworkPolicy::DenyAll);
+    }
+
+    struct FakeChild {
+        killed: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Killable for FakeChild {
+        fn kill_best_effort(&mut self) {
+            self.killed.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn spawn_with_timeout_returns_promptly_when_spawn_is_fast() {
+        let result: Result<(), String> = spawn_with_timeout(Duration::from_secs(10), || {
+            Ok(FakeChild {
+                killed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            })
+        });
+        assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn spawn_with_timeout_propagates_a_fast_error() {
+        let result: Result<(), String> =
+            spawn_with_timeout::<FakeChild, _>(Duration::from_secs(10), || Err("boom".to_string()));
+        assert_eq!(result, Err("boom".to_string()));
+    }
+
+    #[test]
+    fn spawn_with_timeout_returns_error_without_waiting_for_a_hung_spawn() {
+        let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let killed_for_spawn = Arc::clone(&killed);
+        let started = std::time::Instant::now();
+
+        let result: Result<(), String> = spawn_with_timeout(Duration::from_millis(50), move || {
+            // Simulates the real launch()/pre_exec hang this guard exists
+            // for: a spawn attempt that never returns within the timeout.
+            thread::sleep(Duration::from_secs(2));
+            Ok(FakeChild {
+                killed: killed_for_spawn,
+            })
+        });
+
+        assert_eq!(result, Err("sandbox launch timed out".to_string()));
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "must return promptly on timeout, not block until the hung spawn resolves"
+        );
+
+        // The hung "spawn" finishes ~2s in; give the detached watcher thread
+        // time to receive it and kill it, since the caller already gave up.
+        thread::sleep(Duration::from_millis(2200));
+        assert!(
+            killed.load(Ordering::SeqCst),
+            "a spawn result that arrives after the caller gave up must be killed"
+        );
     }
 }
