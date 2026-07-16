@@ -2,6 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { validateServerUrl } from "./settings";
 
+/** Mirrors src-tauri/src/entitlements.rs EntitlementsView. */
+interface EntitlementsView {
+  status: "known" | "awaiting_session" | "unreachable";
+  cowork_enabled: boolean;
+  reason?: string;
+}
+
 function byId<T extends HTMLElement>(id: string): T {
   const el = document.getElementById(id);
   if (!el) throw new Error(`missing #${id}`);
@@ -20,9 +27,33 @@ function clearError(): void {
   errorEl.textContent = "";
 }
 
+/**
+ * Step 4.3 (#310): if the startup gate fetch (src-tauri/src/entitlements.rs)
+ * found the configured server unreachable, show that inline instead of
+ * silently leaving the user on a bare "enter your server" form -- the two
+ * states look identical otherwise. Not shown for `awaiting_session` (the
+ * expected first-run and cold-start state) or `known`.
+ */
+async function showUnreachableBannerIfNeeded(): Promise<void> {
+  const entitlements = await invoke<EntitlementsView>("get_entitlements");
+  if (entitlements.status !== "unreachable") return;
+
+  const savedUrl = await invoke<string | null>("get_server_url");
+  if (savedUrl) {
+    byId<HTMLInputElement>("server-url").value = savedUrl;
+  }
+  showError(
+    `Can't reach ${savedUrl ?? "the configured server"}. Check the address or your connection, then try again.`,
+  );
+}
+
 function init(): void {
   const form = byId<HTMLFormElement>("server-form");
   const input = byId<HTMLInputElement>("server-url");
+
+  showUnreachableBannerIfNeeded().catch(() => {
+    // Non-fatal: worst case the form just shows no banner.
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
