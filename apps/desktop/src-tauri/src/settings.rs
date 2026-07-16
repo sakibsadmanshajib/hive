@@ -76,12 +76,26 @@ pub fn resolved_target_url(saved: Option<String>) -> Option<Url> {
     saved.and_then(|s| Url::parse(&s).ok())
 }
 
+/// Returns the deployment origin (scheme + host + optional port) the stored
+/// console URL was built from, by stripping the fixed console base path this
+/// module always appends. Used by `entitlements.rs` to target edge-api's
+/// `/v1/featuregate` on the same origin as the console, without re-parsing
+/// or re-deriving the URL a second way.
+pub fn origin(console_url: &str) -> &str {
+    console_url
+        .strip_suffix(CONSOLE_BASE_PATH)
+        .unwrap_or(console_url)
+}
+
 pub fn save(data_dir: &Path, normalized_url: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(data_dir)?;
     let payload = StoredSettings {
         console_url: normalized_url.to_string(),
     };
-    std::fs::write(settings_path(data_dir), serde_json::to_vec_pretty(&payload)?)
+    std::fs::write(
+        settings_path(data_dir),
+        serde_json::to_vec_pretty(&payload)?,
+    )
 }
 
 pub fn remove(data_dir: &Path) -> std::io::Result<()> {
@@ -172,8 +186,7 @@ mod tests {
 
     #[test]
     fn strips_user_provided_path_query_and_fragment() {
-        let out =
-            validate_and_normalize("https://hive.example.com/some/path?x=1#frag").unwrap();
+        let out = validate_and_normalize("https://hive.example.com/some/path?x=1#frag").unwrap();
         assert_eq!(out, "https://hive.example.com/agent-workspace");
     }
 
@@ -216,10 +229,8 @@ mod tests {
 
     #[test]
     fn resolved_target_url_parses_valid_saved_string() {
-        let url = resolved_target_url(Some(
-            "https://hive.example.com/agent-workspace".to_string(),
-        ))
-        .unwrap();
+        let url = resolved_target_url(Some("https://hive.example.com/agent-workspace".to_string()))
+            .unwrap();
         assert_eq!(url.as_str(), "https://hive.example.com/agent-workspace");
     }
 
@@ -253,6 +264,32 @@ mod tests {
     fn remove_is_idempotent_when_nothing_saved() {
         let dir = temp_dir("remove-idempotent");
         assert!(remove(&dir).is_ok());
+    }
+
+    // -- origin ---------------------------------------------------------------
+
+    #[test]
+    fn origin_strips_console_base_path() {
+        assert_eq!(
+            origin("https://hive.example.com/agent-workspace"),
+            "https://hive.example.com"
+        );
+    }
+
+    #[test]
+    fn origin_preserves_port() {
+        assert_eq!(
+            origin("https://hive.example.com:8443/agent-workspace"),
+            "https://hive.example.com:8443"
+        );
+    }
+
+    #[test]
+    fn origin_falls_back_to_input_when_suffix_absent() {
+        // Defensive: a hand-edited or otherwise corrupt stored value that
+        // doesn't end in the expected base path is returned unchanged rather
+        // than mangled.
+        assert_eq!(origin("not a url"), "not a url");
     }
 
     #[test]
