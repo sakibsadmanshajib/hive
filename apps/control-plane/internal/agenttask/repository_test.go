@@ -2,6 +2,7 @@ package agenttask_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -156,6 +157,53 @@ func TestRepository_CreateGetTransition_RoundTrip(t *testing.T) {
 	}
 	if finished.ResultSummaryRef != "result-ref" {
 		t.Errorf("expected result_summary_ref persisted, got %q", finished.ResultSummaryRef)
+	}
+}
+
+// TestRepository_Transition_AtomicGuardRejectsAlreadyTerminal proves the
+// UPDATE's own "not already terminal" precondition is what rejects a second
+// transition, not an application-level pre-read — the fix for the
+// last-write-wins race where a concurrent engine callback could otherwise
+// clobber a Cancel (or vice versa). Two sequential Transitions: the first
+// reaches a terminal state, the second must fail with ErrTerminalState
+// rather than silently overwriting it.
+func TestRepository_Transition_AtomicGuardRejectsAlreadyTerminal(t *testing.T) {
+	pool := newRLSTestPool(t)
+	repo := agenttask.NewPgxRepository(pool)
+	ctx := context.Background()
+
+	tenantID := uuid.New()
+	seedTenant(t, tenantID)
+	userID := seedUser(t)
+
+	created, err := repo.Create(ctx, tenantID, userID, agenttask.PackCoding)
+	if err != nil {
+		t.Fatalf("seed task: %v", err)
+	}
+
+	cancelled, err := repo.Transition(ctx, tenantID, userID, created.ID, agenttask.StatusCancelled, "", "", "")
+	if err != nil {
+		t.Fatalf("first Transition (cancel): %v", err)
+	}
+	if cancelled.Status != agenttask.StatusCancelled {
+		t.Fatalf("expected StatusCancelled, got %v", cancelled.Status)
+	}
+
+	if _, err := repo.Transition(ctx, tenantID, userID, created.ID, agenttask.StatusSucceeded, "", "result-ref", ""); !errors.Is(err, agenttask.ErrTerminalState) {
+		t.Fatalf("expected ErrTerminalState on a second transition targeting an already-terminal row, got %v", err)
+	}
+
+	// The row must be unchanged: still cancelled, result_summary_ref never
+	// applied by the rejected transition.
+	got, err := repo.Get(ctx, tenantID, userID, created.ID)
+	if err != nil {
+		t.Fatalf("Get after rejected transition: %v", err)
+	}
+	if got.Status != agenttask.StatusCancelled {
+		t.Errorf("expected status to remain cancelled, got %v", got.Status)
+	}
+	if got.ResultSummaryRef != "" {
+		t.Errorf("expected result_summary_ref to remain empty, got %q", got.ResultSummaryRef)
 	}
 }
 

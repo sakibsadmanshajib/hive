@@ -44,16 +44,6 @@ const (
 	StatusCancelled Status = "cancelled"
 )
 
-// terminal reports whether no further transition is allowed out of s.
-func (s Status) terminal() bool {
-	switch s {
-	case StatusSucceeded, StatusFailed, StatusCancelled:
-		return true
-	default:
-		return false
-	}
-}
-
 // Task is one row of public.agent_tasks.
 type Task struct {
 	ID               uuid.UUID

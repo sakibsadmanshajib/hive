@@ -54,6 +54,13 @@ func (f *fakeRepository) Transition(_ context.Context, tenantID, userID, id uuid
 	if !ok || t.TenantID != tenantID || t.UserID != userID {
 		return agenttask.Task{}, agenttask.ErrNotFound
 	}
+	// Mirrors the real repository's atomic "not already terminal" UPDATE
+	// guard: Service no longer pre-checks this itself, so the fake must
+	// enforce it for terminal-rejection tests to mean anything.
+	switch t.Status {
+	case agenttask.StatusSucceeded, agenttask.StatusFailed, agenttask.StatusCancelled:
+		return agenttask.Task{}, agenttask.ErrTerminalState
+	}
 	t.Status = status
 	if sessionRef != "" {
 		t.EngineSessionRef = sessionRef

@@ -66,14 +66,10 @@ func (s *Service) List(ctx context.Context, tenantID, userID uuid.UUID) ([]Task,
 
 // Cancel transitions a task to StatusCancelled. Only reachable from
 // StatusQueued or StatusRunning; a task already in a terminal state returns
-// ErrTerminalState rather than silently no-op-ing.
+// ErrTerminalState. No read-then-act check here — Repository.Transition's
+// UPDATE carries the "not already terminal" precondition atomically, so a
+// concurrent engine callback finishing the task can never be clobbered by a
+// racing Cancel (or vice versa).
 func (s *Service) Cancel(ctx context.Context, tenantID, userID, id uuid.UUID) (Task, error) {
-	t, err := s.repo.Get(ctx, tenantID, userID, id)
-	if err != nil {
-		return Task{}, err
-	}
-	if t.Status.terminal() {
-		return Task{}, ErrTerminalState
-	}
 	return s.repo.Transition(ctx, tenantID, userID, id, StatusCancelled, "", "", "")
 }

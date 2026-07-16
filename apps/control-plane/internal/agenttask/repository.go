@@ -119,8 +119,16 @@ func (r *pgxRepository) List(ctx context.Context, tenantID, userID uuid.UUID) ([
 	return out, nil
 }
 
+// Transition updates status atomically: the UPDATE itself carries a "not
+// already terminal" precondition, so a status flip (e.g. an async engine
+// callback landing succeeded) can never be clobbered by a concurrent Cancel
+// racing against it, or vice versa — whichever transition's UPDATE commits
+// first wins, and the loser's statement matches zero rows instead of
+// silently overwriting a terminal state (last-write-wins was the bug: the
+// old UPDATE had no status precondition at all).
 func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uuid.UUID, status Status, sessionRef, resultSummaryRef, errMsg string) (Task, error) {
 	var t Task
+	var notFound, terminal bool
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx, `
 			UPDATE public.agent_tasks
@@ -132,17 +140,44 @@ func (r *pgxRepository) Transition(ctx context.Context, tenantID, userID, id uui
 			       finished_at = CASE WHEN finished_at IS NULL AND $4 IN ('succeeded', 'failed', 'cancelled') THEN now() ELSE finished_at END,
 			       updated_at = now()
 			 WHERE id = $1 AND user_id = $2
+			   AND status NOT IN ('succeeded', 'failed', 'cancelled')
 			RETURNING id, tenant_id, user_id, pack, status, engine_session_ref, result_summary_ref, error_message, created_at, updated_at, started_at, finished_at
 		`, id, userID, tenantID, string(status), sessionRef, resultSummaryRef, errMsg)
 		var err error
 		t, err = scanTask(row)
-		return err
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+
+		// The guard blocked the UPDATE (0 rows) — disambiguate "no such
+		// task for this id+user" from "task exists but is terminal" with a
+		// plain read scoped the same way, in the same transaction.
+		var exists bool
+		qerr := tx.QueryRow(ctx,
+			`SELECT true FROM public.agent_tasks WHERE id = $1 AND user_id = $2`,
+			id, userID).Scan(&exists)
+		switch {
+		case errors.Is(qerr, pgx.ErrNoRows):
+			notFound = true
+			return nil
+		case qerr != nil:
+			return qerr
+		default:
+			terminal = true
+			return nil
+		}
 	})
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return Task{}, ErrNotFound
-		}
 		return Task{}, fmt.Errorf("agenttask: transition: %w", err)
+	}
+	if notFound {
+		return Task{}, ErrNotFound
+	}
+	if terminal {
+		return Task{}, ErrTerminalState
 	}
 	return t, nil
 }
