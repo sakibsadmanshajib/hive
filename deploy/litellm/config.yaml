@@ -104,6 +104,21 @@ model_list:
     model_info:
       mode: embedding
 
+  # ── 5b. Embedding: bge-m3 (Enterprise/Ollama local, native 1024-dim) ────────
+  # Not active in the serverless cloud demo -- no bge-m3 server runs there.
+  # This route lets the enterprise/self-host profile point EMBEDDING_MODEL at
+  # "bge-m3" through LiteLLM instead of hitting Ollama directly, once an
+  # operator sets EMBEDDING_LOCAL_BASE_URL to their bge-m3-serving endpoint
+  # (e.g. http://ollama:11434/v1). Native 1024-dim: no EMBEDDING_TRUNCATE_TO
+  # needed when EMBEDDING_DIM=1024 (the default, matching rag_chunks today).
+  - model_name: bge-m3
+    litellm_params:
+      model: openai/bge-m3
+      api_base: os.environ/EMBEDDING_LOCAL_BASE_URL
+      api_key: "none"
+    model_info:
+      mode: embedding
+
   # ── 6. Voice: speech-to-text (Groq Whisper, free tier) ──────────────────────
   # Groq: whisper-large-v3 — serverless STT for the demo. edge-api's audio
   # handler forwards POST /v1/audio/transcriptions here whenever no local

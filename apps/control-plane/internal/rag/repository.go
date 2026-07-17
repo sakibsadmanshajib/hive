@@ -171,6 +171,27 @@ func (r *Repo) UpdateDocumentStatus(ctx context.Context, tenantID, docID uuid.UU
 	})
 }
 
+// SetEmbeddedProvenance marks a document embedded and records the model +
+// dimension that produced its vectors, in one statement. Ingester calls this
+// instead of UpdateDocumentStatus(..., StatusEmbedded, "") so provenance is
+// never left at the column DEFAULT for documents actually embedded under a
+// different, later configuration (needed to find stale rows once a re-embed
+// job exists — PR2, not built here).
+func (r *Repo) SetEmbeddedProvenance(ctx context.Context, tenantID, docID uuid.UUID, model string, dim int) error {
+	return r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx, `
+			UPDATE public.rag_documents
+			SET status = $1, error_msg = NULL, embedding_model = $2, embedding_dim = $3, updated_at = now()
+			WHERE id = $4`,
+			StatusEmbedded, model, dim, docID,
+		)
+		if err != nil {
+			return fmt.Errorf("rag.repo: set embedded provenance: %w", err)
+		}
+		return nil
+	})
+}
+
 // DeleteDocument deletes a document and cascades to its chunks.
 func (r *Repo) DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) error {
 	return r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {

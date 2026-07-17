@@ -108,6 +108,11 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		topK = maxTopK
 	}
 
+	if !h.checkEmbeddingGuard(r.Context(), user.TenantID) {
+		apierrors.Write(w, http.StatusServiceUnavailable, apierrors.CodeServiceUnavailable, "embedding model changed, re-embed required")
+		return
+	}
+
 	h.audit(r.Context(), "RAG_CHAT_QUERY", "rag_document", user.TenantID.String(), "INFO",
 		user.TenantID, user.ID, r.UserAgent(), map[string]any{"model": req.Model, "top_k": topK})
 

@@ -7,11 +7,15 @@ import (
 	"unicode"
 )
 
-const (
-	// EmbeddingDimension is the vector size for bge-m3. Must agree with the
-	// rag_chunks.embedding column definition in the migration.
-	EmbeddingDimension = 1024
+// EmbeddingDimension is the configured embedding vector width. Defaults to
+// 1024 (rag_chunks.embedding's current column width). main.go overwrites
+// this once at process startup from EMBEDDING_DIM, before any ingest
+// traffic is served; the admin-chosen model + this value are validated for
+// consistency by packages/embedmodel at the same point. Do not mutate after
+// the server starts serving requests.
+var EmbeddingDimension = 1024
 
+const (
 	// DefaultChunkTokens is the target chunk size in approximate tokens.
 	// ~512 tokens at ~4 chars/token = ~2048 chars.
 	DefaultChunkTokens = 512

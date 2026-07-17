@@ -70,6 +70,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/usage"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/waldrainer"
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
 
@@ -975,14 +976,38 @@ func main() {
 				log.Printf("WARNING: EMBEDDING_TRUNCATE_TO=%q is not a valid integer; truncation disabled (strict dimension reject applies)", ragEmbedTruncateToRaw)
 				ragEmbedTruncateTo = 0
 			}
-			ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo)
-			ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0)
-			cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
-				return ragIngester.Ingest(ctx, tenantID, docID, content)
-			}, func(h http.Handler) http.Handler {
-				return platformhttp.RequireInternalToken(cfg.InternalToken, h)
-			})
-			log.Println("rag ingest route registered")
+			// EMBEDDING_DIM: see the matching comment in edge-api/cmd/server/main.go.
+			// Overwrites cprag.EmbeddingDimension's default (1024) so ingest's
+			// dimension checks and rag_documents.embedding_dim provenance both
+			// follow config instead of a compile-time constant.
+			ragEmbedDimRaw := strings.TrimSpace(os.Getenv("EMBEDDING_DIM"))
+			ragEmbedDim := cprag.EmbeddingDimension
+			if ragEmbedDimRaw != "" {
+				if v, err := strconv.Atoi(ragEmbedDimRaw); err != nil {
+					log.Printf("WARNING: EMBEDDING_DIM=%q is not a valid integer; falling back to default %d", ragEmbedDimRaw, ragEmbedDim)
+				} else {
+					ragEmbedDim = v
+				}
+			}
+			cprag.EmbeddingDimension = ragEmbedDim
+
+			// embedmodel.Validate: see the matching comment in
+			// edge-api/cmd/server/main.go. A known but inconsistent
+			// model/dim/truncateTo combination disables ingestion the same way
+			// an unset EMBEDDING_BASE_URL does above, instead of embedding and
+			// storing vectors of the wrong width.
+			if err := embedmodel.Validate(ragEmbedModel, ragEmbedDim, ragEmbedTruncateTo); err != nil {
+				log.Printf("ERROR: RAG embedding configuration is inconsistent, rag ingest route not registered: %v", err)
+			} else {
+				ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo)
+				ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0, ragEmbedModel)
+				cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
+					return ragIngester.Ingest(ctx, tenantID, docID, content)
+				}, func(h http.Handler) http.Handler {
+					return platformhttp.RequireInternalToken(cfg.InternalToken, h)
+				})
+				log.Println("rag ingest route registered")
+			}
 		}
 	}
 
