@@ -243,7 +243,12 @@ func TestHandleChat_ChatNotConfigured_Returns503(t *testing.T) {
 // The upstream "model" is the concrete route name (route-groq-fast) so tests
 // can prove the relay rewrites it to the client alias (provider-blind), and
 // the terminal chunk carries usage so the accounting audit can capture tokens.
+// cannedSSEResponse includes an event: line carrying a provider name so the
+// test proves non-data upstream lines are dropped (never relayed): if the
+// relay forwarded it, assertNoLeak would catch "groq" in the response body.
 const cannedSSEResponse = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"The answer"}}]}
+
+event: groq.internal.rate_notice
 
 data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":" is 42 [1]."}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
 
@@ -277,9 +282,13 @@ func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
 		t.Fatalf("expected SSE content type, got %q", ct)
 	}
 
-	// The dispatched body must request streaming from upstream.
+	// The dispatched body must request streaming from upstream, with
+	// include_usage so the terminal chunk carries token counts for accounting.
 	if !strings.Contains(string(captured), `"stream":true`) {
 		t.Errorf("expected dispatched body to set stream:true, got %s", captured)
+	}
+	if !strings.Contains(string(captured), `"include_usage":true`) {
+		t.Errorf("expected dispatched body to set stream_options.include_usage:true, got %s", captured)
 	}
 
 	body := w.Body.String()
@@ -322,6 +331,64 @@ func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
 	}
 	if got := completed["total_tokens"]; got != int64(15) {
 		t.Errorf("expected RAG_CHAT_COMPLETED total_tokens=15 from usage chunk, got %v (%T)", got, got)
+	}
+}
+
+func TestHandleChat_StreamingUpstreamNon2xx_StaysProviderBlindNoSSE(t *testing.T) {
+	var audits []auditRecord
+	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+		fakeSelectRoute("route-groq-fast", nil),
+		fakeDispatch(http.StatusTooManyRequests, `{"error":{"message":"groq rate limit exceeded, retry after 2.5s"}}`, nil))
+
+	req := chatReq(t, ChatRequest{
+		Model:    "hive-fast",
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+		Stream:   true,
+	}, uuid.New())
+	w := httptest.NewRecorder()
+	h.handleChat(w, req)
+
+	// Even though the client asked to stream, a non-2xx upstream must be
+	// surfaced as a provider-blind JSON error and must NOT begin an SSE stream.
+	if w.Code != http.StatusTooManyRequests {
+		t.Errorf("expected 429 passthrough, got %d: %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/event-stream") {
+		t.Errorf("must not start an SSE stream on a non-2xx upstream, got content-type %q", ct)
+	}
+	if strings.Contains(w.Body.String(), "data:") {
+		t.Errorf("must not emit SSE frames on a non-2xx upstream, got: %s", w.Body.String())
+	}
+	assertNoLeak(t, w.Body.String())
+}
+
+func TestHandleChat_StreamingWithoutDoneDoesNotRecordCompleted(t *testing.T) {
+	store := newFakeStore()
+	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: uuid.New(), Content: "ctx", Score: 0.1}}
+
+	// Upstream stream that ends WITHOUT a [DONE] (truncated / dropped mid-stream).
+	truncated := `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"partial"}}]}
+
+`
+	var audits []auditRecord
+	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+		fakeSelectRoute("route-groq-fast", nil),
+		fakeDispatch(http.StatusOK, truncated, nil))
+
+	req := chatReq(t, ChatRequest{
+		Model:    "hive-fast",
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+		Stream:   true,
+	}, uuid.New())
+	w := httptest.NewRecorder()
+	h.handleChat(w, req)
+
+	// The partial content still relays, but a stream that never saw [DONE]
+	// must NOT be recorded as a completed (billable) stream.
+	for _, a := range audits {
+		if a.Action == "RAG_CHAT_COMPLETED" {
+			t.Error("RAG_CHAT_COMPLETED must not fire for a stream that never received [DONE]")
+		}
 	}
 }
 

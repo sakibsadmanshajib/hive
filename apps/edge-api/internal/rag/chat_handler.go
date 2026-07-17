@@ -377,6 +377,7 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 	}
 
 	var promptTokens, completionTokens, totalTokens int64
+	completed := false
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 64*1024), 512*1024)
 	for scanner.Scan() {
@@ -389,6 +390,7 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 		if line == "data: [DONE]" {
 			fmt.Fprint(w, "data: [DONE]\n\n")
 			flusher.Flush()
+			completed = true
 			break
 		}
 
@@ -416,18 +418,25 @@ func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, res
 			continue
 		}
 
-		// Blank separators are implied by our own framing; other SSE fields
-		// (event:, comments) carry no model name and pass through unchanged.
-		if line == "" {
-			continue
-		}
-		fmt.Fprintf(w, "%s\n", line)
-		flusher.Flush()
+		// Drop every other upstream line. event:, comment (":"), and blank
+		// separators are never forwarded: an "event: <provider>-error" line
+		// would leak the provider identity, and our own framing already emits
+		// the blank separators between data frames. Only sanitized data frames
+		// and our [DONE] reach the client (provider-blind).
 	}
 
-	// RAG_CHAT_COMPLETED is the accounting signal for this JWT-session path;
-	// see the non-streaming path's doc comment for why audit is the carrier.
-	// Token counts come from the terminal usage chunk (stream_options.include_usage).
+	if err := scanner.Err(); err != nil {
+		log.Printf("rag: chat stream read error: %v", err)
+	}
+
+	// RAG_CHAT_COMPLETED is the usage-accounting signal for this JWT-session
+	// path (see the non-streaming path's doc comment for why audit is the
+	// carrier). Emit it ONLY when the upstream stream genuinely finished with
+	// [DONE]: a client cancellation, scanner error, or truncation must not be
+	// billed as a completed stream with partial or zero usage.
+	if !completed {
+		return
+	}
 	h.audit(r.Context(), "RAG_CHAT_COMPLETED", "rag_document", tenantID.String(), "INFO",
 		tenantID, actorID, userAgent, map[string]any{
 			"model":             alias,
