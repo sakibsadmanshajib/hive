@@ -85,6 +85,29 @@ services:
     # launches here fail at the `exec.LookPath("apptainer")` step; see
     # apps/agent-engine/internal/sandbox/apptainer_integration_test.go
     # (HIVE_APPTAINER_TEST=1) for the gated live-launch proof.
+    #
+    # cmd/agent-engine's -tenant/-user/-workspace/-sif flags are required and
+    # have no default (see cmd/agent-engine/main.go); this compose service
+    # supplied none of them, so the entrypoint hit uuid.Parse("") and
+    # log.Fatal'd immediately on every start. The command below is the
+    # manual smoke-test invocation the binary's package doc already
+    # describes: placeholder tenant/user UUIDs plus --dry-run take the
+    # binary past flag parsing and into its real egress-policy call to
+    # control-plane, proving the binary builds, starts, and reaches its
+    # dependency over the compose network. It still exits non-zero because
+    # the placeholder tenant/user do not exist in this database (egress
+    # policy resolution 500s for an unknown tenant) -- expected for a
+    # placeholder ID, not a regression. Real per-task sandbox launches do
+    # not go through this container at all: apps/control-plane embeds
+    # apps/agent-engine/engineapi in-process (see cmd/server/main.go's
+    # buildAgentEngine) and calls it directly on whatever host runs
+    # control-plane.
+    command:
+      - "-tenant=00000000-0000-0000-0000-000000000000"
+      - "-user=00000000-0000-0000-0000-000000000000"
+      - "-workspace=/tmp/agent-engine-smoke-test"
+      - "-sif=/tmp/agent-engine-smoke-test.sif"
+      - "-dry-run"
     volumes:
       - gomodcache:/go/pkg/mod
       - gobuildcache:/root/.cache/go-build
