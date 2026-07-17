@@ -1880,6 +1880,20 @@
       ]
     },
     {
+      "date": "2026-07-17",
+      "error_message": "column \"tenant_id\" does not exist on clean supabase db push at 20260625_06_audit_cold_archive_manifest.sql (CREATE UNIQUE INDEX ... (tenant_id, partition_month))",
+      "root_cause": "audit_cold_archive_manifest defined twice with incompatible shapes: 20260516_04 (May, partition_name/parquet_path) and 20260625_06 (June, id/tenant_id/object_key). June used CREATE TABLE IF NOT EXISTS, so on a chained fresh apply it no-opped onto the May table, then its unique index on the June-only column tenant_id errored. A CI-only DROP TABLE band-aid in ci.yml masked it, and a stale compliance test (audit_retention_test.go) asserted May columns, so it only passed because the CI drop left the May table live. App code (auditarchive/pg_repository.go) and the 20260625_08 immutability trigger both use the June shape, so June is authoritative.",
+      "fix": "Made 20260625_06 self-healing (permitted: it was un-applied and always-failing): drop the stale May table and its May-era policies (manifest_service_role_all, manifest_auditor_select) then create the June table, with hive_app INSERT/SELECT/UPDATE and auditor_ro SELECT grants relocated in. Removed the CI DROP band-aid so CI validates the real chain. Fixed audit_retention_test.go to assert June columns. Stale May table provably empty everywhere (app writes June-only columns, so writes against the May shape always error; staging confirmed 0 rows), so the drop preserves all audit data. Validated: full migration chain applies cleanly on a fresh pgvector:pg17 with no drop hack, and the compliance + RLS suites pass against the June schema.",
+      "tags": [
+        "migration",
+        "rls",
+        "audit",
+        "compliance",
+        "ci-integrity",
+        "prod-only"
+      ]
+    },
+    {
       "id": "preexec-allocator-unsafe",
       "date": "2026-07-17",
       "error_message": "Desktop sandbox launch() could hang the whole app (once a 15+ minute cargo test hang) inside the Command::pre_exec closure",

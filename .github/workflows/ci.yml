@@ -125,20 +125,6 @@ jobs:
           dsn="postgresql://postgres:postgres@127.0.0.1:5432/hive_test?sslmode=disable"
           psql "$dsn" -v ON_ERROR_STOP=1 -f .github/ci/test-db-bootstrap.sql
           for f in supabase/migrations/*.sql; do
-            name=$(basename "$f")
-            # Pre-existing migration-ordering defect, tracked separately
-            # (not fixed here — CI wiring only, no product-code changes):
-            # 20260516_04_phase19_audit_log.sql and this later file both
-            # create a table named public.audit_cold_archive_manifest with
-            # different column shapes. CREATE TABLE IF NOT EXISTS here
-            # silently no-ops against the earlier (stale) shape on any
-            # from-scratch replay, so a later ALTER in this same file then
-            # fails against columns that don't exist. This drop is CI-only,
-            # against this run's throwaway database, never a real
-            # environment, and only unblocks this ephemeral replay.
-            if [ "$name" = "20260625_06_audit_cold_archive_manifest.sql" ]; then
-              psql "$dsn" -v ON_ERROR_STOP=1 -c "DROP TABLE IF EXISTS public.audit_cold_archive_manifest CASCADE;"
-            fi
             psql "$dsn" -v ON_ERROR_STOP=1 -f "$f"
           done
           echo "HIVE_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
