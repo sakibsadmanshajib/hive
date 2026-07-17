@@ -230,7 +230,22 @@ func main() {
 
 	// Issue #293: Voice previously had a gate constant with no enforcing route
 	// check. Wire it here, at the one real route it protects.
-	voiceMW := featureGate.Require(featuregate.FeatureVoice)
+	//
+	// voiceGateForAPIKeys below narrows that gate to JWT-session callers only.
+	// Unlike RAG and Cowork (deliberately JWT-only sovereign-workspace
+	// features per the comments on their wiring above), /v1/audio/* is core
+	// OpenAI-contract surface -- the same category as /v1/chat/completions,
+	// /v1/embeddings, and /v1/images/*, none of which carry a tenant feature
+	// gate. featuregate.Gate.Require reads auth.UserFrom, which is only ever
+	// populated by the JWT middleware (auth.Selector sends "Bearer hk_..."
+	// requests straight past it, see internal/auth/selector.go); wrapping an
+	// hk_-authenticated route in Require therefore denied every API-key
+	// caller unconditionally, regardless of routing/catalog config or the
+	// tenant's actual ENABLE_VOICE setting. The audio.Handler already does
+	// its own API-key authorization (audio.Authorizer), so hk_ callers are
+	// let through here and JWT/OWUI callers alone are still subject to the
+	// tenant flag.
+	voiceMW := voiceGateForAPIKeys(featureGate.Require(featuregate.FeatureVoice))
 	registerMediaFileBatchRoutes(mux, imagesHandler, audioHandler, filesHandler, batchesHandler, voiceMW)
 
 	log.Printf("S3 storage enabled: images=%s, files=%s", storageCfg.ImagesBucket, storageCfg.FilesBucket)
@@ -608,6 +623,24 @@ func jwtAwareChatHandler(jwtHandler, apiKeyHandler http.Handler) http.Handler {
 		}
 		apiKeyHandler.ServeHTTP(w, r)
 	})
+}
+
+// voiceGateForAPIKeys narrows a featuregate middleware to JWT-session callers
+// only. hk_ API-key requests never populate auth.UserFrom (see the comment
+// above the voiceMW construction in main()), so an hk_ caller skips the gate
+// and reaches next directly; the gated path still applies in full to
+// JWT-authenticated (OWUI/web-console) requests.
+func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		gated := gate(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if user, ok := auth.UserFrom(r.Context()); ok && user != nil {
+				gated.ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {

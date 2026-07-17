@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	edgecatalog "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/catalog"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/files"
@@ -420,5 +422,47 @@ func testRouteHandler(name string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Test-Handler", name)
 		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
+// TestVoiceGateForAPIKeysBypassesGateForAPIKeyCallers proves the fix for the
+// hk_-caller lockout: auth.Selector never populates auth.UserFrom for
+// "Bearer hk_..." requests (see internal/auth/selector.go), so wrapping
+// /v1/audio/* directly in featureGate.Require denied every API-key caller
+// unconditionally, regardless of the tenant's ENABLE_VOICE setting or any
+// routing/catalog config. voiceGateForAPIKeys must let those requests reach
+// next directly, while still applying the wrapped gate in full to
+// JWT-session (OWUI/web-console) callers.
+func TestVoiceGateForAPIKeysBypassesGateForAPIKeyCallers(t *testing.T) {
+	denyGate := func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+		})
+	}
+	inner := testRouteHandler("audio")
+	gated := voiceGateForAPIKeys(denyGate)(inner)
+
+	t.Run("api key caller bypasses the gate", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+		req.Header.Set("Authorization", "Bearer hk_test")
+		rec := httptest.NewRecorder()
+
+		gated.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("api-key caller: got status %d, want 204 (gate bypassed, inner handler reached)", rec.Code)
+		}
+	})
+
+	t.Run("jwt session caller is still gated", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech", nil)
+		req = req.WithContext(auth.WithUser(req.Context(), &auth.User{TenantID: uuid.New()}))
+		rec := httptest.NewRecorder()
+
+		gated.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("jwt caller: got status %d, want 403 (gate still enforced)", rec.Code)
+		}
 	})
 }

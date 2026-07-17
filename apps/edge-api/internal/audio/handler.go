@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -267,12 +268,14 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 // handleTranscription processes POST /v1/audio/transcriptions.
 // When local STT backends are configured (h.stt != nil), requests are dispatched
 // directly to the two-tier Parakeet/faster-whisper client — audio never leaves the
-// box. When no local backends are configured, a provider-blind 503 is returned;
-// we do NOT fall back to an external proxy on a sovereign edge box.
+// box (sovereign edge deployments, PARAKEET_BASE_URL/FASTER_WHISPER_BASE_URL set).
+// When no local backends are configured (serverless/cloud deployments), requests
+// fall back to the same generic LiteLLM route selection handleTranslation already
+// uses, so a serverless STT provider (e.g. Groq Whisper) can be wired purely
+// through routing/catalog data without any further edge-api changes.
 func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	if h.stt == nil {
-		code := "feature_unavailable"
-		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech transcription is not available.", &code)
+		h.handleMultipartAudio(w, r, "/audio/transcriptions", "/v1/audio/transcriptions")
 		return
 	}
 	ctx := r.Context()
@@ -382,6 +385,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		EstimatedCredits: 500,
 	})
 	if err != nil {
+		log.Printf("audio: create reservation failed for endpoint=%s alias=%s: %v", accountingEndpoint, route.AliasID, err)
 		code := "insufficient_quota"
 		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
 		return
