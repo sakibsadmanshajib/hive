@@ -32,6 +32,10 @@ package-lock.json
 /apps/desktop-sandbox/target/
 /apps/desktop-sandbox/*/target/
 
+# apps/agent-engine runtime image: the Apptainer SIF is a multi-GB build
+# artifact (built in CI or via deploy/apptainer/build.sh), never committed.
+/deploy/apptainer/*.sif
+
 # IDE
 .idea/
 .vscode/
