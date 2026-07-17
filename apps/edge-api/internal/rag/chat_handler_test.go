@@ -239,21 +239,89 @@ func TestHandleChat_ChatNotConfigured_Returns503(t *testing.T) {
 	}
 }
 
-func TestHandleChat_StreamingRejected(t *testing.T) {
+// cannedSSEResponse is a two-chunk streamed completion terminated by [DONE].
+// The upstream "model" is the concrete route name (route-groq-fast) so tests
+// can prove the relay rewrites it to the client alias (provider-blind), and
+// the terminal chunk carries usage so the accounting audit can capture tokens.
+const cannedSSEResponse = `data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":"The answer"}}]}
+
+data: {"id":"up-1","object":"chat.completion.chunk","model":"route-groq-fast","choices":[{"index":0,"delta":{"content":" is 42 [1]."}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+
+data: [DONE]
+
+`
+
+func TestHandleChat_StreamingRelaysCitationsAndChunks(t *testing.T) {
+	store := newFakeStore()
+	docID := uuid.New()
+	store.chunks = []ChunkRow{{ID: uuid.New(), DocumentID: docID, Content: "relevant content", Score: 0.1}}
+
 	var audits []auditRecord
-	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
-		fakeSelectRoute("route-groq-fast", nil), fakeDispatch(http.StatusOK, canned200Response, nil))
+	var captured []byte
+	h := newChatTestHandler(store, &fakeEmbedder{}, &audits,
+		fakeSelectRoute("route-groq-fast", nil),
+		capturingDispatch(http.StatusOK, cannedSSEResponse, &captured))
 
 	req := chatReq(t, ChatRequest{
 		Model:    "hive-fast",
-		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+		Messages: []ChatMessage{{Role: "user", Content: "what is the answer?"}},
 		Stream:   true,
 	}, uuid.New())
 	w := httptest.NewRecorder()
 	h.handleChat(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for streaming request (deferred scope), got %d", w.Code)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for streaming, got %d: %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("expected SSE content type, got %q", ct)
+	}
+
+	// The dispatched body must request streaming from upstream.
+	if !strings.Contains(string(captured), `"stream":true`) {
+		t.Errorf("expected dispatched body to set stream:true, got %s", captured)
+	}
+
+	body := w.Body.String()
+	frames := strings.Split(strings.TrimSpace(body), "\n\n")
+	if len(frames) < 2 {
+		t.Fatalf("expected multiple SSE frames, got %q", body)
+	}
+
+	// Retrieval-first: the very first frame carries the citations so a
+	// streaming client gets grounding sources before any model token.
+	if !strings.Contains(frames[0], "rag.citations") || !strings.Contains(frames[0], docID.String()) {
+		t.Errorf("expected a leading citations frame naming document %s, got %q", docID, frames[0])
+	}
+
+	// Provider-blind: relayed chunks must be rewritten to the client alias,
+	// never expose the concrete upstream route name.
+	assertNoLeak(t, body)
+	if strings.Contains(body, "route-groq-fast") {
+		t.Errorf("upstream route name leaked into the stream:\n%s", body)
+	}
+	if !strings.Contains(body, "hive-fast") {
+		t.Errorf("expected relayed chunks rewritten to alias hive-fast, got:\n%s", body)
+	}
+
+	// Terminated with [DONE].
+	if !strings.HasSuffix(strings.TrimSpace(body), "data: [DONE]") {
+		t.Errorf("expected stream to end with data: [DONE], got:\n%s", body)
+	}
+
+	// Accounting parity with the non-streaming path: RAG_CHAT_COMPLETED must
+	// still fire, with token counts captured from the terminal usage chunk.
+	var completed map[string]any
+	for _, a := range audits {
+		if a.Action == "RAG_CHAT_COMPLETED" {
+			completed, _ = a.After.(map[string]any)
+		}
+	}
+	if completed == nil {
+		t.Fatal("RAG_CHAT_COMPLETED audit not emitted for streaming request")
+	}
+	if got := completed["total_tokens"]; got != int64(15) {
+		t.Errorf("expected RAG_CHAT_COMPLETED total_tokens=15 from usage chunk, got %v (%T)", got, got)
 	}
 }
 
