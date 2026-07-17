@@ -1037,6 +1037,97 @@
       "status": "explicitly_unsupported_at_launch",
       "phase": null,
       "notes": "Search a vector store for relevant chunks based on a query and file attributes f"
+    },
+    {
+      "method": "POST",
+      "path": "/v1/rag/documents",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): upload a document for chunking and embedding."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/rag/documents",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): list uploaded RAG documents."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/rag/documents/{document_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): retrieve a RAG document."
+    },
+    {
+      "method": "DELETE",
+      "path": "/v1/rag/documents/{document_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): delete a RAG document."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/rag/search",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): semantic search over indexed chunks."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/rag/chat",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): grounded chat completion over retrieved context."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent/tasks",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): create an agent task."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/tasks",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): list agent tasks."
+    },
+    {
+      "method": "GET",
+      "path": "/v1/agent/tasks/{task_id}",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): retrieve an agent task."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/agent/tasks/{task_id}/cancel",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): cancel an agent task."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/artifacts",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): create an artifact."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/artifacts/{artifact_id}/versions",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): add a new artifact version."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/artifacts/{artifact_id}/share",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem): toggle artifact public sharing."
     }
   ]
 }

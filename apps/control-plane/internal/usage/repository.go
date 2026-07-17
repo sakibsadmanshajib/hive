@@ -37,10 +37,21 @@ func (r *pgxRepository) CreateAttempt(ctx context.Context, input StartAttemptInp
 		return RequestAttempt{}, fmt.Errorf("usage: marshal customer tags: %w", err)
 	}
 
+	// Idempotent on (account_id, request_id, attempt_number). A single request
+	// starts the same attempt twice: the edge-api orchestrator calls StartAttempt
+	// directly, and the reservation path (accounting.CreateReservation) starts it
+	// again to link the hold. A plain INSERT collided on
+	// idx_request_attempts_account_request_attempt (23505), which aborted the
+	// reservation transaction and silently dropped the credit hold. ON CONFLICT
+	// returns the pre-existing attempt unchanged (first write wins); the no-op SET
+	// is only there so RETURNING yields the existing row. Status transitions stay
+	// owned by UpdateAttemptStatus, so this never moves an attempt backward.
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO public.request_attempts
 			(account_id, request_id, attempt_number, endpoint, model_alias, status, user_id, team_id, service_account_id, api_key_id, customer_tags)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
+		ON CONFLICT (account_id, request_id, attempt_number)
+		DO UPDATE SET status = request_attempts.status
 		RETURNING id, account_id, request_id, attempt_number, endpoint, model_alias, status, user_id, team_id, service_account_id, api_key_id, customer_tags, started_at, completed_at
 	`, input.AccountID, input.RequestID, input.AttemptNumber, input.Endpoint, input.ModelAlias, string(input.Status), input.UserID, input.TeamID, input.ServiceAccountID, input.APIKeyID, customerTags)
 
