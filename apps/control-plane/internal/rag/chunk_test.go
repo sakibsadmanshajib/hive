@@ -91,8 +91,12 @@ func TestApproxTokens(t *testing.T) {
 	}
 }
 
-func TestEmbeddingDimensionConstant(t *testing.T) {
+func TestEmbeddingDimensionDefault(t *testing.T) {
+	// EmbeddingDimension is a config-driven var (set from EMBEDDING_DIM at
+	// startup, see main.go), not a hardcoded constant; this only pins the
+	// zero-value default so an accidental change to the fallback doesn't
+	// silently break the rag_chunks vector(1024) column it must match.
 	if EmbeddingDimension != 1024 {
-		t.Errorf("EmbeddingDimension must be 1024 for bge-m3, got %d", EmbeddingDimension)
+		t.Errorf("EmbeddingDimension default = %d, want 1024", EmbeddingDimension)
 	}
 }

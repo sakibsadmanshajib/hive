@@ -151,6 +151,31 @@ func (r *Repo) DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) (b
 	return found, nil
 }
 
+// EmbeddingMismatch reports whether tenantID has any embedded document whose
+// stored provenance (embedding_model, embedding_dim) differs from the
+// currently configured model + dim. A true result means at least one of the
+// tenant's documents was embedded under a different model/dimension than
+// this process is configured for right now -- comparing today's query vector
+// against those chunks would silently mix two incompatible vector spaces.
+// The handler uses this to fail RAG search closed instead (WithEmbeddingGuard);
+// this package does not re-embed anything (PR2).
+func (r *Repo) EmbeddingMismatch(ctx context.Context, tenantID uuid.UUID, model string, dim int) (bool, error) {
+	var mismatch bool
+	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, `
+			SELECT EXISTS(
+				SELECT 1 FROM public.rag_documents
+				WHERE status = 'embedded' AND (embedding_model != $1 OR embedding_dim != $2)
+			)`,
+			model, dim,
+		).Scan(&mismatch)
+	})
+	if err != nil {
+		return false, fmt.Errorf("rag.repo: embedding mismatch check: %w", err)
+	}
+	return mismatch, nil
+}
+
 // SearchChunks performs cosine vector similarity search scoped to the tenant.
 // queryVec must be EmbeddingDimension floats. Results are ordered most similar first.
 func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int) ([]ChunkRow, error) {

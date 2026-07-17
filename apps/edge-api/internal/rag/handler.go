@@ -39,6 +39,10 @@ type Store interface {
 	// found=false means no row matched (caller should 404); error means infra failure.
 	DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) (found bool, err error)
 	SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []float32, topK int) ([]ChunkRow, error)
+	// EmbeddingMismatch reports whether tenantID has embedded documents whose
+	// stored provenance differs from the model/dim passed in. See
+	// WithEmbeddingGuard for how the handler uses this.
+	EmbeddingMismatch(ctx context.Context, tenantID uuid.UUID, model string, dim int) (bool, error)
 }
 
 // store aliases Store for backward-compat with existing unexported references.
@@ -54,6 +58,50 @@ type Handler struct {
 	wg          sync.WaitGroup   // tracks in-flight ingest goroutines
 	selectRoute RouteSelectFunc  // nil until WithChat is called; POST /v1/rag/chat returns 503
 	dispatch    ChatDispatchFunc // nil until WithChat is called; POST /v1/rag/chat returns 503
+
+	// guardEnabled/guardModel/guardDim back the embedding-consistency guard;
+	// see WithEmbeddingGuard. Disabled by default so existing NewHandler
+	// call sites (and their tests) are unaffected.
+	guardEnabled bool
+	guardModel   string
+	guardDim     int
+}
+
+// WithEmbeddingGuard enables the fail-closed embedding-consistency guard on
+// this Handler and returns it for chaining. Once enabled, every
+// /v1/rag/search and /v1/rag/chat request first asks the store whether the
+// caller's tenant has any embedded document whose stored provenance
+// (embedding_model, embedding_dim) differs from model/dim; a mismatch fails
+// the request closed with a clear error instead of comparing today's query
+// vector against chunks from a different embedding space. Wired in main.go
+// with the same EMBEDDING_MODEL/EmbeddingDimension the process is configured
+// with; unwired (default) Handlers never check.
+func (h *Handler) WithEmbeddingGuard(model string, dim int) *Handler {
+	h.guardModel = model
+	h.guardDim = dim
+	h.guardEnabled = true
+	return h
+}
+
+// checkEmbeddingGuard reports whether the request should proceed. A store
+// error is logged and treated as pass-through -- the SearchChunks call that
+// follows would surface the same infra failure as its own 500, so this does
+// not invent a second failure mode for a transient DB hiccup; only a
+// confirmed mismatch fails the request closed.
+func (h *Handler) checkEmbeddingGuard(ctx context.Context, tenantID uuid.UUID) bool {
+	if !h.guardEnabled {
+		return true
+	}
+	mismatch, err := h.store.EmbeddingMismatch(ctx, tenantID, h.guardModel, h.guardDim)
+	if err != nil {
+		log.Printf("rag: embedding guard check failed, allowing request through: %v", err)
+		return true
+	}
+	if mismatch {
+		log.Printf("rag: embedding guard: tenant %s has documents embedded under a different model/dim than the current configuration (model=%s dim=%d); failing closed", tenantID, h.guardModel, h.guardDim)
+		return false
+	}
+	return true
 }
 
 // NewHandler constructs a Handler.
@@ -266,6 +314,11 @@ func (h *Handler) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// ponytail: cap prevents huge vector scans and audit event floods.
 	if req.TopK > maxTopK {
 		req.TopK = maxTopK
+	}
+
+	if !h.checkEmbeddingGuard(r.Context(), user.TenantID) {
+		apierrors.Write(w, http.StatusServiceUnavailable, apierrors.CodeServiceUnavailable, "embedding model changed, re-embed required")
+		return
 	}
 
 	h.audit(r.Context(), "RAG_SEARCH", "rag_document", user.TenantID.String(), "INFO",

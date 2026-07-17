@@ -15,7 +15,7 @@ import (
 // EmbedClient calls the local embedding service (bge-m3 via Ollama/LiteLLM).
 // It is kept as an interface so tests can inject a fake without unsafe casts.
 type EmbedClient interface {
-	// Embed returns a 1024-dim vector for each input string.
+	// Embed returns an EmbeddingDimension-wide vector for each input string.
 	// Returns an error when the backend is unavailable (provider-blind to callers).
 	Embed(ctx context.Context, inputs []string) ([][]float32, error)
 }
@@ -134,19 +134,26 @@ func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float
 
 // Ingester chunks a document, embeds each chunk, and stores results.
 type Ingester struct {
-	repo   *Repo
-	embed  EmbedClient
+	repo  *Repo
+	embed EmbedClient
 	// batchSize controls how many chunks are embedded in one HTTP call.
 	// ponytail: global constant, tune if embed service has payload limits.
 	batchSize int
+	// embedModel is recorded as rag_documents.embedding_model provenance for
+	// every document this Ingester embeds (see SetEmbeddedProvenance).
+	embedModel string
 }
 
-// NewIngester creates an Ingester. batchSize 0 defaults to 32.
-func NewIngester(repo *Repo, embed EmbedClient, batchSize int) *Ingester {
+// NewIngester creates an Ingester. batchSize 0 defaults to 32. embedModel is
+// the EMBEDDING_MODEL this Ingester's embed client was constructed with; it
+// is stamped onto every document as provenance (paired with the current
+// EmbeddingDimension) so a later model swap can find which documents still
+// need re-embedding.
+func NewIngester(repo *Repo, embed EmbedClient, batchSize int, embedModel string) *Ingester {
 	if batchSize <= 0 {
 		batchSize = 32
 	}
-	return &Ingester{repo: repo, embed: embed, batchSize: batchSize}
+	return &Ingester{repo: repo, embed: embed, batchSize: batchSize, embedModel: embedModel}
 }
 
 // Ingest chunks text, embeds all chunks, persists to rag_chunks, and
@@ -199,5 +206,5 @@ func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ Stri
 		return fmt.Errorf("rag.ingest: store chunks: %w", err)
 	}
 
-	return ing.repo.UpdateDocumentStatus(ctx, tid, did, StatusEmbedded, "")
+	return ing.repo.SetEmbeddedProvenance(ctx, tid, did, ing.embedModel, EmbeddingDimension)
 }

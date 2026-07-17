@@ -39,6 +39,7 @@ import (
 	edgerag "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/rag"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/sovereign"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
 
@@ -269,6 +270,39 @@ func main() {
 			log.Printf("WARNING: EMBEDDING_TRUNCATE_TO=%q is not a valid integer; truncation disabled (strict dimension reject applies)", ragEmbedTruncateToRaw)
 			ragEmbedTruncateTo = 0
 		}
+		// EMBEDDING_DIM: the vector width the admin-selected model is expected
+		// to produce (post-truncation). Overwrites the rag package's default
+		// (1024, matching today's rag_chunks.embedding column) so the dimension
+		// checks in embed.go compare against config, not a compile-time constant.
+		// Resizing the live column for a non-1024 value is a later PR; setting
+		// EMBEDDING_DIM to anything else today will surface as a Postgres
+		// insert error, not a graceful reject, until that PR lands.
+		ragEmbedDimRaw := strings.TrimSpace(os.Getenv("EMBEDDING_DIM"))
+		ragEmbedDim := edgerag.EmbeddingDimension
+		if ragEmbedDimRaw != "" {
+			if v, err := strconv.Atoi(ragEmbedDimRaw); err != nil {
+				log.Printf("WARNING: EMBEDDING_DIM=%q is not a valid integer; falling back to default %d", ragEmbedDimRaw, ragEmbedDim)
+			} else {
+				ragEmbedDim = v
+			}
+		}
+		edgerag.EmbeddingDimension = ragEmbedDim
+
+		// embedmodel.Validate cross-checks model/dim/truncateTo against the
+		// known dimension facts for ragEmbedModel (packages/embedmodel). An
+		// unknown model is skipped, not rejected -- an admin may be pointing at
+		// a custom model this build has no registry entry for. A known but
+		// inconsistent combination disables the embedding backend the same way
+		// an unset EMBEDDING_BASE_URL does below (route stays registered,
+		// returns a provider-blind 503), rather than serving vectors from a
+		// misconfigured width.
+		if ragEmbedBaseURL != "" {
+			if err := embedmodel.Validate(ragEmbedModel, ragEmbedDim, ragEmbedTruncateTo); err != nil {
+				log.Printf("ERROR: RAG embedding configuration is inconsistent, disabling /v1/rag/* embedding: %v", err)
+				ragEmbedBaseURL = ""
+			}
+		}
+
 		var ragRepo edgerag.Store
 		if dbPool != nil {
 			ragRepo = edgerag.NewRepo(dbPool)
@@ -339,6 +373,12 @@ func main() {
 
 		ragHandler := edgerag.NewHandler(ragRepo, ragEmbedder, ragAudit, ragIngest, rootCtx).
 			WithChat(ragSelectRoute, litellmClient.ChatCompletion)
+		if ragRepo != nil {
+			// Fail RAG search closed for a tenant whose stored documents were
+			// embedded under a different model/dim than this process is
+			// configured for right now (see EmbeddingMismatch / checkEmbeddingGuard).
+			ragHandler = ragHandler.WithEmbeddingGuard(ragEmbedModel, ragEmbedDim)
+		}
 		ragMW := featureGate.Require(featuregate.FeatureRAG)
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)

@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Embedder produces 1024-dim vectors for text queries.
+// Embedder produces EmbeddingDimension-wide vectors for text queries.
 // The interface keeps the handler testable without a real HTTP backend.
 type Embedder interface {
 	Embed(ctx context.Context, text string) ([]float32, error)
@@ -80,7 +80,7 @@ type embedResp struct {
 	} `json:"data"`
 }
 
-// Embed embeds a single text string and returns a 1024-dim vector.
+// Embed embeds a single text string and returns an EmbeddingDimension-wide vector.
 // Errors are provider-blind: no backend URL, model name, or upstream message.
 func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}})

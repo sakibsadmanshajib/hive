@@ -10,4 +10,6 @@ use ./packages/storage
 
 use ./packages/audit-canonical
 
+use ./packages/embedmodel
+
 use ./apps/agent-engine

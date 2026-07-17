@@ -26,6 +26,9 @@ type fakeStore struct {
 	deleteCalled bool
 	getErr       error // injected error for GetDocument
 	lastTopK     int   // records the topK SearchChunks actually received, for cap assertions
+
+	mismatch    bool  // EmbeddingMismatch return value
+	mismatchErr error // EmbeddingMismatch injected error
 }
 
 func newFakeStore() *fakeStore {
@@ -76,6 +79,10 @@ func (f *fakeStore) SearchChunks(_ context.Context, _ uuid.UUID, _ []float32, to
 		topK = len(f.chunks)
 	}
 	return f.chunks[:topK], nil
+}
+
+func (f *fakeStore) EmbeddingMismatch(_ context.Context, _ uuid.UUID, _ string, _ int) (bool, error) {
+	return f.mismatch, f.mismatchErr
 }
 
 type fakeEmbedder struct{ fail bool }
@@ -295,6 +302,99 @@ func TestHandleSearch_HappyPath(t *testing.T) {
 	}
 	if !sawChunk {
 		t.Error("RAG_CHUNK_RETRIEVED audit not emitted")
+	}
+}
+
+// TestHandleSearch_EmbeddingGuardBlocksOnMismatch verifies that a wired
+// embedding guard fails a search closed (503, no embed/search side effects)
+// when the store reports the tenant has documents embedded under a
+// different model/dim than the current configuration.
+func TestHandleSearch_EmbeddingGuardBlocksOnMismatch(t *testing.T) {
+	store := newFakeStore()
+	store.mismatch = true
+	embed := &fakeEmbedder{}
+
+	var audits []auditRecord
+	h := newTestHandler(store, embed, &audits).WithEmbeddingGuard("bge-m3", 1024)
+
+	body, _ := json.Marshal(SearchRequest{Query: "find me something", TopK: 1})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/search", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleSearch(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "re-embed required") {
+		t.Errorf("expected re-embed-required message, got: %s", w.Body.String())
+	}
+	for _, a := range audits {
+		if a.Action == "RAG_SEARCH" {
+			t.Error("RAG_SEARCH audit fired for a request the guard should have blocked")
+		}
+	}
+}
+
+// TestHandleSearch_EmbeddingGuardAllowsOnMatch verifies the wired guard is a
+// no-op when the store reports no mismatch (the common case).
+func TestHandleSearch_EmbeddingGuardAllowsOnMatch(t *testing.T) {
+	store := newFakeStore()
+	store.mismatch = false
+
+	var audits []auditRecord
+	h := newTestHandler(store, &fakeEmbedder{}, &audits).WithEmbeddingGuard("bge-m3", 1024)
+
+	body, _ := json.Marshal(SearchRequest{Query: "find me something", TopK: 1})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/search", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleSearch(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleSearch_EmbeddingGuardDisabledByDefault verifies a Handler built
+// without WithEmbeddingGuard never checks the store's EmbeddingMismatch, so
+// every pre-existing NewHandler call site (and its tests) is unaffected.
+func TestHandleSearch_EmbeddingGuardDisabledByDefault(t *testing.T) {
+	store := newFakeStore()
+	store.mismatch = true // would fail closed if the guard were (wrongly) enabled
+
+	var audits []auditRecord
+	h := newTestHandler(store, &fakeEmbedder{}, &audits)
+
+	body, _ := json.Marshal(SearchRequest{Query: "find me something", TopK: 1})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/search", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleSearch(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (guard disabled by default), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestHandleSearch_EmbeddingGuardErrorFailsOpen verifies a store error while
+// checking the guard does not itself block the request: the SearchChunks
+// call that follows would surface the same infra failure on its own.
+func TestHandleSearch_EmbeddingGuardErrorFailsOpen(t *testing.T) {
+	store := newFakeStore()
+	store.mismatchErr = errors.New("db unavailable")
+
+	var audits []auditRecord
+	h := newTestHandler(store, &fakeEmbedder{}, &audits).WithEmbeddingGuard("bge-m3", 1024)
+
+	body, _ := json.Marshal(SearchRequest{Query: "find me something", TopK: 1})
+	req := httptest.NewRequest(http.MethodPost, "/v1/rag/search", bytes.NewReader(body))
+	req = req.WithContext(userCtx(uuid.New()))
+	w := httptest.NewRecorder()
+	h.handleSearch(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (guard check error fails open), got %d: %s", w.Code, w.Body.String())
 	}
 }
 

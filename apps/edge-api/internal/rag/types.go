@@ -13,8 +13,14 @@ const (
 	StatusError      = "error"
 )
 
-// EmbeddingDimension is 1024 (bge-m3). Must agree with the migration.
-const EmbeddingDimension = 1024
+// EmbeddingDimension is the configured embedding vector width. Defaults to
+// 1024 (rag_chunks.embedding's current column width and the serverless
+// demo's MRL-truncation target). main.go overwrites this once at process
+// startup from EMBEDDING_DIM, before any request handling begins; the
+// admin-chosen model + this value are validated for consistency by
+// packages/embedmodel at the same point. Do not mutate after the server
+// starts serving requests.
+var EmbeddingDimension = 1024
 
 // UploadRequest is the JSON body for POST /v1/rag/documents.
 type UploadRequest struct {
