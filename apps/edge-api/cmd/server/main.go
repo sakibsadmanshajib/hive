@@ -248,7 +248,12 @@ func main() {
 		// width exceeds EmbeddingDimension (e.g. the serverless demo's
 		// route-openrouter-embedding-fallback returns 4096). Unset/0 keeps the
 		// strict reject so a non-MRL model never gets silently truncated.
-		ragEmbedTruncateTo, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_TRUNCATE_TO")))
+		ragEmbedTruncateToRaw := strings.TrimSpace(os.Getenv("EMBEDDING_TRUNCATE_TO"))
+		ragEmbedTruncateTo, err := strconv.Atoi(ragEmbedTruncateToRaw)
+		if ragEmbedTruncateToRaw != "" && err != nil {
+			log.Printf("WARNING: EMBEDDING_TRUNCATE_TO=%q is not a valid integer; truncation disabled (strict dimension reject applies)", ragEmbedTruncateToRaw)
+			ragEmbedTruncateTo = 0
+		}
 		var ragRepo edgerag.Store
 		if dbPool != nil {
 			ragRepo = edgerag.NewRepo(dbPool)

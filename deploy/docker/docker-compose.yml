@@ -52,8 +52,10 @@ services:
       # this proxy config even with drop_params set, so EMBEDDING_TRUNCATE_TO
       # reduces the vector client-side (MRL truncation + L2 renormalize) instead
       # of asking the provider for a narrower width. Only qwen3 is MRL-verified;
-      # the free Nemotron primary is NOT used here for that reason, even though
-      # LiteLLM would fall back to it on qwen3 failure.
+      # the free Nemotron primary is NOT used here for that reason. Note the
+      # fallback chain is one-directional: route-openrouter-embedding-fallback
+      # (qwen3) is terminal in deploy/litellm/config.yaml, with no further
+      # fallback if it also fails.
       # Provider-swappable with no schema change: override in .env
       # (e.g. http://ollama:11434 + bge-m3 + EMBEDDING_TRUNCATE_TO=0 for the
       # enterprise profile's in-stack Ollama, which returns native 1024-dim).
