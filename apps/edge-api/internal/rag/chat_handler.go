@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -84,15 +85,6 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "model required")
 		return
 	}
-	// ponytail: streaming deferred, per issue #325's own scope note ("ship
-	// non-streaming first and note it"). Tracked as a separate, explicitly
-	// scoped follow-up in issue #339: SSE needs a trailing (or
-	// retrieval-first) citations frame on top of the existing stream.go
-	// plumbing, which is its own reviewable unit of work.
-	if req.Stream {
-		apierrors.Write(w, http.StatusBadRequest, apierrors.CodeInvalidRequest, "streaming is not yet supported for /v1/rag/chat")
-		return
-	}
 
 	// Drop any client-supplied "system" role message before it ever reaches
 	// lastUserMessage or the augmented request: the only system message in
@@ -167,10 +159,12 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	})
 	augmented = append(augmented, req.Messages...)
 
-	body, err := json.Marshal(struct {
-		Model    string        `json:"model"`
-		Messages []ChatMessage `json:"messages"`
-	}{Model: litellmModel, Messages: augmented})
+	body, err := json.Marshal(dispatchBody{
+		Model:         litellmModel,
+		Messages:      augmented,
+		Stream:        req.Stream,
+		StreamOptions: streamOptionsFor(req.Stream),
+	})
 	if err != nil {
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "request build failed")
 		return
@@ -183,13 +177,23 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	// A non-2xx upstream is a provider-blind error on both paths. Check the
+	// status before consuming the body so the streaming path can relay the
+	// live SSE reader rather than a drained buffer.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
+		apierrors.WriteProviderBlindUpstreamError(w, req.Model, resp.StatusCode, string(errBody))
+		return
+	}
+
+	if req.Stream {
+		h.streamGroundedChat(w, r, resp, req.Model, citations, user.TenantID, user.ID, r.UserAgent())
+		return
+	}
+
 	upstreamBody, err := io.ReadAll(io.LimitReader(resp.Body, 2*1024*1024))
 	if err != nil {
 		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "failed to read upstream response")
-		return
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		apierrors.WriteProviderBlindUpstreamError(w, req.Model, resp.StatusCode, string(upstreamBody))
 		return
 	}
 
@@ -316,4 +320,137 @@ type upstreamChatResponse struct {
 		CompletionTokens int64 `json:"completion_tokens"`
 		TotalTokens      int64 `json:"total_tokens"`
 	} `json:"usage"`
+}
+
+// dispatchBody is the wire shape marshaled to the upstream chat-completion
+// endpoint. The streaming fields are omitempty so a non-streaming request is
+// byte-identical to what shipped in #325.
+type dispatchBody struct {
+	Model         string         `json:"model"`
+	Messages      []ChatMessage  `json:"messages"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+}
+
+// streamOptions asks the upstream to emit a terminal usage chunk so the
+// streaming path can record the same RAG_CHAT_COMPLETED token counts the
+// non-streaming path does.
+type streamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
+func streamOptionsFor(stream bool) *streamOptions {
+	if !stream {
+		return nil
+	}
+	return &streamOptions{IncludeUsage: true}
+}
+
+// streamGroundedChat relays the upstream SSE completion to the client. It
+// emits a retrieval-first "rag.citations" frame so a streaming client receives
+// the grounding sources before the first model token, rewrites each chunk's
+// "model" to the client alias (provider-blind: the concrete route name must
+// never reach the customer), and captures token usage from the terminal chunk
+// for the RAG_CHAT_COMPLETED accounting audit.
+func (h *Handler) streamGroundedChat(w http.ResponseWriter, r *http.Request, resp *http.Response,
+	alias string, citations []ChunkResult, tenantID, actorID uuid.UUID, userAgent string) {
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		apierrors.Write(w, http.StatusInternalServerError, apierrors.CodeInternal, "streaming unsupported")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	// Retrieval-first citations frame.
+	if b, err := json.Marshal(struct {
+		Object    string        `json:"object"`
+		Citations []ChunkResult `json:"citations"`
+	}{Object: "rag.citations", Citations: citations}); err == nil {
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+
+	var promptTokens, completionTokens, totalTokens int64
+	completed := false
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 64*1024), 512*1024)
+	for scanner.Scan() {
+		// Honor client disconnect / request cancellation.
+		if r.Context().Err() != nil {
+			break
+		}
+		line := scanner.Text()
+
+		if line == "data: [DONE]" {
+			fmt.Fprint(w, "data: [DONE]\n\n")
+			flusher.Flush()
+			completed = true
+			break
+		}
+
+		if strings.HasPrefix(line, "data: ") {
+			var chunk map[string]any
+			if err := json.Unmarshal([]byte(line[6:]), &chunk); err != nil {
+				// Never forward an unparseable upstream data frame: it could
+				// carry unsanitized provider fields. Drop it.
+				continue
+			}
+			if _, ok := chunk["model"]; ok {
+				chunk["model"] = alias
+			}
+			if usage, ok := chunk["usage"].(map[string]any); ok {
+				promptTokens = asInt64(usage["prompt_tokens"])
+				completionTokens = asInt64(usage["completion_tokens"])
+				totalTokens = asInt64(usage["total_tokens"])
+			}
+			sanitized, err := json.Marshal(chunk)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "data: %s\n\n", sanitized)
+			flusher.Flush()
+			continue
+		}
+
+		// Drop every other upstream line. event:, comment (":"), and blank
+		// separators are never forwarded: an "event: <provider>-error" line
+		// would leak the provider identity, and our own framing already emits
+		// the blank separators between data frames. Only sanitized data frames
+		// and our [DONE] reach the client (provider-blind).
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("rag: chat stream read error: %v", err)
+	}
+
+	// RAG_CHAT_COMPLETED is the usage-accounting signal for this JWT-session
+	// path (see the non-streaming path's doc comment for why audit is the
+	// carrier). Emit it ONLY when the upstream stream genuinely finished with
+	// [DONE]: a client cancellation, scanner error, or truncation must not be
+	// billed as a completed stream with partial or zero usage.
+	if !completed {
+		return
+	}
+	h.audit(r.Context(), "RAG_CHAT_COMPLETED", "rag_document", tenantID.String(), "INFO",
+		tenantID, actorID, userAgent, map[string]any{
+			"model":             alias,
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      totalTokens,
+		})
+}
+
+// asInt64 coerces a JSON number (decoded as float64 in a map[string]any) to
+// int64, returning 0 for any other shape.
+func asInt64(v any) int64 {
+	if f, ok := v.(float64); ok {
+		return int64(f)
+	}
+	return 0
 }
