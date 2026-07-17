@@ -1892,6 +1892,20 @@
         "edge-api",
         "db"
       ]
+    },
+    {
+      "id": "matrix-missing-proprietary-endpoints",
+      "priority": "P0",
+      "date": "2026-07-17",
+      "error_message": "agent-subsystem /v1 endpoints (/v1/rag/*, /v1/agent/tasks*, /v1/artifacts*) 404 via UnsupportedEndpointMiddleware; entire agent-subsystem web surface dead (demo blocker)",
+      "root_cause": "support matrix supported_now never updated for Waves 2-4 endpoints. The edge-api UnsupportedEndpointMiddleware 404s any /v1/ path not marked supported_now in packages/openai-contract/matrix/support-matrix.json (loaded at boot, baked into the Docker image). The rag/agent/artifacts handlers shipped wired and feature-gated but were only covered by per-package isolation tests that bypass the full middleware chain, so CI stayed green while every request 404-ed in a real stack. Note: support-matrix.json is the hand-maintained source; overlays/hive-support-status.yaml is an OpenAI-only OpenAPI overlay consumed by nothing and does not feed the matrix.",
+      "fix": "Add supported_now entries for the 13 real proprietary routes (verified against the router registrations, not the ticket's guide) to support-matrix.json, then regenerate docs/support-matrix.md + generated/hive-openapi.yaml via generate-matrix.sh. Add apps/edge-api/internal/middleware/unsupported_integration_test.go, a full-chain integration test that drives all 13 paths through the real UnsupportedEndpointMiddleware + the real committed matrix: 404 before, 200 after.",
+      "tags": [
+        "contract",
+        "middleware",
+        "demo-blocker",
+        "test-gap"
+      ]
     }
   ]
 }
