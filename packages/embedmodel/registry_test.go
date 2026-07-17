@@ -39,6 +39,10 @@ func TestValidate(t *testing.T) {
 		{"native narrower than dim, truncation set: still an error", "bge-m3", 2048, 2048, true},
 		{"unknown model: nothing to validate, ok", "custom-model-not-in-registry", 999, 0, false},
 		{"lookup by LiteLLM route alias: ok", "route-openrouter-embedding-fallback", 1024, 1024, false},
+		{"dim zero: error even for unknown model", "custom-model-not-in-registry", 0, 0, true},
+		{"dim negative: error even for unknown model", "custom-model-not-in-registry", -1, 0, true},
+		{"truncateTo negative: error even for unknown model", "custom-model-not-in-registry", 999, -1, true},
+		{"unknown model, positive dim, zero truncateTo: still ok", "custom-model-not-in-registry", 1, 0, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

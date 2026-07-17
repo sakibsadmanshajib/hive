@@ -70,6 +70,12 @@ func Lookup(modelOrRoute string) (Model, bool) {
 //   - native dim <  dim: always an error; a narrower vector cannot be padded
 //     out to a wider column.
 func Validate(model string, dim, truncateTo int) error {
+	if dim <= 0 {
+		return fmt.Errorf("embedmodel: EMBEDDING_DIM must be strictly positive, got %d", dim)
+	}
+	if truncateTo < 0 {
+		return fmt.Errorf("embedmodel: EMBEDDING_TRUNCATE_TO cannot be negative, got %d", truncateTo)
+	}
 	m, ok := Lookup(model)
 	if !ok {
 		return nil
