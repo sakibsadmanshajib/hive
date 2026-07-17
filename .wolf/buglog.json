@@ -1880,6 +1880,19 @@
       ]
     },
     {
+      "id": "preexec-allocator-unsafe",
+      "date": "2026-07-17",
+      "error_message": "Desktop sandbox launch() could hang the whole app (once a 15+ minute cargo test hang) inside the Command::pre_exec closure",
+      "root_cause": "The pre_exec closure ran after fork() and before execve() in a child of a multithreaded process but was not async-signal-safe: it built the Landlock ruleset (Ruleset build, PathFd::new), compiled the seccomp BPF program, ran codex pre_main_hardening (std::env::remove_var over vars_os), and used format! on error paths. Allocating in a forked child can deadlock forever if another thread held the allocator lock at fork, and std makes the parent spawn() block until the child execs or errors, so the parent hangs too.",
+      "fix": "Hoist all allocation and fd setup before the fork: build_landlock_ruleset returns a RulesetCreated (converted to OwnedFd) and build_seccomp_filter returns the compiled BpfProgram, both in the parent. Strip LD_* env on the Command before fork instead of via std::env in the child. The closure now performs only raw async-signal-safe syscalls on pre-built values: prctl(PR_SET_DUMPABLE) via codex disable_process_dumping, setrlimit(RLIMIT_CORE), prctl(PR_SET_NO_NEW_PRIVS), raw landlock_restrict_self on the pre-built fd, and seccompiler::apply_filter over the pre-compiled program; error paths map to allocation-free io::Errors. Added tests/launch_spawn.rs end-to-end regression guard. The #341 10s spawn timeout stays as defense in depth.",
+      "tags": [
+        "rust",
+        "sandbox",
+        "fork-safety",
+        "security"
+      ]
+    },
+    {
       "date": "2026-07-17",
       "id": "reservation-duplicate-key-23505",
       "severity": "P2",

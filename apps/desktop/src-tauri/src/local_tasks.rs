@@ -78,16 +78,18 @@ pub trait SandboxLauncher: Send + Sync {
 }
 
 /// Timeout guard for the real OS-level spawn (VENDORING.md open risk #7,
-/// `apps/desktop-sandbox`): `hive_desktop_sandbox::launch`'s `pre_exec`
-/// closure allocates inside a raw-`fork()`ed child of this (multithreaded)
-/// process, a known post-fork allocator-deadlock hazard. That hazard hung
-/// `cargo test` for 15+ minutes when first exercised end to end (see that
-/// crate's `linux.rs` test module comment) -- this is the same call, now on
-/// a live path (every "Run a task locally" click). This is a containment
-/// guard, not the fix: it stops one stuck spawn from hanging the whole
-/// app, it does not make `pre_exec` alloc-free. The real fix (pre-allocate
-/// before fork, or move off fork+pre_exec) is tracked as a follow-up, not
-/// attempted here.
+/// `apps/desktop-sandbox`). `hive_desktop_sandbox::launch`'s `pre_exec`
+/// closure runs in a raw-`fork()`ed child of this (multithreaded) process; a
+/// closure that allocated there would be a post-fork allocator-deadlock
+/// hazard, and one did once hang `cargo test` for 15+ minutes when first
+/// exercised end to end. That closure is now allocation-free -- all
+/// allocation and fd setup was hoisted before the fork (see that crate's
+/// `linux.rs` launch() and its `tests/launch_spawn.rs` regression guard) --
+/// so the hazard is fixed at the source. This timeout stays as defense in
+/// depth: it stops any other stuck spawn (a third-party binary that never
+/// execs, a kernel edge case) from hanging the whole app on the live path
+/// (every "Run a task locally" click), which the source fix alone does not
+/// cover.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Something `spawn_with_timeout` can kill if the underlying spawn call
