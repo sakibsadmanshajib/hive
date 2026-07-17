@@ -10,6 +10,30 @@
 --       Rows are never updated or deleted by application code; the RLS
 --       policy enforces read-only access for tenant roles.
 --
+-- Schema reconciliation (compliance fix):
+--   An earlier migration, 20260516_04_phase19_audit_log.sql, also created a
+--   table named public.audit_cold_archive_manifest with a different, now
+--   superseded shape (partition_name / parquet_path / parquet_sha256 ...).
+--   That earlier shape is NOT the one the application uses: InsertManifest and
+--   the retention/purge queries in
+--   apps/control-plane/internal/auditarchive/pg_repository.go read and write
+--   the (id / tenant_id / partition_month / object_key / sha256_hash /
+--   first_seq / last_seq / purge_after) shape defined below, and the
+--   immutability trigger in 20260625_08 references the same columns.
+--
+--   Because this file was originally written with CREATE TABLE IF NOT EXISTS,
+--   on any from-scratch replay it silently no-opped onto the stale shape and
+--   then the UNIQUE INDEX on (tenant_id, partition_month) failed with
+--   "column tenant_id does not exist", breaking every clean `supabase db push`
+--   (fresh-DB init and enterprise self-host). This migration now explicitly
+--   drops the stale table and its May-era policies first, then creates the
+--   authoritative shape.
+--
+--   Data safety: the stale table can never hold rows. Every application write
+--   targets the columns defined below, which do not exist on the stale shape,
+--   so any INSERT against the stale table errors out before committing. The
+--   drop therefore loses no audit data (verified: 0 rows on staging).
+--
 -- Design notes:
 --   - object_key is the storage path (e.g. audit/cold/<tenant>/<YYYY-MM>.jsonl.gz).
 --   - sha256_hash (bytea, 32 bytes) covers the compressed JSONL object so
@@ -22,7 +46,14 @@
 
 BEGIN;
 
-CREATE TABLE IF NOT EXISTS public.audit_cold_archive_manifest (
+-- Remove the stale (20260516_04) shape and its May-era policies from
+-- 20260518_04 before recreating the authoritative table. IF EXISTS keeps this
+-- idempotent whether or not those objects are present in a given environment.
+DROP POLICY IF EXISTS manifest_service_role_all ON public.audit_cold_archive_manifest;
+DROP POLICY IF EXISTS manifest_auditor_select ON public.audit_cold_archive_manifest;
+DROP TABLE IF EXISTS public.audit_cold_archive_manifest CASCADE;
+
+CREATE TABLE public.audit_cold_archive_manifest (
     id              UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
     -- ON DELETE RESTRICT: tenant deletion must not silently orphan or destroy
     -- cold-archive objects. PHIPA / Law 25 require 10-year retention; a tenant
@@ -44,12 +75,22 @@ CREATE TABLE IF NOT EXISTS public.audit_cold_archive_manifest (
 );
 
 -- One manifest entry per (tenant, month).
-CREATE UNIQUE INDEX IF NOT EXISTS audit_cold_archive_manifest_tenant_month
+CREATE UNIQUE INDEX audit_cold_archive_manifest_tenant_month
     ON public.audit_cold_archive_manifest (tenant_id, partition_month);
 
 -- Covering index for the purge scan (purge_after ASC).
-CREATE INDEX IF NOT EXISTS audit_cold_archive_manifest_purge
+CREATE INDEX audit_cold_archive_manifest_purge
     ON public.audit_cold_archive_manifest (purge_after);
+
+-- ── Grants ───────────────────────────────────────────────────────────────────
+-- Relocated here from the removed 20260518_04 manifest block (that block
+-- targeted the stale table dropped above). The service role (control-plane)
+-- bypasses RLS for inserts and the purge scan; hive_app is a non-bypass
+-- application role that still needs explicit table privileges, and auditor_ro
+-- reads the manifest for chain spot-checks.
+REVOKE ALL ON public.audit_cold_archive_manifest FROM PUBLIC;
+GRANT INSERT, SELECT, UPDATE ON public.audit_cold_archive_manifest TO hive_app;
+GRANT SELECT ON public.audit_cold_archive_manifest TO auditor_ro;
 
 -- ── RLS ──────────────────────────────────────────────────────────────────────
 ALTER TABLE public.audit_cold_archive_manifest ENABLE ROW LEVEL SECURITY;

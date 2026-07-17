@@ -38,13 +38,16 @@ func TestAuditRetention_ColdArchiveManifestExists(t *testing.T) {
 	require.NoError(t, rows.Err())
 
 	expected := []string{
-		"partition_name",
-		"archived_at",
-		"parquet_path",
-		"parquet_sha256",
+		"id",
+		"tenant_id",
+		"partition_month",
+		"object_key",
+		"sha256_hash",
 		"row_count",
-		"last_prev_hash",
-		"last_row_hash",
+		"first_seq",
+		"last_seq",
+		"archived_at",
+		"purge_after",
 	}
 	for _, c := range expected {
 		require.True(t, got[c], "missing column %s on public.audit_cold_archive_manifest", c)
