@@ -85,6 +85,26 @@ impl AllowlistProxy {
         Self::spawn_with_policy(socket_path, allowed_hosts, false)
     }
 
+    /// Test-only sibling of [`AllowlistProxy::spawn`] that permits resolved
+    /// destinations which are private/loopback/link-local. The shipped path
+    /// (`spawn`) always forbids them -- a sandboxed task must never reach
+    /// host-local or LAN services -- and that guard is exercised directly by
+    /// `resolve_pinned_rejects_private_loopback_and_link_local`. The only
+    /// caller is the `egress-proxy-harness` example: its e2e
+    /// (`scripts/egress-bwrap-e2e.sh`) uses two loopback IPs (127.0.0.2 vs
+    /// 127.0.0.3) as a throwaway stand-in "internet", so it must opt out of
+    /// the loopback-destination guard for the allowed target to be dialable.
+    /// The allowlist host check (`is_allowed`) and the netns isolation the
+    /// e2e proves are unaffected -- only the redundant destination-IP guard
+    /// is relaxed, so the test still genuinely proves a disallowed host is
+    /// refused (403) while an allowed one is dialed (200).
+    pub fn spawn_allowing_local_dest(
+        socket_path: &Path,
+        allowed_hosts: Vec<String>,
+    ) -> std::io::Result<Self> {
+        Self::spawn_with_policy(socket_path, allowed_hosts, true)
+    }
+
     /// As [`AllowlistProxy::spawn`], with control over whether resolved
     /// destinations that are private/loopback/link-local are permitted.
     /// Production always passes `allow_local_dest = false` (via `spawn`): a

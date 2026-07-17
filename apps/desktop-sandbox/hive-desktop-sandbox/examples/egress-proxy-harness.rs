@@ -31,7 +31,14 @@ fn main() {
     };
     let allowed_hosts: Vec<String> = args.collect();
 
-    let proxy = match AllowlistProxy::spawn(&PathBuf::from(&socket_path), allowed_hosts.clone()) {
+    // The e2e's "internet" is two loopback IPs (see egress-bwrap-e2e.sh), so
+    // the harness must opt out of the proxy's loopback-destination guard (the
+    // shipped `spawn` forbids loopback/private targets). The allowlist host
+    // decision and netns isolation the e2e asserts are unaffected.
+    let proxy = match AllowlistProxy::spawn_allowing_local_dest(
+        &PathBuf::from(&socket_path),
+        allowed_hosts.clone(),
+    ) {
         Ok(proxy) => proxy,
         Err(err) => {
             eprintln!("egress-proxy-harness: failed to bind {socket_path}: {err}");
