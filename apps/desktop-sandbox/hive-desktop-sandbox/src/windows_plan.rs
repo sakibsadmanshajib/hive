@@ -112,12 +112,39 @@ pub fn allow_hosts_firewall_script(
         ));
     }
     for host in &plan.firewall_allow_outbound_hosts {
+        // Issue #342 item 4: never interpolate a host into a command string
+        // that is not a safe literal. The egress SSOT
+        // (`apps/control-plane/internal/egress/service.go`'s `normalizeHosts`)
+        // already rejects whitespace and wildcards upstream, but this codegen
+        // must not depend on every future caller having sanitised its input.
+        // A host that is not a plain hostname/IP/CIDR literal gets no allow
+        // rule at all -- fail closed, so it stays denied by the block rule
+        // above rather than emitting an attacker-controlled `netsh` argument.
+        if !is_safe_firewall_host(host) {
+            continue;
+        }
         lines.push(format!(
             "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-allow-{host}\" \
              dir=out action=allow program=\"{program_path}\" remoteip={host} enable=yes"
         ));
     }
     lines
+}
+
+/// True only for a host string safe to interpolate verbatim into a `netsh`
+/// command line: a plain hostname, IPv4/IPv6 literal, or CIDR range. Rejects
+/// anything carrying quotes, whitespace, shell/`netsh` metacharacters, or
+/// wildcards, which is what makes the interpolation in
+/// [`allow_hosts_firewall_script`] injection-safe regardless of what a future
+/// caller passes. Deliberately a strict allowlist of characters rather than
+/// an attempt to escape: escaping `netsh`/`cmd` quoting correctly is subtle,
+/// and no legitimate egress host needs a character outside this set.
+fn is_safe_firewall_host(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 255
+        && host
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_' | '/'))
 }
 
 /// Computes the parent of a Windows-style path using explicit `\`/`/`
@@ -312,5 +339,56 @@ mod tests {
         // Must be "C:\" (the drive root), not "C:" (Win32's "current
         // directory on drive C", a different and non-deterministic path).
         assert_eq!(plan.acl_deny_write_parent_dir, PathBuf::from(r"C:\"));
+    }
+
+    #[test]
+    fn allow_hosts_firewall_script_skips_unsafe_hosts() {
+        // Construct the plan directly so the injection guard is tested in
+        // isolation, even for hosts SandboxPolicy::build would itself reject:
+        // this codegen must be safe regardless of what a future caller passes.
+        let plan = WindowsConfinementPlan {
+            acl_deny_write_parent_dir: PathBuf::from(r"C:\Users\agent\AppData\Hive"),
+            protect_dacl_from_inheritance: true,
+            job_object_kill_on_close: true,
+            firewall_deny_outbound: true,
+            firewall_allow_outbound_hosts: vec![
+                "api.openrouter.ai".to_string(),
+                r#"evil.com" & calc.exe & echo "#.to_string(),
+                "with space.com".to_string(),
+                "*.wild.com".to_string(),
+            ],
+        };
+
+        let lines = allow_hosts_firewall_script(&plan, "task-1", r"C:\hive\task.exe");
+        // Deny rule plus exactly one allow rule: only the single safe host.
+        assert_eq!(
+            lines.len(),
+            2,
+            "unsafe hosts must not produce allow rules: {lines:?}"
+        );
+        assert!(lines[0].contains("action=block"));
+        assert!(lines[1].contains("action=allow") && lines[1].contains("api.openrouter.ai"));
+        for line in &lines {
+            assert!(
+                !line.contains("calc.exe"),
+                "no injected command must survive into a rule: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_safe_firewall_host_accepts_literals_and_rejects_metacharacters() {
+        for good in [
+            "api.openrouter.ai",
+            "10.0.0.1",
+            "2606:4700::1111",
+            "10.0.0.0/8",
+            "host-name_1",
+        ] {
+            assert!(is_safe_firewall_host(good), "{good} should be safe");
+        }
+        for bad in ["", "a b", "x\"y", "a&b", "a|b", "*.x.com", "a\nb", "a;b"] {
+            assert!(!is_safe_firewall_host(bad), "{bad} should be rejected");
+        }
     }
 }

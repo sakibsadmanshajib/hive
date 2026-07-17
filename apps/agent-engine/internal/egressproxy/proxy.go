@@ -19,34 +19,46 @@ import (
 // Proxy is an allowlist-enforcing HTTP/HTTPS forward proxy. It implements
 // http.Handler so callers run it with an ordinary http.Server.
 type Proxy struct {
-	allowed   map[string]struct{}
-	transport *http.Transport
+	allowed map[string]struct{}
+	// allowLocalDest opts out of the private/loopback/link-local destination
+	// guard (issue #342 item 2). Always false in production; only the
+	// test-only constructor in export_test.go sets it true, since the
+	// httptest backends the proxy tests dial bind to 127.0.0.1.
+	allowLocalDest bool
+	transport      *http.Transport
 }
 
 // New builds a Proxy that permits egress only to the given hosts (hostname
 // or IP, no port, matching the egress-policy wire shape). A nil or empty
 // list denies all egress, which is the correct fail-closed behaviour when no
-// policy could be resolved.
+// policy could be resolved. Resolved addresses that are private, loopback,
+// or link-local are always refused (issue #342 item 2).
 func New(allowedHosts []string) *Proxy {
+	return newProxy(allowedHosts, false)
+}
+
+func newProxy(allowedHosts []string, allowLocalDest bool) *Proxy {
 	allowed := make(map[string]struct{}, len(allowedHosts))
 	for _, h := range allowedHosts {
 		allowed[strings.ToLower(h)] = struct{}{}
 	}
-	return &Proxy{
-		allowed: allowed,
-		// Plain-HTTP path (handleForward) must pin the resolved IP exactly
-		// like the CONNECT path: DialContext resolves once here instead of
-		// letting the transport's default dialer resolve addr itself.
-		transport: &http.Transport{
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				pinned, err := resolvePinnedAddr(ctx, addr, "80")
-				if err != nil {
-					return nil, err
-				}
-				return (&net.Dialer{}).DialContext(ctx, network, pinned)
-			},
+	p := &Proxy{
+		allowed:        allowed,
+		allowLocalDest: allowLocalDest,
+	}
+	// Plain-HTTP path (handleForward) must pin the resolved IP exactly
+	// like the CONNECT path: DialContext resolves once here instead of
+	// letting the transport's default dialer resolve addr itself.
+	p.transport = &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			pinned, err := resolvePinnedAddr(ctx, addr, "80", allowLocalDest)
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(ctx, network, pinned)
 		},
 	}
+	return p
 }
 
 func (p *Proxy) isAllowed(hostport string) bool {
@@ -78,7 +90,7 @@ func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	// again: dialing by hostname would trigger a second, independent DNS
 	// resolution, leaving a window for a short-TTL DNS-rebind response
 	// between the allowlist check above and the actual connection.
-	pinned, err := resolvePinnedAddr(r.Context(), r.Host, "443")
+	pinned, err := resolvePinnedAddr(r.Context(), r.Host, "443", p.allowLocalDest)
 	if err != nil {
 		http.Error(w, "egress: dns lookup failed", http.StatusBadGateway)
 		return
@@ -136,7 +148,7 @@ func (p *Proxy) handleForward(w http.ResponseWriter, r *http.Request) {
 // returns "resolvedIP:port", so the caller can dial that literal address
 // instead of triggering a second resolution. defaultPort is used when
 // hostport carries no port of its own.
-func resolvePinnedAddr(ctx context.Context, hostport, defaultPort string) (string, error) {
+func resolvePinnedAddr(ctx context.Context, hostport, defaultPort string, allowLocal bool) (string, error) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
 		host, port = hostport, defaultPort
@@ -148,7 +160,36 @@ func resolvePinnedAddr(ctx context.Context, hostport, defaultPort string) (strin
 	if len(ips) == 0 {
 		return "", fmt.Errorf("egressproxy: no addresses found for %q", host)
 	}
-	return net.JoinHostPort(ips[0], port), nil
+	// Issue #342 item 2: pin the first resolved address that is not private,
+	// loopback, or link-local. An allowed hostname rebound to an internal IP
+	// (127.0.0.1, 169.254.x.x, RFC1918/ULA) must not become a path to
+	// host-local or LAN services from inside the sandbox. Mirrors the same
+	// guard in the desktop Rust proxy (egress_proxy.rs::resolve_pinned) so
+	// both #308 surfaces reject the same addresses.
+	for _, ipStr := range ips {
+		if ip := net.ParseIP(ipStr); ip != nil && (allowLocal || !isForbiddenIP(ip)) {
+			return net.JoinHostPort(ipStr, port), nil
+		}
+	}
+	return "", fmt.Errorf(
+		"egressproxy: %q resolved only to disallowed (private/loopback/link-local) addresses",
+		host,
+	)
+}
+
+// isForbiddenIP reports whether ip is an address a sandboxed task must never
+// be allowed to reach: loopback, unspecified, multicast, or any private or
+// link-local range on IPv4 or IPv6. net.IP.IsPrivate covers RFC1918 and the
+// IPv6 unique-local fc00::/7 range.
+func isForbiddenIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsUnspecified() ||
+		ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.Equal(net.IPv4bcast)
 }
 
 func relay(a, b net.Conn) {

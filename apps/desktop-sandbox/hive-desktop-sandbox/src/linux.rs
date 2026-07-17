@@ -22,10 +22,12 @@ use crate::policy::NetworkPolicy;
 use crate::{LaunchError, SandboxPolicy};
 use landlock::{
     ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr,
+    RulesetCreated, RulesetCreatedAttr,
 };
 use seccompiler::{BpfProgram, SeccompAction, SeccompFilter};
 use std::convert::TryInto;
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -176,23 +178,94 @@ pub(crate) fn launch(
 
     let bwrap_path = locate_bwrap_binary();
     let argv = build_bwrap_argv(policy, &wrapped_command, cwd, egress.as_ref());
-    let policy_for_child = policy.clone();
+
+    // Everything that allocates or opens file descriptors for the sandbox
+    // is done HERE, in the parent, before the fork: build the Landlock
+    // ruleset (opens an O_PATH fd per bound path, creates the ruleset fd,
+    // adds every rule) and compile the seccomp-BPF program. See the
+    // pre_exec SAFETY comment below for why this split is mandatory. The
+    // ruleset fd is held open by `landlock_fd` until `cmd` is dropped after
+    // spawn; it survives the fork and is applied (not created) in the child.
+    let landlock_fd: OwnedFd = Option::<OwnedFd>::from(
+        build_landlock_ruleset(policy, &extra_landlock_paths)
+            .map_err(|err| LaunchError::Confinement(format!("landlock: {err}")))?,
+    )
+    .ok_or_else(|| {
+        LaunchError::Confinement(
+            "landlock ruleset produced no file descriptor (kernel lacks Landlock support)"
+                .to_string(),
+        )
+    })?;
+    let seccomp_filter = build_seccomp_filter()
+        .map_err(|err| LaunchError::Confinement(format!("seccomp: {err}")))?;
 
     let mut cmd = Command::new(bwrap_path);
     cmd.args(&argv);
-    // SAFETY: the closure only calls into `codex_process_hardening`,
-    // `landlock`, and `seccompiler`, all of which perform their own
-    // syscalls directly and do not allocate in a way that is unsafe
-    // between fork and exec.
+
+    // Strip LD_* from the child's environment before the fork. Codex's
+    // `pre_main_hardening` does this after fork via `std::env::remove_var`,
+    // which allocates and takes a process-global lock -- both unsafe between
+    // fork and exec. Doing it on the `Command` here is equivalent for the
+    // exec'd process (Command builds its envp in the parent) and keeps the
+    // pre_exec closure allocation-free.
+    for (key, _) in std::env::vars_os() {
+        if key.as_bytes().starts_with(b"LD_") {
+            cmd.env_remove(&key);
+        }
+    }
+
+    // SAFETY: `pre_exec` runs this closure in the child after `fork()` and
+    // before `execve()`. The parent is multithreaded (the desktop app, plus
+    // AllowlistProxy's accept-loop threads), so the forked child has exactly
+    // one running thread and the closure MUST be async-signal-safe: no heap
+    // allocation, no lock, no non-reentrant libc. If another thread held the
+    // allocator lock at the instant of fork, a `malloc` in the child would
+    // deadlock forever, and because std makes the parent's `spawn()` block on
+    // a pipe until the child execs or reports an error, that hangs the parent
+    // too (observed directly: a 15+ minute `cargo test` hang before this was
+    // made alloc-free). Every allocation and fd open was therefore hoisted
+    // above, before the fork; this closure performs ONLY raw
+    // prctl/setrlimit/landlock_restrict_self syscalls plus
+    // `seccompiler::apply_filter`, whose success path is itself just a prctl
+    // and the seccomp syscall over the already-compiled program. Its error
+    // paths map to allocation-free `io::Error`s.
+    let restrict = move || -> std::io::Result<()> {
+        // Mark the child non-dumpable (matches codex `pre_main_hardening`):
+        // a raw prctl, allocation-free.
+        codex_process_hardening::disable_process_dumping()?;
+        // Defense in depth: no core dumps of the sandboxed process.
+        let rlim = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: raw setrlimit over a stack-local rlimit; no allocation.
+        if unsafe { libc::setrlimit(libc::RLIMIT_CORE, &rlim) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Landlock and seccomp both require NO_NEW_PRIVS (or CAP_SYS_ADMIN).
+        // SAFETY: raw prctl; no allocation.
+        if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Enforce the pre-built Landlock ruleset on this (child) thread so it
+        // is inherited across the coming execve. Flags 0 = no audit logging,
+        // matching the `landlock` crate's default `restrict_self`.
+        // SAFETY: raw landlock_restrict_self on the fd built before fork; no
+        // allocation.
+        if unsafe { libc::syscall(libc::SYS_landlock_restrict_self, landlock_fd.as_raw_fd(), 0) }
+            != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Install the pre-compiled seccomp denylist. `apply_filter` borrows
+        // the program (no allocation) and issues prctl + the seccomp syscall.
+        seccompiler::apply_filter(&seccomp_filter)
+            .map_err(|_| std::io::Error::from(std::io::ErrorKind::Other))?;
+        Ok(())
+    };
+    // SAFETY: see the comment above -- the closure is async-signal-safe.
     unsafe {
-        cmd.pre_exec(move || {
-            codex_process_hardening::pre_main_hardening();
-            apply_landlock_ruleset(&policy_for_child, &extra_landlock_paths)
-                .map_err(|err| std::io::Error::other(format!("landlock: {err}")))?;
-            apply_seccomp_denylist()
-                .map_err(|err| std::io::Error::other(format!("seccomp: {err}")))?;
-            Ok(())
-        });
+        cmd.pre_exec(restrict);
     }
 
     let child = cmd.spawn().map_err(LaunchError::from)?;
@@ -307,6 +380,13 @@ fn read_only_paths(policy: &SandboxPolicy) -> impl Iterator<Item = &Path> {
         .chain(policy.readonly_roots().iter().map(PathBuf::as_path))
 }
 
+/// Builds (but does not enforce) the Landlock ruleset. All allocation and
+/// file-descriptor opening lives here so it runs in the parent, before the
+/// fork: [`launch`] applies the returned ruleset in its `pre_exec` closure
+/// with a single raw `landlock_restrict_self` syscall (see that closure's
+/// SAFETY comment). Returning the [`RulesetCreated`] rather than calling
+/// `restrict_self` here is what keeps the post-fork path allocation-free.
+///
 /// `extra_full_access` grants the same (full) access level as
 /// `policy.writable_roots()` -- used for the egress socket and shim binary
 /// paths on an `AllowHosts` launch (see [`setup_egress`]). These are not
@@ -316,10 +396,10 @@ fn read_only_paths(policy: &SandboxPolicy) -> impl Iterator<Item = &Path> {
 /// mount flag in [`build_bwrap_argv`], a stronger guarantee than Landlock
 /// could add on top since it applies inside the sandbox's own mount
 /// namespace, not just to the host-side process this ruleset restricts.
-fn apply_landlock_ruleset(
+fn build_landlock_ruleset(
     policy: &SandboxPolicy,
     extra_full_access: &[PathBuf],
-) -> Result<(), String> {
+) -> Result<RulesetCreated, String> {
     let abi = ABI::V5;
     let access_all = AccessFs::from_all(abi);
     let access_read = AccessFs::from_read(abi);
@@ -354,11 +434,17 @@ fn apply_landlock_ruleset(
             .map_err(|err| format!("{err:?}"))?;
     }
 
-    ruleset.restrict_self().map_err(|err| format!("{err:?}"))?;
-    Ok(())
+    // Deliberately does NOT call `restrict_self` here: enforcement is the
+    // caller's job, inside the fork()ed child, via a raw syscall. See the
+    // function doc.
+    Ok(ruleset)
 }
 
-fn apply_seccomp_denylist() -> Result<(), String> {
+/// Compiles (but does not install) the seccomp-BPF denylist. Like
+/// [`build_landlock_ruleset`], all the allocation happens here, in the
+/// parent, before the fork; [`launch`]'s `pre_exec` closure installs the
+/// returned program with an allocation-free `seccompiler::apply_filter`.
+fn build_seccomp_filter() -> Result<BpfProgram, String> {
     let rules = DENIED_SYSCALLS
         .iter()
         .map(|&syscall| (syscall, Vec::new()))
@@ -381,7 +467,7 @@ fn apply_seccomp_denylist() -> Result<(), String> {
     .try_into()
     .map_err(|err| format!("{err:?}"))?;
 
-    seccompiler::apply_filter(&filter).map_err(|err| format!("{err:?}"))
+    Ok(filter)
 }
 
 #[cfg(test)]
@@ -637,36 +723,24 @@ mod tests {
         assert_eq!(found, Some(shim));
     }
 
-    // No test here calls the real launch() end to end (i.e. all the way
-    // through Command::spawn()'s pre_exec) -- and that is deliberate, not
-    // an oversight. This crate's own test binary is multithreaded (many
-    // concurrent #[test] functions, plus AllowlistProxy's own leaked
-    // accept-loop threads from earlier tests); pre_exec's closure runs in
-    // the forked child via a raw fork() (required so pre_exec can run
-    // arbitrary code before exec), and `apply_landlock_ruleset` /
-    // `apply_seccomp_denylist` both allocate (Vec, PathFd::new, format!).
-    // Allocating in a fork()ed child of a multithreaded process is a
-    // textbook post-fork deadlock hazard: if another thread held the
-    // allocator's lock at the instant of fork, the single surviving child
-    // thread can block on malloc forever, and because Rust's pre_exec
-    // machinery has the parent's spawn() block on a pipe read until the
-    // child either execs or reports an error, THAT hangs too -- observed
-    // directly in this session (a first attempt at an end-to-end launch()
-    // test hung `cargo test` for 15+ minutes; `timeout` plus
-    // `--test-threads=1` plus reading `/proc/<pid>/task/*/comm` confirmed
-    // it was blocked inside the forked child, not anywhere in this crate's
-    // own logic). Fixing pre_exec to be genuinely alloc-free (or moving off
-    // fork+pre_exec entirely, e.g. toward `posix_spawn`-style APIs) is a
-    // real, pre-existing gap this discovery surfaced -- out of scope for
-    // this pass; tracked as a VENDORING.md open risk. Argv construction
-    // (`egress_bind_adds_ro_bind_shim_and_bind_socket`,
-    // `egress_bind_wraps_command_with_shim_and_separator`,
-    // `allow_hosts_also_unshares_net_now_that_the_egress_proxy_gates_it`
-    // above) and the actual enforcement point (`egress_proxy.rs`'s own
-    // tests, which never fork) are both real and tested; only the
-    // OS-process-spawn plumbing in between is untested here, matching this
-    // crate's pre-existing posture (no test before this pass exercised
-    // launch()'s real spawn path either).
+    // launch()'s real spawn path (fork -> pre_exec closure -> execve) is
+    // exercised end to end by tests/launch_spawn.rs, deliberately a SEPARATE
+    // integration binary rather than a #[test] here. The reason is the
+    // landlock_hard_requirement_never_silently_no_ops test below: it calls
+    // restrict_self on its own (test-pool) thread, a one-way confinement, and
+    // if cargo reused that OS thread for a test doing real filesystem I/O
+    // (spawn, tempdir) the confinement would break it. A separate binary
+    // never runs restrict_self, so its threads stay unconfined.
+    //
+    // That end-to-end test is what proves this rewrite: before it, the
+    // pre_exec closure allocated (Ruleset build, PathFd::new, the seccomp BPF
+    // compile, format!) inside a raw fork()ed child of a multithreaded test
+    // binary -- a textbook post-fork allocator-deadlock hazard that hung
+    // `cargo test` for 15+ minutes when first tried. All allocation now
+    // happens in the parent before the fork (build_landlock_ruleset /
+    // build_seccomp_filter), so the closure is async-signal-safe and the
+    // spawn returns promptly. Argv construction and the egress enforcement
+    // point keep their own tests above / in egress_proxy.rs.
 
     // ponytail: calls Ruleset::restrict_self, a one-way, per-thread kernel
     // restriction (like seccomp, Landlock confines the calling thread, not
@@ -686,10 +760,16 @@ mod tests {
             hooks.path().to_path_buf(),
         );
 
-        match apply_landlock_ruleset(&p, &[]) {
-            Ok(()) => {
-                // CompatLevel::HardRequirement means Ok(()) here only
-                // happens when the kernel actually enforced the ruleset.
+        // build_landlock_ruleset does the allocation/fd work; restrict_self
+        // (the one-way, calling-thread confinement) is invoked here exactly
+        // as launch()'s pre_exec does it in the child, so this test still
+        // exercises real enforcement.
+        let restricted = build_landlock_ruleset(&p, &[])
+            .and_then(|ruleset| ruleset.restrict_self().map_err(|err| format!("{err:?}")));
+        match restricted {
+            Ok(_) => {
+                // CompatLevel::HardRequirement means Ok here only happens
+                // when the kernel actually enforced the ruleset.
                 // Prove it behaviorally rather than trusting the return
                 // value alone.
                 let blocked = outside.path().join("blocked");
