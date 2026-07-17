@@ -104,6 +104,30 @@ model_list:
     model_info:
       mode: embedding
 
+  # ── 6. Voice: speech-to-text (Groq Whisper, free tier) ──────────────────────
+  # Groq: whisper-large-v3 — serverless STT for the demo. edge-api's audio
+  # handler forwards POST /v1/audio/transcriptions here whenever no local
+  # sovereign STT sidecar (Parakeet/faster-whisper) is configured.
+  - model_name: route-groq-stt
+    litellm_params:
+      model: groq/whisper-large-v3
+      api_key: os.environ/GROQ_API_KEY
+    model_info:
+      mode: audio_transcription
+
+  # ── 7. Voice: text-to-speech (Groq Orpheus TTS) ─────────────────────────────
+  # Groq: canopylabs/orpheus-v1-english — serverless TTS for the demo. Groq
+  # deprecated playai-tts (shut down 2025-12-31) in favor of Orpheus (Canopy
+  # Labs); this is the current recommended replacement per
+  # https://console.groq.com/docs/deprecations. Voice IDs are plain names
+  # (e.g. "troy", "hannah"), not the old "<Name>-PlayAI" convention.
+  - model_name: route-groq-tts
+    litellm_params:
+      model: groq/canopylabs/orpheus-v1-english
+      api_key: os.environ/GROQ_API_KEY
+    model_info:
+      mode: audio_speech
+
 
 # Retry each upstream call up to 3 times before falling back to another group.
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries

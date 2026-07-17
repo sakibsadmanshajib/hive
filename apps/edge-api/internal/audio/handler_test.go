@@ -498,15 +498,23 @@ func TestTranscriptionForwardedBodyIsNonEmpty(t *testing.T) {
 	}
 }
 
-// TestTranscriptionWithNoSTTReturns503 proves that when WithSTT is not called,
-// transcription returns 503 (no silent fallback to LiteLLM on sovereign box).
-func TestTranscriptionWithNoSTTReturns503(t *testing.T) {
+// TestTranscriptionWithNoSTTFallsBackToLiteLLM proves that when WithSTT is not
+// called (serverless/cloud deployments with no local Parakeet/faster-whisper
+// sidecar), transcription falls back to the generic LiteLLM route selection
+// path — the same one handleTranslation uses — instead of a hard 503. This is
+// what lets a serverless STT provider (e.g. Groq Whisper) serve
+// /v1/audio/transcriptions purely via routing/catalog data.
+func TestTranscriptionWithNoSTTFallsBackToLiteLLM(t *testing.T) {
+	respBody := `{"text":"hello from litellm","duration":1.5}`
+	mock := newMockLiteLLMAudio([]byte(respBody), 200, "application/json")
+	defer mock.Close()
+
 	// Handler without WithSTT — STT field is nil.
-	h := buildAudioHandler("http://should-not-be-called.example.com")
+	h := buildAudioHandler(mock.server.URL)
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
-	_ = mw.WriteField("model", "whisper-1")
+	_ = mw.WriteField("model", "hive-stt")
 	fw, _ := mw.CreateFormFile("file", "audio.wav")
 	fw.Write([]byte("audio")) //nolint:errcheck
 	mw.Close()
@@ -518,8 +526,14 @@ func TestTranscriptionWithNoSTTReturns503(t *testing.T) {
 
 	h.ServeHTTP(w, req)
 
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 when STT not configured, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if mock.lastPath != "/audio/transcriptions" {
+		t.Errorf("expected LiteLLM path /audio/transcriptions, got %s", mock.lastPath)
+	}
+	if !strings.Contains(w.Body.String(), "hello from litellm") {
+		t.Errorf("expected LiteLLM response body forwarded, got: %s", w.Body.String())
 	}
 }
 
