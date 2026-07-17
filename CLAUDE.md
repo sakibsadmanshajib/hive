@@ -69,6 +69,14 @@ cd deploy/docker
 # Local dev: core stack with in-stack Redis.
 docker compose --env-file ../../.env --profile local up --build
 
+# Full demo surface (agent subsystem): core + agent-console sidecar (chat) +
+# agent-engine (agent) + in-stack Redis (local), in ONE command. RAG query
+# embeddings run serverless via LiteLLM (EMBEDDING_BASE_URL default). Live
+# agent-task sandbox launch additionally needs a built Apptainer runtime image
+# (HIVE_AGENT_SIF_PATH); build it from deploy/apptainer/agent-engine.def on a
+# host with apptainer (unavailable on WSL2), then set HIVE_AGENT_SIF_PATH in .env.
+docker compose --env-file ../../.env --profile local --profile chat --profile agent up --build
+
 # Hive Cloud (hosted SaaS): core services expecting managed Upstash Redis.
 # Set REDIS_URL=rediss://... in .env before running.
 docker compose --env-file ../../.env --profile cloud up --build

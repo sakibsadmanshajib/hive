@@ -40,6 +40,17 @@ services:
       SUPABASE_JWT_AUDIENCE: ${SUPABASE_JWT_AUDIENCE:-authenticated}
       SUPABASE_JWKS_URL: ${SUPABASE_JWKS_URL:-}
       OWUI_SHIM_KEY: ${OWUI_SHIM_KEY:-}
+      # RAG query embeddings (#232). Without these the query embedder is nil and
+      # POST /v1/rag/search + /v1/rag/chat return a provider-blind 503. The demo
+      # uses SERVERLESS embeddings only (no local embedding model runs): point at
+      # LiteLLM, whose route-openrouter-embedding forwards to the OpenRouter
+      # serverless embedding pool (Nemotron-Embed free primary, qwen3 paid
+      # fallback). The embedder appends /v1/embeddings, so the base URL must NOT
+      # itself include /v1. Provider-swappable with no schema change: override
+      # both in .env (e.g. http://ollama:11434 + bge-m3 for the enterprise
+      # profile's in-stack Ollama).
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://litellm:4000}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-route-openrouter-embedding}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 5s
