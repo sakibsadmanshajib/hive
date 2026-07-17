@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -243,13 +244,23 @@ func main() {
 		if ragEmbedModel == "" {
 			ragEmbedModel = "bge-m3"
 		}
+		// EMBEDDING_TRUNCATE_TO: set only for MRL-trained models whose native
+		// width exceeds EmbeddingDimension (e.g. the serverless demo's
+		// route-openrouter-embedding-fallback returns 4096). Unset/0 keeps the
+		// strict reject so a non-MRL model never gets silently truncated.
+		ragEmbedTruncateToRaw := strings.TrimSpace(os.Getenv("EMBEDDING_TRUNCATE_TO"))
+		ragEmbedTruncateTo, err := strconv.Atoi(ragEmbedTruncateToRaw)
+		if ragEmbedTruncateToRaw != "" && err != nil {
+			log.Printf("WARNING: EMBEDDING_TRUNCATE_TO=%q is not a valid integer; truncation disabled (strict dimension reject applies)", ragEmbedTruncateToRaw)
+			ragEmbedTruncateTo = 0
+		}
 		var ragRepo edgerag.Store
 		if dbPool != nil {
 			ragRepo = edgerag.NewRepo(dbPool)
 		}
 		var ragEmbedder edgerag.Embedder
 		if ragEmbedBaseURL != "" {
-			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel)
+			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo)
 		}
 		ragAudit := func(ctx context.Context, action, resourceType, resourceID, severity string,
 			tenantID, actorID uuid.UUID, userAgent string, after any) {

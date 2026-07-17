@@ -43,14 +43,25 @@ services:
       # RAG query embeddings (#232). Without these the query embedder is nil and
       # POST /v1/rag/search + /v1/rag/chat return a provider-blind 503. The demo
       # uses SERVERLESS embeddings only (no local embedding model runs): point at
-      # LiteLLM, whose route-openrouter-embedding forwards to the OpenRouter
-      # serverless embedding pool (Nemotron-Embed free primary, qwen3 paid
-      # fallback). The embedder appends /v1/embeddings, so the base URL must NOT
-      # itself include /v1. Provider-swappable with no schema change: override
-      # both in .env (e.g. http://ollama:11434 + bge-m3 for the enterprise
-      # profile's in-stack Ollama).
+      # LiteLLM, whose route-openrouter-embedding-fallback forwards to OpenRouter's
+      # qwen3-embedding-8b (MRL-trained, native 4096-dim). The embedder appends
+      # /v1/embeddings, so the base URL must NOT itself include /v1.
+      # rag_chunks.embedding is vector(1024) NOT NULL (see EmbeddingDimension in
+      # apps/edge-api/internal/rag/types.go); neither serverless route natively
+      # returns 1024, and LiteLLM's `dimensions` request param is rejected by
+      # this proxy config even with drop_params set, so EMBEDDING_TRUNCATE_TO
+      # reduces the vector client-side (MRL truncation + L2 renormalize) instead
+      # of asking the provider for a narrower width. Only qwen3 is MRL-verified;
+      # the free Nemotron primary is NOT used here for that reason. Note the
+      # fallback chain is one-directional: route-openrouter-embedding-fallback
+      # (qwen3) is terminal in deploy/litellm/config.yaml, with no further
+      # fallback if it also fails.
+      # Provider-swappable with no schema change: override in .env
+      # (e.g. http://ollama:11434 + bge-m3 + EMBEDDING_TRUNCATE_TO=0 for the
+      # enterprise profile's in-stack Ollama, which returns native 1024-dim).
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://litellm:4000}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-route-openrouter-embedding}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-route-openrouter-embedding-fallback}
+      EMBEDDING_TRUNCATE_TO: ${EMBEDDING_TRUNCATE_TO:-1024}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
       interval: 5s
@@ -257,6 +268,15 @@ services:
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}
       AUDIT_WAL_DIR: ${AUDIT_WAL_DIR:-/var/lib/hive/audit-wal}
+      # RAG ingestion (#232). Without EMBEDDING_BASE_URL the ingest route is not
+      # registered and uploaded documents stay "pending" forever. Must match the
+      # edge-api query embedder (same model + same truncation) or search/chat
+      # retrieval silently returns nothing, since ingested and query vectors
+      # would live in incompatible embedding spaces. See the edge-api service's
+      # EMBEDDING_* comment above for why EMBEDDING_TRUNCATE_TO exists.
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://litellm:4000}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-route-openrouter-embedding-fallback}
+      EMBEDDING_TRUNCATE_TO: ${EMBEDDING_TRUNCATE_TO:-1024}
       # Phase 20 Plan 03 — LiteLLM config generation and controlled restart.
       LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
       LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
