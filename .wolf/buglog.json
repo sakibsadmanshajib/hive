@@ -1919,6 +1919,21 @@
         "demo-blocker",
         "test-gap"
       ]
+    },
+    {
+      "id": "egress-e2e-loopback-502-ci",
+      "priority": "P1",
+      "date": "2026-07-17",
+      "error_message": "CI job 'Egress firewall e2e (bwrap)' failed deterministically: ALLOWED probe (127.0.0.2) returned '502 CONNECT tunnel failed' instead of 200 (disallowed 403 and direct-refused were fine). Passed locally because only the Rust unit tests were run, never the shell e2e, which executes only in CI where HIVE_EGRESS_E2E_REQUIRE=1.",
+      "root_cause": "egress-proxy-harness spawned AllowlistProxy via spawn(), which forces allow_local_dest=false. The e2e uses two loopback IPs (127.0.0.2 allowed vs 127.0.0.3 denied) as a throwaway stand-in internet. For the allowed target, is_allowed passes but resolve_pinned then hits the is_forbidden_ip loopback guard (all of 127.0.0.0/8 is loopback), returns Err, and the handler writes 502 Bad Gateway before dialing. No non-forbidden address answers on a CI runner, so the allowed probe could never reach 200 with that harness. Not a bwrap or allowlist-logic bug.",
+      "fix": "Add pub AllowlistProxy::spawn_allowing_local_dest (test-only wrapper over spawn_with_policy(..., true), the same opt-out the proxy's own unit tests use) and call it from the egress-proxy-harness example. Relaxes only the redundant destination-IP guard (separately unit-tested); the allowlist host check and netns isolation the e2e asserts stay unchanged. Verified: raw CONNECT over the socket gives allowed=200 / disallowed=403, and the full scripts/egress-bwrap-e2e.sh passes with HIVE_EGRESS_E2E_REQUIRE=1 inside a real bwrap sandbox (allowed=200, disallowed=403, direct refused).",
+      "tags": [
+        "ci",
+        "egress",
+        "desktop-sandbox",
+        "test-harness",
+        "loopback-guard"
+      ]
     }
   ]
 }

@@ -873,3 +873,59 @@ jobs:
       needs.go-tests.result == 'success'
     steps:
       - run: echo "Web E2E skipped (no frontend or stack paths changed); reporting success."
+
+  # ------------------------------------------------------------------
+  # Egress firewall e2e (issue #342 item 6). Live proof that the Linux
+  # desktop egress allowlist blocks disallowed outbound traffic inside a
+  # real bubblewrap sandbox, and lets allowlisted traffic through. Runs
+  # the shipped enforcement components verbatim (codex-bwrap's bwrap, the
+  # AllowlistProxy, hive-egress-shim) via scripts/egress-bwrap-e2e.sh.
+  #
+  # Additive and isolated: a fresh job, not a required check yet (mirrors
+  # rust-tests / desktop-tests, which graduate to required once they have
+  # a track record on main). Builds the shipped bwrap and points
+  # HIVE_BWRAP_PATH at it so the test exercises the binary that ships, not
+  # a system bwrap.
+  # ------------------------------------------------------------------
+
+  egress-firewall-e2e:
+    name: Egress firewall e2e (bwrap)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop-sandbox
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libcap headers + build deps
+        # codex-bwrap's build.rs compiles vendored bubblewrap against libcap.
+        run: sudo apt-get update && sudo apt-get install -y libcap-dev pkg-config
+
+      - name: Allow unprivileged user namespaces
+        # GitHub's ubuntu runners support unprivileged userns, but Ubuntu's
+        # AppArmor restriction blocks bubblewrap's --unshare-user by default.
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop-sandbox/target
+          key: rust-desktop-sandbox-egress-${{ hashFiles('apps/desktop-sandbox/Cargo.lock') }}
+          restore-keys: |
+            rust-desktop-sandbox-
+
+      - name: Build shipped bwrap + shim + proxy harness
+        run: >-
+          cargo build -p codex-bwrap --bin bwrap
+          -p hive-desktop-sandbox --bin hive-egress-shim
+          --example egress-proxy-harness
+
+      - name: Run egress allowlist e2e inside a real bwrap sandbox
+        env:
+          HIVE_EGRESS_E2E_REQUIRE: "1"
+          HIVE_BWRAP_PATH: ${{ github.workspace }}/apps/desktop-sandbox/target/debug/bwrap
+        run: ./scripts/egress-bwrap-e2e.sh
