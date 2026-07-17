@@ -67,6 +67,16 @@ func newRLSTestPool(t *testing.T, role string) *pgxpool.Pool {
 func seedTenant(t *testing.T, id uuid.UUID) {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
+	// Same guards as newRLSTestPool: skip when the suite is not DB-gated
+	// (unset env), and refuse to seed anything but a test database. Without
+	// the skip, an empty DSN falls back to a local unix socket and the seed
+	// fails in CI (which is TCP-only) instead of skipping like the pool helper.
+	if dsn == "" {
+		t.Skip("HIVE_TEST_DB_URL not set")
+	}
+	if !strings.Contains(strings.ToLower(dsn), "test") {
+		t.Fatalf("refusing to seed: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
+	}
 	ctx := context.Background()
 	setup, err := pgxpool.New(ctx, dsn)
 	if err != nil {
