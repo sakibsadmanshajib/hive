@@ -30,6 +30,9 @@ type HTTPEmbedClient struct {
 	// many leading dimensions, then L2-renormalizes. 0 disables reduction: a
 	// non-EmbeddingDimension vector is rejected outright (see EMBEDDING_TRUNCATE_TO).
 	truncateTo int
+	// apiKey authenticates to the backend (LiteLLM requires it; a local
+	// bge-m3/Ollama endpoint does not). Empty means send no Authorization header.
+	apiKey string
 }
 
 // NewHTTPEmbedClient constructs the production embed client.
@@ -37,12 +40,15 @@ type HTTPEmbedClient struct {
 // model must be the alias returning EmbeddingDimension (or truncateTo) vectors, e.g. "bge-m3".
 // truncateTo: 0 requires the backend already return EmbeddingDimension;
 // otherwise the target width for MRL truncation (must equal EmbeddingDimension).
-func NewHTTPEmbedClient(baseURL, model string, truncateTo int) *HTTPEmbedClient {
+// apiKey is sent as a Bearer token when non-empty (LiteLLM's LITELLM_MASTER_KEY);
+// leave empty for backends that require no auth.
+func NewHTTPEmbedClient(baseURL, model string, truncateTo int, apiKey string) *HTTPEmbedClient {
 	return &HTTPEmbedClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		model:      model,
 		client:     &http.Client{Timeout: 30 * time.Second},
 		truncateTo: truncateTo,
+		apiKey:     apiKey,
 	}
 }
 
@@ -96,6 +102,9 @@ func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float
 		return nil, fmt.Errorf("rag.embed: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {

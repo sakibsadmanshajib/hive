@@ -309,7 +309,7 @@ func main() {
 		}
 		var ragEmbedder edgerag.Embedder
 		if ragEmbedBaseURL != "" {
-			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo)
+			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo, resolveLiteLLMMasterKey())
 		}
 		ragAudit := func(ctx context.Context, action, resourceType, resourceID, severity string,
 			tenantID, actorID uuid.UUID, userAgent string, after any) {

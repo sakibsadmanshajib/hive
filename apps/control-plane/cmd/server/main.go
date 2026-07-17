@@ -999,7 +999,7 @@ func main() {
 			if err := embedmodel.Validate(ragEmbedModel, ragEmbedDim, ragEmbedTruncateTo); err != nil {
 				log.Printf("ERROR: RAG embedding configuration is inconsistent, rag ingest route not registered: %v", err)
 			} else {
-				ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo)
+				ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo, resolveLiteLLMMasterKey())
 				ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0, ragEmbedModel)
 				cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
 					return ragIngester.Ingest(ctx, tenantID, docID, content)

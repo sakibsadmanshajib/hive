@@ -71,7 +71,7 @@ func TestHTTPEmbedderTruncates(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := NewHTTPEmbedder(srv.URL, "route-openrouter-embedding-fallback", 1024)
+	e := NewHTTPEmbedder(srv.URL, "route-openrouter-embedding-fallback", 1024, "")
 	vec, err := e.Embed(context.Background(), "hello")
 	if err != nil {
 		t.Fatalf("Embed() error = %v", err)
@@ -94,8 +94,56 @@ func TestHTTPEmbedderStrictRejectByDefault(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := NewHTTPEmbedder(srv.URL, "bge-m3", 0)
+	e := NewHTTPEmbedder(srv.URL, "bge-m3", 0, "")
 	if _, err := e.Embed(context.Background(), "hello"); err == nil {
 		t.Fatal("expected dimension-mismatch error, got nil")
+	}
+}
+
+// TestHTTPEmbedderSendsAuthHeaderWhenKeySet verifies the LiteLLM master key
+// is sent as a Bearer token so /v1/embeddings does not 401.
+func TestHTTPEmbedderSendsAuthHeaderWhenKeySet(t *testing.T) {
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		vec := make([]float32, EmbeddingDimension)
+		_ = json.NewEncoder(w).Encode(embedResp{
+			Data: []struct {
+				Embedding []float32 `json:"embedding"`
+			}{{Embedding: vec}},
+		})
+	}))
+	defer srv.Close()
+
+	e := NewHTTPEmbedder(srv.URL, "bge-m3", 0, "sk-test-key")
+	if _, err := e.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	if gotAuth != "Bearer sk-test-key" {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer sk-test-key")
+	}
+}
+
+// TestHTTPEmbedderOmitsAuthHeaderWhenKeyEmpty verifies a local backend
+// (e.g. Ollama) that needs no auth does not receive a bogus header.
+func TestHTTPEmbedderOmitsAuthHeaderWhenKeyEmpty(t *testing.T) {
+	var sawAuth bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAuth = r.Header.Get("Authorization") != ""
+		vec := make([]float32, EmbeddingDimension)
+		_ = json.NewEncoder(w).Encode(embedResp{
+			Data: []struct {
+				Embedding []float32 `json:"embedding"`
+			}{{Embedding: vec}},
+		})
+	}))
+	defer srv.Close()
+
+	e := NewHTTPEmbedder(srv.URL, "bge-m3", 0, "")
+	if _, err := e.Embed(context.Background(), "hello"); err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	if sawAuth {
+		t.Error("expected no Authorization header when apiKey is empty")
 	}
 }
