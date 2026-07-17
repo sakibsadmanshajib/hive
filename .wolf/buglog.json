@@ -1948,6 +1948,21 @@
         "test-harness",
         "loopback-guard"
       ]
+    },
+    {
+      "id": "agent-engine-sif-playwright-missing",
+      "priority": "P1",
+      "date": "2026-07-17",
+      "error_message": "apptainer build agent-engine.sif FATAL in %post: '/usr/local/bin/python3: No module named playwright' at 'python3 -m playwright install --with-deps chromium'; exit status 1 (CI job Build agent-engine.sif, PR #351)",
+      "root_cause": "The vendored trio (openhands-sdk/-tools/-workspace) is installed with pip --no-deps to protect the patched workspace. That also drops openhands-tools' declared third-party runtime deps (binaryornot, cachetools, libtmux, browser-use, func-timeout, tom-swe). browser-use is what pulls playwright. openhands-agent-server is installed with deps but does not depend on openhands-tools, so pip never backfilled them (an already-installed --no-deps package is treated as satisfied, its missing deps never resolved). The subsequent playwright CLI invocation then failed because playwright was never installed.",
+      "fix": "In deploy/apptainer/agent-engine.def %post, after the trio and agent-server installs and before 'playwright install', add an explicit 'pip install' of openhands-tools' third-party runtime deps (binaryornot>=0.4.4, cachetools, libtmux>=0.53.0, browser-use>=0.8.0, func-timeout>=4.3.5, tom-swe>=1.0.3). These are plain PyPI packages, not the vendored trio, so the patched trio is left untouched (pip sees them already satisfied). Mirrors vendor/openhands/openhands-tools/pyproject.toml dependencies; keep in step with it.",
+      "tags": [
+        "ci",
+        "apptainer",
+        "agent-engine",
+        "playwright",
+        "packaging"
+      ]
     }
   ]
 }

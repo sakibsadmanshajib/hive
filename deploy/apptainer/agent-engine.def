@@ -40,6 +40,24 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     python3 -m pip install --no-cache-dir \
         /opt/hive/vendor/openhands/openhands-agent-server
 
+    # openhands-tools' own third-party runtime dependencies. The trio above
+    # was installed with --no-deps to protect the patched vendored packages,
+    # which also skipped these; and openhands-agent-server does not depend on
+    # openhands-tools, so its install did not pull them either. They back the
+    # core tools (bash: libtmux/func-timeout, file edit: binaryornot, browser:
+    # browser-use, which is what provides playwright). Installing them here
+    # (plain PyPI packages, not the vendored trio) leaves the patched trio
+    # untouched: pip sees openhands-sdk/-tools/-workspace already satisfied.
+    # This mirrors the dependencies list in vendor/openhands/openhands-tools/
+    # pyproject.toml and must be kept in step with it.
+    python3 -m pip install --no-cache-dir \
+        "binaryornot>=0.4.4" \
+        "cachetools" \
+        "libtmux>=0.53.0" \
+        "browser-use>=0.8.0" \
+        "func-timeout>=4.3.5" \
+        "tom-swe>=1.0.3"
+
     # x86-64 only, so Playwright's own bundled Chromium download works
     # normally: no distro-Chromium workaround needed (that was only ever
     # required for arm64, which this box does not target).
