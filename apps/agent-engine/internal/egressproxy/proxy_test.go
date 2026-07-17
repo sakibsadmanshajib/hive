@@ -19,7 +19,10 @@ func TestProxy_AllowsAllowlistedHTTPSHost(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := httptest.NewServer(egressproxy.New([]string{hostOf(t, backend.URL)}))
+	// NewAllowingLocalDest: the backend is a 127.0.0.1 httptest server, which
+	// the production loopback guard (issue #342 item 2) would correctly
+	// refuse. This test opts out to exercise the allow path itself.
+	proxy := httptest.NewServer(egressproxy.NewAllowingLocalDest([]string{hostOf(t, backend.URL)}))
 	defer proxy.Close()
 
 	client := clientThroughProxy(t, proxy.URL)
@@ -73,7 +76,8 @@ func TestProxy_AllowsAllowlistedPlainHTTPHost(t *testing.T) {
 	}))
 	defer backend.Close()
 
-	proxy := httptest.NewServer(egressproxy.New([]string{hostOf(t, backend.URL)}))
+	// NewAllowingLocalDest: 127.0.0.1 httptest backend, see the HTTPS variant.
+	proxy := httptest.NewServer(egressproxy.NewAllowingLocalDest([]string{hostOf(t, backend.URL)}))
 	defer proxy.Close()
 
 	proxyURLParsed, err := url.Parse(proxy.URL)

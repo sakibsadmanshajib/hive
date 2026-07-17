@@ -1892,6 +1892,47 @@
         "ci-integrity",
         "prod-only"
       ]
+    },
+    {
+      "id": "preexec-allocator-unsafe",
+      "date": "2026-07-17",
+      "error_message": "Desktop sandbox launch() could hang the whole app (once a 15+ minute cargo test hang) inside the Command::pre_exec closure",
+      "root_cause": "The pre_exec closure ran after fork() and before execve() in a child of a multithreaded process but was not async-signal-safe: it built the Landlock ruleset (Ruleset build, PathFd::new), compiled the seccomp BPF program, ran codex pre_main_hardening (std::env::remove_var over vars_os), and used format! on error paths. Allocating in a forked child can deadlock forever if another thread held the allocator lock at fork, and std makes the parent spawn() block until the child execs or errors, so the parent hangs too.",
+      "fix": "Hoist all allocation and fd setup before the fork: build_landlock_ruleset returns a RulesetCreated (converted to OwnedFd) and build_seccomp_filter returns the compiled BpfProgram, both in the parent. Strip LD_* env on the Command before fork instead of via std::env in the child. The closure now performs only raw async-signal-safe syscalls on pre-built values: prctl(PR_SET_DUMPABLE) via codex disable_process_dumping, setrlimit(RLIMIT_CORE), prctl(PR_SET_NO_NEW_PRIVS), raw landlock_restrict_self on the pre-built fd, and seccompiler::apply_filter over the pre-compiled program; error paths map to allocation-free io::Errors. Added tests/launch_spawn.rs end-to-end regression guard. The #341 10s spawn timeout stays as defense in depth.",
+      "tags": [
+        "rust",
+        "sandbox",
+        "fork-safety",
+        "security"
+      ]
+    },
+    {
+      "date": "2026-07-17",
+      "id": "reservation-duplicate-key-23505",
+      "severity": "P2",
+      "error_message": "duplicate key value violates unique constraint \"idx_request_attempts_account_request_attempt\" (SQLSTATE 23505) on chat dispatch",
+      "root_cause": "Non-idempotent request-attempt insert. A single edge-api chat request starts the same attempt twice for one (account_id, request_id, attempt_number=1): the orchestrator calls StartAttempt directly (status dispatching), then CreateReservation internally calls usage.StartAttempt again (accounting/service.go). usage/repository.go CreateAttempt used a plain INSERT, so the second insert hit the unique index and raised 23505. Non-fatal to the served request (errors were logged as non-fatal), but the error aborted the reservation transaction, silently dropping the credit hold, and polluted logs.",
+      "fix": "Make CreateAttempt idempotent with INSERT ... ON CONFLICT (account_id, request_id, attempt_number) DO UPDATE SET status = request_attempts.status RETURNING ... The no-op SET returns the pre-existing attempt (first write wins); status transitions stay owned by UpdateAttemptStatus so an attempt never moves backward. Preserves append-only semantics and money-path correctness (single attempt, single reservation, no double-charge). Added DB-backed regression test TestCreateAttemptIsIdempotentOnAccountRequestAttempt in apps/control-plane/internal/usage/repository_test.go asserting no 23505, same row returned, exactly one row.",
+      "tags": [
+        "billing",
+        "idempotency",
+        "edge-api",
+        "db"
+      ]
+    },
+    {
+      "id": "matrix-missing-proprietary-endpoints",
+      "priority": "P0",
+      "date": "2026-07-17",
+      "error_message": "agent-subsystem /v1 endpoints (/v1/rag/*, /v1/agent/tasks*, /v1/artifacts*) 404 via UnsupportedEndpointMiddleware; entire agent-subsystem web surface dead (demo blocker)",
+      "root_cause": "support matrix supported_now never updated for Waves 2-4 endpoints. The edge-api UnsupportedEndpointMiddleware 404s any /v1/ path not marked supported_now in packages/openai-contract/matrix/support-matrix.json (loaded at boot, baked into the Docker image). The rag/agent/artifacts handlers shipped wired and feature-gated but were only covered by per-package isolation tests that bypass the full middleware chain, so CI stayed green while every request 404-ed in a real stack. Note: support-matrix.json is the hand-maintained source; overlays/hive-support-status.yaml is an OpenAI-only OpenAPI overlay consumed by nothing and does not feed the matrix.",
+      "fix": "Add supported_now entries for the 13 real proprietary routes (verified against the router registrations, not the ticket's guide) to support-matrix.json, then regenerate docs/support-matrix.md + generated/hive-openapi.yaml via generate-matrix.sh. Add apps/edge-api/internal/middleware/unsupported_integration_test.go, a full-chain integration test that drives all 13 paths through the real UnsupportedEndpointMiddleware + the real committed matrix: 404 before, 200 after.",
+      "tags": [
+        "contract",
+        "middleware",
+        "demo-blocker",
+        "test-gap"
+      ]
     }
   ]
 }
