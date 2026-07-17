@@ -1,0 +1,16 @@
+# Supabase CLI declarative config. Minimal by design: this repo does not
+# run `supabase start` for local dev (Postgres is Supabase-hosted per
+# CLAUDE.md), so this file exists only to version-control settings that
+# must otherwise be clicked through the dashboard. Push with
+# `supabase config push` (or apply manually via the dashboard path noted
+# in the demo-host provisioning doc) after `supabase link`.
+project_id = "hive"
+
+# Registers migration 20260516_07_phase19_custom_access_token_hook.sql's
+# public.custom_access_token_hook as the project's active Auth Hook. Without
+# this, the function exists in the database but Supabase Auth never calls
+# it, so issued JWTs carry no tenant_id/tenants/role claims and every
+# tenant-scoped RLS policy and authz middleware check fails closed (401).
+[auth.hook.custom_access_token]
+enabled = true
+uri = "pg-functions://postgres/public/custom_access_token_hook"
