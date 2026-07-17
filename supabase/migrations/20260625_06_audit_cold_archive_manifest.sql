@@ -6,9 +6,12 @@
 -- Tables:
 --   public.audit_cold_archive_manifest
 --       Tracks every JSONL+gzip batch archived to local cold storage.
---       One row per (tenant_id, partition month) -- immutable after insert.
---       Rows are never updated or deleted by application code; the RLS
---       policy enforces read-only access for tenant roles.
+--       One row per (tenant_id, partition month), write-once after insert.
+--       The DB-layer immutability trigger (20260625_08) blocks every UPDATE
+--       and blocks DELETE until purge_after; the only legitimate DELETE is the
+--       retention-expiry purge. RLS follows the audit_log service model: the
+--       archiver runs as hive_app across all tenants, so hive_app has full
+--       access and auditor_ro may read.
 --
 -- Schema reconciliation (compliance fix):
 --   An earlier migration, 20260516_04_phase19_audit_log.sql, also created a
@@ -84,29 +87,50 @@ CREATE INDEX audit_cold_archive_manifest_purge
 
 -- ── Grants ───────────────────────────────────────────────────────────────────
 -- Relocated here from the removed 20260518_04 manifest block (that block
--- targeted the stale table dropped above). The service role (control-plane)
--- bypasses RLS for inserts and the purge scan; hive_app is a non-bypass
--- application role that still needs explicit table privileges, and auditor_ro
--- reads the manifest for chain spot-checks.
+-- targeted the stale table dropped above). The control-plane connects as
+-- hive_app, which is NOT BYPASSRLS, so it needs explicit table privileges. The
+-- cold-archive job inserts new rows, updates none, and deletes rows once their
+-- purge_after has passed (auditarchive/pg_repository.go DeleteManifest), so
+-- hive_app needs DELETE as well as INSERT/SELECT. UPDATE is granted for parity
+-- with the sibling audit surfaces even though the immutability trigger
+-- (20260625_08) blocks every UPDATE. auditor_ro reads for chain spot-checks.
 REVOKE ALL ON public.audit_cold_archive_manifest FROM PUBLIC;
-GRANT INSERT, SELECT, UPDATE ON public.audit_cold_archive_manifest TO hive_app;
+GRANT INSERT, SELECT, UPDATE, DELETE ON public.audit_cold_archive_manifest TO hive_app;
 GRANT SELECT ON public.audit_cold_archive_manifest TO auditor_ro;
 
 -- ── RLS ──────────────────────────────────────────────────────────────────────
+-- Service model, matching the sibling audit surfaces in
+-- 20260518_04_phase19_audit_rls_and_indexes.sql. The control-plane connects as
+-- hive_app, which is NOT BYPASSRLS (the platform pool does no SET ROLE, it
+-- connects as hive_app directly). The cold-archive job in
+-- apps/control-plane/internal/auditarchive runs as a cross-tenant platform
+-- sweep on that pool: FetchExpiredManifests scans every tenant and
+-- InsertManifest / DeleteManifest run with no app.current_tenant_id set. A
+-- tenant-scoped policy would make those queries match zero rows and deny every
+-- write, breaking the archiver, so hive_app gets a FOR ALL policy here exactly
+-- as audit_log does. Any tenant-facing read of this manifest is scoped in the
+-- application layer, the same way audit_log is.
+--
+-- FORCE so the table owner is subject to RLS too, matching the sibling audit
+-- tables; the DB-layer immutability trigger (20260625_08) is what enforces
+-- write-once semantics for all roles including the service path.
 ALTER TABLE public.audit_cold_archive_manifest ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_cold_archive_manifest FORCE  ROW LEVEL SECURITY;
 
--- Tenant users may list their own manifest entries (read-only).
--- The app sets app.current_tenant_id via SET LOCAL before queries.
-CREATE POLICY audit_cold_archive_manifest_tenant_read
+CREATE POLICY manifest_service_role_all
     ON public.audit_cold_archive_manifest
-    FOR SELECT
-    USING (
-        tenant_id::text = current_setting('app.current_tenant_id', true)
-    );
+    AS PERMISSIVE
+    FOR ALL
+    TO hive_app
+    USING (true)
+    WITH CHECK (true);
 
--- Service-role (control-plane) bypasses RLS for inserts and the purge scan.
--- No UPDATE / DELETE policy is defined for tenant roles -- manifest is
--- write-once from the application perspective.
+CREATE POLICY manifest_auditor_select
+    ON public.audit_cold_archive_manifest
+    AS PERMISSIVE
+    FOR SELECT
+    TO auditor_ro
+    USING (true);
 
 COMMENT ON TABLE public.audit_cold_archive_manifest IS
     'Immutable manifest of audit_log cold-archive batches. '
