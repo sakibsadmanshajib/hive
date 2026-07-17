@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -25,17 +26,48 @@ type HTTPEmbedClient struct {
 	baseURL string
 	model   string
 	client  *http.Client
+	// truncateTo reduces a wider MRL-trained embedding (e.g. 4096-dim) to this
+	// many leading dimensions, then L2-renormalizes. 0 disables reduction: a
+	// non-EmbeddingDimension vector is rejected outright (see EMBEDDING_TRUNCATE_TO).
+	truncateTo int
 }
 
 // NewHTTPEmbedClient constructs the production embed client.
 // baseURL example: "http://localhost:11434/v1" (Ollama) or "http://litellm:4000".
-// model must be the alias that returns 1024-dim vectors, e.g. "bge-m3".
-func NewHTTPEmbedClient(baseURL, model string) *HTTPEmbedClient {
+// model must be the alias returning EmbeddingDimension (or truncateTo) vectors, e.g. "bge-m3".
+// truncateTo: 0 requires the backend already return EmbeddingDimension;
+// otherwise the target width for MRL truncation (must equal EmbeddingDimension).
+func NewHTTPEmbedClient(baseURL, model string, truncateTo int) *HTTPEmbedClient {
 	return &HTTPEmbedClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		model:   model,
-		client:  &http.Client{Timeout: 30 * time.Second},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		model:      model,
+		client:     &http.Client{Timeout: 30 * time.Second},
+		truncateTo: truncateTo,
 	}
+}
+
+// reduceEmbedding implements Matryoshka Representation Learning (MRL)
+// truncation: keep the first `target` dimensions and L2-renormalize so the
+// result is a valid unit-ish vector for cosine similarity. Only correct for
+// MRL-trained embedding models; never apply to an arbitrary model.
+func reduceEmbedding(vec []float32, target int) []float32 {
+	if target <= 0 || target >= len(vec) {
+		return vec
+	}
+	out := make([]float32, target)
+	copy(out, vec[:target])
+	var sumSq float64
+	for _, v := range out {
+		sumSq += float64(v) * float64(v)
+	}
+	norm := math.Sqrt(sumSq)
+	if norm == 0 {
+		return out
+	}
+	for i, v := range out {
+		out[i] = float32(float64(v) / norm)
+	}
+	return out
 }
 
 type embedRequest struct {
@@ -87,11 +119,15 @@ func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float
 
 	out := make([][]float32, len(result.Data))
 	for i, d := range result.Data {
-		if len(d.Embedding) != EmbeddingDimension {
-			return nil, fmt.Errorf("rag.embed: item %d has dimension %d, want %d",
-				i, len(d.Embedding), EmbeddingDimension)
+		emb := d.Embedding
+		if c.truncateTo > 0 {
+			emb = reduceEmbedding(emb, c.truncateTo)
 		}
-		out[i] = d.Embedding
+		if len(emb) != EmbeddingDimension {
+			return nil, fmt.Errorf("rag.embed: item %d has dimension %d, want %d",
+				i, len(emb), EmbeddingDimension)
+		}
+		out[i] = emb
 	}
 	return out, nil
 }

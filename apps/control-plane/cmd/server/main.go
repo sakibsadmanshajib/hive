@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -968,7 +969,8 @@ func main() {
 			log.Println("WARNING: EMBEDDING_BASE_URL not set; rag ingest route not registered (uploaded documents will stay pending)")
 		} else {
 			ragRepo := cprag.NewRepo(pool)
-			ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel)
+			ragEmbedTruncateTo, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("EMBEDDING_TRUNCATE_TO")))
+			ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo)
 			ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0)
 			cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
 				return ragIngester.Ingest(ctx, tenantID, docID, content)
