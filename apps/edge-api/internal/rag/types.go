@@ -65,9 +65,9 @@ type ChatRequest struct {
 	Model    string        `json:"model"`
 	Messages []ChatMessage `json:"messages"`
 	TopK     int           `json:"top_k"` // defaults to 5 when zero, capped at maxTopK
-	// Stream is accepted but rejected with 400: SSE grounded generation is
-	// deferred (issue #325 scope note); a client that already sends
-	// stream:true gets a clear error instead of a silently ignored flag.
+	// Stream requests an SSE response (#339): a retrieval-first citations
+	// frame followed by the relayed upstream chat.completion.chunk frames and
+	// a terminating data: [DONE].
 	Stream bool `json:"stream,omitempty"`
 }
 
