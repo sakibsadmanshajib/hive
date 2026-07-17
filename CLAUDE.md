@@ -116,6 +116,28 @@ supabase db push                    # If Supabase CLI is linked
 # Or apply supabase/migrations/ files in order via SQL editor
 ```
 
+### 5. Agent-engine runtime image (Apptainer)
+
+The agent-engine service launches each agent session inside an Apptainer
+sandbox built from `deploy/apptainer/agent-engine.def`. It needs a prebuilt
+`.sif` and reads its path from `HIVE_AGENT_SIF_PATH`. The image is `linux/amd64`
+only and cannot be built on the WSL2 dev box.
+
+```bash
+# Demo/prod host with apptainer installed:
+make agent-sif                       # -> deploy/apptainer/agent-engine.sif
+export HIVE_AGENT_SIF_PATH=$(pwd)/deploy/apptainer/agent-engine.sif
+
+# No local apptainer: download the CI-built image instead.
+gh workflow run "agent-engine SIF"   # or use the latest successful run
+gh run download -n agent-engine-sif -D /opt/hive
+export HIVE_AGENT_SIF_PATH=/opt/hive/agent-engine.sif
+```
+
+The `agent-engine SIF` workflow builds the `.sif` in CI (which also validates
+the def) and uploads it as the `agent-engine-sif` artifact. Full detail:
+`deploy/apptainer/README.md`.
+
 ## Commands
 
 ### Testing (always use Docker)

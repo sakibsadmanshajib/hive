@@ -40,6 +40,44 @@ From: nikolaik/python-nodejs:python3.12-nodejs22-bookworm
     python3 -m pip install --no-cache-dir \
         /opt/hive/vendor/openhands/openhands-agent-server
 
+    # openhands-tools' own third-party runtime dependencies. The trio above
+    # was installed with --no-deps to protect the patched vendored packages,
+    # which also skipped these; and openhands-agent-server does not depend on
+    # openhands-tools, so its install did not pull them either. They back the
+    # core tools (bash: libtmux/func-timeout, file edit: binaryornot, browser:
+    # browser-use). Installing them here (plain PyPI packages, not the
+    # vendored trio) leaves the patched trio untouched: pip sees
+    # openhands-sdk/-tools/-workspace already satisfied. This mirrors the
+    # dependencies list in vendor/openhands/openhands-tools/pyproject.toml
+    # and must be kept in step with it.
+    python3 -m pip install --no-cache-dir \
+        "binaryornot>=0.4.4" \
+        "cachetools" \
+        "libtmux>=0.53.0" \
+        "browser-use>=0.8.0" \
+        "func-timeout>=4.3.5" \
+        "tom-swe>=1.0.3"
+
+    # The block above can backtrack litellm below the floor openhands-sdk
+    # pins (litellm>=1.84.1): tom-swe only requires litellm>=1.0.0, and pip
+    # resolves each `pip install` invocation independently, so it is free to
+    # pick any version satisfying that looser bound across this command
+    # (observed landing on 1.83.0, undoing the 1.84.1+ install pulled in
+    # earlier by openhands-sdk). Re-assert both vendored packages' floors
+    # (openhands-sdk: litellm>=1.84.1; openhands-agent-server: openai>=2.33,
+    # <3) here so the final resolved environment satisfies both.
+    python3 -m pip install --no-cache-dir "litellm>=1.84.1" "openai>=2.33.0,<3"
+
+    # browser-use (from the block above) dropped its own playwright
+    # dependency as of the 0.13.x line: it now drives Chromium over CDP via
+    # cdp-use instead of through Playwright's API, so nothing above still
+    # pulls playwright in transitively. openhands-tools' own browser tool
+    # (openhands/tools/browser_use/impl.py) looks for a Chromium binary
+    # under Playwright's ms-playwright cache dir regardless, so both the
+    # playwright package and its bundled Chromium download are still
+    # required here.
+    python3 -m pip install --no-cache-dir playwright
+
     # x86-64 only, so Playwright's own bundled Chromium download works
     # normally: no distro-Chromium workaround needed (that was only ever
     # required for arm64, which this box does not target).

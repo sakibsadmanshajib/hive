@@ -1,0 +1,98 @@
+name: agent-engine SIF
+
+# Builds the Apptainer runtime image (agent-engine.sif) that the agent-engine
+# service launches per session (HIVE_AGENT_SIF_PATH). Building here also
+# validates deploy/apptainer/agent-engine.def on every change to its inputs,
+# and publishes the built image as a downloadable CI artifact for demo hosts.
+#
+# Additive and self-contained: this file owns its own triggers and its single
+# job. It intentionally does not touch .github/workflows/ci.yml.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'deploy/apptainer/**'
+      - 'vendor/openhands/**'
+      - 'apps/agent-engine/packs/**'
+      - '.github/workflows/agent-engine-sif.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/apptainer/**'
+      - 'vendor/openhands/**'
+      - 'apps/agent-engine/packs/**'
+      - '.github/workflows/agent-engine-sif.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: agent-engine-sif-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned Apptainer release (reproducible). Bump this to upgrade; the download
+  # URL below tracks it. Uses the distro-generic .deb (not the -trixie+ build)
+  # so it installs and runs on the ubuntu-latest (noble, glibc 2.39) runner.
+  APPTAINER_VERSION: "1.5.2"
+
+jobs:
+  build-sif:
+    name: Build agent-engine.sif
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Apptainer ${{ env.APPTAINER_VERSION }}
+        run: |
+          set -euo pipefail
+          deb="apptainer_${APPTAINER_VERSION}_amd64.deb"
+          url="https://github.com/apptainer/apptainer/releases/download/v${APPTAINER_VERSION}/${deb}"
+          curl -fsSL -o "/tmp/${deb}" "$url"
+          sudo apt-get update
+          sudo apt-get install -y "/tmp/${deb}"
+          apptainer --version
+
+      - name: Prepare build scratch on the large /mnt volume
+        run: |
+          set -euo pipefail
+          # The hosted runner's root filesystem is small; /mnt has tens of GB
+          # free. Point Apptainer's tmp and OCI-layer cache there so a multi-GB
+          # image build has room.
+          sudo mkdir -p /mnt/apptainer/tmp /mnt/apptainer/cache
+          sudo chmod -R 777 /mnt/apptainer
+
+      - name: Build agent-engine.sif
+        working-directory: deploy/apptainer
+        run: |
+          set -euo pipefail
+          # CWD is the def's own directory so its ../../ %files sources
+          # (vendor/openhands, apps/agent-engine/packs) resolve to the repo
+          # root. Build as real root (sudo) so the docker-bootstrap %post
+          # apt/pip/playwright steps run without rootless-userns quirks.
+          sudo env \
+            APPTAINER_TMPDIR=/mnt/apptainer/tmp \
+            APPTAINER_CACHEDIR=/mnt/apptainer/cache \
+            apptainer build agent-engine.sif agent-engine.def
+          sudo chown "$(id -un)" agent-engine.sif
+          ls -lh agent-engine.sif
+
+      - name: Inspect the built image
+        working-directory: deploy/apptainer
+        run: |
+          set -euo pipefail
+          # Proves the artifact is a valid SIF (metadata readable), not merely
+          # that the build command exited 0.
+          apptainer inspect agent-engine.sif
+
+      - name: Upload agent-engine.sif artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-engine-sif
+          path: deploy/apptainer/agent-engine.sif
+          retention-days: 14
+          if-no-files-found: error
