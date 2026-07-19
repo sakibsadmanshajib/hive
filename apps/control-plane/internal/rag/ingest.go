@@ -26,10 +26,15 @@ type HTTPEmbedClient struct {
 	baseURL string
 	model   string
 	client  *http.Client
-	// truncateTo reduces a wider MRL-trained embedding (e.g. 4096-dim) to this
-	// many leading dimensions, then L2-renormalizes. 0 disables reduction: a
-	// non-EmbeddingDimension vector is rejected outright (see EMBEDDING_TRUNCATE_TO).
-	truncateTo int
+	// reduceTo is the MRL reduction target, derived from embedmodel.Resolve:
+	// EmbeddingDimension when the configured model is MRL-trained and its
+	// chosen dim is below its native width, else 0. Not an independent operator
+	// knob (the old EMBEDDING_TRUNCATE_TO): a non-MRL model at a non-native dim
+	// is rejected at config time, so reduceTo is only set where the reduction
+	// is legitimate. It doubles as the `dimensions` value requested from the
+	// endpoint; the client-side reduce is a no-op when the endpoint honors it.
+	// 0 means require the native width exactly.
+	reduceTo int
 	// apiKey authenticates to the backend (LiteLLM requires it; a local
 	// bge-m3/Ollama endpoint does not). Empty means send no Authorization header.
 	apiKey string
@@ -37,18 +42,20 @@ type HTTPEmbedClient struct {
 
 // NewHTTPEmbedClient constructs the production embed client.
 // baseURL example: "http://localhost:11434/v1" (Ollama) or "http://litellm:4000".
-// model must be the alias returning EmbeddingDimension (or truncateTo) vectors, e.g. "bge-m3".
-// truncateTo: 0 requires the backend already return EmbeddingDimension;
-// otherwise the target width for MRL truncation (must equal EmbeddingDimension).
+// model must be the alias returning EmbeddingDimension vectors, e.g. "bge-m3".
+// reduceTo: 0 requires the backend already return EmbeddingDimension; otherwise
+// the MRL reduction target (== EmbeddingDimension) derived from
+// embedmodel.Resolve, sent as `dimensions` and applied client-side only if the
+// endpoint ignores it.
 // apiKey is sent as a Bearer token when non-empty (LiteLLM's LITELLM_MASTER_KEY);
 // leave empty for backends that require no auth.
-func NewHTTPEmbedClient(baseURL, model string, truncateTo int, apiKey string) *HTTPEmbedClient {
+func NewHTTPEmbedClient(baseURL, model string, reduceTo int, apiKey string) *HTTPEmbedClient {
 	return &HTTPEmbedClient{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		model:      model,
-		client:     &http.Client{Timeout: 30 * time.Second},
-		truncateTo: truncateTo,
-		apiKey:     apiKey,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		model:    model,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		reduceTo: reduceTo,
+		apiKey:   apiKey,
 	}
 }
 
@@ -79,6 +86,10 @@ func reduceEmbedding(vec []float32, target int) []float32 {
 type embedRequest struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
+	// Dimensions requests a native N-wide vector from an MRL-capable endpoint
+	// (Qwen3 supports it). Omitted when 0; the reduceEmbedding fallback covers
+	// an endpoint that ignores it.
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 type embedResponse struct {
@@ -91,7 +102,7 @@ type embedResponse struct {
 // Errors are wrapped with a provider-blind message — callers must not
 // expose the raw error to customers.
 func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float32, error) {
-	body, err := json.Marshal(embedRequest{Model: c.model, Input: inputs})
+	body, err := json.Marshal(embedRequest{Model: c.model, Input: inputs, Dimensions: c.reduceTo})
 	if err != nil {
 		return nil, fmt.Errorf("rag.embed: marshal: %w", err)
 	}
@@ -129,8 +140,9 @@ func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float
 	out := make([][]float32, len(result.Data))
 	for i, d := range result.Data {
 		emb := d.Embedding
-		if c.truncateTo > 0 {
-			emb = reduceEmbedding(emb, c.truncateTo)
+		if c.reduceTo > 0 {
+			// No-op when the endpoint already returned a reduceTo-wide vector.
+			emb = reduceEmbedding(emb, c.reduceTo)
 		}
 		if len(emb) != EmbeddingDimension {
 			return nil, fmt.Errorf("rag.embed: item %d has dimension %d, want %d",
@@ -190,24 +202,16 @@ func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ Stri
 		return fmt.Errorf("rag.ingest: document produced no text chunks")
 	}
 
-	// Embed in batches.
-	embeddings := make([][]float32, 0, len(chunks))
-	for start := 0; start < len(chunks); start += ing.batchSize {
-		end := start + ing.batchSize
-		if end > len(chunks) {
-			end = len(chunks)
-		}
-		batch := chunks[start:end]
-		texts := make([]string, len(batch))
-		for i, c := range batch {
-			texts[i] = c.Content
-		}
-		vecs, err := ing.embed.Embed(ctx, texts)
-		if err != nil {
-			_ = ing.repo.UpdateDocumentStatus(ctx, tid, did, StatusError, "embedding service unavailable")
-			return fmt.Errorf("rag.ingest: embed batch: embedding service unavailable")
-		}
-		embeddings = append(embeddings, vecs...)
+	// Embed in batches (shared with the re-embed worker: fail-closed on any
+	// batch error so a partial vector set is never stored).
+	texts := make([]string, len(chunks))
+	for i, c := range chunks {
+		texts[i] = c.Content
+	}
+	embeddings, err := embedInBatches(ctx, ing.embed, texts, ing.batchSize)
+	if err != nil {
+		_ = ing.repo.UpdateDocumentStatus(ctx, tid, did, StatusError, "embedding service unavailable")
+		return fmt.Errorf("rag.ingest: embed batch: embedding service unavailable")
 	}
 
 	if err := ing.repo.InsertChunks(ctx, tid, did, chunks, embeddings); err != nil {

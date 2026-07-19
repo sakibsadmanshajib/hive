@@ -24,31 +24,39 @@ type HTTPEmbedder struct {
 	baseURL string
 	model   string
 	client  *http.Client
-	// truncateTo reduces a wider MRL-trained embedding (e.g. 4096-dim) to this
-	// many leading dimensions, then L2-renormalizes. 0 disables reduction: a
-	// non-EmbeddingDimension vector is rejected outright (see EMBEDDING_TRUNCATE_TO).
-	truncateTo int
+	// reduceTo is the MRL reduction target, derived from embedmodel.Resolve:
+	// it is EmbeddingDimension when the configured model is MRL-trained and its
+	// chosen dim is below its native width, else 0. It is NOT an independent
+	// operator knob (the old EMBEDDING_TRUNCATE_TO): a non-MRL model at a
+	// non-native dim is rejected at config time, so reduceTo is only ever set
+	// for a model where the reduction is legitimate. It doubles as the
+	// `dimensions` value requested from the endpoint (preferred over client
+	// slicing); when the endpoint honors it and returns a dim-wide vector, the
+	// client-side reduce is a no-op. 0 means require the native width exactly.
+	reduceTo int
 	// apiKey authenticates to the backend (LiteLLM requires it; a local
 	// bge-m3/Ollama endpoint does not). Empty means send no Authorization header.
 	apiKey string
 }
 
 // NewHTTPEmbedder constructs the production embedder.
-// baseURL:    e.g. "http://ollama:11434/v1" or "http://litellm:4000".
-// model:      the alias returning EmbeddingDimension (or truncateTo) vectors, e.g. "bge-m3".
-// truncateTo: 0 to require the backend already return EmbeddingDimension;
+// baseURL:  e.g. "http://ollama:11434/v1" or "http://litellm:4000".
+// model:    the alias returning EmbeddingDimension vectors, e.g. "bge-m3".
+// reduceTo: 0 to require the backend already return EmbeddingDimension;
 //
-//	otherwise the target width for MRL truncation (must equal EmbeddingDimension).
+//	otherwise the MRL reduction target (== EmbeddingDimension), derived from
+//	embedmodel.Resolve, sent to the endpoint as `dimensions` and applied
+//	client-side only if the endpoint ignores it.
 //
 // apiKey is sent as a Bearer token when non-empty (LiteLLM's LITELLM_MASTER_KEY);
 // leave empty for backends that require no auth.
-func NewHTTPEmbedder(baseURL, model string, truncateTo int, apiKey string) *HTTPEmbedder {
+func NewHTTPEmbedder(baseURL, model string, reduceTo int, apiKey string) *HTTPEmbedder {
 	return &HTTPEmbedder{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		model:      model,
-		client:     &http.Client{Timeout: 30 * time.Second},
-		truncateTo: truncateTo,
-		apiKey:     apiKey,
+		baseURL:  strings.TrimRight(baseURL, "/"),
+		model:    model,
+		client:   &http.Client{Timeout: 30 * time.Second},
+		reduceTo: reduceTo,
+		apiKey:   apiKey,
 	}
 }
 
@@ -79,6 +87,11 @@ func reduceEmbedding(vec []float32, target int) []float32 {
 type embedReq struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
+	// Dimensions requests a native N-wide vector from an MRL-capable endpoint
+	// (Qwen3 supports it). Omitted when 0 so non-MRL native-width models are
+	// unaffected. Preferred over client-side slicing; the reduceEmbedding
+	// fallback covers an endpoint that silently ignores the parameter.
+	Dimensions int `json:"dimensions,omitempty"`
 }
 
 type embedResp struct {
@@ -90,7 +103,7 @@ type embedResp struct {
 // Embed embeds a single text string and returns an EmbeddingDimension-wide vector.
 // Errors are provider-blind: no backend URL, model name, or upstream message.
 func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}})
+	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}, Dimensions: e.reduceTo})
 	if err != nil {
 		return nil, fmt.Errorf("rag.embed: marshal: %w", err)
 	}
@@ -125,8 +138,10 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 		return nil, fmt.Errorf("rag: embedding service returned no data")
 	}
 	vec := result.Data[0].Embedding
-	if e.truncateTo > 0 {
-		vec = reduceEmbedding(vec, e.truncateTo)
+	if e.reduceTo > 0 {
+		// No-op when the endpoint already honored `dimensions` and returned a
+		// reduceTo-wide vector; a legitimate MRL slice otherwise.
+		vec = reduceEmbedding(vec, e.reduceTo)
 	}
 	if len(vec) != EmbeddingDimension {
 		return nil, fmt.Errorf("rag: unexpected embedding dimension %d", len(vec))

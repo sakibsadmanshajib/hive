@@ -55,13 +55,51 @@ func TestReduceEmbeddingNoop(t *testing.T) {
 	}
 }
 
-// TestHTTPEmbedderTruncates drives a fake 4096-dim backend through
-// HTTPEmbedder with truncateTo=1024 and expects a 1024-dim result.
-func TestHTTPEmbedderTruncates(t *testing.T) {
+// TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions drives a fake backend
+// that ignores `dimensions` and returns 4096-dim; the client-side MRL reduce
+// fallback must bring it to EmbeddingDimension. It also asserts the client
+// asked for the narrower width via `dimensions` (preferred endpoint-native).
+func TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions(t *testing.T) {
+	var gotDims int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		vec := make([]float32, 4096)
+		var req embedReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotDims = req.Dimensions
+		vec := make([]float32, 4096) // endpoint ignores dimensions, returns native
 		for i := range vec {
 			vec[i] = 0.01
+		}
+		_ = json.NewEncoder(w).Encode(embedResp{
+			Data: []struct {
+				Embedding []float32 `json:"embedding"`
+			}{{Embedding: vec}},
+		})
+	}))
+	defer srv.Close()
+
+	e := NewHTTPEmbedder(srv.URL, "route-openrouter-embedding-fallback", 1024, "")
+	vec, err := e.Embed(context.Background(), "hello")
+	if err != nil {
+		t.Fatalf("Embed() error = %v", err)
+	}
+	if gotDims != 1024 {
+		t.Errorf("requested dimensions = %d, want 1024 (endpoint-native preferred)", gotDims)
+	}
+	if len(vec) != EmbeddingDimension {
+		t.Errorf("len = %d, want %d", len(vec), EmbeddingDimension)
+	}
+}
+
+// TestHTTPEmbedderEndpointHonorsDimensions covers the preferred path: the
+// endpoint honors `dimensions` and returns EmbeddingDimension natively, so the
+// client-side reduce is a no-op and the strict width check passes.
+func TestHTTPEmbedderEndpointHonorsDimensions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req embedReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		vec := make([]float32, req.Dimensions) // honor the requested width
+		for i := range vec {
+			vec[i] = 0.02
 		}
 		_ = json.NewEncoder(w).Encode(embedResp{
 			Data: []struct {
@@ -81,7 +119,7 @@ func TestHTTPEmbedderTruncates(t *testing.T) {
 	}
 }
 
-// TestHTTPEmbedderStrictRejectByDefault confirms truncateTo=0 (unset) still
+// TestHTTPEmbedderStrictRejectByDefault confirms reduceTo=0 (unset) still
 // rejects a non-EmbeddingDimension response instead of silently truncating.
 func TestHTTPEmbedderStrictRejectByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

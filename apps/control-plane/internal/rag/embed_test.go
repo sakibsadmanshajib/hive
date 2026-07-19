@@ -44,7 +44,7 @@ func TestReduceEmbeddingNoop(t *testing.T) {
 }
 
 // TestHTTPEmbedClientTruncates drives a fake 4096-dim backend through
-// HTTPEmbedClient with truncateTo=1024 and expects a 1024-dim result per item.
+// HTTPEmbedClient with reduceTo=1024 and expects a 1024-dim result per item.
 func TestHTTPEmbedClientTruncates(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req embedRequest
@@ -78,7 +78,7 @@ func TestHTTPEmbedClientTruncates(t *testing.T) {
 	}
 }
 
-// TestHTTPEmbedClientStrictRejectByDefault confirms truncateTo=0 (unset) still
+// TestHTTPEmbedClientStrictRejectByDefault confirms reduceTo=0 (unset) still
 // rejects a non-EmbeddingDimension response instead of silently truncating.
 func TestHTTPEmbedClientStrictRejectByDefault(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
