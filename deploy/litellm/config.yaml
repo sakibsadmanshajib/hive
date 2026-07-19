@@ -8,7 +8,7 @@
 # `route_capabilities.executor_kind = 'local'` in the database so the
 # control-plane local batch executor handles POST /v1/batches for these
 # providers instead of LiteLLM's upstream file-upload path.
-# See .planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md
+# (See git history for the phase 10 KNOWN-ISSUE-batch-upstream planning note.)
 
 # Demo budget posture — paid-route count
 # ──────────────────────────────────────
@@ -29,8 +29,8 @@ model_list:
   # OpenRouter: Meta Llama 3.3 70B Instruct — strong instruction-following,
   # 128k context, best quality/cost ratio for the demo tier.
   # Pinned to a specific model slug to avoid usage-token variance from the
-  # generic `openrouter/free` pool (see PR #99 and
-  # .planning/debug/flaky-usage-tokens-root-cause.md for background).
+  # generic `openrouter/free` pool (see PR #99 and git history for the
+  # flaky-usage-tokens root-cause debug notes for background).
   - model_name: route-openrouter-default
     litellm_params:
       model: os.environ/OPENROUTER_DEFAULT_MODEL
@@ -176,5 +176,6 @@ files_settings:
 # Ollama entries are intentionally omitted from this config. The cloud demo
 # runs on managed providers (OpenRouter + Groq) only. To activate Ollama for
 # the enterprise profile, append entries to model_list above (do NOT add a
-# second top-level model_list: key) and follow the steps in deploy/gcp/README.md.
+# second top-level model_list: key); scripts/install.sh --with-ollama handles
+# this automatically, see scripts/README.md.
 # ─────────────────────────────────────────────────────────────────────────────

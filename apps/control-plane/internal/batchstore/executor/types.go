@@ -4,11 +4,9 @@
 // OpenAI-shape output.jsonl + errors.jsonl, and settles per-line credits via
 // the existing reservation primitive. It exists so that the v1.0 batch
 // success-path can ship without a LiteLLM-supported batch upstream provider
-// (OpenAI/Azure/Vertex/Anthropic). See
-// .planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md
-// for the original constraint and
-// .planning/phases/15-batch-local-executor/DECISIONS.md for the resolved
-// open questions.
+// (OpenAI/Azure/Vertex/Anthropic). See the KNOWN-ISSUE-batch-upstream doc in
+// git history (phase 10/15 planning notes) for the original constraint and
+// resolved open questions.
 package executor
 
 import (

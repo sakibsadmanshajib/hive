@@ -11,7 +11,11 @@ The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session s
 
 # Hive
 
-OpenAI-compatible API gateway for Bangladesh market — v1.0 full **Go rewrite** of prior impl, shipped for efficiency + operational control (lean hot-path latency, precise `math/big` FX, full source-level control over routing, sanitization, billing). Provider-agnostic routing to OpenRouter/Groq/future providers, prepaid credit billing on BDT payment rails (Stripe + bKash + SSLCommerz), dev console for key/billing mgmt.
+OpenAI-compatible API gateway. v1.0 shipped as a full **Go rewrite** of a prior implementation, for efficiency and operational control (lean hot-path latency, precise `math/big` FX, full source-level control over routing, sanitization, billing).
+
+One product, two modes: **Hive** (hosted SaaS, Bangladesh market first, prepaid credit billing on BDT payment rails via Stripe, bKash, and SSLCommerz) and **Hive Enterprise** (customer-hosted, data-sovereign posture for regulated buyers in finance, legal, healthcare, and government). Single org equals single tenant; departments via RBAC. Provider-agnostic routing to OpenRouter, Groq, and future providers, plus self-hosted inference for the Enterprise posture.
+
+Surfaces: chat (Open WebUI), coding and browsing agents (agent-console sidecar plus agent-engine sandbox), RAG (`/v1/rag/chat`), voice (Groq STT/TTS), artifacts hosting, desktop app (Tauri, Windows/Linux), and the developer console for key and billing management.
 
 ## Tech Stack
 
@@ -31,17 +35,27 @@ OpenAI-compatible API gateway for Bangladesh market — v1.0 full **Go rewrite**
 ## Architecture
 
 ```
-apps/control-plane    Go — accounts, billing, credits, API keys, payments, catalog, routing
-apps/edge-api         Go — auth, rate limiting, inference dispatch, SSE streaming, file/media
-apps/web-console      Next.js — developer console (billing, keys, analytics, catalog)
-packages/openai-contract  OpenAI spec + support matrix (single source of truth)
-packages/sdk-tests    JS/Python/Java SDK integration tests (real OpenAI SDKs)
-supabase/migrations   Postgres schema (41 migrations)
-deploy/docker         Docker Compose + Dockerfiles
-deploy/litellm        LiteLLM config (OpenRouter/Groq routing)
-deploy/prometheus     Prometheus + alert rules
-deploy/grafana        Dashboards + provisioning
-deploy/alertmanager   Alert routing
+apps/control-plane     Go: accounts, billing, credits, API keys, payments, catalog, routing
+apps/edge-api          Go: auth, rate limiting, inference dispatch, SSE streaming, file/media
+apps/agent-console     Next.js: agent chat sidecar, served under Caddy alongside the rest of the chat surface
+apps/agent-engine      Go: agent sandbox service, launches each agent session inside an Apptainer sandbox
+apps/desktop           Tauri (Rust + TypeScript): desktop shell, Windows and Linux
+apps/desktop-sandbox   Rust: desktop-side sandbox process (bwrap/process hardening, vendored from Codex)
+apps/web-console       Next.js: developer console (billing, keys, analytics, catalog)
+packages/openai-contract   OpenAI spec + support matrix (single source of truth)
+packages/sdk-tests     JS/Python/Java SDK integration tests (real OpenAI SDKs)
+packages/storage       Shared Supabase Storage (S3) client helpers
+packages/audit-canonical   Canonical audit-event schema and writer shared across services
+packages/embedmodel    Dimension-agnostic RAG embedding model registry and admin config
+vendor/openhands       Patched vendored OpenHands SDK consumed by apps/agent-engine
+supabase/migrations    Postgres schema
+deploy/docker          Docker Compose + Dockerfiles
+deploy/litellm         LiteLLM config (OpenRouter/Groq routing)
+deploy/prometheus      Prometheus + alert rules
+deploy/grafana         Dashboards + provisioning
+deploy/alertmanager    Alert routing
+website/               Marketing sites (sovereign + BD, geo-split, Astro)
+tools/                 Repo policy lints (tenancy/audit guards) plus SOC2 coverage scripts
 ```
 
 ## Getting Started
@@ -84,7 +98,7 @@ docker compose --env-file ../../.env --profile cloud up --build
 # Hive Cloud with chat front-end (Open WebUI + Caddy on top of cloud):
 docker compose --env-file ../../.env --profile cloud --profile chat up --build
 
-# Hive EnterpriseEdge (self-hosted single box): core + in-stack Redis + OWUI + Caddy.
+# Hive Enterprise (self-hosted single box): core + in-stack Redis + OWUI + Caddy.
 # Optional Ollama: set OLLAMA_BASE_URL=http://ollama:11434 in .env and
 # uncomment the ollama model entries in deploy/litellm/config.yaml.
 docker compose \
@@ -143,10 +157,12 @@ the def) and uploads it as the `agent-engine-sif` artifact. Full detail:
 ### Testing (always use Docker)
 
 ```bash
-# Go unit tests
-cd deploy/docker && docker compose --profile tools run toolchain bash -c \
+# Go unit tests. The toolchain image is Alpine with ENTRYPOINT ["/bin/sh","-c"],
+# so pass the command string directly. Wrapping it in `bash -c` or `sh -c`
+# double-wraps and silently runs nothing (exits 0 with no output).
+cd deploy/docker && docker compose --profile tools run toolchain \
   "cd /workspace && go test ./apps/control-plane/... -count=1 -short"
-cd deploy/docker && docker compose --profile tools run toolchain bash -c \
+cd deploy/docker && docker compose --profile tools run toolchain \
   "cd /workspace && go test ./apps/edge-api/... -count=1 -short"
 
 # Frontend type check + build
@@ -182,28 +198,21 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 
 ## Known Issues
 
-See `.planning/UAT-REPORT.md` for full runtime UAT results, `.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for Phase 10 UAT closure, `.planning/v1.1-DEFERRED-SCOPE.md` for what deferred out of v1.0. All items below deferred to v1.1 — v1.0 ships without them because core developer API path unaffected in practice.
+Full runtime UAT results, phase closure notes, and v1.1 deferred scope live in the project vault (Obsidian), not in-repo. Resolved items stay listed for their regression guards; open items are deferred to v1.1 because the core developer API path is unaffected in practice.
 
-1. **`ensureCapabilityColumns` targets wrong table** — Resolved by Phase 16 (2026-04-25). Function removed from `apps/control-plane/internal/routing/repository.go`; schema lives in `supabase/migrations/20260414_01_provider_capabilities_media_columns.sql` (correctly targets `public.provider_capabilities`); regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence. Evidence: `.planning/phases/16-capability-columns-fix/evidence/CAP-16-01.md`.
+1. **`ensureCapabilityColumns` targets wrong table** — Resolved by Phase 16 (2026-04-25). Function removed from `apps/control-plane/internal/routing/repository.go`; schema lives in `supabase/migrations/20260414_01_provider_capabilities_media_columns.sql` (correctly targets `public.provider_capabilities`); regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence. Evidence recorded in the project vault.
 2. **File storage wiring under final verification** — Phase 10 now wires file + media endpoints to Supabase Storage. Final live smoke verification tracked in Phase 10 Plan 10-08.
 3. **`amount_usd` exposed in BD checkout** — Resolved by Phase 17 (PR #137, 2026-05-09). FX/USD stripped from all customer-bound surfaces. Repo lint script `lint-no-customer-usd.mjs` guards non-recurrence; note it is not yet wired into the required CI job (`repo-policy-lints` runs only the tenant + audit lints), so run it manually or via pre-commit until CI wiring lands.
-4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). Phase 15 shipped a local batch executor in control-plane. See `.planning/phases/10-routing-storage-critical-fixes/KNOWN-ISSUE-batch-upstream.md`.
+4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). Phase 15 shipped a local batch executor in control-plane. Full write-up in the project vault.
 5. **Capability-based tool routing** — Resolved by Phase 20 wave 3 (PR #206, 2026-06-11). Custom providers are DB-managed (PR #199); `tools`/`tool_choice`/`response_format` route per-route on `tools_supported` in `provider_capabilities`. Tenant model visibility (PR #205) is enforced at catalog/model-listing level, not inside `SelectRoute` dispatch, which filters on `AllowedAliases`/`AllowedProviders`.
 
 ## Project State
 
 - **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete. Covers chat-app + CLI-coding-agent integrators.
-- **v1.1 — in progress**: Phase 20 (Provider Catalog) waves 1-3 complete (PRs 197, 199, 204, 205, 206), wave 4 pending. Phases 12-19 complete. See `.planning/STATE.md`.
+- **v1.1 — in progress**: Phase 20 (Provider Catalog) waves 1-3 complete (PRs 197, 199, 204, 205, 206), wave 4 pending. Phases 12-19 complete.
 - **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
 
-Planning artifacts in `.planning/`:
-
-- `.planning/STATE.md` — current milestone state
-- `.planning/ROADMAP.md` — full phase breakdown (phases 11–14 listed there belong to v1.1)
-- `.planning/REQUIREMENTS.md` — requirement traceability
-- `.planning/UAT-REPORT.md` — runtime test results
-- `.planning/milestones/v1.0-MILESTONE-AUDIT.md` — earlier launch readiness audit (dated 2026-04-15; superseded by Phase 10 UAT + v1.1-DEFERRED-SCOPE.md)
-- `.planning/v1.1-DEFERRED-SCOPE.md` — deferred scope for next milestone
+Planning ground truth (milestone state, roadmap, requirements traceability, UAT results, deferred scope) lives in the project vault (Obsidian), not in-repo.
 
 ---
 
@@ -213,7 +222,7 @@ Project use multi-layer Claude Code setup. Each plugin owns domain — don't mix
 
 ### GSD (Project Lifecycle)
 
-GSD manages phases, planning, execution. All project state in `.planning/`.
+GSD manages phases, planning, execution. Planning ground truth lives in the project vault (Obsidian), not in-repo.
 
 | Action | Command |
 |--------|---------|
@@ -255,13 +264,9 @@ Hooks enforce context-mode automatically. Rules:
 - **Web fetches**: Use `ctx_fetch_and_index` instead of WebFetch
 - Check savings: `/ctx-stats`
 
-### claude-mem (Persistent Memory)
+### Auto-memory (Persistent Memory)
 
-Cross-session memory stored via `claude-mem` MCP. Survives context resets.
-
-- **Search memory**: `mem-search` skill or `get_observations([IDs])`
-- **Timeline**: `timeline` tool for chronological view
-- Observations auto-recorded during work. Use `smart_search` for semantic queries.
+Native Claude Code auto-memory replaced claude-mem (retired 2026-06-12). MEMORY.md and topic files load at session start; record durable learnings there. Historical claude-mem archive: `~/.claude-mem/claude-mem.db` (read-only sqlite).
 
 ### Supabase MCP
 
