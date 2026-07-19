@@ -24,15 +24,16 @@
 //! Verbatim-vendored Windows sandbox mechanism primitives from
 //! `openai/codex`'s `codex-rs/windows-sandbox-rs` crate (Apache-2.0). See
 //! `../VENDORING.md` for the pinned commit, the full file-by-file provenance,
-//! and the two modules deliberately NOT vendored this wave
-//! (`deny_read_resolver.rs`'s glob-scan resolver and `process.rs`'s
-//! `CreateProcessAsUserW` wrapper) and why.
+//! and the modules deliberately NOT vendored (`deny_read_resolver.rs`'s
+//! glob-scan resolver, `process.rs`'s `CreateProcessAsUserW` wrapper,
+//! `spawn_prep.rs`, `wrapper.rs`, `elevated_impl.rs`, the full `identity.rs`
+//! and `setup.rs`, and the `setup_main`/`command_runner` binaries) and why.
 //!
-//! This crate is inert this wave (Step 3 Wave 1 of
-//! `plan-codex-crossplatform-desktop.md`): nothing here is called from
-//! `hive-desktop-sandbox`'s `launch` path yet. It exists so the vendored
-//! primitives are vendored, compiled, and unit-tested on their own, ahead of
-//! the elevated-helper and launch-wiring waves that will actually call them.
+//! This crate is inert (Step 3 Waves 1-2 of `plan-codex-crossplatform-desktop.md`):
+//! nothing here is called from `hive-desktop-sandbox`'s `launch` path yet. It
+//! exists so the vendored primitives and elevated-helper IPC mechanism are
+//! vendored, compiled, and unit-tested on their own, ahead of the
+//! provisioning-port and launch-wiring waves that will actually call them.
 //!
 //! Every module below is real Win32 FFI (via `windows-sys`) with no
 //! `#[cfg(windows)]` gate of its own (matching upstream, which is a
@@ -57,13 +58,21 @@ pub mod dpapi;
 #[cfg(windows)]
 pub mod env;
 #[cfg(windows)]
+pub mod helper_materialization;
+#[cfg(windows)]
 pub mod hide_users;
+#[cfg(windows)]
+pub mod identity;
 #[cfg(windows)]
 pub mod path_normalization;
 #[cfg(windows)]
 pub mod proc_thread_attr;
 #[cfg(windows)]
+pub mod sandbox_users;
+#[cfg(windows)]
 pub mod sandbox_utils;
+#[cfg(windows)]
+pub mod setup_error;
 #[cfg(windows)]
 pub mod token;
 #[cfg(windows)]
@@ -71,13 +80,38 @@ pub mod winutil;
 #[cfg(windows)]
 pub mod workspace_acl;
 
-// Not vendored from upstream: minimal, Hive-authored stand-ins so the two
-// verbatim modules above that need them (`deny_read_state::sync_persistent_deny_read_acls`
-// needs `setup::sandbox_dir`; `hide_users` needs `logging::log_note`) compile
-// without pulling in upstream's CODEX_HOME-coupled `setup.rs` or the
-// `tracing-appender`/`codex-utils-string`-coupled `logging.rs`. See
+// Elevated-helper IPC mechanism (Step 3 Wave 2). Upstream's own real lib.rs
+// declares `elevated` as a private module and re-exports its three
+// sub-modules flat at the crate root (`pub(crate) use elevated::ipc_framed;`
+// etc.); vendored files below reference them via that same flat `crate::X`
+// path, so the re-exports are reproduced here rather than switching those
+// files to `crate::elevated::X` paths. Local deviation from upstream: `pub`
+// rather than `pub(crate)`, matching this crate's own "everything pub,
+// mod-nested" convention (every other module in this file is `pub mod`) so
+// the re-export is exempt from `unused_imports` even though nothing in this
+// wave's vendor set calls into `runner_client` yet (its only upstream callers,
+// `elevated_impl.rs`/`wrapper.rs`/`command_runner/win.rs`, are excluded this
+// wave; see `../VENDORING.md`).
+#[cfg(windows)]
+mod elevated;
+#[cfg(windows)]
+pub use elevated::ipc_framed;
+#[cfg(windows)]
+pub use elevated::runner_client;
+#[cfg(windows)]
+pub use elevated::runner_pipe;
+
+// Not vendored from upstream: minimal, Hive-authored stand-ins so vendored
+// modules that need them compile without pulling in upstream's
+// CODEX_HOME-coupled `setup.rs`/`identity.rs`, the
+// `tracing-appender`/`codex-utils-string`-coupled `logging.rs`, or a
+// `codex_protocol`/`codex_utils_absolute_path` dependency. See
 // `../VENDORING.md` for what each stand-in does and does not do.
 #[cfg(windows)]
+pub mod absolute_path;
+#[cfg(windows)]
 mod logging;
+#[cfg(windows)]
+pub mod permission_profile;
 #[cfg(windows)]
 mod setup;
