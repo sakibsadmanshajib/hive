@@ -156,7 +156,15 @@ impl ResolvedWindowsSandboxPermissions {
             .collect();
 
         let mut readonly_roots: Vec<PathBuf> = policy.readonly_roots().to_vec();
-        readonly_roots.push(policy.hook_config_dir().to_path_buf());
+        let hook_config_dir = policy.hook_config_dir().to_path_buf();
+        // `SandboxPolicy::build` only guards writable roots against overlapping
+        // `hook_config_dir` (see policy.rs); it does not guard `readonly_roots`
+        // against already containing it. Dedupe here so a caller that happens
+        // to pass the hook/config directory as one of its readonly roots does
+        // not end up with it listed twice in the resolved view.
+        if !readonly_roots.contains(&hook_config_dir) {
+            readonly_roots.push(hook_config_dir);
+        }
 
         Ok(Self {
             writable_roots,
@@ -356,6 +364,78 @@ mod tests {
         assert_eq!(
             resolved.token_mode(),
             WindowsSandboxTokenMode::ElevatedSandboxUser
+        );
+    }
+
+    #[test]
+    fn from_policy_empty_readonly_roots_yields_only_hook_config_dir() {
+        let hook_dir = PathBuf::from(r"C:\hive\hooks");
+        let policy = policy_with(vec![], vec![], hook_dir.clone(), NetworkPolicy::DenyAll);
+
+        let resolved =
+            ResolvedWindowsSandboxPermissions::from_policy(&policy, Path::new(r"C:\workspace"))
+                .expect("resolves");
+
+        assert_eq!(resolved.readonly_roots(), &[hook_dir]);
+    }
+
+    #[test]
+    fn from_policy_dedupes_hook_config_dir_already_present_in_readonly_roots() {
+        let hook_dir = PathBuf::from(r"C:\hive\hooks");
+        let policy = policy_with(
+            vec![],
+            vec![hook_dir.clone()],
+            hook_dir.clone(),
+            NetworkPolicy::DenyAll,
+        );
+
+        let resolved =
+            ResolvedWindowsSandboxPermissions::from_policy(&policy, Path::new(r"C:\workspace"))
+                .expect("resolves");
+
+        assert_eq!(
+            resolved.readonly_roots(),
+            &[hook_dir],
+            "hook_config_dir must not be duplicated when the caller already listed it as a readonly root"
+        );
+    }
+
+    #[test]
+    fn from_policy_accepts_unc_cwd() {
+        let policy = policy_with(
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\hive\hooks"),
+            NetworkPolicy::DenyAll,
+        );
+
+        let resolved = ResolvedWindowsSandboxPermissions::from_policy(
+            &policy,
+            Path::new(r"\\server\share\work"),
+        );
+
+        assert!(
+            resolved.is_ok(),
+            "a UNC path is a legitimately absolute Windows cwd and must be accepted: {resolved:?}"
+        );
+    }
+
+    #[test]
+    fn from_policy_accepts_forward_slash_drive_absolute_cwd() {
+        let policy = policy_with(
+            vec![],
+            vec![],
+            PathBuf::from(r"C:\hive\hooks"),
+            NetworkPolicy::DenyAll,
+        );
+
+        let resolved =
+            ResolvedWindowsSandboxPermissions::from_policy(&policy, Path::new("C:/workspace"));
+
+        assert!(
+            resolved.is_ok(),
+            "a forward-slash drive-absolute path (C:/...) is a legitimately absolute Windows cwd \
+             and must be accepted: {resolved:?}"
         );
     }
 
