@@ -13,6 +13,7 @@
 
 pub mod policy;
 pub mod windows_plan;
+pub mod windows_resolve;
 
 #[cfg(target_os = "linux")]
 pub mod egress_proxy;
