@@ -94,14 +94,17 @@ CREATE INDEX IF NOT EXISTS rag_reembed_jobs_status_idx
 COMMENT ON TABLE public.rag_reembed_jobs IS
     'Progress ledger for corpus re-embed runs triggered by an embedding model/dim switch. Resumable after restart; append-only per run.';
 
--- Privileges. hive_app (the NOT BYPASSRLS app role) reads the active config
--- and updates job progress during a re-embed. The config row is written by the
--- provisioning routine, which connects with a privileged (DDL-capable) role,
--- so hive_app is granted SELECT + UPDATE on the config but the DDL that makes
--- the column match is out of its reach by design. auditor_ro reads both for
--- the audit trail.
-GRANT SELECT, UPDATE          ON public.rag_embedding_config TO hive_app;
-GRANT SELECT, INSERT, UPDATE  ON public.rag_reembed_jobs     TO hive_app;
+-- Privileges. hive_app (the NOT BYPASSRLS app role) only READS both tables:
+-- it reconciles its resolved env config against the active config row at
+-- startup. The config row is the fail-closed control record; it is written
+-- solely by the provisioning routine, which connects with a privileged
+-- (DDL-capable) role that also runs the matching column DDL, so hive_app must
+-- not be able to UPDATE it out from under the physical schema. The re-embed
+-- worker likewise runs on the privileged pool and does not write
+-- rag_reembed_jobs through hive_app, so no INSERT/UPDATE grant is needed there.
+-- auditor_ro reads both for the audit trail.
+GRANT SELECT ON public.rag_embedding_config TO hive_app;
+GRANT SELECT ON public.rag_reembed_jobs     TO hive_app;
 GRANT SELECT ON public.rag_embedding_config TO auditor_ro;
 GRANT SELECT ON public.rag_reembed_jobs     TO auditor_ro;
 
