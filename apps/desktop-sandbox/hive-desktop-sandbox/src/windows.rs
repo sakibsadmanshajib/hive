@@ -1,80 +1,72 @@
 //! Windows desktop sandbox backend: restricted token, directory-level ACL,
-//! and a Job Object.
+//! and a Job Object, all applied to a child spawned directly via
+//! `CreateProcessAsUserW`.
 //!
-//! ## Launch is currently disabled (security review on PR #335)
+//! ## What this backend applies (base restricted-token variant)
 //!
-//! [`launch`] always returns [`LaunchError::Confinement`] before spawning
-//! anything. `create_restricted_token` below builds a restricted token, but
-//! nothing applies it to the spawned process: `std::process::Command` has
-//! no `CreateProcessAsUserW`/`CreateProcessWithTokenW` equivalent, so a
-//! child spawned through it always runs under the *caller's* full token,
-//! not the restricted one. Shipping that silently would mean this crate's
-//! own docs describe a Windows confinement layer that does not exist. The
-//! directory ACL and Job Object are real, independently-applied mitigations
-//! (see their own doc comments), but "restricted token" is the module's
-//! third pillar and it is currently a no-op, so the whole launch path
-//! refuses to run rather than launch anything under a false confinement
-//! claim. See `VENDORING.md` "Open risks" #1 for the fix (wire
-//! `restricted_token` into process creation via `CreateProcessAsUserW`) and
-//! do not re-enable this path without it.
+//! [`launch`] spawns `command` under three simultaneous controls and refuses
+//! to spawn at all if any of them cannot be established (never a process
+//! under a partial or absent confinement claim):
 //!
-//! `apply_directory_acl`, `create_restricted_token`, and `create_job_object`
-//! stay in this file, unused for now (`#![allow(dead_code)]` below), as the
-//! starting point for that wiring.
+//! 1. A restricted primary token ([`create_restricted_token`]) applied to the
+//!    child by `CreateProcessAsUserW`. This is what makes the token actually
+//!    confine the child, closing the gap that kept this path disabled:
+//!    `std::process::Command` has no way to spawn under an alternate token, so
+//!    a child spawned through it always inherited the caller's full token.
+//! 2. A directory-level deny-write ACL ([`apply_directory_acl`]) on the
+//!    hook/config directory's PARENT (spike #307 condition 3). This is the
+//!    load-bearing filesystem control; the Job Object is process containment
+//!    only.
+//! 3. A Job Object with kill-on-close ([`create_job_object`]). The child is
+//!    created SUSPENDED, assigned to the Job Object, and only then resumed, so
+//!    it is a member of the job before it runs a single instruction (no
+//!    assignment race). The returned [`SandboxChild`] owns the sole job handle
+//!    via RAII: dropping it closes that last handle and terminates the whole
+//!    process tree.
 //!
 //! ## Verification status (read before trusting this file)
 //!
 //! This module is compiled only on Windows (`cfg(windows)`) and this
-//! repository's CI and this session's development environment are both
-//! Linux; nothing in this file has been compiled or run. It must get a real
-//! `cargo check --target x86_64-pc-windows-msvc` and a behavioral run in
-//! the lab (`win11vm`, see VENDORING.md) before it is trusted. The
-//! Win32 API shapes below are written from stable, long-documented Win32
-//! contracts, but the exact `windows`-crate 0.58 signatures (slice vs.
-//! pointer+count, `Option<&T>` vs raw pointer, which calls return
-//! `windows::core::Result<()>` vs an out-handle) are not verified here.
+//! repository's CI and this session's development environment are both Linux.
+//! It is CI-cross-checked to compile against `windows`-crate 0.58's real
+//! signatures (`x86_64-pc-windows-gnu`), but the BEHAVIORAL confinement (the
+//! token restricts, the ACL denies the write, the job kills the tree) is
+//! UNVERIFIED here: `CreateProcessAsUserW`, `AssignProcessToJobObject`, and
+//! the deny-write ACE only take effect on a real Windows host. This path must
+//! get a `cargo check --target x86_64-pc-windows-msvc` and a behavioral run in
+//! the lab (`win11vm`, see VENDORING.md) before it is trusted in production.
 //!
 //! The pure, always-tested part of this backend's design lives in
-//! `windows_plan.rs` ([`crate::windows_plan::WindowsConfinementPlan`]),
-//! which is where the "enforced defaults cannot be constructed without
-//! them" tests required by spike #307 actually run (on every platform,
-//! including this crate's Linux CI job). This module only applies that
-//! plan via Win32 calls.
+//! `windows_plan.rs` ([`crate::windows_plan::WindowsConfinementPlan`], plus
+//! [`crate::windows_plan::command_line_to_utf16`], the argv quoting this
+//! module hands to `CreateProcessAsUserW`), which run on every platform
+//! (including this crate's Linux CI job). This module only applies that plan
+//! via Win32 calls.
 //!
 //! MANDATORY per security spike #307 (implementation condition 3): the
 //! deny-write ACE goes on `plan.acl_deny_write_parent_dir` (the hook/config
 //! directory's PARENT), not on the hook/config directory itself. A
-//! file/dir-level ACL alone does not close the TOCTOU
-//! missing-file-create class; only the parent-directory ACE does.
-//! [`apply_directory_acl`] is the load-bearing control here, not the Job
-//! Object, which is process containment only.
+//! file/dir-level ACL alone does not close the TOCTOU missing-file-create
+//! class; only the parent-directory ACE does. [`apply_directory_acl`] is the
+//! load-bearing control here, not the Job Object, which is process containment
+//! only.
 //!
-//! Not implemented here (see blueprint Step 4.4, and `windows_plan.rs`):
-//! Windows Firewall deny-outbound rule generation from the egress SSOT, and
-//! the elevated low-privilege-sandbox-user variant of the restricted
-//! token (this module restricts the current process's own token rather
-//! than provisioning a dedicated low-privilege OS user).
-//!
-//! Known race (tracked as follow-up, see VENDORING.md "Open risks"):
-//! the child is assigned to the Job Object immediately after `spawn()`
-//! rather than atomically via `CREATE_SUSPENDED` + `ResumeThread`, because
-//! `std::process::Command`/`Child` do not expose the primary thread handle
-//! needed to resume a suspended process. A future revision that calls
-//! `CreateProcessW` directly (bypassing `std::process::Command`) can close
-//! this gap.
-
-// apply_directory_acl / create_restricted_token / create_job_object are not
-// called from `launch` yet (see the module docs above); kept as the
-// starting point for the CreateProcessAsUserW wiring tracked in
-// VENDORING.md "Open risks" #1.
-#![allow(dead_code)]
+//! Not implemented here (later steps of plan-codex-crossplatform-desktop.md):
+//! - [`NetworkPolicy::AllowHosts`] enforcement. `launch` still rejects it with
+//!   [`LaunchError::AllowHostsNotYetImplemented`]; the WFP egress backend is a
+//!   dedicated later step. `windows_plan.rs`'s `netsh` codegen is NOT applied.
+//! - The elevated low-privilege-sandbox-user variant of the restricted token
+//!   (this module restricts the current process's own token rather than
+//!   provisioning a dedicated low-privilege OS user).
+//! - Stdio/ConPTY wiring: the child is spawned with `bInheritHandles=FALSE`
+//!   and default STARTUPINFOW, so its stdio is not bridged. The interactive
+//!   terminal is a later step.
 
 use crate::policy::NetworkPolicy;
-use crate::windows_plan::WindowsConfinementPlan;
+use crate::windows_plan::{WindowsConfinementPlan, command_line_to_utf16};
 use crate::{LaunchError, SandboxPolicy};
 use std::path::Path;
-use std::process::Child;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
+use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::{
     BuildTrusteeWithSidW, DENY_ACCESS, EXPLICIT_ACCESS_W, SE_FILE_OBJECT, SetEntriesInAclW,
     SetNamedSecurityInfoW, TRUSTEE_W,
@@ -86,31 +78,182 @@ use windows::Win32::Security::{
 };
 use windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE;
 use windows::Win32::System::JobObjects::{
-    CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_LIMIT_INFORMATION,
-    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-    SetInformationJobObject,
+    AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOBOBJECT_BASIC_LIMIT_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, SetInformationJobObject,
 };
-use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+use windows::Win32::System::Threading::{
+    CREATE_SUSPENDED, CreateProcessAsUserW, GetCurrentProcess, OpenProcessToken,
+    PROCESS_INFORMATION, ResumeThread, STARTUPINFOW, TerminateProcess,
+};
 use windows::core::{PCWSTR, PWSTR};
+
+/// A running sandboxed child process.
+///
+/// Owns the sole handle to the kill-on-close Job Object the child belongs to,
+/// plus the process handle. Dropping this value closes that last job handle,
+/// which terminates the whole process tree (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
+/// Keep it alive for as long as the sandboxed task should run.
+///
+/// This is deliberately NOT a `std::process::Child`: std cannot own a Job
+/// Object handle, and a leaked or prematurely dropped job handle would
+/// silently break kill-on-close. Owning both handles here is what makes the
+/// sandbox lifetime the value's lifetime.
+pub struct SandboxChild {
+    process: HANDLE,
+    job: HANDLE,
+    pid: u32,
+}
+
+impl SandboxChild {
+    /// The child's Windows process id.
+    pub fn id(&self) -> u32 {
+        self.pid
+    }
+}
+
+impl Drop for SandboxChild {
+    fn drop(&mut self) {
+        // Closing the process handle only releases our reference; it does not
+        // stop the child. Closing the last job handle is what terminates the
+        // tree (kill-on-close), so the child never outlives this value.
+        unsafe {
+            let _ = CloseHandle(self.process);
+            let _ = CloseHandle(self.job);
+        }
+    }
+}
+
+/// RAII wrapper closing a Win32 handle on drop, so every fallible step below
+/// its acquisition cleans the handle up without an explicit `CloseHandle` on
+/// each error path. Ownership is transferred out with [`HandleGuard::into_raw`]
+/// only once the handle has reached a value (`SandboxChild`) that will close
+/// it later.
+struct HandleGuard(HANDLE);
+
+impl HandleGuard {
+    /// Consumes the guard, returning the raw handle WITHOUT closing it. The
+    /// caller becomes responsible for closing it.
+    fn into_raw(self) -> HANDLE {
+        let handle = self.0;
+        std::mem::forget(self);
+        handle
+    }
+}
+
+impl Drop for HandleGuard {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+}
 
 pub(crate) fn launch(
     policy: &SandboxPolicy,
-    _command: &[String],
-    _cwd: &Path,
-) -> Result<Child, LaunchError> {
+    command: &[String],
+    cwd: &Path,
+) -> Result<SandboxChild, LaunchError> {
     if matches!(policy.network(), NetworkPolicy::AllowHosts(_)) {
+        // AllowHosts egress enforcement on Windows (WFP) is a later step; the
+        // netsh codegen in windows_plan.rs is NOT wired to a live effect.
+        // Reject rather than launch with unenforced network policy.
         return Err(LaunchError::AllowHostsNotYetImplemented);
     }
+    if command.is_empty() {
+        return Err(LaunchError::Confinement(
+            "empty command: nothing to launch".to_string(),
+        ));
+    }
 
-    // MANDATORY guard (security review on PR #335, see module docs above):
-    // refuse to spawn rather than launch a process under a restricted
-    // token that is never actually applied to it.
-    Err(LaunchError::Confinement(
-        "Windows sandbox launch is not production-ready: the restricted \
-         token is created but never applied to the spawned process, so it \
-         provides no confinement. See VENDORING.md Open risks #1."
-            .to_string(),
-    ))
+    let plan = WindowsConfinementPlan::for_policy(policy);
+
+    // 1. Filesystem confinement: the load-bearing deny-write ACE on the
+    //    hook/config parent dir (spike #307). Must succeed before we spawn.
+    apply_directory_acl(&plan)
+        .map_err(|e| LaunchError::Confinement(format!("directory ACL: {e}")))?;
+
+    // 2. Restricted primary token for the child.
+    let token = HandleGuard(
+        create_restricted_token()
+            .map_err(|e| LaunchError::Confinement(format!("restricted token: {e}")))?,
+    );
+
+    // 3. Job Object with kill-on-close.
+    let job = HandleGuard(
+        create_job_object(&plan)
+            .map_err(|e| LaunchError::Confinement(format!("job object: {e}")))?,
+    );
+
+    // 4. Spawn SUSPENDED under the restricted token so we can join the Job
+    //    Object before the child runs (closes the assignment race).
+    let mut command_line = command_line_to_utf16(command);
+    let cwd_wide = to_wide_path(cwd);
+    let cwd_ptr = if cwd.as_os_str().is_empty() {
+        PCWSTR::null()
+    } else {
+        PCWSTR(cwd_wide.as_ptr())
+    };
+    let startup_info = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        ..Default::default()
+    };
+    let mut process_info = PROCESS_INFORMATION::default();
+
+    unsafe {
+        CreateProcessAsUserW(
+            token.0,
+            PCWSTR::null(),
+            PWSTR(command_line.as_mut_ptr()),
+            None,
+            None,
+            BOOL(0),
+            CREATE_SUSPENDED,
+            None,
+            cwd_ptr,
+            &startup_info,
+            &mut process_info,
+        )
+    }
+    .map_err(|e| LaunchError::Confinement(format!("CreateProcessAsUserW: {e}")))?;
+
+    let process = HandleGuard(process_info.hProcess);
+    let thread = HandleGuard(process_info.hThread);
+
+    // 5. Join the Job Object BEFORE resuming. The child has not run yet, so
+    //    membership is established atomically with respect to its execution.
+    if let Err(e) = unsafe { AssignProcessToJobObject(job.0, process.0) } {
+        // The child exists but is suspended and unconfined-by-job; kill it
+        // rather than leak a suspended process or resume it outside the job.
+        unsafe {
+            let _ = TerminateProcess(process.0, 1);
+        }
+        return Err(LaunchError::Confinement(format!(
+            "AssignProcessToJobObject: {e}"
+        )));
+    }
+
+    // 6. Release the child to run.
+    if unsafe { ResumeThread(thread.0) } == u32::MAX {
+        let err = windows::core::Error::from_win32();
+        unsafe {
+            let _ = TerminateProcess(process.0, 1);
+        }
+        return Err(LaunchError::Confinement(format!("ResumeThread: {err}")));
+    }
+
+    // Thread and restricted-token handles are no longer needed; their guards
+    // close them here. Process and job handles transfer to SandboxChild, whose
+    // Drop closes them (closing the last job handle triggers kill-on-close).
+    drop(thread);
+    drop(token);
+    Ok(SandboxChild {
+        process: process.into_raw(),
+        job: job.into_raw(),
+        pid: process_info.dwProcessId,
+    })
 }
 
 /// Sets a protected, deny-write ACE for the current user on

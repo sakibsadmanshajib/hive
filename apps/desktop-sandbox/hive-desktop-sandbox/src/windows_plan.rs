@@ -41,9 +41,10 @@ pub struct WindowsConfinementPlan {
     /// carrying the per-host exceptions for `AllowHosts`. Blueprint Step
     /// 4.4 (#308/#311) computes this plan and the rule text
     /// ([`allow_hosts_firewall_script`]) but does not call the Firewall API
-    /// -- `windows::launch` refuses to run at all regardless of network
-    /// policy (see its module doc), so nothing here is ever actually
-    /// applied on a real Windows host today. Marked explicitly untrusted:
+    /// -- `windows::launch` never applies this firewall codegen (and rejects
+    /// `AllowHosts` outright with `AllowHostsNotYetImplemented`), so nothing
+    /// here is ever actually applied on a real Windows host today. Marked
+    /// explicitly untrusted:
     /// this is codegen only, verified by pure unit tests on Linux CI, never
     /// exercised against the real `netsh`/WFP surface.
     ///
@@ -97,8 +98,9 @@ const RULE_NAME_PREFIX: &str = "Hive-Sandbox";
 /// `netsh` for the Windows Filtering Platform (WFP) directly. Tracked as a
 /// follow-up (see the crate's issue tracker); do not wire this to a real
 /// `netsh`/WFP call without fixing the precedence problem first, and note
-/// that `windows::launch` refuses to run at all today regardless of
-/// network policy, so nothing calls this for a live effect yet either way.
+/// that `windows::launch` rejects `AllowHosts` outright
+/// (`AllowHostsNotYetImplemented`) and never calls this codegen, so nothing
+/// applies it for a live effect yet either way.
 pub fn allow_hosts_firewall_script(
     plan: &WindowsConfinementPlan,
     task_id: &str,
@@ -181,6 +183,61 @@ fn parent_dir(hook_config_dir: &Path) -> PathBuf {
 fn is_bare_drive_letter(s: &str) -> bool {
     let bytes = s.as_bytes();
     bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
+}
+
+/// Encodes an argv (`command[0]` is the program) into the single, NUL-
+/// terminated UTF-16 command-line string `CreateProcessAsUserW` expects in
+/// `lpCommandLine`, quoting each argument by the exact rules
+/// `CommandLineToArgvW` parses back (the "Everyone quotes command line
+/// arguments the wrong way" algorithm): an argument is wrapped in double
+/// quotes when it is empty or contains a space or tab; embedded double quotes
+/// are escaped with a preceding backslash; and any run of backslashes is
+/// doubled only when it immediately precedes a double quote (an escaped one or
+/// the wrapping close quote). This is pure computation with no Win32
+/// dependency, kept here so it is covered by this crate's Linux CI job rather
+/// than only by an unrunnable Windows-only test; `windows.rs` hands the result
+/// straight to `CreateProcessAsUserW`.
+pub fn command_line_to_utf16(command: &[String]) -> Vec<u16> {
+    let mut out: Vec<u16> = Vec::new();
+    for (i, arg) in command.iter().enumerate() {
+        if i > 0 {
+            out.push(u16::from(b' '));
+        }
+        append_quoted_arg(&mut out, arg);
+    }
+    out.push(0);
+    out
+}
+
+/// Appends one argv element to `out`, quoted per the `CommandLineToArgvW`
+/// round-trip rules (see [`command_line_to_utf16`]).
+fn append_quoted_arg(out: &mut Vec<u16>, arg: &str) {
+    let needs_quotes = arg.is_empty() || arg.contains([' ', '\t']);
+    if needs_quotes {
+        out.push(u16::from(b'"'));
+    }
+    let mut backslashes: usize = 0;
+    for unit in arg.encode_utf16() {
+        if unit == u16::from(b'\\') {
+            backslashes += 1;
+        } else {
+            if unit == u16::from(b'"') {
+                // Escape every backslash in the run, then the quote itself.
+                for _ in 0..=backslashes {
+                    out.push(u16::from(b'\\'));
+                }
+            }
+            backslashes = 0;
+        }
+        out.push(unit);
+    }
+    if needs_quotes {
+        // Double any trailing backslashes so the closing quote is not escaped.
+        for _ in 0..backslashes {
+            out.push(u16::from(b'\\'));
+        }
+        out.push(u16::from(b'"'));
+    }
 }
 
 #[cfg(test)]
@@ -390,5 +447,67 @@ mod tests {
         for bad in ["", "a b", "x\"y", "a&b", "a|b", "*.x.com", "a\nb", "a;b"] {
             assert!(!is_safe_firewall_host(bad), "{bad} should be rejected");
         }
+    }
+
+    /// Strips the trailing NUL and decodes the UTF-16 command line back to a
+    /// `String` for readable assertions.
+    fn decode_command_line(units: &[u16]) -> String {
+        assert_eq!(
+            units.last().copied(),
+            Some(0),
+            "command line must be NUL-terminated"
+        );
+        String::from_utf16(&units[..units.len() - 1]).expect("valid UTF-16")
+    }
+
+    #[test]
+    fn command_line_joins_and_quotes_only_where_required() {
+        let argv = vec!["foo".to_string(), "bar baz".to_string()];
+        assert_eq!(
+            decode_command_line(&command_line_to_utf16(&argv)),
+            r#"foo "bar baz""#
+        );
+    }
+
+    #[test]
+    fn command_line_leaves_simple_single_arg_unquoted() {
+        assert_eq!(
+            decode_command_line(&command_line_to_utf16(&["notepad.exe".to_string()])),
+            "notepad.exe"
+        );
+    }
+
+    #[test]
+    fn command_line_quotes_empty_argument() {
+        assert_eq!(
+            decode_command_line(&command_line_to_utf16(&["".to_string()])),
+            r#""""#
+        );
+    }
+
+    #[test]
+    fn command_line_escapes_embedded_quote_even_when_unquoted() {
+        // `a"b` has no whitespace, so it is not wrapped, but the embedded
+        // quote must still be backslash-escaped or CommandLineToArgvW would
+        // mis-split it.
+        assert_eq!(
+            decode_command_line(&command_line_to_utf16(&[r#"a"b"#.to_string()])),
+            r#"a\"b"#
+        );
+    }
+
+    #[test]
+    fn command_line_doubles_trailing_backslashes_before_closing_quote() {
+        // `a b\` is wrapped for the space; the trailing backslash must be
+        // doubled so it does not escape the wrapping close quote.
+        assert_eq!(
+            decode_command_line(&command_line_to_utf16(&[r"a b\".to_string()])),
+            r#""a b\\""#
+        );
+    }
+
+    #[test]
+    fn command_line_for_empty_argv_is_just_a_nul() {
+        assert_eq!(command_line_to_utf16(&[]), vec![0u16]);
     }
 }

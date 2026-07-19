@@ -109,25 +109,21 @@ crate deliberately does not inherit the workspace's Apache-2.0
   dir one level below a drive root (e.g. `C:\hooks`), it returned `"C:"`,
   which Win32 treats as "current directory on drive C", not the drive root;
   fixed to return `"C:\"` .
-- `windows::launch` is now disabled outright; see Open risks #1.
+- `windows::launch` was disabled outright at that pass; it has since been
+  wired to `CreateProcessAsUserW` (Open risks #1 and #4 below, now resolved).
 
 ## Open risks / follow-up (not this wave's scope)
 
-1. **Windows sandbox `launch` is disabled (security review on PR #335).**
-   `create_restricted_token` builds a restricted token, but nothing applies
-   it to the spawned process: `std::process::Command` has no
-   `CreateProcessAsUserW`/`CreateProcessWithTokenW` equivalent, so a child
-   spawned through it always inherits the *caller's* full token. Shipping
-   that silently would mean this crate's own docs describe a confinement
-   layer that doesn't exist. `windows::launch` therefore always returns
-   `LaunchError::Confinement` before spawning anything, rather than
-   launching a process under a false confinement claim. The fix is to call
-   `CreateProcessAsUserW` (or `CreateProcessWithTokenW`) directly with
-   `restricted_token` instead of going through `std::process::Command`,
-   which would also let it fix item 3 below (`CREATE_SUSPENDED` +
-   `ResumeThread`) in the same pass, since both need the raw `CreateProcessW`
-   call. Do not re-enable the launch path without this wired and a
-   behavioral lab run (item 2).
+1. **RESOLVED (Step 1 of plan-codex-crossplatform-desktop.md).** `windows::launch`
+   was disabled because `std::process::Command` cannot spawn under an alternate
+   token, so the restricted token it built never confined the child. It now
+   calls `CreateProcessAsUserW` directly with `restricted_token`, applies the
+   directory ACL, creates the child `CREATE_SUSPENDED`, assigns it to the Job
+   Object, then `ResumeThread`s (which also closes item #4). Any confinement
+   step that fails returns an error instead of spawning unconfined, so the
+   crate's honesty invariant holds. CI-cross-checked to compile
+   (`x86_64-pc-windows-gnu`); the behavioral confinement is still lab-pending
+   (item 2), so do not treat this as validated on a real Windows host yet.
 2. **Windows backend is untested on real Windows.** `windows.rs` now
    type-checks and lints clean cross-compiled to `x86_64-pc-windows-gnu`, but
    has never been compiled with the MSVC toolchain or run. Needs
@@ -146,22 +142,25 @@ crate deliberately does not inherit the workspace's Apache-2.0
    repo's test suite (no test here spawns real bwrap at all, for either
    network variant -- that gap predates this pass); the proxy/relay layer
    itself is the actual policy-enforcement point and is real.
-   `windows::launch` is unchanged: it still refuses to run at all,
-   regardless of network policy (item 1), so `AllowHosts` stays fully
-   unenforced there. `windows_plan.rs` now also computes the Windows
+   `windows::launch` now runs for `DenyAll` (item 1 resolved), but still
+   rejects `AllowHosts` with `LaunchError::AllowHostsNotYetImplemented` rather
+   than launch under an unenforced network policy, so `AllowHosts` stays fully
+   unenforced on Windows (WFP egress is a later step). `windows_plan.rs` also
+   computes the Windows
    Firewall rule text for `AllowHosts` (`allow_hosts_firewall_script`,
    deny-outbound-by-default plus a per-host `netsh advfirewall` allow
    exception) as pure, unit-tested codegen -- explicitly not applied by
    this crate, since there is no live Windows launch path to apply it to
    yet. Do not treat the existence of that codegen as Windows enforcement:
-   there is none until item 1 is closed and this rule text is actually
-   wired to `netsh`/WFP and lab-verified.
-4. **Windows Job Object assignment race.** Dormant while `launch` is disabled
-   (item 1), but still true of the written-but-uncalled code: the sandboxed
-   child would be assigned to the Job Object immediately after `spawn()`, not
-   atomically via `CREATE_SUSPENDED` + `ResumeThread` (`Command` doesn't
-   expose the primary thread handle needed to resume a suspended process).
-   Closed by the same `CreateProcessW`-direct rewrite as item 1.
+   there is none until this rule text is actually wired to `netsh`/WFP and
+   lab-verified.
+4. **RESOLVED (Step 1).** The Job Object assignment race is closed: the child
+   is created `CREATE_SUSPENDED`, `AssignProcessToJobObject` runs before the
+   child executes a single instruction, and only then does `ResumeThread`
+   release it. The returned `SandboxChild` owns the sole job handle via RAII,
+   so a leaked or dropped handle cannot silently break kill-on-close. (Was: a
+   `std::process::Command` child could only be assigned after `spawn()` had
+   already let it run, and `Child` does not expose the primary thread handle.)
 5. **AppArmor userns profile (`assets/apparmor/hive-bwrap-userns`) is
    untested in the lab.** Needed for Ubuntu 24.04+'s
    `kernel.apparmor_restrict_unprivileged_userns=1`, which otherwise blocks
@@ -173,7 +172,8 @@ crate deliberately does not inherit the workspace's Apache-2.0
    restricts the *current* process's token rather than provisioning a
    dedicated low-privilege sandbox OS user. `codex-rs/windows-sandbox-rs`'s
    elevated-helper-user pattern (see above) is the precedent for that
-   variant when it's prioritized. Moot until item 1 is wired.
+   variant when it's prioritized. Item 1 is now wired, so this is the next
+   Windows hardening step (a dedicated later step of the cross-platform plan).
 7. **`linux::launch`'s real `Command::spawn()` + `pre_exec` path is a
    post-fork allocator-deadlock hazard, discovered this pass (#308/#311).**
    `pre_exec`'s closure runs in a raw-`fork()`ed child (required so it can

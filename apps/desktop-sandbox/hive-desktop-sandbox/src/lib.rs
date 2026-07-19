@@ -30,9 +30,10 @@ compile_error!(
 );
 
 pub use policy::{NetworkPolicy, PolicyError, SandboxPolicy};
+#[cfg(windows)]
+pub use windows::SandboxChild;
 
 use std::path::Path;
-use std::process::Child;
 
 /// Error launching a command inside the sandbox described by a
 /// [`SandboxPolicy`].
@@ -40,12 +41,11 @@ use std::process::Child;
 pub enum LaunchError {
     /// Windows-only now (blueprint Step 4.4, #308/#311, closed the Linux
     /// side): the policy requested [`NetworkPolicy::AllowHosts`], which
-    /// `windows::launch` does not enforce (see VENDORING.md "Open risks" --
-    /// `windows::launch` refuses to run at all today regardless of network
-    /// policy, so this variant is effectively unreachable there too, but
-    /// kept as the more specific error for when the Windows launch path is
-    /// eventually re-enabled). `linux::launch` no longer returns this: a
-    /// real allowlist-enforcing proxy (`egress_proxy.rs`) backs
+    /// `windows::launch` does not yet enforce (WFP egress is a later step). It
+    /// applies the restricted token, directory ACL, and Job Object for
+    /// `DenyAll`, but returns this error for `AllowHosts` rather than launch
+    /// with an unenforced network policy. `linux::launch` no longer returns
+    /// this: a real allowlist-enforcing proxy (`egress_proxy.rs`) backs
     /// `AllowHosts` there. Reject rather than silently launching with full
     /// network access or full denial.
     AllowHostsNotYetImplemented,
@@ -88,19 +88,30 @@ impl From<std::io::Error> for LaunchError {
 }
 
 /// Launches `command` (argv, `command[0]` is the program) with working
-/// directory `cwd`, confined by `policy`, using the platform-native
-/// backend.
+/// directory `cwd`, confined by `policy`, using the platform-native backend.
+///
+/// The returned handle type is platform-specific because the two backends own
+/// fundamentally different OS resources: Linux returns a
+/// [`std::process::Child`] for the confined bwrap process, while Windows
+/// returns a `SandboxChild` that also owns the Job Object handle whose closure
+/// kills the process tree.
+#[cfg(target_os = "linux")]
 pub fn launch(
     policy: &SandboxPolicy,
     command: &[String],
     cwd: &Path,
-) -> Result<Child, LaunchError> {
-    #[cfg(target_os = "linux")]
-    {
-        linux::launch(policy, command, cwd)
-    }
-    #[cfg(windows)]
-    {
-        windows::launch(policy, command, cwd)
-    }
+) -> Result<std::process::Child, LaunchError> {
+    linux::launch(policy, command, cwd)
+}
+
+/// See the Linux [`launch`] for the shared contract. Windows returns a
+/// [`SandboxChild`], which owns the child process handle and the sole
+/// kill-on-close Job Object handle (dropping it terminates the process tree).
+#[cfg(windows)]
+pub fn launch(
+    policy: &SandboxPolicy,
+    command: &[String],
+    cwd: &Path,
+) -> Result<windows::SandboxChild, LaunchError> {
+    windows::launch(policy, command, cwd)
 }
