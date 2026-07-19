@@ -229,3 +229,47 @@ func TestValidateWrapsResolve(t *testing.T) {
 		t.Fatalf("Validate(qwen3,1024) = %v; want nil (MRL reduction ok)", err)
 	}
 }
+
+func TestCast(t *testing.T) {
+	cases := []struct {
+		name   string
+		pgType string
+		want   string
+	}{
+		{"halfvec column casts query to halfvec", "halfvec", "::halfvec"},
+		{"vector column casts query to vector", "vector", "::vector"},
+		{"empty falls back to vector", "", "::vector"},
+		{"unknown falls back to vector", "bogus", "::vector"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Cast(tc.pgType); got != tc.want {
+				t.Fatalf("Cast(%q) = %q, want %q", tc.pgType, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCastMatchesResolvePgvector guards the invariant that every indexable
+// dimension band's pgType yields the matching query cast, so a halfvec column
+// (dim 2001..4000) is never queried with ::vector.
+func TestCastMatchesResolvePgvector(t *testing.T) {
+	cases := []struct {
+		dim  int
+		want string
+	}{
+		{1024, "::vector"},   // vector band
+		{2000, "::vector"},   // vector ceiling
+		{3000, "::halfvec"},  // halfvec indexed band
+		{4000, "::halfvec"},  // halfvec index ceiling
+	}
+	for _, tc := range cases {
+		pgType, _, _, err := ResolvePgvector(tc.dim, false)
+		if err != nil {
+			t.Fatalf("ResolvePgvector(%d): unexpected err %v", tc.dim, err)
+		}
+		if got := Cast(pgType); got != tc.want {
+			t.Fatalf("Cast(ResolvePgvector(%d))=%q, want %q", tc.dim, got, tc.want)
+		}
+	}
+}

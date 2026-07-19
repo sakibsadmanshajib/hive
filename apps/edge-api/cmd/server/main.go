@@ -291,6 +291,11 @@ func main() {
 		// EMBEDDING_BASE_URL does below (route stays registered, provider-blind
 		// 503), rather than serving vectors from a misconfigured width.
 		ragEmbedReduceTo := 0
+		// pgvector column type the query vector must be cast to in SearchChunks
+		// ("vector"/"halfvec"). Derived from the resolved Plan (dim -> type via
+		// embedmodel.ResolvePgvector), matching what provisioning built the
+		// column as. Defaults to "vector" (shipped column) when RAG is disabled.
+		ragPgType := "vector"
 		if ragEmbedBaseURL != "" {
 			plan, err := embedmodel.Resolve(ragEmbedModel, ragEmbedDim, ragEmbedAllowUnindexed)
 			if err != nil {
@@ -298,6 +303,7 @@ func main() {
 				ragEmbedBaseURL = ""
 			} else {
 				ragEmbedReduceTo = plan.ReduceTo
+				ragPgType = plan.PgType
 				// Cross-service reconcile: compare against the active
 				// rag_embedding_config row the live column was provisioned to.
 				// A mismatch (different model or dim) means our query vectors
@@ -316,7 +322,7 @@ func main() {
 
 		var ragRepo edgerag.Store
 		if dbPool != nil {
-			ragRepo = edgerag.NewRepo(dbPool)
+			ragRepo = edgerag.NewRepo(dbPool, ragPgType)
 		}
 		var ragEmbedder edgerag.Embedder
 		if ragEmbedBaseURL != "" {

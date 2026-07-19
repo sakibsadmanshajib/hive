@@ -154,6 +154,21 @@ func (p Plan) ColumnType() string {
 	return fmt.Sprintf("%s(%d)", p.PgType, p.Dim)
 }
 
+// Cast returns the pgvector cast suffix a query vector must carry to match a
+// column of the given pgvector type: "::halfvec" for a halfvec column, else
+// "::vector". pgvector's vector<->halfvec casts are assignment-only, so a
+// query written as `halfvec_col <=> $1::vector` has no operator and errors at
+// runtime; the query vector must be cast to the column's own type. pgType
+// originates only from ResolvePgvector (an enum-constrained "vector"/"halfvec"),
+// never user input, so the result is safe to interpolate into SQL. An unknown
+// or empty pgType falls back to "::vector", the shipped default column type.
+func Cast(pgType string) string {
+	if pgType == "halfvec" {
+		return "::halfvec"
+	}
+	return "::vector"
+}
+
 // ResolvePgvector maps a dimension to its pgvector storage type, HNSW
 // operator class, and whether an ANN index is possible. It is model-
 // independent: it only encodes pgvector's own limits.

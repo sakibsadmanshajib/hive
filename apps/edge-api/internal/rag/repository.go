@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 )
 
 // DocRow mirrors rag_documents columns needed by the edge handler.
@@ -35,10 +37,19 @@ type ChunkRow struct {
 // RLS is enforced by setting app.current_tenant_id before every query.
 type Repo struct {
 	pool *pgxpool.Pool
+	// pgType is the active rag_chunks.embedding pgvector column type
+	// ("vector" or "halfvec"), from the resolved embedding Plan. It selects
+	// the query-vector cast in SearchChunks so a halfvec column is never
+	// queried with ::vector (assignment-only cast -> no operator, runtime error).
+	pgType string
 }
 
-// NewRepo creates a Repo backed by pool.
-func NewRepo(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
+// NewRepo creates a Repo backed by pool. pgType is the provisioned pgvector
+// column type ("vector"/"halfvec"); an empty value defaults to "vector" (the
+// shipped column type) via embedmodel.Cast.
+func NewRepo(pool *pgxpool.Pool, pgType string) *Repo {
+	return &Repo{pool: pool, pgType: pgType}
+}
 
 // withTenantTx runs fn inside an explicit transaction with the RLS session
 // variable set LOCAL (transaction-scoped) to tenantID. hive_app is NOT
@@ -192,15 +203,7 @@ func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []
 	err = r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		// Explicit tenant_id filter is defense-in-depth alongside RLS:
 		// protects against SECURITY DEFINER / superuser-bypass scenarios.
-		rows, err := tx.Query(ctx, `
-			SELECT id, document_id, content,
-			       (embedding <=> $1::vector)::float4 AS score
-			FROM public.rag_chunks
-			WHERE tenant_id = $3
-			ORDER BY embedding <=> $1::vector
-			LIMIT $2`,
-			vec, topK, tenantID,
-		)
+		rows, err := tx.Query(ctx, searchChunksQuery(r.pgType), vec, topK, tenantID)
 		if err != nil {
 			return fmt.Errorf("rag.repo: search: %w", err)
 		}
@@ -219,6 +222,23 @@ func (r *Repo) SearchChunks(ctx context.Context, tenantID uuid.UUID, queryVec []
 		return nil, err
 	}
 	return results, nil
+}
+
+// searchChunksQuery builds the tenant-scoped cosine-search SQL with the
+// query-vector cast matched to the active embedding column type. The cast
+// suffix comes from embedmodel.Cast (an enum-constrained "::vector"/"::halfvec",
+// never user input), so interpolating it is injection-safe; the query vector
+// and all values remain bound parameters. Pure and side-effect free so the
+// cast selection is unit-testable without a live database.
+func searchChunksQuery(pgType string) string {
+	cast := embedmodel.Cast(pgType)
+	return fmt.Sprintf(`
+			SELECT id, document_id, content,
+			       (embedding <=> $1%[1]s)::float4 AS score
+			FROM public.rag_chunks
+			WHERE tenant_id = $3
+			ORDER BY embedding <=> $1%[1]s
+			LIMIT $2`, cast)
 }
 
 // encodeVector serialises []float32 to pgvector text format '[v1,v2,...]'.

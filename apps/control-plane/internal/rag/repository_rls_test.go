@@ -81,7 +81,7 @@ func TestRepo_RLS_InsertThenGetRoundTripsUnderTenantContext(t *testing.T) {
 	tenantID := uuid.New()
 	seedRAGTenant(t, tenantID)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 
 	docID, err := repo.InsertDocument(ctx, Document{
@@ -115,7 +115,7 @@ func TestRepo_RLS_CrossTenantContextCannotReadRows(t *testing.T) {
 	seedRAGTenant(t, tenantA)
 	seedRAGTenant(t, tenantB)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 	docID, err := repo.InsertDocument(ctx, Document{
 		TenantID:    tenantA,
@@ -155,7 +155,7 @@ func TestRepo_RLS_NoSessionLeakAcrossBorrows(t *testing.T) {
 	tenantA := uuid.New()
 	seedRAGTenant(t, tenantA)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 	docID, err := repo.InsertDocument(ctx, Document{
 		TenantID:    tenantA,

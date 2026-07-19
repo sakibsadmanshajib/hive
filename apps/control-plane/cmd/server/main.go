@@ -969,7 +969,6 @@ func main() {
 		if ragEmbedBaseURL == "" {
 			log.Println("WARNING: EMBEDDING_BASE_URL not set; rag ingest route not registered (uploaded documents will stay pending)")
 		} else {
-			ragRepo := cprag.NewRepo(pool)
 			// EMBEDDING_DIM: overwrites cprag.EmbeddingDimension's default
 			// (1024) so ingest's dimension checks and rag_documents.embedding_dim
 			// provenance both follow config, not a compile-time constant.
@@ -1011,6 +1010,9 @@ func main() {
 			case !ragConfigMatches:
 				log.Printf("ERROR: RAG embedding config mismatch (env model=%s dim=%d) vs provisioned rag_embedding_config, rag ingest route not registered; provision + re-embed to switch models", ragEmbedModel, ragEmbedDim)
 			default:
+				// plan.PgType selects the SearchChunks query-vector cast so a
+				// halfvec-provisioned column is queried with ::halfvec.
+				ragRepo := cprag.NewRepo(pool, plan.PgType)
 				ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, plan.ReduceTo, resolveLiteLLMMasterKey())
 				ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0, ragEmbedModel)
 				cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
