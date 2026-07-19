@@ -11,7 +11,7 @@ Scaffold only. Full Phase 26 implementation will land:
 - `ENGINE-AUDIT.md` — security-reviewer signoff on engine list
 - Docker compose activation in `deploy/docker/docker-compose.yml`
 
-See `.planning/phases/26-web-search-tool/PLAN.md`.
+Full plan tracked in the project vault (see roadmap board in the root README).
 
 ## Hardening (when activated)
 

@@ -5,8 +5,8 @@ import "log"
 // estimateCompletionTokens returns a conservative cl100k-style approximation
 // of the token count for a piece of text. The exact formula does not matter —
 // it only kicks in when the upstream provider returns completion_tokens=0 on
-// a non-empty assistant message, which is a billing-leak case (see
-// .planning/debug/flaky-usage-tokens-root-cause.md).
+// a non-empty assistant message, which is a billing-leak case (see git
+// history for the flaky-usage-tokens root-cause debug notes).
 //
 // Heuristic: ceil(byte_len / 4), with a minimum of 1 when there is any text.
 func estimateCompletionTokens(text string) int64 {

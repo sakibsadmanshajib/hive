@@ -10,7 +10,7 @@
 // `@/lib/control-plane/client` remain valid — both routes resolve the same
 // interface objects.
 //
-// See `.planning/phases/13-console-integration-fixes/13-AUDIT.md` Section B
+// See git history for the phase 13 console-integration-fixes audit, Section B,
 // for the type-sync gap analysis (zero gaps found at audit time).
 
 export type { Permission } from "./permissions.generated";

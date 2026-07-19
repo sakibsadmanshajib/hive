@@ -14,9 +14,9 @@ import (
 )
 
 // LiteLLMInferenceClient is the production InferencePort that the local batch
-// executor uses. Per .planning/phases/15-batch-local-executor/DECISIONS.md
-// Q1, the dispatcher calls LiteLLM's /v1/chat/completions directly rather
-// than crossing the apps/edge-api/internal/inference module boundary. This
+// executor uses. Per the phase 15 local-executor decision record (see git
+// history), the dispatcher calls LiteLLM's /v1/chat/completions directly
+// rather than crossing the apps/edge-api/internal/inference module boundary. This
 // reuses LiteLLM's provider routing, retry, and capability path — the same
 // surface edge-api exposes — while keeping control-plane's go.mod free of
 // edge-api/internal imports.

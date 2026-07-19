@@ -79,7 +79,7 @@ const ogImage = new URL(image ?? '/og/default.png', Astro.site).href;
       hreflang cross-links. This site (.co) is the global default; the Bangladesh
       site (.com.bd) is the locale variant. Each page self-canonicals above, so
       the two sites cross-link as locale alternates rather than duplicates. The
-      geo-router Worker injects the matching headers on the .com.bd side. Never
+      .com.bd edge layer injects the matching headers on that side. Never
       switch the geo redirect to 301, or one site will be de-indexed.
     -->
     <link rel="alternate" hreflang="en" href={Astro.url.href} />

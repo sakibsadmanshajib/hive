@@ -233,9 +233,9 @@ surface. Omit `amount_usd` from BD payment responses.
 
 ## Known Issues
 
-See `.planning/UAT-REPORT.md` for full runtime UAT,
-`.planning/phases/10-routing-storage-critical-fixes/10-UAT.md` for Phase 10 UAT
-closure, and `.planning/v1.1-DEFERRED-SCOPE.md` for items deferred out of v1.0.
+Known issues, UAT results, and deferred scope are tracked in the project
+vault (Obsidian), not in-repo. See the roadmap board below for current
+status.
 
 ## Live Staging
 
@@ -247,17 +247,11 @@ closure, and `.planning/v1.1-DEFERRED-SCOPE.md` for items deferred out of v1.0.
 ## Project State
 
 - **v1.0 — developer-api-core**: shipped 2026-04-21. Phases 1-10 complete.
-- **v1.1 — in progress**: Phase 20 (Provider Catalog) closing. Phases 12-19 complete. See `.planning/STATE.md`.
+- **v1.1 — in progress**: Phase 20 (Provider Catalog) closing. Phases 12-19 complete.
 - **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
 
-Planning artifacts live in `.planning/`:
-
-- `STATE.md` — current milestone state
-- `ROADMAP.md` — full phase breakdown
-- `REQUIREMENTS.md` — requirement traceability
-- `UAT-REPORT.md` — runtime test results
-- `v1.0-MILESTONE-AUDIT.md` — earlier launch-readiness audit
-- `v1.1-DEFERRED-SCOPE.md` — deferred scope for next milestone
+Planning ground truth (state, roadmap, requirements, UAT, deferred scope)
+lives in the project vault (Obsidian), not in-repo.
 
 ## Phase 19 — Foundation Slice
 

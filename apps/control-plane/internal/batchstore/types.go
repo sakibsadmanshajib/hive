@@ -6,8 +6,8 @@ const TypeBatchPoll = "batch:poll"
 
 // TypeBatchExecute is the Asynq task type name for the local executor path —
 // the batch is processed line-by-line by control-plane against LiteLLM's
-// chat-completions endpoint instead of LiteLLM's batch upload API. See
-// .planning/phases/15-batch-local-executor/PLAN.md.
+// chat-completions endpoint instead of LiteLLM's batch upload API (see git
+// history for the phase 15 local-executor planning notes).
 const TypeBatchExecute = "batch:execute"
 
 // BatchPollPayload is the JSON-serialized payload of a TypeBatchPoll task.

@@ -12,8 +12,8 @@ import {
 // primitives as known leaks — this spec catches anything that escapes to
 // the customer surface.
 //
-// Routes covered (from .planning/phases/13-console-integration-fixes/13-AUDIT.md
-// Section A):
+// Routes covered (from the phase 13 console-integration-fixes audit, see git
+// history, Section A):
 //   /console
 //   /console/billing
 //   /console/settings/billing
