@@ -1,4 +1,4 @@
-name: phase-19-owui-nightly
+name: OWUI nightly e2e
 
 on:
   schedule:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: phase-19-owui-${{ github.ref }}
+  group: owui-nightly-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -302,5 +302,5 @@ jobs:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: |
           curl -fsSL -X POST -H 'Content-Type: application/json' \
-            -d '{"text":"phase-19-owui-nightly red — see GHA run"}' \
+            -d '{"text":"OWUI nightly e2e red, see GHA run"}' \
             "$SLACK_WEBHOOK_URL"
