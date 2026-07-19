@@ -48,3 +48,16 @@
 - D8 residual RESOLVED: keep documented direction. Web/server tasks sync everywhere; desktop-local tasks stay OFF cloud sync by default; per-task local-vs-server prompt on desktop.
 - Evidence (July 2026 research, sourced): Claude Code Remote Control is opt-in, off by default, live-steering not upload; teleport is one-way web to local; Codex cloud delegation is an explicit per-task push, transcripts local by default; Cowork Projects have no cloud sync. No vendor auto-uploads local sessions. Industry practice matches Hive direction exactly.
 - Unblocks Step 4.4 (desktop firewall + portability, last Wave 4 demo step). Sources logged in vault log-2026-07-15-wave1-spike-execution.
+
+## Stale-code purge + SDLC audit (2026-07-19, owner-directed)
+- Deleted outright (git history = archive, owner choice): deploy/gcp, deploy/geo-router, deploy/oci, deploy/cloudflared, docker-compose.demo.yml, scripts/phase10-*, verify-requirements-matrix.sh, scripts/seed-demo, .planning/ (all of it; planning ground truth = Obsidian vault). PR #361.
+- graphify-out fully untracked + gitignored (graph.json was 50MB per-session churn blob). Never re-track.
+- Feature-gate category "carl" renamed to "agents" with idempotent supabase migration (PR #362); Carl/EnterpriseEdge names purged from issues, milestones, labels.
+- OWNER DECISION: customer-USD lint + dedicated FX-guard test files REMOVED (PR #377). Tests = functionality/features only. Do NOT reintroduce fx-zero-leak guard-only tests or the lint. Runtime amount_usd omission behavior stays.
+- Branch protection reconciled DOWNWARD to live 6 checks (owner choice, PR #363); Web E2E not required. MERGE-POLICY.md is the doc of record.
+- Vault reorged: hive/README.md entry point, 11 live docs, 317 archived under hive/archive/ with ARCHIVE-SUMMARY.md.
+- Adversarial audit issues #364-#376 (label audit-2026-07-19) = current process-debt backlog.
+
+## Do-Not-Repeat additions (2026-07-19)
+- NEVER wrap toolchain docker test commands in bash -c / sh -c (Alpine, ENTRYPOINT /bin/sh -c; double-wrap silently no-ops). Pass command string directly.
+- CLAUDE.md edits are hook-gated to main agent via claude-md-management skill; do not brief subagents to edit CLAUDE.md.

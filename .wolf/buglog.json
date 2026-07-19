@@ -1963,6 +1963,20 @@
         "playwright",
         "packaging"
       ]
+    },
+    {
+      "id": "toolchain-bash-c-silent-noop",
+      "priority": "P1",
+      "date": "2026-07-19",
+      "error_message": "docker compose --profile tools run toolchain bash -c \"...\" exits 0 with zero output, tests silently not run",
+      "root_cause": "toolchain image is Alpine with no bash and ENTRYPOINT [\"/bin/sh\",\"-c\"]; wrapping with bash -c or sh -c double-wraps so the nested shell reads EOF and exits 0 without executing",
+      "fix": "pass the command string directly as the single arg: docker compose --profile tools run toolchain \"cd /workspace && go test ...\"; CLAUDE.md testing section updated 2026-07-19",
+      "tags": [
+        "docker",
+        "ci",
+        "toolchain",
+        "silent-failure"
+      ]
     }
   ]
 }
