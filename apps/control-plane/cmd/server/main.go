@@ -969,17 +969,9 @@ func main() {
 		if ragEmbedBaseURL == "" {
 			log.Println("WARNING: EMBEDDING_BASE_URL not set; rag ingest route not registered (uploaded documents will stay pending)")
 		} else {
-			ragRepo := cprag.NewRepo(pool)
-			ragEmbedTruncateToRaw := strings.TrimSpace(os.Getenv("EMBEDDING_TRUNCATE_TO"))
-			ragEmbedTruncateTo, err := strconv.Atoi(ragEmbedTruncateToRaw)
-			if ragEmbedTruncateToRaw != "" && err != nil {
-				log.Printf("WARNING: EMBEDDING_TRUNCATE_TO=%q is not a valid integer; truncation disabled (strict dimension reject applies)", ragEmbedTruncateToRaw)
-				ragEmbedTruncateTo = 0
-			}
-			// EMBEDDING_DIM: see the matching comment in edge-api/cmd/server/main.go.
-			// Overwrites cprag.EmbeddingDimension's default (1024) so ingest's
-			// dimension checks and rag_documents.embedding_dim provenance both
-			// follow config instead of a compile-time constant.
+			// EMBEDDING_DIM: overwrites cprag.EmbeddingDimension's default
+			// (1024) so ingest's dimension checks and rag_documents.embedding_dim
+			// provenance both follow config, not a compile-time constant.
 			ragEmbedDimRaw := strings.TrimSpace(os.Getenv("EMBEDDING_DIM"))
 			ragEmbedDim := cprag.EmbeddingDimension
 			if ragEmbedDimRaw != "" {
@@ -991,15 +983,37 @@ func main() {
 			}
 			cprag.EmbeddingDimension = ragEmbedDim
 
-			// embedmodel.Validate: see the matching comment in
-			// edge-api/cmd/server/main.go. A known but inconsistent
-			// model/dim/truncateTo combination disables ingestion the same way
-			// an unset EMBEDDING_BASE_URL does above, instead of embedding and
-			// storing vectors of the wrong width.
-			if err := embedmodel.Validate(ragEmbedModel, ragEmbedDim, ragEmbedTruncateTo); err != nil {
-				log.Printf("ERROR: RAG embedding configuration is inconsistent, rag ingest route not registered: %v", err)
-			} else {
-				ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo, resolveLiteLLMMasterKey())
+			// EMBEDDING_ALLOW_UNINDEXED: see edge-api/cmd/server/main.go. Opts a
+			// >4000-dim configuration into an unindexed brute-force column.
+			ragAllowUnindexedRaw := strings.TrimSpace(os.Getenv("EMBEDDING_ALLOW_UNINDEXED"))
+			ragEmbedAllowUnindexed := ragAllowUnindexedRaw == "1" || strings.EqualFold(ragAllowUnindexedRaw, "true")
+
+			// Cross-service reconcile (#368): compare env config against the
+			// active rag_embedding_config row the column was provisioned to.
+			ragConfigMatches := true
+			if active, found, cerr := cprag.LoadActiveConfig(runCtx, pool); cerr != nil {
+				log.Printf("WARNING: could not read rag_embedding_config, proceeding on env config only: %v", cerr)
+			} else if found && !embedmodel.SameConfig(ragEmbedModel, ragEmbedDim, active.Model, active.Dim) {
+				ragConfigMatches = false
+			}
+
+			// embedmodel.Resolve is the single source of truth: it derives the
+			// MRL reduction target (plan.ReduceTo) and rejects non-selectable
+			// combinations. There is no independent EMBEDDING_TRUNCATE_TO knob.
+			// A rejected or config-mismatched combination leaves the ingest
+			// route unmounted, the same fail-closed posture as an unset
+			// EMBEDDING_BASE_URL above.
+			plan, rerr := embedmodel.Resolve(ragEmbedModel, ragEmbedDim, ragEmbedAllowUnindexed)
+			switch {
+			case rerr != nil:
+				log.Printf("ERROR: RAG embedding configuration is inconsistent, rag ingest route not registered: %v", rerr)
+			case !ragConfigMatches:
+				log.Printf("ERROR: RAG embedding config mismatch (env model=%s dim=%d) vs provisioned rag_embedding_config, rag ingest route not registered; provision + re-embed to switch models", ragEmbedModel, ragEmbedDim)
+			default:
+				// plan.PgType selects the SearchChunks query-vector cast so a
+				// halfvec-provisioned column is queried with ::halfvec.
+				ragRepo := cprag.NewRepo(pool, plan.PgType)
+				ragEmbedClient := cprag.NewHTTPEmbedClient(ragEmbedBaseURL, ragEmbedModel, plan.ReduceTo, resolveLiteLLMMasterKey())
 				ragIngester := cprag.NewIngester(ragRepo, ragEmbedClient, 0, ragEmbedModel)
 				cprag.RegisterRoutes(routerMux, func(ctx context.Context, tenantID, docID uuid.UUID, content string) error {
 					return ragIngester.Ingest(ctx, tenantID, docID, content)
@@ -1007,6 +1021,24 @@ func main() {
 					return platformhttp.RequireInternalToken(cfg.InternalToken, h)
 				})
 				log.Println("rag ingest route registered")
+
+				// Catch-up re-embed: provisioning a new model/dim marks the
+				// corpus pending; migrate any backlog onto the active config
+				// once at startup so the per-tenant fail-closed guard reopens.
+				// ponytail: single startup pass on the privileged pool (walks
+				// every tenant), not a scheduler; a full re-embed queue + admin
+				// trigger endpoint is the follow-up admin-surface PR.
+				go func() {
+					rb := cprag.NewReembedder(pool, ragEmbedClient, 0, ragEmbedModel, ragEmbedDim)
+					done, remaining, rbErr := rb.RunOnce(runCtx)
+					if rbErr != nil {
+						log.Printf("rag re-embed catch-up error: %v", rbErr)
+						return
+					}
+					if done > 0 || remaining > 0 {
+						log.Printf("rag re-embed catch-up: %d migrated, %d still pending", done, remaining)
+					}
+				}()
 			}
 		}
 	}

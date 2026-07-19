@@ -131,7 +131,7 @@ func TestRepo_RLS_InsertThenGetRoundTripsUnderTenantContext(t *testing.T) {
 	tenantID := uuid.New()
 	seedRAGTenant(t, tenantID)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 
 	docID, err := repo.InsertDocument(ctx, tenantID, "doc.txt", "text/plain", 3)
@@ -157,7 +157,7 @@ func TestRepo_RLS_CrossTenantContextCannotReadRows(t *testing.T) {
 	seedRAGTenant(t, tenantA)
 	seedRAGTenant(t, tenantB)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 	docID, err := repo.InsertDocument(ctx, tenantA, "tenant-a-only.txt", "text/plain", 1)
 	if err != nil {
@@ -187,7 +187,7 @@ func TestRepo_RLS_NoSessionLeakAcrossBorrows(t *testing.T) {
 	tenantA := uuid.New()
 	seedRAGTenant(t, tenantA)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 	docID, err := repo.InsertDocument(ctx, tenantA, "tenant-a-only.txt", "text/plain", 1)
 	if err != nil {
@@ -228,7 +228,7 @@ func TestRepo_RLS_SearchChunksCannotReadOtherTenantChunks(t *testing.T) {
 	chunkA := seedRAGChunk(t, tenantA, "tenant a content", vec)
 	chunkB := seedRAGChunk(t, tenantB, "tenant b content", vec)
 
-	repo := NewRepo(pool)
+	repo := NewRepo(pool, "vector")
 	ctx := context.Background()
 
 	results, err := repo.SearchChunks(ctx, tenantA, vec, 10)

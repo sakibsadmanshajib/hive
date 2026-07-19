@@ -260,23 +260,10 @@ func main() {
 		if ragEmbedModel == "" {
 			ragEmbedModel = "bge-m3"
 		}
-		// EMBEDDING_TRUNCATE_TO: set only for MRL-trained models whose native
-		// width exceeds EmbeddingDimension (e.g. the serverless demo's
-		// route-openrouter-embedding-fallback returns 4096). Unset/0 keeps the
-		// strict reject so a non-MRL model never gets silently truncated.
-		ragEmbedTruncateToRaw := strings.TrimSpace(os.Getenv("EMBEDDING_TRUNCATE_TO"))
-		ragEmbedTruncateTo, err := strconv.Atoi(ragEmbedTruncateToRaw)
-		if ragEmbedTruncateToRaw != "" && err != nil {
-			log.Printf("WARNING: EMBEDDING_TRUNCATE_TO=%q is not a valid integer; truncation disabled (strict dimension reject applies)", ragEmbedTruncateToRaw)
-			ragEmbedTruncateTo = 0
-		}
-		// EMBEDDING_DIM: the vector width the admin-selected model is expected
-		// to produce (post-truncation). Overwrites the rag package's default
-		// (1024, matching today's rag_chunks.embedding column) so the dimension
-		// checks in embed.go compare against config, not a compile-time constant.
-		// Resizing the live column for a non-1024 value is a later PR; setting
-		// EMBEDDING_DIM to anything else today will surface as a Postgres
-		// insert error, not a graceful reject, until that PR lands.
+		// EMBEDDING_DIM: the vector width the admin-selected model produces.
+		// Overwrites the rag package's default (1024, matching today's
+		// rag_chunks.embedding column) so the dimension checks in embed.go
+		// compare against config, not a compile-time constant.
 		ragEmbedDimRaw := strings.TrimSpace(os.Getenv("EMBEDDING_DIM"))
 		ragEmbedDim := edgerag.EmbeddingDimension
 		if ragEmbedDimRaw != "" {
@@ -288,28 +275,58 @@ func main() {
 		}
 		edgerag.EmbeddingDimension = ragEmbedDim
 
-		// embedmodel.Validate cross-checks model/dim/truncateTo against the
-		// known dimension facts for ragEmbedModel (packages/embedmodel). An
-		// unknown model is skipped, not rejected -- an admin may be pointing at
-		// a custom model this build has no registry entry for. A known but
-		// inconsistent combination disables the embedding backend the same way
-		// an unset EMBEDDING_BASE_URL does below (route stays registered,
-		// returns a provider-blind 503), rather than serving vectors from a
-		// misconfigured width.
+		// EMBEDDING_ALLOW_UNINDEXED opts a >4000-dim configuration into an
+		// unindexed brute-force column (small-corpus only). Off by default.
+		ragAllowUnindexedRaw := strings.TrimSpace(os.Getenv("EMBEDDING_ALLOW_UNINDEXED"))
+		ragEmbedAllowUnindexed := ragAllowUnindexedRaw == "1" || strings.EqualFold(ragAllowUnindexedRaw, "true")
+
+		// embedmodel.Resolve is the single source of truth (#368): it enforces
+		// the selectable policy (no naive truncation of a non-MRL model, no dim
+		// wider than native, dimension -> pgvector (type, opclass)) and derives
+		// the MRL reduction target (plan.ReduceTo). There is no independent
+		// EMBEDDING_TRUNCATE_TO knob any more: whether and how far to reduce is
+		// derived from (model MRL?, chosen dim vs native). An unknown model
+		// still resolves its pgvector mapping by dimension. A rejected
+		// combination disables the embedding backend the same way an unset
+		// EMBEDDING_BASE_URL does below (route stays registered, provider-blind
+		// 503), rather than serving vectors from a misconfigured width.
+		ragEmbedReduceTo := 0
+		// pgvector column type the query vector must be cast to in SearchChunks
+		// ("vector"/"halfvec"). Derived from the resolved Plan (dim -> type via
+		// embedmodel.ResolvePgvector), matching what provisioning built the
+		// column as. Defaults to "vector" (shipped column) when RAG is disabled.
+		ragPgType := "vector"
 		if ragEmbedBaseURL != "" {
-			if err := embedmodel.Validate(ragEmbedModel, ragEmbedDim, ragEmbedTruncateTo); err != nil {
+			plan, err := embedmodel.Resolve(ragEmbedModel, ragEmbedDim, ragEmbedAllowUnindexed)
+			if err != nil {
 				log.Printf("ERROR: RAG embedding configuration is inconsistent, disabling /v1/rag/* embedding: %v", err)
 				ragEmbedBaseURL = ""
+			} else {
+				ragEmbedReduceTo = plan.ReduceTo
+				ragPgType = plan.PgType
+				// Cross-service reconcile: compare against the active
+				// rag_embedding_config row the live column was provisioned to.
+				// A mismatch (different model or dim) means our query vectors
+				// would hit a column built for a different embedding space, so
+				// disable RAG rather than serve cross-space results.
+				if dbPool != nil {
+					if rowModel, rowDim, found, cerr := edgerag.LoadActiveEmbeddingConfig(context.Background(), dbPool); cerr != nil {
+						log.Printf("WARNING: could not read rag_embedding_config, proceeding on env config only: %v", cerr)
+					} else if found && !embedmodel.SameConfig(ragEmbedModel, ragEmbedDim, rowModel, rowDim) {
+						log.Printf("ERROR: RAG embedding config mismatch (env model=%s dim=%d vs provisioned model=%s dim=%d), disabling /v1/rag/* embedding; provision + re-embed to switch models", ragEmbedModel, ragEmbedDim, rowModel, rowDim)
+						ragEmbedBaseURL = ""
+					}
+				}
 			}
 		}
 
 		var ragRepo edgerag.Store
 		if dbPool != nil {
-			ragRepo = edgerag.NewRepo(dbPool)
+			ragRepo = edgerag.NewRepo(dbPool, ragPgType)
 		}
 		var ragEmbedder edgerag.Embedder
 		if ragEmbedBaseURL != "" {
-			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedTruncateTo, resolveLiteLLMMasterKey())
+			ragEmbedder = edgerag.NewHTTPEmbedder(ragEmbedBaseURL, ragEmbedModel, ragEmbedReduceTo, resolveLiteLLMMasterKey())
 		}
 		ragAudit := func(ctx context.Context, action, resourceType, resourceID, severity string,
 			tenantID, actorID uuid.UUID, userAgent string, after any) {
