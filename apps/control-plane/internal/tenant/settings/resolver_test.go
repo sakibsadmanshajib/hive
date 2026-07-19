@@ -46,7 +46,7 @@ func TestResolver_IsEnabled_ReadsValue(t *testing.T) {
 // TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories is the #293
 // security-review guard: ClientVisibleEnabled backs the featuregate response
 // that reaches Open WebUI via GET /v1/featuregate, so it must expose only
-// client-visible categories (carl, sso). Enabling one key in each sensitive
+// client-visible categories (agents, sso). Enabling one key in each sensitive
 // category proves none of admin, billing, or audit_sink ever appears in the
 // map, closing the information-disclosure blind spot.
 func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T) {
@@ -64,7 +64,7 @@ func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T)
 		settings.EnableAdminConsole,    // admin
 		settings.EnableStripe,          // billing
 		settings.EnableAuditSinkSentry, // audit_sink
-		settings.EnableRAG,             // carl (client-visible)
+		settings.EnableRAG,             // agents (client-visible)
 		settings.EnableSSOGoogle,       // sso (client-visible)
 	} {
 		_, err := pool.Exec(ctx,
@@ -77,7 +77,7 @@ func TestResolver_ClientVisibleEnabled_ExcludesSensitiveCategories(t *testing.T)
 	require.NoError(t, err)
 
 	// Client-visible categories are returned.
-	require.True(t, gates[settings.EnableRAG], "carl gate must be exposed")
+	require.True(t, gates[settings.EnableRAG], "agents gate must be exposed")
 	require.True(t, gates[settings.EnableSSOGoogle], "sso gate must be exposed")
 
 	// Sensitive categories must be absent entirely, not merely false.
@@ -114,7 +114,7 @@ func TestResolver_AllEnabled_ReturnsFullSet(t *testing.T) {
 		settings.EnableAdminConsole,    // admin
 		settings.EnableStripe,          // billing
 		settings.EnableAuditSinkSentry, // audit_sink
-		settings.EnableRAG,             // carl
+		settings.EnableRAG,             // agents
 	} {
 		_, err := pool.Exec(ctx,
 			`INSERT INTO public.tenant_settings(tenant_id, key, enabled) VALUES ($1, $2::public.tenant_setting_key, true)`,

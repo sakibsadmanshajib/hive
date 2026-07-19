@@ -5,7 +5,7 @@ import { FeatureGateManager } from "./feature-gate-manager";
 import type { FeatureGate } from "@/lib/control-plane/client";
 
 const GATES: FeatureGate[] = [
-  { key: "ENABLE_RAG", label: "Carl.sh RAG capability", category: "carl", enabled: false },
+  { key: "ENABLE_RAG", label: "Agent RAG capability", category: "agents", enabled: false },
   { key: "ENABLE_PUBLIC_BILLING", label: "Public billing", category: "billing", enabled: true },
 ];
 
@@ -18,7 +18,7 @@ describe("FeatureGateManager", () => {
   it("renders each gate label, raw key, and grouped category headings", () => {
     render(<FeatureGateManager gates={GATES} />);
     // getByText throws if absent, so the calls themselves assert presence.
-    expect(screen.getByText("Carl.sh RAG capability")).toBeTruthy();
+    expect(screen.getByText("Agent RAG capability")).toBeTruthy();
     expect(screen.getByText("ENABLE_RAG")).toBeTruthy();
     expect(screen.getByText("Sovereign workspace")).toBeTruthy();
     expect(screen.getByText("Billing & payments")).toBeTruthy();
@@ -26,7 +26,7 @@ describe("FeatureGateManager", () => {
 
   it("reflects initial enabled state on the switches", () => {
     render(<FeatureGateManager gates={GATES} />);
-    const rag = screen.getByRole("switch", { name: /Carl\.sh RAG capability/i });
+    const rag = screen.getByRole("switch", { name: /Agent RAG capability/i });
     const billing = screen.getByRole("switch", { name: /Public billing/i });
     expect(rag.getAttribute("aria-checked")).toBe("false");
     expect(billing.getAttribute("aria-checked")).toBe("true");
@@ -41,7 +41,7 @@ describe("FeatureGateManager", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<FeatureGateManager gates={GATES} />);
-    const rag = screen.getByRole("switch", { name: /Carl\.sh RAG capability/i });
+    const rag = screen.getByRole("switch", { name: /Agent RAG capability/i });
     fireEvent.click(rag);
 
     await waitFor(() => {
@@ -63,7 +63,7 @@ describe("FeatureGateManager", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<FeatureGateManager gates={GATES} />);
-    const rag = screen.getByRole("switch", { name: /Carl\.sh RAG capability/i });
+    const rag = screen.getByRole("switch", { name: /Agent RAG capability/i });
     fireEvent.click(rag);
 
     await waitFor(() => {

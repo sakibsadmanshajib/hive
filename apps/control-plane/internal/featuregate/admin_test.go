@@ -69,7 +69,7 @@ func withViewer(req *http.Request, v auth.Viewer) *http.Request {
 func TestAdmin_List_MergesRegistryAndEnablement(t *testing.T) {
 	store := &fakeAdminStore{
 		registry: []settings.GateKey{
-			{Key: settings.EnableRAG, Label: "Carl.sh RAG capability", Category: "carl"},
+			{Key: settings.EnableRAG, Label: "Agent RAG capability", Category: "agents"},
 			{Key: settings.EnablePublicBilling, Label: "Public billing", Category: "billing"},
 		},
 		enabled: map[settings.Key]bool{settings.EnableRAG: true},
@@ -95,7 +95,7 @@ func TestAdmin_List_MergesRegistryAndEnablement(t *testing.T) {
 	if resp.Gates[0].Key != string(settings.EnableRAG) || !resp.Gates[0].Enabled {
 		t.Errorf("gate[0] = %+v, want RAG enabled", resp.Gates[0])
 	}
-	if resp.Gates[0].Label != "Carl.sh RAG capability" || resp.Gates[0].Category != "carl" {
+	if resp.Gates[0].Label != "Agent RAG capability" || resp.Gates[0].Category != "agents" {
 		t.Errorf("gate[0] label/category = %q/%q", resp.Gates[0].Label, resp.Gates[0].Category)
 	}
 	// A registered key with no tenant_settings row defaults to disabled.

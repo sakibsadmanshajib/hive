@@ -23,7 +23,7 @@ package featuregate
 // Client-safety (issue #293 security review): this endpoint returns the gate map
 // verbatim, so it must only ever contain client-visible gates. That guarantee is
 // enforced upstream in control-plane, settings.Resolver.ClientVisibleEnabled
-// filters to the client-visible category allowlist (carl, sso), so admin,
+// filters to the client-visible category allowlist (agents, sso), so admin,
 // billing, and audit_sink gates never reach edge-api and cannot leak here. This
 // handler adds no keys of its own.
 //

@@ -17,7 +17,7 @@ type RowStatus = "idle" | "saving" | "error";
 // migration still renders sensibly without a code change.
 const CATEGORY_LABELS: Record<string, string> = {
   billing: "Billing & payments",
-  carl: "Sovereign workspace",
+  agents: "Sovereign workspace",
   audit: "Audit sinks",
   sso: "Single sign-on",
   feature: "Platform features",
