@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-16T20:35:21.531Z
-> Files: 818 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-19T11:22:55.525Z
+> Files: 916 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../
 
@@ -9,6 +9,11 @@
 
 ## ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/
 
+- `decision-2026-07-07-one-product-two-modes.md` — One Product, Two Modes (2026-07-07) (~412 tok)
+- `decision-2026-07-17-gateway-posture-and-network.md` — Gateway posture and network decisions (2026-07-17) (~591 tok)
+- `decision-2026-07-17-network-access-posture.md` — Decision: network access posture, web versus desktop (~938 tok)
+- `demo-host-provisioning-2026-07-17.md` — Demo host provisioning: two owner-side blockers (~1676 tok)
+- `demo-verification-2026-07-17.md` — Hive demo live feature verification — 2026-07-17 (~2002 tok)
 - `docs-compliance-soc2-log-coverage.md` — SOC 2 Type II — Audit Log Coverage Report (~188 tok)
 - `docs-enterprise-sso.md` — Enterprise SSO Integration Guide (~2630 tok)
 - `docs-license-allowlist.md` — Licence Exception Allowlist (~876 tok)
@@ -16,18 +21,24 @@
 - `docs-superpowers-specs-2026-07-07-coding-agent-cowork-design.md` — Coding-Agent and Cowork Subsystem: Design Specification (~7994 tok)
 - `docs-support-matrix.md` — Hive API Support Matrix (~4737 tok)
 - `gov-ai-landscape-2026.md` — Government / national sovereign-AI competitive landscape (2026-07-07) (~1386 tok)
+- `guide-enable-supabase-auth-hook.md` — Standalone runbook: enable the Supabase Auth Hook (custom access token) (~820 tok)
+- `handoff-2026-07-17.md` — Hive Handoff — 2026-07-17 (~2458 tok)
 - `hive-enterprise-architecture.md` — Hive Enterprise + cloud architecture (locked 2026-06-13) (~1196 tok)
+- `hosting-and-desktop-demo-plan-2026-07-17.md` — Hosting sizing + desktop demo readiness plan (~2404 tok)
 - `log-2026-07-15-wave1-spike-execution.md` — 2026-07-15 Execution Log: Wave 1 Shipped, Spike #307 P0 GO (~1986 tok)
+- `log-2026-07-17-demo-readiness-session.md` — Demo readiness session, 2026-07-17 (~827 tok)
 - `MOC-coding-agent-spec.md` — MOC: Coding-Agent / Cowork Spec (~2481 tok)
 - `MOC-index.md` — MOC: Index — Start Here (~921 tok)
 - `MOC-provider-catalog.md` — MOC: Provider Catalog (Phase 20) (~582 tok)
-- `MOC-roadmap-current.md` — MOC: Roadmap & Current State (~809 tok)
+- `MOC-roadmap-current.md` — MOC: Roadmap & Current State (~792 tok)
 - `MOC-security-compliance.md` — MOC — Security & Compliance (~758 tok)
 - `MOC-sovereign-pivot.md` — MOC: Sovereign Pivot (~1678 tok)
 - `MOC-timeline.md` — MOC: Timeline (Chain of Events) (~982 tok)
 - `MOC-v1.0-launch-archive.md` — MOC: v1.0 Launch Archive (~4394 tok)
 - `MOC-v1.1-chatapp-owui-transition.md` — MOC: Hive Chat / OWUI Transition (~1011 tok)
 - `plan-2026-07-15-agent-subsystem-blueprint.md` — Agent Subsystem Construction Blueprint (demo-first) (~6571 tok)
+- `plan-2026-07-17-desktop-local-runtime.md` — Desktop local agent runtime port (~889 tok)
+- `plan-2026-07-17-sovereignty-wave.md` — Sovereignty Wave Execution Plan (~3593 tok)
 - `planning-bd-planning-commission-tech-brief.md` — Bangladesh Planning Commission — tech brief track (~1474 tok)
 - `planning-carl-charter.md` — Carl.sh — Sovereign Workspace Leadership Charter (~2709 tok)
 - `planning-carl-design.md` — Carl.sh — Sovereign Workspace Design Document (~8535 tok)
@@ -55,9 +66,14 @@
 - `planning-v1.1-deferred-scope.md` — v1.1 Deferred Scope (~1261 tok)
 - `planning-v1.2-agentic-surface.md` — v1.2 Master Plan — Agentic Surface (~5487 tok)
 - `planning-v1.3-device-deployment-and-model-advisor.md` — v1.3 Master Plan — Device Deployment and Model Advisor (~7708 tok)
+- `README.md` — Project documentation (~559 tok)
 - `spec-2026-07-15-security-spike-307-plan.md` — Security spike #307: sandbox isolation validation, execution plan (~5551 tok)
 - `spike-307-p0-results-2026-07-15.md` — Security Spike #307 — P0 Blocking Rows: Results & Go/No-Go (~1046 tok)
 - `website-sovereign-spec.md` — Hive Sovereign Marketing Site — Build Specification (~3875 tok)
+
+## ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/archive/
+
+- `ARCHIVE-SUMMARY.md` — Archive Summary (~1774 tok)
 
 ## ../../../tmp/
 
@@ -201,6 +217,23 @@
 
 - `Dockerfile.control-plane.prod` — syntax=docker/dockerfile:1 (~868 tok)
 
+## ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/
+
+- `jwt_probe.sh` (~393 tok)
+- `verify_hive_auto.sh` (~185 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/hive-demo-provisioning/supabase/
+
+- `config.toml` — Supabase CLI declarative config. Minimal by design: this repo does not (~243 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/wt-embedmodel-dockerfile/deploy/docker/
+
+- `Dockerfile.agent-engine` (~213 tok)
+- `Dockerfile.control-plane` (~468 tok)
+- `Dockerfile.control-plane.prod` — syntax=docker/dockerfile:1 (~904 tok)
+- `Dockerfile.edge-api` (~308 tok)
+- `Dockerfile.edge-api.prod` — syntax=docker/dockerfile:1 (~752 tok)
+
 ## ../../../tmp/claude-1001/-home-sakib-hive/4422c273-7623-4109-8443-8f64b8d0e4a1/scratchpad/
 
 - `CARL_OSS_LICENSE_AUDIT_2026-06-25.md` — Carl.sh OSS License Audit for Government Sales (~2151 tok)
@@ -211,6 +244,11 @@
 - `issueD.md` — Context (~611 tok)
 - `issueE.md` — Context (~716 tok)
 - `issueF.md` — Context (~568 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/
+
+- `CLAUDE.md.drafted` — OpenWolf (~4169 tok)
+- `pr377body.md` — Summary (~861 tok)
 
 ## ../../../tmp/claude-1001/-home-sakib-hive/6ad4597e-4a06-4482-b1db-ba362691ea81/scratchpad/
 
@@ -793,6 +831,111 @@
 
 - `Dockerfile.desktop-linux` — Build environment for apps/desktop's Linux Tauri targets (deb, AppImage). (~320 tok)
 
+## ../../../tmp/hive-embed-foundation/
+
+- `go.work` (~50 tok)
+
+## ../../../tmp/hive-embed-foundation/apps/control-plane/
+
+- `go.mod` — Go module definition (~663 tok)
+
+## ../../../tmp/hive-embed-foundation/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~15806 tok)
+
+## ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/
+
+- `chunk_test.go` — TestChunkText_Empty, TestChunkText_ShortText_SingleChunk, TestChunkText_LongText_MultipleChunks, Tes (~708 tok)
+- `chunk.go` — provides document ingestion: chunking, embedding, and storage. (~971 tok)
+- `ingest.go` — Interface: EmbedClient (~1954 tok)
+- `repository.go` — Struct: Document (~2711 tok)
+
+## ../../../tmp/hive-embed-foundation/apps/edge-api/
+
+- `go.mod` — Go module definition (~652 tok)
+
+## ../../../tmp/hive-embed-foundation/apps/edge-api/cmd/server/
+
+- `main.go` — Struct: jwtAuthEnv (~10259 tok)
+
+## ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/
+
+- `chat_handler.go` — Declares RouteSelectFunc (~4705 tok)
+- `embed.go` — Interface: Embedder (~1019 tok)
+- `handler_test.go` — Struct: fakeStore (~4646 tok)
+- `handler.go` — Interface: Store (~3603 tok)
+- `repository.go` — Struct: DocRow (~2133 tok)
+- `types.go` — implements the /v1/rag/* edge endpoints. (~996 tok)
+
+## ../../../tmp/hive-embed-foundation/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~8993 tok)
+
+## ../../../tmp/hive-embed-foundation/deploy/litellm/
+
+- `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~2533 tok)
+
+## ../../../tmp/hive-embed-foundation/packages/embedmodel/
+
+- `go.mod` — Go module definition (~25 tok)
+- `registry_test.go` — TestLookupByCanonicalID, TestLookupByLiteLLMRoute, TestLookupUnknownModel, TestValidate (~527 tok)
+- `registry.go` — is the single source of truth for which embedding (~1083 tok)
+
+## ../../../tmp/hive-embed-foundation/supabase/migrations/
+
+- `20260717_03_rag_embedding_dim_drop_check.sql` — supabase/migrations/20260717_03_rag_embedding_dim_drop_check.sql (~523 tok)
+
+## ../../../tmp/hive-voice/apps/edge-api/cmd/server/
+
+- `main_test.go` — TestResolveSpecPathDefaultsToGeneratedHiveContract, TestResolveSpecPathHonorsOverride, TestHandleMod (~4172 tok)
+- `main.go` — Struct: jwtAuthEnv (~9706 tok)
+
+## ../../../tmp/hive-voice/apps/edge-api/internal/audio/
+
+- `handler_test.go` — Struct: mockLiteLLMAudio (~6315 tok)
+- `handler.go` — Interface: Authorizer (~4444 tok)
+
+## ../../../tmp/hive-voice/deploy/litellm/
+
+- `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~2327 tok)
+
+## ../../../tmp/hive-voice/supabase/migrations/
+
+- `20260717_02_voice_groq_stt_tts.sql` — Wire serverless voice (STT + TTS) into routing for the cloud demo. (~1050 tok)
+
+## ../../../tmp/wt-351rb/.wolf/
+
+- `buglog.json` — Declares annotation (~21776 tok)
+
+## ../../../tmp/wt-demofix/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~8878 tok)
+
+## ../../../tmp/wt-demofix/supabase/migrations/
+
+- `20260717_01_default_group_hive_auto.sql` — Add `hive-auto` to the `default` model policy group. (~244 tok)
+
+## ../../../tmp/wt-embednit/packages/embedmodel/
+
+- `registry_test.go` — TestLookupByCanonicalID, TestLookupByLiteLLMRoute, TestLookupUnknownModel, TestValidate (~633 tok)
+- `registry.go` — is the single source of truth for which embedding (~1143 tok)
+
+## ../../../tmp/wt-ragnits/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~15462 tok)
+
+## ../../../tmp/wt-ragnits/apps/edge-api/cmd/server/
+
+- `main.go` — Struct: jwtAuthEnv (~9245 tok)
+
+## ../../../tmp/wt-ragnits/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~8495 tok)
+
+## ../../../tmp/wt-sif351/deploy/apptainer/
+
+- `agent-engine.def` — Declares once (~2048 tok)
+
 ## ../.claude/
 
 - `settings.json` (~2002 tok)
@@ -803,8 +946,8 @@
 - `feedback_gateguard_git_api.md` (~539 tok)
 - `feedback_hardware_agnostic_product.md` (~451 tok)
 - `feedback_worktree_builder_dispatch.md` (~444 tok)
-- `MEMORY.md` — Memory Index (~1762 tok)
-- `project_agent_subsystem_kickoff.md` — Wave 1 shipped 2026-07-15 (control-plane spine) (~2848 tok)
+- `MEMORY.md` — Memory Index (~2032 tok)
+- `project_agent_subsystem_kickoff.md` — Wave 1 shipped 2026-07-15 (control-plane spine) (~3705 tok)
 - `project_bd_planning_commission_tech_brief.md` (~1376 tok)
 - `project_carl_sovereign_edge.md` (~1771 tok)
 - `project_coderabbit_merge_ops.md` (~876 tok)
@@ -812,13 +955,16 @@
 - `project_demo_staging.md` (~663 tok)
 - `project_docs_vault_migration.md` — `, component READMEs, and two non-markdown files that briefly got caught in scope by a naive `git rm (~743 tok)
 - `project_edge_architecture.md` — Declares only (~1265 tok)
+- `project_gateway_posture_network.md` — Declares posture (~742 tok)
 - `project_gov_ai_landscape_2026.md` (~1521 tok)
 - `project_marketing_site.md` (~2592 tok)
 - `project_one_product_two_modes.md` (~1285 tok)
 - `project_owui_oidc_gap.md` (~910 tok)
 - `project_pivot_sovereign_enterprise.md` (~695 tok)
 - `project_provider_catalog.md` (~303 tok)
-- `reference_hive_lab_windows.md` — Provisioned 2026-07-15 (wired IP now 192.168.68.56) (~1333 tok)
+- `project_rag_embedding_dim_demo_blocker.md` — RESOLVED 2026-07-17: full RAG chain fixed, demo grounded-chat works e2e (~1088 tok)
+- `project_stale_purge_2026_07_19.md` (~386 tok)
+- `reference_hive_lab_windows.md` — Provisioned 2026-07-15 (wired IP now 192.168.68.56) (~1747 tok)
 
 ## ../.ssh/
 
@@ -827,6 +973,22 @@
 ## ../fundmoreai/.claude/
 
 - `settings.json` (~2243 tok)
+
+## ../hive-worktrees/fix-rag-embedding-dim/apps/control-plane/internal/rag/
+
+- `embed_client_test.go` — TestHTTPEmbedClient_Embed_CorrectDimension, TestHTTPEmbedClient_Embed_WrongDimension (~567 tok)
+
+## ../hive-worktrees/fix-rag-embedding-dim/apps/edge-api/internal/rag/
+
+- `embed_test.go` — TestHTTPEmbedder_Embed_CorrectDimension, TestHTTPEmbedder_Embed_WrongDimension, TestHTTPEmbedder_Emb (~909 tok)
+
+## ../hive-worktrees/fix-rag-embedding-dim/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~8374 tok)
+
+## ../hive-worktrees/fix-rag-embedding-dim/deploy/litellm/
+
+- `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~2311 tok)
 
 ## .claude/worktrees/agent-a0601818c191bc2f3/.github/workflows/
 
@@ -869,6 +1031,10 @@
 ## .claude/worktrees/agent-a142ccd3a4d6a4643/apps/web-console/lib/control-plane/
 
 - `client.ts` — API routes: GET (1 endpoints) (~18761 tok)
+
+## .claude/worktrees/agent-a15d27bdd575bd375/
+
+- `CLAUDE.md` — OpenWolf (~3895 tok)
 
 ## .claude/worktrees/agent-a23761961789c1fc1/website/sovereign/src/content/pages/
 
@@ -925,6 +1091,30 @@
 
 - `go.mod` — Go module definition (~111 tok)
 - `main.go` — Command seed-demo populates a fresh Hive database with synthetic demo data (~3891 tok)
+
+## .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/
+
+- `admin_test.go` — Struct: fakeAdminStore (~1767 tok)
+- `handler.go` — exposes an internal service-to-service endpoint that (~1168 tok)
+
+## .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/
+
+- `keys.go` — Declares exactly (~574 tok)
+- `resolver_test.go` — TestResolver_IsEnabled_UnsetReturnsFalse, TestResolver_IsEnabled_ReadsValue, TestResolver_ClientVisi (~1530 tok)
+- `resolver.go` — Struct: Resolver (~2613 tok)
+
+## .claude/worktrees/agent-a32217066fcbe4054/apps/edge-api/internal/featuregate/
+
+- `handler.go` — NewStateHandler (~934 tok)
+
+## .claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/
+
+- `feature-gate-manager.test.tsx` — GATES (~818 tok)
+- `feature-gate-manager.tsx` — CATEGORY_LABELS (~1948 tok)
+
+## .claude/worktrees/agent-a32217066fcbe4054/supabase/migrations/
+
+- `20260719_01_rename_carl_feature_category.sql` — Rename the retired "carl" feature-gate category to "agents" (owner (~552 tok)
 
 ## .claude/worktrees/agent-a33bf105ae05398d9/.planning/phases/20-provider-catalog/
 
@@ -1230,6 +1420,45 @@
 
 - `20260715_01_featuregate_dynamic_keys.sql` — Featuregate data-model rework (issue #293). (~1103 tok)
 - `20260715_04_featuregate_dynamic_keys.sql` — Featuregate data-model rework (issue #293). (~1231 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/
+
+- `.gitignore` — Git ignore rules (~480 tok)
+- `README.md` — Project documentation (~2685 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/
+
+- `local_inference.go` — Struct: LiteLLMInferenceClient (~1078 tok)
+- `types.go` — Struct: BatchPollPayload (~397 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/executor/
+
+- `types.go` — implements Hive's local batch executor: it processes a (~1547 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/
+
+- `responses.go` — Declares body (~2877 tok)
+- `usage_clamp.go` (~884 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/lib/control-plane/
+
+- `types.ts` — Source-of-truth types for control-plane request/response shapes. (~457 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/tests/e2e/
+
+- `console-fx-guard.spec.ts` — Page: signIn (~834 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/
+
+- `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~2546 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/services/searxng/
+
+- `README.md` — Project documentation (~206 tok)
+
+## .claude/worktrees/agent-a8b1c914d8e7e795e/website/sovereign/src/layouts/
+
+- `Base.astro` — Base layout shell. Every page renders inside this. (~1673 tok)
 
 ## .claude/worktrees/agent-a9006a563f7dcf922/apps/control-plane/cmd/server/
 
@@ -1627,6 +1856,15 @@
 
 - `use-cases.astro` — Use Cases page (template: usecase). Built from SPEC.md and the source-of-truth (~4672 tok)
 
+## .claude/worktrees/agent-aea42a311d28a5ad0/.github/
+
+- `branch-protection-main.json` (~150 tok)
+- `MERGE-POLICY.md` — Merge Policy (enforced on `main`) (~575 tok)
+
+## .claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/
+
+- `owui-nightly.yml` — CI: OWUI nightly e2e (~4542 tok)
+
 ## .claude/worktrees/agent-aed6ec5a141dfc70f/apps/control-plane/internal/auditarchive/
 
 - `archiver_test.go` — Struct: fakeRepo (~5442 tok)
@@ -1840,8 +2078,30 @@
 
 - `launcher.go` — constructs the Apptainer rootless launch command for a (~3975 tok)
 
+## apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~15813 tok)
+
+## apps/control-plane/internal/rag/
+
+- `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedClientTruncates, TestHTTPEmbedClientStric (~1210 tok)
+- `ingest.go` — Interface: EmbedClient (~2064 tok)
+
+## apps/edge-api/cmd/server/
+
+- `main.go` — Struct: jwtAuthEnv (~10267 tok)
+
+## apps/edge-api/internal/rag/
+
+- `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedderTruncates, TestHTTPEmbedderStrictRejec (~1199 tok)
+- `embed.go` — Interface: Embedder (~1130 tok)
+
 ## deploy/
 
+
+## deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~8458 tok)
 
 ## docs/superpowers/specs/
 

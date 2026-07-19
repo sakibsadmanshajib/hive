@@ -3060,3 +3060,319 @@
 | 16:45 | Session end: 97 writes across 27 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 96 reads | ~92955 tok |
 | 16:50 | Session end: 97 writes across 27 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 96 reads | ~92955 tok |
 | 16:51 | Session end: 97 writes across 27 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 96 reads | ~92955 tok |
+| 10:16 | Session end: 97 writes across 27 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 101 reads | ~92955 tok |
+| 10:17 | Session end: 97 writes across 27 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 101 reads | ~92955 tok |
+| 13:18 | Edited ../../../tmp/wt-sif351/deploy/apptainer/agent-engine.def | modified pins() | ~650 |
+| 13:19 | Session end: 98 writes across 28 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 103 reads | ~93651 tok |
+| 13:19 | Session end: 98 writes across 28 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 103 reads | ~93651 tok |
+| 13:24 | Created ../.claude/projects/-home-sakib-hive/memory/project_rag_embedding_dim_demo_blocker.md | — | ~730 |
+| 13:26 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | 1→2 lines | ~120 |
+| 13:28 | Session end: 100 writes across 30 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 105 reads | ~94561 tok |
+| 13:28 | Session end: 100 writes across 30 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 105 reads | ~94561 tok |
+| 13:30 | Edited ../hive-worktrees/fix-rag-embedding-dim/deploy/litellm/config.yaml | 6→8 lines | ~76 |
+| 13:32 | Session end: 101 writes across 31 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 108 reads | ~94637 tok |
+| 13:32 | Edited ../hive-worktrees/fix-rag-embedding-dim/deploy/litellm/config.yaml | modified trained() | ~249 |
+| 13:32 | Edited ../../../tmp/wt-351rb/.wolf/buglog.json | 3→2 lines | ~14 |
+| 13:32 | Edited ../../../tmp/wt-351rb/.wolf/buglog.json | 3→5 lines | ~28 |
+| 13:32 | Edited ../hive-worktrees/fix-rag-embedding-dim/deploy/litellm/config.yaml | modified fallback() | ~193 |
+| 13:32 | Edited ../../../tmp/wt-351rb/.wolf/buglog.json | removed 3 lines | ~8 |
+| 13:33 | Edited ../hive-worktrees/fix-rag-embedding-dim/deploy/docker/docker-compose.yml | modified only() | ~345 |
+| 13:33 | Session end: 107 writes across 33 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 111 reads | ~95474 tok |
+| 13:33 | Created ../hive-worktrees/fix-rag-embedding-dim/apps/edge-api/internal/rag/embed_test.go | — | ~909 |
+| 13:36 | Edited apps/edge-api/internal/rag/embed.go | 10→11 lines | ~27 |
+| 13:36 | Edited apps/edge-api/internal/rag/embed.go | modified NewHTTPEmbedder() | ~482 |
+| 13:36 | Edited apps/edge-api/internal/rag/embed.go | 5→8 lines | ~63 |
+| 13:36 | Edited apps/control-plane/internal/rag/ingest.go | 10→11 lines | ~27 |
+| 13:36 | Edited apps/control-plane/internal/rag/ingest.go | modified NewHTTPEmbedClient() | ~492 |
+| 13:36 | Edited apps/control-plane/internal/rag/ingest.go | 9→13 lines | ~96 |
+| 13:37 | Edited apps/edge-api/cmd/server/main.go | 13→18 lines | ~220 |
+| 13:37 | Edited apps/control-plane/cmd/server/main.go | 3→4 lines | ~78 |
+| 13:37 | Edited apps/edge-api/cmd/server/main.go | 4→5 lines | ~14 |
+| 13:37 | Edited apps/control-plane/cmd/server/main.go | 4→5 lines | ~14 |
+| 13:38 | Edited deploy/docker/docker-compose.yml | modified only() | ~435 |
+| 13:38 | Edited deploy/docker/docker-compose.yml | expanded (+9 lines) | ~234 |
+| 13:39 | Created apps/edge-api/internal/rag/embed_test.go | — | ~754 |
+| 13:39 | Created apps/control-plane/internal/rag/embed_test.go | — | ~753 |
+| 13:42 | Edited ../hive-worktrees/fix-rag-embedding-dim/deploy/docker/docker-compose.yml | modified ingestion() | ~255 |
+| 13:42 | Session end: 123 writes across 36 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 118 reads | ~149000 tok |
+| 13:43 | Created ../hive-worktrees/fix-rag-embedding-dim/apps/control-plane/internal/rag/embed_client_test.go | — | ~567 |
+| 13:45 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 120 reads | ~151428 tok |
+| 13:47 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:47 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:49 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:53 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:53 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:54 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:54 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:55 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:56 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:56 | Session end: 124 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 121 reads | ~151428 tok |
+| 13:56 | Edited ../../../tmp/wt-ragnits/apps/edge-api/cmd/server/main.go | 1→6 lines | ~101 |
+| 13:56 | Edited ../../../tmp/wt-ragnits/apps/control-plane/cmd/server/main.go | 3→8 lines | ~138 |
+| 13:57 | Edited ../../../tmp/wt-ragnits/deploy/docker/docker-compose.yml | 3→5 lines | ~99 |
+| 14:00 | Session end: 127 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 122 reads | ~160240 tok |
+| 14:11 | Session end: 127 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 122 reads | ~160240 tok |
+| 14:16 | Session end: 127 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 123 reads | ~160240 tok |
+| 14:24 | Edited ../.claude/projects/-home-sakib-hive/memory/project_agent_subsystem_kickoff.md | modified merged() | ~934 |
+| 14:27 | Session end: 128 writes across 37 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 123 reads | ~161240 tok |
+| 14:31 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/plan-2026-07-17-sovereignty-wave.md | — | ~3833 |
+| 14:50 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/handoff-2026-07-17.md | — | ~2622 |
+| 14:51 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-17-network-access-posture.md | — | ~1001 |
+| 14:55 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-17-gateway-posture-and-network.md | — | ~588 |
+| 14:56 | Created ../.claude/projects/-home-sakib-hive/memory/project_gateway_posture_network.md | — | ~776 |
+| 14:56 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | 1→2 lines | ~141 |
+| 14:57 | Session end: 134 writes across 42 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 130 reads | ~180309 tok |
+| 14:58 | Session end: 134 writes across 42 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 130 reads | ~180309 tok |
+| 14:58 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | — | ~2568 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~15 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | "s own comment; this conta" → "s own comment. This conta" | ~94 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | 2→2 lines | ~38 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~20 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~20 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | 2→2 lines | ~22 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | 2→2 lines | ~35 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~20 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~20 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~18 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~20 |
+| 14:59 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/hosting-and-desktop-demo-plan-2026-07-17.md | inline fix | ~20 |
+| 15:01 | Session end: 147 writes across 43 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 130 reads | ~183425 tok |
+| 15:01 | Session end: 147 writes across 43 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 130 reads | ~183425 tok |
+| 15:10 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/demo-verification-2026-07-17.md | — | ~2136 |
+| 15:18 | Created ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/jwt_probe.sh | — | ~393 |
+| 15:19 | Session end: 149 writes across 45 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 138 reads | ~186137 tok |
+| 15:20 | Session end: 149 writes across 45 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 139 reads | ~186137 tok |
+| 15:22 | Edited ../../../tmp/wt-demofix/deploy/docker/docker-compose.yml | expanded (+19 lines) | ~550 |
+| 15:22 | Created ../../../tmp/wt-demofix/supabase/migrations/20260717_01_default_group_hive_auto.sql | — | ~244 |
+| 15:25 | Edited ../../../tmp/wt-demofix/deploy/docker/docker-compose.yml | 13→17 lines | ~317 |
+| 15:26 | Created ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/verify_hive_auto.sh | — | ~185 |
+| 15:33 | Session end: 153 writes across 47 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 142 reads | ~195921 tok |
+| 15:33 | Session end: 153 writes across 47 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 142 reads | ~195921 tok |
+| 15:35 | Created ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/hive-demo-provisioning/supabase/config.toml | — | ~243 |
+| 15:37 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/demo-host-provisioning-2026-07-17.md | — | ~1788 |
+| 15:38 | Session end: 155 writes across 49 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 144 reads | ~198096 tok |
+| 15:43 | Session end: 155 writes across 49 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 144 reads | ~198096 tok |
+| 15:43 | Session end: 155 writes across 49 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 147 reads | ~198096 tok |
+| 15:47 | Edited ../../../tmp/hive-voice/apps/edge-api/internal/audio/handler.go | modified handleTranscription() | ~225 |
+| 15:47 | Edited ../../../tmp/hive-voice/apps/edge-api/internal/audio/handler_test.go | modified TestTranscriptionWithNoSTTFallsBackToLiteLLM() | ~419 |
+| 15:49 | Edited ../../../tmp/hive-voice/deploy/litellm/config.yaml | expanded (+21 lines) | ~340 |
+| 15:49 | Created ../../../tmp/hive-voice/supabase/migrations/20260717_02_voice_groq_stt_tts.sql | — | ~985 |
+| 16:00 | Edited ../../../tmp/hive-voice/apps/edge-api/cmd/server/main.go | expanded (+15 lines) | ~318 |
+| 16:00 | Edited ../../../tmp/hive-voice/apps/edge-api/cmd/server/main.go | modified jwtAwareChatHandler() | ~276 |
+| 16:01 | Edited ../../../tmp/hive-voice/apps/edge-api/cmd/server/main_test.go | modified testRouteHandler() | ~511 |
+| 16:01 | Edited ../../../tmp/hive-voice/apps/edge-api/cmd/server/main_test.go | 12→14 lines | ~116 |
+| 16:08 | Edited ../../../tmp/hive-voice/apps/edge-api/internal/audio/handler.go | 9→10 lines | ~28 |
+| 16:08 | Edited ../../../tmp/hive-voice/apps/edge-api/internal/audio/handler.go | 8→9 lines | ~101 |
+| 16:16 | Edited ../../../tmp/hive-voice/deploy/litellm/config.yaml | 9→12 lines | ~176 |
+| 16:16 | Edited ../../../tmp/hive-voice/supabase/migrations/20260717_02_voice_groq_stt_tts.sql | 10→10 lines | ~52 |
+| 16:16 | Edited ../../../tmp/hive-voice/supabase/migrations/20260717_02_voice_groq_stt_tts.sql | modified route() | ~119 |
+| 16:24 | Session end: 168 writes across 51 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 163 reads | ~211158 tok |
+| 16:24 | Session end: 168 writes across 51 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 163 reads | ~211158 tok |
+| 16:26 | Session end: 168 writes across 51 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 164 reads | ~211158 tok |
+| 16:26 | Session end: 168 writes across 51 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 164 reads | ~211158 tok |
+| 16:35 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/log-2026-07-17-demo-readiness-session.md | — | ~883 |
+| 16:36 | Session end: 169 writes across 52 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 164 reads | ~212104 tok |
+| 16:45 | Session end: 169 writes across 52 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 164 reads | ~212104 tok |
+| 16:55 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/guide-enable-supabase-auth-hook.md | — | ~875 |
+| 16:58 | Session end: 170 writes across 53 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 166 reads | ~214861 tok |
+| 16:58 | Session end: 170 writes across 53 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 166 reads | ~214861 tok |
+| 17:06 | Session end: 170 writes across 53 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 167 reads | ~214861 tok |
+| 17:06 | Session end: 170 writes across 53 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 179 reads | ~242246 tok |
+| 17:10 | Session end: 170 writes across 53 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 186 reads | ~250704 tok |
+| 17:12 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/plan-2026-07-17-desktop-local-runtime.md | — | ~948 |
+| 17:13 | Session end: 171 writes across 54 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 194 reads | ~252473 tok |
+| 17:13 | Session end: 171 writes across 54 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 194 reads | ~252473 tok |
+| 17:13 | Created ../../../tmp/hive-embed-foundation/packages/embedmodel/go.mod | — | ~25 |
+| 17:13 | Created ../../../tmp/hive-embed-foundation/packages/embedmodel/registry.go | — | ~1083 |
+| 17:13 | Created ../../../tmp/hive-embed-foundation/packages/embedmodel/registry_test.go | — | ~527 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/go.work | added 1 import(s) | ~22 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/go.mod | 3→4 lines | ~66 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/go.mod | 3→5 lines | ~73 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/go.mod | 3→4 lines | ~56 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/go.mod | 3→5 lines | ~75 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/types.go | expanded (+6 lines) | ~131 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/chunk.go | 6→10 lines | ~139 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/chunk_test.go | modified TestEmbeddingDimensionDefault() | ~120 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/embed.go | 2→2 lines | ~39 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/embed.go | inline fix | ~23 |
+| 17:14 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/ingest.go | 4→4 lines | ~70 |
+| 17:15 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/ingest.go | modified NewIngester() | ~267 |
+| 17:15 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/ingest.go | UpdateDocumentStatus() → SetEmbeddedProvenance() | ~25 |
+| 17:20 | Session end: 187 writes across 60 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 196 reads | ~255409 tok |
+| 17:21 | Session end: 187 writes across 60 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 196 reads | ~255409 tok |
+| 17:21 | Session end: 187 writes across 60 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 196 reads | ~255409 tok |
+| 17:23 | Session end: 187 writes across 60 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 196 reads | ~255409 tok |
+| 17:25 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/internal/rag/repository.go | expanded (+21 lines) | ~264 |
+| 17:25 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/repository.go | expanded (+25 lines) | ~317 |
+| 17:25 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/handler.go | 5→9 lines | ~173 |
+| 17:26 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/handler.go | expanded (+44 lines) | ~652 |
+| 17:26 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/handler.go | 4→9 lines | ~111 |
+| 17:26 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/chat_handler.go | 4→9 lines | ~115 |
+| 17:26 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/handler_test.go | 8→11 lines | ~101 |
+| 17:26 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/handler_test.go | modified len() | ~94 |
+| 17:27 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/internal/rag/handler_test.go | modified TestHandleSearch_EmbeddingGuardBlocksOnMismatch() | ~1014 |
+| 17:27 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/cmd/server/main.go | 4→5 lines | ~85 |
+| 17:28 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/cmd/server/main.go | expanded (+33 lines) | ~622 |
+| 17:28 | Edited ../../../tmp/hive-embed-foundation/apps/edge-api/cmd/server/main.go | expanded (+6 lines) | ~137 |
+| 17:28 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/cmd/server/main.go | 4→5 lines | ~70 |
+| 17:28 | Edited ../../../tmp/hive-embed-foundation/apps/control-plane/cmd/server/main.go | expanded (+24 lines) | ~618 |
+| 17:29 | Created ../../../tmp/hive-embed-foundation/supabase/migrations/20260717_03_rag_embedding_dim_drop_check.sql | — | ~523 |
+| 17:29 | Edited ../../../tmp/hive-embed-foundation/deploy/litellm/config.yaml | expanded (+15 lines) | ~276 |
+| 17:31 | Session end: 203 writes across 62 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 200 reads | ~260929 tok |
+| 17:31 | Session end: 203 writes across 62 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 200 reads | ~260929 tok |
+| 17:33 | Edited ../../../tmp/hive-embed-foundation/deploy/docker/docker-compose.yml | 3→4 lines | ~72 |
+| 17:33 | Edited ../../../tmp/hive-embed-foundation/deploy/docker/docker-compose.yml | 2→6 lines | ~131 |
+| 17:44 | Edited ../.claude/projects/-home-sakib-hive/memory/reference_hive_lab_windows.md | added 1 condition(s) | ~469 |
+| 17:45 | Session end: 206 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 201 reads | ~261635 tok |
+| 17:48 | Edited ../../../tmp/wt-embednit/packages/embedmodel/registry.go | modified Validate() | ~89 |
+| 17:48 | Session end: 207 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 203 reads | ~261730 tok |
+| 17:49 | Session end: 207 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 203 reads | ~261730 tok |
+| 17:49 | Edited ../../../tmp/wt-embednit/packages/embedmodel/registry_test.go | 3→7 lines | ~158 |
+| 17:51 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 203 reads | ~261899 tok |
+| 17:52 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 203 reads | ~261899 tok |
+| 17:54 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 203 reads | ~261899 tok |
+| 18:04 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 205 reads | ~261899 tok |
+| 18:04 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 205 reads | ~261899 tok |
+| 18:08 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 206 reads | ~261899 tok |
+| 18:08 | Session end: 208 writes across 63 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 206 reads | ~261899 tok |
+| 18:09 | Edited ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/wt-embedmodel-dockerfile/deploy/docker/Dockerfile.control-plane | 8→10 lines | ~155 |
+| 18:09 | Edited ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/wt-embedmodel-dockerfile/deploy/docker/Dockerfile.control-plane.prod | 8→10 lines | ~155 |
+| 18:09 | Edited ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/wt-embedmodel-dockerfile/deploy/docker/Dockerfile.edge-api | 7→9 lines | ~159 |
+| 18:09 | Edited ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/wt-embedmodel-dockerfile/deploy/docker/Dockerfile.edge-api.prod | 8→10 lines | ~146 |
+| 18:09 | Edited ../../../tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/wt-embedmodel-dockerfile/deploy/docker/Dockerfile.agent-engine | 2→3 lines | ~60 |
+| 19:27 | Session end: 213 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 211 reads | ~262622 tok |
+| 19:28 | Session end: 213 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 211 reads | ~262622 tok |
+| 19:36 | Session end: 213 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 211 reads | ~262622 tok |
+| 19:37 | Session end: 213 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 211 reads | ~262622 tok |
+| 19:48 | Session end: 213 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 212 reads | ~262622 tok |
+| 19:48 | Session end: 213 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 212 reads | ~262622 tok |
+| 19:49 | Edited apps/control-plane/internal/rag/ingest.go | modified NewHTTPEmbedClient() | ~355 |
+| 19:49 | Edited apps/control-plane/internal/rag/ingest.go | 7→10 lines | ~86 |
+| 19:49 | Edited apps/edge-api/internal/rag/embed.go | modified NewHTTPEmbedder() | ~349 |
+| 19:49 | Edited apps/edge-api/internal/rag/embed.go | 7→10 lines | ~76 |
+| 19:49 | Edited apps/control-plane/cmd/server/main.go | inline fix | ~31 |
+| 19:49 | Edited apps/edge-api/cmd/server/main.go | inline fix | ~32 |
+| 19:49 | Edited apps/control-plane/internal/rag/embed_test.go | inline fix | ~22 |
+| 19:49 | Edited apps/control-plane/internal/rag/embed_test.go | inline fix | ~14 |
+| 19:49 | Edited apps/edge-api/internal/rag/embed_test.go | inline fix | ~22 |
+| 19:49 | Edited apps/edge-api/internal/rag/embed_test.go | inline fix | ~13 |
+| 19:49 | Edited apps/control-plane/internal/rag/embed_test.go | modified TestHTTPEmbedClientSendsAuthHeaderWhenKeySet() | ~506 |
+| 19:49 | Edited apps/edge-api/internal/rag/embed_test.go | modified TestHTTPEmbedderSendsAuthHeaderWhenKeySet() | ~490 |
+| 19:50 | Edited apps/control-plane/cmd/server/main.go | inline fix | ~34 |
+| 19:57 | Session end: 226 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 215 reads | ~266730 tok |
+| 19:57 | Session end: 226 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 215 reads | ~266730 tok |
+| 20:08 | Session end: 226 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 215 reads | ~266730 tok |
+| 20:15 | Edited ../.claude/projects/-home-sakib-hive/memory/project_rag_embedding_dim_demo_blocker.md | modified next() | ~437 |
+| 20:16 | Session end: 227 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 215 reads | ~267198 tok |
+| 20:16 | Session end: 227 writes across 66 files (chat_handler_test.go, types.go, handler.go, chat_handler.go, main.go) | 215 reads | ~267198 tok |
+
+## Session: 2026-07-18 03:35
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-18 04:19
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 05:57
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 06:05
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 06:07
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 06:22 | Created ../.claude/projects/-home-sakib-hive/memory/project_stale_purge_2026_07_19.md | — | ~381 |
+| 06:22 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/.gitignore | 7→6 lines | ~27 |
+| 06:22 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | 1→2 lines | ~84 |
+| 06:22 | Session end: 3 writes across 3 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md) | 2 reads | ~527 tok |
+| 06:22 | Session end: 3 writes across 3 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md) | 2 reads | ~527 tok |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/README.md | 5→5 lines | ~45 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/README.md | reduced (-6 lines) | ~102 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/executor/types.go | 5→3 lines | ~49 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/types.go | 3→3 lines | ~47 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/local_inference.go | 4→4 lines | ~83 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/usage_clamp.go | 2→2 lines | ~36 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/responses.go | 3→3 lines | ~56 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/tests/e2e/console-fx-guard.spec.ts | modified covered() | ~29 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/lib/control-plane/types.ts | 2→2 lines | ~42 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/website/sovereign/src/layouts/Base.astro | 3→3 lines | ~60 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml | 2→2 lines | ~40 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml | 2→2 lines | ~38 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml | 4→5 lines | ~100 |
+| 06:24 | Edited .claude/worktrees/agent-a8b1c914d8e7e795e/services/searxng/README.md | inline fix | ~21 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go | 6→6 lines | ~118 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go | carl() → agents() | ~136 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go | 3→3 lines | ~26 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/admin_test.go | "Carl.sh RAG capability" → "Agent RAG capability" | ~22 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/admin_test.go | "Carl.sh RAG capability" → "Agent RAG capability" | ~24 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx | inline fix | ~6 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx | inline fix | ~26 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx | "Carl.sh RAG capability" → "Agent RAG capability" | ~19 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver.go | carl() → agents() | ~253 |
+| 06:25 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver.go | modified clientVisibleGateCategories() | ~166 |
+| 06:26 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/keys.go | 1→2 lines | ~34 |
+| 06:26 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/handler.go | inline fix | ~21 |
+| 06:26 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/handler.go | inline fix | ~22 |
+| 06:26 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/edge-api/internal/featuregate/handler.go | inline fix | ~21 |
+| 06:26 | Edited .claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.tsx | CSS: agents | ~26 |
+| 06:26 | Created .claude/worktrees/agent-a32217066fcbe4054/supabase/migrations/20260719_01_rename_carl_feature_category.sql | — | ~552 |
+| 06:31 | Session end: 33 writes across 20 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 19 reads | ~5373 tok |
+| 06:31 | Created ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted | — | ~4124 |
+| 06:32 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md | — | ~597 |
+| 06:33 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/archive/ARCHIVE-SUMMARY.md | — | ~1892 |
+| 06:33 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-17-gateway-posture-and-network.md | expanded (+6 lines) | ~89 |
+| 06:34 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted | inline fix | ~22 |
+| 06:34 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted | inline fix | ~73 |
+| 06:34 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted | get_observations() → memory() | ~73 |
+| 06:34 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted | 5→7 lines | ~131 |
+| 06:35 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md | postures() → platform() | ~70 |
+| 06:35 | Session end: 42 writes across 23 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 21 reads | ~12950 tok |
+| 06:35 | Session end: 42 writes across 23 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 21 reads | ~12950 tok |
+| 06:36 | Session end: 42 writes across 23 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 22 reads | ~12950 tok |
+| 06:36 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-07-one-product-two-modes.md | — | ~439 |
+| 06:36 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md | platform() → product() | ~61 |
+| 06:36 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/MOC-roadmap-current.md | "s " → ".planning/" | ~37 |
+| 06:36 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 24 reads | ~13525 tok |
+| 06:37 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:40 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:40 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:43 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:45 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:45 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:45 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:45 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 06:46 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 07:06 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 07:06 | Session end: 45 writes across 25 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 25 reads | ~13525 tok |
+| 07:07 | Edited .claude/worktrees/agent-aea42a311d28a5ad0/.github/branch-protection-main.json | 2→1 lines | ~12 |
+| 07:07 | Edited .claude/worktrees/agent-aea42a311d28a5ad0/.github/MERGE-POLICY.md | 8→7 lines | ~56 |
+| 07:07 | Edited .claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml | inline fix | ~7 |
+| 07:07 | Edited .claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml | inline fix | ~12 |
+| 07:08 | Edited .claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml | inline fix | ~18 |
+| 07:09 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 29 reads | ~13634 tok |
+| 07:10 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 29 reads | ~13634 tok |
+| 07:10 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 29 reads | ~13634 tok |
+| 07:11 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 30 reads | ~13634 tok |
+| 07:11 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 31 reads | ~13634 tok |
+| 07:15 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 37 reads | ~13634 tok |
+| 07:16 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 37 reads | ~13634 tok |
+| 07:16 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 37 reads | ~13634 tok |
+| 07:16 | Session end: 50 writes across 28 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 37 reads | ~13634 tok |
+| 07:19 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md | 4→5 lines | ~97 |
+| 07:19 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md | 4→3 lines | ~127 |
+| 07:19 | Edited ../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md | "docker compose run web-co" → "docker compose run --buil" | ~25 |
+| 07:20 | Session end: 53 writes across 29 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 38 reads | ~13901 tok |
+| 07:22 | Edited .claude/worktrees/agent-a15d27bdd575bd375/CLAUDE.md | inline fix | ~86 |
+| 07:24 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
+| 07:24 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
+| 07:36 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
+| 07:41 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
