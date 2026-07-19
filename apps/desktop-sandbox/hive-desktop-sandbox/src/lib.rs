@@ -41,14 +41,23 @@ use std::path::Path;
 pub enum LaunchError {
     /// Windows-only now (blueprint Step 4.4, #308/#311, closed the Linux
     /// side): the policy requested [`NetworkPolicy::AllowHosts`], which
-    /// `windows::launch` does not yet enforce (WFP egress is a later step). It
-    /// applies the restricted token, directory ACL, and Job Object for
-    /// `DenyAll`, but returns this error for `AllowHosts` rather than launch
-    /// with an unenforced network policy. `linux::launch` no longer returns
-    /// this: a real allowlist-enforcing proxy (`egress_proxy.rs`) backs
-    /// `AllowHosts` there. Reject rather than silently launching with full
-    /// network access or full denial.
+    /// `windows::launch` does not yet enforce (WFP egress is a later step). In
+    /// Step 1 `windows::launch` refuses BOTH network policies rather than
+    /// launch under an unenforced network policy -- this error for
+    /// `AllowHosts` and [`LaunchError::NetworkConfinementNotImplemented`] for
+    /// `DenyAll`. `linux::launch` no longer returns this: a real
+    /// allowlist-enforcing proxy (`egress_proxy.rs`) backs `AllowHosts` there.
+    /// Reject rather than silently launching with full network access.
     AllowHostsNotYetImplemented,
+    /// Windows-only (Step 1): the policy requested [`NetworkPolicy::DenyAll`],
+    /// but `windows::launch` does not yet enforce any network confinement --
+    /// the Job Object carries no network limit and the firewall codegen in
+    /// `windows_plan.rs` is never applied. Returned instead of launching a
+    /// process while claiming a block-all egress control that is not in force
+    /// (symmetric with [`LaunchError::AllowHostsNotYetImplemented`]). Real
+    /// enforcement lands with the WFP egress backend (Step 4). `linux::launch`
+    /// enforces `DenyAll` via `--unshare-net` and never returns this.
+    NetworkConfinementNotImplemented,
     /// Spawning the sandboxed process failed.
     Io(std::io::Error),
     /// Linux-only: applying the Landlock ruleset or seccomp-BPF filter
@@ -68,6 +77,12 @@ impl std::fmt::Display for LaunchError {
                 write!(
                     f,
                     "NetworkPolicy::AllowHosts is not yet enforced by this crate"
+                )
+            }
+            LaunchError::NetworkConfinementNotImplemented => {
+                write!(
+                    f,
+                    "NetworkPolicy::DenyAll network confinement is not yet enforced by this crate on Windows"
                 )
             }
             LaunchError::Io(err) => write!(f, "failed to spawn sandboxed process: {err}"),

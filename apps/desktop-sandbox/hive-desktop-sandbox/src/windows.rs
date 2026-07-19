@@ -1,22 +1,30 @@
-//! Windows desktop sandbox backend: restricted token, directory-level ACL,
-//! and a Job Object, all applied to a child spawned directly via
+//! Windows desktop sandbox backend: a distinct primary token, a directory-
+//! level ACL, and a Job Object, all applied to a child spawned directly via
 //! `CreateProcessAsUserW`.
 //!
-//! ## What this backend applies (base restricted-token variant)
+//! ## What Step 1 applies (and, just as importantly, what it does NOT)
 //!
-//! [`launch`] spawns `command` under three simultaneous controls and refuses
-//! to spawn at all if any of them cannot be established (never a process
-//! under a partial or absent confinement claim):
+//! [`launch`] spawns `command` under the controls below and refuses to spawn
+//! at all if any of them cannot be established (never a process under a
+//! partial or absent confinement claim). This is the Step 1 launch seam, not
+//! a finished sandbox:
 //!
-//! 1. A restricted primary token ([`create_restricted_token`]) applied to the
-//!    child by `CreateProcessAsUserW`. This is what makes the token actually
-//!    confine the child, closing the gap that kept this path disabled:
-//!    `std::process::Command` has no way to spawn under an alternate token, so
-//!    a child spawned through it always inherited the caller's full token.
+//! 1. Launch under a DISTINCT primary token ([`create_restricted_token`] +
+//!    `CreateProcessAsUserW`). This wires the seam `std::process::Command`
+//!    could never provide: std has no way to spawn under an alternate token,
+//!    so a child spawned through it always inherited the caller's token.
+//!    IMPORTANT, no overclaiming: the token handed to the child is currently
+//!    an UNRESTRICTED duplicate (`CreateRestrictedToken` with flags `0` and
+//!    empty disable/restrict/delete lists), so it does NOT yet reduce the
+//!    child's privileges. It does not "confine the child"; today it only
+//!    establishes the alternate-token launch path. Real restriction (Low
+//!    integrity level, SID disabling, privilege deletion, or a dedicated
+//!    low-privilege sandbox OS user) is deferred to the Step 3 sandbox-user
+//!    variant.
 //! 2. A directory-level deny-write ACL ([`apply_directory_acl`]) on the
 //!    hook/config directory's PARENT (spike #307 condition 3). This is the
-//!    load-bearing filesystem control; the Job Object is process containment
-//!    only.
+//!    load-bearing filesystem control Step 1 actually enforces; the Job Object
+//!    is process containment only.
 //! 3. A Job Object with kill-on-close ([`create_job_object`]). The child is
 //!    created SUSPENDED, assigned to the Job Object, and only then resumed, so
 //!    it is a member of the job before it runs a single instruction (no
@@ -24,24 +32,34 @@
 //!    via RAII: dropping it closes that last handle and terminates the whole
 //!    process tree.
 //!
+//! Network confinement is NOT applied in Step 1: [`launch`] refuses BOTH
+//! network policies (see the "Not implemented" list) rather than run a process
+//! while claiming an egress control that is not in force.
+//!
 //! ## Verification status (read before trusting this file)
 //!
 //! This module is compiled only on Windows (`cfg(windows)`) and this
 //! repository's CI and this session's development environment are both Linux.
-//! It is CI-cross-checked to compile against `windows`-crate 0.58's real
-//! signatures (`x86_64-pc-windows-gnu`), but the BEHAVIORAL confinement (the
-//! token restricts, the ACL denies the write, the job kills the tree) is
-//! UNVERIFIED here: `CreateProcessAsUserW`, `AssignProcessToJobObject`, and
-//! the deny-write ACE only take effect on a real Windows host. This path must
-//! get a `cargo check --target x86_64-pc-windows-msvc` and a behavioral run in
-//! the lab (`win11vm`, see VENDORING.md) before it is trusted in production.
+//! CI now cross-compiles this file: the `rust-tests` job runs `cargo check`
+//! and `cargo clippy` for `x86_64-pc-windows-gnu` against
+//! `hive-desktop-sandbox`, so the Win32 call shapes are type-checked against
+//! `windows`-crate 0.58's real signatures on every PR (before this, the
+//! `cfg(windows)` gate meant CI never compiled this file at all). What CI
+//! still does NOT do: build with the MSVC toolchain, or run anything. The
+//! BEHAVIORAL confinement (the ACL denies the write, the job kills the tree)
+//! only takes effect on a real Windows host: `CreateProcessAsUserW`,
+//! `AssignProcessToJobObject`, and the deny-write ACE are UNVERIFIED here.
+//! This path must still get a `cargo check --target x86_64-pc-windows-msvc`
+//! and a behavioral run in the lab (`win11vm`, see VENDORING.md) before it is
+//! trusted in production.
 //!
 //! The pure, always-tested part of this backend's design lives in
 //! `windows_plan.rs` ([`crate::windows_plan::WindowsConfinementPlan`], plus
 //! [`crate::windows_plan::command_line_to_utf16`], the argv quoting this
-//! module hands to `CreateProcessAsUserW`), which run on every platform
-//! (including this crate's Linux CI job). This module only applies that plan
-//! via Win32 calls.
+//! module hands to `CreateProcessAsUserW`, and
+//! [`crate::windows_plan::is_fully_qualified_program`], the binary-planting
+//! guard below), which run on every platform (including this crate's Linux CI
+//! job). This module only applies that plan via Win32 calls.
 //!
 //! MANDATORY per security spike #307 (implementation condition 3): the
 //! deny-write ACE goes on `plan.acl_deny_write_parent_dir` (the hook/config
@@ -52,18 +70,27 @@
 //! only.
 //!
 //! Not implemented here (later steps of plan-codex-crossplatform-desktop.md):
-//! - [`NetworkPolicy::AllowHosts`] enforcement. `launch` still rejects it with
-//!   [`LaunchError::AllowHostsNotYetImplemented`]; the WFP egress backend is a
-//!   dedicated later step. `windows_plan.rs`'s `netsh` codegen is NOT applied.
-//! - The elevated low-privilege-sandbox-user variant of the restricted token
-//!   (this module restricts the current process's own token rather than
-//!   provisioning a dedicated low-privilege OS user).
+//! - Network confinement of ANY kind. `launch` rejects
+//!   [`NetworkPolicy::DenyAll`] with
+//!   [`LaunchError::NetworkConfinementNotImplemented`] and
+//!   [`NetworkPolicy::AllowHosts`] with
+//!   [`LaunchError::AllowHostsNotYetImplemented`]. The Job Object carries no
+//!   network limit and `windows_plan.rs`'s `netsh` codegen is never applied;
+//!   the WFP egress backend is a dedicated later step (Step 4).
+//! - Token privilege reduction / the low-privilege sandbox-user variant
+//!   (Step 3): see control 1 above.
+//! - Environment scrubbing: `CreateProcessAsUserW` is called with
+//!   `lpEnvironment = NULL`, so the child inherits the parent process's full
+//!   environment (secrets and `*_API_KEY`-style values included). A scrubbed
+//!   environment block lands with the Step 3 sandbox-user variant.
 //! - Stdio/ConPTY wiring: the child is spawned with `bInheritHandles=FALSE`
 //!   and default STARTUPINFOW, so its stdio is not bridged. The interactive
 //!   terminal is a later step.
 
 use crate::policy::NetworkPolicy;
-use crate::windows_plan::{WindowsConfinementPlan, command_line_to_utf16};
+use crate::windows_plan::{
+    WindowsConfinementPlan, command_line_to_utf16, is_fully_qualified_program,
+};
 use crate::{LaunchError, SandboxPolicy};
 use std::path::Path;
 use windows::Win32::Foundation::{BOOL, CloseHandle, HANDLE, HLOCAL, LocalFree};
@@ -162,10 +189,35 @@ pub(crate) fn launch(
         // Reject rather than launch with unenforced network policy.
         return Err(LaunchError::AllowHostsNotYetImplemented);
     }
+    if matches!(policy.network(), NetworkPolicy::DenyAll) {
+        // DenyAll is equally unenforced on Windows in Step 1: the Job Object
+        // carries no network limit and the firewall rule text in
+        // windows_plan.rs is codegen only, never applied. Refuse rather than
+        // run a process while claiming a block-all egress control that is not
+        // in force (symmetric with the AllowHosts rejection above). Real
+        // enforcement is Step 4 (WFP). Two separate guards, not one exhaustive
+        // `match`, so the confinement seam below stays compiled and reachable
+        // for the CI cross-check until Step 4 removes these rejections.
+        return Err(LaunchError::NetworkConfinementNotImplemented);
+    }
     if command.is_empty() {
         return Err(LaunchError::Confinement(
             "empty command: nothing to launch".to_string(),
         ));
+    }
+    if !is_fully_qualified_program(&command[0]) {
+        // `CreateProcessAsUserW` is called with `lpApplicationName = NULL`, so
+        // Windows parses the program name out of the command line and runs its
+        // module search -- which consults the child's CURRENT DIRECTORY before
+        // PATH. With an attacker-controlled cwd that is a binary-planting
+        // vector (a malicious `notepad.exe` dropped in cwd would win over the
+        // real one). Require a fully qualified absolute path for command[0] so
+        // the module search never consults cwd.
+        return Err(LaunchError::Confinement(format!(
+            "command[0] must be a fully qualified absolute path to avoid \
+             binary planting from the working directory, got: {}",
+            command[0]
+        )));
     }
 
     let plan = WindowsConfinementPlan::for_policy(policy);
@@ -211,6 +263,9 @@ pub(crate) fn launch(
             None,
             BOOL(0),
             CREATE_SUSPENDED,
+            // lpEnvironment = NULL: the child inherits the parent's full
+            // environment. Environment scrubbing (dropping secrets/API keys)
+            // lands with the Step 3 sandbox-user variant; see the module doc.
             None,
             cwd_ptr,
             &startup_info,
@@ -287,7 +342,16 @@ fn apply_directory_acl(plan: &WindowsConfinementPlan) -> windows::core::Result<(
         let _ = CloseHandle(process_token);
     }
     get_info_result?;
-    let token_user = unsafe { &*(token_user_buf.as_ptr() as *const TOKEN_USER) };
+    // SAFETY: `GetTokenInformation` (checked by `get_info_result?` above) wrote
+    // a `TOKEN_USER` into `token_user_buf`, but the buffer is a `Vec<u8>`
+    // (alignment 1) while `TOKEN_USER` requires 8-byte alignment, so taking a
+    // `&*(.. as *const TOKEN_USER)` reference would be undefined behaviour.
+    // Read an aligned copy out with `read_unaligned` instead. The `User.Sid`
+    // pointer inside the copy still points into `token_user_buf`, which
+    // outlives every use of `sid` below (through `SetEntriesInAclW`), so the
+    // SID bytes it references stay valid.
+    let token_user =
+        unsafe { std::ptr::read_unaligned(token_user_buf.as_ptr() as *const TOKEN_USER) };
     let sid: PSID = token_user.User.Sid;
 
     let mut trustee = TRUSTEE_W::default();
@@ -324,11 +388,16 @@ fn apply_directory_acl(plan: &WindowsConfinementPlan) -> windows::core::Result<(
     result.ok()
 }
 
-/// Restricts the CURRENT process's own token. This is intentionally the
-/// base variant with no SIDs disabled and no privileges deleted beyond
-/// `CreateRestrictedToken`'s own contract; the elevated variant (a
-/// dedicated low-privilege sandbox OS user) is follow-up work, see
-/// VENDORING.md "Open risks".
+/// Duplicates the CURRENT process's own token via `CreateRestrictedToken`
+/// with flags `0` and empty disable-SID / restrict-SID / delete-privilege
+/// lists. Despite the API name, that exact combination yields a token with the
+/// SAME privileges and groups as the source: it is an UNRESTRICTED duplicate,
+/// NOT a privilege-reduced token. Its only Step 1 job is to give
+/// `CreateProcessAsUserW` a distinct primary token to spawn under (the launch
+/// seam). Real restriction -- Low integrity level, SID disabling, privilege
+/// deletion, or a dedicated low-privilege sandbox OS user -- is deferred to
+/// the Step 3 sandbox-user variant; see VENDORING.md "Open risks" #1 and #6.
+/// Do not read this as confining the child.
 fn create_restricted_token() -> windows::core::Result<HANDLE> {
     let mut process_token = HANDLE::default();
     unsafe {
