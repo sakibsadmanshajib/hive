@@ -5,7 +5,7 @@
 // GET /internal/featuregate/{tenant_id}
 //
 // The tenant_id path segment is the UUID of the requesting tenant. The
-// handler resolves the client-visible gate keys (categories carl and sso)
+// handler resolves the client-visible gate keys (categories agents and sso)
 // from the tenant_settings table via the shared settings.Resolver in a
 // single call. The response is a flat key->bool map; unknown/unset keys
 // default to false. Admin, billing, and audit_sink gates are deliberately
@@ -41,7 +41,7 @@ type FlagsResponse struct {
 }
 
 // Resolver is the narrow interface the handler needs from settings.Resolver.
-// ClientVisibleEnabled resolves only the client-visible gate keys (carl, sso)
+// ClientVisibleEnabled resolves only the client-visible gate keys (agents, sso)
 // for tenantID in one call; see settings.Resolver.ClientVisibleEnabled. The
 // full set (settings.Resolver.AllEnabled) is intentionally not used here so
 // admin/billing/audit_sink gates cannot leak to the client.

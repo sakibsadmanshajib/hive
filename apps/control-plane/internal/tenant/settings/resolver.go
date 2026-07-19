@@ -97,15 +97,16 @@ func (r *Resolver) refresh(ctx context.Context, tenantID uuid.UUID, key Key) (en
 // clientVisibleGateCategories is the allowlist of feature_gate_keys.category
 // values that are safe to expose to an authenticated end user or OWUI Function
 // (issue #293 security review). It covers only capability gates a client needs
-// to adapt its own UI: carl (the RAG/voice/relay/cowork feature keys) and sso.
+// to adapt its own UI: agents (the RAG/voice/relay/cowork feature keys, née
+// "carl" before the product-name retirement) and sso.
 // The admin, billing, and audit_sink categories are deliberately excluded:
 // exposing them would leak the deployment's commercial and operational posture
 // to any authenticated user, the same information-disclosure class the
 // 20260715_04 migration avoided by not granting feature_gate_keys to the
 // authenticated role. Fail-closed: a newly added category is excluded here
 // until it is explicitly listed, so a new admin/billing key never leaks by
-// default while a new carl/sso key is exposed automatically.
-var clientVisibleGateCategories = []string{"carl", "sso"}
+// default while a new agents/sso key is exposed automatically.
+var clientVisibleGateCategories = []string{"agents", "sso"}
 
 // AllEnabled resolves every gate key registered in public.feature_gate_keys
 // for tenantID in a single query, returning enabled=false for any key with no
@@ -122,13 +123,13 @@ func (r *Resolver) AllEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]
 }
 
 // ClientVisibleEnabled resolves only the gate keys whose
-// feature_gate_keys.category is in clientVisibleGateCategories (carl, sso):
+// feature_gate_keys.category is in clientVisibleGateCategories (agents, sso):
 // the subset safe to expose to an authenticated end user or OWUI Function
 // (issue #293 security review). It backs the control-plane featuregate
 // endpoint, which feeds edge-api's Gate/Require and the /v1/featuregate read
 // surface, so admin, billing, and audit_sink gates never leave control-plane.
 // Fail-closed: a new category is excluded until added to the allowlist, so a
-// new admin/billing key never leaks by default while a new carl/sso key is
+// new admin/billing key never leaks by default while a new agents/sso key is
 // exposed automatically.
 func (r *Resolver) ClientVisibleEnabled(ctx context.Context, tenantID uuid.UUID) (map[Key]bool, error) {
 	return r.gateMap(ctx, tenantID, clientVisibleGateCategories)

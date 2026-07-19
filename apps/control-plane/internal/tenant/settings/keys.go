@@ -36,7 +36,8 @@ const (
 	EnableAdminConsole      Key = "ENABLE_ADMIN_CONSOLE"
 	EnableProviderCustom    Key = "ENABLE_PROVIDER_CUSTOM"
 
-	// Carl.sh sovereign workspace feature gates (issue #238).
+	// Agent-subsystem feature gates (issue #238; "carl" category retired,
+	// see 20260719_01_rename_carl_feature_category.sql).
 	EnableRAG    Key = "ENABLE_RAG"
 	EnableVoice  Key = "ENABLE_VOICE"
 	EnableRelay  Key = "ENABLE_RELAY"
