@@ -114,21 +114,35 @@ crate deliberately does not inherit the workspace's Apache-2.0
 
 ## Open risks / follow-up (not this wave's scope)
 
-1. **RESOLVED (Step 1 of plan-codex-crossplatform-desktop.md).** `windows::launch`
-   was disabled because `std::process::Command` cannot spawn under an alternate
-   token, so the restricted token it built never confined the child. It now
-   calls `CreateProcessAsUserW` directly with `restricted_token`, applies the
-   directory ACL, creates the child `CREATE_SUSPENDED`, assigns it to the Job
-   Object, then `ResumeThread`s (which also closes item #4). Any confinement
-   step that fails returns an error instead of spawning unconfined, so the
-   crate's honesty invariant holds. CI-cross-checked to compile
-   (`x86_64-pc-windows-gnu`); the behavioral confinement is still lab-pending
-   (item 2), so do not treat this as validated on a real Windows host yet.
+1. **Step 1 launch seam wired; confinement strength explicitly PARTIAL
+   (plan-codex-crossplatform-desktop.md).** `windows::launch` was disabled
+   because `std::process::Command` cannot spawn under an alternate token. It
+   now calls `CreateProcessAsUserW` directly under a distinct primary token,
+   applies the directory ACL, creates the child `CREATE_SUSPENDED`, assigns it
+   to the Job Object, then `ResumeThread`s (which also closes item #4). Any
+   confinement step that fails returns an error instead of spawning
+   unconfined, so the crate's honesty invariant holds. What Step 1 ACTUALLY
+   enforces: the parent-directory deny-write ACL and the kill-on-close Job
+   Object. What it does NOT (no overclaiming): (a) the token is an
+   UNRESTRICTED duplicate (`CreateRestrictedToken` with flags `0` and empty
+   disable/restrict/delete lists), so it does not reduce the child's
+   privileges -- real restriction / Low IL / SID disabling is the Step 3
+   sandbox-user variant (item #6); (b) network confinement -- `launch` refuses
+   BOTH `DenyAll` (`NetworkConfinementNotImplemented`) and `AllowHosts`
+   (`AllowHostsNotYetImplemented`) rather than run under an unenforced egress
+   policy (item #3). CI now cross-compiles this file: the `rust-tests` job runs
+   `cargo check` and `cargo clippy` for `x86_64-pc-windows-gnu -p
+   hive-desktop-sandbox`, so the Win32 call shapes are type-checked against
+   `windows`-crate 0.58 on every PR. MSVC compilation and any behavioral run
+   are still lab-pending (item #2), so do not treat this as validated on a real
+   Windows host yet.
 2. **Windows backend is untested on real Windows.** `windows.rs` now
-   type-checks and lints clean cross-compiled to `x86_64-pc-windows-gnu`, but
-   has never been compiled with the MSVC toolchain or run. Needs
-   `cargo check --target x86_64-pc-windows-msvc` plus a behavioral run in the
-   lab (`win11vm`) before it is trusted, per the module's own doc comment.
+   type-checks and lints clean cross-compiled to `x86_64-pc-windows-gnu` (this
+   cross-check runs in the `rust-tests` CI job on every PR, not just locally),
+   but has never been compiled with the MSVC toolchain or run. Needs
+   `cargo check --target x86_64-pc-windows-msvc` (CI does not do this; MSVC
+   needs a Windows or cross-linker toolchain) plus a behavioral run in the lab
+   (`win11vm`) before it is trusted, per the module's own doc comment.
 3. **`NetworkPolicy::AllowHosts` enforcement -- Linux closed, Windows still
    codegen-only (blueprint Step 4.4, #308/#311).** `linux::launch` now
    always `--unshare-net`s (for `AllowHosts` too, not only `DenyAll`) and
@@ -201,5 +215,6 @@ crate deliberately does not inherit the workspace's Apache-2.0
    should not need renaming; they already match upstream).
 3. Re-copy the repo-root `LICENSE`/`NOTICE` if changed.
 4. Re-run `cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
-   cargo test`, plus the `x86_64-pc-windows-gnu` cross-check, before merging.
+   cargo test`, plus the `x86_64-pc-windows-gnu` cross-check (now also run by
+   the `rust-tests` CI job), before merging.
 5. Update the commit SHA/date at the top of this file.
