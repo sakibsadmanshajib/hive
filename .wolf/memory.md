@@ -3376,3 +3376,184 @@
 | 07:24 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
 | 07:36 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
 | 07:41 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
+| 07:47 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
+| 07:48 | Session end: 54 writes across 30 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 39 reads | ~13993 tok |
+| 07:50 | Created ../.claude/projects/-home-sakib-hive/memory/feedback_session_autonomy_dev_env.md | — | ~220 |
+| 07:50 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | 1→2 lines | ~74 |
+| 07:50 | Session end: 56 writes across 31 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 40 reads | ~14308 tok |
+| 07:51 | Session end: 56 writes across 31 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 40 reads | ~14308 tok |
+| 07:51 | Session end: 56 writes across 31 files (project_stale_purge_2026_07_19.md, .gitignore, MEMORY.md, README.md, types.go) | 40 reads | ~14308 tok |
+
+## Session: 2026-07-19 07:57
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 08:16 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/demo-guide.md | — | ~3540 |
+| 08:17 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/parity-gap-map-2026-07-19.md | — | ~1086 |
+| 08:17 | Created DEMO.md | — | ~1527 |
+| 08:18 | Edited ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/MOC-roadmap-current.md | modified guide() | ~130 |
+| 08:20 | Created ../.claude/projects/-home-sakib-hive/memory/project_enterprise_parity_demo.md | — | ~894 |
+| 08:20 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | modified map() | ~147 |
+| 08:20 | Session end: 6 writes across 6 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 5 reads | ~7846 tok |
+| 08:26 | Session end: 6 writes across 6 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 7 reads | ~7846 tok |
+| 08:27 | Session end: 6 writes across 6 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 12 reads | ~7846 tok |
+| 08:32 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | 1→2 lines | ~143 |
+| 08:32 | Created ../.claude/projects/-home-sakib-hive/memory/feedback_no_bandaid_embedding_admin_dim.md | — | ~462 |
+| 08:33 | Session end: 8 writes across 7 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 12 reads | ~8495 tok |
+| 08:33 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/plan-windows-desktop-sandbox.md | — | ~8975 |
+| 08:36 | Session end: 9 writes across 8 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 12 reads | ~18111 tok |
+| 08:39 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/plan-admin-embedding-dim.md | — | ~4906 |
+| 08:40 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/issue-embedding-dim.md | — | ~1044 |
+| 08:44 | Session end: 11 writes across 10 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 24 reads | ~25615 tok |
+| 08:48 | Created packages/embedmodel/registry.go | — | ~2682 |
+| 08:49 | Created packages/embedmodel/registry_test.go | — | ~1923 |
+| 08:49 | Edited apps/edge-api/internal/rag/embed.go | modified knob() | ~183 |
+| 08:50 | Edited apps/edge-api/internal/rag/embed.go | modified NewHTTPEmbedder() | ~236 |
+| 08:50 | Edited apps/edge-api/internal/rag/embed.go | 4→9 lines | ~114 |
+| 08:50 | Edited apps/edge-api/internal/rag/embed.go | inline fix | ~27 |
+| 08:50 | Edited apps/edge-api/internal/rag/embed.go | 4→6 lines | ~62 |
+| 08:50 | Edited apps/control-plane/internal/rag/ingest.go | modified knob() | ~158 |
+| 08:50 | Edited apps/control-plane/internal/rag/ingest.go | modified NewHTTPEmbedClient() | ~238 |
+| 08:50 | Edited apps/control-plane/internal/rag/ingest.go | 4→8 lines | ~86 |
+| 08:50 | Edited apps/control-plane/internal/rag/ingest.go | inline fix | ~26 |
+| 08:50 | Edited apps/control-plane/internal/rag/ingest.go | 4→5 lines | ~43 |
+| 08:51 | Edited apps/edge-api/internal/rag/embed_test.go | modified TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions() | ~607 |
+| 08:52 | Created supabase/migrations/20260719_01_rag_embedding_config.sql | — | ~1582 |
+| 08:53 | Edited supabase/migrations/20260719_01_rag_embedding_config.sql | 12→16 lines | ~290 |
+| 08:53 | Edited packages/embedmodel/registry.go | modified Canonical() | ~213 |
+| 08:53 | Edited packages/embedmodel/registry_test.go | modified TestCanonical() | ~147 |
+| 08:55 | Created apps/control-plane/internal/rag/provision.go | — | ~2353 |
+| 08:56 | Created apps/control-plane/internal/rag/reembed.go | — | ~1673 |
+| 08:56 | Edited apps/control-plane/internal/rag/reembed.go | 6→5 lines | ~32 |
+| 08:56 | Edited apps/control-plane/internal/rag/reembed.go | removed 6 lines | ~7 |
+| 08:56 | Edited apps/control-plane/internal/rag/ingest.go | reduced (-8 lines) | ~131 |
+| 08:57 | Created apps/control-plane/internal/rag/reembed_test.go | — | ~764 |
+| 08:57 | Edited packages/embedmodel/registry.go | modified Validate() | ~298 |
+| 08:57 | Edited packages/embedmodel/registry_test.go | modified TestSameConfig() | ~325 |
+| 08:57 | Created apps/edge-api/internal/rag/config.go | — | ~315 |
+| 08:59 | Edited apps/edge-api/cmd/server/main.go | modified truth() | ~771 |
+| 08:59 | Edited apps/edge-api/cmd/server/main.go | inline fix | ~32 |
+| 08:59 | Edited apps/edge-api/cmd/server/main.go | 3→4 lines | ~89 |
+| 09:00 | Edited apps/control-plane/cmd/server/main.go | modified reconcile() | ~979 |
+| 09:02 | Edited ../.claude/projects/-home-sakib-hive/memory/MEMORY.md | 1→2 lines | ~116 |
+| 09:03 | Created ../.claude/projects/-home-sakib-hive/memory/feedback_agent_owns_full_pr_loop.md | — | ~504 |
+| 09:03 | Created apps/control-plane/internal/rag/provision_test.go | — | ~1007 |
+| 09:03 | Session end: 44 writes across 23 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 34 reads | ~73776 tok |
+| 09:05 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/c1.txt | — | ~281 |
+| 09:06 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/c2.txt | — | ~220 |
+| 09:06 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/c3.txt | — | ~369 |
+| 09:06 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/c4.txt | — | ~314 |
+| 09:08 | Created apps/desktop-sandbox/hive-desktop-sandbox/src/child.rs | — | ~695 |
+| 09:08 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/pr.md | — | ~1153 |
+| 09:08 | Created apps/desktop-sandbox/hive-desktop-sandbox/src/windows_caps.rs | — | ~1469 |
+| 09:10 | Session end: 51 writes across 30 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 41 reads | ~78599 tok |
+| 09:12 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/windows_caps.rs | modified command_line() | ~698 |
+| 09:12 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/windows_caps.rs | modified profile_name_is_non_empty_even_for_empty_task_id() | ~410 |
+| 09:13 | Session end: 53 writes across 30 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 46 reads | ~81556 tok |
+| 09:14 | Created apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | — | ~6250 |
+| 09:14 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | 11→13 lines | ~63 |
+| 09:14 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | 4→4 lines | ~30 |
+| 09:14 | Session end: 56 writes across 32 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 46 reads | ~88353 tok |
+| 09:14 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | modified launch() | ~194 |
+| 09:14 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/linux.rs | modified launch() | ~39 |
+| 09:14 | Edited apps/desktop-sandbox/hive-desktop-sandbox/src/linux.rs | 5→5 lines | ~36 |
+| 09:47 | Session end: 59 writes across 33 files (demo-guide.md, parity-gap-map-2026-07-19.md, DEMO.md, MOC-roadmap-current.md, project_enterprise_parity_demo.md) | 49 reads | ~88641 tok |
+
+## Session: 2026-07-19 09:56
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 09:57
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 09:57
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 10:06 | Edited packages/embedmodel/registry.go | modified Cast() | ~242 |
+| 10:06 | Edited packages/embedmodel/registry_test.go | modified TestValidateWrapsResolve() | ~446 |
+| 10:07 | Edited apps/edge-api/internal/rag/repository.go | 4→6 lines | ~40 |
+| 10:07 | Edited apps/edge-api/internal/rag/repository.go | modified NewRepo() | ~206 |
+| 10:07 | Edited apps/edge-api/internal/rag/repository.go | reduced (-8 lines) | ~99 |
+| 10:07 | Edited apps/edge-api/internal/rag/repository.go | modified searchChunksQuery() | ~266 |
+| 10:07 | Edited apps/edge-api/cmd/server/main.go | expanded (+6 lines) | ~184 |
+| 10:07 | Edited apps/edge-api/cmd/server/main.go | 4→4 lines | ~27 |
+| 10:07 | Edited apps/control-plane/internal/rag/repository.go | 4→6 lines | ~40 |
+| 10:08 | Edited apps/control-plane/internal/rag/repository.go | modified NewRepo() | ~176 |
+| 10:08 | Edited apps/control-plane/internal/rag/repository.go | reduced (-8 lines) | ~99 |
+| 10:08 | Edited apps/control-plane/internal/rag/repository.go | modified searchChunksQuery() | ~275 |
+| 10:08 | Edited CLAUDE.md | inline fix | ~96 |
+| 10:08 | Edited apps/control-plane/cmd/server/main.go | 2→1 lines | ~18 |
+| 10:08 | Edited apps/control-plane/cmd/server/main.go | 3→6 lines | ~104 |
+| 10:08 | Edited apps/control-plane/internal/rag/provision.go | expanded (+8 lines) | ~212 |
+| 10:09 | Session end: 16 writes across 6 files (registry.go, registry_test.go, repository.go, main.go, CLAUDE.md) | 14 reads | ~45420 tok |
+| 10:09 | Edited apps/control-plane/internal/rag/provision.go | expanded (+8 lines) | ~162 |
+| 10:09 | Edited apps/control-plane/internal/rag/reembed.go | expanded (+8 lines) | ~148 |
+| 10:09 | Edited apps/control-plane/internal/rag/reembed.go | 5→9 lines | ~126 |
+| 10:09 | Edited apps/control-plane/internal/rag/reembed.go | modified Is() | ~109 |
+| 10:10 | Edited apps/control-plane/internal/rag/reembed.go | modified Is() | ~280 |
+| 10:10 | Edited supabase/migrations/20260719_01_rag_embedding_config.sql | 10→13 lines | ~235 |
+| 10:10 | Created apps/edge-api/internal/rag/search_query_test.go | — | ~380 |
+| 10:10 | Created apps/control-plane/internal/rag/search_query_test.go | — | ~380 |
+| 10:15 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/plan-codex-crossplatform-desktop.md | — | ~5811 |
+| 10:15 | Session end: 25 writes across 10 files (registry.go, registry_test.go, repository.go, main.go, CLAUDE.md) | 14 reads | ~53593 tok |
+| 10:18 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/00_roles.sql | — | ~107 |
+| 10:18 | Created ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/01_tenants.sql | — | ~162 |
+| 10:23 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/handoff-2026-07-19-session.md | — | ~1782 |
+
+## Session: 2026-07-19 13:37
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 13:39
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+
+## Session: 2026-07-19 13:39
+
+| Time | Action | File(s) | Outcome | ~Tokens |
+|------|--------|---------|---------|--------|
+| 13:53 | Created ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | — | ~4041 |
+| 13:53 | Edited packages/embedmodel/registry.go | 8→12 lines | ~235 |
+| 13:53 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows_plan.rs | policy() → codegen() | ~90 |
+| 13:53 | Edited apps/edge-api/internal/rag/repository.go | vector() → scan() | ~100 |
+| 13:53 | Edited apps/control-plane/internal/rag/repository.go | vector() → scan() | ~100 |
+| 13:53 | Edited apps/edge-api/internal/rag/search_query_test.go | 2→3 lines | ~60 |
+| 13:53 | Edited apps/control-plane/internal/rag/search_query_test.go | 2→3 lines | ~60 |
+| 13:53 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows_plan.rs | modified allow_hosts_firewall_script() | ~98 |
+| 13:54 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows_plan.rs | modified is_bare_drive_letter() | ~641 |
+| 13:54 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows_plan.rs | modified decode_command_line() | ~576 |
+| 13:55 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | 4→5 lines | ~35 |
+| 13:55 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | modified now() | ~180 |
+| 13:55 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | modified launch() | ~291 |
+| 13:55 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | 1→2 lines | ~41 |
+| 13:56 | Session end: 14 writes across 7 files (windows.rs, registry.go, windows_plan.rs, repository.go, search_query_test.go) | 25 reads | ~76385 tok |
+| 13:56 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | 15→10 lines | ~204 |
+| 13:56 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | policy() → Windows() | ~89 |
+| 13:56 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | disabled() → RESOLVED() | ~189 |
+| 13:56 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | 3→4 lines | ~80 |
+| 14:02 | Session end: 18 writes across 7 files (windows.rs, registry.go, windows_plan.rs, repository.go, search_query_test.go) | 25 reads | ~76986 tok |
+| 14:08 | Session end: 18 writes across 7 files (windows.rs, registry.go, windows_plan.rs, repository.go, search_query_test.go) | 31 reads | ~76986 tok |
+| 14:10 | Session end: 18 writes across 7 files (windows.rs, registry.go, windows_plan.rs, repository.go, search_query_test.go) | 31 reads | ~76986 tok |
+| 14:12 | Session end: 18 writes across 7 files (windows.rs, registry.go, windows_plan.rs, repository.go, search_query_test.go) | 31 reads | ~76986 tok |
+| 14:17 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | modified 307() | ~1429 |
+| 14:17 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | 1→3 lines | ~29 |
+| 14:18 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | modified is_empty() | ~549 |
+| 14:18 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | expanded (+8 lines) | ~200 |
+| 14:18 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | 13→16 lines | ~148 |
+| 14:18 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows.rs | variant() → under() | ~212 |
+| 14:18 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | modified now() | ~361 |
+| 14:18 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/lib.rs | expanded (+6 lines) | ~126 |
+| 14:19 | Created ../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/handoff-2026-07-19-session.md | — | ~3432 |
+| 14:19 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows_plan.rs | modified is_fully_qualified_program() | ~477 |
+| 14:19 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/windows_plan.rs | modified command_line_for_empty_argv_is_just_a_nul() | ~439 |
+| 14:19 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | modified NOT() | ~424 |
+| 14:19 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | 5→7 lines | ~139 |
+| 14:19 | Edited ../../../tmp/winsbx/apps/desktop-sandbox/VENDORING.md | 2→3 lines | ~54 |
+| 14:20 | Edited ../../../tmp/winsbx/.github/workflows/ci.yml | expanded (+17 lines) | ~342 |
+| 14:20 | Session end: 33 writes across 9 files (windows.rs, registry.go, windows_plan.rs, repository.go, search_query_test.go) | 33 reads | ~85920 tok |

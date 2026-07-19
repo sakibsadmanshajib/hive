@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-19T11:22:55.525Z
-> Files: 916 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-19T18:20:05.015Z
+> Files: 958 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../
 
@@ -12,6 +12,7 @@
 - `decision-2026-07-07-one-product-two-modes.md` — One Product, Two Modes (2026-07-07) (~412 tok)
 - `decision-2026-07-17-gateway-posture-and-network.md` — Gateway posture and network decisions (2026-07-17) (~591 tok)
 - `decision-2026-07-17-network-access-posture.md` — Decision: network access posture, web versus desktop (~938 tok)
+- `demo-guide.md` — Hive Enterprise Demo Guide (~3318 tok)
 - `demo-host-provisioning-2026-07-17.md` — Demo host provisioning: two owner-side blockers (~1676 tok)
 - `demo-verification-2026-07-17.md` — Hive demo live feature verification — 2026-07-17 (~2002 tok)
 - `docs-compliance-soc2-log-coverage.md` — SOC 2 Type II — Audit Log Coverage Report (~188 tok)
@@ -23,6 +24,7 @@
 - `gov-ai-landscape-2026.md` — Government / national sovereign-AI competitive landscape (2026-07-07) (~1386 tok)
 - `guide-enable-supabase-auth-hook.md` — Standalone runbook: enable the Supabase Auth Hook (custom access token) (~820 tok)
 - `handoff-2026-07-17.md` — Hive Handoff — 2026-07-17 (~2458 tok)
+- `handoff-2026-07-19-session.md` — Windows + CLI Adoption Handoff (current) (~3218 tok)
 - `hive-enterprise-architecture.md` — Hive Enterprise + cloud architecture (locked 2026-06-13) (~1196 tok)
 - `hosting-and-desktop-demo-plan-2026-07-17.md` — Hosting sizing + desktop demo readiness plan (~2404 tok)
 - `log-2026-07-15-wave1-spike-execution.md` — 2026-07-15 Execution Log: Wave 1 Shipped, Spike #307 P0 GO (~1986 tok)
@@ -30,15 +32,19 @@
 - `MOC-coding-agent-spec.md` — MOC: Coding-Agent / Cowork Spec (~2481 tok)
 - `MOC-index.md` — MOC: Index — Start Here (~921 tok)
 - `MOC-provider-catalog.md` — MOC: Provider Catalog (Phase 20) (~582 tok)
-- `MOC-roadmap-current.md` — MOC: Roadmap & Current State (~792 tok)
+- `MOC-roadmap-current.md` — MOC: Roadmap & Current State (~903 tok)
 - `MOC-security-compliance.md` — MOC — Security & Compliance (~758 tok)
 - `MOC-sovereign-pivot.md` — MOC: Sovereign Pivot (~1678 tok)
 - `MOC-timeline.md` — MOC: Timeline (Chain of Events) (~982 tok)
 - `MOC-v1.0-launch-archive.md` — MOC: v1.0 Launch Archive (~4394 tok)
 - `MOC-v1.1-chatapp-owui-transition.md` — MOC: Hive Chat / OWUI Transition (~1011 tok)
+- `parity-gap-map-2026-07-19.md` — Hive Enterprise vs Claude Enterprise: Parity Gap Map (2026-07-19) (~1018 tok)
 - `plan-2026-07-15-agent-subsystem-blueprint.md` — Agent Subsystem Construction Blueprint (demo-first) (~6571 tok)
 - `plan-2026-07-17-desktop-local-runtime.md` — Desktop local agent runtime port (~889 tok)
 - `plan-2026-07-17-sovereignty-wave.md` — Sovereignty Wave Execution Plan (~3593 tok)
+- `plan-admin-embedding-dim.md` — Admin-selectable embedding model and dimension with dynamic vector-DB provisioning (PR2) (~4599 tok)
+- `plan-codex-crossplatform-desktop.md` — Cross-platform desktop sandbox and coding-agent CLI, following OpenAI Codex (~5448 tok)
+- `plan-windows-desktop-sandbox.md` — Windows Desktop Sandbox and Real Agent Runtime (~8414 tok)
 - `planning-bd-planning-commission-tech-brief.md` — Bangladesh Planning Commission — tech brief track (~1474 tok)
 - `planning-carl-charter.md` — Carl.sh — Sovereign Workspace Leadership Charter (~2709 tok)
 - `planning-carl-design.md` — Carl.sh — Sovereign Workspace Design Document (~8535 tok)
@@ -233,6 +239,17 @@
 - `Dockerfile.control-plane.prod` — syntax=docker/dockerfile:1 (~904 tok)
 - `Dockerfile.edge-api` (~308 tok)
 - `Dockerfile.edge-api.prod` — syntax=docker/dockerfile:1 (~752 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/2e3e7f24-5980-4090-8d2e-ef16953ba23a/scratchpad/
+
+- `00_roles.sql` — Cluster-global roles the rag migrations GRANT to. Not superuser, NOT (~107 tok)
+- `01_tenants.sql` — Minimal public.tenants stand-in (real migration 20260516_01_phase19_tenants (~162 tok)
+- `c1.txt` — Declares and (~263 tok)
+- `c2.txt` (~206 tok)
+- `c3.txt` — Declares and (~346 tok)
+- `c4.txt` (~295 tok)
+- `issue-embedding-dim.md` — Problem (~979 tok)
+- `pr.md` — Summary (~1081 tok)
 
 ## ../../../tmp/claude-1001/-home-sakib-hive/4422c273-7623-4109-8443-8f64b8d0e4a1/scratchpad/
 
@@ -903,6 +920,20 @@
 
 - `20260717_02_voice_groq_stt_tts.sql` — Wire serverless voice (STT + TTS) into routing for the cloud demo. (~1050 tok)
 
+## ../../../tmp/winsbx/.github/workflows/
+
+- `ci.yml` — CI: CI (~10976 tok)
+
+## ../../../tmp/winsbx/apps/desktop-sandbox/
+
+- `VENDORING.md` — Vendored OpenAI Codex sandbox crates (issue #306, blueprint Step 4.2) (~3482 tok)
+
+## ../../../tmp/winsbx/apps/desktop-sandbox/hive-desktop-sandbox/src/
+
+- `lib.rs` — Desktop native sandbox backends for the Hive agent subsystem (~1400 tok)
+- `windows_plan.rs` — Windows confinement plan: the platform-independent computation of what (~6547 tok)
+- `windows.rs` — Windows desktop sandbox backend: a distinct primary token, a directory- (~5211 tok)
+
 ## ../../../tmp/wt-351rb/.wolf/
 
 - `buglog.json` — Declares annotation (~21776 tok)
@@ -942,11 +973,14 @@
 
 ## ../.claude/projects/-home-sakib-hive/memory/
 
+- `feedback_agent_owns_full_pr_loop.md` (~502 tok)
 - `feedback_external_proposal_docs.md` (~856 tok)
 - `feedback_gateguard_git_api.md` (~539 tok)
 - `feedback_hardware_agnostic_product.md` (~451 tok)
+- `feedback_no_bandaid_embedding_admin_dim.md` (~462 tok)
+- `feedback_session_autonomy_dev_env.md` (~235 tok)
 - `feedback_worktree_builder_dispatch.md` (~444 tok)
-- `MEMORY.md` — Memory Index (~2032 tok)
+- `MEMORY.md` — Memory Index (~2258 tok)
 - `project_agent_subsystem_kickoff.md` — Wave 1 shipped 2026-07-15 (control-plane spine) (~3705 tok)
 - `project_bd_planning_commission_tech_brief.md` (~1376 tok)
 - `project_carl_sovereign_edge.md` (~1771 tok)
@@ -955,6 +989,7 @@
 - `project_demo_staging.md` (~663 tok)
 - `project_docs_vault_migration.md` — `, component READMEs, and two non-markdown files that briefly got caught in scope by a naive `git rm (~743 tok)
 - `project_edge_architecture.md` — Declares only (~1265 tok)
+- `project_enterprise_parity_demo.md` (~867 tok)
 - `project_gateway_posture_network.md` — Declares posture (~742 tok)
 - `project_gov_ai_landscape_2026.md` (~1521 tok)
 - `project_marketing_site.md` (~2592 tok)
@@ -989,6 +1024,11 @@
 ## ../hive-worktrees/fix-rag-embedding-dim/deploy/litellm/
 
 - `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~2311 tok)
+
+## ./
+
+- `CLAUDE.md` — OpenWolf (~3942 tok)
+- `DEMO.md` — Hive Enterprise Demo Guide (~1432 tok)
 
 ## .claude/worktrees/agent-a0601818c191bc2f3/.github/workflows/
 
@@ -2080,21 +2120,38 @@
 
 ## apps/control-plane/cmd/server/
 
-- `main.go` — Struct: ledgerGrantAdapter (~15813 tok)
+- `main.go` — Struct: ledgerGrantAdapter (~16250 tok)
 
 ## apps/control-plane/internal/rag/
 
 - `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedClientTruncates, TestHTTPEmbedClientStric (~1210 tok)
-- `ingest.go` — Interface: EmbedClient (~2064 tok)
+- `ingest.go` — Interface: EmbedClient (~2222 tok)
+- `provision_test.go` — TestProvision_RecreatesColumnAndIndex (~1007 tok)
+- `provision.go` — Struct: ActiveConfig (~2606 tok)
+- `reembed_test.go` — Struct: orderedEmbedClient (~764 tok)
+- `reembed.go` — Struct: Reembedder (~2055 tok)
+- `repository.go` — Struct: Document (~3032 tok)
+- `search_query_test.go` — TestSearchChunksQueryCast (~398 tok)
+
+## apps/desktop-sandbox/hive-desktop-sandbox/src/
+
+- `child.rs` — Cross-platform handle to a launched sandboxed process. (~695 tok)
+- `lib.rs` — Desktop native sandbox backends for the Hive agent subsystem (~1076 tok)
+- `linux.rs` — Linux desktop sandbox backend: bubblewrap (bundled static binary, ~1 MB; (~9132 tok)
+- `windows_caps.rs` — Pure, platform-independent derivations for the Windows AppContainer (~2507 tok)
+- `windows.rs` — Windows desktop sandbox backend: AppContainer (LowBox token) as the (~6250 tok)
 
 ## apps/edge-api/cmd/server/
 
-- `main.go` — Struct: jwtAuthEnv (~10267 tok)
+- `main.go` — Struct: jwtAuthEnv (~10533 tok)
 
 ## apps/edge-api/internal/rag/
 
-- `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedderTruncates, TestHTTPEmbedderStrictRejec (~1199 tok)
-- `embed.go` — Interface: Embedder (~1130 tok)
+- `config.go` — LoadActiveEmbeddingConfig (~315 tok)
+- `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions, (~1592 tok)
+- `embed.go` — Interface: Embedder (~1398 tok)
+- `repository.go` — Struct: DocRow (~2454 tok)
+- `search_query_test.go` — TestSearchChunksQueryCast (~398 tok)
 
 ## deploy/
 
@@ -2107,12 +2164,18 @@
 
 - `2026-07-07-coding-agent-cowork-design.md` — Coding-Agent and Cowork Subsystem: Design Specification (~7956 tok)
 
+## packages/embedmodel/
+
+- `registry_test.go` — TestLookupByCanonicalID, TestLookupByLiteLLMRoute, TestLookupNemotronNotMRL, TestLookupUnknownModel, (~2727 tok)
+- `registry.go` — is the single source of truth for which embedding (~3345 tok)
+
 ## supabase/
 
 
 ## supabase/migrations/
 
 - `20260716_02_artifacts.sql` — supabase/migrations/20260716_02_artifacts.sql (~1772 tok)
+- `20260719_01_rag_embedding_config.sql` — supabase/migrations/20260719_01_rag_embedding_config.sql (~1732 tok)
 
 ## website/sovereign/
 

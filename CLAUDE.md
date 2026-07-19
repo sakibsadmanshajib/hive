@@ -2,7 +2,7 @@
 
 @.wolf/OPENWOLF.md
 
-Project use OpenWolf for context mgmt. Read + follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files.
+Project use OpenWolf for context mgmt. Read + follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files. Check .wolf/decisions.md before any design, spec, plan, or implementation, and inject the relevant decisions into every subagent brief (detail lives in the vault, this is the terse index).
 
 ## Orchestrator Contract
 
