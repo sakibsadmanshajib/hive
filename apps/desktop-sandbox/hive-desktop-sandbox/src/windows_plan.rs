@@ -240,6 +240,34 @@ fn append_quoted_arg(out: &mut Vec<u16>, arg: &str) {
     }
 }
 
+/// True only for a Windows program path that is fully qualified: a
+/// drive-absolute path (`C:\tool.exe` or `C:/tool.exe`) or a UNC / device path
+/// (`\\server\share\tool.exe`, `\\?\C:\tool.exe`). Rejects relative paths,
+/// bare program names (`notepad.exe`), rooted-but-driveless paths (`\tool.exe`,
+/// which resolves against the current drive), and drive-RELATIVE paths
+/// (`C:tool.exe`, which Win32 resolves against drive C's current directory).
+///
+/// `windows::launch` requires this for `command[0]` because it calls
+/// `CreateProcessAsUserW` with `lpApplicationName = NULL`: Windows then runs
+/// the module search, which consults the child's CURRENT DIRECTORY before
+/// PATH. A fully qualified path removes cwd from that search, closing the
+/// binary-planting vector. Parsed here with explicit `\`/`/` handling (not via
+/// `Path::is_absolute`, which is host-relative) so the check is Windows-correct
+/// and unit-tested on the Linux CI job, exactly like [`parent_dir`].
+pub fn is_fully_qualified_program(program: &str) -> bool {
+    let bytes = program.as_bytes();
+    let is_sep = |b: u8| b == b'\\' || b == b'/';
+    // UNC or device path: begins with two separators (e.g. `\\server\share`,
+    // `\\?\C:\...`, `//server/share`). Either separator flavour counts.
+    if bytes.len() >= 2 && is_sep(bytes[0]) && is_sep(bytes[1]) {
+        return true;
+    }
+    // Drive-absolute: drive letter, `:`, then a separator (`C:\...`, `C:/...`).
+    // A drive letter with no following separator (`C:tool.exe`) is
+    // drive-relative and must be rejected.
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && is_sep(bytes[2])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -509,5 +537,52 @@ mod tests {
     #[test]
     fn command_line_for_empty_argv_is_just_a_nul() {
         assert_eq!(command_line_to_utf16(&[]), vec![0u16]);
+    }
+
+    #[test]
+    fn command_line_quotes_and_escapes_arg_with_both_quote_and_whitespace() {
+        // `a "b` has BOTH whitespace (forces wrapping) and an embedded quote
+        // (forces backslash-escaping). The two rules must compose: the arg is
+        // wrapped in quotes AND the inner quote is escaped, so
+        // CommandLineToArgvW parses it back as the single original argument.
+        assert_eq!(
+            decode_command_line(&command_line_to_utf16(&[r#"a "b"#.to_string()])),
+            r#""a \"b""#
+        );
+    }
+
+    #[test]
+    fn fully_qualified_program_accepts_drive_absolute_and_unc() {
+        for good in [
+            r"C:\Windows\System32\notepad.exe",
+            r"C:/tools/task.exe",
+            r"\\server\share\task.exe",
+            r"\\?\C:\tools\task.exe",
+            r"//server/share/task.exe",
+        ] {
+            assert!(
+                is_fully_qualified_program(good),
+                "{good} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn fully_qualified_program_rejects_relative_and_drive_relative() {
+        for bad in [
+            "",
+            "notepad.exe",
+            r".\task.exe",
+            r"..\task.exe",
+            "tools/task.exe",
+            r"C:task.exe", // drive-RELATIVE: resolves against C:'s current dir
+            "C:",
+            r"\task.exe", // rooted but drive-less: current-drive-relative
+        ] {
+            assert!(
+                !is_fully_qualified_program(bad),
+                "{bad:?} should be rejected"
+            );
+        }
     }
 }
