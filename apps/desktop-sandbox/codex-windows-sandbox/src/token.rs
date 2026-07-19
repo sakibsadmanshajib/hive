@@ -476,8 +476,14 @@ unsafe fn create_token_with_caps_from(
     dacl_sids.push(psid_logon);
     dacl_sids.push(psid_everyone);
     dacl_sids.extend_from_slice(psid_capabilities);
-    set_default_dacl(new_token, &dacl_sids)?;
+    if let Err(e) = set_default_dacl(new_token, &dacl_sids) {
+        CloseHandle(new_token);
+        return Err(e);
+    }
 
-    enable_single_privilege(new_token, "SeChangeNotifyPrivilege")?;
+    if let Err(e) = enable_single_privilege(new_token, "SeChangeNotifyPrivilege") {
+        CloseHandle(new_token);
+        return Err(e);
+    }
     Ok(new_token)
 }

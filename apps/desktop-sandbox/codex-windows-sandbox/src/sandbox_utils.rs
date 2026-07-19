@@ -39,7 +39,7 @@ pub fn inject_git_safe_directory(env_map: &mut HashMap<String, String>, cwd: &Pa
             .get("GIT_CONFIG_COUNT")
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(0);
-        let git_path = git_root.to_string_lossy().replace("\\\\", "/");
+        let git_path = git_root.to_string_lossy().replace('\\', "/");
         env_map.insert(
             format!("GIT_CONFIG_KEY_{cfg_count}"),
             "safe.directory".to_string(),
@@ -63,7 +63,7 @@ mod tests {
         dunce::canonicalize(path)
             .expect("canonicalize path")
             .to_string_lossy()
-            .replace("\\\\", "/")
+            .replace('\\', "/")
     }
 
     #[test]

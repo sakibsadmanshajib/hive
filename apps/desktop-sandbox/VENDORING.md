@@ -81,6 +81,52 @@ body) rather than any bug. Allowed at the crate level, not patched
 per-callsite, specifically so the vendored files stay byte-for-byte
 diffable against upstream for future re-vendoring passes.
 
+### Local deviations from upstream (CodeRabbit findings, PR #398)
+
+Four of the vendored files above received small bug fixes on top of the
+byte-for-byte copy, so they are no longer byte-identical to upstream. Step 3
+of "Updating this vendor copy" below re-copies these files verbatim from
+upstream on any future re-vendoring pass; check whether upstream has
+independently fixed the same bugs, and if not, re-apply these fixes.
+
+- `acl.rs:675` (`allow_null_device`): the null-device path was
+  `r"\\\\.\\NUL"`, a raw string literal, so the backslashes are taken
+  literally rather than un-escaped. That produced 4 backslashes before the
+  dot and 2 after (`\\\\.\\NUL`) as the actual `CreateFileW` path argument,
+  instead of the documented Win32 device-namespace path `\\.\NUL` (2
+  backslashes before the dot, 1 after). Fixed to `r"\\.\NUL"`. CodeRabbit's
+  major finding asked whether `\\.\NUL` or bare `NUL` is the correct form;
+  the bug here was the raw-string escaping, not the device-path convention
+  itself (`\\.\<name>` is the standard, well-documented Win32 device
+  namespace prefix), so this was verified by static byte-level inspection of
+  the literal and needs no Windows lab run to trust.
+- `env.rs:119` (`ensure_denybin`): the deny-stub `.bat`/`.cmd` files were
+  written with `b"@echo off\\r\\nexit /b 1\\r\\n"`. In a normal (non-raw)
+  byte-string literal, `\\r` decodes to the two literal ASCII characters
+  backslash and `r`, not a carriage-return byte, so the file lands as one
+  line with no real line breaks, and `exit /b 1` never runs as its own
+  statement (defeating the deny-stub's job of making blocked tools fail with
+  a distinct exit code). Fixed to `b"@echo off\r\nexit /b 1\r\n"` (single
+  backslash, so Rust's escape processing emits real CR (0x0D) and LF (0x0A)
+  bytes).
+- `sandbox_utils.rs:42` and its test helper at `sandbox_utils.rs:66`
+  (`inject_git_safe_directory` / `safe_directory_value`): both called
+  `.replace("\\\\", "/")`, which matches a literal two-backslash sequence.
+  `PathBuf::to_string_lossy()` on Windows returns single backslashes as path
+  separators (e.g. `C:\Users\foo`), so the replace was a no-op and the
+  `GIT_CONFIG_VALUE_*` env var kept native backslashes instead of the
+  intended forward-slash form. Fixed both call sites to
+  `.replace('\\', "/")` (single-backslash-char pattern). Both sites shared
+  the identical bug, so the existing tests (which build their expected value
+  with the same helper) still pass unchanged once both are fixed together.
+- `token.rs:479-482` (`create_token_with_caps_from`): after
+  `CreateRestrictedToken` succeeds, a later failure in `set_default_dacl` or
+  `enable_single_privilege` returned `Err` via `?` without closing
+  `new_token`, leaking the HANDLE. Fixed to explicitly `CloseHandle(new_token)`
+  on both error paths before returning, matching the `CloseHandle`-on-cleanup
+  idiom already used elsewhere in this file (line 357) and in `acl.rs`
+  (lines 88, 732).
+
 ### Deliberately NOT vendored this wave (deviations from the blueprint's Wave 1/2 module list, found while fetching the actual upstream source)
 
 - **`process.rs`** (the `CreateProcessAsUserW` wrapper). The blueprint
@@ -322,6 +368,29 @@ crate deliberately does not inherit the workspace's Apache-2.0
    this crate's own (multithreaded) test binary. Pre-existing at the time: no
    test before that pass ever exercised the real spawn path, so nothing
    surfaced it earlier.
+8. **Known upstream issue, deferred (`cap.rs`, CodeRabbit finding, PR #398):
+   the `cap_sid` file is an unsynchronized read-modify-write.**
+   `workspace_cap_sid_for_cwd` and `writable_root_cap_sid_for_path` both
+   `load_or_create_cap_sids` (read + parse JSON), mutate the in-memory
+   `CapSids`, then `persist_caps` (serialize + `fs::write`) the whole file
+   back, with no file lock, mutex, or atomic replace between the read and
+   the write. Two concurrent callers against the same `codex_home` can race:
+   both read the same base state, each adds its own
+   `workspace_by_cwd`/`writable_root_by_path` entry, and whichever
+   `persist_caps` writes last silently drops the other's entry (and its
+   already-applied ACL SID becomes orphaned). This is reachable in the
+   intended production design, not merely theoretical: under the Step 3
+   Q1/Q3 decision (one shared low-privilege sandbox OS user, not one per
+   session), concurrent agent-engine sandbox launches on Windows share that
+   one user's `codex_home`, hence one `cap_sid` file. Not guess-fixed this
+   pass: `cap.rs` is still fully inert (nothing calls it from
+   `windows::launch` yet, see item #6), and the right fix (`LockFileEx`
+   around the read-modify-write, a named mutex, or an atomic
+   rename-based compare-and-swap) needs a real concurrent-launch test on
+   Windows to trust the chosen approach. Fix and lab-validate together with
+   whichever of Wave 3 or Wave 4 first makes concurrent launches reachable
+   (the same wave that wires the sandbox-user provisioning and the actual
+   `cap.rs` launch-path call sites).
 
 ## Updating this vendor copy
 
