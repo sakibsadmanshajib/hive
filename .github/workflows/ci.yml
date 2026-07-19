@@ -178,6 +178,23 @@ jobs:
       - name: cargo test
         run: cargo test
 
+      # windows.rs is #[cfg(windows)]-gated, so the Linux legs above never
+      # compile it. Cross-compile the crate to x86_64-pc-windows-gnu so the
+      # Win32 FFI is actually type-checked against windows-crate 0.58's real
+      # signatures on every PR (a broken call shape now fails CI instead of
+      # only surfacing on a Windows host). `cargo check`/`clippy` do not link,
+      # so no MinGW linker is needed; adding the target's std is enough. Scoped
+      # to -p hive-desktop-sandbox to skip the vendored bwrap C build. MSVC is
+      # not cross-checkable here (no linker); see VENDORING.md open risk #2.
+      - name: Add Windows cross target
+        run: rustup target add x86_64-pc-windows-gnu
+
+      - name: cargo check (Windows FFI cross-compile)
+        run: cargo check --target x86_64-pc-windows-gnu -p hive-desktop-sandbox
+
+      - name: cargo clippy (Windows FFI cross-compile)
+        run: cargo clippy --target x86_64-pc-windows-gnu -p hive-desktop-sandbox -- -D warnings
+
   # ------------------------------------------------------------------
   # Desktop app (Tauri shell, issue #310/#311). Toolchain version comes
   # from apps/desktop/src-tauri/rust-toolchain.toml, same auto-detect as
