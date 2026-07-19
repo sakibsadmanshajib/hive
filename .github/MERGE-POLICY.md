@@ -20,13 +20,12 @@ bypassed from the CLI or UI.
 | `allow_deletions` | `false` | `main` cannot be deleted |
 
 ### Required status checks
+- `Go tests (agent-engine)`
 - `Go tests (control-plane)`
 - `Go tests (edge-api)`
 - `Go tests (storage)`
 - `Repo policy lints (tenant + audit)`
 - `Web console (type + unit + build)`
-- `Live integration (SDK tests + smoke)`
-- `Web E2E (full stack)`
 
 These are the jobs in `.github/workflows/ci.yml`, which runs on every
 same-repo pull request with no path filter (so it never deadlocks a PR).

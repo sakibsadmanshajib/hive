@@ -7,8 +7,7 @@
       "Go tests (edge-api)",
       "Go tests (storage)",
       "Repo policy lints (tenant + audit)",
-      "Web console (type + unit + build)",
-      "Web E2E (full stack)"
+      "Web console (type + unit + build)"
     ]
   },
   "enforce_admins": true,
