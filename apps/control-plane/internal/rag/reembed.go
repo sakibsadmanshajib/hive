@@ -2,13 +2,21 @@ package rag
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 )
+
+// errDocClaimedElsewhere is returned by reembedDocument when another worker
+// already holds the document's row lock (FOR UPDATE SKIP LOCKED found no row),
+// so RunOnce skips it without counting a failure. Concurrent replicas therefore
+// never re-embed the same document.
+var errDocClaimedElsewhere = errors.New("rag.reembed: document claimed by another worker")
 
 // embedInBatches embeds texts in fixed-size batches through embed, preserving
 // input order. A single batch error fails the whole call (fail-closed): the
@@ -71,10 +79,14 @@ func NewReembedder(pool *pgxpool.Pool, embed EmbedClient, batchSize int, model s
 // candidate. Model comparison is canonical so a route alias and its canonical
 // id are treated as one model.
 func (rb *Reembedder) pendingDocIDs(ctx context.Context) ([]uuid.UUID, error) {
+	// SKIP LOCKED so a candidate another replica is actively re-embedding (its
+	// row held FOR UPDATE by reembedDocument) is not even listed here; the
+	// per-document claim in reembedDocument is the authoritative guard.
 	rows, err := rb.pool.Query(ctx, `
 		SELECT id FROM public.rag_documents
 		WHERE NOT (status = 'embedded' AND embedding_model = $1 AND embedding_dim = $2)
-		ORDER BY created_at ASC`,
+		ORDER BY created_at ASC
+		FOR UPDATE SKIP LOCKED`,
 		embedmodel.Canonical(rb.model), rb.dim)
 	if err != nil {
 		return nil, fmt.Errorf("rag.reembed: list pending: %w", err)
@@ -102,6 +114,11 @@ func (rb *Reembedder) RunOnce(ctx context.Context) (done int, remaining int, err
 	}
 	for _, id := range ids {
 		if rerr := rb.reembedDocument(ctx, id); rerr != nil {
+			if errors.Is(rerr, errDocClaimedElsewhere) {
+				// Another replica owns this document; not our failure and not
+				// our success. Skip without counting it.
+				continue
+			}
 			// Leave the document pending (guard stays closed) and continue;
 			// the next RunOnce retries it.
 			remaining++
@@ -121,6 +138,25 @@ func (rb *Reembedder) reembedDocument(ctx context.Context, docID uuid.UUID) erro
 		return fmt.Errorf("rag.reembed: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Claim the document by taking its row lock for the whole re-embed. If it is
+	// already at the active config, or another replica holds it (SKIP LOCKED),
+	// no row comes back and we skip: never re-embed a document twice. The lock
+	// is held until commit/rollback, so a concurrent worker's list + claim both
+	// pass this document over.
+	var claimed uuid.UUID
+	claimErr := tx.QueryRow(ctx, `
+		SELECT id FROM public.rag_documents
+		WHERE id = $1
+		  AND NOT (status = 'embedded' AND embedding_model = $2 AND embedding_dim = $3)
+		FOR UPDATE SKIP LOCKED`,
+		docID, embedmodel.Canonical(rb.model), rb.dim).Scan(&claimed)
+	if errors.Is(claimErr, pgx.ErrNoRows) {
+		return errDocClaimedElsewhere
+	}
+	if claimErr != nil {
+		return fmt.Errorf("rag.reembed: claim document: %w", claimErr)
+	}
 
 	rows, err := tx.Query(ctx, `
 		SELECT id, content FROM public.rag_chunks
