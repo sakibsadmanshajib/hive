@@ -12,7 +12,10 @@ git checkout main && git pull origin main
 cp .env.example .env
 # Fill: SUPABASE_* + NEXT_PUBLIC_SUPABASE_*, S3_* (buckets hive-files + hive-images
 # must exist), and at least one of OPENROUTER_API_KEY / GROQ_API_KEY.
-# For RAG, also configure a 1024-dim embedder (see Known Limitations).
+# RAG's embedding model and dimension are admin-selectable (packages/embedmodel)
+# and drive dynamic vector-column provisioning. .env.example already ships a
+# working demo default (qwen3-embedding-8b, MRL-reduced to 1024-dim), and RAG
+# works out of the box once OPENROUTER_API_KEY and LITELLM_MASTER_KEY are set.
 
 # 2. Migrations
 supabase db push        # or apply supabase/migrations/ in order
@@ -64,7 +67,7 @@ For each surface: what to show, what it proves, and the current limit to narrate
 - **Desktop app** (Tauri): show the Linux shell launching a sandbox. Proves sandbox hardening (Linux: bwrap + Landlock + seccomp + egress-proxy). **Limit (do not hit live): Linux runs a placeholder `/bin/echo`, not a real agent runtime; Windows launch disabled; authed-session/license handoff incomplete (#310).** Present as "hardening proven, runtime integration in progress."
 - **Connectors / MCP**: local admin-curated marketplace becomes OpenHands `mcpServers` JSON bind-mounted into the SIF. Proves operator-curated tools. Limit: remote/OAuth MCP out of scope (#309); no one-click install (#390).
 - **Policies / RBAC / Settings**: role assignment, policy toggles, sovereign posture. Proves departmental separation in one tenant. Limit: no SSO admin config (#388), no SCIM (#385).
-- **RAG** (`/v1/rag/chat`): ingest a doc, ask a grounded question. Proves retrieval over the customer's own docs. **Limit (demo blocker): wired behind FeatureRAG but hard-requires a 1024-dim embedder (bge-m3); serverless embedders return 4096-dim, so RAG chat FAILS unless a 1024-dim embedder is configured first. Skip RAG if none is available.**
+- **RAG** (`/v1/rag/chat`): ingest a doc, ask a grounded question. Proves retrieval over the customer's own docs. Embedding model and dimension are admin-selectable (`packages/embedmodel`), and the vector column plus HNSW index are provisioned dynamically to match. Demo default: qwen3-embedding-8b MRL-reduced to 1024-dim (`vector(1024)`, HNSW cosine), a native Matryoshka reduction, not truncation. Works with the `.env.example` defaults; no separate setup beyond the standard `OPENROUTER_API_KEY` / `LITELLM_MASTER_KEY` config.
 - **Voice** (`/v1/audio`): transcription via the OpenAI-Whisper-compatible API (parakeet en, faster-whisper bangla). Proves on-box speech-to-text. Limit: confirm input is not garbled with a clean sample first.
 - **Artifacts** (`/v1/artifacts` + isolated caddy-artifacts): publish a static artifact, open it on the isolated host. Proves isolated static hosting. Limit: no persistent/API/live-data artifacts (#381).
 
@@ -85,7 +88,6 @@ Not built, do not demo: Projects (#380), cross-chat Memory (#172), preset Enviro
 | SSO admin config | enum-keys only | #388 |
 | GitHub-native coding tools | not built | #389 |
 | One-click MCP install | not built | #390 |
-| RAG embedder dimension | 1024-dim required, serverless returns 4096-dim | demo blocker |
 | OWUI OIDC login | not fully built | #269 |
 | Desktop runtime (real agent) | placeholder/echo, Windows disabled | #310, #312, #319 |
 | Agent pack routing | always default pack | #311 |
