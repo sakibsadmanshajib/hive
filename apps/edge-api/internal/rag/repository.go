@@ -39,8 +39,10 @@ type Repo struct {
 	pool *pgxpool.Pool
 	// pgType is the active rag_chunks.embedding pgvector column type
 	// ("vector" or "halfvec"), from the resolved embedding Plan. It selects
-	// the query-vector cast in SearchChunks so a halfvec column is never
-	// queried with ::vector (assignment-only cast -> no operator, runtime error).
+	// the query-vector cast in SearchChunks so the cast matches the column
+	// type, keeping the HNSW index usable and avoiding a per-row cast that
+	// would force a sequential scan (a mismatched cast degrades, it does not
+	// error).
 	pgType string
 }
 

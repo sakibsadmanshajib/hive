@@ -156,12 +156,16 @@ func (p Plan) ColumnType() string {
 
 // Cast returns the pgvector cast suffix a query vector must carry to match a
 // column of the given pgvector type: "::halfvec" for a halfvec column, else
-// "::vector". pgvector's vector<->halfvec casts are assignment-only, so a
-// query written as `halfvec_col <=> $1::vector` has no operator and errors at
-// runtime; the query vector must be cast to the column's own type. pgType
-// originates only from ResolvePgvector (an enum-constrained "vector"/"halfvec"),
-// never user input, so the result is safe to interpolate into SQL. An unknown
-// or empty pgType falls back to "::vector", the shipped default column type.
+// "::vector". In pgvector, vector -> halfvec is an implicit cast and
+// halfvec -> vector is an assignment cast, so `halfvec_col <=> $1::vector` does
+// not error: the planner rewrites the literal to halfvec and still uses the
+// HNSW index. Matching the query vector to the column type is a performance
+// guarantee, not a correctness one: it keeps the HNSW index usable in both
+// column directions and avoids a per-row cast that would otherwise force a
+// sequential scan. pgType originates only from ResolvePgvector (an enum-
+// constrained "vector"/"halfvec"), never user input, so the result is safe to
+// interpolate into SQL. An unknown or empty pgType falls back to "::vector",
+// the shipped default column type.
 func Cast(pgType string) string {
 	if pgType == "halfvec" {
 		return "::halfvec"

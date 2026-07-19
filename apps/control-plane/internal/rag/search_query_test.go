@@ -7,8 +7,9 @@ import (
 
 // TestSearchChunksQueryCast is the regression guard for the halfvec query path:
 // a halfvec-provisioned column must be queried with ::halfvec, a vector column
-// with ::vector. pgvector's vector<->halfvec cast is assignment-only, so the
-// wrong cast has no <=> operator and errors at query time. No live DB needed:
+// with ::vector. Matching the cast to the column type keeps the HNSW index
+// usable in both directions; a mismatched cast does not error but can force a
+// per-row cast that degrades to a sequential scan. No live DB needed:
 // searchChunksQuery is a pure builder over embedmodel.Cast.
 func TestSearchChunksQueryCast(t *testing.T) {
 	cases := []struct {
