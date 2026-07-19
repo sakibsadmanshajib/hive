@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "codex-bwrap",
     "codex-process-hardening",
+    "codex-windows-sandbox",
     "hive-desktop-sandbox",
 ]
 

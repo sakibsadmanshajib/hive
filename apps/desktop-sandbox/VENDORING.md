@@ -37,7 +37,159 @@ use -- `hive-desktop-sandbox`'s `policy.rs`/`linux.rs` are a from-scratch,
 narrower replacement for the parts we need) and `sandboxing/` (Codex's
 higher-level policy abstraction, same reason).
 
-## Why not `codex-rs/windows-sandbox-rs` for the Windows backend
+## `codex-windows-sandbox/` (Step 3 Wave 1, blueprint `blueprint-step3-elevated-windows-sandbox.md`)
+
+Blueprint Step 3 takes the base non-elevated Windows sandbox above (#395,
+`c8c1434b`) toward the elevated variant: a dedicated low-privilege sandbox OS
+user, ACL filesystem confinement, and a UAC-elevated helper. Wave 1 (this
+pass) vendors the mechanism primitives and ports the one policy seam; it does
+NOT wire anything into `windows::launch` yet (see "Newly authored" below and
+the crate's own `lib.rs` doc). Same pinned commit as the rest of this file's
+vendored code, so the whole vendored `codex-rs` tree stays on one SHA:
+
+- Upstream: `codex-rs/windows-sandbox-rs` (package `codex-windows-sandbox`,
+  Apache-2.0).
+- Commit: `a47c661ea9e226fe65e46cf9dbc5c5ed75c2c762` (2026-07-16).
+
+### What was vendored (verbatim, byte-for-byte)
+
+Into the new `codex-windows-sandbox/` subcrate (own `Cargo.toml`, own
+Apache-2.0 licence inherited from `[workspace.package]`, same reason as
+`codex-bwrap`: keeps the licence boundary crisp against
+`hive-desktop-sandbox`'s proprietary code):
+
+`token.rs`, `cap.rs`, `proc_thread_attr.rs`, `acl.rs`, `workspace_acl.rs`,
+`deny_read_acl.rs`, `deny_read_state.rs`, `dpapi.rs`, `hide_users.rs`,
+`winutil.rs`, `sandbox_utils.rs`, `env.rs`, `path_normalization.rs`. Every
+module here takes primitive arguments (paths, masks, SID pointers, token
+handles) and does not import `codex_protocol`; `codex_protocol` is not a
+dependency of this crate. Every `mod` declaration in `lib.rs` is
+`#[cfg(windows)]`-gated (matching how `hive-desktop-sandbox`'s own `windows.rs`
+is gated), so this crate compiles to an empty crate on non-Windows hosts and
+is exercised only by the `-p codex-windows-sandbox` leg of the
+`x86_64-pc-windows-gnu` cross-compile CI step below.
+
+`lib.rs` also carries two crate-level `#![allow(...)]`s
+(`unsafe_op_in_unsafe_fn`, `clippy::missing_safety_doc`) found necessary by
+actually running `cargo clippy --target x86_64-pc-windows-gnu -p
+codex-windows-sandbox -- -D warnings` this pass: without them the cross-compile
+CI step below fails with 143 errors, ALL from these two lint classes (135
+`unsafe_op_in_unsafe_fn`, 8 `missing_safety_doc`; verified no other clippy
+lint fired), caused by an edition mismatch (upstream predates edition 2024's
+requirement for an explicit `unsafe {}` block inside an `unsafe fn`'s own
+body) rather than any bug. Allowed at the crate level, not patched
+per-callsite, specifically so the vendored files stay byte-for-byte
+diffable against upstream for future re-vendoring passes.
+
+### Local deviations from upstream (CodeRabbit findings, PR #398)
+
+Four of the vendored files above received small bug fixes on top of the
+byte-for-byte copy, so they are no longer byte-identical to upstream. Step 3
+of "Updating this vendor copy" below re-copies these files verbatim from
+upstream on any future re-vendoring pass; check whether upstream has
+independently fixed the same bugs, and if not, re-apply these fixes.
+
+- `acl.rs:675` (`allow_null_device`): the null-device path was
+  `r"\\\\.\\NUL"`, a raw string literal, so the backslashes are taken
+  literally rather than un-escaped. That produced 4 backslashes before the
+  dot and 2 after (`\\\\.\\NUL`) as the actual `CreateFileW` path argument,
+  instead of the documented Win32 device-namespace path `\\.\NUL` (2
+  backslashes before the dot, 1 after). Fixed to `r"\\.\NUL"`. CodeRabbit's
+  major finding asked whether `\\.\NUL` or bare `NUL` is the correct form;
+  the bug here was the raw-string escaping, not the device-path convention
+  itself (`\\.\<name>` is the standard, well-documented Win32 device
+  namespace prefix), so this was verified by static byte-level inspection of
+  the literal and needs no Windows lab run to trust.
+- `env.rs:119` (`ensure_denybin`): the deny-stub `.bat`/`.cmd` files were
+  written with `b"@echo off\\r\\nexit /b 1\\r\\n"`. In a normal (non-raw)
+  byte-string literal, `\\r` decodes to the two literal ASCII characters
+  backslash and `r`, not a carriage-return byte, so the file lands as one
+  line with no real line breaks, and `exit /b 1` never runs as its own
+  statement (defeating the deny-stub's job of making blocked tools fail with
+  a distinct exit code). Fixed to `b"@echo off\r\nexit /b 1\r\n"` (single
+  backslash, so Rust's escape processing emits real CR (0x0D) and LF (0x0A)
+  bytes).
+- `sandbox_utils.rs:42` and its test helper at `sandbox_utils.rs:66`
+  (`inject_git_safe_directory` / `safe_directory_value`): both called
+  `.replace("\\\\", "/")`, which matches a literal two-backslash sequence.
+  `PathBuf::to_string_lossy()` on Windows returns single backslashes as path
+  separators (e.g. `C:\Users\foo`), so the replace was a no-op and the
+  `GIT_CONFIG_VALUE_*` env var kept native backslashes instead of the
+  intended forward-slash form. Fixed both call sites to
+  `.replace('\\', "/")` (single-backslash-char pattern). Both sites shared
+  the identical bug, so the existing tests (which build their expected value
+  with the same helper) still pass unchanged once both are fixed together.
+- `token.rs:479-482` (`create_token_with_caps_from`): after
+  `CreateRestrictedToken` succeeds, a later failure in `set_default_dacl` or
+  `enable_single_privilege` returned `Err` via `?` without closing
+  `new_token`, leaking the HANDLE. Fixed to explicitly `CloseHandle(new_token)`
+  on both error paths before returning, matching the `CloseHandle`-on-cleanup
+  idiom already used elsewhere in this file (line 357) and in `acl.rs`
+  (lines 88, 732).
+
+### Deliberately NOT vendored this wave (deviations from the blueprint's Wave 1/2 module list, found while fetching the actual upstream source)
+
+- **`process.rs`** (the `CreateProcessAsUserW` wrapper). The blueprint
+  describes it as "verbatim-vendorable... no `codex_protocol` coupling," which
+  is true, but it is NOT self-contained: it imports `crate::desktop::LaunchDesktop`
+  (constructs one, holds it as a field of its returned spawn handle) and
+  `crate::logging` for debug logging. `desktop.rs` is explicitly Step 5
+  (CLI/ConPTY) scope, out of bounds for this wave. Vendoring `process.rs` now
+  would mean either vendoring `desktop.rs` early or inventing a fake
+  `LaunchDesktop` stub that misrepresents a real upstream type -- both worse
+  than deferring. `process.rs` is deferred to whichever wave vendors or ports
+  `desktop.rs` (Step 5, or whenever a real caller needs it); `hive-desktop-sandbox`'s
+  own `windows.rs` already has its own working `CreateProcessAsUserW` call from
+  issue #395 for what this wave needs.
+- **`deny_read_resolver.rs`** (`resolve_windows_deny_read_paths`, the
+  glob-scan-based deny-read carve-out selector). The blueprint's section 0.2
+  claims `resolved_permissions.rs` is "the ONLY windows-sandbox module that
+  imports `codex_protocol`"; that is incorrect; `deny_read_resolver.rs` also
+  imports `codex_protocol::permissions::*` and `codex_utils_absolute_path::AbsolutePathBuf`.
+  It is a policy-resolution module (decides WHICH paths get denied), not a
+  Win32 mechanism primitive, so it belongs with `resolved_permissions.rs`'s
+  port treatment, not the verbatim vendor set -- and porting it is unnecessary
+  this wave: `SandboxPolicy` has no secret-path input source yet, so
+  `windows_resolve.rs`'s adapter returns an empty deny-read carve-out set (a
+  correct, honest default per the blueprint's own mapping table: "secret paths
+  (future, from hook/config) -> deny-read carveout set; empty set is valid").
+  Note that `deny_read_acl.rs`/`deny_read_state.rs` (vendored) take a plain
+  `&[PathBuf]` and never depend on `deny_read_resolver.rs`'s output type, so
+  excluding it does not affect what was vendored.
+- `deny_read_state.rs`'s one CODEX_HOME-coupled dependency
+  (`crate::setup::sandbox_dir`) is satisfied by a ONE-FUNCTION verbatim
+  extraction into a local `setup.rs` (just `sandbox_dir(codex_home) -> PathBuf`,
+  byte-identical to upstream); the rest of upstream's `setup.rs` (OS-account
+  provisioning, `SandboxUsersFile`, elevated setup) is Wave 3 scope, ported
+  into `hive-desktop-sandbox`'s `windows_elevated.rs`, not vendored here.
+- `hide_users.rs`'s one dependency on `crate::logging::log_note` is satisfied
+  by a minimal, Hive-authored (NOT vendored) `logging.rs` stand-in (writes to
+  stderr) instead of upstream's real `logging.rs`, which pulls in
+  `tracing-appender`, `chrono`, and the `codex-utils-string` crate for
+  CODEX_HOME-scoped rotating log files -- none of that is load-bearing while
+  `hide_users.rs` itself is not called from any Hive launch path yet.
+
+### Newly authored (Hive-proprietary, ported from upstream's one policy seam)
+
+- `hive-desktop-sandbox/src/windows_resolve.rs`: the port of
+  `resolved_permissions.rs` to Hive-native types.
+  `ResolvedWindowsSandboxPermissions::from_policy(&SandboxPolicy, cwd)` drops
+  `codex_protocol` entirely and returns Hive types
+  (`crate::policy::NetworkPolicy`, `Vec<PathBuf>`, a Hive `WindowsSandboxTokenMode`
+  with a single `ElevatedSandboxUser` variant per the Step 3 Q1/Q3 decisions).
+  Pure, no Win32 calls, unit-tested on Linux CI exactly like `windows_plan.rs`.
+  Not called from `windows::launch` this wave.
+- `codex-windows-sandbox/src/setup.rs` and `codex-windows-sandbox/src/logging.rs`:
+  the two minimal stand-ins described above, not part of the verbatim vendor.
+
+### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
+
+This section predates Step 3 and explains why the #395 wave (the base,
+non-elevated Windows backend) did not vendor `windows-sandbox-rs` at all. Step
+3 Wave 1 above now vendors a real subset of it. The reasoning below (WFP,
+DPAPI, elevated helper, ConPTY, a dedicated setup binary are out of scope for
+the BASE variant) still holds for why #395 itself stayed hand-authored; it is
+Step 3, not #395, that draws on this upstream crate.
 
 `codex-rs/windows-sandbox-rs` (`codex-windows-sandbox`) exists upstream and is
 Apache-2.0, but it is a much larger, Codex-CLI-specific system: Windows
@@ -114,8 +266,10 @@ crate deliberately does not inherit the workspace's Apache-2.0
 
 ## Open risks / follow-up (not this wave's scope)
 
-1. **Step 1 launch seam wired; confinement strength explicitly PARTIAL
-   (plan-codex-crossplatform-desktop.md).** `windows::launch` was disabled
+1. **RESOLVED (Step 1, `c8c1434b` / #395): launch seam wired.** Confinement
+   strength beyond the seam itself is explicitly PARTIAL and tracked
+   separately below (items #3 and #6), not reopened here.
+   `windows::launch` was disabled
    because `std::process::Command` cannot spawn under an alternate token. It
    now calls `CreateProcessAsUserW` directly under a distinct primary token,
    applies the directory ACL, creates the child `CREATE_SUSPENDED`, assigns it
@@ -181,31 +335,62 @@ crate deliberately does not inherit the workspace's Apache-2.0
    bubblewrap's `--unshare-user` for any process without an explicit `userns`
    grant. Written against the documented Ubuntu pattern but not loaded and
    exercised against a real restricted-userns box in this session.
-6. **Windows restricted token is the base variant only.** No SIDs disabled,
-   no privileges deleted beyond `CreateRestrictedToken`'s own defaults, and it
-   restricts the *current* process's token rather than provisioning a
-   dedicated low-privilege sandbox OS user. `codex-rs/windows-sandbox-rs`'s
-   elevated-helper-user pattern (see above) is the precedent for that
-   variant when it's prioritized. Item 1 is now wired, so this is the next
-   Windows hardening step (a dedicated later step of the cross-platform plan).
-7. **`linux::launch`'s real `Command::spawn()` + `pre_exec` path is a
-   post-fork allocator-deadlock hazard, discovered this pass (#308/#311).**
-   `pre_exec`'s closure runs in a raw-`fork()`ed child (required so it can
-   run arbitrary code before `exec`); `apply_landlock_ruleset` and
-   `apply_seccomp_denylist` both allocate (`Vec`, `PathFd::new`, `format!`).
+6. **IN PROGRESS (Step 3): Windows restricted token is the base variant
+   only.** No SIDs disabled, no privileges deleted beyond
+   `CreateRestrictedToken`'s own defaults, and it restricts the *current*
+   process's token rather than provisioning a dedicated low-privilege sandbox
+   OS user. `codex-rs/windows-sandbox-rs`'s elevated-helper-user pattern (see
+   above) is the precedent for that variant. Execution is
+   `blueprint-step3-elevated-windows-sandbox.md` (project vault): Wave 1 (this
+   PR) vendors the mechanism primitives (`codex-windows-sandbox/`) and ports
+   the policy adapter (`windows_resolve.rs`), both inert and not yet wired
+   into `windows::launch`. Waves 2 to 4 (elevated helper and provisioning,
+   then the actual launch-path wiring) remain open. Mark RESOLVED only when
+   Wave 4 lab-validates the isolation matrix on `spike307-win` (assertions L7
+   to L12 in the blueprint).
+7. **RESOLVED (#350).** The Linux `pre_exec` post-fork allocator-deadlock
+   hazard below was fixed by #350 (merged), which moved `linux::launch`'s
+   `pre_exec` closure to an allocation-free path so no thread can deadlock on
+   the allocator's lock immediately after `fork()`. Original hazard, kept for
+   the regression record: `linux::launch`'s real `Command::spawn()` +
+   `pre_exec` path was a post-fork allocator-deadlock hazard, discovered in
+   the #308/#311 pass. `pre_exec`'s closure runs in a raw-`fork()`ed child
+   (required so it can run arbitrary code before `exec`); `apply_landlock_ruleset`
+   and `apply_seccomp_denylist` both allocated (`Vec`, `PathFd::new`, `format!`).
    Allocating in a forked child of a multithreaded parent risks the classic
    post-fork malloc deadlock (another thread can hold the allocator's lock
    at the instant of `fork()`, and the single surviving child thread then
    blocks on it forever) -- and because Rust's `pre_exec` machinery makes
    the *parent's* `spawn()` block on a pipe read until the child execs or
-   reports an error, that hang propagates back to the caller too. Directly
-   observed this pass: an end-to-end `launch()` test (removed, see
+   reports an error, that hang propagated back to the caller too. Directly
+   observed at the time: an end-to-end `launch()` test (removed, see
    `linux.rs`'s test module comment) hung `cargo test` for 15+ minutes in
-   this crate's own (multithreaded) test binary. Pre-existing: no test
-   before this pass ever exercised the real spawn path, so nothing
-   surfaced it earlier; it is not new in this pass, only newly visible.
-   Fix needs either an alloc-free `pre_exec` closure or moving off
-   fork+pre_exec toward a `posix_spawn`-style API -- out of scope here.
+   this crate's own (multithreaded) test binary. Pre-existing at the time: no
+   test before that pass ever exercised the real spawn path, so nothing
+   surfaced it earlier.
+8. **Known upstream issue, deferred (`cap.rs`, CodeRabbit finding, PR #398):
+   the `cap_sid` file is an unsynchronized read-modify-write.**
+   `workspace_cap_sid_for_cwd` and `writable_root_cap_sid_for_path` both
+   `load_or_create_cap_sids` (read + parse JSON), mutate the in-memory
+   `CapSids`, then `persist_caps` (serialize + `fs::write`) the whole file
+   back, with no file lock, mutex, or atomic replace between the read and
+   the write. Two concurrent callers against the same `codex_home` can race:
+   both read the same base state, each adds its own
+   `workspace_by_cwd`/`writable_root_by_path` entry, and whichever
+   `persist_caps` writes last silently drops the other's entry (and its
+   already-applied ACL SID becomes orphaned). This is reachable in the
+   intended production design, not merely theoretical: under the Step 3
+   Q1/Q3 decision (one shared low-privilege sandbox OS user, not one per
+   session), concurrent agent-engine sandbox launches on Windows share that
+   one user's `codex_home`, hence one `cap_sid` file. Not guess-fixed this
+   pass: `cap.rs` is still fully inert (nothing calls it from
+   `windows::launch` yet, see item #6), and the right fix (`LockFileEx`
+   around the read-modify-write, a named mutex, or an atomic
+   rename-based compare-and-swap) needs a real concurrent-launch test on
+   Windows to trust the chosen approach. Fix and lab-validate together with
+   whichever of Wave 3 or Wave 4 first makes concurrent launches reachable
+   (the same wave that wires the sandbox-user provisioning and the actual
+   `cap.rs` launch-path call sites).
 
 ## Updating this vendor copy
 
@@ -213,8 +398,22 @@ crate deliberately does not inherit the workspace's Apache-2.0
 2. Re-copy `codex-rs/bwrap/`, `codex-rs/process-hardening/`, and
    `codex-rs/vendor/bubblewrap/` verbatim (package names and `Cargo.toml`
    should not need renaming; they already match upstream).
-3. Re-copy the repo-root `LICENSE`/`NOTICE` if changed.
-4. Re-run `cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
+3. Re-copy `codex-rs/windows-sandbox-rs/src/{token,cap,proc_thread_attr,acl,
+   workspace_acl,deny_read_acl,deny_read_state,dpapi,hide_users,winutil,
+   sandbox_utils,env,path_normalization}.rs` verbatim into
+   `codex-windows-sandbox/src/`. Re-diff `resolved_permissions.rs` against
+   `hive-desktop-sandbox/src/windows_resolve.rs` by hand (it is a port, not a
+   verbatim copy) for any new upstream fields/accessors worth porting. If
+   `process.rs` or `deny_read_resolver.rs` are ever vendored/ported (see
+   "Deliberately NOT vendored this wave" above), re-check their dependency
+   graph against `desktop.rs`/`logging.rs`/`codex_protocol` again; upstream
+   may have changed the coupling.
+4. Re-copy the repo-root `LICENSE`/`NOTICE` if changed.
+5. Re-run `cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
    cargo test`, plus the `x86_64-pc-windows-gnu` cross-check (now also run by
-   the `rust-tests` CI job), before merging.
-5. Update the commit SHA/date at the top of this file.
+   the `rust-tests` CI job, scoped to `-p hive-desktop-sandbox -p
+   codex-windows-sandbox`), and the MSVC cross-check
+   (`cargo check --target x86_64-pc-windows-msvc -p hive-desktop-sandbox -p
+   codex-windows-sandbox`, lab or a Windows host only; CI still cannot link
+   MSVC) before merging.
+6. Update the commit SHA/date at the top of this file.

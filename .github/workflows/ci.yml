@@ -186,14 +186,18 @@ jobs:
       # so no MinGW linker is needed; adding the target's std is enough. Scoped
       # to -p hive-desktop-sandbox to skip the vendored bwrap C build. MSVC is
       # not cross-checkable here (no linker); see VENDORING.md open risk #2.
+      #
+      # -p codex-windows-sandbox is included from Step 3 Wave 1 onward: its
+      # vendored modules are ALSO #[cfg(windows)]-gated (see its lib.rs) and
+      # need the same cross-compile to be exercised at all in CI.
       - name: Add Windows cross target
         run: rustup target add x86_64-pc-windows-gnu
 
       - name: cargo check (Windows FFI cross-compile)
-        run: cargo check --target x86_64-pc-windows-gnu -p hive-desktop-sandbox
+        run: cargo check --target x86_64-pc-windows-gnu -p hive-desktop-sandbox -p codex-windows-sandbox
 
       - name: cargo clippy (Windows FFI cross-compile)
-        run: cargo clippy --target x86_64-pc-windows-gnu -p hive-desktop-sandbox -- -D warnings
+        run: cargo clippy --target x86_64-pc-windows-gnu -p hive-desktop-sandbox -p codex-windows-sandbox -- -D warnings
 
   # ------------------------------------------------------------------
   # Desktop app (Tauri shell, issue #310/#311). Toolchain version comes
