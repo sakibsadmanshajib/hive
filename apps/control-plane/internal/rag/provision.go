@@ -16,6 +16,14 @@ import (
 // stable so idempotency and the base migration agree.
 const hnswIndexName = "rag_chunks_embedding_hnsw_idx"
 
+// provisionAdvisoryLockKey is a fixed, arbitrary key for the transaction-level
+// advisory lock that serializes Provision. Two concurrent provisions (e.g. two
+// control-plane replicas restarting at once) would otherwise interleave the
+// DROP INDEX / DROP COLUMN / ADD COLUMN / CREATE INDEX sequence and corrupt the
+// schema. pg_advisory_xact_lock blocks the second caller until the first
+// commits or rolls back, and auto-releases with the transaction.
+const provisionAdvisoryLockKey int64 = 0x726167656d626564 // "ragembed"
+
 // ActiveConfig is the singleton public.rag_embedding_config row: the active,
 // provisioned embedding configuration both services reconcile against.
 type ActiveConfig struct {
@@ -107,6 +115,14 @@ func Provision(ctx context.Context, pool *pgxpool.Pool, plan embedmodel.Plan) er
 		return fmt.Errorf("rag.provision: begin: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	// Serialize concurrent provisions: hold a transaction-scoped advisory lock
+	// before the destructive DROP/CREATE sequence so two replicas cannot
+	// interleave and leave rag_chunks.embedding half-rebuilt. Released on
+	// commit/rollback.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, provisionAdvisoryLockKey); err != nil {
+		return fmt.Errorf("rag.provision: acquire advisory lock: %w", err)
+	}
 
 	curType, colFound, err := currentEmbeddingColumnType(ctx, tx)
 	if err != nil {
