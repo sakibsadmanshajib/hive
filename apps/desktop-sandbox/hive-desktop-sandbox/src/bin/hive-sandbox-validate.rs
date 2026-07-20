@@ -66,22 +66,35 @@ fn main() -> std::process::ExitCode {
 
     // Paths the probe touches. `outside` is the sandbox_home root: created by
     // provisioning as an administrator, the least-privilege sandbox account has
-    // no write there, so a write must be denied. `secret` is the DPAPI blob
-    // under the deny-read secrets dir provisioning sealed.
+    // no write there, so a write must be denied. `canary` is a plaintext secret
+    // seeded (by this parent, as admin) INSIDE the deny-read secrets dir, so its
+    // marker inheriting the deny-read ACE means the confined child must not be
+    // able to read it back.
     let inside = ws.join("inside.txt");
     let outside = sandbox_home.join("outside_probe.txt");
-    let secret = hive_desktop_sandbox::windows_elevated::sandbox_creds_path(&sandbox_home);
+    let secrets = hive_desktop_sandbox::windows_elevated::secrets_dir(&sandbox_home);
+    let canary = secrets.join("canary.txt");
+    const CANARY_MARKER: &str = "HIVE_CANARY_DO_NOT_LEAK";
     let _ = std::fs::remove_file(&inside);
     let _ = std::fs::remove_file(&outside);
+    if let Err(e) = std::fs::write(&canary, CANARY_MARKER) {
+        eprintln!("seed canary {}: {e}", canary.display());
+        return std::process::ExitCode::FAILURE;
+    }
 
-    // Probe batch: each step prints a marker so stdout is self-describing.
+    // Probe batch. Paths under the sandbox home contain no spaces, so no inner
+    // quoting is used: quoting the whole script arg and re-quoting inner paths
+    // double-escapes through the argv -> command-line -> cmd re-parse and
+    // produces a malformed path. Commands are sequenced with `&`; each step
+    // prints a marker so stdout is self-describing. `echo`/`type` are cmd
+    // built-ins (no PATH needed); `whoami` resolves via the minimal PATH below.
     let script = format!(
-        "whoami /user & echo ===INSIDE=== & (echo probe> \"{inside}\" && echo INSIDE_WRITE_OK || echo INSIDE_WRITE_DENIED) & \
-         echo ===OUTSIDE=== & (echo probe> \"{outside}\" && echo OUTSIDE_WRITE_OK || echo OUTSIDE_WRITE_DENIED) & \
-         echo ===SECRET=== & (type \"{secret}\" >nul 2>&1 && echo SECRET_READ_OK || echo SECRET_READ_DENIED)",
+        "whoami /user & echo ===INSIDE=== & echo probe>{inside} & \
+         echo ===OUTSIDE=== & echo probe>{outside} & \
+         echo ===SECRET=== & type {canary}",
         inside = inside.display(),
         outside = outside.display(),
-        secret = secret.display(),
+        canary = canary.display(),
     );
     let command = vec![
         r"C:\Windows\System32\cmd.exe".to_string(),
@@ -102,7 +115,15 @@ fn main() -> std::process::ExitCode {
         }
     };
 
-    let env: HashMap<String, String> = HashMap::new();
+    // Minimal, scrubbed environment: enough for cmd/whoami to function
+    // (SystemRoot + a System32 PATH), nothing sensitive. Confinement comes from
+    // the token + ACLs, not from env starvation.
+    let mut env: HashMap<String, String> = HashMap::new();
+    env.insert("SystemRoot".to_string(), r"C:\Windows".to_string());
+    env.insert(
+        "PATH".to_string(),
+        r"C:\Windows\System32;C:\Windows".to_string(),
+    );
     println!("== confined-spawn validation ==");
     println!("sandbox_home = {}", sandbox_home.display());
     println!("workspace    = {}", ws.display());
@@ -144,9 +165,9 @@ fn main() -> std::process::ExitCode {
     // Derived verdicts from the raw evidence above. Printed for convenience;
     // the raw evidence is authoritative.
     let sid_ok = stdout.to_lowercase().contains(&expected_sid.to_lowercase());
-    let inside_ok = inside_exists && stdout.contains("INSIDE_WRITE_OK");
-    let outside_denied = !outside_exists && stdout.contains("OUTSIDE_WRITE_DENIED");
-    let secret_denied = stdout.contains("SECRET_READ_DENIED");
+    let inside_ok = inside_exists;
+    let outside_denied = !outside_exists;
+    let secret_denied = !stdout.contains(CANARY_MARKER);
     println!("-- derived verdicts --");
     println!("(a) child SID == sandbox SID : {sid_ok}");
     println!("(b) outside write denied     : {outside_denied}");
