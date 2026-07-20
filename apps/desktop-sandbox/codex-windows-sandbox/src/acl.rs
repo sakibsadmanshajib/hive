@@ -201,6 +201,26 @@ pub unsafe fn path_has_read_deny(path: &Path, psid: *mut c_void) -> Result<bool>
     }
 }
 
+/// Path-based wrapper: does the DACL on `path` carry an effective (non
+/// inherit-only) write-allow ACE for `psid`? Fresh single DACL fetch,
+/// symmetric with [`path_has_read_deny`]. Used by [`add_allow_ace`] to verify,
+/// fail-closed, that a grant actually persisted before reporting success.
+///
+/// # Safety
+///
+/// `psid` must be a valid, well-formed `PSID` pointer that stays valid for the
+/// duration of this call.
+pub unsafe fn path_has_write_allow(path: &Path, psid: *mut c_void) -> Result<bool> {
+    unsafe {
+        let (p_dacl, sd) = fetch_dacl_handle(path)?;
+        let has = dacl_has_write_allow_for_sid(p_dacl, psid);
+        if !sd.is_null() {
+            LocalFree(sd as HLOCAL);
+        }
+        Ok(has)
+    }
+}
+
 pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
     if p_dacl.is_null() {
         return false;
@@ -490,8 +510,7 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
         }
         return Ok(false);
     }
-    let mut added = false;
-    // Always ensure write is present: if an allow ACE exists without write, add one with write+RX.
+    // Add an allow ACE granting write+RX.
     let trustee = TRUSTEE_W {
         pMultipleTrustee: std::ptr::null_mut(),
         MultipleTrusteeOperation: 0,
@@ -506,27 +525,42 @@ pub unsafe fn add_allow_ace(path: &Path, psid: *mut c_void) -> Result<bool> {
     explicit.Trustee = trustee;
     let mut p_new_dacl: *mut ACL = std::ptr::null_mut();
     let code2 = SetEntriesInAclW(1, &explicit, p_dacl, &mut p_new_dacl);
-    if code2 == ERROR_SUCCESS {
-        let code3 = SetNamedSecurityInfoW(
-            to_wide(path).as_ptr() as *mut u16,
-            1,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            p_new_dacl,
-            std::ptr::null_mut(),
-        );
-        if code3 == ERROR_SUCCESS {
-            added = !dacl_has_write_allow_for_sid(p_dacl, psid);
+    if code2 != ERROR_SUCCESS {
+        if !p_sd.is_null() {
+            LocalFree(p_sd as HLOCAL);
         }
-        if !p_new_dacl.is_null() {
-            LocalFree(p_new_dacl as HLOCAL);
-        }
+        return Err(anyhow!("SetEntriesInAclW failed: {code2}"));
+    }
+    let code3 = SetNamedSecurityInfoW(
+        to_wide(path).as_ptr() as *mut u16,
+        1,
+        DACL_SECURITY_INFORMATION,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        p_new_dacl,
+        std::ptr::null_mut(),
+    );
+    if !p_new_dacl.is_null() {
+        LocalFree(p_new_dacl as HLOCAL);
     }
     if !p_sd.is_null() {
         LocalFree(p_sd as HLOCAL);
     }
-    Ok(added)
+    if code3 != ERROR_SUCCESS {
+        return Err(anyhow!("SetNamedSecurityInfoW failed: {code3}"));
+    }
+    // Fail-closed (D-005): verify the allow-write ACE actually persisted by
+    // re-reading the DACL from a fresh handle. The prior code checked the STALE
+    // pre-write DACL (which never carries the write), so it reported success
+    // even when SetNamedSecurityInfoW was denied (a caller lacking WRITE_DAC on
+    // the object) and no ACE ever landed.
+    if !path_has_write_allow(path, psid)? {
+        return Err(anyhow!(
+            "allow-write ACE did not persist on {}",
+            path.display()
+        ));
+    }
+    Ok(true)
 }
 
 /// Adds a deny ACE to prevent write/append/delete for the given SID on the target path.
