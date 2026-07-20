@@ -656,78 +656,102 @@ with the reason a blind fix would risk invalidating that lab run.
 
 - `desktop.rs::grant_winsta_desktop_access` (Greptile "Desktop Grant Outlives
   Runner"): the persistent `WINSTA_ALL_ACCESS`/`GENERIC_ALL`/`DESKTOP_ALL_ACCESS`
-  grant to the shared sandbox account was never revoked, so a later process
-  running as that account on the same station/desktop also inherited it. It was
-  a known, non-blocking gap for Integration A (unreachable then: `windows::launch`
-  refuses every network policy, so nothing reached this grant outside the
-  lab-only validation entry), with a HARD GATE on Integration B: do not remove
-  the network-refusal guards until the runner moves to a dedicated, non-shared
-  private window station.
-  RESOLVED by Step 3 Integration B1 (see the "Integration B1: private window
-  station for UI isolation" deviation below): `grant_winsta_desktop_access` and
-  its shared-`WinSta0` grant are removed. The runner now launches on a
-  per-launch PRIVATE window station + desktop that no other process shares, so
-  the outlives-runner class no longer exists. The `windows::launch`
-  network-refusal guards remain in force (B1 adds UI isolation only; WFP egress
-  is still Integration B / D-005), so the HARD GATE's own precondition (WFP
-  landing) is untouched by this change.
-- `windows_elevated.rs::stream_child`'s sequential stdout-then-stderr drain
-  (CodeRabbit "Sequential stdout-then-stderr drain can deadlock", Greptile
-  "Sequential Pipe Drain Deadlocks", both on the same code): draining stdout
-  to EOF before touching stderr can deadlock if the child fills the stderr
-  pipe buffer while stdout stays open. The correct fix, a concurrent
-  two-thread drain with the frame writer behind a shared lock, changes this
-  exact D-004 lab-validated spawn/stream path from single- to multi-threaded
-  framing. Deferred rather than blind-rewritten; needs a fresh spike307-win
-  run once implemented. Inline comment added at the call site so this is
-  tracked, not silently missed.
-- `windows_elevated.rs::stream_child`'s ignored `timeout_ms` (Greptile
-  "Request Timeout Is Ignored"): the wait is always `INFINITE` and
-  `timed_out` is always `false`. Currently dormant, not reachable: the sole
+  grant to the shared sandbox account is never revoked, so a later process
+  running as that account on the same station/desktop also inherits it. This
+  is the disposition the opus security review already accepted as a known,
+  non-blocking gap for Integration A (unreachable today: `windows::launch`
+  refuses every network policy, so nothing reaches this grant outside the
+  lab-only validation entry). Documented as a HARD GATE on Integration B in
+  the function's own doc comment: do not remove the network-refusal guards
+  until the runner moves to a dedicated, non-shared private window station.
+  Not re-fixed here per that disposition.
+- **RESOLVED (Step 3 Integration B1).** `windows_elevated.rs::stream_child`'s
+  sequential stdout-then-stderr drain (CodeRabbit "Sequential stdout-then-stderr
+  drain can deadlock", Greptile "Sequential Pipe Drain Deadlocks", both on the
+  same code) could deadlock if the child filled the stderr pipe buffer while
+  stdout stayed open. Fixed with a concurrent two-thread drain
+  (`std::thread::scope`, one thread per stream) sharing the frame `writer`
+  behind a `Mutex` so Output frames never interleave mid-write; each stream's
+  drain runs on its own scoped thread, joined and mapped to `Err`, so a panic
+  on either stream fails closed instead of unwinding raw. This is a live fix
+  (drains run on every `stream_child` call, timeout or not). Still needs a
+  fresh spike307-win lab run to confirm behaviorally; type-checked and
+  clippy-clean cross-compiled to `x86_64-pc-windows-gnu`.
+- **DEFERRED to B2 (request-timeout, `SpawnRequest::timeout_ms`).** An
+  earlier pass on this PR added a watchdog thread, `TerminateJobObject`,
+  `CancelIoEx` on the drain read handles, and a bounded post-timeout wait to
+  make `timeout_ms` actually bound the whole spawn (Greptile "Request Timeout
+  Is Ignored", then two further Greptile/CodeRabbit P1 passes on that fix:
+  "Kill the whole job on timeout, not just the root process" and
+  "Termination failure remains unbounded"). A third review pass (Greptile)
+  found the remaining gap is structural, not fixable by patching further:
+  `CancelIoEx` only cancels OVERLAPPED I/O, and this crate's drain pipes are
+  synchronous (`CreatePipe` plus blocking `File::read`), so `CancelIoEx`
+  cannot interrupt a pending read on them at all. Bounding a blocking
+  synchronous-pipe read correctly needs either `CancelSynchronousIo` called
+  against the specific drain thread's handle (from another thread, targeting
+  that thread, not the file handle) or switching the pipes/reads to
+  overlapped I/O with `GetOverlappedResult`/`WaitForSingleObject` on the
+  OVERLAPPED event, with the cancellation's own result checked, not
+  discarded, either way. `timeout_ms` is dormant in this PR: the sole
   `SpawnRequest` construction site (`run_windows_sandbox_capture`, this file)
-  always sets `timeout_ms: None`. A correct fix needs a watchdog concurrent
-  with the drains (coupled to the drain-deadlock deferral above, since a hang
-  during drain must also be bounded), so it is tracked with that fix rather
-  than half-implemented as a bare final-wait timeout that a stuck drain would
-  never reach. Inline comment added at the call site.
+  always sets `timeout_ms: None`, so the watchdog code path never ran; CTO
+  call was to remove all of the watchdog/termination/cancellation machinery
+  this pass rather than keep chasing synchronous-read cancellation on dead
+  code, and build the correct form (`CancelSynchronousIo` or overlapped I/O,
+  checked results, no discarded cancellation outcomes) together with wiring
+  a real deadline in B2, lab-exercised on `spike307-win` at that point since
+  only then does the watchdog path actually run.
 
-### Integration B1: private window station for UI isolation (Hive deviation)
+### Integration B1: private desktop for UI isolation (Hive deviation)
 
-Upstream `desktop.rs` isolates the UI only as far as an optional private
-DESKTOP under the shared `WinSta0` (`LaunchDesktop::prepare(use_private_desktop)`),
-and Hive's Integration A shipped `grant_winsta_desktop_access`, which granted the
+Hive's Integration A shipped `grant_winsta_desktop_access`, which grants the
 sandbox account access to the interactive user's shared `WinSta0` so the
-user32-linking runner could attach at load. Both leave the sandboxed process on
-the real user's window station, where it can shatter-attack, `SendInput` to, or
-read the clipboard of the real desktop (clipboard and the atom table are
-per-window-station, shared across every desktop on that station).
+user32-linking runner can complete process-attach at load. That left the
+sandboxed inner child on the real user's default desktop (`WinSta0\Default`),
+where it could shatter-attack or `SendInput` to the real desktop's windows.
 
-B1 closes that hole by adding a Hive-native `desktop.rs::PrivateWindowStation`
-(no upstream equivalent) and removing `grant_winsta_desktop_access`:
+B1 closes the desktop half of that hole by adding a Hive-native
+`desktop.rs::PrivateDesktop` (mirroring upstream codex `desktop.rs`) and routing
+the untrusted inner child onto it. It does NOT add a private window station.
 
-- The parent creates a per-launch PRIVATE window station
-  (`CreateWindowStationW`, `CWF_CREATE_ONLY`, a `HiveSandboxWinSta-<random u128>`
-  name) and a `HiveSandboxDesktop` on it (`SetProcessWindowStation` to the new
-  station so `CreateDesktopW` lands there, then the parent's own station is
-  restored). The sandbox account SID is granted on both objects (reusing
-  `merge_grant_on_window_object`) as insurance for a restrictive default DACL.
-- `runner_client.rs::spawn_runner_transport` sets
-  `STARTUPINFO.lpDesktop = "HiveSandboxWinSta-<..>\\HiveSandboxDesktop"` on the
-  `CreateProcessWithLogonW` launch. The spike (spike307-win, 2026-07-20, cl.exe
-  probe) proved `CreateProcessWithLogonW` (Secondary Logon) honours a
-  parent-created private window station named in `lpDesktop`: the child ran as
-  the sandbox SID on the private station and exited cleanly.
-- Fail closed (D-005): if the private station cannot be created (e.g. a
-  de-elevated caller in session 0 gets `ERROR_ACCESS_DENIED`) the launch errors
-  and NEVER falls back to `WinSta0`. Assumes the caller runs in the interactive
-  logged-in user's session, where window-station creation is permissive
-  (documented in `PrivateWindowStation::create`).
+- The RUNNER (running as the sandbox account) creates a per-launch PRIVATE
+  DESKTOP on the shared `WinSta0` (`CreateDesktopW`, a
+  `HiveSandboxDesktop-<random u128>` name from `OsRng`) and grants its own logon
+  SID access to it. The restricted inner-child token derives from the runner's
+  token and carries that same logon SID in its restricting-SID set, so the one
+  grant satisfies both halves of the child's `WRITE_RESTRICTED` access check.
+- `process.rs` sets `STARTUPINFO.lpDesktop = "Winsta0\\HiveSandboxDesktop-<..>"`
+  on the inner-child launch, so the child runs on the private desktop and holds
+  no handle to `WinSta0\Default`: it cannot enumerate the default desktop's
+  windows, `SendInput` across the desktop boundary, or mount a shatter attack on
+  the real desktop.
+- NOT a private window station. A least-privilege sandbox account cannot create
+  a securable window station (`CreateWindowStationW` returns
+  `ERROR_ACCESS_DENIED` for that token) and upstream never creates one; a private
+  desktop is the standard per-process UI isolation boundary (the upstream codex /
+  Chromium baseline). `CreateDesktopW` also has no `CWF_CREATE_ONLY` equivalent,
+  so a duplicate name would open the existing desktop rather than error; the
+  128-bit `OsRng` name suffix makes a collision cryptographically negligible.
+- Fail closed (D-005): any Win32 failure in `PrivateDesktop::create` returns an
+  error and NEVER falls back to `WinSta0\Default`.
 
-Scope: B1 is UI isolation ONLY. The two `windows::launch` network-refusal guards
-are untouched; both `NetworkPolicy::DenyAll` and `AllowHosts` still fail closed
-until the WFP egress backend lands (Integration B / D-005). This code is
-cross-compiled by CI (`x86_64-pc-windows-gnu`) but, like the rest of the Win32
-compose, its behaviour is only lab-provable on `spike307-win`.
+Scope: B1 is DESKTOP-level UI isolation ONLY.
+
+- Clipboard and the global atom table are per-WINDOW-STATION, so they stay
+  shared with the interactive user (accepted tradeoff; a private station would
+  isolate them, but the sandbox token cannot create one).
+- `grant_winsta_desktop_access` is RETAINED: the runner still needs shared
+  `WinSta0` access to attach user32 at load, so the "Desktop Grant Outlives
+  Runner" gap noted above is unchanged by B1 (still a known, non-blocking gap).
+- A hostile child's escape off its own private desktop is contained only once
+  the deferred Low-integrity / SID-disable seam lands.
+- The two `windows::launch` network-refusal guards are untouched; both
+  `NetworkPolicy::DenyAll` and `AllowHosts` still fail closed until the WFP
+  egress backend lands (Integration B / D-005).
+
+This code is cross-compiled by CI (`x86_64-pc-windows-gnu`) but, like the rest
+of the Win32 compose, its behaviour is only lab-provable on `spike307-win`.
 
 ### Deliberately NOT done in A2 (fail-closed stubs, honest)
 
