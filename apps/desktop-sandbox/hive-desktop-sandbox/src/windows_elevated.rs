@@ -34,20 +34,26 @@
 //! UAC prompts exactly once, at provisioning, when the setup binary runs
 //! elevated to create the OS account.
 //!
-//! ## Network semantics (blueprint Q2 / D-005, locked)
+//! ## Network semantics (blueprint Q2 / D-005, Integration B2 LIVE)
 //!
-//! Step 3 does NOT enforce network egress (WFP is Integration B). The public
-//! [`crate::launch`] therefore keeps REFUSING both `NetworkPolicy::DenyAll`
-//! (`NetworkConfinementNotImplemented`) and `NetworkPolicy::AllowHosts`
-//! (`AllowHostsNotYetImplemented`); see [`LaunchDecision`]. There is no
-//! `launch()` code path that reports success while a child has unrestricted
-//! network. The elevated compose ([`run_windows_sandbox_capture`]) is reachable
-//! ONLY through the explicit, lab-only
-//! [`spawn_confined_for_validation`] entry point, which is documented as NOT a
-//! network-confined launch and exists solely so the `spike307-win` lab can
-//! prove the filesystem / user / token / Job isolation matrix (exactly as #395
-//! proved its primitives by lab replica, ahead of the composed success path
-//! that lands with Integration B).
+//! Integration B2 makes egress enforcement LIVE and two-layer (D-011), all
+//! keyed on the sandbox account SID (D-010):
+//!   * PROVISION installs the persistent fence: the WFP per-protocol + core
+//!     filters (loopback permit above SID block-all) and the firewall
+//!     block-all-outbound rule.
+//!   * PER TASK the compose ([`run_windows_sandbox_capture`]) installs the
+//!     firewall loopback allow; `DenyAll` blocks all egress, `AllowHosts`
+//!     routes through the loopback [`crate::egress_proxy::AllowlistProxy`]
+//!     (injecting `HTTP(S)_PROXY` / `NO_PROXY` into the child env). A task-end
+//!     RAII guard re-blocks loopback on every return path.
+//!
+//! The public [`crate::launch`] dispatches to this compose (it no longer
+//! refuses either policy). Because the child runs UNDER the sandbox SID, the
+//! SID-keyed fence applies to it (the whole point versus the base backend).
+//! Fail-closed (D-005): a crash leaves the persistent block-all in force, and a
+//! failed fence step aborts the launch rather than opening egress. Only one
+//! fenced task runs at a time (single shared SID / loopback rule, D-003),
+//! enforced by an [`ActiveTaskGuard`] CAS.
 //!
 //! ## Verification status (read before trusting this file)
 //!
@@ -80,46 +86,56 @@ pub struct CaptureResult {
     pub timed_out: bool,
 }
 
-/// The decision [`crate::launch`] reaches for a policy BEFORE any spawn.
+/// The spawn shape [`crate::launch`] reaches for a policy BEFORE any spawn.
 ///
-/// Step 3 has no `Spawn` variant on purpose: [`NetworkPolicy`] has exactly two
-/// variants and Step 3 refuses BOTH (WFP is Integration B; Q2/D-005). A future
-/// `Spawn` variant lands with Integration B, when the refusal guards are
-/// removed and the composed success path runs for the first time. Keeping this
-/// as an explicit enum (rather than two inline `if` guards) makes the
-/// refuse-vs-spawn decision independently unit-testable, and gives Integration
-/// B one obvious place to add the success branch.
+/// Integration B2 activation flipped the two former `Refuse*` variants to
+/// `Spawn*`: `launch` no longer refuses either network policy. It dispatches to
+/// the SID-fenced elevated compose ([`run_windows_sandbox_capture`]), which, on
+/// top of the persistent WFP + firewall block-all installed at provision,
+/// installs the per-task loopback firewall allow and (for `AllowHosts`) starts
+/// the loopback egress proxy and injects `HTTP(S)_PROXY`. Keeping this as an
+/// explicit enum (rather than two inline `if`s) keeps the policy -> spawn-shape
+/// mapping independently unit-testable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LaunchDecision {
-    /// `NetworkPolicy::AllowHosts`: refuse with
-    /// [`LaunchError::AllowHostsNotYetImplemented`] (needs the egress proxy +
-    /// WFP, Integration B).
-    RefuseAllowHosts,
-    /// `NetworkPolicy::DenyAll`: refuse with
-    /// [`LaunchError::NetworkConfinementNotImplemented`]. A `DenyAll` child
-    /// under a standard sandbox user CAN still open sockets, so spawning it
-    /// without WFP would be a SILENT fail-open (D-005, FORBIDDEN). Refuse until
-    /// Integration B installs the WFP block.
-    RefuseDenyAll,
+    /// `NetworkPolicy::DenyAll`: spawn with all egress blocked, no proxy.
+    SpawnDenyAll,
+    /// `NetworkPolicy::AllowHosts`: spawn with the loopback egress proxy
+    /// fronting exactly `hosts`.
+    SpawnAllowHosts { hosts: Vec<String> },
 }
 
 impl LaunchDecision {
-    /// Pure mapping from a policy's network posture to the Step 3 launch
-    /// decision. Both variants refuse; see the type doc.
+    /// Pure mapping from a policy's network posture to the launch spawn shape.
     pub fn for_policy(policy: &SandboxPolicy) -> Self {
         match policy.network() {
-            NetworkPolicy::AllowHosts(_) => LaunchDecision::RefuseAllowHosts,
-            NetworkPolicy::DenyAll => LaunchDecision::RefuseDenyAll,
+            NetworkPolicy::AllowHosts(hosts) => LaunchDecision::SpawnAllowHosts {
+                hosts: hosts.clone(),
+            },
+            NetworkPolicy::DenyAll => LaunchDecision::SpawnDenyAll,
         }
     }
+}
 
-    /// The [`LaunchError`] this decision produces from the public launch path.
-    pub fn into_refusal(self) -> LaunchError {
-        match self {
-            LaunchDecision::RefuseAllowHosts => LaunchError::AllowHostsNotYetImplemented,
-            LaunchDecision::RefuseDenyAll => LaunchError::NetworkConfinementNotImplemented,
-        }
-    }
+// -------- Single-active-task guard (pure helper; RAII lives in the compose) --
+
+/// Attempts to acquire a single-active-task flag by CAS `false -> true`.
+/// Returns `true` iff the flag was free (this caller now owns it). Pure and
+/// testable on any platform; the process-wide static and the RAII guard that
+/// wrap it live in the Windows compose.
+///
+/// Only one fenced sandbox task may run at a time because every task shares one
+/// firewall loopback rule keyed on the single sandbox account SID (D-003); a
+/// second concurrent launch would clobber the first task's per-task loopback
+/// allow, so it is rejected instead (blocker a, fail-closed).
+fn acquire_single_task_flag(flag: &std::sync::atomic::AtomicBool) -> bool {
+    flag.compare_exchange(
+        false,
+        true,
+        std::sync::atomic::Ordering::SeqCst,
+        std::sync::atomic::Ordering::SeqCst,
+    )
+    .is_ok()
 }
 
 /// The filesystem paths a per-task ACL grant should allow (writable) and deny
@@ -240,6 +256,7 @@ pub use windows_impl::{
 #[cfg(windows)]
 mod windows_impl {
     use super::*;
+    use crate::windows_firewall;
     use codex_windows_sandbox::absolute_path::AbsolutePathBuf;
     use codex_windows_sandbox::identity::SandboxCreds;
     use codex_windows_sandbox::ipc_framed::{
@@ -261,6 +278,7 @@ mod windows_impl {
     use std::fs::File;
     use std::io::{Read, Write};
     use std::sync::Mutex;
+    use std::sync::atomic::AtomicBool;
 
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
     use windows_sys::Win32::Security::Authentication::Identity::{
@@ -284,6 +302,73 @@ mod windows_impl {
     // its runner-exe resolution and log dir; Hive passes the sandbox home. The
     // name is kept as `codex_home` at the vendored call boundary only.
     type Result<T> = anyhow::Result<T>;
+
+    // -------------------------------------------------------------------
+    // Per-task egress fence guards (Integration B2 activation)
+    // -------------------------------------------------------------------
+
+    /// Process-wide single-active-task flag. Only one fenced sandbox task may
+    /// run at a time because all tasks share one firewall loopback rule keyed
+    /// on the single sandbox account SID (D-003).
+    static SANDBOX_TASK_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+    /// RAII holder of the [`SANDBOX_TASK_ACTIVE`] flag; releases on drop.
+    struct ActiveTaskGuard;
+
+    impl ActiveTaskGuard {
+        /// Acquires the single-active-task flag, or `None` if another fenced
+        /// task is already active (blocker a: reject rather than clobber the
+        /// shared loopback rule).
+        fn acquire() -> Option<Self> {
+            if acquire_single_task_flag(&SANDBOX_TASK_ACTIVE) {
+                Some(ActiveTaskGuard)
+            } else {
+                None
+            }
+        }
+    }
+
+    impl Drop for ActiveTaskGuard {
+        fn drop(&mut self) {
+            SANDBOX_TASK_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    /// Per-task egress-fence teardown guard. On drop it re-blocks loopback for
+    /// the sandbox SID (removing the per-task proxy allow) and releases the
+    /// single-active-task flag, so EVERY return path from the compose (normal
+    /// return or early error) restores the fail-closed baseline: proxy gone,
+    /// loopback re-blocked, persistent block-all still up (blocker c: PROVISION
+    /// owns the persistent fence, TASK-END owns this per-task teardown).
+    /// Best-effort: a teardown error is logged but cannot re-open egress, since
+    /// the persistent provision-time block-all stays in force regardless.
+    struct EgressFenceGuard {
+        sid: String,
+        fence_log_path: PathBuf,
+        // Dropped after the teardown below; releases the single-active flag.
+        _active: ActiveTaskGuard,
+    }
+
+    impl Drop for EgressFenceGuard {
+        fn drop(&mut self) {
+            let mut log: Box<dyn Write> = match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.fence_log_path)
+            {
+                Ok(file) => Box::new(file),
+                Err(_) => Box::new(std::io::sink()),
+            };
+            if let Err(err) =
+                windows_firewall::teardown_offline_proxy_allowlist(&self.sid, &mut *log)
+            {
+                let _ = writeln!(
+                    log,
+                    "egress fence teardown FAILED (persistent block-all still enforced, egress stays closed): {err}"
+                );
+            }
+        }
+    }
 
     // -------------------------------------------------------------------
     // Credential seal / load (identity.rs port; DPAPI at rest)
@@ -336,14 +421,15 @@ mod windows_impl {
     }
 
     // -------------------------------------------------------------------
-    // Provisioning (identity.rs / setup.rs port; WFP + firewall OMITTED)
+    // Provisioning (identity.rs / setup.rs port; WFP + firewall INSTALLED)
     // -------------------------------------------------------------------
 
     /// One-time, ELEVATED provisioning of the shared low-privilege sandbox
     /// account. Port of the provisioning half of `identity.rs` /`setup.rs`
-    /// (`run_elevated_provisioning_setup`), retargeted to the Hive sandbox home
-    /// and with the WFP/firewall call sites OMITTED (Integration B): this
-    /// authors NO network egress control.
+    /// (`run_elevated_provisioning_setup`), retargeted to the Hive sandbox home.
+    /// Integration B2: it now INSTALLS the persistent, SID-keyed egress fence
+    /// (WFP per-protocol + core filters and the firewall block-all-outbound)
+    /// before the readiness marker, so the fence is up before the first task.
     ///
     /// Steps (each fail-closed; a failure aborts and does NOT leave a
     /// half-created account usable):
@@ -354,6 +440,8 @@ mod windows_impl {
     /// 3. DPAPI-seal the CSPRNG password into a secrets dir whose ACL excludes
     ///    the sandbox account (lab item L5);
     /// 4. hide the account and its profile dir from the login screen (L4);
+    ///    then install the persistent egress fence (WFP + firewall block-all),
+    ///    SID-keyed, fail-closed (Integration B2);
     /// 5. write the readiness marker so subsequent launches do not re-elevate.
     ///
     /// MUST be run elevated (Administrator). Callers reach it through the setup
@@ -392,6 +480,23 @@ mod windows_impl {
 
         // 4. Hide the account + its profile dir from the login screen.
         hide_users::hide_newly_created_users(&[SANDBOX_USERNAME.to_string()], sandbox_home);
+
+        // 4b. Persistent egress fence (WFP + firewall block-all), SID-keyed,
+        //     fail-closed. Installed here so the fence is up before the first
+        //     task ever launches; `?` aborts provisioning (and the marker below
+        //     is never written) if either half fails, so a partially-fenced
+        //     account is never reported provisioned (D-005).
+        // WFP per-protocol + core filters (persistent, keyed on the account
+        // name -> SID).
+        codex_windows_sandbox::wfp_setup::install_wfp_filters(SANDBOX_USERNAME, |line| {
+            let _ = writeln!(log, "{line}");
+        })?;
+        // Firewall block-all outbound (non-loopback), SID-keyed.
+        let fence_sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
+            &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+        crate::windows_firewall::ensure_offline_outbound_block(&fence_sid, log)?;
 
         // 5. Readiness marker (last, so a partial provisioning is never
         //    reported complete).
@@ -557,8 +662,14 @@ mod windows_impl {
     /// uses `CreateProcessWithLogonW`), sends a `tty = false` `SpawnRequest`,
     /// and drives the frame loop to capture stdout/stderr/exit.
     ///
-    /// This is the confinement mechanism; it is NOT a network-confined launch.
-    /// It is invoked only through [`spawn_confined_for_validation`].
+    /// Integration B2: this is now the LIVE network-fenced path. Before
+    /// building the `SpawnRequest` it installs the per-task egress fence (the
+    /// firewall loopback allow, plus the loopback proxy + `HTTP(S)_PROXY` env
+    /// for `AllowHosts`) on top of the persistent WFP + block-all fence from
+    /// provision, all keyed on the sandbox SID, and arms an RAII teardown that
+    /// re-blocks loopback on every return path. It is reached both through the
+    /// public [`crate::launch`] and the lab-only
+    /// [`spawn_confined_for_validation`].
     pub fn run_windows_sandbox_capture(
         sandbox_home: &Path,
         policy: &SandboxPolicy,
@@ -566,6 +677,73 @@ mod windows_impl {
         cwd: &Path,
         env: &HashMap<String, String>,
     ) -> Result<CaptureResult> {
+        // ---- Per-task egress fence (Integration B2 activation) ----
+        // Single active task (D-003): reject a concurrent fenced launch rather
+        // than clobber the shared SID-keyed loopback rule (blocker a).
+        let active = ActiveTaskGuard::acquire().ok_or_else(|| {
+            anyhow::anyhow!(
+                "another sandboxed task is already active; concurrent fenced tasks are not supported (single shared sandbox account, D-003)"
+            )
+        })?;
+
+        // Sandbox account SID: the firewall fence + loopback allow are keyed on
+        // it (D-010), the same SID the WFP filters are keyed on at provision.
+        let sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
+            &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        let logs_base_dir = sandbox_home.join(".sandbox");
+        std::fs::create_dir_all(&logs_base_dir)
+            .map_err(|e| anyhow::anyhow!("create sandbox log dir: {e}"))?;
+        let fence_log_path = logs_base_dir.join("egress-fence.log");
+        let mut fence_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&fence_log_path)
+            .map_err(|e| anyhow::anyhow!("open egress fence log: {e}"))?;
+
+        // Mutable child env; AllowHosts injects the proxy vars into this clone.
+        let mut env = env.clone();
+
+        match policy.network() {
+            NetworkPolicy::DenyAll => {
+                // Block all loopback (no proxy exception). The persistent WFP +
+                // firewall block-all (provision) already denies non-loopback.
+                windows_firewall::ensure_offline_proxy_allowlist(&sid, &[], false, &mut fence_log)?;
+            }
+            NetworkPolicy::AllowHosts(hosts) => {
+                let proxy = crate::egress_proxy::AllowlistProxy::spawn(hosts.clone())
+                    .map_err(|e| anyhow::anyhow!("start loopback egress proxy: {e}"))?;
+                let port = proxy.port();
+                // Allow loopback ONLY to the bound proxy port; block the rest.
+                windows_firewall::ensure_offline_proxy_allowlist(
+                    &sid,
+                    &[port],
+                    false,
+                    &mut fence_log,
+                )?;
+                env.insert("HTTP_PROXY".to_string(), format!("http://127.0.0.1:{port}"));
+                env.insert(
+                    "HTTPS_PROXY".to_string(),
+                    format!("http://127.0.0.1:{port}"),
+                );
+                env.insert("NO_PROXY".to_string(), "127.0.0.1,localhost".to_string());
+                // Task-lifetime: the RAII teardown below re-blocks loopback at
+                // task end, after which the leaked proxy reaches nothing.
+                proxy.leak_for_process_lifetime();
+            }
+        }
+
+        // Install the teardown guard AFTER the fence is up, so every return path
+        // below (including an early error) re-blocks loopback and releases the
+        // single-active-task flag (blocker c: task-end teardown on all paths).
+        let _fence_guard = EgressFenceGuard {
+            sid,
+            fence_log_path,
+            _active: active,
+        };
+
         let permissions = ResolvedWindowsSandboxPermissions::from_policy(policy, cwd)
             .map_err(|e| anyhow::anyhow!("resolve policy: {e}"))?;
 
@@ -651,8 +829,7 @@ mod windows_impl {
         };
 
         let sandbox_creds = load_logon_sandbox_creds(sandbox_home)?;
-        let logs_base_dir = sandbox_home.join(".sandbox");
-        let _ = std::fs::create_dir_all(&logs_base_dir);
+        // `logs_base_dir` was created above (it also holds the egress-fence log).
 
         let transport = retry_runner_spawn_once(
             sandbox_creds,
@@ -709,12 +886,12 @@ mod windows_impl {
         })
     }
 
-    /// Lab-only confinement-validation entry point. NOT a network-confined
-    /// launch (Q2/D-005): it runs the elevated compose so the `spike307-win`
-    /// lab can prove the filesystem / user / token / Job isolation matrix
-    /// directly, exactly as #395 proved its primitives by lab replica ahead of
-    /// the composed success path. The public [`crate::launch`] never calls this;
-    /// it keeps refusing both network policies until Integration B.
+    /// Lab-only confinement-validation entry point. Integration B2: it now runs
+    /// the LIVE network-fenced compose ([`run_windows_sandbox_capture`]), so the
+    /// `spike307-win` lab drives the full matrix, filesystem / user / token /
+    /// Job isolation AND the SID-keyed egress fence, for whatever policy it is
+    /// given (the validate bin exercises both `DenyAll` and `AllowHosts`). The
+    /// public [`crate::launch`] runs the same compose directly.
     pub fn spawn_confined_for_validation(
         sandbox_home: &Path,
         policy: &SandboxPolicy,
@@ -1220,24 +1397,41 @@ mod tests {
     }
 
     #[test]
-    fn deny_all_refuses_with_network_confinement_error() {
+    fn deny_all_maps_to_spawn_deny_all() {
         let decision = LaunchDecision::for_policy(&policy(NetworkPolicy::DenyAll));
-        assert_eq!(decision, LaunchDecision::RefuseDenyAll);
-        assert!(matches!(
-            decision.into_refusal(),
-            LaunchError::NetworkConfinementNotImplemented
-        ));
+        assert_eq!(decision, LaunchDecision::SpawnDenyAll);
     }
 
     #[test]
-    fn allow_hosts_refuses_with_allow_hosts_error() {
+    fn allow_hosts_maps_to_spawn_allow_hosts_preserving_hosts() {
         let decision =
             LaunchDecision::for_policy(&policy(NetworkPolicy::AllowHosts(vec!["h".into()])));
-        assert_eq!(decision, LaunchDecision::RefuseAllowHosts);
-        assert!(matches!(
-            decision.into_refusal(),
-            LaunchError::AllowHostsNotYetImplemented
-        ));
+        assert_eq!(
+            decision,
+            LaunchDecision::SpawnAllowHosts {
+                hosts: vec!["h".into()]
+            }
+        );
+    }
+
+    #[test]
+    fn single_task_flag_admits_one_then_rejects_until_released() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        // Blocker a: the CAS admits exactly one holder at a time.
+        let flag = AtomicBool::new(false);
+        assert!(
+            acquire_single_task_flag(&flag),
+            "first acquire must succeed"
+        );
+        assert!(
+            !acquire_single_task_flag(&flag),
+            "second acquire must be rejected while the first is held"
+        );
+        flag.store(false, Ordering::SeqCst);
+        assert!(
+            acquire_single_task_flag(&flag),
+            "after release a fresh acquire must succeed again"
+        );
     }
 
     #[test]

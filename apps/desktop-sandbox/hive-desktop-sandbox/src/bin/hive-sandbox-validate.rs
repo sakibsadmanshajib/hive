@@ -64,6 +64,42 @@ fn main() -> std::process::ExitCode {
         }
     }
 
+    // Network policy under test (Integration B2 matrix, plan §5 rows):
+    //   unset / "deny"       -> NetworkPolicy::DenyAll (rows 1-4: all egress
+    //                           and DNS blocked, only the loopback proxy port
+    //                           reachable and it has no proxy behind it);
+    //   "allow:host1,host2"  -> NetworkPolicy::AllowHosts([..]) (rows 5-6: the
+    //                           allowed host is reachable via the proxy, a
+    //                           non-allowed host and any direct connect are not).
+    let net_spec = std::env::var("HIVE_VALIDATE_NET").unwrap_or_else(|_| "deny".to_string());
+    let allow_hosts: Vec<String> = match net_spec.strip_prefix("allow:") {
+        Some(rest) => rest
+            .split(',')
+            .map(|h| h.trim().to_string())
+            .filter(|h| !h.is_empty())
+            .collect(),
+        None => Vec::new(),
+    };
+    // Same cmd.exe metacharacter guard as the paths above: allowed hosts flow
+    // into the probe script, so reject anything that could rewrite it (extend
+    // the guard to host strings too, not just paths).
+    for host in &allow_hosts {
+        if host
+            .chars()
+            .any(|c| c.is_whitespace() || "&|<>^%\"/".contains(c))
+        {
+            eprintln!(
+                "HIVE_VALIDATE_NET host must not contain whitespace or cmd.exe metacharacters: {host}"
+            );
+            return std::process::ExitCode::from(2);
+        }
+    }
+    let network = if allow_hosts.is_empty() {
+        hive_desktop_sandbox::NetworkPolicy::DenyAll
+    } else {
+        hive_desktop_sandbox::NetworkPolicy::AllowHosts(allow_hosts.clone())
+    };
+
     if let Err(e) = std::fs::create_dir_all(&ws) {
         eprintln!("create workspace {}: {e}", ws.display());
         return std::process::ExitCode::FAILURE;
@@ -111,7 +147,7 @@ fn main() -> std::process::ExitCode {
     // produces a malformed path. Commands are sequenced with `&`; each step
     // prints a marker so stdout is self-describing. `echo`/`type` are cmd
     // built-ins (no PATH needed); `whoami` resolves via the minimal PATH below.
-    let script = format!(
+    let mut script = format!(
         "whoami /user & echo ===INSIDE=== & echo probe>{inside} & \
          echo ===OUTSIDE=== & echo probe>{outside} & \
          echo ===SECRET=== & type {canary}",
@@ -119,6 +155,20 @@ fn main() -> std::process::ExitCode {
         outside = outside.display(),
         canary = canary.display(),
     );
+    // Network matrix probes (plan §5 rows 1-6) for an AllowHosts run. curl uses
+    // `--ssl-no-revoke` for the schannel CRL gotcha on the lab host; each step
+    // prints a marker and an OK/FAIL/BLOCKED tag so stdout is self-describing.
+    // The harness (and operator) read the raw stdout and derive per-row
+    // verdicts; nothing here is executed by this build (compile-only, D-004).
+    if let Some(host) = allow_hosts.first() {
+        script.push_str(&format!(
+            " & echo ===NET_ALLOWED=== & curl -sS --ssl-no-revoke -o NUL https://{host}/ && echo NET_ALLOWED_OK || echo NET_ALLOWED_FAIL \
+             & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
+             & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
+             & echo ===NET_DNS=== & nslookup {host}",
+            host = host,
+        ));
+    }
     let command = vec![
         r"C:\Windows\System32\cmd.exe".to_string(),
         "/c".to_string(),
@@ -129,7 +179,7 @@ fn main() -> std::process::ExitCode {
         vec![ws.clone()],
         vec![],
         sandbox_home.join("hooks"),
-        hive_desktop_sandbox::NetworkPolicy::DenyAll,
+        network,
     ) {
         Ok(p) => p,
         Err(e) => {
@@ -150,6 +200,7 @@ fn main() -> std::process::ExitCode {
     println!("== confined-spawn validation ==");
     println!("sandbox_home = {}", sandbox_home.display());
     println!("workspace    = {}", ws.display());
+    println!("network      = {net_spec}");
     println!("expected sandbox SID = {expected_sid}");
 
     let result = hive_desktop_sandbox::windows_elevated::spawn_confined_for_validation(

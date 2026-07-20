@@ -20,7 +20,10 @@ pub mod windows_resolve;
 // port complement math, unit-tested on this crate's Linux CI job.
 pub mod wfp_ports;
 
-#[cfg(target_os = "linux")]
+// Egress proxy: the Linux transport is a Unix socket; the Windows transport is
+// a loopback TCP listener (Integration B2 activation). Compiled on both, with
+// the shared allowlist/DNS logic single-sourced (see `egress_proxy.rs`).
+#[cfg(any(target_os = "linux", windows))]
 pub mod egress_proxy;
 #[cfg(target_os = "linux")]
 mod linux;
@@ -29,13 +32,11 @@ pub mod shim;
 #[cfg(windows)]
 mod windows;
 // Windows Firewall COM half of the two-layer egress fence (Integration B2,
-// CTO Q1). Present and cross-compiled, but INERT: `launch` still refuses both
-// network policies, so nothing calls these entry points yet. `allow(dead_code)`
-// is deliberate and scoped to this module: the activation PR (separate,
-// lab-gated per D-004) wires `ensure_offline_outbound_block` /
-// `ensure_offline_proxy_allowlist` into the launch path and removes this allow.
+// CTO Q1). LIVE (Integration B2 activation): `launch` dispatches to the
+// SID-fenced elevated compose, which wires `ensure_offline_outbound_block`
+// (provision) and `ensure_offline_proxy_allowlist` / `teardown_offline_proxy_allowlist`
+// (per task) into the launch path, so the earlier `allow(dead_code)` is gone.
 #[cfg(windows)]
-#[allow(dead_code)]
 mod windows_firewall;
 
 #[cfg(not(any(target_os = "linux", windows)))]
@@ -54,24 +55,20 @@ use std::path::Path;
 /// [`SandboxPolicy`].
 #[derive(Debug)]
 pub enum LaunchError {
-    /// Windows-only now (blueprint Step 4.4, #308/#311, closed the Linux
-    /// side): the policy requested [`NetworkPolicy::AllowHosts`], which
-    /// `windows::launch` does not yet enforce (WFP egress is a later step). In
-    /// Step 1 `windows::launch` refuses BOTH network policies rather than
-    /// launch under an unenforced network policy -- this error for
-    /// `AllowHosts` and [`LaunchError::NetworkConfinementNotImplemented`] for
-    /// `DenyAll`. `linux::launch` no longer returns this: a real
-    /// allowlist-enforcing proxy (`egress_proxy.rs`) backs `AllowHosts` there.
-    /// Reject rather than silently launching with full network access.
+    /// LEGACY (Integration B2 activation): no longer produced by `launch`.
+    /// Before B2, `windows::launch` returned this to refuse
+    /// [`NetworkPolicy::AllowHosts`] rather than launch under an unenforced
+    /// egress control. B2 wired the SID-fenced compose (WFP + firewall +
+    /// loopback proxy), so `AllowHosts` now launches enforced. Retained as
+    /// part of the public error API; construction sites are gone.
     AllowHostsNotYetImplemented,
-    /// Windows-only (Step 1): the policy requested [`NetworkPolicy::DenyAll`],
-    /// but `windows::launch` does not yet enforce any network confinement --
-    /// the Job Object carries no network limit and the firewall codegen in
-    /// `windows_plan.rs` is never applied. Returned instead of launching a
-    /// process while claiming a block-all egress control that is not in force
-    /// (symmetric with [`LaunchError::AllowHostsNotYetImplemented`]). Real
-    /// enforcement lands with the WFP egress backend (Step 4). `linux::launch`
-    /// enforces `DenyAll` via `--unshare-net` and never returns this.
+    /// LEGACY (Integration B2 activation): no longer produced by `launch`.
+    /// Before B2, `windows::launch` returned this to refuse
+    /// [`NetworkPolicy::DenyAll`] rather than launch a process while claiming a
+    /// block-all egress control that was not in force. B2 installs the
+    /// persistent WFP + firewall block-all at provision and enforces it per
+    /// task, so `DenyAll` now launches enforced. Retained as part of the
+    /// public error API; construction sites are gone.
     NetworkConfinementNotImplemented,
     /// Spawning the sandboxed process failed.
     Io(std::io::Error),
@@ -91,13 +88,13 @@ impl std::fmt::Display for LaunchError {
             LaunchError::AllowHostsNotYetImplemented => {
                 write!(
                     f,
-                    "NetworkPolicy::AllowHosts is not yet enforced by this crate"
+                    "legacy LaunchError::AllowHostsNotYetImplemented (AllowHosts is now enforced; this variant is no longer produced)"
                 )
             }
             LaunchError::NetworkConfinementNotImplemented => {
                 write!(
                     f,
-                    "NetworkPolicy::DenyAll network confinement is not yet enforced by this crate on Windows"
+                    "legacy LaunchError::NetworkConfinementNotImplemented (DenyAll is now enforced; this variant is no longer produced)"
                 )
             }
             LaunchError::Io(err) => write!(f, "failed to spawn sandboxed process: {err}"),
@@ -146,28 +143,7 @@ pub fn launch(
     windows::launch(policy, command, cwd)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Inert-boundary guard (Integration B2): the WFP + firewall egress code is
-    // present and cross-compiled, but `launch()` on Windows still REFUSES both
-    // network policies until the separate lab-gated activation PR (D-004). This
-    // Linux-runnable test asserts the two refusal variants still exist and
-    // still render as "not yet enforced", so an accidental early activation
-    // that dropped them would fail CI here as well as in the windows-gated
-    // `windows_elevated` decision tests.
-    #[test]
-    fn network_policies_still_report_as_not_yet_enforced() {
-        assert!(
-            LaunchError::AllowHostsNotYetImplemented
-                .to_string()
-                .contains("not yet enforced")
-        );
-        assert!(
-            LaunchError::NetworkConfinementNotImplemented
-                .to_string()
-                .contains("not yet enforced")
-        );
-    }
-}
+// The former `network_policies_still_report_as_not_yet_enforced` inert-boundary
+// guard was removed with Integration B2 activation: `launch` no longer refuses
+// either network policy. The live NetworkPolicy -> LaunchDecision::Spawn*
+// mapping is asserted in `windows_elevated`'s tests instead.

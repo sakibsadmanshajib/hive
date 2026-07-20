@@ -21,9 +21,12 @@
 //! - a defensive [`is_wellformed_sid_string`] guard rejects a malformed SID
 //!   before it is ever interpolated into the SDDL local-user spec.
 //!
-//! Applied only `cfg(windows)`. It is NOT wired into `launch()` in this
-//! (inert) B2 PR: `launch()` still refuses both network policies. Activation
-//! is a separate lab-gated PR (D-004).
+//! Applied only `cfg(windows)`. Integration B2 activation wires this LIVE:
+//! `provision_sandbox_account` installs [`ensure_offline_outbound_block`]
+//! (persistent block-all) at provision, and the per-task elevated compose
+//! calls [`ensure_offline_proxy_allowlist`] and
+//! [`teardown_offline_proxy_allowlist`] around each fenced launch. Runtime
+//! behaviour stays lab-gated on `spike307-win` (D-004).
 
 use crate::wfp_ports::blocked_loopback_tcp_remote_ports;
 use anyhow::Result;
@@ -104,6 +107,14 @@ fn is_wellformed_sid_string(sid: &str) -> bool {
 /// the sandbox account SID. When `allow_local_binding` is true the loopback
 /// blocks are removed instead (DenyAll passes an empty `proxy_ports` with
 /// `allow_local_binding = false` to block loopback outright).
+///
+/// Atomicity guarantee (blocker d, fail toward more restrictive): a broad
+/// loopback-TCP block is installed FIRST and only THEN narrowed to the
+/// proxy-port complement, so if the narrowing update fails the broader (more
+/// restrictive) block stays in force, never a widened one. Combined with
+/// `configure_rule` enabling each rule only after it is fully scoped and
+/// verified, a partially applied change can only ever leave egress MORE
+/// closed, never open.
 pub fn ensure_offline_proxy_allowlist(
     offline_sid: &str,
     proxy_ports: &[u16],
@@ -206,6 +217,20 @@ pub fn ensure_offline_proxy_allowlist(
         CoUninitialize();
     }
     result
+}
+
+/// Tears down the per-task loopback proxy exception at task end (blocker c).
+///
+/// Equivalent to `ensure_offline_proxy_allowlist(sid, &[], false)`: it re-blocks
+/// ALL loopback (the empty allowlist widens the loopback-TCP block back to every
+/// port and removes the per-task proxy allow), returning to the fail-closed
+/// baseline. Ownership matrix: PROVISION owns the persistent block-all + WFP
+/// fence; TASK-END owns this per-task teardown. A crash that skips teardown
+/// leaves a harmless stale state: the proxy process is gone, so the still-open
+/// port reaches nothing, and the persistent block-all keeps non-loopback egress
+/// closed.
+pub fn teardown_offline_proxy_allowlist(offline_sid: &str, log: &mut dyn Write) -> Result<()> {
+    ensure_offline_proxy_allowlist(offline_sid, &[], false, log)
 }
 
 /// Installs the persistent block-all-outbound rule (all IP protocols to every
@@ -377,6 +402,12 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
     // SAFETY: `rule` is a live INetFwRule3. Every setter below is a COM property
     // write taking either a Copy enum value or a BSTR we own for the duration of
     // the call; each result is checked via `map_err`.
+    //
+    // Blocker d FIXED (atomic enable / fail-toward-restrictive): `SetEnabled`
+    // is the LAST setter, applied only AFTER the network scope, the SID scope,
+    // and the read-back verification below have all succeeded. A freshly
+    // created rule stays DISABLED until it is fully and correctly scoped, so a
+    // partially configured rule is never enabled with a wrong (broader) scope.
     unsafe {
         rule.SetDescription(&BSTR::from(spec.friendly_desc))
             .map_err(|err| anyhow!("SetDescription failed: {err:?}"))?;
@@ -384,8 +415,6 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
             .map_err(|err| anyhow!("SetDirection failed: {err:?}"))?;
         rule.SetAction(NET_FW_ACTION_BLOCK)
             .map_err(|err| anyhow!("SetAction failed: {err:?}"))?;
-        rule.SetEnabled(VARIANT_TRUE)
-            .map_err(|err| anyhow!("SetEnabled failed: {err:?}"))?;
         rule.SetProfiles(NET_FW_PROFILE2_ALL.0)
             .map_err(|err| anyhow!("SetProfiles failed: {err:?}"))?;
         configure_rule_network_scope(rule, spec)?;
@@ -406,18 +435,39 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
             spec.offline_sid
         ));
     }
+
+    // Enable LAST (blocker d): the rule is fully scoped and verified above, so
+    // enabling it here can only bring a correctly-scoped BLOCK into force.
+    // SAFETY: `rule` is a live INetFwRule3; `SetEnabled` takes a Copy VARIANT.
+    unsafe {
+        rule.SetEnabled(VARIANT_TRUE)
+            .map_err(|err| anyhow!("SetEnabled failed: {err:?}"))?;
+    }
     Ok(())
 }
 
 fn configure_rule_network_scope(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
+    // Blocker b FIXED (RemotePorts / RemoteAddresses "*" is only ever a BLOCK
+    // widening, never an allow): every `BlockRuleSpec` configured here is a
+    // BLOCK rule (`configure_rule` always calls `SetAction(NET_FW_ACTION_BLOCK)`
+    // before this), so a broader scope is strictly MORE restrictive. That makes
+    // both `None` cases fail-closed, never egress-opening:
+    //   * `remote_addresses == None` -> "*" widens the block to EVERY address;
+    //   * `remote_ports == None`     -> the rule blocks EVERY remote port (the
+    //     broad loopback block installed before it is narrowed to the proxy-port
+    //     complement). A `None` therefore never leaves a port UNblocked.
     // SAFETY: `rule` is a live INetFwRule3. `SetProtocol` takes a Copy i32;
     // `SetRemoteAddresses`/`SetRemotePorts` take BSTRs we own for each call.
     unsafe {
         rule.SetProtocol(spec.protocol)
             .map_err(|err| anyhow!("SetProtocol failed: {err:?}"))?;
+        // None on a BLOCK rule widens the block to all addresses (fail-closed),
+        // never opens egress.
         let remote_addresses = spec.remote_addresses.unwrap_or("*");
         rule.SetRemoteAddresses(&BSTR::from(remote_addresses))
             .map_err(|err| anyhow!("SetRemoteAddresses failed: {err:?}"))?;
+        // Only narrow the port scope when a complement is supplied; a `None`
+        // leaves the rule blocking ALL remote ports (never unblocks one).
         if let Some(remote_ports) = spec.remote_ports {
             rule.SetRemotePorts(&BSTR::from(remote_ports))
                 .map_err(|err| anyhow!("SetRemotePorts failed: {err:?}"))?;

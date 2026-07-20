@@ -855,6 +855,50 @@ and should be diffed by hand, not overwritten.
   here. The Win32 FFI paths (real WFP install, firewall COM) are lab-deferred
   to `spike307-win` (D-004) and do not run in CI.
 
+### Integration B2 activation (this PR)
+
+This PR activates the fence that #408 shipped inert. Changes:
+
+- WFP core filters ADDED (they were missing: #408 shipped only the Codex
+  per-protocol blocks). `codex-windows-sandbox/src/wfp/filter_specs.rs` gains
+  the srt-shape core, a loopback PERMIT (v4/v6, no user condition, high weight)
+  above a sandbox-SID BLOCK-all (v4/v6), plus a `FilterAction` enum and a
+  `weight: Option<u64>` on `FilterSpec` (const-asserted `W_LOOPBACK > W_BLOCK`).
+  `src/wfp.rs` gained the `FWP_ACTION_PERMIT` / `FWP_V4_ADDR_AND_MASK` /
+  `FWP_V6_ADDR_AND_MASK` / `FWP_RANGE0` / port-range / manual-weight FFI to
+  emit them. Result: WFP is now a complete standalone fence (loopback permit
+  above SID block) AND the firewall COM layer stays, so the two-layer model
+  (D-011) is whole.
+- `hive-desktop-sandbox/src/egress_proxy.rs` gained a Windows loopback-TCP
+  transport: the request parsing / allowlist / pinned-DNS / no-private-IP logic
+  is single-sourced across both transports via a `ProxyClientStream` trait; the
+  Linux Unix-socket `AllowlistProxy` is unchanged in behaviour. `lib.rs` gates
+  the module `any(target_os = "linux", windows)`.
+- `provision_sandbox_account` now installs the persistent fence (WFP filters
+  via `wfp_setup::install_wfp_filters` + firewall block-all via
+  `ensure_offline_outbound_block`), SID-keyed, fail-closed, before the marker.
+- `windows::launch` is wired to the SID-fenced compose
+  (`windows_elevated::run_windows_sandbox_capture`): the refusal guard is gone,
+  `LaunchDecision` flipped `Refuse*` -> `Spawn*`, and the compose installs the
+  per-task firewall loopback allow (plus the loopback proxy + `HTTP(S)_PROXY`
+  env for AllowHosts) and re-blocks loopback via an RAII teardown on every
+  return path. `SandboxChild` now carries `Option<HANDLE>` + `exit_code` (the
+  capture-based launch returns a completed run).
+- `windows_firewall` is wired LIVE (`#[allow(dead_code)]` removed). The base
+  `windows.rs` restricted-token / Job-Object launch seam is superseded and
+  retained `#[allow(dead_code)]` (documented base primitive + CI shape cover).
+
+Deviation from the plan: the base backend (caller-token) could never carry the
+sandbox-SID fence, so routing `launch` to the elevated compose is the only
+D-005-safe live path; because that compose is capture-based (blocking), the
+returned `SandboxChild` represents a completed confined run rather than a live
+handle. `apps/desktop`'s `RealLauncher` only checks Ok/Err, so it is unaffected
+functionally (noted for a follow-up; not edited here).
+
+The lab matrix (`plan-b2-wfp-egress-2026-07-20.md` §5, rows 1-11) still gates
+un-drafting this PR (D-004): the Win32 fence is compile-checked here but not
+executed, so it must pass `spike307-win` live before this leaves draft.
+
 ### Integration B / D-004 activation blockers (must pass spike307-win lab before removing the network refusal)
 
 These are real correctness concerns raised in the PR #408 review that are
@@ -871,6 +915,10 @@ step): all tasks run under one sandbox account SID, and the firewall / WFP
 rules use fixed names keyed on that one SID, so concurrent tasks share one rule
 set.
 
+The B2-activation PR (this PR) resolves all four below in code; each still
+requires the `spike307-win` lab matrix (plan §5) to sign off before this PR
+leaves draft (D-004).
+
 1. Concurrent-task rule clobber and loopback-fence loss. Under the shared
    account SID plus fixed rule names (`hive_sandbox_offline_*`), two concurrent
    tasks last-writer-wins on the loopback allowlist / proxy port complement,
@@ -880,21 +928,41 @@ set.
    sublayer), refcounting of the shared rules, or an enforced single-active-task
    invariant. Until then, activation must guarantee at most one active
    sandboxed task.
+   FIXED (B2 activation): the single-active-task invariant is enforced via an
+   `ActiveTaskGuard` (an `AtomicBool` CAS in `windows_elevated`); a second
+   concurrent fenced launch is rejected fail-closed rather than clobbering the
+   shared loopback rule.
 2. `INetFwRule` `RemotePorts = "*"` cleanup semantics (CodeRabbit,
    `windows_firewall.rs` :427 region). Verify that reverting or removing the
    narrowed TCP loopback block does not silently fall back to
    `RemotePorts = "*"` in a way that opens all loopback ports on teardown.
    Confirm the teardown order keeps the fence closed, never momentarily open.
+   FIXED (B2 activation): every firewall rule is a BLOCK; teardown removes the
+   per-task loopback allow and re-blocks loopback via
+   `ensure_offline_proxy_allowlist(&[], false)`; a `None` on a block rule widens
+   the block to all ports and addresses (fail-closed), never opens egress, and
+   `RemotePorts = "*"` is never serialized as an ALLOW.
 3. Firewall-COM rule ownership and cleanup guarantees (CodeRabbit,
    `VENDORING.md` :783 region). Proxy-process teardown alone does not remove
    the persisted firewall rules: a stale permitted proxy port can outlive the
    proxy. Activation must define who owns rule cleanup (provision vs task end)
    and prove no stale permitted port survives a task, a crash, or a reboot.
+   FIXED (B2 activation): the ownership matrix is explicit. PROVISION owns the
+   persistent block-all plus WFP; TASK-END owns the per-task loopback allow,
+   torn down by an RAII guard on every return path (normal or error); a crash
+   leaves a harmless stale allow (the proxy is gone and the persistent
+   block-all stays up).
 4. Non-atomic `configure_rule` re-narrow (security-review LOW #1). When
    re-narrowing an existing rule, `configure_rule` re-applies fields on a live
    rule rather than swapping atomically, so a failure mid-update can leave the
    rule broader than intended. Activation needs an atomic replace (or a
    verified fail-closed intermediate) so a partial update never widens egress.
+   FIXED (B2 activation): `configure_rule` sets `SetEnabled` LAST, after the
+   network scope, the SID scope, and the read-back all succeed, so a
+   partially-scoped rule is never enabled; and `ensure_offline_proxy_allowlist`
+   installs the broad loopback block before narrowing it, so a failed narrow
+   leaves the broader (more restrictive) block in force (fail toward
+   restrictive).
 
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
