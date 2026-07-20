@@ -234,7 +234,7 @@ struct SetupMarker {
 #[cfg(windows)]
 pub use windows_impl::{
     load_logon_sandbox_creds, provision_sandbox_account, run_command_runner,
-    run_windows_sandbox_capture, spawn_confined_for_validation,
+    run_windows_sandbox_capture, runner_debug_log, spawn_confined_for_validation,
 };
 
 #[cfg(windows)]
@@ -681,11 +681,20 @@ mod windows_impl {
     /// leaves the release path untouched. It NEVER logs the sandbox password,
     /// credential bytes, or environment values (D-005 honest logging); only
     /// non-sensitive shape (counts, flags, pipe names, error kinds).
-    fn runner_debug_log(msg: &str) {
+    pub fn runner_debug_log(msg: &str) {
         if std::env::var("HIVE_RUNNER_DEBUG").ok().as_deref() != Some("1") {
             return;
         }
-        let path = std::env::temp_dir().join("hive-command-runner.log");
+        // Deterministic sink override (HIVE_RUNNER_DEBUG_DIR) so the log lands
+        // somewhere the sandbox account can write and an administrator can read,
+        // independent of how CreateProcessWithLogonW resolves the runner's TEMP
+        // (with a NULL environment block the runner inherits the caller's env,
+        // which makes the plain temp dir ambiguous). Falls back to the process
+        // temp dir when unset.
+        let dir = std::env::var_os("HIVE_RUNNER_DEBUG_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir);
+        let path = dir.join("hive-command-runner.log");
         if let Ok(mut f) = std::fs::OpenOptions::new()
             .create(true)
             .append(true)

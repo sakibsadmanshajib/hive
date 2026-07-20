@@ -24,9 +24,20 @@
 #[cfg(windows)]
 fn main() -> std::process::ExitCode {
     let args: Vec<String> = std::env::args().collect();
+    // Earliest observable point: proves the runner image loaded and main ran,
+    // and whether the pipe arguments arrived (diagnostic, gated).
+    hive_desktop_sandbox::windows_elevated::runner_debug_log(&format!(
+        "hive-command-runner main entry: argc={} has_pipe_in={} has_pipe_out={}",
+        args.len(),
+        args.iter().any(|a| a.starts_with("--pipe-in=")),
+        args.iter().any(|a| a.starts_with("--pipe-out=")),
+    ));
     let pipe_in = arg_value(&args, "--pipe-in");
     let pipe_out = arg_value(&args, "--pipe-out");
     let (Some(pipe_in), Some(pipe_out)) = (pipe_in, pipe_out) else {
+        hive_desktop_sandbox::windows_elevated::runner_debug_log(
+            "exiting 2: missing --pipe-in/--pipe-out",
+        );
         eprintln!("usage: hive-command-runner --pipe-in=<name> --pipe-out=<name>");
         return std::process::ExitCode::from(2);
     };

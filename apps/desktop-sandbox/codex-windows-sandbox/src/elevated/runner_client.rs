@@ -42,6 +42,7 @@ use windows_sys::Win32::System::Pipes::PeekNamedPipe;
 use windows_sys::Win32::System::Threading::CreateProcessWithLogonW;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 use windows_sys::Win32::System::Threading::GetCurrentThread;
+use windows_sys::Win32::System::Threading::GetExitCodeProcess;
 use windows_sys::Win32::System::Threading::LOGON_WITH_PROFILE;
 use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
@@ -409,18 +410,30 @@ pub fn spawn_runner_transport(
     }
 
     if let Err(err) = connect_result {
+        // Diagnostic (D-004): capture the runner's real exit status BEFORE we
+        // terminate it, so a pre-handshake failure (early main exit, loader
+        // failure) is observable instead of being masked by our own
+        // TerminateProcess. 259 (STILL_ACTIVE) means the runner is still
+        // running / blocked; a small code (1/2) means it already exited in
+        // main; a 0xC000_xxxx code is an NTSTATUS (e.g. 0xC0000135 missing DLL).
+        let mut runner_exit_code: u32 = 259;
         unsafe {
             // Keep the process handle alive until the pipe handshake finishes. If the handshake
             // fails after the runner process has already launched, we still need a way to stop
-            // that child instead of leaking a stray `codex-command-runner.exe`.
+            // that child instead of leaking a stray runner process.
             if pi.hProcess != 0 {
+                if GetExitCodeProcess(pi.hProcess, &mut runner_exit_code) == 0 {
+                    runner_exit_code = 0xFFFF_FFFF;
+                }
                 let _ = TerminateProcess(pi.hProcess, 1);
                 CloseHandle(pi.hProcess);
             }
             CloseHandle(h_pipe_in);
             CloseHandle(h_pipe_out);
         }
-        return Err(err);
+        return Err(err.context(format!(
+            "runner process exit code before pipe handshake completed: {runner_exit_code} (0x{runner_exit_code:08x}); 259 = STILL_ACTIVE (runner still running / blocked)"
+        )));
     }
 
     let mut transport = RunnerTransport {
