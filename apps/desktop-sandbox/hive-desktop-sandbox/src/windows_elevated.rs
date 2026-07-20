@@ -590,7 +590,10 @@ mod windows_impl {
             timeout_ms: None,
             tty: false,
             stdin_open: false,
-            use_private_desktop: false,
+            // UI isolation (Step 3 B1): the runner moves the restricted inner
+            // child onto a private window station + desktop (full clipboard/atom
+            // isolation), granting its own logon SID so the child can attach.
+            use_private_desktop: true,
         };
 
         let sandbox_creds = load_logon_sandbox_creds(sandbox_home)?;
@@ -897,7 +900,7 @@ mod windows_impl {
             StdinMode::Closed,
             StderrMode::Separate,
             ConsoleMode::NoWindow,
-            /* use_private_desktop */ false,
+            request.use_private_desktop,
             None,
         );
         // SAFETY: `token` is a valid handle from the token builder above; close
