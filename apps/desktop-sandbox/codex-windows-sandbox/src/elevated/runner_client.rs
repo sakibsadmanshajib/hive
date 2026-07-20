@@ -336,20 +336,39 @@ pub fn spawn_runner_transport(
         };
 
     // The runner is launched AS the low-privilege sandbox account and links
-    // user32.dll, whose process-attach initialization connects to the caller's
-    // window station and desktop. That account has no access to them by
-    // default, so without this grant the runner dies at load with
-    // STATUS_DLL_INIT_FAILED (0xC0000142) BEFORE main runs (observed on
-    // spike307-win). Grant the sandbox SID access to the current station +
-    // desktop first; the launch leaves STARTUPINFO.lpDesktop NULL so the runner
-    // inherits this same, now-accessible station/desktop.
-    if let Err(err) = crate::desktop::grant_winsta_desktop_access(&sandbox_creds.username) {
-        unsafe {
-            CloseHandle(h_pipe_in);
-            CloseHandle(h_pipe_out);
-        }
-        return Err(err);
-    }
+    // user32.dll, whose process-attach initialization connects to a window
+    // station and desktop. That account has no access to the interactive
+    // user's WinSta0 by default, so it needs a station it CAN attach to.
+    //
+    // UI isolation (Step 3 Integration B1): give it a PRIVATE window station +
+    // desktop instead of the shared interactive WinSta0. On the shared station
+    // the sandboxed child could shatter-attack, SendInput to, or read the
+    // clipboard of the real desktop; a private station has no handle to any of
+    // that. `CreateProcessWithLogonW` honours a parent-created private window
+    // station named in STARTUPINFO.lpDesktop (validated on spike307-win,
+    // 2026-07-20), which we set below. Fail closed: if the private station
+    // cannot be created (e.g. a de-elevated caller in session 0 gets
+    // ERROR_ACCESS_DENIED) this returns an error and NEVER falls back to
+    // WinSta0. Assumes the caller runs in the interactive logged-in user's
+    // session (the Hive desktop app), where window-station creation is
+    // permissive. Network egress stays refused until Integration B (WFP); this
+    // change adds UI isolation only.
+    //
+    // `private_station` is kept alive until this function returns. By then the
+    // runner has completed its startup handshake, so it is already attached to
+    // this station/desktop and holds its own process reference keeping them
+    // alive; on every error path the value drops and closes both handles.
+    let private_station =
+        match crate::desktop::PrivateWindowStation::create(&sandbox_creds.username) {
+            Ok(station) => station,
+            Err(err) => {
+                unsafe {
+                    CloseHandle(h_pipe_in);
+                    CloseHandle(h_pipe_out);
+                }
+                return Err(err);
+            }
+        };
 
     let runner_exe = find_runner_exe(codex_home, log_dir);
     let runner_cmdline = runner_exe
@@ -374,6 +393,11 @@ pub fn spawn_runner_transport(
     let mut password_w = to_wide(&sandbox_creds.password);
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
+    // Launch the runner on the private window station + desktop created above,
+    // not the interactive user's WinSta0. The backing UTF-16 buffer lives in
+    // `private_station`, which stays in scope through the CreateProcessWithLogonW
+    // call below.
+    si.lpDesktop = private_station.startup_info_desktop();
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
     let env_block: Option<Vec<u16>> = None;
 

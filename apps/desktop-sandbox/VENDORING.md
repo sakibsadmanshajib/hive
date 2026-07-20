@@ -656,15 +656,21 @@ with the reason a blind fix would risk invalidating that lab run.
 
 - `desktop.rs::grant_winsta_desktop_access` (Greptile "Desktop Grant Outlives
   Runner"): the persistent `WINSTA_ALL_ACCESS`/`GENERIC_ALL`/`DESKTOP_ALL_ACCESS`
-  grant to the shared sandbox account is never revoked, so a later process
-  running as that account on the same station/desktop also inherits it. This
-  is the disposition the opus security review already accepted as a known,
-  non-blocking gap for Integration A (unreachable today: `windows::launch`
-  refuses every network policy, so nothing reaches this grant outside the
-  lab-only validation entry). Documented as a HARD GATE on Integration B in
-  the function's own doc comment: do not remove the network-refusal guards
-  until the runner moves to a dedicated, non-shared private window station.
-  Not re-fixed here per that disposition.
+  grant to the shared sandbox account was never revoked, so a later process
+  running as that account on the same station/desktop also inherited it. It was
+  a known, non-blocking gap for Integration A (unreachable then: `windows::launch`
+  refuses every network policy, so nothing reached this grant outside the
+  lab-only validation entry), with a HARD GATE on Integration B: do not remove
+  the network-refusal guards until the runner moves to a dedicated, non-shared
+  private window station.
+  RESOLVED by Step 3 Integration B1 (see the "Integration B1: private window
+  station for UI isolation" deviation below): `grant_winsta_desktop_access` and
+  its shared-`WinSta0` grant are removed. The runner now launches on a
+  per-launch PRIVATE window station + desktop that no other process shares, so
+  the outlives-runner class no longer exists. The `windows::launch`
+  network-refusal guards remain in force (B1 adds UI isolation only; WFP egress
+  is still Integration B / D-005), so the HARD GATE's own precondition (WFP
+  landing) is untouched by this change.
 - `windows_elevated.rs::stream_child`'s sequential stdout-then-stderr drain
   (CodeRabbit "Sequential stdout-then-stderr drain can deadlock", Greptile
   "Sequential Pipe Drain Deadlocks", both on the same code): draining stdout
@@ -684,6 +690,44 @@ with the reason a blind fix would risk invalidating that lab run.
   during drain must also be bounded), so it is tracked with that fix rather
   than half-implemented as a bare final-wait timeout that a stuck drain would
   never reach. Inline comment added at the call site.
+
+### Integration B1: private window station for UI isolation (Hive deviation)
+
+Upstream `desktop.rs` isolates the UI only as far as an optional private
+DESKTOP under the shared `WinSta0` (`LaunchDesktop::prepare(use_private_desktop)`),
+and Hive's Integration A shipped `grant_winsta_desktop_access`, which granted the
+sandbox account access to the interactive user's shared `WinSta0` so the
+user32-linking runner could attach at load. Both leave the sandboxed process on
+the real user's window station, where it can shatter-attack, `SendInput` to, or
+read the clipboard of the real desktop (clipboard and the atom table are
+per-window-station, shared across every desktop on that station).
+
+B1 closes that hole by adding a Hive-native `desktop.rs::PrivateWindowStation`
+(no upstream equivalent) and removing `grant_winsta_desktop_access`:
+
+- The parent creates a per-launch PRIVATE window station
+  (`CreateWindowStationW`, `CWF_CREATE_ONLY`, a `HiveSandboxWinSta-<random u128>`
+  name) and a `HiveSandboxDesktop` on it (`SetProcessWindowStation` to the new
+  station so `CreateDesktopW` lands there, then the parent's own station is
+  restored). The sandbox account SID is granted on both objects (reusing
+  `merge_grant_on_window_object`) as insurance for a restrictive default DACL.
+- `runner_client.rs::spawn_runner_transport` sets
+  `STARTUPINFO.lpDesktop = "HiveSandboxWinSta-<..>\\HiveSandboxDesktop"` on the
+  `CreateProcessWithLogonW` launch. The spike (spike307-win, 2026-07-20, cl.exe
+  probe) proved `CreateProcessWithLogonW` (Secondary Logon) honours a
+  parent-created private window station named in `lpDesktop`: the child ran as
+  the sandbox SID on the private station and exited cleanly.
+- Fail closed (D-005): if the private station cannot be created (e.g. a
+  de-elevated caller in session 0 gets `ERROR_ACCESS_DENIED`) the launch errors
+  and NEVER falls back to `WinSta0`. Assumes the caller runs in the interactive
+  logged-in user's session, where window-station creation is permissive
+  (documented in `PrivateWindowStation::create`).
+
+Scope: B1 is UI isolation ONLY. The two `windows::launch` network-refusal guards
+are untouched; both `NetworkPolicy::DenyAll` and `AllowHosts` still fail closed
+until the WFP egress backend lands (Integration B / D-005). This code is
+cross-compiled by CI (`x86_64-pc-windows-gnu`) but, like the rest of the Win32
+compose, its behaviour is only lab-provable on `spike307-win`.
 
 ### Deliberately NOT done in A2 (fail-closed stubs, honest)
 
