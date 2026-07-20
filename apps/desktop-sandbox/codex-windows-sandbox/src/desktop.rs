@@ -5,11 +5,15 @@ use crate::winutil::format_last_error;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use rand::Rng;
+use rand::RngCore;
 use rand::SeedableRng;
+use rand::rngs::OsRng;
 use rand::rngs::SmallRng;
 use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -328,8 +332,11 @@ impl PrivateWindowStation {
     /// `ERROR_ACCESS_DENIED` from `CreateWindowStationW`, surfaced here as an
     /// error rather than a downgrade.
     pub fn create(sandbox_username: &str) -> Result<Self> {
-        let mut rng = SmallRng::from_entropy();
-        let winsta_name = format!("HiveSandboxWinSta-{:x}", rng.r#gen::<u128>());
+        // OsRng (CSPRNG) for the station name: SmallRng is not cryptographically
+        // secure, and this is a security-relevant object identifier.
+        let mut token = [0u8; 16];
+        OsRng.fill_bytes(&mut token);
+        let winsta_name = format!("HiveSandboxWinSta-{:x}", u128::from_le_bytes(token));
         let desktop_name = "HiveSandboxDesktop";
 
         // SAFETY: standard CreateWindowStationW / SetProcessWindowStation /
@@ -408,6 +415,77 @@ impl Drop for PrivateWindowStation {
     }
 }
 
+/// Serializes the process-global window-station switch inside
+/// [`create_private_winsta_desktop`]. The hive sandbox is per-agent-task, so
+/// concurrent launches are reachable; without this lock, one launch's
+/// `SetProcessWindowStation` would corrupt another's `CreateDesktopW` placement.
+/// Held across the ENTIRE switched window (from before the switch until after
+/// the restore).
+static STATION_SWITCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+/// Restores the process window station to `original` on drop, so a panic or an
+/// early return between the switch and the explicit restore can never leave the
+/// parent stranded on the private station (which would then make
+/// `CloseWindowStation` fail on the current station). The happy path restores
+/// explicitly via [`StationGuard::restore`] and checks the result; this `Drop`
+/// is the last-resort fallback and disarms once the explicit restore succeeds.
+struct StationGuard {
+    original: isize,
+    armed: bool,
+}
+
+impl StationGuard {
+    /// Explicit, checked restore. Disarms the drop-time fallback ONLY on
+    /// success, so a failed restore is retried when the guard drops. Returns the
+    /// Win32 `BOOL` (0 means failure).
+    ///
+    /// # Safety
+    /// `original` must be a valid window-station handle for this process.
+    unsafe fn restore(&mut self) -> i32 {
+        let ok = SetProcessWindowStation(self.original);
+        if ok != 0 {
+            self.armed = false;
+        }
+        ok
+    }
+}
+
+impl Drop for StationGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            // SAFETY: `original` is the caller's valid station handle from
+            // GetProcessWindowStation; making it current again needs no close.
+            unsafe {
+                let _ = SetProcessWindowStation(self.original);
+            }
+        }
+    }
+}
+
+/// Creates `desktop_name` on the process's CURRENT window station. Split out of
+/// [`create_private_winsta_desktop`] to keep that function under the size
+/// guideline; must be called while the process is switched to the target
+/// station.
+///
+/// # Safety
+/// Calls raw Win32 `CreateDesktopW`; the returned handle must be closed by the
+/// caller.
+unsafe fn create_desktop_on_current_station(desktop_name: &str) -> Result<isize> {
+    let desktop_name_wide = to_wide(desktop_name);
+    let desktop = CreateDesktopW(
+        desktop_name_wide.as_ptr(),
+        ptr::null(),
+        ptr::null(),
+        0,
+        DESKTOP_ALL_ACCESS,
+        ptr::null(),
+    );
+    if desktop == 0 {
+        return Err(anyhow::anyhow!("CreateDesktopW failed: {}", GetLastError()));
+    }
+    Ok(desktop)
+}
+
 /// Creates a private window station and a desktop on it, restoring the caller's
 /// original process window station before returning. Returns the `(winsta,
 /// desktop)` handle pair on success.
@@ -415,15 +493,12 @@ impl Drop for PrivateWindowStation {
 /// `SetProcessWindowStation` is required because `CreateDesktopW` always creates
 /// the desktop on the process's CURRENT window station; there is no
 /// target-station parameter. The switch is reverted immediately after the
-/// desktop is created so the parent process keeps its own station. On any
-/// failure the process window station is restored and every partially created
-/// handle is closed (fail closed, no leak).
-///
-/// The station switch is process-global for its brief window, so callers must
-/// spawn runners SERIALLY (the current runner-spawn path does): two concurrent
-/// spawns could observe each other's temporary station. A per-launch
-/// `CreateDesktopW`-on-a-separately-opened-station path (no process switch) is
-/// the upgrade if concurrent per-task spawns are ever needed.
+/// desktop is created so the parent keeps its own station, and the whole
+/// switched window is serialized by [`STATION_SWITCH_LOCK`] so concurrent
+/// per-task launches cannot corrupt each other's desktop placement. On any
+/// failure the process window station is restored (via [`StationGuard`], which
+/// also covers panics) BEFORE any private handle is closed, so
+/// `CloseWindowStation` never runs on the current station.
 ///
 /// # Safety
 /// Calls raw Win32 window-station APIs. Must run in the interactive user's
@@ -433,7 +508,22 @@ unsafe fn create_private_winsta_desktop(
     winsta_name: &str,
     desktop_name: &str,
 ) -> Result<(isize, isize)> {
+    // Fail closed: without a valid saved station we cannot restore the parent
+    // after the switch, so refuse BEFORE creating or switching anything.
     let saved = GetProcessWindowStation();
+    if saved == 0 {
+        return Err(anyhow::anyhow!(
+            "GetProcessWindowStation failed: {}",
+            GetLastError()
+        ));
+    }
+
+    // Serialize the whole process-global switch window (held until return).
+    let _switch_lock = STATION_SWITCH_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     let winsta_name_wide = to_wide(winsta_name);
     let winsta = CreateWindowStationW(
         winsta_name_wide.as_ptr(),
@@ -454,31 +544,40 @@ unsafe fn create_private_winsta_desktop(
             "SetProcessWindowStation(private) failed: {err}"
         ));
     }
-    let desktop_name_wide = to_wide(desktop_name);
-    let desktop = CreateDesktopW(
-        desktop_name_wide.as_ptr(),
-        ptr::null(),
-        ptr::null(),
-        0,
-        DESKTOP_ALL_ACCESS,
-        ptr::null(),
-    );
-    let desktop_err = GetLastError();
-    // Restore the parent's own window station regardless of the desktop result,
-    // so the parent process is never left stranded on the private station.
-    if saved != 0 && SetProcessWindowStation(saved) == 0 {
-        let restore_err = GetLastError();
-        if desktop != 0 {
+
+    // Parent is now switched to `winsta`; `guard` restores `saved` on every exit
+    // path (including panic) BEFORE any private handle is closed.
+    let mut guard = StationGuard {
+        original: saved,
+        armed: true,
+    };
+
+    let desktop = create_desktop_on_current_station(desktop_name);
+    // Explicit, checked restore; capture its error immediately, before any other
+    // Win32 call clobbers the last-error.
+    let restore_ok = guard.restore();
+    let restore_err = if restore_ok == 0 { GetLastError() } else { 0 };
+
+    match desktop {
+        Ok(desktop) if restore_ok != 0 => Ok((winsta, desktop)),
+        Ok(desktop) => {
+            // Restore failed: the parent may still be on `winsta`, so closing it
+            // could target the CURRENT station. Close only the desktop (never
+            // current) and surface the error; `guard` (still armed) retries the
+            // restore on drop. The winsta handle is intentionally leaked on this
+            // near-impossible path rather than closed while possibly current.
             let _ = CloseDesktop(desktop);
+            Err(anyhow::anyhow!(
+                "SetProcessWindowStation(restore) failed: {restore_err}"
+            ))
         }
-        let _ = CloseWindowStation(winsta);
-        return Err(anyhow::anyhow!(
-            "SetProcessWindowStation(restore) failed: {restore_err}"
-        ));
+        Err(e) => {
+            // Desktop creation failed. If the restore succeeded, `winsta` is not
+            // current and is safe to close; if it failed, leak it (guard retries).
+            if restore_ok != 0 {
+                let _ = CloseWindowStation(winsta);
+            }
+            Err(e)
+        }
     }
-    if desktop == 0 {
-        let _ = CloseWindowStation(winsta);
-        return Err(anyhow::anyhow!("CreateDesktopW failed: {desktop_err}"));
-    }
-    Ok((winsta, desktop))
 }
