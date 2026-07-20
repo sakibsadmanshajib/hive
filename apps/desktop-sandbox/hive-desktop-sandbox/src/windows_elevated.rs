@@ -639,8 +639,13 @@ mod windows_impl {
             tty: false,
             stdin_open: false,
             // UI isolation (Step 3 B1): the runner moves the restricted inner
-            // child onto a private window station + desktop (full clipboard/atom
-            // isolation), granting its own logon SID so the child can attach.
+            // child onto a private DESKTOP on the interactive WinSta0
+            // (upstream/Chromium baseline), granting its own logon SID so the
+            // child can attach. Desktop-level UI isolation only: clipboard and
+            // the global atom table are per-window-station and stay shared with
+            // the interactive user (accepted tradeoff, no station-level
+            // isolation). A hostile child's desktop escape is contained only
+            // once the deferred Low-integrity / SID-disable seam lands.
             use_private_desktop: true,
         };
 

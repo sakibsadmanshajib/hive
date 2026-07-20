@@ -345,8 +345,12 @@ impl PrivateDesktop {
         // Each Win32 step inside `merge_grant_on_window_object` is checked.
         unsafe {
             let token = get_current_token_for_restriction()?;
-            let mut logon_sid = get_logon_sid_bytes(token)?;
+            // Close the token on both the success and error paths of
+            // get_logon_sid_bytes: propagating its error with `?` before
+            // CloseHandle would leak the handle.
+            let logon_sid_result = get_logon_sid_bytes(token);
             CloseHandle(token);
+            let mut logon_sid = logon_sid_result?;
             let psid = logon_sid.as_mut_ptr() as *mut c_void;
             let desktop_entries = [explicit_grant(psid, DESKTOP_ALL_ACCESS, NO_INHERITANCE)];
             merge_grant_on_window_object(self.desktop, &desktop_entries)?;
@@ -376,6 +380,10 @@ impl Drop for PrivateDesktop {
 /// caller.
 unsafe fn create_desktop_on_current_station(desktop_name: &str) -> Result<isize> {
     let desktop_name_wide = to_wide(desktop_name);
+    // CreateDesktopW has no CWF_CREATE_ONLY equivalent: a duplicate name opens
+    // the existing desktop rather than erroring. Accepted because desktop_name
+    // carries a 128-bit OsRng suffix, so a collision is cryptographically
+    // negligible.
     let desktop = CreateDesktopW(
         desktop_name_wide.as_ptr(),
         ptr::null(),
