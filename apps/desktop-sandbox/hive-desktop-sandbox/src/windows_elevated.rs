@@ -264,11 +264,14 @@ mod windows_impl {
     use std::sync::mpsc;
     use std::time::Duration;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, ERROR_OPERATION_ABORTED, GetLastError, HANDLE, WAIT_OBJECT_0,
+    };
     use windows_sys::Win32::Security::Authentication::Identity::{
         LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
         LsaOpenPolicy, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
     };
+    use windows_sys::Win32::System::IO::CancelIoEx;
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
@@ -1119,8 +1122,11 @@ mod windows_impl {
                         // instead kills the direct child AND every
                         // descendant in one call, closing every inherited
                         // pipe handle, so the drains hit EOF/BrokenPipe and
-                        // unblock. Falls back to `TerminateProcess` only for
-                        // a caller with no job (single-process path).
+                        // unblock. Falls back to `TerminateProcess` if there
+                        // is no job (single-process caller) OR the job
+                        // termination itself fails; both results are
+                        // captured and logged below, never silently
+                        // discarded (Greptile P1 finding, same PR).
                         //
                         // SAFETY: `process`/`job` are live handles owned by
                         // this `stream_child` call (and by the caller's
@@ -1132,14 +1138,72 @@ mod windows_impl {
                         // `CreateJobObjectW` grants by default to the handle
                         // it returns (no explicit access mask requested), so
                         // no separate rights check/duplication is needed.
+                        let job_terminated =
+                            job.map(|job| unsafe { TerminateJobObject(job, 1) != 0 });
+                        if job_terminated == Some(false) {
+                            // SAFETY: GetLastError is valid to call
+                            // immediately after the failed Win32 call above.
+                            let err = unsafe { GetLastError() };
+                            runner_debug_log(&format!(
+                                "child pid={pid} TerminateJobObject FAILED ({err}); \
+                                 falling back to TerminateProcess"
+                            ));
+                        }
+                        if job_terminated != Some(true) {
+                            // Best effort fallback: either no job was
+                            // passed in (single-process caller) or the job
+                            // termination above failed. Capture this
+                            // result too instead of discarding it.
+                            //
+                            // SAFETY: `process` is the live handle from
+                            // PROCESS_INFORMATION for this call's whole
+                            // duration, see above.
+                            let process_terminated = unsafe { TerminateProcess(process, 1) != 0 };
+                            if !process_terminated {
+                                // SAFETY: GetLastError is valid to call
+                                // immediately after the failed Win32 call.
+                                let err = unsafe { GetLastError() };
+                                runner_debug_log(&format!(
+                                    "child pid={pid} fallback TerminateProcess ALSO FAILED \
+                                     ({err}); relying on CancelIoEx below and the bounded \
+                                     post-timeout wait to still return within a bound"
+                                ));
+                            }
+                        }
+
+                        // FIXED (Greptile P1, PR #402): terminating the
+                        // job/process above is not by itself enough to
+                        // bound this call. If that termination failed, or a
+                        // descendant survived it while still holding an
+                        // inherited pipe WRITE handle, the drain thread's
+                        // blocking `ReadFile` never completes, `thread::
+                        // scope` can never join it, and `stream_child` hangs
+                        // past `timeout_ms` regardless of what happened
+                        // above. `CancelIoEx` aborts any pending I/O on the
+                        // given handle (the pending read fails with
+                        // `ERROR_OPERATION_ABORTED`, treated as a normal
+                        // drain end in `drain_stream`) from any thread,
+                        // unconditionally on this branch, so the drain
+                        // threads unblock regardless of whether the
+                        // termination above succeeded.
+                        //
+                        // SAFETY: `stdout_handle`/`stderr_handle` are the
+                        // live pipe read ends `spawn_process_with_pipes`
+                        // returned. A drain thread only closes its handle
+                        // (via its owning `File`'s `Drop`) after it returns,
+                        // and a drain thread can only return once EITHER it
+                        // sees EOF/an error OR this watchdog reaches this
+                        // point (the only two ways `timed_out` and a
+                        // drain's own completion race), so calling
+                        // `CancelIoEx` here targets a handle that is still
+                        // open in every case this fires for. `CancelIoEx`
+                        // does not take ownership of the handle, it only
+                        // cancels pending I/O on it; the owning `File`
+                        // still closes it normally afterward.
                         unsafe {
-                            match job {
-                                Some(job) => {
-                                    let _ = TerminateJobObject(job, 1);
-                                }
-                                None => {
-                                    let _ = TerminateProcess(process, 1);
-                                }
+                            let _ = CancelIoEx(stdout_handle, std::ptr::null());
+                            if let Some(h) = stderr_handle {
+                                let _ = CancelIoEx(h, std::ptr::null());
                             }
                         }
                     }
@@ -1168,30 +1232,63 @@ mod windows_impl {
                 .map_err(|_| anyhow::anyhow!("stderr drain thread panicked"))?;
             stdout_result.and(stderr_result)?;
 
-            // SAFETY: `process` is the child's process handle from
-            // PROCESS_INFORMATION; wait for it to exit (the watchdog above
-            // bounds this when a timeout was requested), then read its exit
-            // code.
-            let exit_code = unsafe {
-                if WaitForSingleObject(process, INFINITE) != WAIT_OBJECT_0 {
-                    anyhow::bail!("WaitForSingleObject on child failed: {}", GetLastError());
-                }
-                let mut code: u32 = 0;
-                if GetExitCodeProcess(process, &mut code) == 0 {
-                    anyhow::bail!("GetExitCodeProcess failed: {}", GetLastError());
-                }
-                code as i32
-            };
-
-            // Release the watchdog now instead of leaving it asleep for the
-            // rest of `timeout_ms`; any early `?` above already released it
-            // the same way, via `WatchdogRelease`'s `Drop`.
+            // Release the watchdog now (both drains are joined, whether via
+            // normal EOF or the watchdog's own termination+cancel above)
+            // instead of leaving it asleep for the rest of `timeout_ms`; any
+            // early `?` above already released it the same way, via
+            // `WatchdogRelease`'s `Drop`. Joining it here, BEFORE the final
+            // process wait below, is what lets that wait pick a bound based
+            // on whether this call actually timed out.
             drop(release);
             let timed_out = match watchdog {
                 Some(handle) => handle
                     .join()
                     .map_err(|_| anyhow::anyhow!("watchdog thread panicked"))?,
                 None => false,
+            };
+
+            // FIXED (Greptile P1, PR #402): an unconditional `INFINITE` wait
+            // here defeated the timeout on the rare path where the
+            // termination above (TerminateJobObject/TerminateProcess) raced
+            // the OS actually tearing the process down, or failed outright.
+            // On the timeout path only, bound this wait too, a short grace
+            // for that teardown to finish, so `stream_child` cannot hang
+            // here either. The normal (EOF, non-timeout) path is unchanged:
+            // it still waits `INFINITE`, since a child that legitimately
+            // closes its pipes slightly before it fully exits is expected
+            // behavior, not a hang to bound.
+            const TERMINATION_GRACE_MS: u32 = 5_000;
+            let exit_code = unsafe {
+                let wait_ms = if timed_out {
+                    TERMINATION_GRACE_MS
+                } else {
+                    INFINITE
+                };
+                let wait_result = WaitForSingleObject(process, wait_ms);
+                if wait_result == WAIT_OBJECT_0 {
+                    let mut code: u32 = 0;
+                    if GetExitCodeProcess(process, &mut code) == 0 {
+                        anyhow::bail!("GetExitCodeProcess failed: {}", GetLastError());
+                    }
+                    code as i32
+                } else if timed_out {
+                    // Best effort: the process still hasn't reported exited
+                    // within the grace window after timeout termination (a
+                    // truly stuck/undead descendant). Report a sentinel
+                    // exit code rather than propagate an error here, so the
+                    // Exit frame this function's caller sends still reaches
+                    // the far end bounded by `timeout_ms` plus this grace,
+                    // instead of stream_child returning Err from a call site
+                    // whose whole point was bounding the wait.
+                    runner_debug_log(&format!(
+                        "child pid={pid} did not report exited within \
+                         {TERMINATION_GRACE_MS}ms grace after timeout termination \
+                         (wait result {wait_result})"
+                    ));
+                    -1
+                } else {
+                    anyhow::bail!("WaitForSingleObject on child failed: {}", GetLastError());
+                }
             };
 
             Ok((exit_code, timed_out))
@@ -1250,6 +1347,12 @@ mod windows_impl {
                     ipc_framed::write_frame(&mut **guard, &frame)?;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
+                // FIXED (Greptile P1, PR #402): the watchdog's `CancelIoEx`
+                // on the timeout path aborts this exact pending read, which
+                // surfaces here as `ERROR_OPERATION_ABORTED`. That is the
+                // intended, orderly way this loop ends on a timeout, not a
+                // hard error to propagate.
+                Err(ref e) if e.raw_os_error() == Some(ERROR_OPERATION_ABORTED as i32) => break,
                 Err(e) => return Err(anyhow::anyhow!("read child {stream:?}: {e}")),
             }
         }
