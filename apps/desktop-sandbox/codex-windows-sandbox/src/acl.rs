@@ -177,6 +177,23 @@ pub fn path_mask_allows(
     }
 }
 
+/// Path-based wrapper: does the DACL on `path` carry an effective (non
+/// inherit-only) read-deny ACE for `psid`? Single DACL fetch, symmetric with
+/// [`path_mask_allows`]. Used to make deny-read provisioning idempotent AND
+/// fail-closed: `add_deny_read_ace` returns `false` both when the ACE already
+/// exists and when the underlying Win32 set silently failed, so callers that
+/// must guarantee the deny is in force verify presence with this.
+pub fn path_has_read_deny(path: &Path, psid: *mut c_void) -> Result<bool> {
+    unsafe {
+        let (p_dacl, sd) = fetch_dacl_handle(path)?;
+        let has = dacl_has_read_deny_for_sid(p_dacl, psid);
+        if !sd.is_null() {
+            LocalFree(sd as HLOCAL);
+        }
+        Ok(has)
+    }
+}
+
 pub unsafe fn dacl_has_write_allow_for_sid(p_dacl: *mut ACL, psid: *mut c_void) -> bool {
     if p_dacl.is_null() {
         return false;

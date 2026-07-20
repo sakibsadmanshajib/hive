@@ -1,0 +1,170 @@
+//! Hive sandbox confined-spawn validation harness (Step 3 Integration A, D-004).
+//!
+//! Lab-only. Drives the lab-only
+//! [`hive_desktop_sandbox::windows_elevated::spawn_confined_for_validation`]
+//! entry point on `spike307-win` so the filesystem / user / token isolation
+//! matrix can be PROVEN on a real MSVC Windows host (CI only cross-compiles
+//! this crate for `x86_64-pc-windows-gnu`; it never runs the Win32 paths).
+//!
+//! It launches a probe command AS the low-privilege sandbox account under a
+//! workspace-write capability-restricted token and reports, with raw evidence
+//! (never a bare "pass"):
+//!   (a) the child token user SID (must equal the `hive_sandbox` account SID),
+//!   (b) a write OUTSIDE the writable root is denied,
+//!   (c) a write INSIDE the writable root succeeds,
+//!   (d) reading a seeded secret under the deny-read secrets dir is denied.
+//!
+//! This is a peer of `hive-sandbox-provision`: a `src/bin` target so it lands
+//! in `target/<profile>/` next to `hive-command-runner.exe`, which is what the
+//! helper-resolution sibling lookup (`helper_materialization::find_runner_exe`)
+//! needs to locate the runner. Run AFTER `hive-sandbox-provision` has created
+//! the account. It performs NO privileged provisioning itself.
+//!
+//! Configuration (environment):
+//!   HIVE_SANDBOX_HOME  required, same sandbox home passed to provisioning.
+//!   HIVE_VALIDATE_WS   optional writable-root dir; default `<home>\ws`. Must be
+//!                      granted write to the sandbox account by the operator
+//!                      (icacls) before running; it is the designated workspace.
+
+#[cfg(windows)]
+fn main() -> std::process::ExitCode {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    let sandbox_home = match std::env::var_os("HIVE_SANDBOX_HOME") {
+        Some(v) => PathBuf::from(v),
+        None => {
+            eprintln!("HIVE_SANDBOX_HOME must be set");
+            return std::process::ExitCode::from(2);
+        }
+    };
+    let ws = std::env::var_os("HIVE_VALIDATE_WS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| sandbox_home.join("ws"));
+    if let Err(e) = std::fs::create_dir_all(&ws) {
+        eprintln!("create workspace {}: {e}", ws.display());
+        return std::process::ExitCode::FAILURE;
+    }
+
+    // Expected sandbox account SID, resolved independently of the child so the
+    // (a) assertion compares two independently-obtained values.
+    let expected_sid = match codex_windows_sandbox::sandbox_users::resolve_sid(
+        hive_desktop_sandbox::windows_elevated::SANDBOX_USERNAME,
+    ) {
+        Ok(bytes) => match codex_windows_sandbox::winutil::string_from_sid_bytes(&bytes) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("sandbox SID to string: {e}");
+                return std::process::ExitCode::FAILURE;
+            }
+        },
+        Err(e) => {
+            eprintln!("resolve sandbox SID: {e:#}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    // Paths the probe touches. `outside` is the sandbox_home root: created by
+    // provisioning as an administrator, the least-privilege sandbox account has
+    // no write there, so a write must be denied. `secret` is the DPAPI blob
+    // under the deny-read secrets dir provisioning sealed.
+    let inside = ws.join("inside.txt");
+    let outside = sandbox_home.join("outside_probe.txt");
+    let secret = hive_desktop_sandbox::windows_elevated::sandbox_creds_path(&sandbox_home);
+    let _ = std::fs::remove_file(&inside);
+    let _ = std::fs::remove_file(&outside);
+
+    // Probe batch: each step prints a marker so stdout is self-describing.
+    let script = format!(
+        "whoami /user & echo ===INSIDE=== & (echo probe> \"{inside}\" && echo INSIDE_WRITE_OK || echo INSIDE_WRITE_DENIED) & \
+         echo ===OUTSIDE=== & (echo probe> \"{outside}\" && echo OUTSIDE_WRITE_OK || echo OUTSIDE_WRITE_DENIED) & \
+         echo ===SECRET=== & (type \"{secret}\" >nul 2>&1 && echo SECRET_READ_OK || echo SECRET_READ_DENIED)",
+        inside = inside.display(),
+        outside = outside.display(),
+        secret = secret.display(),
+    );
+    let command = vec![
+        r"C:\Windows\System32\cmd.exe".to_string(),
+        "/c".to_string(),
+        script,
+    ];
+
+    let policy = match hive_desktop_sandbox::SandboxPolicy::build(
+        vec![ws.clone()],
+        vec![],
+        sandbox_home.join("hooks"),
+        hive_desktop_sandbox::NetworkPolicy::DenyAll,
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("build policy: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let env: HashMap<String, String> = HashMap::new();
+    println!("== confined-spawn validation ==");
+    println!("sandbox_home = {}", sandbox_home.display());
+    println!("workspace    = {}", ws.display());
+    println!("expected sandbox SID = {expected_sid}");
+
+    let result = hive_desktop_sandbox::windows_elevated::spawn_confined_for_validation(
+        &sandbox_home,
+        &policy,
+        &command,
+        &ws,
+        &env,
+    );
+    let capture = match result {
+        Ok(c) => c,
+        Err(e) => {
+            // The IPC-failure blocker surfaces here as a confinement error
+            // (e.g. the 15s pipe-connect timeout). Print it as the evidence.
+            eprintln!("spawn_confined_for_validation FAILED: {e}");
+            return std::process::ExitCode::FAILURE;
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&capture.stdout);
+    let stderr = String::from_utf8_lossy(&capture.stderr);
+    println!(
+        "-- child exit_code = {} timed_out = {} --",
+        capture.exit_code, capture.timed_out
+    );
+    println!("-- child stdout --\n{stdout}");
+    println!("-- child stderr --\n{stderr}");
+
+    // Independent, parent-side filesystem evidence (does not trust child stdout).
+    let inside_exists = inside.is_file();
+    let outside_exists = outside.is_file();
+    println!("-- parent-side filesystem evidence --");
+    println!("inside file exists (expect true):  {inside_exists}");
+    println!("outside file exists (expect false): {outside_exists}");
+
+    // Derived verdicts from the raw evidence above. Printed for convenience;
+    // the raw evidence is authoritative.
+    let sid_ok = stdout.to_lowercase().contains(&expected_sid.to_lowercase());
+    let inside_ok = inside_exists && stdout.contains("INSIDE_WRITE_OK");
+    let outside_denied = !outside_exists && stdout.contains("OUTSIDE_WRITE_DENIED");
+    let secret_denied = stdout.contains("SECRET_READ_DENIED");
+    println!("-- derived verdicts --");
+    println!("(a) child SID == sandbox SID : {sid_ok}");
+    println!("(b) outside write denied     : {outside_denied}");
+    println!("(c) inside write ok          : {inside_ok}");
+    println!("(d) secret read denied       : {secret_denied}");
+
+    if sid_ok && inside_ok && outside_denied && secret_denied {
+        println!("VALIDATION: ALL ASSERTIONS PASS");
+        std::process::ExitCode::SUCCESS
+    } else {
+        println!("VALIDATION: ONE OR MORE ASSERTIONS FAILED (see evidence above)");
+        std::process::ExitCode::FAILURE
+    }
+}
+
+/// Non-Windows: the confined spawn is Windows-only. Fail closed (D-005).
+#[cfg(not(windows))]
+fn main() -> std::process::ExitCode {
+    eprintln!("hive-sandbox-validate is only functional on Windows");
+    std::process::ExitCode::FAILURE
+}

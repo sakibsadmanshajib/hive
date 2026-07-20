@@ -33,7 +33,13 @@ pub(crate) enum HelperExecutable {
 impl HelperExecutable {
     fn file_name(self) -> &'static str {
         match self {
-            Self::CommandRunner => "codex-command-runner.exe",
+            // The runner is built by the `hive-command-runner` cargo bin target
+            // (`hive-desktop-sandbox/src/bin/hive-command-runner.rs`), which
+            // produces `hive-command-runner.exe`. The stale vendored
+            // `codex-command-runner.exe` name never exists on disk, so every
+            // helper lookup (sibling copy AND legacy fallback) missed the real
+            // binary. See ../VENDORING.md.
+            Self::CommandRunner => "hive-command-runner.exe",
         }
     }
 
@@ -603,6 +609,6 @@ mod tests {
     fn materialized_file_name_adds_suffix_before_extension() {
         let file_name = materialized_file_name(HelperExecutable::CommandRunner, "test-suffix");
 
-        assert_eq!(file_name, "codex-command-runner-test-suffix.exe");
+        assert_eq!(file_name, "hive-command-runner-test-suffix.exe");
     }
 }

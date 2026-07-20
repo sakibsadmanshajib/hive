@@ -405,10 +405,22 @@ mod windows_impl {
         // SAFETY: `psid` was just built from a valid resolved SID byte buffer by
         // the vendored helper; `add_deny_read_ace` reads it and applies a
         // deny-read ACE to `path`. The buffer outlives the call.
-        let applied = unsafe { acl::add_deny_read_ace(path, psid) }
+        let newly_applied = unsafe { acl::add_deny_read_ace(path, psid) }
             .map_err(|e| anyhow::anyhow!("deny-read ACE on secrets dir: {e}"))?;
-        if !applied {
-            anyhow::bail!("deny-read ACE was not applied to the secrets directory");
+        // `add_deny_read_ace` returns `false` in TWO cases: the deny-read ACE is
+        // already present (an idempotent re-run, which must NOT fail), and — the
+        // vendored acl layer maps a failed `SetEntriesInAclW`/
+        // `SetNamedSecurityInfoW` to `Ok(false)` — when the ACE could not be
+        // applied at all. Treating every `false` as fatal is what broke
+        // re-running provisioning ("deny-read ACE was not applied"). Fail closed
+        // (D-005): only accept a non-add once we have confirmed the deny is
+        // actually in force on disk; otherwise bail.
+        if !newly_applied {
+            let present = acl::path_has_read_deny(path, psid)
+                .map_err(|e| anyhow::anyhow!("verify deny-read ACE on secrets dir: {e}"))?;
+            if !present {
+                anyhow::bail!("deny-read ACE was not applied to the secrets directory");
+            }
         }
         Ok(())
     }
@@ -654,6 +666,40 @@ mod windows_impl {
     // Runner-side (spawn_prep.rs + command_runner/win.rs port; tty = false)
     // -------------------------------------------------------------------
 
+    /// Append-only diagnostic sink for the command-runner startup path.
+    ///
+    /// The runner is launched by `CreateProcessWithLogonW` with
+    /// `CREATE_NO_WINDOW` and no redirected stdio, so anything it writes to
+    /// stderr is discarded: a failure BEFORE the IPC handshake (for example a
+    /// pipe-open error) otherwise leaves no trace at all, which is exactly the
+    /// blind spot that made the "runner exits before connecting" blocker
+    /// undiagnosable. This writes timestamped lines to
+    /// `<temp>/hive-command-runner.log` in the runner account's OWN temp
+    /// directory (readable by an administrator for lab inspection).
+    ///
+    /// Gated on `HIVE_RUNNER_DEBUG=1` so it is inert in normal operation and
+    /// leaves the release path untouched. It NEVER logs the sandbox password,
+    /// credential bytes, or environment values (D-005 honest logging); only
+    /// non-sensitive shape (counts, flags, pipe names, error kinds).
+    fn runner_debug_log(msg: &str) {
+        if std::env::var("HIVE_RUNNER_DEBUG").ok().as_deref() != Some("1") {
+            return;
+        }
+        let path = std::env::temp_dir().join("hive-command-runner.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0);
+            let pid = std::process::id();
+            let _ = writeln!(f, "[{now}][pid {pid}] {msg}");
+        }
+    }
+
     /// Runs the Hive command-runner protocol on the two named pipes. This is
     /// the process that `CreateProcessWithLogonW` starts AS the sandbox account;
     /// it derives a capability-restricted primary token FROM ITS OWN token and
@@ -665,21 +711,33 @@ mod windows_impl {
     /// fail-closed (an `Error` frame), never silently downgraded; ConPTY is
     /// Step 5.
     pub fn run_command_runner(pipe_in: &str, pipe_out: &str) -> Result<()> {
+        runner_debug_log(&format!(
+            "run_command_runner entry: pipe_in={pipe_in} pipe_out={pipe_out}"
+        ));
         // The runner is the pipe CLIENT: it opens the parent's server pipes as
         // files. `pipe_in` was created by the parent with PIPE_ACCESS_OUTBOUND
         // (parent writes, runner reads); `pipe_out` PIPE_ACCESS_INBOUND (runner
         // writes, parent reads). Opening a named pipe as a std file is the
         // documented client path and avoids a bespoke CreateFileW FFI.
+        runner_debug_log("opening inbound pipe (pipe_in)");
         let mut reader = File::options()
             .read(true)
             .write(true)
             .open(pipe_in)
-            .map_err(|e| anyhow::anyhow!("open inbound pipe {pipe_in}: {e}"))?;
+            .map_err(|e| {
+                runner_debug_log(&format!("open inbound pipe FAILED: {e}"));
+                anyhow::anyhow!("open inbound pipe {pipe_in}: {e}")
+            })?;
+        runner_debug_log("inbound pipe opened; opening outbound pipe (pipe_out)");
         let mut writer = File::options()
             .read(true)
             .write(true)
             .open(pipe_out)
-            .map_err(|e| anyhow::anyhow!("open outbound pipe {pipe_out}: {e}"))?;
+            .map_err(|e| {
+                runner_debug_log(&format!("open outbound pipe FAILED: {e}"));
+                anyhow::anyhow!("open outbound pipe {pipe_out}: {e}")
+            })?;
+        runner_debug_log("both pipes opened; reading spawn request frame");
 
         let request = match ipc_framed::read_frame(&mut reader) {
             Ok(Some(FramedMessage {
@@ -700,8 +758,25 @@ mod windows_impl {
             }
         };
 
+        // Non-sensitive shape only: NO env values, NO command args, NO creds.
+        runner_debug_log(&format!(
+            "spawn request received: program={:?} argc={} tty={} read_only={} cap_sids={} workspace_roots={} env_keys={}",
+            request
+                .command
+                .first()
+                .map(String::as_str)
+                .unwrap_or("<none>"),
+            request.command.len(),
+            request.tty,
+            request.permission_profile.read_only,
+            request.cap_sids.len(),
+            request.workspace_roots.len(),
+            request.env.len(),
+        ));
+
         // ConPTY stub site 1: fail closed, never downgrade to pipes silently.
         if request.tty {
+            runner_debug_log("rejecting tty=true (ConPTY is Step 5)");
             send_error(
                 &mut writer,
                 ErrorStage::SpawnChild,
@@ -747,6 +822,11 @@ mod windows_impl {
             .collect::<Result<Vec<_>>>()?;
         let cap_ptrs: Vec<*mut c_void> = cap_sids.iter().map(|s| s.as_ptr()).collect();
 
+        runner_debug_log(&format!(
+            "applying per-task allow ACEs: {} root(s) x {} cap sid(s)",
+            request.workspace_roots.len(),
+            cap_ptrs.len()
+        ));
         // Apply the per-task ACL grants for the workspace roots BEFORE spawning
         // (spawn_prep assembly). Each capability SID gets an allow-write ACE on
         // its writable roots; the cap SID is what the restricted token carries.
@@ -756,6 +836,10 @@ mod windows_impl {
                 // which outlives this loop); `add_allow_ace` applies an allow ACE
                 // to the validated absolute root path.
                 let _ = unsafe { acl::add_allow_ace(root.as_path(), *psid) }.map_err(|e| {
+                    runner_debug_log(&format!(
+                        "allow ACE FAILED on {}: {e}",
+                        root.as_path().display()
+                    ));
                     anyhow::anyhow!("allow ACE on {}: {e}", root.as_path().display())
                 })?;
             }
@@ -767,6 +851,10 @@ mod windows_impl {
         // handles are closed below. Because the derived token comes from the
         // caller's OWN token it is assignable, so the CreateProcessAsUserW
         // inside spawn_process_with_pipes needs no privilege (A.Q1).
+        runner_debug_log(&format!(
+            "deriving capability-restricted token from own token (read_only={})",
+            request.permission_profile.read_only
+        ));
         let token = unsafe {
             let base = get_current_token_for_restriction()?;
             let derived = if request.permission_profile.read_only {
@@ -777,6 +865,7 @@ mod windows_impl {
             CloseHandle(base);
             derived?
         };
+        runner_debug_log("token derived; spawning inner child via CreateProcessAsUserW");
 
         let spawn_result = spawn_process_with_pipes(
             token,
@@ -794,7 +883,14 @@ mod windows_impl {
         unsafe {
             CloseHandle(token);
         }
-        let handles = spawn_result?;
+        let handles = spawn_result.map_err(|e| {
+            runner_debug_log(&format!("spawn_process_with_pipes FAILED: {e}"));
+            e
+        })?;
+        runner_debug_log(&format!(
+            "inner child spawned (pid={}); acking SpawnReady and streaming",
+            handles.process.dwProcessId
+        ));
 
         stream_child(handles, writer)
     }
@@ -834,6 +930,9 @@ mod windows_impl {
             }
             code as i32
         };
+        runner_debug_log(&format!(
+            "child pid={pid} exited code={exit_code}; sending Exit frame"
+        ));
 
         ipc_framed::write_frame(
             &mut *writer,
