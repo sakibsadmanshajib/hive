@@ -15,6 +15,10 @@ pub mod policy;
 pub mod windows_elevated;
 pub mod windows_plan;
 pub mod windows_resolve;
+// Cross-platform (no Win32) pieces of the Windows WFP egress fence
+// (Integration B2): the loopback proxy port range and the loopback-allowlist
+// port complement math, unit-tested on this crate's Linux CI job.
+pub mod wfp_ports;
 
 #[cfg(target_os = "linux")]
 pub mod egress_proxy;
@@ -24,6 +28,15 @@ mod linux;
 pub mod shim;
 #[cfg(windows)]
 mod windows;
+// Windows Firewall COM half of the two-layer egress fence (Integration B2,
+// CTO Q1). Present and cross-compiled, but INERT: `launch` still refuses both
+// network policies, so nothing calls these entry points yet. `allow(dead_code)`
+// is deliberate and scoped to this module: the activation PR (separate,
+// lab-gated per D-004) wires `ensure_offline_outbound_block` /
+// `ensure_offline_proxy_allowlist` into the launch path and removes this allow.
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_firewall;
 
 #[cfg(not(any(target_os = "linux", windows)))]
 compile_error!(
@@ -131,4 +144,30 @@ pub fn launch(
     cwd: &Path,
 ) -> Result<windows::SandboxChild, LaunchError> {
     windows::launch(policy, command, cwd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Inert-boundary guard (Integration B2): the WFP + firewall egress code is
+    // present and cross-compiled, but `launch()` on Windows still REFUSES both
+    // network policies until the separate lab-gated activation PR (D-004). This
+    // Linux-runnable test asserts the two refusal variants still exist and
+    // still render as "not yet enforced", so an accidental early activation
+    // that dropped them would fail CI here as well as in the windows-gated
+    // `windows_elevated` decision tests.
+    #[test]
+    fn network_policies_still_report_as_not_yet_enforced() {
+        assert!(
+            LaunchError::AllowHostsNotYetImplemented
+                .to_string()
+                .contains("not yet enforced")
+        );
+        assert!(
+            LaunchError::NetworkConfinementNotImplemented
+                .to_string()
+                .contains("not yet enforced")
+        );
+    }
 }

@@ -43,13 +43,17 @@ libc = { workspace = true }
 tempfile = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
-# Restricted token + directory ACL + Job Object only. Windows Firewall
-# deny-outbound rule generation from the egress SSOT is blueprint Step 4.4's
-# scope, not this crate's; see `windows_plan.rs` and VENDORING.md.
+# Restricted token + directory ACL + Job Object, plus the Windows Firewall COM
+# half of the two-layer egress fence (Integration B2 / blueprint Step 4.4):
+# `windows_firewall.rs` drives INetFwPolicy2/INetFwRule3 to install the
+# block-all-outbound and loopback allowlist rules, SID-scoped to the sandbox
+# account. See `windows_firewall.rs` and VENDORING.md.
 windows = { version = "0.58", features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_WindowsFirewall",
     "Win32_Security",
     "Win32_Security_Authorization",
+    "Win32_System_Com",
     "Win32_System_JobObjects",
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",

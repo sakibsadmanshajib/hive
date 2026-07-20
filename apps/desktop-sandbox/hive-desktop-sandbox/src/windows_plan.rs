@@ -9,7 +9,6 @@
 //! validation.
 
 use crate::SandboxPolicy;
-use crate::policy::NetworkPolicy;
 use std::path::{Path, PathBuf};
 
 /// Windows-specific enforcement plan derived from a [`SandboxPolicy`].
@@ -36,117 +35,27 @@ pub struct WindowsConfinementPlan {
     /// closes is still required so no sandboxed process outlives its
     /// workspace/ACL lifetime.
     pub job_object_kill_on_close: bool,
-    /// `true` for both [`NetworkPolicy`] variants: a Windows Firewall
-    /// deny-outbound-by-default rule, with [`firewall_allow_outbound_hosts`]
-    /// carrying the per-host exceptions for `AllowHosts`. Blueprint Step
-    /// 4.4 (#308/#311) computes this plan and the rule text
-    /// ([`allow_hosts_firewall_script`]) but does not call the Firewall API
-    /// -- `windows::launch` never applies this firewall codegen (and rejects
-    /// `AllowHosts` outright with `AllowHostsNotYetImplemented`), so nothing
-    /// here is ever actually applied on a real Windows host today. Marked
-    /// explicitly untrusted:
-    /// this is codegen only, verified by pure unit tests on Linux CI, never
-    /// exercised against the real `netsh`/WFP surface.
-    ///
-    /// [`firewall_allow_outbound_hosts`]: WindowsConfinementPlan::firewall_allow_outbound_hosts
-    pub firewall_deny_outbound: bool,
-
-    /// Per-host outbound allow exceptions for [`NetworkPolicy::AllowHosts`],
-    /// layered on top of `firewall_deny_outbound`. Empty for
-    /// [`NetworkPolicy::DenyAll`] (nothing to allow).
-    pub firewall_allow_outbound_hosts: Vec<String>,
+    // Network egress is NOT represented in this plan. The old `netsh` codegen
+    // fields (`firewall_deny_outbound`, `firewall_allow_outbound_hosts`) were
+    // removed in Integration B2: `netsh` evaluates block rules ahead of allow
+    // rules, so that codegen could only ever express a strict deny-all, never
+    // the requested AllowHosts allowlist, and it was never wired to a live
+    // effect. Egress enforcement now lives in the WFP + Windows Firewall COM
+    // layer (`windows_firewall.rs` + `codex_windows_sandbox::wfp`), keyed on
+    // the sandbox account SID, applied at provision time.
 }
 
 impl WindowsConfinementPlan {
     pub fn for_policy(policy: &SandboxPolicy) -> Self {
-        let firewall_allow_outbound_hosts = match policy.network() {
-            NetworkPolicy::DenyAll => Vec::new(),
-            NetworkPolicy::AllowHosts(hosts) => hosts.clone(),
-        };
+        // Network egress is not represented in this plan; it is enforced by the
+        // WFP + firewall COM layer at provision time (see the struct's network
+        // comment), so `policy.network()` is intentionally not read here.
         Self {
             acl_deny_write_parent_dir: parent_dir(policy.hook_config_dir()),
             protect_dacl_from_inheritance: true,
             job_object_kill_on_close: true,
-            firewall_deny_outbound: true,
-            firewall_allow_outbound_hosts,
         }
     }
-}
-
-/// Rule-name prefix for every generated rule, so a caller (or a human
-/// reading `netsh advfirewall firewall show rule name=all`) can find and
-/// remove every rule this crate ever generated for one task by prefix.
-const RULE_NAME_PREFIX: &str = "Hive-Sandbox";
-
-/// Generates the `netsh advfirewall` command lines implementing `plan`,
-/// scoped to `program_path` (the sandboxed task's own executable) via
-/// `netsh`'s `program=` parameter so the rules only ever affect that one
-/// process, never the whole host. Pure text generation -- see the module
-/// doc and `firewall_deny_outbound`'s doc comment for why this is never
-/// applied by this crate. `task_id` scopes the rule *names* so concurrent
-/// sandboxed tasks (if this is ever wired to run more than one at a time)
-/// don't collide or shadow each other's rules.
-///
-/// Known incomplete design, not yet a working allowlist: Windows Firewall
-/// evaluates `Block` rules ahead of `Allow` rules regardless of
-/// specificity, so the single `action=block` rule below always wins over
-/// every per-host `action=allow` rule that follows it -- the net effect if
-/// this were ever applied is a strict deny-all, not the requested
-/// `AllowHosts`. `netsh` has no "allow overrides block" priority to ask
-/// for; a real allowlist needs either a single block rule built from an
-/// inverted (everything-except-the-allowed-hosts) IP range, or dropping
-/// `netsh` for the Windows Filtering Platform (WFP) directly. Tracked as a
-/// follow-up (see the crate's issue tracker); do not wire this to a real
-/// `netsh`/WFP call without fixing the precedence problem first, and note
-/// that `windows::launch` rejects `AllowHosts` outright
-/// (`AllowHostsNotYetImplemented`) and never calls this codegen, so nothing
-/// applies it for a live effect yet either way.
-pub fn allow_hosts_firewall_script(
-    plan: &WindowsConfinementPlan,
-    task_id: &str,
-    program_path: &str,
-) -> Vec<String> {
-    let mut lines = Vec::with_capacity(1 + plan.firewall_allow_outbound_hosts.len());
-    if plan.firewall_deny_outbound {
-        lines.push(format!(
-            "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-deny\" \
-             dir=out action=block program=\"{program_path}\" enable=yes"
-        ));
-    }
-    for host in &plan.firewall_allow_outbound_hosts {
-        // Issue #342 item 4: never interpolate a host into a command string
-        // that is not a safe literal. The egress SSOT
-        // (`apps/control-plane/internal/egress/service.go`'s `normalizeHosts`)
-        // already rejects whitespace and wildcards upstream, but this codegen
-        // must not depend on every future caller having sanitised its input.
-        // A host that is not a plain hostname/IP/CIDR literal gets no allow
-        // rule at all -- fail closed, so it stays denied by the block rule
-        // above rather than emitting an attacker-controlled `netsh` argument.
-        if !is_safe_firewall_host(host) {
-            continue;
-        }
-        lines.push(format!(
-            "netsh advfirewall firewall add rule name=\"{RULE_NAME_PREFIX}-{task_id}-allow-{host}\" \
-             dir=out action=allow program=\"{program_path}\" remoteip={host} enable=yes"
-        ));
-    }
-    lines
-}
-
-/// True only for a host string safe to interpolate verbatim into a `netsh`
-/// command line: a plain hostname, IPv4/IPv6 literal, or CIDR range. Rejects
-/// anything carrying quotes, whitespace, shell/`netsh` metacharacters, or
-/// wildcards, which is what makes the interpolation in
-/// [`allow_hosts_firewall_script`] injection-safe regardless of what a future
-/// caller passes. Deliberately a strict allowlist of characters rather than
-/// an attempt to escape: escaping `netsh`/`cmd` quoting correctly is subtle,
-/// and no legitimate egress host needs a character outside this set.
-fn is_safe_firewall_host(host: &str) -> bool {
-    !host.is_empty()
-        && host.len() <= 255
-        && host
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | ':' | '-' | '_' | '/'))
 }
 
 /// Computes the parent of a Windows-style path using explicit `\`/`/`
@@ -271,6 +180,7 @@ pub fn is_fully_qualified_program(program: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::NetworkPolicy;
     use crate::policy::SandboxPolicy;
     use pretty_assertions::assert_eq;
 
@@ -313,90 +223,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_requests_deny_outbound_firewall_for_deny_all_network() {
-        let policy = SandboxPolicy::build(
-            vec![],
-            vec![],
-            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
-            NetworkPolicy::DenyAll,
-        )
-        .expect("valid policy");
-
-        let plan = WindowsConfinementPlan::for_policy(&policy);
-        assert!(plan.firewall_deny_outbound);
-        assert!(
-            plan.firewall_allow_outbound_hosts.is_empty(),
-            "DenyAll must not carry any allow exceptions"
-        );
-    }
-
-    #[test]
-    fn plan_requests_deny_outbound_and_per_host_exceptions_for_allow_hosts_network() {
-        let policy = SandboxPolicy::build(
-            vec![],
-            vec![],
-            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
-            NetworkPolicy::AllowHosts(vec!["api.openrouter.ai".to_string()]),
-        )
-        .expect("valid policy");
-
-        let plan = WindowsConfinementPlan::for_policy(&policy);
-        // Blueprint Step 4.4 (#308/#311): deny-outbound-by-default now
-        // applies to AllowHosts too, not just DenyAll -- the exceptions
-        // below are what makes it an *allow*list rather than a full block.
-        assert!(plan.firewall_deny_outbound);
-        assert_eq!(
-            plan.firewall_allow_outbound_hosts,
-            vec!["api.openrouter.ai".to_string()]
-        );
-    }
-
-    #[test]
-    fn allow_hosts_firewall_script_orders_deny_rule_before_allow_exceptions() {
-        let policy = SandboxPolicy::build(
-            vec![],
-            vec![],
-            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
-            NetworkPolicy::AllowHosts(vec![
-                "api.openrouter.ai".to_string(),
-                "example.com".to_string(),
-            ]),
-        )
-        .expect("valid policy");
-        let plan = WindowsConfinementPlan::for_policy(&policy);
-
-        let lines = allow_hosts_firewall_script(&plan, "task-123", r"C:\hive\sandboxed-task.exe");
-        assert_eq!(lines.len(), 3, "one deny rule plus one allow rule per host");
-        assert!(lines[0].contains("action=block"));
-        assert!(lines[0].contains("task-123"));
-        assert!(lines[1].contains("action=allow") && lines[1].contains("api.openrouter.ai"));
-        assert!(lines[2].contains("action=allow") && lines[2].contains("example.com"));
-        for line in &lines {
-            assert!(
-                line.contains(r#"program="C:\hive\sandboxed-task.exe""#),
-                "every rule must be scoped to the sandboxed task's own executable, not the whole host: {line}"
-            );
-        }
-    }
-
-    #[test]
-    fn allow_hosts_firewall_script_for_deny_all_is_just_the_deny_rule() {
-        let policy = SandboxPolicy::build(
-            vec![],
-            vec![],
-            PathBuf::from(r"C:\Users\agent\AppData\Hive\hooks"),
-            NetworkPolicy::DenyAll,
-        )
-        .expect("valid policy");
-        let plan = WindowsConfinementPlan::for_policy(&policy);
-
-        let lines = allow_hosts_firewall_script(&plan, "task-456", r"C:\hive\sandboxed-task.exe");
-        assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("action=block"));
-        assert!(lines[0].contains(r#"program="C:\hive\sandboxed-task.exe""#));
-    }
-
-    #[test]
     fn plan_for_hook_config_dir_at_drive_root_falls_back_to_itself() {
         let policy = SandboxPolicy::build(
             vec![],
@@ -424,57 +250,6 @@ mod tests {
         // Must be "C:\" (the drive root), not "C:" (Win32's "current
         // directory on drive C", a different and non-deterministic path).
         assert_eq!(plan.acl_deny_write_parent_dir, PathBuf::from(r"C:\"));
-    }
-
-    #[test]
-    fn allow_hosts_firewall_script_skips_unsafe_hosts() {
-        // Construct the plan directly so the injection guard is tested in
-        // isolation, even for hosts SandboxPolicy::build would itself reject:
-        // this codegen must be safe regardless of what a future caller passes.
-        let plan = WindowsConfinementPlan {
-            acl_deny_write_parent_dir: PathBuf::from(r"C:\Users\agent\AppData\Hive"),
-            protect_dacl_from_inheritance: true,
-            job_object_kill_on_close: true,
-            firewall_deny_outbound: true,
-            firewall_allow_outbound_hosts: vec![
-                "api.openrouter.ai".to_string(),
-                r#"evil.com" & calc.exe & echo "#.to_string(),
-                "with space.com".to_string(),
-                "*.wild.com".to_string(),
-            ],
-        };
-
-        let lines = allow_hosts_firewall_script(&plan, "task-1", r"C:\hive\task.exe");
-        // Deny rule plus exactly one allow rule: only the single safe host.
-        assert_eq!(
-            lines.len(),
-            2,
-            "unsafe hosts must not produce allow rules: {lines:?}"
-        );
-        assert!(lines[0].contains("action=block"));
-        assert!(lines[1].contains("action=allow") && lines[1].contains("api.openrouter.ai"));
-        for line in &lines {
-            assert!(
-                !line.contains("calc.exe"),
-                "no injected command must survive into a rule: {line}"
-            );
-        }
-    }
-
-    #[test]
-    fn is_safe_firewall_host_accepts_literals_and_rejects_metacharacters() {
-        for good in [
-            "api.openrouter.ai",
-            "10.0.0.1",
-            "2606:4700::1111",
-            "10.0.0.0/8",
-            "host-name_1",
-        ] {
-            assert!(is_safe_firewall_host(good), "{good} should be safe");
-        }
-        for bad in ["", "a b", "x\"y", "a&b", "a|b", "*.x.com", "a\nb", "a;b"] {
-            assert!(!is_safe_firewall_host(bad), "{bad} should be rejected");
-        }
     }
 
     /// Strips the trailing NUL and decodes the UTF-16 command line back to a
