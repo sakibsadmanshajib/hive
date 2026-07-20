@@ -8,8 +8,6 @@ use rand::rngs::OsRng;
 use std::ffi::c_void;
 use std::path::Path;
 use std::ptr;
-use std::sync::Mutex;
-use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
 use windows_sys::Win32::Foundation::GetLastError;
@@ -27,9 +25,7 @@ use windows_sys::Win32::Security::Authorization::TRUSTEE_IS_UNKNOWN;
 use windows_sys::Win32::Security::Authorization::TRUSTEE_W;
 use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 use windows_sys::Win32::System::StationsAndDesktops::CloseDesktop;
-use windows_sys::Win32::System::StationsAndDesktops::CloseWindowStation;
 use windows_sys::Win32::System::StationsAndDesktops::CreateDesktopW;
-use windows_sys::Win32::System::StationsAndDesktops::CreateWindowStationW;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_CREATEMENU;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_CREATEWINDOW;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_DELETE;
@@ -45,7 +41,6 @@ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_OWNER;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITEOBJECTS;
 use windows_sys::Win32::System::StationsAndDesktops::GetProcessWindowStation;
 use windows_sys::Win32::System::StationsAndDesktops::GetThreadDesktop;
-use windows_sys::Win32::System::StationsAndDesktops::SetProcessWindowStation;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 
 const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
@@ -63,32 +58,40 @@ const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_WRITE_OWNER;
 
 /// Chooses the desktop a launched child attaches to. When `use_private_desktop`
-/// is set, the child runs on a per-launch PRIVATE window station + desktop (full
-/// UI isolation: a separate clipboard and global atom table, not just a separate
-/// desktop under the shared `WinSta0`); otherwise it stays on the interactive
-/// `Winsta0\Default`.
+/// is set, the child runs on a per-launch PRIVATE desktop on the interactive
+/// `WinSta0` (its own desktop object, isolated from `WinSta0\Default`); otherwise
+/// it stays on `WinSta0\Default`.
+///
+/// This mirrors upstream codex `desktop.rs`: a private DESKTOP under the shared
+/// `WinSta0`, NOT a private window station. A least-privilege sandbox account
+/// cannot create a securable window station (`CreateWindowStationW` returns
+/// `ERROR_ACCESS_DENIED` for that token), and upstream never creates one; a
+/// private desktop is the standard per-process UI isolation boundary. The known
+/// limit: clipboard and the global atom table are per-window-station and stay
+/// shared with the interactive user (a private station would isolate them, but
+/// the sandbox token cannot create one).
 ///
 /// Created RUNNER-side (inside the sandbox-account runner), so the logon SID the
-/// private objects are granted to is the runner's, which the restricted inner
-/// child shares. See [`PrivateWindowStation`].
+/// private desktop is granted to is the runner's, which the restricted inner
+/// child shares. See [`PrivateDesktop`].
 pub struct LaunchDesktop {
-    _private: Option<PrivateWindowStation>,
+    _private: Option<PrivateDesktop>,
     startup_name: Vec<u16>,
 }
 
 impl LaunchDesktop {
     pub fn prepare(use_private_desktop: bool, logs_base_dir: Option<&Path>) -> Result<Self> {
         if use_private_desktop {
-            let private = PrivateWindowStation::create().map_err(|e| {
+            let private = PrivateDesktop::create().map_err(|e| {
                 logging::debug_log(
-                    &format!("private window station create failed: {e}"),
+                    &format!("private desktop create failed: {e}"),
                     logs_base_dir,
                 );
                 e
             })?;
-            // Copy the "<winsta>\\<desktop>" name into our own buffer; the
-            // pointer handed to STARTUPINFO.lpDesktop must outlive the spawn, and
-            // `_private` keeps the objects themselves alive.
+            // Copy the "WinSta0\\<desktop>" name into our own buffer; the pointer
+            // handed to STARTUPINFO.lpDesktop must outlive the spawn, and
+            // `_private` keeps the desktop object itself alive.
             let startup_name = private.startup_name().to_vec();
             Ok(Self {
                 _private: Some(private),
@@ -112,10 +115,12 @@ impl LaunchDesktop {
 /// `CreateProcessWithLogonW` can complete user32 process-attach at load (without
 /// it the runner dies with `STATUS_DLL_INIT_FAILED` 0xC0000142 before `main`).
 ///
-/// The RUNNER stays on `WinSta0`; only the untrusted inner CHILD is moved to a
-/// private window station (via [`LaunchDesktop`] / [`PrivateWindowStation`]), so
-/// this shared-station grant applies to the trusted runner only and is not a
-/// UI-isolation relaxation for the sandboxed workload.
+/// The RUNNER stays on `WinSta0\Default`; the untrusted inner CHILD is moved to a
+/// private DESKTOP on `WinSta0` (via [`LaunchDesktop`] / [`PrivateDesktop`]). The
+/// child holds no handle to the default desktop, so it cannot enumerate the
+/// default desktop's windows or inject input across the desktop boundary.
+/// Clipboard and the atom table are per-window-station and stay shared with the
+/// interactive user: the known limit of desktop-only isolation.
 pub fn grant_winsta_desktop_access(sandbox_username: &str) -> Result<()> {
     let sid_bytes = crate::sandbox_users::resolve_sid(sandbox_username)?;
     let psid = crate::sandbox_users::sid_bytes_to_psid(&sid_bytes)?;
@@ -255,105 +260,94 @@ unsafe fn merge_grant_on_window_object(handle: isize, entries: &[EXPLICIT_ACCESS
     Ok(())
 }
 
-/// `CWF_CREATE_ONLY` (winuser.h): make `CreateWindowStationW` FAIL rather than
-/// open an existing station of the same name, so a name collision or a
-/// pre-squatted station is a hard error instead of a silent attach to another
-/// object. Not re-exported by windows-sys 0.52; value from the Win32 headers.
-const CWF_CREATE_ONLY: u32 = 0x0000_0001;
-
-/// A per-launch PRIVATE window station plus a desktop on it, created RUNNER-side
-/// so the sandboxed inner child runs in full UI isolation from the interactive
-/// user's `WinSta0`: a separate clipboard and global atom table, not just a
-/// separate desktop. The child holds no handle to the real desktop and cannot
-/// shatter-attack it, `SendInput` to it, or read its clipboard.
+/// A per-launch PRIVATE desktop on the interactive `WinSta0`, created RUNNER-side
+/// so the sandboxed inner child runs on its own desktop object, isolated from the
+/// interactive user's `WinSta0\Default`. The child holds no handle to the default
+/// desktop, so it cannot enumerate its windows, `SendInput` to it, or mount a
+/// shatter-style cross-window attack across the desktop boundary.
+///
+/// This mirrors upstream codex `desktop.rs` (a private DESKTOP under the shared
+/// `WinSta0`, NOT a private window station). A least-privilege sandbox account
+/// cannot create a securable window station: `CreateWindowStationW` returns
+/// `ERROR_ACCESS_DENIED` (GLE 5) for that token, and upstream never creates one.
+/// `CreateDesktopW` on `WinSta0` only needs `WINSTA_CREATEDESKTOP`, which the
+/// parent already granted the sandbox account via [`grant_winsta_desktop_access`].
+/// The residual limit: clipboard and the global atom table are per-window-station
+/// and remain shared with the interactive user.
 ///
 /// The child is spawned with `STARTUPINFO.lpDesktop` set to this object's
-/// [`PrivateWindowStation::startup_name`] (`"<winsta>\\<desktop>"`). Access is
-/// granted to the runner's logon SID, which the restricted inner-child token
-/// shares (see [`PrivateWindowStation::create`]).
+/// [`PrivateDesktop::startup_name`] (`"WinSta0\\<desktop>"`). Access is granted to
+/// the runner's logon SID, which the restricted inner-child token shares (see
+/// [`PrivateDesktop::create`]).
 ///
-/// Both handles are held for the value's lifetime; keep it alive until the child
-/// has been created. By then the child holds its OWN process reference to the
-/// station and desktop, so they outlive this value even after its handles close
-/// on drop.
-pub struct PrivateWindowStation {
-    winsta: isize,
+/// The handle is held for the value's lifetime; keep it alive until the child has
+/// been created. By then the child holds its OWN process reference to the desktop,
+/// so it outlives this value even after the handle closes on drop.
+pub struct PrivateDesktop {
     desktop: isize,
-    /// `"<winsta>\\<desktop>"`, NUL-terminated UTF-16, for `STARTUPINFO.lpDesktop`.
+    /// `"WinSta0\\<desktop>"`, NUL-terminated UTF-16, for `STARTUPINFO.lpDesktop`.
     startup_name: Vec<u16>,
 }
 
-impl PrivateWindowStation {
-    /// Creates the private station + desktop and grants the CURRENT process's
-    /// logon SID access to BOTH objects. Called RUNNER-side (the runner runs as
-    /// the sandbox account), so the logon SID is the runner's; the restricted
-    /// inner-child token derives from the runner's token and carries that same
-    /// logon SID in its restricting-SID set, so this ONE grant lets the
-    /// restricted child attach: it satisfies both halves of the
-    /// `WRITE_RESTRICTED` access check (the logon SID is in the token's normal
-    /// groups AND its restricting-SID set).
+impl PrivateDesktop {
+    /// Creates the private desktop on the process's CURRENT window station (the
+    /// interactive `WinSta0`) and grants the CURRENT process's logon SID access to
+    /// it. Called RUNNER-side (the runner runs as the sandbox account), so the
+    /// logon SID is the runner's; the restricted inner-child token derives from
+    /// the runner's token and carries that same logon SID in its restricting-SID
+    /// set, so this ONE grant lets the restricted child attach: the logon SID
+    /// satisfies both halves of the `WRITE_RESTRICTED` access check (it is in the
+    /// token's normal groups AND its restricting-SID set).
+    ///
+    /// No process-wide window-station switch is performed (`CreateDesktopW`
+    /// targets the current station directly), so there is no station-switch lock
+    /// or `StationGuard` to restore.
     ///
     /// Fail closed (D-005): any Win32 failure returns an error and NEVER falls
-    /// back to the shared `WinSta0`. Assumes the caller runs in an interactive
-    /// session (the runner is launched into one via seclogon), where
-    /// window-station creation is permitted.
+    /// back to `WinSta0\Default`.
     pub fn create() -> Result<Self> {
-        // OsRng (CSPRNG) for the station name: not cryptographically-weak
-        // SmallRng, since this is a security-relevant object identifier.
+        // OsRng (CSPRNG) for the desktop name: a security-relevant object
+        // identifier, so not cryptographically-weak SmallRng.
         let mut token = [0u8; 16];
         OsRng.fill_bytes(&mut token);
-        let winsta_name = format!("HiveSandboxWinSta-{:x}", u128::from_le_bytes(token));
-        let desktop_name = "HiveSandboxDesktop";
+        let desktop_name = format!("HiveSandboxDesktop-{:x}", u128::from_le_bytes(token));
 
-        // SAFETY: standard CreateWindowStationW / SetProcessWindowStation /
-        // CreateDesktopW sequence; see `create_private_winsta_desktop`. On
-        // failure it restores the process window station and closes any created
-        // handle before returning.
-        let (winsta, desktop) =
-            unsafe { create_private_winsta_desktop(&winsta_name, desktop_name)? };
+        // SAFETY: creates a desktop on the current (`WinSta0`) window station; the
+        // returned handle is closed by this value's `Drop`.
+        let desktop = unsafe { create_desktop_on_current_station(&desktop_name)? };
 
-        let station = Self {
-            winsta,
+        let this = Self {
             desktop,
-            startup_name: to_wide(format!("{winsta_name}\\{desktop_name}")),
+            // The interactive station is `WinSta0` (same convention as the
+            // `Winsta0\Default` fallback above; Win32 station names are
+            // case-insensitive).
+            startup_name: to_wide(format!("Winsta0\\{desktop_name}")),
         };
 
-        // On failure the returned `station` is dropped here, closing both handles.
-        station.grant_access()?;
-        Ok(station)
+        // On failure the returned `this` is dropped here, closing the handle.
+        this.grant_access()?;
+        Ok(this)
     }
 
-    /// The `"<winsta>\\<desktop>"` name as NUL-terminated UTF-16, for the caller
-    /// to copy into its own `STARTUPINFO.lpDesktop` buffer.
+    /// The `"WinSta0\\<desktop>"` name as NUL-terminated UTF-16, for the caller to
+    /// copy into its own `STARTUPINFO.lpDesktop` buffer.
     pub(crate) fn startup_name(&self) -> &[u16] {
         &self.startup_name
     }
 
-    /// Grants the current process's logon SID access to the private station and
-    /// desktop, preserving every existing ACE (the creator keeps full control).
-    /// See [`PrivateWindowStation::create`] for why the logon SID is the correct
-    /// trustee for the restricted child.
+    /// Grants the current process's logon SID access to the private desktop,
+    /// preserving every existing ACE (the creator keeps full control). See
+    /// [`PrivateDesktop::create`] for why the logon SID is the correct trustee for
+    /// the restricted child.
     fn grant_access(&self) -> Result<()> {
-        // SAFETY: the token helpers return this process's own token and its
-        // logon SID; `psid` points into `logon_sid`, which outlives every grant
-        // below. Each Win32 step inside `merge_grant_on_window_object` is checked.
+        // SAFETY: the token helpers return this process's own token and its logon
+        // SID; `psid` points into `logon_sid`, which outlives the grant below.
+        // Each Win32 step inside `merge_grant_on_window_object` is checked.
         unsafe {
             let token = get_current_token_for_restriction()?;
             let mut logon_sid = get_logon_sid_bytes(token)?;
             CloseHandle(token);
             let psid = logon_sid.as_mut_ptr() as *mut c_void;
-            // KB165194: a window station needs two ACEs for a launched-as user —
-            // an inherit-only generic ACE so child desktops inherit access, plus
-            // the station-specific access on the station object itself.
-            let winsta_entries = [
-                explicit_grant(
-                    psid,
-                    GENERIC_ALL_MASK,
-                    CONTAINER_INHERIT_ACE | INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE,
-                ),
-                explicit_grant(psid, WINSTA_ALL_ACCESS, NO_INHERITANCE),
-            ];
-            merge_grant_on_window_object(self.winsta, &winsta_entries)?;
             let desktop_entries = [explicit_grant(psid, DESKTOP_ALL_ACCESS, NO_INHERITANCE)];
             merge_grant_on_window_object(self.desktop, &desktop_entries)?;
         }
@@ -361,73 +355,21 @@ impl PrivateWindowStation {
     }
 }
 
-impl Drop for PrivateWindowStation {
+impl Drop for PrivateDesktop {
     fn drop(&mut self) {
-        // SAFETY: `desktop`/`winsta` are handles from CreateDesktopW /
-        // CreateWindowStationW; closing each once is safe. Close the desktop
-        // before the station it lives on.
+        // SAFETY: `desktop` is a handle from CreateDesktopW; closing it once is
+        // safe.
         unsafe {
             if self.desktop != 0 {
                 let _ = CloseDesktop(self.desktop);
             }
-            if self.winsta != 0 {
-                let _ = CloseWindowStation(self.winsta);
-            }
         }
     }
 }
 
-/// Serializes the process-global window-station switch inside
-/// [`create_private_winsta_desktop`]. The hive sandbox is per-agent-task, so
-/// concurrent launches are reachable; without this lock, one launch's
-/// `SetProcessWindowStation` would corrupt another's `CreateDesktopW` placement.
-/// Held across the ENTIRE switched window (from before the switch until after
-/// the restore).
-static STATION_SWITCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-/// Restores the process window station to `original` on drop, so a panic or an
-/// early return between the switch and the explicit restore can never leave the
-/// parent stranded on the private station (which would then make
-/// `CloseWindowStation` fail on the current station). The happy path restores
-/// explicitly via [`StationGuard::restore`] and checks the result; this `Drop`
-/// is the last-resort fallback and disarms once the explicit restore succeeds.
-struct StationGuard {
-    original: isize,
-    armed: bool,
-}
-
-impl StationGuard {
-    /// Explicit, checked restore. Disarms the drop-time fallback ONLY on
-    /// success, so a failed restore is retried when the guard drops. Returns the
-    /// Win32 `BOOL` (0 means failure).
-    ///
-    /// # Safety
-    /// `original` must be a valid window-station handle for this process.
-    unsafe fn restore(&mut self) -> i32 {
-        let ok = SetProcessWindowStation(self.original);
-        if ok != 0 {
-            self.armed = false;
-        }
-        ok
-    }
-}
-
-impl Drop for StationGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            // SAFETY: `original` is the caller's valid station handle from
-            // GetProcessWindowStation; making it current again needs no close.
-            unsafe {
-                let _ = SetProcessWindowStation(self.original);
-            }
-        }
-    }
-}
-
-/// Creates `desktop_name` on the process's CURRENT window station. Split out of
-/// [`create_private_winsta_desktop`] to keep that function under the size
-/// guideline; must be called while the process is switched to the target
-/// station.
+/// Creates `desktop_name` on the process's CURRENT window station (the
+/// interactive `WinSta0` for the sandbox-account runner). No station switch is
+/// performed: `CreateDesktopW` targets the current station directly.
 ///
 /// # Safety
 /// Calls raw Win32 `CreateDesktopW`; the returned handle must be closed by the
@@ -450,107 +392,4 @@ unsafe fn create_desktop_on_current_station(desktop_name: &str) -> Result<isize>
         return Err(anyhow::anyhow!("CreateDesktopW failed: {}", GetLastError()));
     }
     Ok(desktop)
-}
-
-/// Creates a private window station and a desktop on it, restoring the caller's
-/// original process window station before returning. Returns the `(winsta,
-/// desktop)` handle pair on success.
-///
-/// `SetProcessWindowStation` is required because `CreateDesktopW` always creates
-/// the desktop on the process's CURRENT window station; there is no
-/// target-station parameter. The switch is reverted immediately after the
-/// desktop is created so the parent keeps its own station, and the whole
-/// switched window is serialized by [`STATION_SWITCH_LOCK`] so concurrent
-/// per-task launches cannot corrupt each other's desktop placement. On any
-/// failure the process window station is restored (via [`StationGuard`], which
-/// also covers panics) BEFORE any private handle is closed, so
-/// `CloseWindowStation` never runs on the current station.
-///
-/// # Safety
-/// Calls raw Win32 window-station APIs. Must run in the interactive user's
-/// session (see [`PrivateWindowStation::create`]); the returned handles must be
-/// closed by the caller (they are, via [`PrivateWindowStation`]'s `Drop`).
-unsafe fn create_private_winsta_desktop(
-    winsta_name: &str,
-    desktop_name: &str,
-) -> Result<(isize, isize)> {
-    // Serialize the whole process-global switch window (held until return).
-    // Acquire the lock BEFORE reading `saved`: otherwise a concurrent launch
-    // that has already switched the process to ITS private station could be
-    // captured here as our `saved`, and on teardown we would restore the parent
-    // to that other launch's (already closed) station. Reading `saved` under the
-    // lock guarantees it is the real interactive station, not a transient one.
-    let _switch_lock = STATION_SWITCH_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-    // Fail closed: without a valid saved station we cannot restore the parent
-    // after the switch, so refuse BEFORE creating or switching anything.
-    let saved = GetProcessWindowStation();
-    if saved == 0 {
-        return Err(anyhow::anyhow!(
-            "GetProcessWindowStation failed: {}",
-            GetLastError()
-        ));
-    }
-
-    let winsta_name_wide = to_wide(winsta_name);
-    let winsta = CreateWindowStationW(
-        winsta_name_wide.as_ptr(),
-        CWF_CREATE_ONLY,
-        // READ_CONTROL | WRITE_DAC so the returned handle can GetSecurityInfo /
-        // SetSecurityInfo when grant_access adds the sandbox SID ACE below.
-        WINSTA_ALL_ACCESS | READ_CONTROL | WRITE_DAC,
-        ptr::null(),
-    );
-    if winsta == 0 {
-        return Err(anyhow::anyhow!(
-            "CreateWindowStationW failed: {}",
-            GetLastError()
-        ));
-    }
-    if SetProcessWindowStation(winsta) == 0 {
-        let err = GetLastError();
-        let _ = CloseWindowStation(winsta);
-        return Err(anyhow::anyhow!(
-            "SetProcessWindowStation(private) failed: {err}"
-        ));
-    }
-
-    // Parent is now switched to `winsta`; `guard` restores `saved` on every exit
-    // path (including panic) BEFORE any private handle is closed.
-    let mut guard = StationGuard {
-        original: saved,
-        armed: true,
-    };
-
-    let desktop = create_desktop_on_current_station(desktop_name);
-    // Explicit, checked restore; capture its error immediately, before any other
-    // Win32 call clobbers the last-error.
-    let restore_ok = guard.restore();
-    let restore_err = if restore_ok == 0 { GetLastError() } else { 0 };
-
-    match desktop {
-        Ok(desktop) if restore_ok != 0 => Ok((winsta, desktop)),
-        Ok(desktop) => {
-            // Restore failed: the parent may still be on `winsta`, so closing it
-            // could target the CURRENT station. Close only the desktop (never
-            // current) and surface the error; `guard` (still armed) retries the
-            // restore on drop. The winsta handle is intentionally leaked on this
-            // near-impossible path rather than closed while possibly current.
-            let _ = CloseDesktop(desktop);
-            Err(anyhow::anyhow!(
-                "SetProcessWindowStation(restore) failed: {restore_err}"
-            ))
-        }
-        Err(e) => {
-            // Desktop creation failed. If the restore succeeded, `winsta` is not
-            // current and is safe to close; if it failed, leak it (guard retries).
-            if restore_ok != 0 {
-                let _ = CloseWindowStation(winsta);
-            }
-            Err(e)
-        }
-    }
 }
