@@ -260,6 +260,7 @@ mod windows_impl {
     use std::ffi::c_void;
     use std::fs::File;
     use std::io::{Read, Write};
+    use std::sync::Mutex;
 
     use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
     use windows_sys::Win32::Security::Authentication::Identity::{
@@ -1027,49 +1028,62 @@ mod windows_impl {
             },
         )?;
 
-        // DEFERRED, not fixed here (CodeRabbit + Greptile findings, PR #401
-        // review round; VENDORING.md tracks both): draining stdout to EOF
-        // before touching stderr can deadlock if the child fills the stderr
-        // pipe buffer while stdout stays open (the child blocks on stderr,
-        // this runner blocks waiting for stdout EOF, neither ever proceeds).
-        // The correct fix is a concurrent two-thread drain (one per stream)
-        // with the frame `writer` behind a shared lock, which changes this
-        // exact lab-validated (D-004) spawn/stream path from single- to
-        // multi-threaded framing and needs re-validation on spike307-win
-        // before landing, not a blind rewrite. Tracked, not silently ignored.
-        drain_stream(handles.stdout_read, OutputStream::Stdout, &mut *writer)?;
-        if let Some(err_read) = handles.stderr_read {
-            drain_stream(err_read, OutputStream::Stderr, &mut *writer)?;
-        }
+        // FIXED (CodeRabbit "Sequential stdout-then-stderr drain can
+        // deadlock" / Greptile "Sequential Pipe Drain Deadlocks", VENDORING.md
+        // tracked both): draining stdout to EOF before touching stderr could
+        // deadlock if the child filled the stderr pipe buffer while stdout
+        // stayed open (the child blocks writing stderr, this runner blocks
+        // waiting for stdout EOF, neither proceeds). Both streams now drain
+        // concurrently, one OS thread per stream, sharing the frame `writer`
+        // behind a `Mutex` so Output frames from either stream never
+        // interleave mid-write. `std::thread::scope` lets both threads borrow
+        // `writer`/the pipe handles without needing `'static`/`Arc`, and
+        // guarantees every thread spawned here is joined before this function
+        // can return. A panic mid-drain on either stream (e.g. a
+        // poisoned-mutex `.lock().unwrap()`) converts to a fail-closed `Err`
+        // via `.join()`, not only on stdout.
+        let writer_lock = Mutex::new(writer);
+        let stdout_handle = handles.stdout_read;
+        let stderr_handle = handles.stderr_read;
 
-        // DEFERRED, not fixed here (Greptile finding, PR #401 review round;
-        // VENDORING.md tracks it): `SpawnRequest::timeout_ms` is plumbed
-        // through the protocol but never read here, so the wait below is
-        // always `INFINITE` and `timed_out` below is always `false`. Today
-        // this is dormant, not reachable: the sole call site that builds a
-        // `SpawnRequest` (see `run_windows_sandbox_capture` in this file)
-        // always sets `timeout_ms: None`. Enforcing a real deadline correctly
-        // needs a watchdog concurrent with the drains above (the same
-        // restructuring as the drain-deadlock deferral just above, since a
-        // hang during drain must also be bounded, not only the final wait),
-        // so it is tracked together with that fix rather than half-done here.
-        //
-        // SAFETY: `process` is the child's process handle from PROCESS_INFORMATION;
-        // wait for it to exit, then read its exit code.
-        let exit_code = unsafe {
-            if WaitForSingleObject(process, INFINITE) != WAIT_OBJECT_0 {
-                anyhow::bail!("WaitForSingleObject on child failed: {}", GetLastError());
+        let exit_code = std::thread::scope(|scope| -> Result<i32> {
+            let stdout_thread =
+                scope.spawn(|| drain_stream(stdout_handle, OutputStream::Stdout, &writer_lock));
+            let stderr_thread = scope.spawn(|| match stderr_handle {
+                Some(h) => drain_stream(h, OutputStream::Stderr, &writer_lock),
+                None => Ok(()),
+            });
+            let stdout_result = stdout_thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("stdout drain thread panicked"))?;
+            let stderr_result = stderr_thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("stderr drain thread panicked"))?;
+            stdout_result.and(stderr_result)?;
+
+            // SAFETY: `process` is the child's process handle from
+            // PROCESS_INFORMATION; wait for it to exit, then read its exit
+            // code.
+            unsafe {
+                if WaitForSingleObject(process, INFINITE) != WAIT_OBJECT_0 {
+                    anyhow::bail!("WaitForSingleObject on child failed: {}", GetLastError());
+                }
+                let mut code: u32 = 0;
+                if GetExitCodeProcess(process, &mut code) == 0 {
+                    anyhow::bail!("GetExitCodeProcess failed: {}", GetLastError());
+                }
+                Ok(code as i32)
             }
-            let mut code: u32 = 0;
-            if GetExitCodeProcess(process, &mut code) == 0 {
-                anyhow::bail!("GetExitCodeProcess failed: {}", GetLastError());
-            }
-            code as i32
-        };
+        })?;
+
         runner_debug_log(&format!(
             "child pid={pid} exited code={exit_code}; sending Exit frame"
         ));
 
+        // Both drain threads have joined (the `thread::scope` call above does
+        // not return until they have), so the mutex is uncontended here;
+        // reclaim the plain `&mut File` for the final write.
+        let writer = writer_lock.into_inner().unwrap();
         ipc_framed::write_frame(
             &mut *writer,
             &FramedMessage {
@@ -1085,8 +1099,10 @@ mod windows_impl {
         Ok(())
     }
 
-    /// Reads a child pipe handle to EOF, emitting Output frames.
-    fn drain_stream(handle: HANDLE, stream: OutputStream, writer: &mut File) -> Result<()> {
+    /// Reads a child pipe handle to EOF, emitting Output frames. `writer` is
+    /// shared with the sibling stream's drain thread (see `stream_child`); the
+    /// lock is held only around each frame write, not the blocking read.
+    fn drain_stream(handle: HANDLE, stream: OutputStream, writer: &Mutex<&mut File>) -> Result<()> {
         // Wrap the raw read handle as a File so we get std buffered reads; the
         // handle ownership transfers here and is closed on drop.
         use std::os::windows::io::FromRawHandle;
@@ -1100,18 +1116,17 @@ mod windows_impl {
             match file.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    ipc_framed::write_frame(
-                        &mut *writer,
-                        &FramedMessage {
-                            version: ipc_framed::IPC_PROTOCOL_VERSION,
-                            message: Message::Output {
-                                payload: OutputPayload {
-                                    data_b64: ipc_framed::encode_bytes(&buf[..n]),
-                                    stream,
-                                },
+                    let frame = FramedMessage {
+                        version: ipc_framed::IPC_PROTOCOL_VERSION,
+                        message: Message::Output {
+                            payload: OutputPayload {
+                                data_b64: ipc_framed::encode_bytes(&buf[..n]),
+                                stream,
                             },
                         },
-                    )?;
+                    };
+                    let mut guard = writer.lock().unwrap();
+                    ipc_framed::write_frame(&mut **guard, &frame)?;
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
                 Err(e) => return Err(anyhow::anyhow!("read child {stream:?}: {e}")),

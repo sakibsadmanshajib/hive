@@ -665,25 +665,43 @@ with the reason a blind fix would risk invalidating that lab run.
   the function's own doc comment: do not remove the network-refusal guards
   until the runner moves to a dedicated, non-shared private window station.
   Not re-fixed here per that disposition.
-- `windows_elevated.rs::stream_child`'s sequential stdout-then-stderr drain
-  (CodeRabbit "Sequential stdout-then-stderr drain can deadlock", Greptile
-  "Sequential Pipe Drain Deadlocks", both on the same code): draining stdout
-  to EOF before touching stderr can deadlock if the child fills the stderr
-  pipe buffer while stdout stays open. The correct fix, a concurrent
-  two-thread drain with the frame writer behind a shared lock, changes this
-  exact D-004 lab-validated spawn/stream path from single- to multi-threaded
-  framing. Deferred rather than blind-rewritten; needs a fresh spike307-win
-  run once implemented. Inline comment added at the call site so this is
-  tracked, not silently missed.
-- `windows_elevated.rs::stream_child`'s ignored `timeout_ms` (Greptile
-  "Request Timeout Is Ignored"): the wait is always `INFINITE` and
-  `timed_out` is always `false`. Currently dormant, not reachable: the sole
+- **RESOLVED (Step 3 Integration B1).** `windows_elevated.rs::stream_child`'s
+  sequential stdout-then-stderr drain (CodeRabbit "Sequential stdout-then-stderr
+  drain can deadlock", Greptile "Sequential Pipe Drain Deadlocks", both on the
+  same code) could deadlock if the child filled the stderr pipe buffer while
+  stdout stayed open. Fixed with a concurrent two-thread drain
+  (`std::thread::scope`, one thread per stream) sharing the frame `writer`
+  behind a `Mutex` so Output frames never interleave mid-write; each stream's
+  drain runs on its own scoped thread, joined and mapped to `Err`, so a panic
+  on either stream fails closed instead of unwinding raw. This is a live fix
+  (drains run on every `stream_child` call, timeout or not). Still needs a
+  fresh spike307-win lab run to confirm behaviorally; type-checked and
+  clippy-clean cross-compiled to `x86_64-pc-windows-gnu`.
+- **DEFERRED to B2 (request-timeout, `SpawnRequest::timeout_ms`).** An
+  earlier pass on this PR added a watchdog thread, `TerminateJobObject`,
+  `CancelIoEx` on the drain read handles, and a bounded post-timeout wait to
+  make `timeout_ms` actually bound the whole spawn (Greptile "Request Timeout
+  Is Ignored", then two further Greptile/CodeRabbit P1 passes on that fix:
+  "Kill the whole job on timeout, not just the root process" and
+  "Termination failure remains unbounded"). A third review pass (Greptile)
+  found the remaining gap is structural, not fixable by patching further:
+  `CancelIoEx` only cancels OVERLAPPED I/O, and this crate's drain pipes are
+  synchronous (`CreatePipe` plus blocking `File::read`), so `CancelIoEx`
+  cannot interrupt a pending read on them at all. Bounding a blocking
+  synchronous-pipe read correctly needs either `CancelSynchronousIo` called
+  against the specific drain thread's handle (from another thread, targeting
+  that thread, not the file handle) or switching the pipes/reads to
+  overlapped I/O with `GetOverlappedResult`/`WaitForSingleObject` on the
+  OVERLAPPED event, with the cancellation's own result checked, not
+  discarded, either way. `timeout_ms` is dormant in this PR: the sole
   `SpawnRequest` construction site (`run_windows_sandbox_capture`, this file)
-  always sets `timeout_ms: None`. A correct fix needs a watchdog concurrent
-  with the drains (coupled to the drain-deadlock deferral above, since a hang
-  during drain must also be bounded), so it is tracked with that fix rather
-  than half-implemented as a bare final-wait timeout that a stuck drain would
-  never reach. Inline comment added at the call site.
+  always sets `timeout_ms: None`, so the watchdog code path never ran; CTO
+  call was to remove all of the watchdog/termination/cancellation machinery
+  this pass rather than keep chasing synchronous-read cancellation on dead
+  code, and build the correct form (`CancelSynchronousIo` or overlapped I/O,
+  checked results, no discarded cancellation outcomes) together with wiring
+  a real deadline in B2, lab-exercised on `spike307-win` at that point since
+  only then does the watchdog path actually run.
 
 ### Deliberately NOT done in A2 (fail-closed stubs, honest)
 
