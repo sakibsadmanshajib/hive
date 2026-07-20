@@ -1052,17 +1052,36 @@ mod windows_impl {
         let stdout_handle = handles.stdout_read;
         let stderr_handle = handles.stderr_read;
 
-        // FIXED (was DEFERRED; Greptile "Request Timeout Is Ignored",
-        // VENDORING.md tracked): `timeout_ms` now bounds the whole spawn, not
-        // only a final wait. A watchdog thread races the drains/wait below
-        // via an mpsc channel: if `timeout_ms` elapses before the normal path
-        // signals completion, it force-terminates the child, which unblocks
-        // any drain still reading (the pipes close, giving EOF/BrokenPipe)
-        // and the final wait (the process handle signals) instead of a hang
-        // no timeout would ever catch.
-        let (done_tx, done_rx) = mpsc::channel::<()>();
-
         let (exit_code, timed_out) = std::thread::scope(|scope| -> Result<(i32, bool)> {
+            // FIXED (was DEFERRED; Greptile "Request Timeout Is Ignored",
+            // VENDORING.md tracked): `timeout_ms` now bounds the whole spawn,
+            // not only a final wait. A watchdog thread races the drains/wait
+            // below via an mpsc channel: if `timeout_ms` elapses before the
+            // normal path signals completion, it force-terminates the child,
+            // which unblocks any drain still reading (the pipes close, giving
+            // EOF/BrokenPipe) and the final wait (the process handle signals)
+            // instead of a hang no timeout would ever catch.
+            let (done_tx, done_rx) = mpsc::channel::<()>();
+
+            // FIXED (Rust review, PR #402): `done_tx` used to be signaled
+            // only on the success path below, so an early `?` return from a
+            // drain/wait error left it alive until THIS closure returned --
+            // and `thread::scope` cannot return until the watchdog thread
+            // joins, so an early error stalled for the entire `timeout_ms`
+            // before propagating. Wrapping `done_tx` in an RAII guard whose
+            // `Drop` signals it means EVERY exit path from this closure
+            // (early `?` or the normal path at the bottom) releases the
+            // watchdog immediately: Rust drops live locals, including this
+            // guard, when a `?` triggers an early return, exactly like a
+            // normal scope exit.
+            struct WatchdogRelease(mpsc::Sender<()>);
+            impl Drop for WatchdogRelease {
+                fn drop(&mut self) {
+                    let _ = self.0.send(());
+                }
+            }
+            let release = WatchdogRelease(done_tx);
+
             let watchdog = timeout_ms.map(|ms| {
                 scope.spawn(move || {
                     let timed_out = matches!(
@@ -1088,13 +1107,23 @@ mod windows_impl {
 
             let stdout_thread =
                 scope.spawn(|| drain_stream(stdout_handle, OutputStream::Stdout, &writer_lock));
-            let stderr_result = match stderr_handle {
+            // FIXED (Rust review, PR #402): stderr now drains on its own
+            // scoped thread too (was inline on the scope-calling thread), so
+            // a panic mid-drain (e.g. a poisoned-mutex `.lock().unwrap()`) is
+            // converted to a fail-closed `Err` via `.join()` on EITHER
+            // stream, not only stdout. Still deadlock-free: the lock is held
+            // only around each frame write inside `drain_stream`, never
+            // across a blocking read.
+            let stderr_thread = scope.spawn(|| match stderr_handle {
                 Some(h) => drain_stream(h, OutputStream::Stderr, &writer_lock),
                 None => Ok(()),
-            };
+            });
             let stdout_result = stdout_thread
                 .join()
                 .map_err(|_| anyhow::anyhow!("stdout drain thread panicked"))?;
+            let stderr_result = stderr_thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("stderr drain thread panicked"))?;
             stdout_result.and(stderr_result)?;
 
             // SAFETY: `process` is the child's process handle from
@@ -1112,10 +1141,10 @@ mod windows_impl {
                 code as i32
             };
 
-            // Wake the watchdog now instead of leaving it asleep for the rest
-            // of `timeout_ms`; a no-op (send fails, ignored) once the
-            // watchdog has already fired and dropped its receiver.
-            let _ = done_tx.send(());
+            // Release the watchdog now instead of leaving it asleep for the
+            // rest of `timeout_ms`; any early `?` above already released it
+            // the same way, via `WatchdogRelease`'s `Drop`.
+            drop(release);
             let timed_out = match watchdog {
                 Some(handle) => handle
                     .join()
