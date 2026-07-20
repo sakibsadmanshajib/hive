@@ -47,11 +47,15 @@ impl Drop for CrossProcessCapLock {
     }
 }
 
-/// Acquires the cross-process cap-SID mutex, blocking until it is owned. Returns
-/// `None` only if the mutex object could not be created (in which case the
-/// intra-process lock still provides same-process safety); a WAIT_ABANDONED
-/// result still confers ownership, which is the desired behaviour here.
-fn acquire_cross_process_cap_lock(codex_home: &Path) -> Option<CrossProcessCapLock> {
+/// Acquires the cross-process cap-SID mutex, blocking until it is owned.
+/// Fails closed (CodeRabbit/Greptile findings, PR #401): returns an error if
+/// the mutex object could not be created, or if the wait does not return
+/// ownership, instead of silently returning `None`/proceeding under only the
+/// intra-process lock. Callers MUST propagate the error with `?` and abort the
+/// read-modify-write rather than treat a lock failure as success; a
+/// WAIT_ABANDONED result still confers ownership, which is the desired
+/// behaviour here and is not an error.
+fn acquire_cross_process_cap_lock(codex_home: &Path) -> std::io::Result<CrossProcessCapLock> {
     use std::hash::{Hash, Hasher};
     // Mutex names cannot contain '\' except the namespace prefix, so key the
     // name on a stable hash of the canonical cap_sid path rather than the path
@@ -69,10 +73,15 @@ fn acquire_cross_process_cap_lock(codex_home: &Path) -> Option<CrossProcessCapLo
         let h =
             windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, wide.as_ptr());
         if h == 0 {
-            return None;
+            return Err(std::io::Error::last_os_error());
         }
-        let _ = windows_sys::Win32::System::Threading::WaitForSingleObject(h, u32::MAX);
-        Some(CrossProcessCapLock(h))
+        let wait = windows_sys::Win32::System::Threading::WaitForSingleObject(h, u32::MAX);
+        if wait == windows_sys::Win32::Foundation::WAIT_FAILED {
+            let err = std::io::Error::last_os_error();
+            let _ = windows_sys::Win32::Foundation::CloseHandle(h);
+            return Err(err);
+        }
+        Ok(CrossProcessCapLock(h))
     }
 }
 
@@ -122,8 +131,9 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
     let _guard = CAP_SID_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Hold the cross-process mutex for the same critical section (A2, see above).
-    let _xproc = acquire_cross_process_cap_lock(codex_home);
+    // Hold the cross-process mutex for the same critical section (A2, see
+    // above). Fails closed: a lock failure aborts before the read-modify-write.
+    let _xproc = acquire_cross_process_cap_lock(codex_home)?;
     load_or_create_cap_sids_locked(&cap_sid_file(codex_home))
 }
 
@@ -167,8 +177,9 @@ pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String
     let _guard = CAP_SID_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Hold the cross-process mutex for the same critical section (A2, see above).
-    let _xproc = acquire_cross_process_cap_lock(codex_home);
+    // Hold the cross-process mutex for the same critical section (A2, see
+    // above). Fails closed: a lock failure aborts before the read-modify-write.
+    let _xproc = acquire_cross_process_cap_lock(codex_home)?;
     let mut caps = load_or_create_cap_sids_locked(&path)?;
     let key = canonical_path_key(cwd);
     if let Some(sid) = caps.workspace_by_cwd.get(&key) {
@@ -186,8 +197,9 @@ pub fn writable_root_cap_sid_for_path(codex_home: &Path, root: &Path) -> Result<
     let _guard = CAP_SID_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Hold the cross-process mutex for the same critical section (A2, see above).
-    let _xproc = acquire_cross_process_cap_lock(codex_home);
+    // Hold the cross-process mutex for the same critical section (A2, see
+    // above). Fails closed: a lock failure aborts before the read-modify-write.
+    let _xproc = acquire_cross_process_cap_lock(codex_home)?;
     let mut caps = load_or_create_cap_sids_locked(&path)?;
     let key = canonical_path_key(root);
     if let Some(sid) = caps.writable_root_by_path.get(&key) {

@@ -305,6 +305,24 @@ unsafe fn merge_grant_on_window_object(handle: isize, entries: &[EXPLICIT_ACCESS
 /// capability-restricted token + Job Object; UI/desktop isolation (a dedicated
 /// private window station for the runner) is a separate follow-up hardening and
 /// is intentionally not attempted here.
+///
+/// KNOWN GAP, dispositioned and NOT re-fixed here (Greptile finding "Desktop
+/// Grant Outlives Runner", PR #401 review round; opus security review PASSED
+/// PR #401 MERGE-WITH-TRACKED-FOLLOWUP on this exact basis): the grant is
+/// persistent (`WINSTA_ALL_ACCESS` / inheritable `GENERIC_ALL` / `DESKTOP_ALL_ACCESS`)
+/// and never revoked, so any later process running as the shared sandbox
+/// account on this station/desktop also inherits it. Unreachable in the
+/// product path today because `windows::launch` refuses every network
+/// policy (`DenyAll` and `AllowHosts` both fail closed; see VENDORING.md
+/// "Open risks" #3), so nothing reaches this grant outside the lab-only
+/// `spawn_confined_for_validation` entry.
+///
+/// HARD GATE ON INTEGRATION B: do not remove or loosen the network-refusal
+/// guards in `windows::launch` until the runner is switched to a dedicated,
+/// non-shared private window station (revoking this shared-station/desktop
+/// grant) instead of the caller's own interactive station. WFP egress
+/// enforcement landing without that switch would make this gap reachable in
+/// production. Track resolution together, not WFP alone.
 pub fn grant_winsta_desktop_access(sandbox_username: &str) -> Result<()> {
     let sid_bytes = crate::sandbox_users::resolve_sid(sandbox_username)?;
     let psid = crate::sandbox_users::sid_bytes_to_psid(&sid_bytes)?;

@@ -41,6 +41,29 @@ fn main() -> std::process::ExitCode {
     let ws = std::env::var_os("HIVE_VALIDATE_WS")
         .map(PathBuf::from)
         .unwrap_or_else(|| sandbox_home.join("ws"));
+
+    // Greptile finding, PR #401: `sandbox_home`/`ws` flow unescaped into a
+    // `cmd.exe /c` script below (see the comment on `script` for why proper
+    // escaping is not attempted). This tool is lab-only and its env vars are
+    // operator-supplied, not attacker input, but fail closed rather than
+    // silently building a script whose structure a stray metacharacter can
+    // rewrite. Reject up front instead of trying to escape.
+    for (label, p) in [
+        ("HIVE_SANDBOX_HOME", &sandbox_home),
+        ("HIVE_VALIDATE_WS", &ws),
+    ] {
+        let s = p.to_string_lossy();
+        if s.chars()
+            .any(|c| c.is_whitespace() || "&|<>^%\"".contains(c))
+        {
+            eprintln!(
+                "{label} must not contain whitespace or cmd.exe metacharacters (& | < > ^ % \"): {}",
+                p.display()
+            );
+            return std::process::ExitCode::from(2);
+        }
+    }
+
     if let Err(e) = std::fs::create_dir_all(&ws) {
         eprintln!("create workspace {}: {e}", ws.display());
         return std::process::ExitCode::FAILURE;

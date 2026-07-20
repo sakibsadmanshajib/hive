@@ -266,12 +266,17 @@ mod windows_impl {
         LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
         LsaOpenPolicy, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
     };
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+        SetInformationJobObject,
+    };
     use windows_sys::Win32::System::Services::{
         CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT,
         SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATUS, StartServiceW,
     };
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, INFINITE, WaitForSingleObject,
+        GetExitCodeProcess, INFINITE, TerminateProcess, WaitForSingleObject,
     };
 
     // The runner-spawn transport wants a "codex_home"-shaped base directory for
@@ -904,12 +909,106 @@ mod windows_impl {
             runner_debug_log(&format!("spawn_process_with_pipes FAILED: {e}"));
             e
         })?;
+        // Greptile finding, PR #401: nothing previously controlled this child
+        // once spawned, so an IPC write failure or a parent disconnect below
+        // orphaned it with no controller left to stop it. Assign it to a
+        // kill-on-close Job Object now so any early return in `stream_child`
+        // (the SpawnReady write, a drain error, or the wait) terminates the
+        // child instead of leaving it running unsupervised. If job setup
+        // itself fails, terminate the child directly rather than propagate
+        // the error with an unconfined child still alive.
+        let job_guard = match confine_child_to_job(handles.process.hProcess) {
+            Ok(guard) => guard,
+            Err(e) => {
+                runner_debug_log(&format!(
+                    "confine_child_to_job FAILED: {e}; terminating unconfined child"
+                ));
+                // SAFETY: `handles.process.hProcess` is the live handle from
+                // `spawn_process_with_pipes` above; terminating it here (job
+                // setup failed) is the fail-closed choice over leaving it
+                // running with no containment at all.
+                unsafe {
+                    let _ = TerminateProcess(handles.process.hProcess, 1);
+                }
+                return Err(e);
+            }
+        };
         runner_debug_log(&format!(
-            "inner child spawned (pid={}); acking SpawnReady and streaming",
+            "inner child spawned (pid={}); confined to kill-on-close job; acking SpawnReady and streaming",
             handles.process.dwProcessId
         ));
 
-        stream_child(handles, writer)
+        let result = stream_child(handles, writer);
+        // By the time `stream_child` returns `Ok`, the child has already
+        // exited (it waits on the process handle before returning), so
+        // dropping the job here is a no-op in that case; on `Err` it
+        // terminates whatever is still running.
+        drop(job_guard);
+        result
+    }
+
+    /// RAII guard that terminates the sandboxed child if dropped before the
+    /// child has already exited on its own: closing the last handle to a job
+    /// created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` terminates every
+    /// process still in it. Mirrors the base (non-elevated) variant's Step 1
+    /// containment (`windows.rs::create_job_object`), reused here for the
+    /// elevated path via `windows-sys` to interoperate with this module's
+    /// `HANDLE` type (see the module's own `windows-sys` vs `windows` crate
+    /// note at the top of this file).
+    struct ChildJobGuard(HANDLE);
+
+    impl Drop for ChildJobGuard {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is a job handle created by `CreateJobObjectW`
+            // in `confine_child_to_job`; closing it is safe at any point and,
+            // with KILL_ON_JOB_CLOSE set, is exactly the desired cleanup.
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
+    /// Creates a job object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` and
+    /// assigns `process` to it immediately after spawn. Unlike the base
+    /// variant's Step 1 sequence, the child here is not `CREATE_SUSPENDED`
+    /// (upstream `create_process_as_user` never suspends it, and changing
+    /// that vendored primitive is out of scope here), so there is a narrow
+    /// window between spawn and this call in which the child runs outside
+    /// any job; that window is unchanged from before this fix. What this
+    /// closes is the much larger gap after it: previously nothing controlled
+    /// the child for the rest of its life, so an IPC failure or parent
+    /// disconnect at any later point orphaned it (Greptile finding, PR #401).
+    fn confine_child_to_job(process: HANDLE) -> Result<ChildJobGuard> {
+        // SAFETY: standard CreateJobObjectW / SetInformationJobObject /
+        // AssignProcessToJobObject sequence. `process` is the live handle
+        // from `spawn_process_with_pipes`, still owned and closed by its
+        // existing caller; the job handle is owned by the returned guard and
+        // closed on drop.
+        unsafe {
+            let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+            if job == 0 {
+                anyhow::bail!("CreateJobObjectW failed: {}", GetLastError());
+            }
+            let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+            limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            if SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &limits as *const _ as *const c_void,
+                std::mem::size_of_val(&limits) as u32,
+            ) == 0
+            {
+                let err = GetLastError();
+                CloseHandle(job);
+                anyhow::bail!("SetInformationJobObject failed: {err}");
+            }
+            if AssignProcessToJobObject(job, process) == 0 {
+                let err = GetLastError();
+                CloseHandle(job);
+                anyhow::bail!("AssignProcessToJobObject failed: {err}");
+            }
+            Ok(ChildJobGuard(job))
+        }
     }
 
     /// Streams the child's stdout/stderr as Output frames and its exit as an
@@ -928,13 +1027,33 @@ mod windows_impl {
             },
         )?;
 
-        // Drain stdout then stderr sequentially. tty=false capture does not need
-        // interleaving fidelity; ordering within a stream is preserved.
+        // DEFERRED, not fixed here (CodeRabbit + Greptile findings, PR #401
+        // review round; VENDORING.md tracks both): draining stdout to EOF
+        // before touching stderr can deadlock if the child fills the stderr
+        // pipe buffer while stdout stays open (the child blocks on stderr,
+        // this runner blocks waiting for stdout EOF, neither ever proceeds).
+        // The correct fix is a concurrent two-thread drain (one per stream)
+        // with the frame `writer` behind a shared lock, which changes this
+        // exact lab-validated (D-004) spawn/stream path from single- to
+        // multi-threaded framing and needs re-validation on spike307-win
+        // before landing, not a blind rewrite. Tracked, not silently ignored.
         drain_stream(handles.stdout_read, OutputStream::Stdout, &mut *writer)?;
         if let Some(err_read) = handles.stderr_read {
             drain_stream(err_read, OutputStream::Stderr, &mut *writer)?;
         }
 
+        // DEFERRED, not fixed here (Greptile finding, PR #401 review round;
+        // VENDORING.md tracks it): `SpawnRequest::timeout_ms` is plumbed
+        // through the protocol but never read here, so the wait below is
+        // always `INFINITE` and `timed_out` below is always `false`. Today
+        // this is dormant, not reachable: the sole call site that builds a
+        // `SpawnRequest` (see `run_windows_sandbox_capture` in this file)
+        // always sets `timeout_ms: None`. Enforcing a real deadline correctly
+        // needs a watchdog concurrent with the drains above (the same
+        // restructuring as the drain-deadlock deferral just above, since a
+        // hang during drain must also be bounded, not only the final wait),
+        // so it is tracked together with that fix rather than half-done here.
+        //
         // SAFETY: `process` is the child's process handle from PROCESS_INFORMATION;
         // wait for it to exit, then read its exit code.
         let exit_code = unsafe {

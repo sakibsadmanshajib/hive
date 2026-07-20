@@ -89,7 +89,23 @@ pub(crate) fn resolve_helper_for_launch(
             path
         }
         Err(err) => {
-            let fallback = legacy_lookup(kind);
+            let legacy = legacy_lookup(kind);
+            // A2 boundary #8 guard (VENDORING; documented deviation from the
+            // verbatim vendor, PR #401 CodeRabbit/Greptile follow-up):
+            // `legacy_lookup` can return a bare, cwd/PATH-resolvable file name
+            // when neither the sibling nor resource-dir lookup finds the
+            // helper. Handed to `CreateProcessWithLogonW` as-is, a bare name
+            // resolves through Windows executable search instead of failing
+            // closed, which is a direct escalation vector (a planted binary
+            // found first). Anchor it under the trusted helper bin dir
+            // instead when it is not already fully qualified; that path will
+            // not exist either in this failure branch, so the launch fails
+            // closed on a missing file rather than searching for one.
+            let fallback = if is_fully_qualified_launch_path(&legacy) {
+                legacy
+            } else {
+                helper_bin_dir(codex_home).join(kind.file_name())
+            };
             log_note(
                 &format!(
                     "helper copy failed for {}: {err:#}; falling back to legacy path {}",
