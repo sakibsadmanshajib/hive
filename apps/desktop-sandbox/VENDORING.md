@@ -679,11 +679,30 @@ with the reason a blind fix would risk invalidating that lab run.
   the wait always `INFINITE` and `timed_out` always `false`. Fixed with a
   watchdog thread (spawned inside the same `thread::scope` as the drains
   above, so it bounds the drain phase too, not only the final wait) racing an
-  mpsc channel against `timeout_ms`: on expiry it force-terminates the child
-  (fail closed, never a silent success) and reports `timed_out: true`. Still
-  dormant in practice: the sole `SpawnRequest` construction site
-  (`run_windows_sandbox_capture`, this file) still sets `timeout_ms: None`;
-  wiring a real deadline value through is a later wave's concern.
+  mpsc channel against `timeout_ms`: on expiry it force-terminates (fail
+  closed, never a silent success) and reports `timed_out: true`. `done_tx` is
+  wrapped in a `WatchdogRelease` RAII guard so an early drain/wait error also
+  releases the watchdog immediately instead of stalling for the rest of
+  `timeout_ms` (CodeRabbit finding, second review pass); the stderr drain
+  moved onto its own scoped thread too, joined and mapped to `Err` the same
+  way as stdout, so a panic on either stream fails closed instead of
+  unwinding raw (Rust review, same pass).
+  **CodeRabbit finding, third review pass:** on expiry the watchdog now
+  terminates the whole kill-on-close Job Object (`TerminateJobObject`, the
+  same job `confine_child_to_job`/`ChildJobGuard` already assigns the child
+  to), not only the direct child via `TerminateProcess`. Terminating just the
+  direct child left the timeout defeatable in the common case: a sandboxed
+  command that spawns its own children inherits the stdout/stderr pipe WRITE
+  handles into them, so those handles stay open after the direct child dies,
+  a drain thread's `read` never sees EOF, and `stream_child` hangs past
+  `timeout_ms` regardless of the watchdog. Job-wide termination closes every
+  inherited handle in one call. `TerminateProcess` is kept as a fallback for
+  a hypothetical caller with no job. This is what makes the "bounds the whole
+  spawn" claim in this entry actually true rather than narrowed to the
+  single-process case; still dormant in practice, the sole `SpawnRequest`
+  construction site (`run_windows_sandbox_capture`, this file) still sets
+  `timeout_ms: None`, so wiring a real deadline value through remains a later
+  wave's concern.
 
 ### Deliberately NOT done in A2 (fail-closed stubs, honest)
 

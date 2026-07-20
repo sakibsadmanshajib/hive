@@ -272,7 +272,7 @@ mod windows_impl {
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
         JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
-        SetInformationJobObject,
+        SetInformationJobObject, TerminateJobObject,
     };
     use windows_sys::Win32::System::Services::{
         CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT,
@@ -941,7 +941,13 @@ mod windows_impl {
             handles.process.dwProcessId
         ));
 
-        let result = stream_child(handles, writer, request.timeout_ms);
+        // CodeRabbit finding, PR #402: passing the job handle through lets the
+        // watchdog below terminate the whole job (child + any descendants it
+        // spawned), not only the direct child. `job_guard` still owns the
+        // handle and closes it after (harmless: the job is already dead by
+        // then if the watchdog fired).
+        let job = job_guard.0;
+        let result = stream_child(handles, writer, request.timeout_ms, Some(job));
         // By the time `stream_child` returns `Ok`, the child has already
         // exited (it waits on the process handle before returning), so
         // dropping the job here is a no-op in that case; on `Err` it
@@ -1017,11 +1023,18 @@ mod windows_impl {
     /// Streams the child's stdout/stderr as Output frames and its exit as an
     /// Exit frame, after acking with SpawnReady. `timeout_ms` bounds the whole
     /// operation (drains + wait); `None` waits forever, matching the previous
-    /// behavior.
+    /// behavior. `job` is the kill-on-close Job Object the child (and any
+    /// descendants it spawns) is confined to; on timeout the watchdog
+    /// terminates the whole job, not only the direct child (see the
+    /// watchdog's own comment below for why). `None` falls back to
+    /// terminating just `process` (no caller currently passes `None`, but
+    /// `stream_child` stays correct for a hypothetical single-process caller
+    /// with no job).
     fn stream_child(
         handles: PipeSpawnHandles,
         writer: &mut File,
         timeout_ms: Option<u64>,
+        job: Option<HANDLE>,
     ) -> Result<()> {
         let process = handles.process.hProcess;
         let pid = handles.process.dwProcessId;
@@ -1092,13 +1105,42 @@ mod windows_impl {
                         runner_debug_log(&format!(
                             "child pid={pid} exceeded {ms}ms timeout; terminating"
                         ));
-                        // SAFETY: `process` is the live handle from
-                        // PROCESS_INFORMATION, owned by this `stream_child`
-                        // call for its whole duration; the enclosing
-                        // `thread::scope` cannot return (so `process` cannot
-                        // be closed or reused) until this thread is joined.
+                        // FIXED (CodeRabbit finding, PR #402): terminating
+                        // only the direct `process` left the timeout
+                        // defeatable in the common case, the sandboxed
+                        // command spawning its own child(ren). A descendant
+                        // that inherited the stdout/stderr pipe WRITE
+                        // handles keeps them open even after the direct
+                        // child dies, so a drain thread's `read` never sees
+                        // EOF, `thread::scope` can never return (it waits
+                        // for every spawned thread to join), and
+                        // `stream_child` hangs past `timeout_ms` regardless
+                        // of this watchdog. Terminating the whole Job Object
+                        // instead kills the direct child AND every
+                        // descendant in one call, closing every inherited
+                        // pipe handle, so the drains hit EOF/BrokenPipe and
+                        // unblock. Falls back to `TerminateProcess` only for
+                        // a caller with no job (single-process path).
+                        //
+                        // SAFETY: `process`/`job` are live handles owned by
+                        // this `stream_child` call (and by the caller's
+                        // `ChildJobGuard`, respectively) for its whole
+                        // duration; the enclosing `thread::scope` cannot
+                        // return (so neither handle can be closed or reused)
+                        // until this thread is joined. `TerminateJobObject`
+                        // requires `JOB_OBJECT_TERMINATE` access, which
+                        // `CreateJobObjectW` grants by default to the handle
+                        // it returns (no explicit access mask requested), so
+                        // no separate rights check/duplication is needed.
                         unsafe {
-                            let _ = TerminateProcess(process, 1);
+                            match job {
+                                Some(job) => {
+                                    let _ = TerminateJobObject(job, 1);
+                                }
+                                None => {
+                                    let _ = TerminateProcess(process, 1);
+                                }
+                            }
                         }
                     }
                     timed_out
