@@ -17,7 +17,9 @@
 //!   Linux-testable [`crate::wfp_ports::blocked_loopback_tcp_remote_ports`]
 //!   rather than a private copy;
 //! - the `chrono` RFC3339 log timestamp is dropped (the caller's log sink owns
-//!   timestamps).
+//!   timestamps);
+//! - a defensive [`is_wellformed_sid_string`] guard rejects a malformed SID
+//!   before it is ever interpolated into the SDDL local-user spec.
 //!
 //! Applied only `cfg(windows)`. It is NOT wired into `launch()` in this
 //! (inert) B2 PR: `launch()` still refuses both network policies. Activation
@@ -77,6 +79,26 @@ struct BlockRuleSpec<'a> {
     remote_ports: Option<&'a str>,
 }
 
+/// True only for a well-formed SID string literal (`S-1-<authority>-<sub>...`,
+/// digits and `-` only). The sandbox SID is OS-generated today, but this is
+/// cheap insurance: it is interpolated into the SDDL local-user spec below, so
+/// anything carrying `)`, `;`, whitespace, or other SDDL metacharacters must
+/// never reach `format!`. Fail-closed: a malformed SID aborts rule install.
+fn is_wellformed_sid_string(sid: &str) -> bool {
+    let mut parts = sid.split('-');
+    if parts.next() != Some("S") || parts.next() != Some("1") {
+        return false;
+    }
+    let sub_authorities: Vec<&str> = parts.collect();
+    // A real SID has an identifier authority plus at least one sub-authority,
+    // and never more than 15 sub-authorities; every component is decimal.
+    !sub_authorities.is_empty()
+        && sub_authorities.len() <= 16
+        && sub_authorities.iter().all(|part| {
+            !part.is_empty() && part.len() <= 20 && part.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
 /// Installs / updates the loopback allowlist: blocks all loopback UDP and all
 /// loopback TCP except the `proxy_ports` (the bound proxy port), all scoped to
 /// the sandbox account SID. When `allow_local_binding` is true the loopback
@@ -88,18 +110,31 @@ pub fn ensure_offline_proxy_allowlist(
     allow_local_binding: bool,
     log: &mut dyn Write,
 ) -> Result<()> {
+    if !is_wellformed_sid_string(offline_sid) {
+        return Err(anyhow!(
+            "refusing to build firewall rule for malformed sandbox SID: {offline_sid:?}"
+        ));
+    }
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
+    // SAFETY: CoInitializeEx takes a null reserved pointer (`None`) and a valid
+    // COINIT flag; it is sound to call on any thread and is balanced by the
+    // CoUninitialize below on every return path.
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     if hr.is_err() {
         return Err(anyhow!("CoInitializeEx failed: {hr:?}"));
     }
 
     let result = (|| -> Result<()> {
+        // SAFETY: CoCreateInstance is called after a successful CoInitializeEx
+        // on this thread with a valid CLSID/CLSCTX; the returned interface is
+        // checked via `map_err` before use.
         let policy: INetFwPolicy2 =
             unsafe { CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|err| anyhow!("CoCreateInstance NetFwPolicy2 failed: {err:?}"))?;
         ensure_local_policy_rules_take_effect(&policy)?;
+        // SAFETY: `policy` is a live, checked INetFwPolicy2; `Rules()` is a
+        // COM accessor with no additional pointer preconditions.
         let rules = unsafe { policy.Rules() }
             .map_err(|err| anyhow!("INetFwPolicy2::Rules failed: {err:?}"))?;
 
@@ -165,6 +200,8 @@ pub fn ensure_offline_proxy_allowlist(
         Ok(())
     })();
 
+    // SAFETY: balances the CoInitializeEx above; called exactly once on this
+    // thread regardless of the closure's outcome.
     unsafe {
         CoUninitialize();
     }
@@ -175,18 +212,28 @@ pub fn ensure_offline_proxy_allowlist(
 /// non-loopback address) scoped to the sandbox account SID. This is the
 /// block-all half of the two-layer fence.
 pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut dyn Write) -> Result<()> {
+    if !is_wellformed_sid_string(offline_sid) {
+        return Err(anyhow!(
+            "refusing to build firewall rule for malformed sandbox SID: {offline_sid:?}"
+        ));
+    }
     let local_user_spec = format!("O:LSD:(A;;CC;;;{offline_sid})");
 
+    // SAFETY: see `ensure_offline_proxy_allowlist`; null reserved pointer and a
+    // valid COINIT flag, balanced by the CoUninitialize below.
     let hr = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     if hr.is_err() {
         return Err(anyhow!("CoInitializeEx failed: {hr:?}"));
     }
 
     let result = (|| -> Result<()> {
+        // SAFETY: called after a successful CoInitializeEx with a valid
+        // CLSID/CLSCTX; the returned interface is checked before use.
         let policy: INetFwPolicy2 =
             unsafe { CoCreateInstance(&NetFwPolicy2, None, CLSCTX_INPROC_SERVER) }
                 .map_err(|err| anyhow!("CoCreateInstance NetFwPolicy2 failed: {err:?}"))?;
         ensure_local_policy_rules_take_effect(&policy)?;
+        // SAFETY: `policy` is a live, checked INetFwPolicy2 COM accessor.
         let rules = unsafe { policy.Rules() }
             .map_err(|err| anyhow!("INetFwPolicy2::Rules failed: {err:?}"))?;
 
@@ -206,6 +253,7 @@ pub fn ensure_offline_outbound_block(offline_sid: &str, log: &mut dyn Write) -> 
         Ok(())
     })();
 
+    // SAFETY: balances the CoInitializeEx above; called exactly once.
     unsafe {
         CoUninitialize();
     }
@@ -218,6 +266,9 @@ fn remove_rule_if_present(
     log: &mut dyn Write,
 ) -> Result<()> {
     let name = BSTR::from(internal_name);
+    // SAFETY: `rules` is a live INetFwRules; `Item`/`Remove` take a valid BSTR
+    // we own for the duration of the call. `Item` returning Err just means the
+    // rule is absent, so `Remove` only runs when the rule exists.
     if unsafe { rules.Item(&name) }.is_ok() {
         unsafe { rules.Remove(&name) }
             .map_err(|err| anyhow!("Rules::Remove failed for {internal_name}: {err:?}"))?;
@@ -228,6 +279,16 @@ fn remove_rule_if_present(
 
 fn ensure_local_policy_rules_take_effect(policy: &INetFwPolicy2) -> Result<()> {
     let mut modify_state = NET_FW_MODIFY_STATE::default();
+    // SAFETY: the generated safe `LocalPolicyModifyState` wrapper is
+    // deliberately bypassed here: it maps a non-`S_OK` success (`S_FALSE`, the
+    // "applies to only some active profiles" answer) to `Ok`, which would hide
+    // a partial-coverage result we MUST reject (fail-closed). Calling through
+    // the vtable returns the raw HRESULT so `validate_local_policy_modify_result`
+    // can distinguish `S_OK` from `S_FALSE`. This is ABI-correct against
+    // windows-0.58.0: `Interface::vtable(policy)` yields the interface's live
+    // vtable and `Interface::as_raw(policy)` its `this` pointer, both valid for
+    // the borrow of `policy`; `LocalPolicyModifyState(this, *out)` writes the
+    // out-param `modify_state`, which is a stack `NET_FW_MODIFY_STATE` we own.
     let result = unsafe {
         (Interface::vtable(policy).LocalPolicyModifyState)(
             Interface::as_raw(policy),
@@ -272,18 +333,26 @@ fn ensure_block_rule(
     log: &mut dyn Write,
 ) -> Result<()> {
     let name = BSTR::from(spec.internal_name);
+    // SAFETY: `rules` is a live INetFwRules; `Item` takes a BSTR we own. An Err
+    // just means the rule does not exist yet, handled by the `Err(_)` arm.
     let rule: INetFwRule3 = match unsafe { rules.Item(&name) } {
         Ok(existing) => existing
             .cast()
             .map_err(|err| anyhow!("cast existing firewall rule to INetFwRule3 failed: {err:?}"))?,
         Err(_) => {
+            // SAFETY: called after a successful CoInitializeEx on this thread
+            // with a valid CLSID/CLSCTX; the interface is checked before use.
             let new_rule: INetFwRule3 =
                 unsafe { CoCreateInstance(&NetFwRule, None, CLSCTX_INPROC_SERVER) }
                     .map_err(|err| anyhow!("CoCreateInstance NetFwRule failed: {err:?}"))?;
+            // SAFETY: `new_rule` is a live INetFwRule3; `SetName` takes a BSTR
+            // we own for the call.
             unsafe { new_rule.SetName(&name) }.map_err(|err| anyhow!("SetName failed: {err:?}"))?;
             // Set all properties before adding so we never leave a
             // half-configured rule.
             configure_rule(&new_rule, spec)?;
+            // SAFETY: `rules` is live and `new_rule` is a fully configured,
+            // live INetFwRule3 that `Add` takes by reference.
             unsafe { rules.Add(&new_rule) }.map_err(|err| anyhow!("Rules::Add failed: {err:?}"))?;
             new_rule
         }
@@ -305,6 +374,9 @@ fn ensure_block_rule(
 }
 
 fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
+    // SAFETY: `rule` is a live INetFwRule3. Every setter below is a COM property
+    // write taking either a Copy enum value or a BSTR we own for the duration of
+    // the call; each result is checked via `map_err`.
     unsafe {
         rule.SetDescription(&BSTR::from(spec.friendly_desc))
             .map_err(|err| anyhow!("SetDescription failed: {err:?}"))?;
@@ -323,6 +395,8 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
 
     // Read-back verification: fail-closed if we did not actually write the
     // expected SID scope, so a rule can never silently apply to every user.
+    // SAFETY: `rule` is a live INetFwRule3; `LocalUserAuthorizedList` reads back
+    // a COM-owned BSTR that `windows` frees.
     let actual = unsafe { rule.LocalUserAuthorizedList() }
         .map_err(|err| anyhow!("LocalUserAuthorizedList (read-back) failed: {err:?}"))?;
     let actual_str = actual.to_string();
@@ -336,6 +410,8 @@ fn configure_rule(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
 }
 
 fn configure_rule_network_scope(rule: &INetFwRule3, spec: &BlockRuleSpec<'_>) -> Result<()> {
+    // SAFETY: `rule` is a live INetFwRule3. `SetProtocol` takes a Copy i32;
+    // `SetRemoteAddresses`/`SetRemotePorts` take BSTRs we own for each call.
     unsafe {
         rule.SetProtocol(spec.protocol)
             .map_err(|err| anyhow!("SetProtocol failed: {err:?}"))?;
@@ -376,5 +452,29 @@ mod tests {
     fn local_policy_modify_state_rejects_partial_profile_coverage() {
         validate_local_policy_modify_result(S_FALSE, NET_FW_MODIFY_STATE_OK)
             .expect_err("partial profile coverage should fail sandbox firewall setup");
+    }
+
+    #[test]
+    fn wellformed_sid_accepts_real_sids_and_rejects_injection() {
+        assert!(is_wellformed_sid_string("S-1-5-18"));
+        assert!(is_wellformed_sid_string(
+            "S-1-5-21-3623811015-3361044348-30300820-1013"
+        ));
+        // Not a SID / carries SDDL metacharacters that must never reach format!.
+        for bad in [
+            "",
+            "S-1",
+            "S-2-5-18",
+            "X-1-5-18",
+            "S-1-5-18)",
+            "S-1-5-18;DROP",
+            "S-1-5- 18",
+            "S-1-5-1a",
+        ] {
+            assert!(
+                !is_wellformed_sid_string(bad),
+                "{bad:?} must be rejected as a malformed SID"
+            );
+        }
     }
 }

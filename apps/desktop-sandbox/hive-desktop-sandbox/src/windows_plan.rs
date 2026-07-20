@@ -47,10 +47,9 @@ pub struct WindowsConfinementPlan {
 
 impl WindowsConfinementPlan {
     pub fn for_policy(policy: &SandboxPolicy) -> Self {
-        // `policy.network()` no longer feeds this plan: egress is enforced by
-        // the WFP + firewall COM layer at provision time, not by anything the
-        // plan carries. See the struct's network comment.
-        let _ = policy.network();
+        // Network egress is not represented in this plan; it is enforced by the
+        // WFP + firewall COM layer at provision time (see the struct's network
+        // comment), so `policy.network()` is intentionally not read here.
         Self {
             acl_deny_write_parent_dir: parent_dir(policy.hook_config_dir()),
             protect_dacl_from_inheritance: true,
