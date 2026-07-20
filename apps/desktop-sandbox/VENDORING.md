@@ -671,38 +671,37 @@ with the reason a blind fix would risk invalidating that lab run.
   same code) could deadlock if the child filled the stderr pipe buffer while
   stdout stayed open. Fixed with a concurrent two-thread drain
   (`std::thread::scope`, one thread per stream) sharing the frame `writer`
-  behind a `Mutex` so Output frames never interleave mid-write. Still needs a
+  behind a `Mutex` so Output frames never interleave mid-write; each stream's
+  drain runs on its own scoped thread, joined and mapped to `Err`, so a panic
+  on either stream fails closed instead of unwinding raw. This is a live fix
+  (drains run on every `stream_child` call, timeout or not). Still needs a
   fresh spike307-win lab run to confirm behaviorally; type-checked and
   clippy-clean cross-compiled to `x86_64-pc-windows-gnu`.
-- **RESOLVED (Step 3 Integration B1).** `windows_elevated.rs::stream_child`'s
-  ignored `timeout_ms` (Greptile "Request Timeout Is Ignored") previously left
-  the wait always `INFINITE` and `timed_out` always `false`. Fixed with a
-  watchdog thread (spawned inside the same `thread::scope` as the drains
-  above, so it bounds the drain phase too, not only the final wait) racing an
-  mpsc channel against `timeout_ms`: on expiry it force-terminates (fail
-  closed, never a silent success) and reports `timed_out: true`. `done_tx` is
-  wrapped in a `WatchdogRelease` RAII guard so an early drain/wait error also
-  releases the watchdog immediately instead of stalling for the rest of
-  `timeout_ms` (CodeRabbit finding, second review pass); the stderr drain
-  moved onto its own scoped thread too, joined and mapped to `Err` the same
-  way as stdout, so a panic on either stream fails closed instead of
-  unwinding raw (Rust review, same pass).
-  **CodeRabbit finding, third review pass:** on expiry the watchdog now
-  terminates the whole kill-on-close Job Object (`TerminateJobObject`, the
-  same job `confine_child_to_job`/`ChildJobGuard` already assigns the child
-  to), not only the direct child via `TerminateProcess`. Terminating just the
-  direct child left the timeout defeatable in the common case: a sandboxed
-  command that spawns its own children inherits the stdout/stderr pipe WRITE
-  handles into them, so those handles stay open after the direct child dies,
-  a drain thread's `read` never sees EOF, and `stream_child` hangs past
-  `timeout_ms` regardless of the watchdog. Job-wide termination closes every
-  inherited handle in one call. `TerminateProcess` is kept as a fallback for
-  a hypothetical caller with no job. This is what makes the "bounds the whole
-  spawn" claim in this entry actually true rather than narrowed to the
-  single-process case; still dormant in practice, the sole `SpawnRequest`
-  construction site (`run_windows_sandbox_capture`, this file) still sets
-  `timeout_ms: None`, so wiring a real deadline value through remains a later
-  wave's concern.
+- **DEFERRED to B2 (request-timeout, `SpawnRequest::timeout_ms`).** An
+  earlier pass on this PR added a watchdog thread, `TerminateJobObject`,
+  `CancelIoEx` on the drain read handles, and a bounded post-timeout wait to
+  make `timeout_ms` actually bound the whole spawn (Greptile "Request Timeout
+  Is Ignored", then two further Greptile/CodeRabbit P1 passes on that fix:
+  "Kill the whole job on timeout, not just the root process" and
+  "Termination failure remains unbounded"). A third review pass (Greptile)
+  found the remaining gap is structural, not fixable by patching further:
+  `CancelIoEx` only cancels OVERLAPPED I/O, and this crate's drain pipes are
+  synchronous (`CreatePipe` plus blocking `File::read`), so `CancelIoEx`
+  cannot interrupt a pending read on them at all. Bounding a blocking
+  synchronous-pipe read correctly needs either `CancelSynchronousIo` called
+  against the specific drain thread's handle (from another thread, targeting
+  that thread, not the file handle) or switching the pipes/reads to
+  overlapped I/O with `GetOverlappedResult`/`WaitForSingleObject` on the
+  OVERLAPPED event, with the cancellation's own result checked, not
+  discarded, either way. `timeout_ms` is dormant in this PR: the sole
+  `SpawnRequest` construction site (`run_windows_sandbox_capture`, this file)
+  always sets `timeout_ms: None`, so the watchdog code path never ran; CTO
+  call was to remove all of the watchdog/termination/cancellation machinery
+  this pass rather than keep chasing synchronous-read cancellation on dead
+  code, and build the correct form (`CancelSynchronousIo` or overlapped I/O,
+  checked results, no discarded cancellation outcomes) together with wiring
+  a real deadline in B2, lab-exercised on `spike307-win` at that point since
+  only then does the watchdog path actually run.
 
 ### Deliberately NOT done in A2 (fail-closed stubs, honest)
 
