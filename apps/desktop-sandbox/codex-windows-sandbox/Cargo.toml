@@ -14,10 +14,15 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22"
 dunce = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 dirs-next = "2.0"
+# Real (not dev-only) dependency: helper_materialization.rs's
+# `copy_from_source_if_needed` uses `NamedTempFile` in production code, not
+# just tests (see that file for the write-into-temp-then-rename pattern).
+tempfile = { workspace = true }
 
 [dependencies.rand]
 version = "0.8"
@@ -32,15 +37,17 @@ features = ["std", "small_rng"]
 version = "0.52"
 features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_NetManagement",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
-    "Win32_System_Threading",
-    "Win32_System_Registry",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
 ]
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-tempfile = { workspace = true }

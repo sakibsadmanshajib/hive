@@ -182,6 +182,234 @@ independently fixed the same bugs, and if not, re-apply these fixes.
 - `codex-windows-sandbox/src/setup.rs` and `codex-windows-sandbox/src/logging.rs`:
   the two minimal stand-ins described above, not part of the verbatim vendor.
 
+## `codex-windows-sandbox/` Step 3 Wave 2 (elevated-helper IPC mechanism)
+
+Wave 2 vendors the elevated runner's named-pipe IPC mechanism into the same
+inert `codex-windows-sandbox/` subcrate Wave 1 created. NOTHING from this wave
+is wired into `windows::launch`. Same pinned commit as the rest of this file.
+
+### What was vendored (verbatim, byte-for-byte except two documented import swaps)
+
+- `elevated/mod.rs`, `elevated/runner_pipe.rs`, `elevated/runner_client.rs`
+  (visibility bumped `pub(crate)` -> `pub` throughout, see `elevated/mod.rs`'s
+  and `lib.rs`'s own comments: this crate's convention is fully `pub`
+  mod-nested, not upstream's curated `pub(crate)` surface, and unused
+  `pub(crate)` items fail `-D warnings` dead_code when this wave's vendor set
+  gives them no caller).
+- `elevated/ipc_framed.rs`: verbatim except swapping
+  `codex_protocol::models::PermissionProfile` for
+  `crate::permission_profile::PermissionProfile` and
+  `codex_utils_absolute_path::AbsolutePathBuf` for
+  `crate::absolute_path::AbsolutePathBuf` (both new local stand-ins, see
+  below). One test, `spawn_request_serializes_permission_profile`, is excluded
+  (not faked) because it asserts the real upstream `PermissionProfile`'s
+  tagged-enum JSON shape, which the stand-in does not reproduce; see the
+  file's own module doc and test-module comment.
+- `helper_materialization.rs`: verbatim except two import-path edits
+  (`crate::sandbox_bin_dir` -> `crate::setup::sandbox_bin_dir`,
+  `crate::sandbox_dir` -> `crate::setup::sandbox_dir`), since this crate does
+  not replicate upstream's flat crate-root re-export surface for `setup.rs`'s
+  helpers (see `lib.rs`'s comment).
+- `setup_error.rs`: verbatim except inlining `codex_utils_string::sanitize_metric_tag_value`
+  (a ~20-line pure function) as a private fn instead of adding a new crate
+  dependency for one function.
+- `sandbox_users.rs`: relocated from upstream's
+  `bin/setup_main/win/sandbox_users.rs` into this crate's library (top-level
+  `src/`, not a `bin/`), TRIMMED to the OS-account/SID Win32 primitives only:
+  `ensure_sandbox_users_group`, `resolve_sandbox_users_group_sid`,
+  `ensure_sandbox_user`, `ensure_local_user`, `ensure_local_group`,
+  `ensure_local_group_member`, `resolve_sid`, `well_known_sid_str`,
+  `sid_bytes_from_string`, `lookup_account_name_for_sid`, `sid_bytes_to_psid`.
+  See "Deliberately NOT vendored this wave" below for what was cut and why.
+- `setup.rs` (the Wave 1 one-function stand-in) gains one more verbatim
+  extraction, `sandbox_bin_dir`, needed by `helper_materialization.rs`.
+
+### New, Hive-authored stand-ins (NOT vendored from upstream)
+
+- `permission_profile.rs`: a minimal pure-data mirror of upstream
+  `codex_protocol::models::PermissionProfile`, reproducing only the
+  `read_only()` constructor `elevated/ipc_framed.rs`'s own test exercises.
+  The real type is a much larger legacy-serde-compat tagged enum
+  (`Managed`/`Disabled`/`External` variants, a hand-rolled `Deserialize` for
+  old rollout files); interpreting it meaningfully requires
+  `ResolvedWindowsSandboxPermissions::try_from_permission_profile*`
+  (upstream's `resolved_permissions.rs`), which Wave 1 ported to Hive-native
+  types instead of vendoring (Q1 decision), specifically to keep
+  `codex_protocol` out of this tree. See "Deliberately NOT vendored this
+  wave" below for the investigation that found `PermissionProfile` threaded
+  far deeper into the elevated-helper modules than the blueprint's Wave 2
+  module list assumed.
+- `absolute_path.rs`: a minimal pure-data mirror of upstream
+  `codex_utils_absolute_path::AbsolutePathBuf` (a real ~900-line crate with
+  `schemars`/`ts-rs` TypeScript-binding dependencies and a thread-local
+  base-path deserialization guard, none of which is load-bearing for an
+  inert, unexercised struct field this wave).
+- `identity.rs`: a one-struct (`SandboxCreds`) extraction from upstream's real
+  `identity.rs`, the same treatment Wave 1 gave `setup.rs`. The rest of
+  upstream's `identity.rs` (`sandbox_setup_is_complete`,
+  `require_logon_sandbox_creds`, `refresh_logon_sandbox_creds`) takes or
+  returns `&ResolvedWindowsSandboxPermissions` and is excluded for the same
+  reason as `permission_profile.rs` above.
+
+### Deliberately NOT vendored this wave (deviations from the mission's Wave 2 module list, found while fetching the actual upstream source)
+
+Investigating the actual upstream source (not just the blueprint's module
+table) found the `codex_protocol`/`resolved_permissions.rs` coupling is far
+more pervasive across the "elevated helper" modules than Step 0.2's "one
+seam" framing suggested. Concretely:
+
+- **`spawn_prep.rs`**: every substantive function
+  (`prepare_spawn_context_common`, `prepare_legacy_spawn_context`, etc.) takes
+  `&PermissionProfile` and immediately calls
+  `ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots`.
+  It also depends on `allow.rs` (also `codex_protocol`-coupled, never in
+  scope) and `identity.rs`'s resolver-coupled functions. Not vendorable
+  without also vendoring upstream's real `resolved_permissions.rs` (banned:
+  no `codex_protocol` dependency) or duplicating Wave 1's Hive-native port a
+  second time inside this Apache-2.0 crate (a maintenance/correctness
+  hazard, not a thin adapter).
+- **`wrapper.rs`** (+ `wrapper_tests.rs`): the CLI-argv wrapper threads
+  `PermissionProfile`/`WindowsSandboxLevel` (`codex_protocol::config_types`)
+  through its public entry points; same exclusion reason as `spawn_prep.rs`.
+- **`elevated_impl.rs`**: its one substantive function,
+  `run_windows_sandbox_capture_for_permission_profile`, calls
+  `ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots`
+  directly; excluded whole-file (nearly the entire file is this one function
+  plus its non-Windows stub).
+- **`identity.rs`** (full file) and **`setup.rs`** (full file): both mix a
+  few primitive path/marker helpers with resolver-coupled orchestration
+  (`require_logon_sandbox_creds`, `refresh_logon_sandbox_creds`,
+  `run_setup_refresh*`, `run_elevated_setup*`,
+  `run_elevated_provisioning_setup`, `gather_write_roots_for_permissions`).
+  Only the non-coupled pieces are extracted as stand-ins (see above); the
+  rest belongs to whichever later wave ports the provisioning orchestration
+  into `hive-desktop-sandbox`'s proprietary `windows_elevated.rs`, matching
+  the blueprint's own original Wave 3 assignment for this exact content.
+- **`bin/setup_main/` and `bin/command_runner/` (the two binaries)**: fetching
+  their actual source found both `win.rs` files pull in scope well beyond
+  Step 3: `bin/setup_main/win.rs` calls `install_wfp_filters` and declares
+  `mod firewall;` (`bin/setup_main/win/firewall.rs` is genuine Windows
+  Firewall/WFP management via COM `INetFwPolicy2` — Step 4 scope, explicitly
+  out per the blueprint's own "Explicitly OUT of Step 3" list) and depends on
+  a brand-new external crate, `codex-otel` (telemetry), not otherwise needed.
+  `bin/command_runner/win.rs` depends on `ConptyInstance`/
+  `spawn_conpty_process_as_user` (Step 5, ConPTY, explicitly out of scope),
+  `process.rs` (deferred in Wave 1 for its own `desktop.rs` coupling), and
+  `token_mode_for_permission_profile`/`WindowsSandboxTokenMode`
+  (`resolved_permissions.rs` again). Both binaries are the fully-integrated
+  END STATE of Steps 3+4+5 combined, not separable at the Step 3 boundary as
+  written upstream. Vendoring them now would mean pulling in WFP, ConPTY, the
+  resolver, and a new telemetry dependency all at once — the opposite of a
+  staged, reviewable wave. Deferred as binaries; the one clean, self-contained
+  primitive module living under `bin/setup_main/win/`
+  (`sandbox_users.rs`) is salvaged and relocated into the library instead (see
+  above). `bin/setup_main/win/read_acl_mutex.rs` and
+  `bin/setup_main/win/setup_runtime_bin.rs` are individually clean too but are
+  ONLY consumed by the excluded `win.rs`; no other Wave 2 file needs them, so
+  they are excluded as orphans, not because they are themselves coupled.
+- **`sandbox_users.rs`'s own `provision_sandbox_users`, `write_secrets`,
+  `prepare_setup_marker`, `commit_setup_marker`, and `random_password`**:
+  orchestration coupled to the excluded `win.rs`'s specific setup flow
+  (`super::log_line`, a sibling fn on the excluded parent module) and,
+  for the marker functions, a `chrono` dependency not otherwise needed. The
+  remaining primitives get a local, timestamp-free `log_line` stand-in
+  instead of upstream's real one (which itself needs `chrono`).
+
+### Self-audit of newly vendored code (same bug classes CodeRabbit found in Wave 1)
+
+Checked every newly vendored/relocated file for: raw-string/byte-string path
+escaping bugs, Win32 HANDLE leaks on error paths, and unsynchronized file
+read-modify-write.
+
+- `runner_pipe.rs`'s named-pipe path (`format!(r"\\.\pipe\codex-runner-{nonce:x}")`)
+  has the correct backslash count for the Win32 pipe namespace prefix
+  (`\\.\pipe\`) when the raw string is decoded; unlike Wave 1's `acl.rs` NUL
+  bug, this one is correct as vendored.
+- `runner_pipe.rs::create_named_pipe` frees the security descriptor
+  (`LocalFree(sd)`) unconditionally before checking `CreateNamedPipeW`'s
+  return value, so the error path does not leak it.
+- `runner_client.rs::spawn_runner_transport` closes `h_pipe_in`/`h_pipe_out`
+  on the `CreateProcessWithLogonW` failure path, closes `pi.hThread`
+  unconditionally right after the connect attempt (success or failure), and
+  closes `pi.hProcess` on both the connect-failure and startup-failure paths
+  (after `TerminateProcess`); the transport's own `File`s close their handles
+  via `Drop` when `startup_result` fails and `transport` is dropped. No leak
+  found on any traced path.
+- `connect_pipe_with_timeout`'s `thread_handle` is closed unconditionally
+  after the match, on every branch.
+- No file-based read-modify-write was introduced this wave (no new code
+  touches `cap.rs`'s already-documented unsynchronized `cap_sid` file, open
+  risk #8 below, unchanged).
+
+No new bugs found by this self-audit; nothing required a deviation beyond the
+ones already documented above. The automated CodeRabbit/Greptile review pass
+on PR #399 (below) found three more, after this self-audit had already
+landed.
+
+### Local deviations from upstream (CodeRabbit/Greptile findings, PR #399)
+
+Three more small bug fixes on top of the byte-for-byte copy, found by the
+automated review pass rather than the self-audit above. Same re-vendoring
+note as Wave 1's equivalent section: re-copying these files verbatim from
+upstream on a future pass should check whether upstream independently fixed
+the same bugs, and if not, re-apply these fixes.
+
+- `elevated/runner_client.rs::spawn_runner_transport`: the inbound server
+  pipe (`h_pipe_in`) was created, then the outbound server pipe
+  (`h_pipe_out`)'s creation used `?`, which returned without closing
+  `h_pipe_in` on failure. Every failed launch attempt (for example, a second
+  `create_named_pipe` call racing an already-in-use pipe name) leaked one
+  server-pipe HANDLE. Fixed to explicitly `CloseHandle(h_pipe_in)` before
+  returning the outbound-pipe error, matching the `CloseHandle`-on-cleanup
+  idiom this same function already uses everywhere else (see the self-audit
+  above).
+- `sandbox_users.rs::ensure_local_group_member`: discarded every
+  `NetLocalGroupAddMembers` result (`let _ = NetLocalGroupAddMembers(...)`),
+  not only the expected "already a member" result. Access denied, a missing
+  group, or an invalid account therefore made `ensure_sandbox_user` return
+  `Ok(())` while the account was never actually added to
+  `CodexSandboxUsers`, silently defeating the group-membership half of the
+  sandbox-user provisioning contract. Fixed to check the status code against
+  `NERR_Success` and `ERROR_MEMBER_IN_ALIAS` (1378; verified against the
+  `windows-sys` 0.52 `Foundation` module this crate already depends on) only,
+  returning a `SetupFailure` for any other code.
+- `helper_materialization.rs::copy_helper_if_needed`: once a helper path was
+  cached in the process-lifetime `HELPER_PATH_CACHE`, later calls returned it
+  without checking the file still existed. Antivirus quarantine, cleanup, or
+  a concurrent replacement removing the helper after it was cached would make
+  every subsequent runner launch in the process keep using the missing path
+  instead of recopying it. Fixed by gating the cache hit on `path.is_file()`;
+  a miss now falls through to the existing copy-if-needed path below it
+  (which already re-populates the cache once the copy succeeds again), so no
+  other control flow changed.
+
+Three further findings from the same review pass are genuine but were NOT
+fixed this pass, deliberately: they fall inside latent hardening items an
+independent security review of this same PR had already catalogued as
+MUST-FIX-during-Integration-A (open risk #6 below), not new findings, and
+fixing them piecemeal on still-inert code risks being redone or reshaped once
+the transport is actually wired and lab-tested. Each gets one line here; open
+risk #6 is the tracking entry.
+
+- `helper_materialization.rs::legacy_lookup`'s fallback to the bare
+  `codex-command-runner.exe` name (not an absolute path) lets
+  `CreateProcessWithLogonW` fall back to executable search instead of
+  failing closed when the packaged helper cannot be found or copied. Same
+  bucket as the security review's "absolute-path guard" item.
+- `elevated/ipc_framed.rs::read_frame` deserializes a `FramedMessage` without
+  checking `msg.version` against `IPC_PROTOCOL_VERSION`, so a stale runner
+  sending an older-versioned message with overlapping JSON fields would be
+  treated as current. Same bucket as the security review's `ipc_framed`/nonce
+  item.
+- `identity.rs::SandboxCreds` derives `Debug` over its cleartext `password`
+  field, so any future `{:?}` on the struct (log line, error context, panic)
+  would leak it. No current call site formats `SandboxCreds` with `{:?}`
+  (verified by grep), so this is latent, not live. Same underlying
+  cleartext-logon-password concern the security review already flagged for
+  `identity.rs`/`sandbox_users.rs`/`runner_client.rs` (the zeroize-on-drop
+  item); bundling the Debug redaction with that pass avoids fixing the same
+  struct's credential hygiene in two uncoordinated passes.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
@@ -341,13 +569,36 @@ crate deliberately does not inherit the workspace's Apache-2.0
    process's token rather than provisioning a dedicated low-privilege sandbox
    OS user. `codex-rs/windows-sandbox-rs`'s elevated-helper-user pattern (see
    above) is the precedent for that variant. Execution is
-   `blueprint-step3-elevated-windows-sandbox.md` (project vault): Wave 1 (this
-   PR) vendors the mechanism primitives (`codex-windows-sandbox/`) and ports
-   the policy adapter (`windows_resolve.rs`), both inert and not yet wired
-   into `windows::launch`. Waves 2 to 4 (elevated helper and provisioning,
-   then the actual launch-path wiring) remain open. Mark RESOLVED only when
-   Wave 4 lab-validates the isolation matrix on `spike307-win` (assertions L7
-   to L12 in the blueprint).
+   `blueprint-step3-elevated-windows-sandbox.md` (project vault): Wave 1
+   vendored the mechanism primitives (`codex-windows-sandbox/`) and ported
+   the policy adapter (`windows_resolve.rs`). Wave 2 (this PR) vendors the
+   elevated-helper IPC mechanism (`elevated/{ipc_framed,runner_pipe,
+   runner_client}`, `helper_materialization.rs`, `setup_error.rs`, a trimmed
+   `sandbox_users.rs`), all still inert and not wired into `windows::launch`.
+   Wave 2 also found the `codex_protocol`/`resolved_permissions.rs` coupling
+   is deeper than originally scoped: `spawn_prep.rs`, `wrapper.rs`,
+   `elevated_impl.rs`, the full `identity.rs`, the full `setup.rs`, and both
+   binaries (`setup_main`, `command_runner`, which additionally pull in WFP,
+   ConPTY, and a new `codex-otel` telemetry dependency) are deferred to a
+   later wave that ports them into `hive-desktop-sandbox`'s proprietary
+   `windows_elevated.rs`, per this file's own "Deliberately NOT vendored this
+   wave" section above. Remaining work (provisioning/identity port, the two
+   binaries, and the actual launch-path wiring) stays open. Mark RESOLVED
+   only when a later wave lab-validates the isolation matrix on
+   `spike307-win` (assertions L7 to L12 in the blueprint).
+
+   **Known issues, fix in Integration A (CodeRabbit/Greptile, PR #399; see
+   this file's Wave 2 "Local deviations" section above for the three that
+   were fixed instead):** (a) `helper_materialization.rs::legacy_lookup`'s
+   bare-executable-name fallback lets `CreateProcessWithLogonW` fall back to
+   executable search instead of failing closed; needs an absolute-path
+   guard once a real launch path calls it. (b) `elevated/ipc_framed.rs`'s
+   `read_frame` does not check `msg.version` against `IPC_PROTOCOL_VERSION`,
+   so a stale runner's older-versioned message would be accepted as current.
+   (c) `identity.rs::SandboxCreds` derives `Debug` over its cleartext
+   `password` field (latent only, no current `{:?}` call site); bundle a
+   redacting `Debug` impl with the zeroize-on-drop hardening this item
+   already tracks for the same struct.
 7. **RESOLVED (#350).** The Linux `pre_exec` post-fork allocator-deadlock
    hazard below was fixed by #350 (merged), which moved `linux::launch`'s
    `pre_exec` closure to an allocation-free path so no thread can deadlock on
@@ -408,6 +659,20 @@ crate deliberately does not inherit the workspace's Apache-2.0
    "Deliberately NOT vendored this wave" above), re-check their dependency
    graph against `desktop.rs`/`logging.rs`/`codex_protocol` again; upstream
    may have changed the coupling.
+3a. Re-copy `codex-rs/windows-sandbox-rs/src/{elevated/ipc_framed,
+   elevated/runner_pipe,elevated/runner_client,elevated/mod,
+   helper_materialization,setup_error}.rs` verbatim into
+   `codex-windows-sandbox/src/` (Step 3 Wave 2), re-applying the same small
+   deviations documented in this file's Wave 2 section (the
+   `permission_profile`/`absolute_path` stand-in swap in `ipc_framed.rs`, the
+   `crate::setup::X` import-path fix in `helper_materialization.rs`, the
+   inlined `sanitize_metric_tag_value` in `setup_error.rs`). Re-copy
+   `bin/setup_main/win/sandbox_users.rs` into `codex-windows-sandbox/src/sandbox_users.rs`,
+   re-trimming to the OS-account primitives and re-applying the local
+   `log_line` stand-in. Re-check whether `spawn_prep.rs`, `wrapper.rs`,
+   `elevated_impl.rs`, `identity.rs`, `setup.rs`, or the two binaries have
+   become separable from `resolved_permissions.rs`/WFP/ConPTY upstream; if
+   so, that is the trigger to plan the next wave, not to vendor them here.
 4. Re-copy the repo-root `LICENSE`/`NOTICE` if changed.
 5. Re-run `cargo fmt --check && cargo clippy --all-targets -- -D warnings &&
    cargo test`, plus the `x86_64-pc-windows-gnu` cross-check (now also run by
