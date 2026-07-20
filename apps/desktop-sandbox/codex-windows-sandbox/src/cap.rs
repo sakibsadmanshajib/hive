@@ -27,6 +27,64 @@ use std::sync::Mutex;
 // ever matters.
 static CAP_SID_LOCK: Mutex<()> = Mutex::new(());
 
+// A2 (VENDORING open risk 8; documented deviation from the verbatim vendor):
+// the intra-process CAP_SID_LOCK above serializes threads within one process,
+// but the elevated provisioning binary and the per-task runner are SEPARATE
+// processes that both read-modify-write this file. A named OS mutex, keyed to
+// the cap_sid path, closes that cross-process race (the same discipline
+// upstream setup_main uses with its read_acl_mutex). It is held for the SAME
+// critical section as CAP_SID_LOCK and released on drop.
+struct CrossProcessCapLock(windows_sys::Win32::Foundation::HANDLE);
+
+impl Drop for CrossProcessCapLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a mutex HANDLE we acquired below; release
+        // ownership then close the handle. Both are no-ops on an invalid handle.
+        unsafe {
+            let _ = windows_sys::Win32::System::Threading::ReleaseMutex(self.0);
+            let _ = windows_sys::Win32::Foundation::CloseHandle(self.0);
+        }
+    }
+}
+
+/// Acquires the cross-process cap-SID mutex, blocking until it is owned.
+/// Fails closed (CodeRabbit/Greptile findings, PR #401): returns an error if
+/// the mutex object could not be created, or if the wait does not return
+/// ownership, instead of silently returning `None`/proceeding under only the
+/// intra-process lock. Callers MUST propagate the error with `?` and abort the
+/// read-modify-write rather than treat a lock failure as success; a
+/// WAIT_ABANDONED result still confers ownership, which is the desired
+/// behaviour here and is not an error.
+fn acquire_cross_process_cap_lock(codex_home: &Path) -> std::io::Result<CrossProcessCapLock> {
+    use std::hash::{Hash, Hasher};
+    // Mutex names cannot contain '\' except the namespace prefix, so key the
+    // name on a stable hash of the canonical cap_sid path rather than the path
+    // itself. DefaultHasher (SipHash with fixed keys) is deterministic across
+    // processes, so both racers derive the same name.
+    let key = canonical_path_key(&cap_sid_file(codex_home));
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    key.hash(&mut hasher);
+    let name = format!("Local\\hive_cap_sid_{:016x}", hasher.finish());
+    let wide: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: standard CreateMutexW + WaitForSingleObject. `wide` is a valid
+    // NUL-terminated UTF-16 name that outlives the call; the returned handle is
+    // owned by the CrossProcessCapLock guard and closed on drop.
+    unsafe {
+        let h =
+            windows_sys::Win32::System::Threading::CreateMutexW(std::ptr::null(), 0, wide.as_ptr());
+        if h == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let wait = windows_sys::Win32::System::Threading::WaitForSingleObject(h, u32::MAX);
+        if wait == windows_sys::Win32::Foundation::WAIT_FAILED {
+            let err = std::io::Error::last_os_error();
+            let _ = windows_sys::Win32::Foundation::CloseHandle(h);
+            return Err(err);
+        }
+        Ok(CrossProcessCapLock(h))
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CapSids {
     pub workspace: String,
@@ -73,6 +131,9 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
     let _guard = CAP_SID_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Hold the cross-process mutex for the same critical section (A2, see
+    // above). Fails closed: a lock failure aborts before the read-modify-write.
+    let _xproc = acquire_cross_process_cap_lock(codex_home)?;
     load_or_create_cap_sids_locked(&cap_sid_file(codex_home))
 }
 
@@ -116,6 +177,9 @@ pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String
     let _guard = CAP_SID_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Hold the cross-process mutex for the same critical section (A2, see
+    // above). Fails closed: a lock failure aborts before the read-modify-write.
+    let _xproc = acquire_cross_process_cap_lock(codex_home)?;
     let mut caps = load_or_create_cap_sids_locked(&path)?;
     let key = canonical_path_key(cwd);
     if let Some(sid) = caps.workspace_by_cwd.get(&key) {
@@ -133,6 +197,9 @@ pub fn writable_root_cap_sid_for_path(codex_home: &Path, root: &Path) -> Result<
     let _guard = CAP_SID_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Hold the cross-process mutex for the same critical section (A2, see
+    // above). Fails closed: a lock failure aborts before the read-modify-write.
+    let _xproc = acquire_cross_process_cap_lock(codex_home)?;
     let mut caps = load_or_create_cap_sids_locked(&path)?;
     let key = canonical_path_key(root);
     if let Some(sid) = caps.writable_root_by_path.get(&key) {

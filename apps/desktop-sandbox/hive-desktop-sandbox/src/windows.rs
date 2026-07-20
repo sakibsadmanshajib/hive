@@ -78,7 +78,18 @@
 //!   network limit and `windows_plan.rs`'s `netsh` codegen is never applied;
 //!   the WFP egress backend is a dedicated later step (Step 4).
 //! - Token privilege reduction / the low-privilege sandbox-user variant
-//!   (Step 3): see control 1 above.
+//!   (Step 3): see control 1 above. Step 3 Integration A lands the elevated
+//!   compose (the sandbox-account `CreateProcessWithLogonW` transport, the
+//!   capability-restricted token derived in the runner, and the per-task ACL
+//!   assembly) in [`crate::windows_elevated`]. That compose is NOT reached
+//!   through this `launch` (which keeps refusing both network policies until
+//!   the WFP egress backend lands in Integration B, per D-005): it is exercised
+//!   only through the lab-only
+//!   [`crate::windows_elevated::spawn_confined_for_validation`] entry point, so
+//!   the filesystem / user / token / Job isolation matrix can be proven on
+//!   `spike307-win` ahead of the composed network success path. The two
+//!   network-refusal guards below are the pure-tested
+//!   [`crate::windows_elevated::LaunchDecision`] made real.
 //! - Environment scrubbing: `CreateProcessAsUserW` is called with
 //!   `lpEnvironment = NULL`, so the child inherits the parent process's full
 //!   environment (secrets and `*_API_KEY`-style values included). A scrubbed
@@ -88,6 +99,7 @@
 //!   terminal is a later step.
 
 use crate::policy::NetworkPolicy;
+use crate::windows_elevated::LaunchDecision;
 use crate::windows_plan::{
     WindowsConfinementPlan, command_line_to_utf16, is_fully_qualified_program,
 };
@@ -183,22 +195,20 @@ pub(crate) fn launch(
     command: &[String],
     cwd: &Path,
 ) -> Result<SandboxChild, LaunchError> {
-    if matches!(policy.network(), NetworkPolicy::AllowHosts(_)) {
-        // AllowHosts egress enforcement on Windows (WFP) is a later step; the
-        // netsh codegen in windows_plan.rs is NOT wired to a live effect.
-        // Reject rather than launch with unenforced network policy.
-        return Err(LaunchError::AllowHostsNotYetImplemented);
-    }
-    if matches!(policy.network(), NetworkPolicy::DenyAll) {
-        // DenyAll is equally unenforced on Windows in Step 1: the Job Object
-        // carries no network limit and the firewall rule text in
-        // windows_plan.rs is codegen only, never applied. Refuse rather than
-        // run a process while claiming a block-all egress control that is not
-        // in force (symmetric with the AllowHosts rejection above). Real
-        // enforcement is Step 4 (WFP). Two separate guards, not one exhaustive
-        // `match`, so the confinement seam below stays compiled and reachable
-        // for the CI cross-check until Step 4 removes these rejections.
-        return Err(LaunchError::NetworkConfinementNotImplemented);
+    if matches!(
+        policy.network(),
+        NetworkPolicy::AllowHosts(_) | NetworkPolicy::DenyAll
+    ) {
+        // Network confinement (WFP) is not applied on Windows yet (Step 4).
+        // Both network policies refuse rather than launch with an unenforced
+        // egress control. `LaunchDecision` is the single, unit-tested source
+        // of that refusal decision (see its type doc in
+        // `windows_elevated.rs`); this module no longer hand-duplicates the
+        // guard logic inline. Kept as an `if` (not a `match`) so rustc's
+        // dead-code analysis does not treat it as exhaustive and eliminate
+        // the confinement seam below, which must stay compiled and reachable
+        // for the CI cross-check until Step 4 removes this rejection.
+        return Err(LaunchDecision::for_policy(policy).into_refusal());
     }
     if command.is_empty() {
         return Err(LaunchError::Confinement(
