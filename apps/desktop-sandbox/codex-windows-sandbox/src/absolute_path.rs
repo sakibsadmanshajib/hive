@@ -14,10 +14,15 @@
 //! this type is now a validating newtype rather than an opaque wrapper. Every
 //! value, however constructed (including via `serde` from an inbound frame), is
 //! checked to be an absolute Windows path (drive-absolute `C:\...`/`C:/...` or
-//! UNC/device `\\...`) that contains no `..` traversal segment. A crafted frame
-//! carrying `C:\ws\..\..\Windows\System32` is therefore rejected at the
-//! deserialization boundary, before it can widen an ACL grant. The inner
-//! `PathBuf` is private; callers read it through [`AbsolutePathBuf::as_path`].
+//! UNC/device `\\...`) that contains no `..` traversal segment and no
+//! embedded NUL byte. A crafted frame carrying `C:\ws\..\..\Windows\System32`
+//! is therefore rejected at the deserialization boundary, before it can widen
+//! an ACL grant. The NUL check closes a truncation bypass: a Rust string may
+//! contain an embedded NUL that a later NUL-terminating Win32 call would not
+//! see, so a segment such as `..\0suffix` (not equal to `..`) could otherwise
+//! pass the traversal scan while resolving, downstream, to the shorter,
+//! traversal-containing string up to the NUL. The inner `PathBuf` is private;
+//! callers read it through [`AbsolutePathBuf::as_path`].
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -31,6 +36,8 @@ pub enum AbsolutePathError {
     NotAbsolute(PathBuf),
     /// Path contains a `..` traversal segment.
     Traversal(PathBuf),
+    /// Path contains an embedded NUL byte.
+    ContainsNul(PathBuf),
 }
 
 impl std::fmt::Display for AbsolutePathError {
@@ -45,6 +52,9 @@ impl std::fmt::Display for AbsolutePathError {
                     "path contains a `..` traversal segment: {}",
                     path.display()
                 )
+            }
+            AbsolutePathError::ContainsNul(path) => {
+                write!(f, "path contains an embedded NUL byte: {}", path.display())
             }
         }
     }
@@ -62,6 +72,16 @@ impl AbsolutePathBuf {
     pub fn new(path: impl Into<PathBuf>) -> Result<Self, AbsolutePathError> {
         let path = path.into();
         let raw = path.to_string_lossy();
+        // Reject an embedded NUL byte before any other check. Rust strings
+        // (unlike C strings) do not stop at NUL, so a segment such as
+        // `..\0suffix` is not equal to `..` and would otherwise slip past the
+        // traversal-segment scan below. A later Win32 call that NUL-terminates
+        // the string (as a C API must) would see only the text up to the NUL,
+        // i.e. `..`, so it would resolve to the parent directory even though
+        // this validator saw the full, longer string and let it through.
+        if raw.contains('\0') {
+            return Err(AbsolutePathError::ContainsNul(path));
+        }
         if !is_windows_absolute(&raw) {
             return Err(AbsolutePathError::NotAbsolute(path));
         }
@@ -146,6 +166,17 @@ mod tests {
             AbsolutePathBuf::new(PathBuf::from("C:/ws/../secret")),
             Err(AbsolutePathError::Traversal(_))
         ));
+    }
+
+    #[test]
+    fn rejects_nul_truncation_traversal_bypass() {
+        // `..` followed by an embedded NUL is not the literal segment `..`,
+        // so it must be caught by an explicit NUL check, not the segment scan.
+        let raw = "C:\\allowed\\..\u{0}suffix";
+        assert_eq!(
+            AbsolutePathBuf::new(PathBuf::from(raw)),
+            Err(AbsolutePathError::ContainsNul(PathBuf::from(raw)))
+        );
     }
 
     #[test]

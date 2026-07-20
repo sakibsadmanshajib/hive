@@ -480,7 +480,43 @@ to `Cargo.toml` for the password-scrubbing fixes.
   is not an absolute Windows path or that contains a `..` traversal segment, so a
   crafted `SpawnRequest.workspace_roots` frame carrying `C:\ws\..\..\Windows`
   cannot reach the ACL grant path. The inner `PathBuf` is private, read via
-  `as_path()`. Tests added.
+  `as_path()`. Tests added. Hardened further in PR #400 below (embedded-NUL
+  rejection) since it is Hive-authored, not vendored.
+
+### Local deviations from upstream (Greptile findings, PR #400)
+
+Two more fixes on top of the byte-for-byte `process.rs` vendor copy (see
+"Integration A1" above), found by the automated Greptile review pass on PR
+#400. Same re-vendoring note as the other deviation sections: re-copying
+`process.rs` verbatim from upstream on a future pass should check whether
+upstream independently fixed the same bugs, and if not, re-apply these fixes.
+
+- `process.rs::make_env_block` (NUL-terminator bug): when `env` is empty, the
+  function returned a single NUL, but `CreateProcessAsUserW` requires the
+  environment block to end in two consecutive NULs (one ending the last
+  string, one ending the block). A one-NUL block is malformed; the API can
+  read past the end of the buffer looking for the second terminator. Fixed to
+  push an extra NUL when the block would otherwise be empty, so it always
+  ends in two. Two tests added (`make_env_block_empty_env_is_double_nul_terminated`,
+  `make_env_block_nonempty_env_ends_in_double_nul`).
+- `process.rs::create_process_as_user`'s no-explicit-stdio (`None`) branch
+  (unrestricted child handle inheritance): this branch called
+  `CreateProcessAsUserW` with `bInheritHandles = 1` via a plain `STARTUPINFOW`,
+  with no `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` restricting which handles are
+  inherited, unlike the explicit-stdio (`Some(..)`) branch a few lines above it
+  in the same function, which already restricts inheritance to exactly the
+  stdio handles it hands the child via `ProcThreadAttributeList::set_handle_list`.
+  Without that restriction, any other inheritable handle open in the process at
+  spawn time (pipe, file, event, IPC handle unrelated to stdio) is also
+  silently inherited by the sandboxed child. Fixed by switching this branch to
+  `STARTUPINFOEXW` + `EXTENDED_STARTUPINFO_PRESENT` and restricting the handle
+  list to the three std handles `ensure_inheritable_stdio` already sets, the
+  same pattern the `Some(..)` branch uses. Verified against the actual
+  `codex-windows-sandbox` call graph: this `None` branch has no caller anywhere
+  in this repo yet (`spawn_process_with_pipes`, the only caller of
+  `create_process_as_user` in the vendored/authored tree, always passes
+  `Some(..)`), so this is a preventive fix on still-inert code, not a behavior
+  change to any live path.
 
 ### Still deferred after A1 (unchanged from Wave 2)
 
@@ -753,15 +789,18 @@ crate deliberately does not inherit the workspace's Apache-2.0
    `hive-desktop-sandbox/src/windows_resolve.rs` by hand (it is a port, not a
    verbatim copy) for any new upstream fields/accessors worth porting.
    Also re-copy `codex-rs/windows-sandbox-rs/src/{process,desktop}.rs` verbatim
-   (Integration A1); they are byte-for-byte upstream. If `deny_read_resolver.rs`
+   (Integration A1); `desktop.rs` is byte-for-byte upstream, `process.rs` is
+   NOT (see the PR #400 deviations below). If `deny_read_resolver.rs`
    is ever vendored/ported (see "Still deferred after A1" above), re-check its
    dependency graph against `codex_protocol`/`codex_utils_absolute_path` again;
    upstream may have changed the coupling. NOTE the Integration A1 security
    deviations that make several Wave 1/2 files no longer byte-identical to
    upstream (`elevated/ipc_framed.rs`, `elevated/runner_client.rs`,
-   `identity.rs`, `sandbox_users.rs`, `cap.rs`, `absolute_path.rs`); re-apply
-   them the same way as the other documented deviations, checking first whether
-   upstream fixed the same items.
+   `identity.rs`, `sandbox_users.rs`, `cap.rs`, `absolute_path.rs`), PLUS the
+   PR #400 `process.rs` deviations (`make_env_block`'s empty-environment
+   double-NUL terminator, `create_process_as_user`'s `None`-branch handle-list
+   restriction); re-apply them the same way as the other documented
+   deviations, checking first whether upstream fixed the same items.
 3a. Re-copy `codex-rs/windows-sandbox-rs/src/{elevated/ipc_framed,
    elevated/runner_pipe,elevated/runner_client,elevated/mod,
    helper_materialization,setup_error}.rs` verbatim into

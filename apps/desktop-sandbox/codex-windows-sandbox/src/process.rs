@@ -59,6 +59,14 @@ pub fn make_env_block(env: &HashMap<String, String>) -> Vec<u16> {
         w.extend_from_slice(&s);
         w.push(0);
     }
+    // `CreateProcessAsUserW` requires the environment block to end in two
+    // consecutive NULs (one ending the last string, one ending the block).
+    // When `env` is empty the loop above never runs, so `w` is still empty;
+    // pushing only the single block-terminator NUL below would leave a
+    // one-NUL block instead of the required two.
+    if w.is_empty() {
+        w.push(0);
+    }
     w.push(0);
     w
 }
@@ -171,12 +179,30 @@ pub unsafe fn create_process_as_user(
             })
         }
         None => {
-            let mut si: STARTUPINFOW = std::mem::zeroed();
-            si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
-            si.lpDesktop = desktop.startup_info_desktop();
-            ensure_inheritable_stdio(&mut si)?;
+            let mut si: STARTUPINFOEXW = std::mem::zeroed();
+            si.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+            si.StartupInfo.lpDesktop = desktop.startup_info_desktop();
+            ensure_inheritable_stdio(&mut si.StartupInfo)?;
 
-            let creation_flags = CREATE_UNICODE_ENVIRONMENT;
+            // `bInheritHandles` below must be paired with an explicit handle
+            // list (`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`), same as the
+            // explicit-stdio branch above. Without it, every OTHER
+            // inheritable handle open in this process (pipes, files, events,
+            // IPC handles unrelated to stdio) is also inherited by the
+            // sandboxed child, not only the three std handles this function
+            // intends to hand it.
+            let stdin_h = si.StartupInfo.hStdInput;
+            let stdout_h = si.StartupInfo.hStdOutput;
+            let stderr_h = si.StartupInfo.hStdError;
+            let mut inherited_handles = vec![stdin_h, stdout_h];
+            if !inherited_handles.contains(&stderr_h) {
+                inherited_handles.push(stderr_h);
+            }
+            let mut attrs = ProcThreadAttributeList::new(/*attr_count*/ 1)?;
+            attrs.set_handle_list(inherited_handles)?;
+            si.lpAttributeList = attrs.as_mut_ptr();
+
+            let creation_flags = CREATE_UNICODE_ENVIRONMENT | EXTENDED_STARTUPINFO_PRESENT;
             let ok = CreateProcessAsUserW(
                 h_token,
                 std::ptr::null(),
@@ -187,7 +213,7 @@ pub unsafe fn create_process_as_user(
                 creation_flags,
                 env_block.as_ptr() as *mut c_void,
                 cwd_wide.as_ptr(),
-                &si,
+                &si.StartupInfo,
                 &mut pi,
             );
             if ok == 0 {
@@ -199,7 +225,7 @@ pub unsafe fn create_process_as_user(
                     cwd.display(),
                     cmdline_str,
                     env_block_len,
-                    si.dwFlags,
+                    si.StartupInfo.dwFlags,
                     creation_flags,
                 );
                 logging::debug_log(&msg, logs_base_dir);
@@ -207,7 +233,7 @@ pub unsafe fn create_process_as_user(
             }
             Ok(CreatedProcess {
                 process_info: pi,
-                startup_info: si,
+                startup_info: si.StartupInfo,
                 _desktop: desktop,
             })
         }
@@ -370,4 +396,25 @@ where
             CloseHandle(handle);
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn make_env_block_empty_env_is_double_nul_terminated() {
+        // `CreateProcessAsUserW` requires the block to end in two NULs even
+        // when there are no entries; a single-NUL block is malformed.
+        let block = make_env_block(&HashMap::new());
+        assert_eq!(block, vec![0u16, 0u16]);
+    }
+
+    #[test]
+    fn make_env_block_nonempty_env_ends_in_double_nul() {
+        let mut env = HashMap::new();
+        env.insert("FOO".to_string(), "bar".to_string());
+        let block = make_env_block(&env);
+        assert_eq!(&block[block.len() - 2..], &[0u16, 0u16]);
+    }
 }
