@@ -188,21 +188,32 @@ pub fn ensure_local_group(name: &str, comment: &str, log: &mut dyn Write) -> Res
 }
 
 pub fn ensure_local_group_member(group_name: &str, member_name: &str) -> Result<()> {
-    // If the member is already in the group, NetLocalGroupAddMembers may
-    // return an error code. We don't care.
+    // If the member is already in the group, NetLocalGroupAddMembers returns
+    // ERROR_MEMBER_IN_ALIAS; treat that (and NERR_Success) as success. Any other code
+    // (access denied, missing group, invalid account, ...) must fail instead of being
+    // silently discarded, otherwise this reports success while the account never actually
+    // joined the group (CodeRabbit/Greptile finding, PR #399, see ../VENDORING.md).
+    const ERROR_MEMBER_IN_ALIAS: u32 = 1378;
+
     let group_w = to_wide(OsStr::new(group_name));
     let member_w = to_wide(OsStr::new(member_name));
-    unsafe {
+    let status = unsafe {
         let member = LOCALGROUP_MEMBERS_INFO_3 {
             lgrmi3_domainandname: member_w.as_ptr() as *mut u16,
         };
-        let _ = NetLocalGroupAddMembers(
+        NetLocalGroupAddMembers(
             std::ptr::null(),
             group_w.as_ptr(),
             3,
             &member as *const _ as *mut u8,
             1,
-        );
+        )
+    };
+    if status != NERR_Success && status != ERROR_MEMBER_IN_ALIAS {
+        return Err(anyhow::Error::new(SetupFailure::new(
+            SetupErrorCode::HelperUserProvisionFailed,
+            format!("failed to add {member_name} to group {group_name}, code {status}"),
+        )));
     }
     Ok(())
 }

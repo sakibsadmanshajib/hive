@@ -132,7 +132,14 @@ pub(crate) fn copy_helper_if_needed(
     log_dir: Option<&Path>,
 ) -> Result<PathBuf> {
     let cache_key = format!("{}|{}", kind.file_name(), codex_home.display());
-    if let Some(path) = cached_helper_path(&cache_key) {
+    // Re-validate the cached path is still on disk before trusting it: antivirus
+    // quarantine, cleanup, or a concurrent replacement can remove the helper after it was
+    // cached, and a stale in-memory hit must not paper over that (CodeRabbit/Greptile
+    // finding, PR #399, see ../VENDORING.md). Falling through re-runs the normal
+    // copy-if-needed path below, which re-populates the cache once the copy succeeds again.
+    if let Some(path) = cached_helper_path(&cache_key)
+        && path.is_file()
+    {
         log_note(
             &format!(
                 "helper copy: using in-memory cache for {} -> {}",

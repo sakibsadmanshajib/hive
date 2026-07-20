@@ -318,8 +318,19 @@ pub fn spawn_runner_transport(
     let (pipe_in_name, pipe_out_name) = pipe_pair();
     let h_pipe_in =
         create_named_pipe(&pipe_in_name, PIPE_ACCESS_OUTBOUND, &sandbox_creds.username)?;
+    // If the outbound pipe fails to create, close the inbound pipe already created above
+    // before returning; otherwise every failed launch attempt leaks one server-pipe handle
+    // (CodeRabbit/Greptile finding, PR #399, see ../../VENDORING.md).
     let h_pipe_out =
-        create_named_pipe(&pipe_out_name, PIPE_ACCESS_INBOUND, &sandbox_creds.username)?;
+        match create_named_pipe(&pipe_out_name, PIPE_ACCESS_INBOUND, &sandbox_creds.username) {
+            Ok(handle) => handle,
+            Err(err) => {
+                unsafe {
+                    CloseHandle(h_pipe_in);
+                }
+                return Err(err.into());
+            }
+        };
 
     let runner_exe = find_runner_exe(codex_home, log_dir);
     let runner_cmdline = runner_exe

@@ -341,8 +341,74 @@ read-modify-write.
   touches `cap.rs`'s already-documented unsynchronized `cap_sid` file, open
   risk #8 below, unchanged).
 
-No new bugs found; nothing required a deviation beyond the ones already
-documented above.
+No new bugs found by this self-audit; nothing required a deviation beyond the
+ones already documented above. The automated CodeRabbit/Greptile review pass
+on PR #399 (below) found three more, after this self-audit had already
+landed.
+
+### Local deviations from upstream (CodeRabbit/Greptile findings, PR #399)
+
+Three more small bug fixes on top of the byte-for-byte copy, found by the
+automated review pass rather than the self-audit above. Same re-vendoring
+note as Wave 1's equivalent section: re-copying these files verbatim from
+upstream on a future pass should check whether upstream independently fixed
+the same bugs, and if not, re-apply these fixes.
+
+- `elevated/runner_client.rs::spawn_runner_transport`: the inbound server
+  pipe (`h_pipe_in`) was created, then the outbound server pipe
+  (`h_pipe_out`)'s creation used `?`, which returned without closing
+  `h_pipe_in` on failure. Every failed launch attempt (for example, a second
+  `create_named_pipe` call racing an already-in-use pipe name) leaked one
+  server-pipe HANDLE. Fixed to explicitly `CloseHandle(h_pipe_in)` before
+  returning the outbound-pipe error, matching the `CloseHandle`-on-cleanup
+  idiom this same function already uses everywhere else (see the self-audit
+  above).
+- `sandbox_users.rs::ensure_local_group_member`: discarded every
+  `NetLocalGroupAddMembers` result (`let _ = NetLocalGroupAddMembers(...)`),
+  not only the expected "already a member" result. Access denied, a missing
+  group, or an invalid account therefore made `ensure_sandbox_user` return
+  `Ok(())` while the account was never actually added to
+  `CodexSandboxUsers`, silently defeating the group-membership half of the
+  sandbox-user provisioning contract. Fixed to check the status code against
+  `NERR_Success` and `ERROR_MEMBER_IN_ALIAS` (1378; verified against the
+  `windows-sys` 0.52 `Foundation` module this crate already depends on) only,
+  returning a `SetupFailure` for any other code.
+- `helper_materialization.rs::copy_helper_if_needed`: once a helper path was
+  cached in the process-lifetime `HELPER_PATH_CACHE`, later calls returned it
+  without checking the file still existed. Antivirus quarantine, cleanup, or
+  a concurrent replacement removing the helper after it was cached would make
+  every subsequent runner launch in the process keep using the missing path
+  instead of recopying it. Fixed by gating the cache hit on `path.is_file()`;
+  a miss now falls through to the existing copy-if-needed path below it
+  (which already re-populates the cache once the copy succeeds again), so no
+  other control flow changed.
+
+Three further findings from the same review pass are genuine but were NOT
+fixed this pass, deliberately: they fall inside latent hardening items an
+independent security review of this same PR had already catalogued as
+MUST-FIX-during-Integration-A (open risk #6 below), not new findings, and
+fixing them piecemeal on still-inert code risks being redone or reshaped once
+the transport is actually wired and lab-tested. Each gets one line here; open
+risk #6 is the tracking entry.
+
+- `helper_materialization.rs::legacy_lookup`'s fallback to the bare
+  `codex-command-runner.exe` name (not an absolute path) lets
+  `CreateProcessWithLogonW` fall back to executable search instead of
+  failing closed when the packaged helper cannot be found or copied. Same
+  bucket as the security review's "absolute-path guard" item.
+- `elevated/ipc_framed.rs::read_frame` deserializes a `FramedMessage` without
+  checking `msg.version` against `IPC_PROTOCOL_VERSION`, so a stale runner
+  sending an older-versioned message with overlapping JSON fields would be
+  treated as current. Same bucket as the security review's `ipc_framed`/nonce
+  item.
+- `identity.rs::SandboxCreds` derives `Debug` over its cleartext `password`
+  field, so any future `{:?}` on the struct (log line, error context, panic)
+  would leak it. No current call site formats `SandboxCreds` with `{:?}`
+  (verified by grep), so this is latent, not live. Same underlying
+  cleartext-logon-password concern the security review already flagged for
+  `identity.rs`/`sandbox_users.rs`/`runner_client.rs` (the zeroize-on-drop
+  item); bundling the Debug redaction with that pass avoids fixing the same
+  struct's credential hygiene in two uncoordinated passes.
 
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
@@ -520,6 +586,19 @@ crate deliberately does not inherit the workspace's Apache-2.0
    binaries, and the actual launch-path wiring) stays open. Mark RESOLVED
    only when a later wave lab-validates the isolation matrix on
    `spike307-win` (assertions L7 to L12 in the blueprint).
+
+   **Known issues, fix in Integration A (CodeRabbit/Greptile, PR #399; see
+   this file's Wave 2 "Local deviations" section above for the three that
+   were fixed instead):** (a) `helper_materialization.rs::legacy_lookup`'s
+   bare-executable-name fallback lets `CreateProcessWithLogonW` fall back to
+   executable search instead of failing closed; needs an absolute-path
+   guard once a real launch path calls it. (b) `elevated/ipc_framed.rs`'s
+   `read_frame` does not check `msg.version` against `IPC_PROTOCOL_VERSION`,
+   so a stale runner's older-versioned message would be accepted as current.
+   (c) `identity.rs::SandboxCreds` derives `Debug` over its cleartext
+   `password` field (latent only, no current `{:?}` call site); bundle a
+   redacting `Debug` impl with the zeroize-on-drop hardening this item
+   already tracks for the same struct.
 7. **RESOLVED (#350).** The Linux `pre_exec` post-fork allocator-deadlock
    hazard below was fixed by #350 (merged), which moved `linux::launch`'s
    `pre_exec` closure to an allocation-free path so no thread can deadlock on
