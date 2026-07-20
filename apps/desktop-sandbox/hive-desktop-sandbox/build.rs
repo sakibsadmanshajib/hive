@@ -1,0 +1,38 @@
+//! Build script for the desktop-sandbox crate.
+//!
+//! Its only job today: delay-load `user32.dll` for the `hive-command-runner`
+//! binary on the MSVC target.
+//!
+//! Why: `hive-command-runner` statically imports `user32.dll` (the private
+//! window-station / desktop calls). The Windows loader runs user32's
+//! process-attach `DllMain` BEFORE `main()`, and that attach connects the
+//! process to a window station + desktop. For the low-privilege sandbox account
+//! launched via `CreateProcessWithLogonW`, that loader-time attach fails in
+//! session 0 (`STATUS_DLL_INIT_FAILED`, 0xC0000142) and blocks in session 1
+//! (the runner never reaches `main`, so it never opens its IPC pipe and the
+//! parent times out with `259 STILL_ACTIVE`). Lab-proven on spike307-win: a
+//! marker on the first line of `main` never fired.
+//!
+//! Delay-loading user32 defers its load (and its DllMain attach) until the
+//! runner's FIRST user32 call. By then `main()` has run, the IPC handshake has
+//! completed, and the runner is executing on `WinSta0` (where its
+//! `grant_winsta_desktop_access` has granted it access), so the now-deferred
+//! attach succeeds when the runner first calls `CreateWindowStationW` to build
+//! the child's private window station.
+//!
+//! MSVC only: `/DELAYLOAD` and `delayimp.lib` are MSVC-linker features, and the
+//! product ships the MSVC target. The `x86_64-pc-windows-gnu` cross-compile that
+//! CI type-checks uses a different toolchain and is intentionally left untouched
+//! (it never runs, so its loader behaviour does not matter).
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
+    if target_os == "windows" && target_env == "msvc" {
+        // Scoped to the runner bin only; other bins/libs are unaffected.
+        println!("cargo:rustc-link-arg-bin=hive-command-runner=/DELAYLOAD:user32.dll");
+        // The delay-load thunks call __delayLoadHelper2 from delayimp.lib.
+        println!("cargo:rustc-link-arg-bin=hive-command-runner=delayimp.lib");
+    }
+}

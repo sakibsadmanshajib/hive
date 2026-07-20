@@ -342,7 +342,15 @@ pub fn spawn_runner_transport(
     // STATUS_DLL_INIT_FAILED (0xC0000142) BEFORE main runs (observed on
     // spike307-win). Grant the sandbox SID access to the current station +
     // desktop first; the launch leaves STARTUPINFO.lpDesktop NULL so the runner
-    // inherits this same, now-accessible station/desktop.
+    // inherits this same WinSta0 station/desktop (seclogon auto-grants the
+    // runner's new logon SID there).
+    //
+    // UI isolation for the untrusted inner CHILD is applied separately,
+    // RUNNER-side: the runner moves the child onto a PRIVATE window station
+    // (see `desktop::LaunchDesktop` / `use_private_desktop`), where it grants its
+    // own logon SID so the restricted child can attach. The runner staying on
+    // WinSta0 here is therefore not a UI-isolation relaxation for the sandboxed
+    // workload. Network egress stays refused until Integration B (WFP).
     if let Err(err) = crate::desktop::grant_winsta_desktop_access(&sandbox_creds.username) {
         unsafe {
             CloseHandle(h_pipe_in);

@@ -577,6 +577,54 @@ mod windows_impl {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| anyhow::anyhow!("workspace root not absolute: {e}"))?;
 
+        // Per-task allow-write grants, applied HERE in the elevated parent
+        // rather than in the runner. The runner executes as the low-privilege
+        // sandbox account, which does not own the workspace root and has no
+        // WRITE_DAC on it, so its SetNamedSecurityInfoW was denied and no ACE
+        // landed -- the (c) "write inside the writable root" failure. This
+        // parent owns the root (it created it) and can rewrite its DACL. On each
+        // writable root we grant:
+        //   * the sandbox-account SID -- the identity present in BOTH the
+        //     WRITE_RESTRICTED token's normal groups AND its restricting-SID set
+        //     (the token adds the sandbox user as an extra restricting SID), so
+        //     a write passes both of the token's access checks. A capability SID
+        //     alone is only in the restricting set, so the normal-groups check
+        //     still denied the write; and
+        //   * each per-workspace capability SID -- the restricting-side gate the
+        //     token carries, kept so the isolation design stays populated.
+        // Fail-closed (D-005): add_allow_ace now returns Err (and verifies the
+        // ACE persisted) so a grant that cannot be applied aborts the launch
+        // rather than proceeding with a workspace the confined child cannot
+        // write.
+        if permissions.uses_write_capabilities() {
+            let sandbox_sid_str = codex_windows_sandbox::winutil::string_from_sid_bytes(
+                &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let sandbox_local = LocalSid::from_string(&sandbox_sid_str)?;
+            let cap_local_sids: Vec<LocalSid> = cap_sids
+                .iter()
+                .map(|s| LocalSid::from_string(s))
+                .collect::<Result<Vec<_>>>()?;
+            for root in &workspace_roots {
+                let root_path = root.as_path();
+                // SAFETY: sandbox_local / cap_local_sids own live SID pointers
+                // that outlive this loop; add_allow_ace reads them and rewrites
+                // the DACL of the validated absolute root path.
+                unsafe { acl::add_allow_ace(root_path, sandbox_local.as_ptr()) }.map_err(|e| {
+                    anyhow::anyhow!(
+                        "grant sandbox-account write on {}: {e}",
+                        root_path.display()
+                    )
+                })?;
+                for cap in &cap_local_sids {
+                    unsafe { acl::add_allow_ace(root_path, cap.as_ptr()) }.map_err(|e| {
+                        anyhow::anyhow!("grant capability write on {}: {e}", root_path.display())
+                    })?;
+                }
+            }
+        }
+
         let spawn_request = SpawnRequest {
             command: command.to_vec(),
             cwd: cwd.to_path_buf(),
@@ -591,7 +639,15 @@ mod windows_impl {
             timeout_ms: None,
             tty: false,
             stdin_open: false,
-            use_private_desktop: false,
+            // UI isolation (Step 3 B1): the runner moves the restricted inner
+            // child onto a private DESKTOP on the interactive WinSta0
+            // (upstream/Chromium baseline), granting its own logon SID so the
+            // child can attach. Desktop-level UI isolation only: clipboard and
+            // the global atom table are per-window-station and stay shared with
+            // the interactive user (accepted tradeoff, no station-level
+            // isolation). A hostile child's desktop escape is contained only
+            // once the deferred Low-integrity / SID-disable seam lands.
+            use_private_desktop: true,
         };
 
         let sandbox_creds = load_logon_sandbox_creds(sandbox_home)?;
@@ -845,28 +901,16 @@ mod windows_impl {
             .collect::<Result<Vec<_>>>()?;
         let cap_ptrs: Vec<*mut c_void> = cap_sids.iter().map(|s| s.as_ptr()).collect();
 
+        // The per-task allow-write ACEs are applied by the ELEVATED parent
+        // (run_windows_sandbox_capture) BEFORE this runner is launched, because
+        // this runner runs as the low-privilege sandbox account and has no
+        // WRITE_DAC on the workspace root (a runner-side SetNamedSecurityInfoW
+        // was denied, so the ACE never landed -- the (c) write-inside failure).
+        // The cap SIDs below are still what the restricted token carries.
         runner_debug_log(&format!(
-            "applying per-task allow ACEs: {} root(s) x {} cap sid(s)",
-            request.workspace_roots.len(),
+            "per-task allow ACEs applied parent-side; deriving token with {} cap sid(s)",
             cap_ptrs.len()
         ));
-        // Apply the per-task ACL grants for the workspace roots BEFORE spawning
-        // (spawn_prep assembly). Each capability SID gets an allow-write ACE on
-        // its writable roots; the cap SID is what the restricted token carries.
-        for root in &request.workspace_roots {
-            for psid in &cap_ptrs {
-                // SAFETY: `psid` is a live LocalSid pointer (owned by `cap_sids`,
-                // which outlives this loop); `add_allow_ace` applies an allow ACE
-                // to the validated absolute root path.
-                let _ = unsafe { acl::add_allow_ace(root.as_path(), *psid) }.map_err(|e| {
-                    runner_debug_log(&format!(
-                        "allow ACE FAILED on {}: {e}",
-                        root.as_path().display()
-                    ));
-                    anyhow::anyhow!("allow ACE on {}: {e}", root.as_path().display())
-                })?;
-            }
-        }
 
         // SAFETY: get_current_token_for_restriction returns the runner's own
         // primary token; the *_and_user_from builders derive a capability-
@@ -898,7 +942,7 @@ mod windows_impl {
             StdinMode::Closed,
             StderrMode::Separate,
             ConsoleMode::NoWindow,
-            /* use_private_desktop */ false,
+            request.use_private_desktop,
             None,
         );
         // SAFETY: `token` is a valid handle from the token builder above; close
