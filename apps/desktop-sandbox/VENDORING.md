@@ -703,56 +703,6 @@ with the reason a blind fix would risk invalidating that lab run.
   a real deadline in B2, lab-exercised on `spike307-win` at that point since
   only then does the watchdog path actually run.
 
-### Integration B1: private desktop for UI isolation (Hive deviation)
-
-Hive's Integration A shipped `grant_winsta_desktop_access`, which grants the
-sandbox account access to the interactive user's shared `WinSta0` so the
-user32-linking runner can complete process-attach at load. That left the
-sandboxed inner child on the real user's default desktop (`WinSta0\Default`),
-where it could shatter-attack or `SendInput` to the real desktop's windows.
-
-B1 closes the desktop half of that hole by adding a Hive-native
-`desktop.rs::PrivateDesktop` (mirroring upstream codex `desktop.rs`) and routing
-the untrusted inner child onto it. It does NOT add a private window station.
-
-- The RUNNER (running as the sandbox account) creates a per-launch PRIVATE
-  DESKTOP on the shared `WinSta0` (`CreateDesktopW`, a
-  `HiveSandboxDesktop-<random u128>` name from `OsRng`) and grants its own logon
-  SID access to it. The restricted inner-child token derives from the runner's
-  token and carries that same logon SID in its restricting-SID set, so the one
-  grant satisfies both halves of the child's `WRITE_RESTRICTED` access check.
-- `process.rs` sets `STARTUPINFO.lpDesktop = "Winsta0\\HiveSandboxDesktop-<..>"`
-  on the inner-child launch, so the child runs on the private desktop and holds
-  no handle to `WinSta0\Default`: it cannot enumerate the default desktop's
-  windows, `SendInput` across the desktop boundary, or mount a shatter attack on
-  the real desktop.
-- NOT a private window station. A least-privilege sandbox account cannot create
-  a securable window station (`CreateWindowStationW` returns
-  `ERROR_ACCESS_DENIED` for that token) and upstream never creates one; a private
-  desktop is the standard per-process UI isolation boundary (the upstream codex /
-  Chromium baseline). `CreateDesktopW` also has no `CWF_CREATE_ONLY` equivalent,
-  so a duplicate name would open the existing desktop rather than error; the
-  128-bit `OsRng` name suffix makes a collision cryptographically negligible.
-- Fail closed (D-005): any Win32 failure in `PrivateDesktop::create` returns an
-  error and NEVER falls back to `WinSta0\Default`.
-
-Scope: B1 is DESKTOP-level UI isolation ONLY.
-
-- Clipboard and the global atom table are per-WINDOW-STATION, so they stay
-  shared with the interactive user (accepted tradeoff; a private station would
-  isolate them, but the sandbox token cannot create one).
-- `grant_winsta_desktop_access` is RETAINED: the runner still needs shared
-  `WinSta0` access to attach user32 at load, so the "Desktop Grant Outlives
-  Runner" gap noted above is unchanged by B1 (still a known, non-blocking gap).
-- A hostile child's escape off its own private desktop is contained only once
-  the deferred Low-integrity / SID-disable seam lands.
-- The two `windows::launch` network-refusal guards are untouched; both
-  `NetworkPolicy::DenyAll` and `AllowHosts` still fail closed until the WFP
-  egress backend lands (Integration B / D-005).
-
-This code is cross-compiled by CI (`x86_64-pc-windows-gnu`) but, like the rest
-of the Win32 compose, its behaviour is only lab-provable on `spike307-win`.
-
 ### Deliberately NOT done in A2 (fail-closed stubs, honest)
 
 - WFP / firewall egress (Integration B): the two `windows::launch`
