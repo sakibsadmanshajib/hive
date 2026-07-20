@@ -55,6 +55,7 @@ use crate::setup_error::SetupErrorCode;
 use crate::setup_error::SetupFailure;
 use crate::winutil::string_from_sid_bytes;
 use crate::winutil::to_wide;
+use zeroize::Zeroize;
 
 pub const SANDBOX_USERS_GROUP: &str = "CodexSandboxUsers";
 const SANDBOX_USERS_GROUP_COMMENT: &str = "Codex sandbox internal group (managed)";
@@ -93,66 +94,74 @@ pub fn ensure_sandbox_user(username: &str, password: &str, log: &mut dyn Write) 
 
 pub fn ensure_local_user(name: &str, password: &str, log: &mut dyn Write) -> Result<()> {
     let name_w = to_wide(OsStr::new(name));
-    let pwd_w = to_wide(OsStr::new(password));
-    unsafe {
-        let info = USER_INFO_1 {
-            usri1_name: name_w.as_ptr() as *mut u16,
-            usri1_password: pwd_w.as_ptr() as *mut u16,
-            usri1_password_age: 0,
-            usri1_priv: USER_PRIV_USER,
-            usri1_home_dir: std::ptr::null_mut(),
-            usri1_comment: std::ptr::null_mut(),
-            usri1_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD,
-            usri1_script_path: std::ptr::null_mut(),
-        };
-        let status = NetUserAdd(
-            std::ptr::null(),
-            1,
-            &info as *const _ as *mut u8,
-            std::ptr::null_mut(),
-        );
-        if status != NERR_Success {
-            // Try update password via level 1003.
-            let pw_info = USER_INFO_1003 {
-                usri1003_password: pwd_w.as_ptr() as *mut u16,
+    // Cleartext password wide buffer for NetUserAdd / NetUserSetInfo. Zeroized
+    // after the account API calls complete (Integration A1, W2 review finding 6)
+    // so it does not linger in freed heap; the raw pointers into it are only
+    // dereferenced inside the `unsafe` block below.
+    let mut pwd_w = to_wide(OsStr::new(password));
+    let result = (|| {
+        unsafe {
+            let info = USER_INFO_1 {
+                usri1_name: name_w.as_ptr() as *mut u16,
+                usri1_password: pwd_w.as_ptr() as *mut u16,
+                usri1_password_age: 0,
+                usri1_priv: USER_PRIV_USER,
+                usri1_home_dir: std::ptr::null_mut(),
+                usri1_comment: std::ptr::null_mut(),
+                usri1_flags: UF_SCRIPT | UF_DONT_EXPIRE_PASSWD,
+                usri1_script_path: std::ptr::null_mut(),
             };
-            let upd = NetUserSetInfo(
+            let status = NetUserAdd(
                 std::ptr::null(),
-                name_w.as_ptr(),
-                1003,
-                &pw_info as *const _ as *mut u8,
+                1,
+                &info as *const _ as *mut u8,
                 std::ptr::null_mut(),
             );
-            if upd != NERR_Success {
-                log_line(log, &format!("NetUserSetInfo failed for {name} code {upd}"))?;
-                return Err(anyhow::Error::new(SetupFailure::new(
-                    SetupErrorCode::HelperUserCreateOrUpdateFailed,
-                    format!("failed to create/update user {name}, code {status}/{upd}"),
-                )));
+            if status != NERR_Success {
+                // Try update password via level 1003.
+                let pw_info = USER_INFO_1003 {
+                    usri1003_password: pwd_w.as_ptr() as *mut u16,
+                };
+                let upd = NetUserSetInfo(
+                    std::ptr::null(),
+                    name_w.as_ptr(),
+                    1003,
+                    &pw_info as *const _ as *mut u8,
+                    std::ptr::null_mut(),
+                );
+                if upd != NERR_Success {
+                    log_line(log, &format!("NetUserSetInfo failed for {name} code {upd}"))?;
+                    return Err(anyhow::Error::new(SetupFailure::new(
+                        SetupErrorCode::HelperUserCreateOrUpdateFailed,
+                        format!("failed to create/update user {name}, code {status}/{upd}"),
+                    )));
+                }
+            }
+
+            // Ensure the principal is a regular local user account.
+            if let Ok(group_name) = lookup_account_name_for_sid(SID_USERS) {
+                let group = to_wide(OsStr::new(&group_name));
+                let member = LOCALGROUP_MEMBERS_INFO_3 {
+                    lgrmi3_domainandname: name_w.as_ptr() as *mut u16,
+                };
+                let _ = NetLocalGroupAddMembers(
+                    std::ptr::null(),
+                    group.as_ptr(),
+                    3,
+                    &member as *const _ as *mut u8,
+                    1,
+                );
+            } else {
+                log_line(
+                    log,
+                    "LookupAccountSidW failed for Users SID; skipping Users group membership",
+                )?;
             }
         }
-
-        // Ensure the principal is a regular local user account.
-        if let Ok(group_name) = lookup_account_name_for_sid(SID_USERS) {
-            let group = to_wide(OsStr::new(&group_name));
-            let member = LOCALGROUP_MEMBERS_INFO_3 {
-                lgrmi3_domainandname: name_w.as_ptr() as *mut u16,
-            };
-            let _ = NetLocalGroupAddMembers(
-                std::ptr::null(),
-                group.as_ptr(),
-                3,
-                &member as *const _ as *mut u8,
-                1,
-            );
-        } else {
-            log_line(
-                log,
-                "LookupAccountSidW failed for Users SID; skipping Users group membership",
-            )?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })();
+    pwd_w.zeroize();
+    result
 }
 
 pub fn ensure_local_group(name: &str, comment: &str, log: &mut dyn Write) -> Result<()> {
