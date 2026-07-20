@@ -211,6 +211,16 @@ const GENERIC_ALL_MASK: u32 = 0x1000_0000;
 // WINSTA_ALL_ACCESS is not re-exported by windows-sys 0.52; value from the
 // Win32 headers (winuser.h): the OR of all WINSTA_* rights.
 const WINSTA_ALL_ACCESS: u32 = 0x0000_037F;
+// Standard access rights (winnt.h) a window-station/desktop HANDLE needs to read
+// and rewrite its OWN security descriptor: GetSecurityInfo requires READ_CONTROL
+// and SetSecurityInfo requires WRITE_DAC. WINSTA_ALL_ACCESS (0x037F) does NOT
+// include either, so CreateWindowStationW must request them or the sandbox-SID
+// grant fails with ERROR_ACCESS_DENIED and, being fail-closed, aborts EVERY
+// spawn (lab, MSVC, spike307-win). DESKTOP_ALL_ACCESS already folds these in
+// (DESKTOP_READ_CONTROL = 0x0002_0000, DESKTOP_WRITE_DAC = 0x0004_0000); we OR
+// them onto the desktop mask too so the requirement is explicit at both sites.
+const READ_CONTROL: u32 = 0x0002_0000;
+const WRITE_DAC: u32 = 0x0004_0000;
 const CONTAINER_INHERIT_ACE: u32 = 0x2;
 const OBJECT_INHERIT_ACE: u32 = 0x1;
 const INHERIT_ONLY_ACE: u32 = 0x8;
@@ -477,7 +487,11 @@ unsafe fn create_desktop_on_current_station(desktop_name: &str) -> Result<isize>
         ptr::null(),
         ptr::null(),
         0,
-        DESKTOP_ALL_ACCESS,
+        // READ_CONTROL | WRITE_DAC so the handle can GetSecurityInfo /
+        // SetSecurityInfo for the sandbox SID grant. DESKTOP_ALL_ACCESS already
+        // includes both (DESKTOP_READ_CONTROL / DESKTOP_WRITE_DAC); ORed again
+        // here so the requirement is explicit and not dependent on that alias.
+        DESKTOP_ALL_ACCESS | READ_CONTROL | WRITE_DAC,
         ptr::null(),
     );
     if desktop == 0 {
@@ -533,7 +547,9 @@ unsafe fn create_private_winsta_desktop(
     let winsta = CreateWindowStationW(
         winsta_name_wide.as_ptr(),
         CWF_CREATE_ONLY,
-        WINSTA_ALL_ACCESS,
+        // READ_CONTROL | WRITE_DAC so the returned handle can GetSecurityInfo /
+        // SetSecurityInfo when grant_access adds the sandbox SID ACE below.
+        WINSTA_ALL_ACCESS | READ_CONTROL | WRITE_DAC,
         ptr::null(),
     );
     if winsta == 0 {
