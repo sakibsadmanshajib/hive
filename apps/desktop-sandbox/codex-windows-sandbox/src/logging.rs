@@ -21,3 +21,15 @@ use std::path::Path;
 pub fn log_note(msg: &str, _base_dir: Option<&Path>) {
     eprintln!("[codex-windows-sandbox] {msg}");
 }
+
+/// Stand-in for upstream `logging::debug_log`. Consumed by the verbatim-vendored
+/// `process.rs` and `desktop.rs` (Integration A1). Upstream gates the file write
+/// on the `SBX_DEBUG=1` env var and also mirrors to stderr; this stand-in keeps
+/// the same gate and stderr mirror but performs no CODEX_HOME file rotation
+/// (matching `log_note` above). `base_dir` is accepted for signature parity but
+/// unused. See `../VENDORING.md`.
+pub fn debug_log(msg: &str, _base_dir: Option<&Path>) {
+    if std::env::var("SBX_DEBUG").ok().as_deref() == Some("1") {
+        eprintln!("[codex-windows-sandbox] DEBUG: {msg}");
+    }
+}

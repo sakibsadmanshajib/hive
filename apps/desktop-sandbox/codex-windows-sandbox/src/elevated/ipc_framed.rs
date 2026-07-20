@@ -34,8 +34,11 @@ use std::path::PathBuf;
 /// Safety cap for a single framed message payload.
 ///
 /// This is not a protocol requirement; it simply bounds memory use and rejects
-/// obviously invalid frames.
-const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
+/// obviously invalid frames. Exposed (Integration A1) so the parent-side
+/// `runner_client::wait_for_complete_frame` can reject an over-large declared
+/// length as soon as it peeks the length prefix, instead of spinning until the
+/// spawn-ready timeout on an attacker-controlled length (W2 review finding 1).
+pub const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
 pub const IPC_PROTOCOL_VERSION: u8 = 4;
@@ -185,6 +188,18 @@ pub fn read_frame<R: Read>(mut reader: R) -> Result<Option<FramedMessage>> {
     let mut payload = vec![0u8; len];
     reader.read_exact(&mut payload)?;
     let msg: FramedMessage = serde_json::from_slice(&payload)?;
+    // Fail closed on a protocol-version mismatch (Integration A1, W2 review
+    // finding 5; blueprint section 3.3: "a mismatch must fail closed, never
+    // fall back"). Every legitimate frame carries `IPC_PROTOCOL_VERSION`
+    // (see `write_frame`'s callers), so rejecting here at the single read
+    // choke point rejects any peer speaking a different framing contract
+    // before its `message` is ever acted on.
+    if msg.version != IPC_PROTOCOL_VERSION {
+        anyhow::bail!(
+            "unsupported IPC protocol version {} (expected {IPC_PROTOCOL_VERSION})",
+            msg.version
+        );
+    }
     Ok(Some(msg))
 }
 
@@ -252,6 +267,28 @@ mod tests {
                 }
             }),
             encoded
+        );
+    }
+
+    #[test]
+    fn read_frame_rejects_protocol_version_mismatch() {
+        // A well-formed frame that merely carries the wrong version must be
+        // rejected, not acted on (fail closed, W2 finding 5). `write_frame`
+        // does not enforce the version, so this simulates a peer speaking a
+        // different framing contract.
+        let msg = FramedMessage {
+            version: IPC_PROTOCOL_VERSION.wrapping_add(1),
+            message: Message::Terminate {
+                payload: EmptyPayload {},
+            },
+        };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &msg).expect("write");
+
+        let err = read_frame(buf.as_slice()).expect_err("version mismatch must be rejected");
+        assert!(
+            err.to_string().contains("unsupported IPC protocol version"),
+            "unexpected error: {err}"
         );
     }
 }

@@ -3,6 +3,7 @@ use crate::ipc_framed::ErrorPayload;
 use crate::ipc_framed::ErrorStage;
 use crate::ipc_framed::FramedMessage;
 use crate::ipc_framed::IPC_PROTOCOL_VERSION;
+use crate::ipc_framed::MAX_FRAME_LEN;
 use crate::ipc_framed::Message;
 use crate::ipc_framed::SpawnRequest;
 use crate::ipc_framed::read_frame;
@@ -46,6 +47,7 @@ use windows_sys::Win32::System::Threading::PROCESS_INFORMATION;
 use windows_sys::Win32::System::Threading::STARTUPINFOW;
 use windows_sys::Win32::System::Threading::TerminateProcess;
 use windows_sys::Win32::System::Threading::WaitForSingleObject;
+use zeroize::Zeroize;
 
 const RUNNER_SPAWN_READY_TIMEOUT: Duration = Duration::from_secs(15);
 const RUNNER_PIPE_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -348,7 +350,11 @@ pub fn spawn_runner_transport(
     let cwd_w = to_wide(cwd);
     let user_w = to_wide(&sandbox_creds.username);
     let domain_w = to_wide(".");
-    let password_w = to_wide(&sandbox_creds.password);
+    // Cleartext logon password materialized as a wide buffer for
+    // CreateProcessWithLogonW. Zeroized immediately after the call returns
+    // (below) so it does not linger in freed heap (Integration A1, W2 review
+    // finding 6). `SandboxCreds::password` itself is zeroize-on-drop (identity.rs).
+    let mut password_w = to_wide(&sandbox_creds.password);
     let mut si: STARTUPINFOW = unsafe { std::mem::zeroed() };
     si.cb = std::mem::size_of::<STARTUPINFOW>() as u32;
     let mut pi: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
@@ -377,6 +383,9 @@ pub fn spawn_runner_transport(
     unsafe {
         SetErrorMode(previous_error_mode);
     }
+    // The password wide buffer is no longer needed once CreateProcessWithLogonW
+    // has returned; scrub it before it is freed (W2 review finding 6).
+    password_w.zeroize();
     if spawn_res == 0 {
         let err = unsafe { GetLastError() };
         unsafe {
@@ -478,6 +487,17 @@ fn wait_for_complete_frame(pipe_read: &File, timeout: Duration) -> Result<()> {
 
         if bytes_read == len_buf.len() as u32 {
             let frame_len = u32::from_le_bytes(len_buf) as usize;
+            // Pre-check the peeked, attacker-influenceable declared length
+            // against the same cap `read_frame` enforces, BEFORE waiting for
+            // the rest of the frame to arrive (W2 review finding 1). Without
+            // this, an oversized length prefix makes this loop spin until the
+            // spawn-ready timeout waiting for bytes that will never come;
+            // rejecting it here fails closed immediately.
+            if frame_len > MAX_FRAME_LEN {
+                return Err(anyhow::anyhow!(
+                    "runner frame length {frame_len} exceeds maximum {MAX_FRAME_LEN}"
+                ));
+            }
             let total_len = frame_len
                 .checked_add(len_buf.len())
                 .ok_or_else(|| anyhow::anyhow!("runner frame length overflow"))?;

@@ -11,9 +11,32 @@
 //! `SandboxCreds` itself is copied byte-for-byte from upstream; only the surrounding file
 //! (credential loading, DPAPI unseal, setup-marker readiness checks) is trimmed away.
 
+use zeroize::Zeroize;
+
 /// Decoded sandbox-account logon credentials (username + cleartext password).
-#[derive(Debug, Clone)]
+///
+/// Integration A1 hardening (W2 review findings 3/6): `Debug` is hand-written
+/// to redact the password so it never lands in a log line or panic message,
+/// and the cleartext password is zeroized on drop so it does not linger in
+/// freed heap. `Clone` is retained (the retry path clones creds); each clone
+/// zeroizes its own copy on drop.
+#[derive(Clone)]
 pub struct SandboxCreds {
     pub username: String,
     pub password: String,
+}
+
+impl std::fmt::Debug for SandboxCreds {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SandboxCreds")
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+impl Drop for SandboxCreds {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
 }

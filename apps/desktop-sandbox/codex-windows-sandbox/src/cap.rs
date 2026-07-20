@@ -11,6 +11,21 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+/// Serializes the cap-SID file read-modify-write so two concurrent callers that
+/// both miss a per-cwd or per-write-root key cannot persist divergent SIDs and
+/// hand a caller a SID that does not match what landed on disk (Integration A1,
+/// VENDORING open risk 8). Each mutating accessor re-reads the file under this
+/// guard before inserting.
+///
+// ponytail: process-wide lock, coarse (serializes across every codex_home).
+// Fine for the desktop's single shared sandbox user (Q3). Cross-PROCESS races
+// (the elevated setup binary racing the runner) still need a named OS mutex,
+// like upstream setup_main's read_acl_mutex; that belongs to the wired
+// provisioning path and is deferred to A2. Per-codex_home locks if throughput
+// ever matters.
+static CAP_SID_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct CapSids {
@@ -55,9 +70,19 @@ fn persist_caps(path: &Path, caps: &CapSids) -> Result<()> {
 }
 
 pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
-    let path = cap_sid_file(codex_home);
+    let _guard = CAP_SID_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    load_or_create_cap_sids_locked(&cap_sid_file(codex_home))
+}
+
+/// Read-or-create the cap-SID file. Callers MUST hold [`CAP_SID_LOCK`]; the
+/// public [`load_or_create_cap_sids`] and the per-key accessors acquire it
+/// before calling here so the whole read-modify-write is atomic within the
+/// process.
+fn load_or_create_cap_sids_locked(path: &Path) -> Result<CapSids> {
     if path.exists() {
-        let txt = fs::read_to_string(&path)
+        let txt = fs::read_to_string(path)
             .with_context(|| format!("read cap sid file {}", path.display()))?;
         let t = txt.trim();
         if t.starts_with('{') && t.ends_with('}') {
@@ -71,7 +96,7 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
                 workspace_by_cwd: HashMap::new(),
                 writable_root_by_path: HashMap::new(),
             };
-            persist_caps(&path, &caps)?;
+            persist_caps(path, &caps)?;
             return Ok(caps);
         }
     }
@@ -81,14 +106,17 @@ pub fn load_or_create_cap_sids(codex_home: &Path) -> Result<CapSids> {
         workspace_by_cwd: HashMap::new(),
         writable_root_by_path: HashMap::new(),
     };
-    persist_caps(&path, &caps)?;
+    persist_caps(path, &caps)?;
     Ok(caps)
 }
 
 /// Returns the workspace-specific capability SID for `cwd`, creating and persisting it if missing.
 pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String> {
     let path = cap_sid_file(codex_home);
-    let mut caps = load_or_create_cap_sids(codex_home)?;
+    let _guard = CAP_SID_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut caps = load_or_create_cap_sids_locked(&path)?;
     let key = canonical_path_key(cwd);
     if let Some(sid) = caps.workspace_by_cwd.get(&key) {
         return Ok(sid.clone());
@@ -102,7 +130,10 @@ pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String
 /// Returns the capability SID for an additional writable root, creating and persisting it if missing.
 pub fn writable_root_cap_sid_for_path(codex_home: &Path, root: &Path) -> Result<String> {
     let path = cap_sid_file(codex_home);
-    let mut caps = load_or_create_cap_sids(codex_home)?;
+    let _guard = CAP_SID_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut caps = load_or_create_cap_sids_locked(&path)?;
     let key = canonical_path_key(root);
     if let Some(sid) = caps.writable_root_by_path.get(&key) {
         return Ok(sid.clone());
@@ -199,5 +230,41 @@ mod tests {
         let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
         assert_eq!(caps.workspace_by_cwd.len(), 1);
         assert_eq!(caps.writable_root_by_path.len(), 1);
+    }
+
+    #[test]
+    fn concurrent_first_touch_of_same_cwd_yields_one_stable_sid() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let codex_home = Arc::new(temp.path().join("codex-home"));
+        std::fs::create_dir_all(codex_home.as_path()).expect("create codex home");
+        let cwd = Arc::new(temp.path().join("workspace"));
+        std::fs::create_dir_all(cwd.as_path()).expect("create workspace");
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let codex_home = Arc::clone(&codex_home);
+                let cwd = Arc::clone(&cwd);
+                thread::spawn(move || workspace_cap_sid_for_cwd(&codex_home, &cwd).expect("sid"))
+            })
+            .collect();
+        let sids: Vec<String> = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("join"))
+            .collect();
+
+        let first = &sids[0];
+        assert!(
+            sids.iter().all(|sid| sid == first),
+            "all concurrent callers must observe the same workspace SID: {sids:?}"
+        );
+        let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
+        assert_eq!(
+            caps.workspace_by_cwd.len(),
+            1,
+            "exactly one workspace SID must be persisted after a concurrent first touch"
+        );
     }
 }

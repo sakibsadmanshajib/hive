@@ -410,6 +410,91 @@ risk #6 is the tracking entry.
   item); bundling the Debug redaction with that pass avoids fixing the same
   struct's credential hygiene in two uncoordinated passes.
 
+## `codex-windows-sandbox/` Step 3 Integration A1 (capture-path primitives + W2 security hardening)
+
+Integration A1 adds the two remaining capture-path Win32 primitives Wave 1
+deferred and applies the module-internal security must-fixes the PR #398/#399
+review passes catalogued for "fix during Integration A" (open risk #6). Still
+INERT: nothing added here is wired into `windows::launch`; the resolver-coupled
+port (`spawn_prep`, `allow`, `elevated_impl` capture, the full `identity`/`setup`
+provisioning, and the two binaries) and the launch wiring itself remain deferred
+to Integration A2, which is lab-gated on `spike307-win` (blueprint L7 to L12).
+Same pinned commit as the rest of this file.
+
+### What was vendored (verbatim, byte-for-byte)
+
+- `process.rs`: the `CreateProcessAsUserW` wrapper (`create_process_as_user`,
+  `spawn_process_with_pipes`, `make_env_block`, `read_handle_loop`,
+  `ConsoleMode`/`StdinMode`/`StderrMode`/`PipeSpawnHandles`). Wave 1 deferred it
+  for its `crate::desktop::LaunchDesktop` and `crate::logging` coupling; both are
+  now satisfied (see next). No `codex_protocol`, no `conpty`; vendored whole.
+- `desktop.rs`: `LaunchDesktop` window-station/desktop handling. Vendored whole,
+  including the `PrivateDesktop` private-desktop path, which stays DORMANT for
+  A: the capture path always calls `LaunchDesktop::prepare(false, ..)` (the
+  interactive desktop, no new isolation surface). The private-desktop hardening
+  is a genuine Step 5 (ConPTY) feature, vendored-but-unused, not a lying stub.
+
+`process.rs` calls `crate::logging::debug_log`; the Wave 1 `logging.rs` stand-in
+gained a matching `debug_log` (SBX_DEBUG-gated stderr, no CODEX_HOME file
+rotation), the same stand-in treatment `log_note` already had. `Cargo.toml`
+gains the `Win32_System_Console`, `Win32_System_StationsAndDesktops`, and
+`Win32_Graphics_Gdi` windows-sys features these two files need
+(`CreateDesktopW` requires `Win32_Graphics_Gdi` in windows-sys 0.52).
+
+### Local deviations from upstream (Integration A1 security must-fixes)
+
+These edit files vendored in Waves 1/2, so they are no longer byte-identical to
+upstream; the re-vendoring steps below note them. Each closes a specific W2
+review finding (PR #398/#399) or open risk #6/#8 item. `zeroize = "1"` is added
+to `Cargo.toml` for the password-scrubbing fixes.
+
+- `elevated/ipc_framed.rs::read_frame` (W2 finding 5): now rejects a frame whose
+  `version != IPC_PROTOCOL_VERSION` (fail closed, blueprint 3.3 "a mismatch must
+  fail closed, never fall back"), at the single read choke point. `MAX_FRAME_LEN`
+  is made `pub` so the parent-side pre-check below can reuse it. Test added.
+- `elevated/runner_client.rs::wait_for_complete_frame` (W2 finding 1): pre-checks
+  the peeked, attacker-influenceable declared frame length against
+  `MAX_FRAME_LEN` before waiting for the rest of the frame, so an over-large
+  length prefix fails closed immediately instead of spinning to the spawn-ready
+  timeout.
+- `elevated/runner_client.rs::spawn_runner_transport` (W2 finding 6): the
+  cleartext password wide buffer (`password_w`) is `zeroize`d immediately after
+  `CreateProcessWithLogonW` returns, so it does not linger in freed heap.
+- `identity.rs::SandboxCreds` (W2 findings 3/6): `Debug` is now hand-written to
+  redact the password (was a derive that would leak it via any `{:?}`), and the
+  cleartext password is zeroized on drop.
+- `sandbox_users.rs::ensure_local_user` (W2 finding 6): the password wide buffer
+  (`pwd_w`) is `zeroize`d after the `NetUserAdd`/`NetUserSetInfo` calls complete
+  (body wrapped in a closure so every return path scrubs it).
+- `cap.rs` (open risk #8, intra-process half): `load_or_create_cap_sids`,
+  `workspace_cap_sid_for_cwd`, and `writable_root_cap_sid_for_path` now hold a
+  process-wide `Mutex` across the file read-modify-write and re-read under the
+  lock, so two concurrent same-process callers cannot persist divergent SIDs or
+  return a SID that does not match disk. A concurrency regression test is added.
+  Cross-PROCESS serialization (the elevated setup binary racing the runner; a
+  named OS mutex like upstream `setup_main`'s `read_acl_mutex`) is still open and
+  belongs to the wired provisioning path (A2); open risk #8 stays open for that
+  half.
+- `absolute_path.rs` (W2 finding 4): the opaque `AbsolutePathBuf(PathBuf)`
+  stand-in is now a validating newtype. `new`/`Deserialize` reject any path that
+  is not an absolute Windows path or that contains a `..` traversal segment, so a
+  crafted `SpawnRequest.workspace_roots` frame carrying `C:\ws\..\..\Windows`
+  cannot reach the ACL grant path. The inner `PathBuf` is private, read via
+  `as_path()`. Tests added.
+
+### Still deferred after A1 (unchanged from Wave 2)
+
+`deny_read_resolver.rs` (still `codex_protocol`/`codex_utils_absolute_path`
+coupled AND still with no secret-path source to resolve, so `windows_resolve`'s
+deny-read set stays legitimately empty), `spawn_prep.rs`, `allow.rs`,
+`elevated_impl.rs` (capture), the full `identity.rs`/`setup.rs` provisioning
+orchestration, and the two binaries (`setup_main`, `command_runner`). These are
+the resolver-coupled port that consumes the thin Hive `windows_resolve`
+`ResolvedWindowsSandboxPermissions` (a real rewrite, not a mechanical retarget,
+against a resolver far thinner than upstream's) plus the launch wiring, and their
+confinement correctness is only validatable in the A2 `spike307-win` lab (D-004),
+so they are not hand-ported blind on inert code here. See open risk #6.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
@@ -587,18 +672,19 @@ crate deliberately does not inherit the workspace's Apache-2.0
    only when a later wave lab-validates the isolation matrix on
    `spike307-win` (assertions L7 to L12 in the blueprint).
 
-   **Known issues, fix in Integration A (CodeRabbit/Greptile, PR #399; see
-   this file's Wave 2 "Local deviations" section above for the three that
-   were fixed instead):** (a) `helper_materialization.rs::legacy_lookup`'s
-   bare-executable-name fallback lets `CreateProcessWithLogonW` fall back to
-   executable search instead of failing closed; needs an absolute-path
-   guard once a real launch path calls it. (b) `elevated/ipc_framed.rs`'s
-   `read_frame` does not check `msg.version` against `IPC_PROTOCOL_VERSION`,
-   so a stale runner's older-versioned message would be accepted as current.
-   (c) `identity.rs::SandboxCreds` derives `Debug` over its cleartext
-   `password` field (latent only, no current `{:?}` call site); bundle a
-   redacting `Debug` impl with the zeroize-on-drop hardening this item
-   already tracks for the same struct.
+   **Known issues, fix in Integration A (CodeRabbit/Greptile, PR #399):**
+   (b) and (c) plus the wider security-review hardening were FIXED in
+   Integration A1 (see this file's "Integration A1" section: `read_frame`
+   version gate, `SandboxCreds` redacting `Debug` + zeroize-on-drop, password
+   buffer zeroize in `runner_client`/`sandbox_users`, `runner_client` frame
+   pre-check, `absolute_path` traversal guard, and the intra-process half of
+   the `cap.rs` open-risk-#8 lock). Still OPEN after A1:
+   (a) `helper_materialization.rs::legacy_lookup`'s bare-executable-name
+   fallback lets `CreateProcessWithLogonW` fall back to executable search
+   instead of failing closed; it needs an absolute-path guard, but only matters
+   once a real launch path calls it, so it is fixed with the A2 launch wiring
+   (its correctness depends on the resolved helper-materialization directory,
+   which the wired path establishes).
 7. **RESOLVED (#350).** The Linux `pre_exec` post-fork allocator-deadlock
    hazard below was fixed by #350 (merged), which moved `linux::launch`'s
    `pre_exec` closure to an allocation-free path so no thread can deadlock on
@@ -619,8 +705,19 @@ crate deliberately does not inherit the workspace's Apache-2.0
    this crate's own (multithreaded) test binary. Pre-existing at the time: no
    test before that pass ever exercised the real spawn path, so nothing
    surfaced it earlier.
-8. **Known upstream issue, deferred (`cap.rs`, CodeRabbit finding, PR #398):
-   the `cap_sid` file is an unsynchronized read-modify-write.**
+8. **PARTIALLY RESOLVED (Integration A1: intra-process lock landed). Original
+   issue (`cap.rs`, CodeRabbit finding, PR #398): the `cap_sid` file is an
+   unsynchronized read-modify-write.** Integration A1 added a process-wide
+   `Mutex` (`CAP_SID_LOCK`) that serializes the read-modify-write and re-reads
+   under the lock in `load_or_create_cap_sids`, `workspace_cap_sid_for_cwd`, and
+   `writable_root_cap_sid_for_path`, closing the intra-process race (a
+   concurrency regression test proves 8 concurrent first-touches share one SID
+   and persist exactly one entry). The CROSS-PROCESS race (the elevated setup
+   binary racing the runner against the same `codex_home`) is still open: it
+   needs a named OS mutex or `LockFileEx`, like upstream `setup_main`'s
+   `read_acl_mutex`, and a real concurrent-launch test on Windows to trust the
+   approach, so it is fixed together with the wave that wires the actual
+   `cap.rs` launch-path call sites (A2). Original detail retained below.
    `workspace_cap_sid_for_cwd` and `writable_root_cap_sid_for_path` both
    `load_or_create_cap_sids` (read + parse JSON), mutate the in-memory
    `CapSids`, then `persist_caps` (serialize + `fs::write`) the whole file
@@ -654,11 +751,17 @@ crate deliberately does not inherit the workspace's Apache-2.0
    sandbox_utils,env,path_normalization}.rs` verbatim into
    `codex-windows-sandbox/src/`. Re-diff `resolved_permissions.rs` against
    `hive-desktop-sandbox/src/windows_resolve.rs` by hand (it is a port, not a
-   verbatim copy) for any new upstream fields/accessors worth porting. If
-   `process.rs` or `deny_read_resolver.rs` are ever vendored/ported (see
-   "Deliberately NOT vendored this wave" above), re-check their dependency
-   graph against `desktop.rs`/`logging.rs`/`codex_protocol` again; upstream
-   may have changed the coupling.
+   verbatim copy) for any new upstream fields/accessors worth porting.
+   Also re-copy `codex-rs/windows-sandbox-rs/src/{process,desktop}.rs` verbatim
+   (Integration A1); they are byte-for-byte upstream. If `deny_read_resolver.rs`
+   is ever vendored/ported (see "Still deferred after A1" above), re-check its
+   dependency graph against `codex_protocol`/`codex_utils_absolute_path` again;
+   upstream may have changed the coupling. NOTE the Integration A1 security
+   deviations that make several Wave 1/2 files no longer byte-identical to
+   upstream (`elevated/ipc_framed.rs`, `elevated/runner_client.rs`,
+   `identity.rs`, `sandbox_users.rs`, `cap.rs`, `absolute_path.rs`); re-apply
+   them the same way as the other documented deviations, checking first whether
+   upstream fixed the same items.
 3a. Re-copy `codex-rs/windows-sandbox-rs/src/{elevated/ipc_framed,
    elevated/runner_pipe,elevated/runner_client,elevated/mod,
    helper_materialization,setup_error}.rs` verbatim into

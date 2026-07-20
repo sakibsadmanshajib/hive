@@ -25,11 +25,14 @@
 //! `openai/codex`'s `codex-rs/windows-sandbox-rs` crate (Apache-2.0). See
 //! `../VENDORING.md` for the pinned commit, the full file-by-file provenance,
 //! and the modules deliberately NOT vendored (`deny_read_resolver.rs`'s
-//! glob-scan resolver, `process.rs`'s `CreateProcessAsUserW` wrapper,
-//! `spawn_prep.rs`, `wrapper.rs`, `elevated_impl.rs`, the full `identity.rs`
-//! and `setup.rs`, and the `setup_main`/`command_runner` binaries) and why.
+//! glob-scan resolver, `spawn_prep.rs`, `allow.rs`, `wrapper.rs`,
+//! `elevated_impl.rs`, the full `identity.rs` and `setup.rs`, and the
+//! `setup_main`/`command_runner` binaries) and why. Integration A1 added the
+//! `process.rs` (`CreateProcessAsUserW`) and `desktop.rs` capture-path
+//! primitives that Wave 1 had deferred, and applied the W2 review security
+//! must-fixes (see `../VENDORING.md`'s "Integration A1" section).
 //!
-//! This crate is inert (Step 3 Waves 1-2 of `plan-codex-crossplatform-desktop.md`):
+//! This crate is inert (Step 3 Waves 1-2 + Integration A1 of `plan-codex-crossplatform-desktop.md`):
 //! nothing here is called from `hive-desktop-sandbox`'s `launch` path yet. It
 //! exists so the vendored primitives and elevated-helper IPC mechanism are
 //! vendored, compiled, and unit-tested on their own, ahead of the
@@ -54,6 +57,8 @@ pub mod deny_read_acl;
 #[cfg(windows)]
 pub mod deny_read_state;
 #[cfg(windows)]
+pub mod desktop;
+#[cfg(windows)]
 pub mod dpapi;
 #[cfg(windows)]
 pub mod env;
@@ -67,6 +72,8 @@ pub mod identity;
 pub mod path_normalization;
 #[cfg(windows)]
 pub mod proc_thread_attr;
+#[cfg(windows)]
+pub mod process;
 #[cfg(windows)]
 pub mod sandbox_users;
 #[cfg(windows)]
