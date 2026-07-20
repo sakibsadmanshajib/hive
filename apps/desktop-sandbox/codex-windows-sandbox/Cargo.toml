@@ -41,6 +41,11 @@ version = "0.52"
 features = [
     "Win32_Foundation",
     "Win32_NetworkManagement_NetManagement",
+    # WFP egress fence (Integration B2): FWPM_* / FWP_* structs and the
+    # Fwpm* engine/provider/sublayer/filter/transaction FFI live here.
+    "Win32_NetworkManagement_WindowsFilteringPlatform",
+    # IPPROTO_ICMP / IPPROTO_ICMPV6 constants used by the WFP filter specs.
+    "Win32_Networking_WinSock",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
@@ -51,6 +56,8 @@ features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Registry",
+    # RPC_C_AUTHN_DEFAULT passed to FwpmEngineOpen0.
+    "Win32_System_Rpc",
     "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
 ]

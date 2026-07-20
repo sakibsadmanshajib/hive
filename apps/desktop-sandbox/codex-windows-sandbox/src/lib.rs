@@ -82,6 +82,13 @@ pub mod sandbox_utils;
 pub mod setup_error;
 #[cfg(windows)]
 pub mod token;
+// Hive-owned WFP egress fence (Step 4 / Integration B2). Not upstream-verbatim:
+// Hive GUIDs + names in `wfp`, and `wfp_setup` inverts upstream's
+// log-and-continue to fail-closed. See `../VENDORING.md`.
+#[cfg(windows)]
+pub mod wfp;
+#[cfg(windows)]
+pub mod wfp_setup;
 #[cfg(windows)]
 pub mod winutil;
 #[cfg(windows)]

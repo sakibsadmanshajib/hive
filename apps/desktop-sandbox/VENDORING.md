@@ -766,6 +766,95 @@ of the Win32 compose, its behaviour is only lab-provable on `spike307-win`.
   provisioning binary is the elevated worker; `windows_elevated` only gates on
   `sandbox_setup_is_complete` and errors if unprovisioned.
 
+## Step 3 Integration B2 (Windows WFP + firewall egress fence, security boundary)
+
+Integration B2 implements the egress fence that A2 stubbed fail-closed above
+(`plan-b2-wfp-egress-2026-07-20.md`). It is a security boundary: per D-004 the
+ACTIVATION of this fence merges only after live `spike307-win` lab validation.
+This PR is the CI-buildable-now, INERT half: the WFP + firewall + proxy-port
+code is present, cross-compiled, and unit-tested, but `windows::launch` STILL
+refuses both network policies (the two refusal guards are untouched). Wiring
+the fence into `launch()` and removing the refusal is a separate lab-gated PR.
+
+CTO decisions applied (from the plan): Q1 keep the Codex two-layer model (WFP
+per-protocol SID blocks + firewall-COM block-all + loopback allowlist), not
+srt's pure-WFP; Q2 fixed Hive loopback proxy port range 62080-62089; Q3 TLS
+revocation stays on (loopback-CRL deferred); Q4 no per-task WFP rules (the
+per-task allowlist lives in the proxy, torn down by the B1 Job kill-on-close).
+
+Source: `openai/codex` at commit
+`a47c661ea9e226fe65e46cf9dbc5c5ed75c2c762` (Apache-2.0),
+`codex-rs/windows-sandbox-rs/`.
+
+### `codex-windows-sandbox/` (vendored WFP, Hive-owned identity)
+
+- `src/wfp.rs`: vendored from upstream `src/wfp.rs`. Deviations: the session /
+  provider / sublayer display names are renamed to a Hive identity; `PROVIDER_KEY`
+  and `SUBLAYER_KEY` are freshly minted Hive-owned GUIDs (never Codex's
+  `0x2e31d31c...` / `0xe65054fd...`, so a Hive install never shares a WFP
+  namespace with a Codex install on the same box, per the plan); and `to_wide`
+  is imported from `crate::winutil` (this crate keeps it there, not at the
+  crate root as upstream does). FFI body otherwise unchanged.
+- `src/wfp/filter_specs.rs`: vendored from upstream `src/wfp/filter_specs.rs`.
+  Deviations: every filter GUID is a freshly minted Hive-owned identity, and
+  every filter `name` renamed `codex_wfp_*` -> `hive_wfp_*`. The filter shape
+  (ALE_USER_ID + per-protocol ICMP/DNS-53/DoT-853/SMB-445/139 block at the
+  ALE_AUTH_CONNECT / ALE_RESOURCE_ASSIGNMENT layers) is unchanged.
+- `src/wfp_setup.rs`: PORTED, not verbatim, from upstream `src/wfp_setup.rs`.
+  The whole point of the port is the D-005 inversion: upstream's
+  `install_wfp_filters` treats a WFP-install failure (or panic) as NON-FATAL
+  (logs, emits a Statsig metric, and lets elevated setup continue). Hive
+  returns `Err` so provisioning ABORTS fail-closed. Upstream's OTEL / Statsig
+  metric machinery is dropped (this crate does not vendor `codex-otel`); the
+  caller gets a plain log callback and a `Result`.
+- `src/lib.rs`, `Cargo.toml`: `wfp` + `wfp_setup` module declarations and the
+  added windows-sys features (`Win32_NetworkManagement_WindowsFilteringPlatform`,
+  `Win32_Networking_WinSock`, `Win32_System_Rpc`).
+
+When re-vendoring `wfp.rs` / `filter_specs.rs` from a future upstream commit,
+re-apply the Hive-GUID and Hive-name renames; `wfp_setup.rs` is a Hive port
+and should be diffed by hand, not overwritten.
+
+### `hive-desktop-sandbox/` (firewall COM port + shared port math)
+
+- `src/windows_firewall.rs`: PORTED, Hive-authored, from upstream
+  `src/bin/setup_main/win/firewall.rs`. Deviations: rule-name constants
+  renamed `codex_sandbox_offline_*` -> `hive_sandbox_offline_*`; upstream's
+  `SetupErrorCode`/`SetupFailure` taxonomy replaced with plain `anyhow`
+  errors, preserving fail-closed behaviour (every COM failure and the
+  `LocalUserAuthorizedList` SID read-back mismatch still return `Err`); the
+  loopback-allowlist port complement is computed by the shared, Linux-testable
+  `crate::wfp_ports::blocked_loopback_tcp_remote_ports` instead of a private
+  copy; the `chrono` RFC3339 log timestamp is dropped. Present but INERT
+  (`#[allow(dead_code)]`, scoped to the module): nothing calls it until the
+  activation PR wires it into `launch()`.
+- `src/wfp_ports.rs`: newly authored (Hive-proprietary), platform-independent.
+  Holds the CTO-Q2 proxy port range (62080-62089), the loopback-TCP transport
+  seam (`bind_loopback_proxy`, binding a free in-range `127.0.0.1` port
+  directly, since Windows has no netns / bind-mount for the Linux
+  socket+shim path), and the loopback-allowlist complement math, all
+  unit-tested on the Linux CI job.
+- `src/windows_plan.rs`: RETIRED the broken `netsh` codegen
+  (`firewall_deny_outbound` / `firewall_allow_outbound_hosts` fields,
+  `RULE_NAME_PREFIX`, `allow_hosts_firewall_script`, `is_safe_firewall_host`,
+  and their tests). `netsh` evaluates block rules ahead of allow rules, so
+  that codegen could only ever express a strict deny-all, never AllowHosts,
+  and it was never wired to a live effect. Kept `command_line_to_utf16`,
+  `is_fully_qualified_program`, `parent_dir`, and the plan struct's ACL /
+  Job-Object fields.
+
+### Verification performed this pass (Integration B2)
+
+- `cargo check` and `cargo clippy --all-targets -- -D warnings` pass for both
+  `codex-windows-sandbox` and `hive-desktop-sandbox` on
+  `x86_64-pc-windows-gnu` AND `x86_64-pc-windows-msvc` (compile-only cross
+  checks; no Win32 execution).
+- `cargo test -p hive-desktop-sandbox` passes on the native Linux host: the
+  `wfp_ports` port-range / complement-math tests and the inert-boundary guard
+  (`launch()` still reports both network policies as not yet enforced) run
+  here. The Win32 FFI paths (real WFP install, firewall COM) are lab-deferred
+  to `spike307-win` (D-004) and do not run in CI.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
