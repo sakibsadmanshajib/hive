@@ -855,6 +855,47 @@ and should be diffed by hand, not overwritten.
   here. The Win32 FFI paths (real WFP install, firewall COM) are lab-deferred
   to `spike307-win` (D-004) and do not run in CI.
 
+### Integration B / D-004 activation blockers (must pass spike307-win lab before removing the network refusal)
+
+These are real correctness concerns raised in the PR #408 review that are
+UNREACHABLE today: this B2 PR is inert, `windows::launch` still refuses both
+network policies, so these firewall / WFP rules are never installed and no task
+ever runs under the fence. They become live only when the separate activation
+PR wires the fence into `launch()` and removes the refusal. Each must be
+resolved and validated on `spike307-win` (D-004) before that refusal is
+removed. The network refusal STAYS until every item below passes lab.
+
+The common root cause is the accepted single-shared-sandbox-account model
+(D-003: one human per machine; per-session isolation is an additive later
+step): all tasks run under one sandbox account SID, and the firewall / WFP
+rules use fixed names keyed on that one SID, so concurrent tasks share one rule
+set.
+
+1. Concurrent-task rule clobber and loopback-fence loss. Under the shared
+   account SID plus fixed rule names (`hive_sandbox_offline_*`), two concurrent
+   tasks last-writer-wins on the loopback allowlist / proxy port complement,
+   and a task calling `ensure_offline_proxy_allowlist(.., allow_local_binding =
+   true)` removes the loopback blocks another task still relies on. Activation
+   needs one of: per-task rule isolation (distinct rule names / a per-task
+   sublayer), refcounting of the shared rules, or an enforced single-active-task
+   invariant. Until then, activation must guarantee at most one active
+   sandboxed task.
+2. `INetFwRule` `RemotePorts = "*"` cleanup semantics (CodeRabbit,
+   `windows_firewall.rs` :427 region). Verify that reverting or removing the
+   narrowed TCP loopback block does not silently fall back to
+   `RemotePorts = "*"` in a way that opens all loopback ports on teardown.
+   Confirm the teardown order keeps the fence closed, never momentarily open.
+3. Firewall-COM rule ownership and cleanup guarantees (CodeRabbit,
+   `VENDORING.md` :783 region). Proxy-process teardown alone does not remove
+   the persisted firewall rules: a stale permitted proxy port can outlive the
+   proxy. Activation must define who owns rule cleanup (provision vs task end)
+   and prove no stale permitted port survives a task, a crash, or a reboot.
+4. Non-atomic `configure_rule` re-narrow (security-review LOW #1). When
+   re-narrowing an existing rule, `configure_rule` re-applies fields on a live
+   rule rather than swapping atomically, so a failure mid-update can leave the
+   rule broader than intended. Activation needs an atomic replace (or a
+   verified fail-closed intermediate) so a partial update never widens egress.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
