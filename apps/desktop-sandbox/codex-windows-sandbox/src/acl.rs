@@ -183,7 +183,14 @@ pub fn path_mask_allows(
 /// fail-closed: `add_deny_read_ace` returns `false` both when the ACE already
 /// exists and when the underlying Win32 set silently failed, so callers that
 /// must guarantee the deny is in force verify presence with this.
-pub fn path_has_read_deny(path: &Path, psid: *mut c_void) -> Result<bool> {
+///
+/// # Safety
+///
+/// `psid` must be a valid, well-formed `PSID` pointer (as returned by SID
+/// resolution such as `sandbox_users::sid_bytes_to_psid`) that stays valid for
+/// the duration of this call. This function dereferences it indirectly via
+/// the DACL walk in `dacl_has_read_deny_for_sid`.
+pub unsafe fn path_has_read_deny(path: &Path, psid: *mut c_void) -> Result<bool> {
     unsafe {
         let (p_dacl, sd) = fetch_dacl_handle(path)?;
         let has = dacl_has_read_deny_for_sid(p_dacl, psid);

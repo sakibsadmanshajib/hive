@@ -360,7 +360,12 @@ mod windows_impl {
         std::fs::create_dir_all(&secrets)
             .map_err(|e| anyhow::anyhow!("create secrets dir: {e}"))?;
 
-        let password = generate_password();
+        // Zeroizing<String> rather than a plain String: this cleartext
+        // password would otherwise linger in freed heap after this function
+        // returns. Matches the zeroize-on-drop handling `SandboxCreds`
+        // (codex-windows-sandbox::identity) and `runner_client` already give
+        // this same class of secret.
+        let password = zeroize::Zeroizing::new(generate_password());
 
         // 1. Least-privilege group + account.
         sandbox_users::ensure_local_group(SANDBOX_GROUP, "Hive sandbox low-privilege users", log)?;
@@ -416,7 +421,10 @@ mod windows_impl {
         // (D-005): only accept a non-add once we have confirmed the deny is
         // actually in force on disk; otherwise bail.
         if !newly_applied {
-            let present = acl::path_has_read_deny(path, psid)
+            // SAFETY: `psid` is the same live SID pointer built from
+            // `sandbox_users::sid_bytes_to_psid` used just above for
+            // `add_deny_read_ace`; it is still valid here.
+            let present = unsafe { acl::path_has_read_deny(path, psid) }
                 .map_err(|e| anyhow::anyhow!("verify deny-read ACE on secrets dir: {e}"))?;
             if !present {
                 anyhow::bail!("deny-read ACE was not applied to the secrets directory");

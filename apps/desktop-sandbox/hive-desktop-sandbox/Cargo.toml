@@ -75,6 +75,12 @@ windows-sys = { version = "0.52", features = [
 [target.'cfg(windows)'.dependencies.rand]
 version = "0.8"
 
+# Zeroizes the generated cleartext provisioning password on drop, matching
+# `codex-windows-sandbox`'s `SandboxCreds`/`runner_client` zeroize-on-drop
+# handling of the same class of secret.
+[target.'cfg(windows)'.dependencies.zeroize]
+version = "1"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 pretty_assertions = { workspace = true }

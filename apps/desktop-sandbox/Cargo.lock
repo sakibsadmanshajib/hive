@@ -185,6 +185,7 @@ dependencies = [
  "tempfile",
  "windows",
  "windows-sys 0.52.0",
+ "zeroize",
 ]
 
 [[package]]
