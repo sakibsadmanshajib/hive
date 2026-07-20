@@ -120,14 +120,19 @@ impl LaunchDecision {
 // -------- Single-active-task guard (pure helper; RAII lives in the compose) --
 
 /// Attempts to acquire a single-active-task flag by CAS `false -> true`.
-/// Returns `true` iff the flag was free (this caller now owns it). Pure and
-/// testable on any platform; the process-wide static and the RAII guard that
-/// wrap it live in the Windows compose.
+/// Returns `true` iff the flag was free (this caller now owns it). Its only
+/// non-test caller is the Windows compose, and its only Linux use is the unit
+/// test below, so it is gated `cfg(any(windows, test))`: present (and used) on
+/// Windows and under test, absent on the plain native build where nothing
+/// would call it (so it is never dead code).
 ///
 /// Only one fenced sandbox task may run at a time because every task shares one
 /// firewall loopback rule keyed on the single sandbox account SID (D-003); a
 /// second concurrent launch would clobber the first task's per-task loopback
-/// allow, so it is rejected instead (blocker a, fail-closed).
+/// allow, so it is rejected instead (blocker a, fail-closed). This in-process
+/// CAS is layered under a cross-process named mutex (see the compose) so two
+/// separate processes cannot both enter the fence-config critical section.
+#[cfg(any(windows, test))]
 fn acquire_single_task_flag(flag: &std::sync::atomic::AtomicBool) -> bool {
     flag.compare_exchange(
         false,
@@ -280,7 +285,9 @@ mod windows_impl {
     use std::sync::Mutex;
     use std::sync::atomic::AtomicBool;
 
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, GetLastError, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    };
     use windows_sys::Win32::Security::Authentication::Identity::{
         LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
         LsaOpenPolicy, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
@@ -295,7 +302,8 @@ mod windows_impl {
         SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATUS, StartServiceW,
     };
     use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, INFINITE, TerminateProcess, WaitForSingleObject,
+        CreateMutexW, GetExitCodeProcess, INFINITE, ReleaseMutex, TerminateProcess,
+        WaitForSingleObject,
     };
 
     // The runner-spawn transport wants a "codex_home"-shaped base directory for
@@ -334,6 +342,73 @@ mod windows_impl {
         }
     }
 
+    /// Machine-global cross-process lock for the egress-fence critical section
+    /// (F2). The in-process [`SANDBOX_TASK_ACTIVE`] CAS only guards one process;
+    /// this named mutex additionally rejects a SECOND PROCESS (the validate bin,
+    /// or a second app instance) that would otherwise reconfigure the single
+    /// OS-global firewall loopback rule concurrently. Held for the task duration
+    /// by [`EgressFenceGuard`], layered UNDER the CAS.
+    struct CrossProcessFenceLock(HANDLE);
+
+    impl CrossProcessFenceLock {
+        /// Acquires the machine-global egress-fence mutex without blocking.
+        /// `Ok(Some)` = acquired. `Ok(None)` = another process holds it, so the
+        /// caller rejects the launch fail-closed. `WAIT_ABANDONED` (a crashed
+        /// prior holder) counts as acquired, since Windows auto-releases an
+        /// abandoned mutex.
+        fn acquire() -> Result<Option<Self>> {
+            // ponytail: the Global\ namespace needs SeCreateGlobalPrivilege; the
+            // elevated provisioner has it. If a non-elevated launcher cannot
+            // create it, CreateMutexW fails and we reject fail-closed. Upgrade
+            // path: fall back to a Local\ (per-session) name if same-session
+            // isolation is ever sufficient.
+            let name: Vec<u16> = "Global\\HiveSandboxEgressFence\0".encode_utf16().collect();
+            // SAFETY: CreateMutexW with a null security-attributes pointer, a
+            // non-owning initial flag, and a NUL-terminated UTF-16 name we own
+            // for the call; it returns a handle this value takes ownership of.
+            let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+            if handle == 0 {
+                anyhow::bail!(
+                    "CreateMutexW(Global\\HiveSandboxEgressFence) failed: {} (needs SeCreateGlobalPrivilege)",
+                    unsafe { GetLastError() }
+                );
+            }
+            // SAFETY: `handle` is the mutex just created; wait with a zero
+            // timeout so a contended lock returns WAIT_TIMEOUT immediately.
+            let wait = unsafe { WaitForSingleObject(handle, 0) };
+            match wait {
+                WAIT_OBJECT_0 | WAIT_ABANDONED => Ok(Some(Self(handle))),
+                WAIT_TIMEOUT => {
+                    // SAFETY: `handle` is owned; close it since we did not acquire.
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    Ok(None)
+                }
+                other => {
+                    // SAFETY: `handle` is owned; close it before erroring.
+                    unsafe {
+                        CloseHandle(handle);
+                    }
+                    anyhow::bail!(
+                        "WaitForSingleObject on the egress-fence mutex failed: 0x{other:08x}"
+                    )
+                }
+            }
+        }
+    }
+
+    impl Drop for CrossProcessFenceLock {
+        fn drop(&mut self) {
+            // SAFETY: `self.0` is the mutex handle this value acquired; release
+            // ownership then close the handle. Both are safe on an owned handle.
+            unsafe {
+                let _ = ReleaseMutex(self.0);
+                let _ = CloseHandle(self.0);
+            }
+        }
+    }
+
     /// Per-task egress-fence teardown guard. On drop it re-blocks loopback for
     /// the sandbox SID (removing the per-task proxy allow) and releases the
     /// single-active-task flag, so EVERY return path from the compose (normal
@@ -345,8 +420,12 @@ mod windows_impl {
     struct EgressFenceGuard {
         sid: String,
         fence_log_path: PathBuf,
-        // Dropped after the teardown below; releases the single-active flag.
+        // Dropped after the teardown below (which runs in Drop::drop, before any
+        // field drops): releases the single-active flag, then the cross-process
+        // mutex, so the loopback re-block happens while this process still owns
+        // the fence.
         _active: ActiveTaskGuard,
+        _xproc: CrossProcessFenceLock,
     }
 
     impl Drop for EgressFenceGuard {
@@ -686,6 +765,18 @@ mod windows_impl {
             )
         })?;
 
+        // Cross-process gate (F2): the in-process CAS above only guards this
+        // process. Two separate processes (the app plus the validate bin, or two
+        // app instances) would each pass their own CAS and then clobber the one
+        // OS-global named firewall rule. A machine-global named mutex, layered
+        // UNDER the CAS, rejects the second PROCESS fail-closed.
+        let xproc = match CrossProcessFenceLock::acquire()? {
+            Some(lock) => lock,
+            None => anyhow::bail!(
+                "another process already holds the egress-fence mutex; concurrent fenced tasks across processes are not supported (blocker a / F2, fail-closed)"
+            ),
+        };
+
         // Sandbox account SID: the firewall fence + loopback allow are keyed on
         // it (D-010), the same SID the WFP filters are keyed on at provision.
         let sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
@@ -705,6 +796,18 @@ mod windows_impl {
 
         // Mutable child env; AllowHosts injects the proxy vars into this clone.
         let mut env = env.clone();
+
+        // Arm the teardown guard BEFORE touching any firewall rule (F4a). If a
+        // fence call below fails partway (a mid-narrowing error) or any later
+        // step returns early, the guard's Drop still re-blocks loopback (the
+        // fail-closed direction) and releases the single-active flag plus the
+        // cross-process mutex, on every return path (blocker c).
+        let _fence_guard = EgressFenceGuard {
+            sid: sid.clone(),
+            fence_log_path: fence_log_path.clone(),
+            _active: active,
+            _xproc: xproc,
+        };
 
         match policy.network() {
             NetworkPolicy::DenyAll => {
@@ -734,15 +837,6 @@ mod windows_impl {
                 proxy.leak_for_process_lifetime();
             }
         }
-
-        // Install the teardown guard AFTER the fence is up, so every return path
-        // below (including an early error) re-blocks loopback and releases the
-        // single-active-task flag (blocker c: task-end teardown on all paths).
-        let _fence_guard = EgressFenceGuard {
-            sid,
-            fence_log_path,
-            _active: active,
-        };
 
         let permissions = ResolvedWindowsSandboxPermissions::from_policy(policy, cwd)
             .map_err(|e| anyhow::anyhow!("resolve policy: {e}"))?;

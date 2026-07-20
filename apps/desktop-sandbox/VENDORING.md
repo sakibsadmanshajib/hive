@@ -651,6 +651,15 @@ with the reason a blind fix would risk invalidating that lab run.
   on a bad value fully closes the risk without solving general `cmd.exe`
   quoting. The existing lab-validated paths (no whitespace/metacharacters, per
   that file's own comment) pass the guard unchanged.
+  F1: the harness now exercises assertion (a) (child token user == sandbox SID)
+  for BOTH token derivations, one per network run, because the egress fence
+  rests on the sandbox account staying the token USER (never demoted to
+  deny-only) in each. The DenyAll run uses empty `writable_roots` (the read-only
+  derivation, `permission_profile.read_only = true`), so an inside-workspace
+  write must be DENIED; the AllowHosts run grants the workspace (the
+  workspace-write derivation), so the inside write must SUCCEED. The (c) verdict
+  flips with the derivation while (a) and (d) (secret read denied) are asserted
+  identically in both. Compile-only under `cfg(windows)` (D-004); lab-run later.
 
 **Deferred this round (tracked, not silently ignored):**
 
@@ -949,9 +958,19 @@ leaves draft (D-004).
    and prove no stale permitted port survives a task, a crash, or a reboot.
    FIXED (B2 activation): the ownership matrix is explicit. PROVISION owns the
    persistent block-all plus WFP; TASK-END owns the per-task loopback allow,
-   torn down by an RAII guard on every return path (normal or error); a crash
-   leaves a harmless stale allow (the proxy is gone and the persistent
-   block-all stays up).
+   torn down by an RAII guard on every return path (normal or error). F4a: that
+   teardown guard is ARMED before any firewall rule is touched (before the
+   `ensure_offline_proxy_allowlist` narrowing on the AllowHosts path), so a
+   failure mid-narrowing still triggers Drop, which re-blocks loopback (the
+   fail-closed direction) and releases the single-active flag plus the
+   cross-process mutex, and the confined child is never spawned on that failure.
+   F3: the
+   per-task allow rule is added via INetFwRules::Add and IS persistent (it
+   survives a reboot; the firewall COM API has no transient-rule flag), so
+   safety does NOT depend on reboot clearing it. After a crash the leaked proxy
+   process is gone, so a stale open proxy port reaches nothing, the persistent
+   block-all plus WFP still deny non-loopback, and the next task re-narrows the
+   rule back to a single allowed port.
 4. Non-atomic `configure_rule` re-narrow (security-review LOW #1). When
    re-narrowing an existing rule, `configure_rule` re-applies fields on a live
    rule rather than swapping atomically, so a failure mid-update can leave the

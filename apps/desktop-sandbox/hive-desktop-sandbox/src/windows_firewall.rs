@@ -174,7 +174,13 @@ pub fn ensure_offline_proxy_allowlist(
 
         // Install a broad TCP loopback block before narrowing it to the allowed
         // proxy-port complement. If the narrowing update fails, the sandbox
-        // stays fail-closed (all loopback TCP blocked).
+        // stays fail-closed (all loopback TCP blocked). F4b: pass the FULL range
+        // explicitly ("1-65535") rather than None. `configure_rule_network_scope`
+        // only calls SetRemotePorts when Some, so on an already-narrowed rule a
+        // None broad-block re-config would be a no-op that leaves the prior
+        // narrow complement in place (a stale open proxy port); the explicit
+        // full range resets the rule to block every loopback TCP port first, so
+        // "broad block, then narrow" is real on re-config, not just first run.
         ensure_block_rule(
             &rules,
             &BlockRuleSpec {
@@ -184,7 +190,7 @@ pub fn ensure_offline_proxy_allowlist(
                 local_user_spec: &local_user_spec,
                 offline_sid,
                 remote_addresses: Some(LOOPBACK_REMOTE_ADDRESSES),
-                remote_ports: None,
+                remote_ports: Some("1-65535"),
             },
             log,
         )?;

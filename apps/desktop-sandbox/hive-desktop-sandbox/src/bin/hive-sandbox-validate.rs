@@ -7,12 +7,25 @@
 //! this crate for `x86_64-pc-windows-gnu`; it never runs the Win32 paths).
 //!
 //! It launches a probe command AS the low-privilege sandbox account under a
-//! workspace-write capability-restricted token and reports, with raw evidence
-//! (never a bare "pass"):
+//! capability-restricted token and reports, with raw evidence (never a bare
+//! "pass"):
 //!   (a) the child token user SID (must equal the `hive_sandbox` account SID),
 //!   (b) a write OUTSIDE the writable root is denied,
-//!   (c) a write INSIDE the writable root succeeds,
+//!   (c) an inside-workspace write matches the token derivation (see below),
 //!   (d) reading a seeded secret under the deny-read secrets dir is denied.
+//!
+//! Two token derivations are exercised, one per run, because the whole egress
+//! fence rests on the sandbox account staying the token USER (never demoted to
+//! deny-only) in EACH. `windows_elevated` sets `permission_profile.read_only =
+//! !uses_write_capabilities()`, so the writable-root set selects the derivation:
+//!   * DenyAll run  (HIVE_VALIDATE_NET unset/"deny"): empty writable_roots ->
+//!     read-only token; an inside-workspace write must be DENIED.
+//!   * AllowHosts run ("allow:host,..."): the workspace is a writable root ->
+//!     workspace-write token; the inside write must SUCCEED.
+//!
+//! Assertions (a) and (d) must hold in BOTH derivations. For the DenyAll /
+//! read-only run the operator must NOT pre-grant the sandbox account write on
+//! the workspace (else (c) cannot observe the denial); a fresh `ws` suffices.
 //!
 //! This is a peer of `hive-sandbox-provision`: a `src/bin` target so it lands
 //! in `target/<profile>/` next to `hive-command-runner.exe`, which is what the
@@ -99,6 +112,10 @@ fn main() -> std::process::ExitCode {
     } else {
         hive_desktop_sandbox::NetworkPolicy::AllowHosts(allow_hosts.clone())
     };
+    // Token derivation follows the network run (see the module doc): the DenyAll
+    // run exercises the read-only derivation (empty writable_roots), the
+    // AllowHosts run the workspace-write derivation (workspace is writable).
+    let workspace_write = !allow_hosts.is_empty();
 
     if let Err(e) = std::fs::create_dir_all(&ws) {
         eprintln!("create workspace {}: {e}", ws.display());
@@ -175,8 +192,15 @@ fn main() -> std::process::ExitCode {
         script,
     ];
 
+    // Empty for the read-only derivation, [ws] for workspace-write. This is the
+    // single lever that flips windows_elevated's `read_only` token choice.
+    let writable_roots = if workspace_write {
+        vec![ws.clone()]
+    } else {
+        vec![]
+    };
     let policy = match hive_desktop_sandbox::SandboxPolicy::build(
-        vec![ws.clone()],
+        writable_roots,
         vec![],
         sandbox_home.join("hooks"),
         network,
@@ -233,19 +257,36 @@ fn main() -> std::process::ExitCode {
     let inside_exists = inside.is_file();
     let outside_exists = outside.is_file();
     println!("-- parent-side filesystem evidence --");
-    println!("inside file exists (expect true):  {inside_exists}");
+    println!(
+        "inside file exists (expect {}): {inside_exists}",
+        workspace_write
+    );
     println!("outside file exists (expect false): {outside_exists}");
 
     // Derived verdicts from the raw evidence above. Printed for convenience;
     // the raw evidence is authoritative.
     let sid_ok = stdout.to_lowercase().contains(&expected_sid.to_lowercase());
-    let inside_ok = inside_exists;
+    // Inside-workspace write: allowed under the workspace-write derivation,
+    // DENIED under the read-only derivation. Assertion (a) and (d) below are
+    // checked identically in both runs (the invariant the fence depends on).
+    let inside_ok = if workspace_write {
+        inside_exists
+    } else {
+        !inside_exists
+    };
     let outside_denied = !outside_exists;
     let secret_denied = !stdout.contains(CANARY_MARKER);
     println!("-- derived verdicts --");
     println!("(a) child SID == sandbox SID : {sid_ok}");
     println!("(b) outside write denied     : {outside_denied}");
-    println!("(c) inside write ok          : {inside_ok}");
+    println!(
+        "(c) inside write {} : {inside_ok}",
+        if workspace_write {
+            "allowed"
+        } else {
+            "denied "
+        }
+    );
     println!("(d) secret read denied       : {secret_denied}");
 
     if sid_ok && inside_ok && outside_denied && secret_denied {
