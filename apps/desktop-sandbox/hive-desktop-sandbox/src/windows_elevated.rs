@@ -1,0 +1,1005 @@
+//! Hive-typed elevated Windows sandbox compose (Step 3, Integration A core).
+//!
+//! This module is the Hive-proprietary port of the upstream elevated helper
+//! surface (`openai/codex` `codex-rs/windows-sandbox-rs`, commit `a47c661…`,
+//! Apache-2.0; see `../../VENDORING.md`). It ports, retargeted from
+//! `codex_protocol` + `CODEX_HOME` to
+//! [`crate::windows_resolve::ResolvedWindowsSandboxPermissions`] and a
+//! caller-supplied Hive config directory (Q1 decision, drop `codex_protocol`):
+//!
+//! - `allow.rs::compute_allow_paths_for_permissions` -> [`compute_allow_paths`]
+//!   (pure path selection for the per-task ACL grant set).
+//! - `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`
+//!   (the `tty = false` CAPTURE half only) -> [`run_windows_sandbox_capture`].
+//! - the token / env / cwd / ACL assembly of `spawn_prep.rs` -> the runner-side
+//!   [`run_command_runner`] (token derivation + per-task ACL + child spawn).
+//! - the provisioning-readiness and credential-load logic of `identity.rs` /
+//!   `setup.rs` (W2 shipped stand-ins) -> [`sandbox_setup_is_complete`],
+//!   [`load_logon_sandbox_creds`], [`provision_sandbox_account`].
+//!
+//! ## Elevation model (blueprint A.Q1, RESOLVED, locked)
+//!
+//! Nothing in the per-task launch path holds or needs
+//! `SeAssignPrimaryTokenPrivilege`, and nothing prompts UAC. The non-elevated
+//! Hive app launches the Hive command-runner AS the sandbox user with
+//! `CreateProcessWithLogonW` (done inside the vendored
+//! `runner_client::spawn_runner_transport`), passing the sandbox account, `.`
+//! domain, and the DPAPI-unsealed password with `LOGON_WITH_PROFILE`. The
+//! command-runner, now running as the low-privilege sandbox account, derives a
+//! capability-restricted primary token FROM ITS OWN token
+//! (`get_current_token_for_restriction` +
+//! `create_*_token_with_caps_and_user_from`) and spawns the inner child with
+//! `CreateProcessAsUserW` (via `spawn_process_with_pipes`). A token derived
+//! from the caller's own token is assignable, so that call needs no privilege.
+//! UAC prompts exactly once, at provisioning, when the setup binary runs
+//! elevated to create the OS account.
+//!
+//! ## Network semantics (blueprint Q2 / D-005, locked)
+//!
+//! Step 3 does NOT enforce network egress (WFP is Integration B). The public
+//! [`crate::launch`] therefore keeps REFUSING both `NetworkPolicy::DenyAll`
+//! (`NetworkConfinementNotImplemented`) and `NetworkPolicy::AllowHosts`
+//! (`AllowHostsNotYetImplemented`); see [`LaunchDecision`]. There is no
+//! `launch()` code path that reports success while a child has unrestricted
+//! network. The elevated compose ([`run_windows_sandbox_capture`]) is reachable
+//! ONLY through the explicit, lab-only
+//! [`spawn_confined_for_validation`] entry point, which is documented as NOT a
+//! network-confined launch and exists solely so the `spike307-win` lab can
+//! prove the filesystem / user / token / Job isolation matrix (exactly as #395
+//! proved its primitives by lab replica, ahead of the composed success path
+//! that lands with Integration B).
+//!
+//! ## Verification status (read before trusting this file)
+//!
+//! Every Win32 path here (`#[cfg(windows)]`) is cross-compiled by CI for
+//! `x86_64-pc-windows-gnu` (type-checked against real `windows-sys` 0.52
+//! signatures) but is NEVER executed off a real MSVC Windows host. All runtime
+//! confinement assertions are lab-gated on `spike307-win` (D-004); see the
+//! `LAB VALIDATION CHECKLIST` at the bottom of this file. The pure-logic parts
+//! ([`LaunchDecision::for_policy`], [`compute_allow_paths`], the config-path
+//! helpers) run on every platform, including this crate's Linux CI, and are
+//! unit-tested there.
+
+use crate::policy::NetworkPolicy;
+use crate::windows_resolve::ResolvedWindowsSandboxPermissions;
+use crate::{LaunchError, SandboxPolicy};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+// ===========================================================================
+// Pure, cross-platform logic (unit-tested on Linux CI)
+// ===========================================================================
+
+/// Captured output and exit status of a confined child run over the framed
+/// pipe. Hive-native replacement for upstream's `windows_impl::CaptureResult`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct CaptureResult {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub timed_out: bool,
+}
+
+/// The decision [`crate::launch`] reaches for a policy BEFORE any spawn.
+///
+/// Step 3 has no `Spawn` variant on purpose: [`NetworkPolicy`] has exactly two
+/// variants and Step 3 refuses BOTH (WFP is Integration B; Q2/D-005). A future
+/// `Spawn` variant lands with Integration B, when the refusal guards are
+/// removed and the composed success path runs for the first time. Keeping this
+/// as an explicit enum (rather than two inline `if` guards) makes the
+/// refuse-vs-spawn decision independently unit-testable, and gives Integration
+/// B one obvious place to add the success branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LaunchDecision {
+    /// `NetworkPolicy::AllowHosts`: refuse with
+    /// [`LaunchError::AllowHostsNotYetImplemented`] (needs the egress proxy +
+    /// WFP, Integration B).
+    RefuseAllowHosts,
+    /// `NetworkPolicy::DenyAll`: refuse with
+    /// [`LaunchError::NetworkConfinementNotImplemented`]. A `DenyAll` child
+    /// under a standard sandbox user CAN still open sockets, so spawning it
+    /// without WFP would be a SILENT fail-open (D-005, FORBIDDEN). Refuse until
+    /// Integration B installs the WFP block.
+    RefuseDenyAll,
+}
+
+impl LaunchDecision {
+    /// Pure mapping from a policy's network posture to the Step 3 launch
+    /// decision. Both variants refuse; see the type doc.
+    pub fn for_policy(policy: &SandboxPolicy) -> Self {
+        match policy.network() {
+            NetworkPolicy::AllowHosts(_) => LaunchDecision::RefuseAllowHosts,
+            NetworkPolicy::DenyAll => LaunchDecision::RefuseDenyAll,
+        }
+    }
+
+    /// The [`LaunchError`] this decision produces from the public launch path.
+    pub fn into_refusal(self) -> LaunchError {
+        match self {
+            LaunchDecision::RefuseAllowHosts => LaunchError::AllowHostsNotYetImplemented,
+            LaunchDecision::RefuseDenyAll => LaunchError::NetworkConfinementNotImplemented,
+        }
+    }
+}
+
+/// The filesystem paths a per-task ACL grant should allow (writable) and deny
+/// (read-only carve-outs inside a writable root). Hive port of
+/// `allow.rs::AllowDenyPaths`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct AllowDenyPaths {
+    pub allow: HashSet<PathBuf>,
+    pub deny: HashSet<PathBuf>,
+}
+
+/// Port of `allow.rs::compute_allow_paths_for_permissions`, retargeted to the
+/// Hive resolver.
+///
+/// Upstream iterates `permissions.writable_roots_for_cwd(cwd, env)` (cwd- and
+/// env-parameterized) and, per writable root, canonicalizes the root into the
+/// `allow` set and pushes each `read_only_subpath` into `deny`. The Hive
+/// resolver is PRE-RESOLVED against a fixed cwd at
+/// [`ResolvedWindowsSandboxPermissions::from_policy`] time, so the accessor is
+/// the argument-free [`ResolvedWindowsSandboxPermissions::writable_roots`]; the
+/// six upstream call sites collapse to this one, per blueprint A.Q2. Honest
+/// difference recorded (D-005): `read_only_subpaths` is always empty from the
+/// Hive resolver today (`SandboxPolicy` cannot express a nested read-only
+/// carve-out, and `deny_read_resolver.rs`'s glob-scan carve-out selection is
+/// deliberately not ported because there is nothing to resolve yet), so `deny`
+/// is empty here rather than reproducing upstream's `.git`/`.codex`/`.agents`
+/// deny logic, which lives in upstream's resolver, not in `allow.rs`. When a
+/// future `SandboxPolicy` extension populates carve-outs, this function already
+/// propagates them without a shape change.
+///
+/// Only paths that currently exist are added, matching upstream (an ACL grant
+/// for a non-existent path is meaningless and would error at apply time).
+pub fn compute_allow_paths(permissions: &ResolvedWindowsSandboxPermissions) -> AllowDenyPaths {
+    let mut allow: HashSet<PathBuf> = HashSet::new();
+    let mut deny: HashSet<PathBuf> = HashSet::new();
+
+    for writable_root in permissions.writable_roots() {
+        let canonical =
+            dunce::canonicalize(&writable_root.root).unwrap_or_else(|_| writable_root.root.clone());
+        if canonical.exists() {
+            allow.insert(canonical);
+        }
+        for read_only_subpath in &writable_root.read_only_subpaths {
+            if read_only_subpath.exists() {
+                deny.insert(read_only_subpath.clone());
+            }
+        }
+    }
+
+    AllowDenyPaths { allow, deny }
+}
+
+// ---- Config-directory layout (pure; caller supplies the Hive sandbox home) --
+
+/// Provisioning-readiness marker filename under the Hive sandbox home. Mirrors
+/// upstream's setup-marker concept but with a Hive name and a Hive version.
+const SETUP_MARKER_FILE: &str = "setup-marker.json";
+/// Sealed sandbox-account credential file (DPAPI blob) under the sandbox home.
+const SANDBOX_CREDS_FILE: &str = "sandbox-creds.dpapi";
+/// Bump when the provisioning layout changes so a stale marker forces
+/// re-provisioning rather than a broken reuse.
+const SETUP_MARKER_VERSION: u32 = 1;
+
+/// `<home>/setup-marker.json`.
+pub fn setup_marker_path(sandbox_home: &Path) -> PathBuf {
+    sandbox_home.join(SETUP_MARKER_FILE)
+}
+
+/// `<home>/secrets` — DPAPI-sealed credential directory. Its ACL MUST exclude
+/// the sandbox account (lab item L5); provisioning applies that ACL.
+pub fn secrets_dir(sandbox_home: &Path) -> PathBuf {
+    sandbox_home.join("secrets")
+}
+
+/// `<home>/secrets/sandbox-creds.dpapi`.
+pub fn sandbox_creds_path(sandbox_home: &Path) -> PathBuf {
+    secrets_dir(sandbox_home).join(SANDBOX_CREDS_FILE)
+}
+
+/// Fixed local account name for the ONE shared low-privilege sandbox user
+/// (Q3: one shared user for the desktop surface). Kept short and prefixed so
+/// it is recognizable in `net user` output and unlikely to collide.
+pub const SANDBOX_USERNAME: &str = "hive_sandbox";
+/// Local group the sandbox account is the sole member of (least privilege).
+pub const SANDBOX_GROUP: &str = "hive_sandbox_users";
+
+/// `true` iff a valid, current provisioning marker exists. Port of
+/// `identity.rs::sandbox_setup_is_complete`, retargeted off `CODEX_HOME`.
+/// Pure filesystem read; safe on every platform (the account it gates is
+/// Windows-only, but the readiness check itself is not).
+pub fn sandbox_setup_is_complete(sandbox_home: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(setup_marker_path(sandbox_home)) else {
+        return false;
+    };
+    match serde_json::from_slice::<SetupMarker>(&bytes) {
+        Ok(marker) => marker.version == SETUP_MARKER_VERSION,
+        Err(_) => false,
+    }
+}
+
+/// On-disk provisioning-readiness marker.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SetupMarker {
+    version: u32,
+    username: String,
+}
+
+// ===========================================================================
+// Windows-only Win32 compose (cross-compiled for windows-gnu; lab-gated)
+// ===========================================================================
+
+#[cfg(windows)]
+pub use windows_impl::{
+    load_logon_sandbox_creds, provision_sandbox_account, run_command_runner,
+    run_windows_sandbox_capture, spawn_confined_for_validation,
+};
+
+#[cfg(windows)]
+mod windows_impl {
+    use super::*;
+    use codex_windows_sandbox::absolute_path::AbsolutePathBuf;
+    use codex_windows_sandbox::identity::SandboxCreds;
+    use codex_windows_sandbox::ipc_framed::{
+        self, ErrorStage, FramedMessage, Message, OutputPayload, OutputStream, SpawnReady,
+        SpawnRequest,
+    };
+    use codex_windows_sandbox::permission_profile::PermissionProfile;
+    use codex_windows_sandbox::process::{
+        ConsoleMode, PipeSpawnHandles, StderrMode, StdinMode, spawn_process_with_pipes,
+    };
+    use codex_windows_sandbox::runner_client::{retry_runner_spawn_once, spawn_runner_transport};
+    use codex_windows_sandbox::token::{
+        LocalSid, create_readonly_token_with_caps_and_user_from,
+        create_workspace_write_token_with_caps_and_user_from, get_current_token_for_restriction,
+    };
+    use codex_windows_sandbox::{acl, cap, dpapi, hide_users, sandbox_users};
+    use std::collections::HashMap;
+    use std::ffi::c_void;
+    use std::fs::File;
+    use std::io::{Read, Write};
+
+    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, HANDLE, WAIT_OBJECT_0};
+    use windows_sys::Win32::Security::Authentication::Identity::{
+        LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
+        LsaOpenPolicy, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
+    };
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SC_MANAGER_CONNECT,
+        SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STATUS, StartServiceW,
+    };
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, INFINITE, WaitForSingleObject,
+    };
+
+    // The runner-spawn transport wants a "codex_home"-shaped base directory for
+    // its runner-exe resolution and log dir; Hive passes the sandbox home. The
+    // name is kept as `codex_home` at the vendored call boundary only.
+    type Result<T> = anyhow::Result<T>;
+
+    // -------------------------------------------------------------------
+    // Credential seal / load (identity.rs port; DPAPI at rest)
+    // -------------------------------------------------------------------
+
+    /// Loads the sandbox-account logon credentials, DPAPI-unsealing the
+    /// password. Port of `identity.rs::require_logon_sandbox_creds`'s load half
+    /// (the resolver-driven ACL-refresh half is Integration-B/refresh scope and
+    /// is deliberately not reproduced: Step 3 provisions ACLs once, at
+    /// provisioning, per A.Q1). Fail-closed (D-005): any missing marker, missing
+    /// blob, or unseal failure returns an error and never a blank/guessed
+    /// credential.
+    pub fn load_logon_sandbox_creds(sandbox_home: &Path) -> Result<SandboxCreds> {
+        if !sandbox_setup_is_complete(sandbox_home) {
+            anyhow::bail!("sandbox account is not provisioned (no valid setup marker)");
+        }
+        let blob = std::fs::read(sandbox_creds_path(sandbox_home))
+            .map_err(|e| anyhow::anyhow!("read sealed sandbox creds: {e}"))?;
+        let cleartext = dpapi::unprotect(&blob)
+            .map_err(|e| anyhow::anyhow!("DPAPI unseal of sandbox creds failed: {e}"))?;
+        let password = String::from_utf8(cleartext)
+            .map_err(|_| anyhow::anyhow!("sealed sandbox password was not valid UTF-8"))?;
+        Ok(SandboxCreds {
+            username: SANDBOX_USERNAME.to_string(),
+            password,
+        })
+    }
+
+    /// Generates a strong random password for the sandbox account. Uses the
+    /// vendored crate's `rand` (CSPRNG `OsRng`-seeded) via a printable-ASCII
+    /// alphabet broad enough to satisfy the local-account complexity policy.
+    fn generate_password() -> String {
+        use rand::RngCore;
+        use rand::rngs::OsRng;
+        // 32 bytes of CSPRNG entropy, mapped to a 64-char complexity-satisfying
+        // set (upper, lower, digit, symbol) so `NetUserAdd` never rejects it.
+        const ALPHABET: &[u8] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+        let mut raw = [0u8; 32];
+        OsRng.fill_bytes(&mut raw);
+        let mut pw: String = raw
+            .iter()
+            .map(|b| ALPHABET[(*b as usize) % ALPHABET.len()] as char)
+            .collect();
+        // Guarantee at least one of each class regardless of the random draw,
+        // so complexity policy is satisfied deterministically (fail-closed:
+        // never emit a password the account-create step would reject).
+        pw.push_str("Aa1!");
+        pw
+    }
+
+    // -------------------------------------------------------------------
+    // Provisioning (identity.rs / setup.rs port; WFP + firewall OMITTED)
+    // -------------------------------------------------------------------
+
+    /// One-time, ELEVATED provisioning of the shared low-privilege sandbox
+    /// account. Port of the provisioning half of `identity.rs` /`setup.rs`
+    /// (`run_elevated_provisioning_setup`), retargeted to the Hive sandbox home
+    /// and with the WFP/firewall call sites OMITTED (Integration B): this
+    /// authors NO network egress control.
+    ///
+    /// Steps (each fail-closed; a failure aborts and does NOT leave a
+    /// half-created account usable):
+    /// 1. create the least-privilege local group and account (`sandbox_users`);
+    /// 2. grant the interactive-logon right and ensure the Secondary Logon
+    ///    service is enabled, so `CreateProcessWithLogonW` can use the account
+    ///    (blueprint A.Q1 provisioning invariant, lab item L1/L4);
+    /// 3. DPAPI-seal the CSPRNG password into a secrets dir whose ACL excludes
+    ///    the sandbox account (lab item L5);
+    /// 4. hide the account and its profile dir from the login screen (L4);
+    /// 5. write the readiness marker so subsequent launches do not re-elevate.
+    ///
+    /// MUST be run elevated (Administrator). Callers reach it through the setup
+    /// binary, which re-launches itself elevated via `ShellExecute "runas"` for
+    /// exactly one UAC consent (L1).
+    pub fn provision_sandbox_account(sandbox_home: &Path, log: &mut dyn Write) -> Result<()> {
+        std::fs::create_dir_all(sandbox_home)
+            .map_err(|e| anyhow::anyhow!("create sandbox home: {e}"))?;
+        let secrets = secrets_dir(sandbox_home);
+        std::fs::create_dir_all(&secrets)
+            .map_err(|e| anyhow::anyhow!("create secrets dir: {e}"))?;
+
+        let password = generate_password();
+
+        // 1. Least-privilege group + account.
+        sandbox_users::ensure_local_group(SANDBOX_GROUP, "Hive sandbox low-privilege users", log)?;
+        sandbox_users::ensure_local_user(SANDBOX_USERNAME, &password, log)?;
+        sandbox_users::ensure_local_group_member(SANDBOX_GROUP, SANDBOX_USERNAME)?;
+
+        // 2. Logon prerequisites for CreateProcessWithLogonW (A.Q1 invariant).
+        grant_interactive_logon_right(SANDBOX_USERNAME)?;
+        ensure_seclogon_enabled()?;
+
+        // 3. Seal the password; then ACL the secrets dir to EXCLUDE the sandbox
+        //    account so a compromised child cannot read its own credential.
+        let blob = dpapi::protect(password.as_bytes())
+            .map_err(|e| anyhow::anyhow!("DPAPI seal of sandbox password failed: {e}"))?;
+        std::fs::write(sandbox_creds_path(sandbox_home), &blob)
+            .map_err(|e| anyhow::anyhow!("write sealed sandbox creds: {e}"))?;
+        deny_sandbox_account_read(&secrets)?;
+
+        // 4. Hide the account + its profile dir from the login screen.
+        hide_users::hide_newly_created_users(&[SANDBOX_USERNAME.to_string()], sandbox_home);
+
+        // 5. Readiness marker (last, so a partial provisioning is never
+        //    reported complete).
+        let marker = SetupMarker {
+            version: SETUP_MARKER_VERSION,
+            username: SANDBOX_USERNAME.to_string(),
+        };
+        let bytes = serde_json::to_vec_pretty(&marker)
+            .map_err(|e| anyhow::anyhow!("serialize setup marker: {e}"))?;
+        std::fs::write(setup_marker_path(sandbox_home), bytes)
+            .map_err(|e| anyhow::anyhow!("write setup marker: {e}"))?;
+        let _ = writeln!(log, "provisioning complete for {SANDBOX_USERNAME}");
+        Ok(())
+    }
+
+    /// Applies a deny-read ACE for the sandbox account SID on `path`, so the
+    /// sealed credential is not readable by the child. Uses the vendored
+    /// `acl`/`sandbox_users` SID resolution.
+    fn deny_sandbox_account_read(path: &Path) -> Result<()> {
+        let sid_bytes = sandbox_users::resolve_sid(SANDBOX_USERNAME)?;
+        let psid = sandbox_users::sid_bytes_to_psid(&sid_bytes)?;
+        // SAFETY: `psid` was just built from a valid resolved SID byte buffer by
+        // the vendored helper; `add_deny_read_ace` reads it and applies a
+        // deny-read ACE to `path`. The buffer outlives the call.
+        let applied = unsafe { acl::add_deny_read_ace(path, psid) }
+            .map_err(|e| anyhow::anyhow!("deny-read ACE on secrets dir: {e}"))?;
+        if !applied {
+            anyhow::bail!("deny-read ACE was not applied to the secrets directory");
+        }
+        Ok(())
+    }
+
+    /// Grants `SeInteractiveLogonRight` to the account via the LSA policy API,
+    /// so the hidden sandbox account can be used by `CreateProcessWithLogonW`
+    /// (which performs an interactive-style logon). `hide_users` hides the
+    /// account from the login screen but must not strip this right; granting it
+    /// here is the counterpart (blueprint A.Q1 provisioning invariant).
+    fn grant_interactive_logon_right(username: &str) -> Result<()> {
+        // SAFETY: standard LsaOpenPolicy / LsaAddAccountRights sequence. All
+        // pointers point at locals that outlive the calls; every fallible step
+        // is checked and the policy handle is closed on every path.
+        unsafe {
+            let mut attrs: LSA_OBJECT_ATTRIBUTES = std::mem::zeroed();
+            attrs.Length = std::mem::size_of::<LSA_OBJECT_ATTRIBUTES>() as u32;
+            let mut policy: LSA_HANDLE = 0;
+            let status = LsaOpenPolicy(
+                std::ptr::null_mut(),
+                &attrs,
+                (POLICY_CREATE_ACCOUNT | POLICY_LOOKUP_NAMES) as u32,
+                &mut policy,
+            );
+            if status != 0 {
+                anyhow::bail!("LsaOpenPolicy failed: NTSTATUS 0x{status:08x}");
+            }
+
+            let sid_bytes = sandbox_users::resolve_sid(username)?;
+            let psid = sandbox_users::sid_bytes_to_psid(&sid_bytes)?;
+
+            let mut right: Vec<u16> = "SeInteractiveLogonRight".encode_utf16().collect();
+            let right_us = LSA_UNICODE_STRING {
+                Length: (right.len() * 2) as u16,
+                MaximumLength: (right.len() * 2) as u16,
+                Buffer: right.as_mut_ptr(),
+            };
+            let add_status = LsaAddAccountRights(policy, psid, &right_us, 1);
+            let _ = LsaClose(policy);
+            if add_status != 0 {
+                anyhow::bail!("LsaAddAccountRights failed: NTSTATUS 0x{add_status:08x}");
+            }
+        }
+        Ok(())
+    }
+
+    /// Ensures the Secondary Logon service (`seclogon`) is running, since
+    /// `CreateProcessWithLogonW` depends on it (blueprint A.Q1). Fail-closed: a
+    /// service that cannot be started aborts provisioning rather than leaving a
+    /// non-functional account.
+    fn ensure_seclogon_enabled() -> Result<()> {
+        // SAFETY: OpenSCManager / OpenService / QueryServiceStatus / StartService
+        // sequence; every handle is closed and every fallible step checked.
+        unsafe {
+            let scm = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
+            if scm == 0 {
+                anyhow::bail!("OpenSCManagerW failed: {}", GetLastError());
+            }
+            let name: Vec<u16> = "seclogon\0".encode_utf16().collect();
+            let svc = OpenServiceW(scm, name.as_ptr(), SERVICE_QUERY_STATUS | SERVICE_START);
+            if svc == 0 {
+                let err = GetLastError();
+                CloseServiceHandle(scm);
+                anyhow::bail!("OpenServiceW(seclogon) failed: {err}");
+            }
+            let mut status: SERVICE_STATUS = std::mem::zeroed();
+            // Already running is success; otherwise try to start it.
+            if QueryServiceStatus(svc, &mut status) != 0
+                && status.dwCurrentState == windows_sys::Win32::System::Services::SERVICE_RUNNING
+            {
+                CloseServiceHandle(svc);
+                CloseServiceHandle(scm);
+                return Ok(());
+            }
+            let started = StartServiceW(svc, 0, std::ptr::null());
+            CloseServiceHandle(svc);
+            CloseServiceHandle(scm);
+            if started == 0 {
+                let err = GetLastError();
+                // ERROR_SERVICE_ALREADY_RUNNING (1056) is benign.
+                if err != 1056 {
+                    anyhow::bail!("StartServiceW(seclogon) failed: {err}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------
+    // Parent-side capture compose (elevated_impl.rs port; tty = false only)
+    // -------------------------------------------------------------------
+
+    /// Builds the capability-SID list for the ACL grants and the `SpawnRequest`
+    /// permission profile from the Hive resolver. Port of the cap-selection
+    /// block of `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`.
+    fn cap_sids_for(
+        sandbox_home: &Path,
+        cwd: &Path,
+        permissions: &ResolvedWindowsSandboxPermissions,
+    ) -> Result<Vec<String>> {
+        let caps = cap::load_or_create_cap_sids(sandbox_home)?;
+        if permissions.uses_write_capabilities() {
+            let cap_sids = permissions
+                .writable_roots()
+                .iter()
+                .map(|root| cap::workspace_write_cap_sid_for_root(sandbox_home, cwd, &root.root))
+                .collect::<Result<Vec<_>>>()?;
+            if cap_sids.is_empty() {
+                anyhow::bail!("workspace-write sandbox has no writable-root capability SIDs");
+            }
+            Ok(cap_sids)
+        } else {
+            Ok(vec![caps.readonly])
+        }
+    }
+
+    /// Port of the `tty = false` CAPTURE half of
+    /// `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`,
+    /// retargeted to the Hive resolver and sandbox home. Spawns the Hive
+    /// command-runner AS the sandbox user (via the vendored transport, which
+    /// uses `CreateProcessWithLogonW`), sends a `tty = false` `SpawnRequest`,
+    /// and drives the frame loop to capture stdout/stderr/exit.
+    ///
+    /// This is the confinement mechanism; it is NOT a network-confined launch.
+    /// It is invoked only through [`spawn_confined_for_validation`].
+    pub fn run_windows_sandbox_capture(
+        sandbox_home: &Path,
+        policy: &SandboxPolicy,
+        command: &[String],
+        cwd: &Path,
+        env: &HashMap<String, String>,
+    ) -> Result<CaptureResult> {
+        let permissions = ResolvedWindowsSandboxPermissions::from_policy(policy, cwd)
+            .map_err(|e| anyhow::anyhow!("resolve policy: {e}"))?;
+
+        let cap_sids = cap_sids_for(sandbox_home, cwd, &permissions)?;
+        let workspace_roots: Vec<AbsolutePathBuf> = permissions
+            .writable_roots()
+            .iter()
+            .map(|r| AbsolutePathBuf::new(r.root.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("workspace root not absolute: {e}"))?;
+
+        let spawn_request = SpawnRequest {
+            command: command.to_vec(),
+            cwd: cwd.to_path_buf(),
+            env: env.clone(),
+            permission_profile: PermissionProfile {
+                read_only: !permissions.uses_write_capabilities(),
+            },
+            workspace_roots,
+            codex_home: sandbox_home.to_path_buf(),
+            real_codex_home: sandbox_home.to_path_buf(),
+            cap_sids,
+            timeout_ms: None,
+            tty: false,
+            stdin_open: false,
+            use_private_desktop: false,
+        };
+
+        let sandbox_creds = load_logon_sandbox_creds(sandbox_home)?;
+        let logs_base_dir = sandbox_home.join(".sandbox");
+        let _ = std::fs::create_dir_all(&logs_base_dir);
+
+        let transport = retry_runner_spawn_once(
+            sandbox_creds,
+            &spawn_request.command,
+            |creds| {
+                spawn_runner_transport(
+                    sandbox_home,
+                    cwd,
+                    &creds,
+                    Some(logs_base_dir.as_path()),
+                    spawn_request.clone(),
+                )
+            },
+            // Step 3 does not re-derive creds; a stale-cred failure is a real
+            // provisioning error (fail-closed), so the refresh closure just
+            // reloads the sealed creds rather than silently re-provisioning.
+            || load_logon_sandbox_creds(sandbox_home),
+        )?;
+
+        let (pipe_write, mut pipe_read) = transport.into_files();
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = loop {
+            let msg = match ipc_framed::read_frame(&mut pipe_read) {
+                Ok(Some(msg)) => msg,
+                Ok(None) => break Err(anyhow::anyhow!("runner pipe closed before exit")),
+                Err(err) => break Err(err),
+            };
+            match msg.message {
+                Message::SpawnReady { .. } => {}
+                Message::Output { payload } => match ipc_framed::decode_bytes(&payload.data_b64) {
+                    Ok(bytes) => match payload.stream {
+                        OutputStream::Stdout => stdout.extend_from_slice(&bytes),
+                        OutputStream::Stderr => stderr.extend_from_slice(&bytes),
+                    },
+                    Err(err) => break Err(err),
+                },
+                Message::Exit { payload } => break Ok((payload.exit_code, payload.timed_out)),
+                Message::Error { payload } => {
+                    break Err(anyhow::anyhow!("runner error: {}", payload.message));
+                }
+                other => {
+                    break Err(anyhow::anyhow!("unexpected runner message: {other:?}"));
+                }
+            }
+        };
+        drop(pipe_write);
+        let (exit_code, timed_out) = result?;
+        Ok(CaptureResult {
+            exit_code,
+            stdout,
+            stderr,
+            timed_out,
+        })
+    }
+
+    /// Lab-only confinement-validation entry point. NOT a network-confined
+    /// launch (Q2/D-005): it runs the elevated compose so the `spike307-win`
+    /// lab can prove the filesystem / user / token / Job isolation matrix
+    /// directly, exactly as #395 proved its primitives by lab replica ahead of
+    /// the composed success path. The public [`crate::launch`] never calls this;
+    /// it keeps refusing both network policies until Integration B.
+    pub fn spawn_confined_for_validation(
+        sandbox_home: &Path,
+        policy: &SandboxPolicy,
+        command: &[String],
+        cwd: &Path,
+        env: &HashMap<String, String>,
+    ) -> std::result::Result<CaptureResult, LaunchError> {
+        if !sandbox_setup_is_complete(sandbox_home) {
+            return Err(LaunchError::Confinement(
+                "sandbox account not provisioned; run the Hive sandbox setup binary first"
+                    .to_string(),
+            ));
+        }
+        run_windows_sandbox_capture(sandbox_home, policy, command, cwd, env)
+            .map_err(|e| LaunchError::Confinement(format!("confined validation run: {e}")))
+    }
+
+    // -------------------------------------------------------------------
+    // Runner-side (spawn_prep.rs + command_runner/win.rs port; tty = false)
+    // -------------------------------------------------------------------
+
+    /// Runs the Hive command-runner protocol on the two named pipes. This is
+    /// the process that `CreateProcessWithLogonW` starts AS the sandbox account;
+    /// it derives a capability-restricted primary token FROM ITS OWN token and
+    /// spawns the inner child under it (A.Q1). Port of the `tty = false` branch
+    /// of `bin/command_runner/win.rs` (upstream lines 339-360) plus the
+    /// token/ACL assembly of `spawn_prep.rs`.
+    ///
+    /// ConPTY stub site 1 (blueprint R.1): a `tty = true` request is rejected
+    /// fail-closed (an `Error` frame), never silently downgraded; ConPTY is
+    /// Step 5.
+    pub fn run_command_runner(pipe_in: &str, pipe_out: &str) -> Result<()> {
+        // The runner is the pipe CLIENT: it opens the parent's server pipes as
+        // files. `pipe_in` was created by the parent with PIPE_ACCESS_OUTBOUND
+        // (parent writes, runner reads); `pipe_out` PIPE_ACCESS_INBOUND (runner
+        // writes, parent reads). Opening a named pipe as a std file is the
+        // documented client path and avoids a bespoke CreateFileW FFI.
+        let mut reader = File::options()
+            .read(true)
+            .write(true)
+            .open(pipe_in)
+            .map_err(|e| anyhow::anyhow!("open inbound pipe {pipe_in}: {e}"))?;
+        let mut writer = File::options()
+            .read(true)
+            .write(true)
+            .open(pipe_out)
+            .map_err(|e| anyhow::anyhow!("open outbound pipe {pipe_out}: {e}"))?;
+
+        let request = match ipc_framed::read_frame(&mut reader) {
+            Ok(Some(FramedMessage {
+                message: Message::SpawnRequest { payload },
+                ..
+            })) => *payload,
+            Ok(_) => {
+                send_error(
+                    &mut writer,
+                    ErrorStage::ReadSpawnRequest,
+                    "expected SpawnRequest",
+                );
+                anyhow::bail!("first frame was not a SpawnRequest");
+            }
+            Err(e) => {
+                send_error(&mut writer, ErrorStage::ReadSpawnRequest, &format!("{e}"));
+                return Err(e);
+            }
+        };
+
+        // ConPTY stub site 1: fail closed, never downgrade to pipes silently.
+        if request.tty {
+            send_error(
+                &mut writer,
+                ErrorStage::SpawnChild,
+                "ConPTY sessions (tty=true) are Step 5, not implemented",
+            );
+            anyhow::bail!("tty=true requested but ConPTY is not implemented (Step 5)");
+        }
+
+        match spawn_and_stream(&request, &mut writer) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                send_error(&mut writer, ErrorStage::SpawnChild, &format!("{e}"));
+                Err(e)
+            }
+        }
+    }
+
+    fn send_error(writer: &mut File, stage: ErrorStage, message: &str) {
+        let _ = ipc_framed::write_frame(
+            &mut *writer,
+            &FramedMessage {
+                version: ipc_framed::IPC_PROTOCOL_VERSION,
+                message: Message::Error {
+                    payload: ipc_framed::ErrorPayload {
+                        message: message.to_string(),
+                        stage,
+                        windows_error_code: None,
+                    },
+                },
+            },
+        );
+    }
+
+    /// Derives the capability-restricted token from the runner's own token,
+    /// applies the per-task ACL grants, spawns the child via
+    /// `spawn_process_with_pipes`, and streams Output/Exit frames.
+    fn spawn_and_stream(request: &SpawnRequest, writer: &mut File) -> Result<()> {
+        // Convert the capability SID strings into LocalSid pointers.
+        let cap_sids: Vec<LocalSid> = request
+            .cap_sids
+            .iter()
+            .map(|s| LocalSid::from_string(s))
+            .collect::<Result<Vec<_>>>()?;
+        let cap_ptrs: Vec<*mut c_void> = cap_sids.iter().map(|s| s.as_ptr()).collect();
+
+        // Apply the per-task ACL grants for the workspace roots BEFORE spawning
+        // (spawn_prep assembly). Each capability SID gets an allow-write ACE on
+        // its writable roots; the cap SID is what the restricted token carries.
+        for root in &request.workspace_roots {
+            for psid in &cap_ptrs {
+                // SAFETY: `psid` is a live LocalSid pointer (owned by `cap_sids`,
+                // which outlives this loop); `add_allow_ace` applies an allow ACE
+                // to the validated absolute root path.
+                let _ = unsafe { acl::add_allow_ace(root.as_path(), *psid) }.map_err(|e| {
+                    anyhow::anyhow!("allow ACE on {}: {e}", root.as_path().display())
+                })?;
+            }
+        }
+
+        // SAFETY: get_current_token_for_restriction returns the runner's own
+        // primary token; the *_and_user_from builders derive a capability-
+        // restricted token whose token user is this (sandbox) account. Both
+        // handles are closed below. Because the derived token comes from the
+        // caller's OWN token it is assignable, so the CreateProcessAsUserW
+        // inside spawn_process_with_pipes needs no privilege (A.Q1).
+        let token = unsafe {
+            let base = get_current_token_for_restriction()?;
+            let derived = if request.permission_profile.read_only {
+                create_readonly_token_with_caps_and_user_from(base, &cap_ptrs)
+            } else {
+                create_workspace_write_token_with_caps_and_user_from(base, &cap_ptrs)
+            };
+            CloseHandle(base);
+            derived?
+        };
+
+        let spawn_result = spawn_process_with_pipes(
+            token,
+            &request.command,
+            &request.cwd,
+            &request.env,
+            StdinMode::Closed,
+            StderrMode::Separate,
+            ConsoleMode::NoWindow,
+            /* use_private_desktop */ false,
+            None,
+        );
+        // SAFETY: `token` is a valid handle from the token builder above; close
+        // it once the spawn has consumed it (the child holds its own copy).
+        unsafe {
+            CloseHandle(token);
+        }
+        let handles = spawn_result?;
+
+        stream_child(handles, writer)
+    }
+
+    /// Streams the child's stdout/stderr as Output frames and its exit as an
+    /// Exit frame, after acking with SpawnReady.
+    fn stream_child(handles: PipeSpawnHandles, writer: &mut File) -> Result<()> {
+        let process = handles.process.hProcess;
+        let pid = handles.process.dwProcessId;
+
+        ipc_framed::write_frame(
+            &mut *writer,
+            &FramedMessage {
+                version: ipc_framed::IPC_PROTOCOL_VERSION,
+                message: Message::SpawnReady {
+                    payload: SpawnReady { process_id: pid },
+                },
+            },
+        )?;
+
+        // Drain stdout then stderr sequentially. tty=false capture does not need
+        // interleaving fidelity; ordering within a stream is preserved.
+        drain_stream(handles.stdout_read, OutputStream::Stdout, &mut *writer)?;
+        if let Some(err_read) = handles.stderr_read {
+            drain_stream(err_read, OutputStream::Stderr, &mut *writer)?;
+        }
+
+        // SAFETY: `process` is the child's process handle from PROCESS_INFORMATION;
+        // wait for it to exit, then read its exit code.
+        let exit_code = unsafe {
+            if WaitForSingleObject(process, INFINITE) != WAIT_OBJECT_0 {
+                anyhow::bail!("WaitForSingleObject on child failed: {}", GetLastError());
+            }
+            let mut code: u32 = 0;
+            if GetExitCodeProcess(process, &mut code) == 0 {
+                anyhow::bail!("GetExitCodeProcess failed: {}", GetLastError());
+            }
+            code as i32
+        };
+
+        ipc_framed::write_frame(
+            &mut *writer,
+            &FramedMessage {
+                version: ipc_framed::IPC_PROTOCOL_VERSION,
+                message: Message::Exit {
+                    payload: ipc_framed::ExitPayload {
+                        exit_code,
+                        timed_out: false,
+                    },
+                },
+            },
+        )?;
+        Ok(())
+    }
+
+    /// Reads a child pipe handle to EOF, emitting Output frames.
+    fn drain_stream(handle: HANDLE, stream: OutputStream, writer: &mut File) -> Result<()> {
+        // Wrap the raw read handle as a File so we get std buffered reads; the
+        // handle ownership transfers here and is closed on drop.
+        use std::os::windows::io::FromRawHandle;
+        // SAFETY: `handle` is a live read end of an anonymous pipe from
+        // spawn_process_with_pipes; wrapping it in a File takes ownership and
+        // closes it on drop. isize -> *mut c_void is the documented raw-handle
+        // representation on Windows.
+        let mut file = unsafe { File::from_raw_handle(handle as *mut _) };
+        let mut buf = [0u8; 8192];
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    ipc_framed::write_frame(
+                        &mut *writer,
+                        &FramedMessage {
+                            version: ipc_framed::IPC_PROTOCOL_VERSION,
+                            message: Message::Output {
+                                payload: OutputPayload {
+                                    data_b64: ipc_framed::encode_bytes(&buf[..n]),
+                                    stream,
+                                },
+                            },
+                        },
+                    )?;
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::BrokenPipe => break,
+                Err(e) => return Err(anyhow::anyhow!("read child {stream:?}: {e}")),
+            }
+        }
+        Ok(())
+    }
+}
+
+// ===========================================================================
+// Non-Windows honest fail-closed stubs (D-005), mirroring elevated_impl's
+// stub: the compose only exists on Windows; on other targets every entry point
+// returns an error rather than pretending to confine.
+// ===========================================================================
+
+#[cfg(not(windows))]
+mod non_windows_stub {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// See the Windows impl. Non-Windows honest fail-closed stub.
+    pub fn spawn_confined_for_validation(
+        _sandbox_home: &Path,
+        _policy: &SandboxPolicy,
+        _command: &[String],
+        _cwd: &Path,
+        _env: &HashMap<String, String>,
+    ) -> Result<CaptureResult, LaunchError> {
+        Err(LaunchError::Confinement(
+            "the Windows elevated sandbox is only available on Windows".to_string(),
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+pub use non_windows_stub::spawn_confined_for_validation;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::SandboxPolicy;
+    use std::path::PathBuf;
+
+    fn policy(network: NetworkPolicy) -> SandboxPolicy {
+        SandboxPolicy::build(vec![], vec![], PathBuf::from(r"C:\hive\hooks"), network)
+            .expect("valid policy")
+    }
+
+    #[test]
+    fn deny_all_refuses_with_network_confinement_error() {
+        let decision = LaunchDecision::for_policy(&policy(NetworkPolicy::DenyAll));
+        assert_eq!(decision, LaunchDecision::RefuseDenyAll);
+        assert!(matches!(
+            decision.into_refusal(),
+            LaunchError::NetworkConfinementNotImplemented
+        ));
+    }
+
+    #[test]
+    fn allow_hosts_refuses_with_allow_hosts_error() {
+        let decision =
+            LaunchDecision::for_policy(&policy(NetworkPolicy::AllowHosts(vec!["h".into()])));
+        assert_eq!(decision, LaunchDecision::RefuseAllowHosts);
+        assert!(matches!(
+            decision.into_refusal(),
+            LaunchError::AllowHostsNotYetImplemented
+        ));
+    }
+
+    #[test]
+    fn compute_allow_paths_includes_existing_writable_roots_and_no_deny() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ws = tmp.path().join("workspace");
+        std::fs::create_dir_all(&ws).expect("mkdir");
+        // A writable root under an absolute cwd. On Linux CI the tempdir path is
+        // absolute in host terms; from_policy uses windows-absolute parsing, so
+        // build the resolver directly to keep this test host-agnostic.
+        let policy = SandboxPolicy::build(
+            vec![ws.clone()],
+            vec![],
+            tmp.path().join("hooks"),
+            NetworkPolicy::DenyAll,
+        )
+        .expect("policy");
+        // Resolve against a windows-absolute cwd string (the roots themselves
+        // are what compute_allow_paths canonicalizes; cwd only gates from_policy).
+        let resolved =
+            ResolvedWindowsSandboxPermissions::from_policy(&policy, Path::new(r"C:\workspace"))
+                .expect("resolves");
+        let paths = compute_allow_paths(&resolved);
+        let canonical_ws = dunce::canonicalize(&ws).unwrap_or(ws);
+        assert!(
+            paths.allow.contains(&canonical_ws),
+            "expected the existing writable root in the allow set: {paths:?}"
+        );
+        assert!(
+            paths.deny.is_empty(),
+            "the Hive resolver produces no read-only carve-outs yet, so deny must be empty"
+        );
+    }
+
+    #[test]
+    fn compute_allow_paths_skips_nonexistent_writable_root() {
+        let policy = SandboxPolicy::build(
+            vec![PathBuf::from(r"C:\does\not\exist\anywhere")],
+            vec![],
+            PathBuf::from(r"C:\hive\hooks"),
+            NetworkPolicy::DenyAll,
+        )
+        .expect("policy");
+        let resolved =
+            ResolvedWindowsSandboxPermissions::from_policy(&policy, Path::new(r"C:\workspace"))
+                .expect("resolves");
+        let paths = compute_allow_paths(&resolved);
+        assert!(
+            paths.allow.is_empty(),
+            "a non-existent writable root must not be added to the allow set"
+        );
+    }
+
+    #[test]
+    fn setup_is_incomplete_without_marker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(!sandbox_setup_is_complete(tmp.path()));
+    }
+}

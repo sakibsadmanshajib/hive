@@ -24,6 +24,13 @@ doctest = false
 workspace = true
 
 [dependencies]
+# Pure, cross-platform parts of windows_elevated.rs (the provisioning-readiness
+# marker (de)serialization and the allow-path canonicalization) compile and are
+# unit-tested on every platform including this crate's Linux CI, so these are
+# unconditional, not windows-only.
+dunce = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 codex-process-hardening = { path = "../codex-process-hardening" }
@@ -47,6 +54,26 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",
     "Win32_Storage_FileSystem",
 ] }
+# Step 3 Integration A: the elevated compose (windows_elevated.rs) and the two
+# Hive binaries orchestrate the vendored mechanism primitives, so this crate now
+# depends on the Apache-2.0 subcrate on Windows. The compose authors its own
+# net-new Win32 (LSA logon-right grant, seclogon service check, child wait) in
+# windows-sys 0.52 to interoperate natively with the subcrate's windows-sys
+# HANDLE/SID types, rather than bridging to the `windows` 0.58 crate above.
+codex-windows-sandbox = { path = "../codex-windows-sandbox" }
+anyhow = "1.0"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authentication_Identity",
+    "Win32_System_Services",
+    "Win32_System_Threading",
+] }
+
+# Default features include `std` + `getrandom`, so `OsRng` (CSPRNG password
+# generation in provisioning) is available without hand-picking feature flags.
+[target.'cfg(windows)'.dependencies.rand]
+version = "0.8"
 
 [dev-dependencies]
 tempfile = { workspace = true }

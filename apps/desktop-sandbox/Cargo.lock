@@ -171,13 +171,20 @@ dependencies = [
 name = "hive-desktop-sandbox"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "codex-process-hardening",
+ "codex-windows-sandbox",
+ "dunce",
  "landlock",
  "libc",
  "pretty_assertions",
+ "rand",
  "seccompiler",
+ "serde",
+ "serde_json",
  "tempfile",
  "windows",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

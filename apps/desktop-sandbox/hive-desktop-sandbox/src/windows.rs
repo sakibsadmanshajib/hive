@@ -78,7 +78,18 @@
 //!   network limit and `windows_plan.rs`'s `netsh` codegen is never applied;
 //!   the WFP egress backend is a dedicated later step (Step 4).
 //! - Token privilege reduction / the low-privilege sandbox-user variant
-//!   (Step 3): see control 1 above.
+//!   (Step 3): see control 1 above. Step 3 Integration A lands the elevated
+//!   compose (the sandbox-account `CreateProcessWithLogonW` transport, the
+//!   capability-restricted token derived in the runner, and the per-task ACL
+//!   assembly) in [`crate::windows_elevated`]. That compose is NOT reached
+//!   through this `launch` (which keeps refusing both network policies until
+//!   the WFP egress backend lands in Integration B, per D-005): it is exercised
+//!   only through the lab-only
+//!   [`crate::windows_elevated::spawn_confined_for_validation`] entry point, so
+//!   the filesystem / user / token / Job isolation matrix can be proven on
+//!   `spike307-win` ahead of the composed network success path. The two
+//!   network-refusal guards below are the pure-tested
+//!   [`crate::windows_elevated::LaunchDecision`] made real.
 //! - Environment scrubbing: `CreateProcessAsUserW` is called with
 //!   `lpEnvironment = NULL`, so the child inherits the parent process's full
 //!   environment (secrets and `*_API_KEY`-style values included). A scrubbed

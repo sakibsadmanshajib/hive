@@ -97,10 +97,32 @@ pub(crate) fn resolve_helper_for_launch(
     }
 }
 
+/// A2 boundary #8 guard (VENDORING; documented deviation from the verbatim
+/// vendor): the resolved runner/helper path is executed elevated / as the
+/// sandbox user, so it MUST be a fully-qualified path (drive-absolute `C:\...`
+/// or UNC/device `\\...`), never a bare name resolvable through PATH or the
+/// untrusted cwd — a plant there is a direct escalation. Parsed with explicit
+/// `\`/`/` handling (not `Path::is_absolute`, which uses HOST conventions) so it
+/// is correct when this crate is cross-checked from a non-Windows CI host.
+pub fn is_fully_qualified_launch_path(p: &Path) -> bool {
+    let raw = p.to_string_lossy();
+    let bytes = raw.as_bytes();
+    let is_sep = |b: u8| b == b'\\' || b == b'/';
+    if bytes.len() >= 2 && is_sep(bytes[0]) && is_sep(bytes[1]) {
+        return true;
+    }
+    bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && is_sep(bytes[2])
+}
+
 pub fn resolve_current_exe_for_launch(codex_home: &Path, fallback_executable: &str) -> PathBuf {
     let source = match std::env::current_exe() {
         Ok(path) => path,
-        Err(_) => return PathBuf::from(fallback_executable),
+        // A2 boundary #8 guard: never hand back a bare, cwd/PATH-resolvable
+        // name for elevated execution. `Path::join` keeps an already-absolute
+        // fallback intact and anchors a relative one under the trusted helper
+        // bin dir (an absolute, non-existent path fails closed downstream rather
+        // than resolving a planted binary from the working directory).
+        Err(_) => return helper_bin_dir(codex_home).join(fallback_executable),
     };
     resolve_exe_for_launch(&source, codex_home)
 }
@@ -121,7 +143,14 @@ pub fn resolve_exe_for_launch(source: &Path, codex_home: &Path) -> PathBuf {
                 ),
                 Some(&sandbox_log_dir),
             );
-            source.to_path_buf()
+            // A2 boundary #8 guard: fall back to `source` ONLY if it is already
+            // fully-qualified; a relative source would be a cwd/PATH plant
+            // vector, so prefer the absolute helper-bin destination instead.
+            if is_fully_qualified_launch_path(source) {
+                source.to_path_buf()
+            } else {
+                destination
+            }
         }
     }
 }

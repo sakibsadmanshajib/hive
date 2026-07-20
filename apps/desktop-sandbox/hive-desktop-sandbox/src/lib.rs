@@ -12,6 +12,7 @@
 //! (Apache-2.0) versus newly authored here, and for open risks.
 
 pub mod policy;
+pub mod windows_elevated;
 pub mod windows_plan;
 pub mod windows_resolve;
 

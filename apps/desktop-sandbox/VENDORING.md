@@ -531,6 +531,88 @@ against a resolver far thinner than upstream's) plus the launch wiring, and thei
 confinement correctness is only validatable in the A2 `spike307-win` lab (D-004),
 so they are not hand-ported blind on inert code here. See open risk #6.
 
+## Step 3 Integration A2 (launch wiring + provisioning + two Hive binaries)
+
+Integration A2 lands the resolver-coupled port that A1 deferred, plus the
+launch wiring and the two Hive binaries. It drops `codex_protocol` entirely
+(Q1): the ports consume the Hive-native
+`hive_desktop_sandbox::windows_resolve::ResolvedWindowsSandboxPermissions`, not
+upstream's `resolved_permissions.rs`. Network stays refuse-until-WFP (Q2/D-005):
+`windows::launch` keeps refusing both `NetworkPolicy` variants, and the elevated
+compose is reachable only through the lab-only
+`windows_elevated::spawn_confined_for_validation` entry point. ConPTY (Step 5)
+and WFP/firewall (Integration B) are stubbed fail-closed, not vendored.
+
+### Newly authored (Hive-proprietary, not Apache-2.0)
+
+- `hive-desktop-sandbox/src/windows_elevated.rs`: the port of
+  `allow.rs::compute_allow_paths_for_permissions` (`compute_allow_paths`,
+  retargeted to the pre-resolved Hive resolver, six upstream cwd/env call sites
+  collapsed to one per blueprint A.Q2), the `tty = false` CAPTURE half of
+  `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`
+  (`run_windows_sandbox_capture`), the provisioning-readiness and
+  credential-load logic of `identity.rs`/`setup.rs`
+  (`sandbox_setup_is_complete`, `load_logon_sandbox_creds`,
+  `provision_sandbox_account`), the token/ACL assembly of `spawn_prep.rs` plus
+  the `command_runner/win.rs` `tty = false` branch (`run_command_runner`), and
+  the pure `LaunchDecision`. It authors its own net-new Win32 in `windows-sys`
+  0.52 (to interoperate natively with the subcrate's `HANDLE`/SID types): the
+  LSA `SeInteractiveLogonRight` grant and the `seclogon` service check (the
+  blueprint A.Q1 provisioning invariant that makes `CreateProcessWithLogonW`
+  work for the hidden account), plus the child `WaitForSingleObject` /
+  `GetExitCodeProcess`. `deny_read_resolver.rs` is still NOT ported: the Hive
+  resolver's deny-read set is legitimately empty (no secret-path source yet), so
+  there is nothing to resolve; `compute_allow_paths` propagates carve-outs
+  already, for when a future `SandboxPolicy` extension adds them.
+- `hive-desktop-sandbox/src/bin/hive-command-runner.rs`: the per-task runner
+  binary (`tty = false` only; `tty = true` is refused fail-closed, ConPTY is
+  Step 5). Port of the `bin/command_runner/win.rs` `tty = false` branch.
+- `hive-desktop-sandbox/src/bin/hive-sandbox-provision.rs`: the elevated
+  provisioning worker (port of `bin/setup_main` intent). It OMITS upstream
+  `setup_main/win.rs`'s WFP + COM-firewall call sites (`install_wfp_filters`,
+  `ensure_offline_proxy_allowlist`, `ensure_offline_outbound_block`); those are
+  Integration B. It is deliberately NOT named `*-setup`/`*-install`: an
+  unmanifested exe whose filename matches Windows installer-detection heuristics
+  is auto-elevated by the OS, so the name avoids those trigger words to keep the
+  correct default `asInvoker` behaviour without an embedded manifest.
+- `hive-desktop-sandbox/src/windows.rs`: doc-only wiring pointing `launch` at
+  the A2 elevated compose and the lab-only validation entry point; the two
+  network-refusal guards are unchanged and are the `LaunchDecision` made real.
+
+### Local deviations from upstream (Integration A2, subcrate)
+
+Two now-wired-path items the A1 pass explicitly deferred to A2. Both are
+`#[cfg(windows)]`-only, cross-checked by the `x86_64-pc-windows-gnu` CI step,
+and lab-gated on `spike307-win`. Re-vendoring note: re-copying these two files
+must re-apply these deviations (checking first whether upstream added an
+equivalent).
+
+- `cap.rs` (open risk #8, cross-process half): `load_or_create_cap_sids` and
+  the two per-key accessors now also hold a named OS mutex
+  (`CreateMutexW`/`WaitForSingleObject`/`ReleaseMutex`, keyed to a stable hash of
+  the canonical `cap_sid` path) for the same critical section as the A1
+  intra-process `CAP_SID_LOCK`. This closes the elevated-provisioning-binary vs
+  runner cross-process race that A1 left open. Open risk #8 is now RESOLVED.
+- `helper_materialization.rs` (blueprint security boundary #8, absolute-path
+  guard): added `is_fully_qualified_launch_path` and routed the two fallback
+  branches of `resolve_current_exe_for_launch`/`resolve_exe_for_launch` through
+  it, so a resolution failure can never hand back a bare, cwd/PATH-resolvable
+  runner name for elevated execution (a plant there is a direct escalation); the
+  fallback is anchored under the trusted helper bin dir instead.
+
+### Deliberately NOT done in A2 (fail-closed stubs, honest)
+
+- WFP / firewall egress (Integration B): the two `windows::launch`
+  network-refusal guards stay; no egress control is authored. `DenyAll` under a
+  standard sandbox user can still open sockets, so refusing (not spawning) is
+  the only D-005-safe behaviour until WFP lands.
+- ConPTY (`tty = true`, Step 5): the command runner refuses a `tty = true`
+  request with an `Error` frame, never a silent downgrade to pipes.
+- App-side `ShellExecute "runas"` elevation trigger (the single UAC consent): it
+  lives in the desktop shell (Tauri), not in this OS-mechanism crate. The
+  provisioning binary is the elevated worker; `windows_elevated` only gates on
+  `sandbox_setup_is_complete` and errors if unprovisioned.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
@@ -741,19 +823,20 @@ crate deliberately does not inherit the workspace's Apache-2.0
    this crate's own (multithreaded) test binary. Pre-existing at the time: no
    test before that pass ever exercised the real spawn path, so nothing
    surfaced it earlier.
-8. **PARTIALLY RESOLVED (Integration A1: intra-process lock landed). Original
-   issue (`cap.rs`, CodeRabbit finding, PR #398): the `cap_sid` file is an
-   unsynchronized read-modify-write.** Integration A1 added a process-wide
-   `Mutex` (`CAP_SID_LOCK`) that serializes the read-modify-write and re-reads
-   under the lock in `load_or_create_cap_sids`, `workspace_cap_sid_for_cwd`, and
-   `writable_root_cap_sid_for_path`, closing the intra-process race (a
-   concurrency regression test proves 8 concurrent first-touches share one SID
-   and persist exactly one entry). The CROSS-PROCESS race (the elevated setup
-   binary racing the runner against the same `codex_home`) is still open: it
-   needs a named OS mutex or `LockFileEx`, like upstream `setup_main`'s
-   `read_acl_mutex`, and a real concurrent-launch test on Windows to trust the
-   approach, so it is fixed together with the wave that wires the actual
-   `cap.rs` launch-path call sites (A2). Original detail retained below.
+8. **RESOLVED (Integration A1: intra-process lock; Integration A2: cross-process
+   mutex). Original issue (`cap.rs`, CodeRabbit finding, PR #398): the `cap_sid`
+   file is an unsynchronized read-modify-write.** Integration A1 added a
+   process-wide `Mutex` (`CAP_SID_LOCK`) that serializes the read-modify-write
+   and re-reads under the lock in `load_or_create_cap_sids`,
+   `workspace_cap_sid_for_cwd`, and `writable_root_cap_sid_for_path`, closing the
+   intra-process race (a concurrency regression test proves 8 concurrent
+   first-touches share one SID and persist exactly one entry). Integration A2
+   added a named OS mutex (`CreateMutexW`, keyed to a stable hash of the
+   canonical `cap_sid` path) held for the same critical section at all three
+   sites, closing the CROSS-PROCESS race (the elevated provisioning binary
+   racing the runner against the same sandbox home), as upstream `setup_main`
+   does with its `read_acl_mutex`. Its behavioural proof (a real concurrent
+   launch) is a `spike307-win` lab item. Original detail retained below.
    `workspace_cap_sid_for_cwd` and `writable_root_cap_sid_for_path` both
    `load_or_create_cap_sids` (read + parse JSON), mutate the in-memory
    `CapSids`, then `persist_caps` (serialize + `fs::write`) the whole file
