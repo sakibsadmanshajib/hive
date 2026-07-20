@@ -728,24 +728,24 @@ mod windows_impl {
         // (parent writes, runner reads); `pipe_out` PIPE_ACCESS_INBOUND (runner
         // writes, parent reads). Opening a named pipe as a std file is the
         // documented client path and avoids a bespoke CreateFileW FFI.
-        runner_debug_log("opening inbound pipe (pipe_in)");
-        let mut reader = File::options()
-            .read(true)
-            .write(true)
-            .open(pipe_in)
-            .map_err(|e| {
-                runner_debug_log(&format!("open inbound pipe FAILED: {e}"));
-                anyhow::anyhow!("open inbound pipe {pipe_in}: {e}")
-            })?;
-        runner_debug_log("inbound pipe opened; opening outbound pipe (pipe_out)");
-        let mut writer = File::options()
-            .read(true)
-            .write(true)
-            .open(pipe_out)
-            .map_err(|e| {
-                runner_debug_log(&format!("open outbound pipe FAILED: {e}"));
-                anyhow::anyhow!("open outbound pipe {pipe_out}: {e}")
-            })?;
+        // The two server pipes are HALF-DUPLEX, so the client (this runner) must
+        // open each with the single matching direction: `pipe_in` was created
+        // PIPE_ACCESS_OUTBOUND (server -> client), so the client opens it
+        // READ-only; `pipe_out` was created PIPE_ACCESS_INBOUND (client ->
+        // server), so the client opens it WRITE-only. Opening either with the
+        // opposite access added (read+write) is rejected by the half-duplex
+        // pipe with ERROR_ACCESS_DENIED, which previously aborted the runner at
+        // the first pipe open. Match the direction exactly.
+        runner_debug_log("opening inbound pipe (pipe_in, read)");
+        let mut reader = File::options().read(true).open(pipe_in).map_err(|e| {
+            runner_debug_log(&format!("open inbound pipe FAILED: {e}"));
+            anyhow::anyhow!("open inbound pipe {pipe_in}: {e}")
+        })?;
+        runner_debug_log("inbound pipe opened; opening outbound pipe (pipe_out, write)");
+        let mut writer = File::options().write(true).open(pipe_out).map_err(|e| {
+            runner_debug_log(&format!("open outbound pipe FAILED: {e}"));
+            anyhow::anyhow!("open outbound pipe {pipe_out}: {e}")
+        })?;
         runner_debug_log("both pipes opened; reading spawn request frame");
 
         let request = match ipc_framed::read_frame(&mut reader) {

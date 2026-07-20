@@ -335,6 +335,22 @@ pub fn spawn_runner_transport(
             }
         };
 
+    // The runner is launched AS the low-privilege sandbox account and links
+    // user32.dll, whose process-attach initialization connects to the caller's
+    // window station and desktop. That account has no access to them by
+    // default, so without this grant the runner dies at load with
+    // STATUS_DLL_INIT_FAILED (0xC0000142) BEFORE main runs (observed on
+    // spike307-win). Grant the sandbox SID access to the current station +
+    // desktop first; the launch leaves STARTUPINFO.lpDesktop NULL so the runner
+    // inherits this same, now-accessible station/desktop.
+    if let Err(err) = crate::desktop::grant_winsta_desktop_access(&sandbox_creds.username) {
+        unsafe {
+            CloseHandle(h_pipe_in);
+            CloseHandle(h_pipe_out);
+        }
+        return Err(err);
+    }
+
     let runner_exe = find_runner_exe(codex_home, log_dir);
     let runner_cmdline = runner_exe
         .to_str()
