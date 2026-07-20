@@ -508,6 +508,17 @@ unsafe fn create_private_winsta_desktop(
     winsta_name: &str,
     desktop_name: &str,
 ) -> Result<(isize, isize)> {
+    // Serialize the whole process-global switch window (held until return).
+    // Acquire the lock BEFORE reading `saved`: otherwise a concurrent launch
+    // that has already switched the process to ITS private station could be
+    // captured here as our `saved`, and on teardown we would restore the parent
+    // to that other launch's (already closed) station. Reading `saved` under the
+    // lock guarantees it is the real interactive station, not a transient one.
+    let _switch_lock = STATION_SWITCH_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
     // Fail closed: without a valid saved station we cannot restore the parent
     // after the switch, so refuse BEFORE creating or switching anything.
     let saved = GetProcessWindowStation();
@@ -517,12 +528,6 @@ unsafe fn create_private_winsta_desktop(
             GetLastError()
         ));
     }
-
-    // Serialize the whole process-global switch window (held until return).
-    let _switch_lock = STATION_SWITCH_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     let winsta_name_wide = to_wide(winsta_name);
     let winsta = CreateWindowStationW(
