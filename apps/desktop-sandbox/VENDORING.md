@@ -1100,55 +1100,79 @@ concurrent-task rule-clobber scenarios), plus the new row 5 schannel
 gap. The network refusal in `launch()` stays in place; PR #409 is
 draft, not merged.
 
-### Local deviation from upstream: interactive group SIDs in the restricting set (row 5 schannel fix)
+### TRIED AND REVERTED: interactive group SIDs in the restricting set (attempted row 5 schannel fix)
 
-Upstream `codex-windows-sandbox` builds the restricted child token in
-`codex-windows-sandbox/src/token.rs` (`create_token_with_caps_from`) with a
-restricting-SID set of the synthetic random capability SIDs, the token user SID
-(elevated backend only), the logon SID, and Everyone. The token is created
-`WRITE_RESTRICTED`, so every write-type access check must also pass against that
-set.
+This experiment is recorded because it failed in an instructive way. It did NOT
+fix row 5 and it DID break write confinement. The change was reverted; the
+restricting set in `codex-windows-sandbox/src/token.rs`
+(`create_token_with_caps_from`) is back to upstream shape: the synthetic random
+capability SIDs, the token user SID (elevated backend only), the logon SID, and
+Everyone, with `CreateRestrictedToken` flags
+`DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED`.
 
-Hive adds four well known group SIDs to that set:
+What was tried: adding four well known group SIDs to the restricting set,
+together Chromium's `USER_INTERACTIVE` restriction level.
 
 - `S-1-5-32-545` BUILTIN\Users
 - `S-1-5-4` INTERACTIVE
 - `S-1-5-11` Authenticated Users
 - `S-1-5-12` RESTRICTED
 
-Together these are Chromium's `USER_INTERACTIVE` restriction level.
+Why it was tried: the token is created `WRITE_RESTRICTED`, so every write-type
+access check must also pass against the restricting set. schannel and CryptoAPI
+credential acquisition performs write-type opens (the LSA and SspiCli ALPC
+shared section, the cryptsvc and KeyIso LRPC endpoints, `CertOpenSystemStore`
+which opens the store read-write by default, and `\Device\KsecDD`). Those
+objects grant access through the groups above rather than through the token user
+SID or the logon SID, so the hypothesis was that an absent group was denying the
+credential path.
 
-Reason: the lab row 5 failure above
-(`curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS
-(0x8009030E)`) is a token problem, not an egress-policy problem. The egress
-fence was proven correct in the same run. schannel and CryptoAPI credential
-acquisition performs write-type opens (the LSA and SspiCli ALPC shared section,
-the cryptsvc and KeyIso LRPC endpoints, `CertOpenSystemStore` which opens the
-store read-write by default, and `\Device\KsecDD`). Those objects grant access
-through the groups above rather than through the token user SID or the logon
-SID, and under `WRITE_RESTRICTED` an absent group is a denial. The failure
-surfaces late, after the security support provider is already reached, which is
-why it reads as `SEC_E_NO_CREDENTIALS` instead of an access-denied error.
+Result 1, it did NOT fix row 5. The allowlisted host still fails with the
+identical error:
 
-Security property given up: the child may now perform write-type access to any
-object whose DACL grants these groups, which covers user-writable registry and
-filesystem locations and world or Users writable service endpoints. Filesystem
-confinement therefore now rests on the per-path deny ACLs and on the other
-layers (private desktop, job object, WFP egress fence) rather than on the
-write-restriction backstop.
+```
+curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)
+```
 
-Explicitly unchanged: the `CreateRestrictedToken` flags stay
-`DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED`, `SidsToDisable` stays
-NULL, `PrivilegesToDelete` stays NULL, the capability SIDs are untouched, and
-the integrity level is unchanged. No new privilege is granted and no previously
-disabled SID is enabled.
+The two diagnostic probes added in the same pass show the relaxation actually
+took effect and still did not help. `certutil -user -store My` began succeeding
+(the user certificate store opens), and `whoami /groups` inside the sandbox
+confirmed all four SIDs present on the child token. The restricting-SID set is
+therefore disproved as a sufficient cause of the row 5 failure. Remaining
+suspects, none yet tested: the LSA and SspiCli ALPC endpoints, the cryptsvc and
+KeyIso LRPC endpoints, and restricted-token-specific checks those endpoints
+apply independent of the SID set (a restricted token can be rejected on the
+endpoint's own policy rather than on an access check against the restricting
+set).
 
-Follow-up: narrowing the set below `USER_INTERACTIVE`, for instance by dropping
-Authenticated Users, is tracked as a follow-up if the security review wants a
-tighter level. The same pass added `===CERTSTORE===` (`certutil -user -store
-My`) and `===WHOAMI===` (`whoami /groups`) probes to the validator script so the
-next lab run captures whether the user certificate store opens and which group
-SIDs the child token actually carries.
+Result 2, it CAUSED a containment regression. In the same lab run the validator
+reported `VALIDATION: ONE OR MORE ASSERTIONS FAILED`: the outside-workspace
+write SUCCEEDED in both derivations, and the inside-workspace write was allowed
+even under the DenyAll read-only derivation. The mechanism was confirmed on the
+box: `C:\hivesbx` carries an inherited
+`NT AUTHORITY\Authenticated Users:(I)(M)` grant, and `WRITE_RESTRICTED` was the
+only thing suppressing it. Admitting Authenticated Users to the restricting set
+let that inherited Modify grant become effective. `C:\hivesbx\secrets` survived
+only because it carries an explicit `(DENY)(R)` ACE.
+
+**Structural finding, more important than the experiment itself: write
+confinement currently rests ENTIRELY on `WRITE_RESTRICTED`.** The sandbox home
+`C:\hivesbx` has an inherited `NT AUTHORITY\Authenticated Users:(I)(M)` grant,
+and the only per-path deny ACE anywhere in the tree is the one on the `secrets`
+directory. The per-path ACL layer therefore provides essentially no write
+defense today. Two consequences follow. First, any future change that admits a
+group SID to the restricting set removes the single remaining write control, as
+this experiment demonstrated. Second, any path not covered by an explicit deny
+ACE is exposed the moment that single control is weakened or bypassed.
+Recommended tracked hardening item: give the sandbox home explicit restrictive
+ACLs, removing or overriding the inherited Authenticated Users Modify grant and
+denying the sandbox account by default outside the workspace, so confinement is
+layered rather than single-point.
+
+Kept from this experiment: the `===CERTSTORE===` (`certutil -user -store My`)
+and `===WHOAMI===` (`whoami /groups`) probes in the validator script. They are
+what proved the relaxation was applied and still insufficient, and they will
+serve the same role for the next row 5 hypothesis.
 
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 

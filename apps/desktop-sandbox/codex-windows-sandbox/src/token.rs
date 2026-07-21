@@ -437,45 +437,9 @@ unsafe fn create_token_with_caps_from(
     let mut everyone = world_sid()?;
     let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
 
-    // The interactive group SIDs, which together are Chromium's USER_INTERACTIVE restriction
-    // level. They must be present in the restricting set for the confined child to be able to
-    // complete a client TLS handshake.
-    //
-    // WHY: the token below is created WRITE_RESTRICTED, so every write-type access check must
-    // also pass against the restricting set. schannel and CryptoAPI credential acquisition
-    // performs write-type opens (the LSA and SspiCli ALPC shared section, the cryptsvc and
-    // KeyIso LRPC endpoints, CertOpenSystemStore which opens the store read-write by default,
-    // and \Device\KsecDD). Those objects grant access through these groups rather than through
-    // the token user SID or the logon SID, and under WRITE_RESTRICTED an absent group is a
-    // denial. The failure surfaces late, after the security support provider is already
-    // reached, as SEC_E_NO_CREDENTIALS (0x8009030E) rather than as an access-denied error.
-    //
-    // WHAT IS GIVEN UP: the child may now perform write-type access to any object whose DACL
-    // grants these groups, which covers user-writable registry and filesystem locations and
-    // world or Users writable service endpoints. Filesystem confinement therefore now rests on
-    // the per-path deny ACLs and on the other layers (private desktop, job object, WFP egress
-    // fence) rather than on the write-restriction backstop. No new privileges are granted, no
-    // SID is enabled that was previously disabled, and the integrity level is unchanged.
-    //
-    // Narrowing this set further, for instance by dropping Authenticated Users, is a tracked
-    // follow-up if the security review wants a tighter level than USER_INTERACTIVE.
-    const INTERACTIVE_GROUP_SIDS: [&str; 4] = [
-        "S-1-5-32-545", // BUILTIN\Users
-        "S-1-5-4",      // INTERACTIVE
-        "S-1-5-11",     // Authenticated Users
-        "S-1-5-12",     // RESTRICTED
-    ];
-    let interactive_sids: Vec<LocalSid> = INTERACTIVE_GROUP_SIDS
-        .iter()
-        .map(|s| LocalSid::from_string(s))
-        .collect::<Result<Vec<_>>>()?;
-
-    // Exact order: Capabilities..., ExtraRestricting..., InteractiveGroups..., Logon, Everyone
+    // Exact order: Capabilities..., ExtraRestricting..., Logon, Everyone
     let mut entries: Vec<SID_AND_ATTRIBUTES> =
-        vec![
-            std::mem::zeroed();
-            psid_capabilities.len() + extra_restricting_sids.len() + interactive_sids.len() + 2
-        ];
+        vec![std::mem::zeroed(); psid_capabilities.len() + extra_restricting_sids.len() + 2];
     for (i, psid) in psid_capabilities.iter().enumerate() {
         entries[i].Sid = *psid;
         entries[i].Attributes = 0;
@@ -485,12 +449,7 @@ unsafe fn create_token_with_caps_from(
         entries[extras_idx + i].Sid = *psid;
         entries[extras_idx + i].Attributes = 0;
     }
-    let interactive_idx = extras_idx + extra_restricting_sids.len();
-    for (i, sid) in interactive_sids.iter().enumerate() {
-        entries[interactive_idx + i].Sid = sid.as_ptr();
-        entries[interactive_idx + i].Attributes = 0;
-    }
-    let logon_idx = interactive_idx + interactive_sids.len();
+    let logon_idx = extras_idx + extra_restricting_sids.len();
     entries[logon_idx].Sid = psid_logon;
     entries[logon_idx].Attributes = 0;
     entries[logon_idx + 1].Sid = psid_everyone;
