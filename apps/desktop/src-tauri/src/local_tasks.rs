@@ -105,6 +105,18 @@ impl Killable for std::process::Child {
     }
 }
 
+/// Windows-only: `hive_desktop_sandbox::launch` returns
+/// [`hive_desktop_sandbox::SandboxChild`] there instead of
+/// [`std::process::Child`] (it also owns the confining Job Object handle).
+/// Its `Drop` already kills the whole process tree -- closing the sole
+/// handle to the kill-on-close Job Object -- and `spawn_with_timeout` drops
+/// `child` immediately after calling `kill_best_effort`, so there is nothing
+/// additional to do here.
+#[cfg(windows)]
+impl Killable for hive_desktop_sandbox::SandboxChild {
+    fn kill_best_effort(&mut self) {}
+}
+
 /// Runs `spawn` (the actual OS-level launch attempt) on a dedicated thread
 /// and waits up to `timeout`. On timeout, returns an error immediately
 /// instead of blocking the caller -- a second, detached thread keeps
