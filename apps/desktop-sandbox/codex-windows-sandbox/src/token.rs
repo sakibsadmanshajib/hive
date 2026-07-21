@@ -25,6 +25,7 @@ use windows_sys::Win32::Security::LookupPrivilegeValueW;
 use windows_sys::Win32::Security::SetTokenInformation;
 
 use windows_sys::Win32::Security::ACL;
+use windows_sys::Win32::Security::LUID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
 use windows_sys::Win32::Security::TOKEN_ADJUST_DEFAULT;
 use windows_sys::Win32::Security::TOKEN_ADJUST_PRIVILEGES;
@@ -36,15 +37,19 @@ use windows_sys::Win32::Security::TOKEN_QUERY;
 use windows_sys::Win32::Security::TOKEN_USER;
 use windows_sys::Win32::Security::TokenDefaultDacl;
 use windows_sys::Win32::Security::TokenGroups;
+use windows_sys::Win32::Security::TokenPrivileges;
 use windows_sys::Win32::Security::TokenUser;
 use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
-const DISABLE_MAX_PRIVILEGE: u32 = 0x01;
 const LUA_TOKEN: u32 = 0x04;
-const WRITE_RESTRICTED: u32 = 0x08;
 const GENERIC_ALL: u32 = 0x1000_0000;
 const WIN_WORLD_SID: i32 = 1;
 const SE_GROUP_LOGON_ID: u32 = 0xC0000000;
+/// `BUILTIN\Administrators`, disabled on the sandbox token.
+const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+/// The only privilege the sandboxed child keeps. Everything else on the base
+/// token is deleted (not merely disabled) by `CreateRestrictedToken`.
+const KEPT_PRIVILEGE: &str = "SeChangeNotifyPrivilege";
 
 #[repr(C)]
 struct TokenDefaultDaclInfo {
@@ -191,50 +196,58 @@ pub unsafe fn get_current_token_for_restriction() -> Result<HANDLE> {
     Ok(h)
 }
 
-pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
-    unsafe fn scan_token_groups_for_logon(h: HANDLE) -> Option<Vec<u8>> {
-        let mut needed: u32 = 0;
-        GetTokenInformation(h, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
-        if needed == 0 {
-            return None;
-        }
-        let mut buf: Vec<u8> = vec![0u8; needed as usize];
-        let ok = GetTokenInformation(
-            h,
-            TokenGroups,
-            buf.as_mut_ptr() as *mut c_void,
-            needed,
-            &mut needed,
-        );
-        if ok == 0 || (needed as usize) < std::mem::size_of::<u32>() {
-            return None;
-        }
-        let group_count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
-        // TOKEN_GROUPS layout is: DWORD GroupCount; SID_AND_ATTRIBUTES Groups[];
-        // On 64-bit, Groups is aligned to pointer alignment after 4-byte GroupCount.
-        let after_count = unsafe { buf.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
-        let align = std::mem::align_of::<SID_AND_ATTRIBUTES>();
-        let aligned = (after_count + (align - 1)) & !(align - 1);
-        let groups_ptr = aligned as *const SID_AND_ATTRIBUTES;
-        for i in 0..group_count {
-            let entry: SID_AND_ATTRIBUTES = std::ptr::read_unaligned(groups_ptr.add(i));
-            if (entry.Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID {
-                let sid = entry.Sid;
-                let sid_len = GetLengthSid(sid);
-                if sid_len == 0 {
-                    return None;
-                }
-                let mut out = vec![0u8; sid_len as usize];
-                if CopySid(sid_len, out.as_mut_ptr() as *mut c_void, sid) == 0 {
-                    return None;
-                }
-                return Some(out);
-            }
-        }
-        None
+/// Copies every group SID on `h` that carries `SE_GROUP_LOGON_ID`.
+///
+/// A token normally carries exactly one logon SID, but the API models groups as
+/// a list and nothing guarantees uniqueness, so this returns all of them: the
+/// sandbox token builder must disable every logon SID it finds, not just the
+/// first one.
+unsafe fn scan_token_groups_for_logon(h: HANDLE) -> Vec<Vec<u8>> {
+    let mut out: Vec<Vec<u8>> = Vec::new();
+    let mut needed: u32 = 0;
+    GetTokenInformation(h, TokenGroups, std::ptr::null_mut(), 0, &mut needed);
+    if needed == 0 {
+        return out;
     }
+    let mut buf: Vec<u8> = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        h,
+        TokenGroups,
+        buf.as_mut_ptr() as *mut c_void,
+        needed,
+        &mut needed,
+    );
+    if ok == 0 || (needed as usize) < std::mem::size_of::<u32>() {
+        return out;
+    }
+    let group_count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
+    // TOKEN_GROUPS layout is: DWORD GroupCount; SID_AND_ATTRIBUTES Groups[];
+    // On 64-bit, Groups is aligned to pointer alignment after 4-byte GroupCount.
+    let after_count = unsafe { buf.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
+    let align = std::mem::align_of::<SID_AND_ATTRIBUTES>();
+    let aligned = (after_count + (align - 1)) & !(align - 1);
+    let groups_ptr = aligned as *const SID_AND_ATTRIBUTES;
+    for i in 0..group_count {
+        let entry: SID_AND_ATTRIBUTES = std::ptr::read_unaligned(groups_ptr.add(i));
+        if (entry.Attributes & SE_GROUP_LOGON_ID) != SE_GROUP_LOGON_ID {
+            continue;
+        }
+        let sid = entry.Sid;
+        let sid_len = GetLengthSid(sid);
+        if sid_len == 0 {
+            continue;
+        }
+        let mut copied = vec![0u8; sid_len as usize];
+        if CopySid(sid_len, copied.as_mut_ptr() as *mut c_void, sid) == 0 {
+            continue;
+        }
+        out.push(copied);
+    }
+    out
+}
 
-    if let Some(v) = scan_token_groups_for_logon(h_token) {
+pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+    if let Some(v) = scan_token_groups_for_logon(h_token).into_iter().next() {
         return Ok(v);
     }
 
@@ -266,7 +279,7 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
             if lt.linked_token != 0 {
                 let res = scan_token_groups_for_logon(lt.linked_token);
                 CloseHandle(lt.linked_token);
-                if let Some(v) = res {
+                if let Some(v) = res.into_iter().next() {
                     return Ok(v);
                 }
             }
@@ -276,7 +289,11 @@ pub unsafe fn get_logon_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     Err(anyhow!("Logon SID not present on token"))
 }
 
-unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
+/// Copies the token user SID out of `h_token`.
+///
+/// # Safety
+/// `h_token` must be a valid token handle opened with `TOKEN_QUERY`.
+pub unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     let mut needed: u32 = 0;
     GetTokenInformation(h_token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
     if needed == 0 {
@@ -316,7 +333,7 @@ unsafe fn get_user_sid_bytes(h_token: HANDLE) -> Result<Vec<u8>> {
     Ok(user_sid_bytes)
 }
 
-unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
+unsafe fn lookup_privilege_luid(name: &str) -> Result<LUID> {
     let mut luid = LUID {
         LowPart: 0,
         HighPart: 0,
@@ -325,6 +342,72 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     if ok == 0 {
         return Err(anyhow!("LookupPrivilegeValueW failed: {}", GetLastError()));
     }
+    Ok(luid)
+}
+
+fn luid_eq(a: &LUID, b: &LUID) -> bool {
+    a.LowPart == b.LowPart && a.HighPart == b.HighPart
+}
+
+/// Pure selection step of the `PrivilegesToDelete` array: every privilege the
+/// base token carries EXCEPT `keep`. This replaces `DISABLE_MAX_PRIVILEGE`,
+/// which merely disables privileges wholesale and is silently a no-op for
+/// anything Windows re-adds; deleting by name is explicit and auditable.
+fn select_privileges_to_delete(
+    all: &[LUID_AND_ATTRIBUTES],
+    keep: &LUID,
+) -> Vec<LUID_AND_ATTRIBUTES> {
+    all.iter()
+        .filter(|entry| !luid_eq(&entry.Luid, keep))
+        .copied()
+        .collect()
+}
+
+/// Reads the full `TOKEN_PRIVILEGES` array off `h_token`.
+unsafe fn token_privileges(h_token: HANDLE) -> Result<Vec<LUID_AND_ATTRIBUTES>> {
+    let mut needed: u32 = 0;
+    GetTokenInformation(
+        h_token,
+        TokenPrivileges,
+        std::ptr::null_mut(),
+        0,
+        &mut needed,
+    );
+    if needed == 0 {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenPrivileges) size query returned 0: {}",
+            GetLastError()
+        ));
+    }
+    let mut buf: Vec<u8> = vec![0u8; needed as usize];
+    let ok = GetTokenInformation(
+        h_token,
+        TokenPrivileges,
+        buf.as_mut_ptr() as *mut c_void,
+        needed,
+        &mut needed,
+    );
+    if ok == 0 || (needed as usize) < std::mem::size_of::<u32>() {
+        return Err(anyhow!(
+            "GetTokenInformation(TokenPrivileges) failed: {}",
+            GetLastError()
+        ));
+    }
+    // TOKEN_PRIVILEGES layout: DWORD PrivilegeCount; LUID_AND_ATTRIBUTES Privileges[].
+    let count = std::ptr::read_unaligned(buf.as_ptr() as *const u32) as usize;
+    let after_count = unsafe { buf.as_ptr().add(std::mem::size_of::<u32>()) } as usize;
+    let align = std::mem::align_of::<LUID_AND_ATTRIBUTES>();
+    let aligned = (after_count + (align - 1)) & !(align - 1);
+    let privileges_ptr = aligned as *const LUID_AND_ATTRIBUTES;
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        out.push(std::ptr::read_unaligned(privileges_ptr.add(i)));
+    }
+    Ok(out)
+}
+
+unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
+    let luid = lookup_privilege_luid(name)?;
     let mut tp: TOKEN_PRIVILEGES = std::mem::zeroed();
     tp.PrivilegeCount = 1;
     tp.Privileges[0].Luid = luid;
@@ -347,143 +430,169 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// # Safety
-/// Caller must close the returned token handle.
-pub unsafe fn create_readonly_token_with_cap(
-    psid_capability: *mut c_void,
-) -> Result<(HANDLE, *mut c_void)> {
-    let base = get_current_token_for_restriction()?;
-    let res = create_readonly_token_with_cap_from(base, psid_capability);
-    CloseHandle(base);
-    res
-}
-
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_readonly_token_with_cap_from(
-    base_token: HANDLE,
-    psid_capability: *mut c_void,
-) -> Result<(HANDLE, *mut c_void)> {
-    let new_token = create_token_with_caps_from(base_token, &[psid_capability], &[])?;
-    Ok((new_token, psid_capability))
-}
-
-/// Create a restricted token that includes all provided capability SIDs.
+/// Builds the primary token the sandboxed child runs under.
+///
+/// # Why there is NO restricting-SID array (decision D-013)
+///
+/// `RestrictingSids` is deliberately NULL. Schannel client credentials are LSA
+/// objects acquired over SSPI RPC into `lsass`. ANY `RestrictingSids` array on
+/// the caller's token breaks that path, and there is no ACL fix available
+/// because `lsass`'s internal client context is not an object anyone can grant
+/// access to. Symptom when it is present:
+/// `curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS`,
+/// so no schannel-based HTTPS client (curl, WinHTTP, .NET default TLS) can
+/// complete a TLS handshake inside the sandbox.
+///
+/// Precedent: Anthropic's Sandbox Runtime reaches the same conclusion in
+/// `src/token.rs` ("No RestrictingSids array, that breaks Schannel/LSA RPC")
+/// and passes `None`. See https://github.com/anthropic-experimental/sandbox-runtime
+///
+/// The shape this file previously used was copied from OpenAI Codex
+/// (`codex-rs/windows-sandbox-rs`), which carries the same defect and the same
+/// open bug: https://github.com/openai/codex/issues/17459
+///
+/// An earlier attempt to keep `WRITE_RESTRICTED` and merely widen the
+/// restricting set with interactive group SIDs was tried in the lab and
+/// reverted: it did not fix credential acquisition and it broke write
+/// containment. See VENDORING.md, "TRIED AND REVERTED".
+///
+/// ## What is given up
+///
+/// `WRITE_RESTRICTED` gave every write-type access check a SECOND pass against
+/// the restricting set. That second check is gone. Containment for writes now
+/// rests entirely on the dedicated low-privilege sandbox account plus NTFS
+/// ACEs, so any location that is world-writable or writable by ordinary user
+/// groups (`C:\Windows\Temp`, `%TEMP%`, the account's own profile, any share
+/// granting `Authenticated Users` Modify) IS writable by the sandbox account.
+/// The read-only permission profile is likewise no longer a token-level
+/// property: it is now expressed purely by NOT granting the sandbox account an
+/// allow-write ACE on the workspace root. The sandbox home is given an explicit
+/// protected ACL at provisioning time (`hive_desktop_sandbox`'s
+/// `sandbox_home_dacl_entries` / `apply_sandbox_home_acl`), which is the
+/// enabling prerequisite for this change; arbitrary task workspaces outside
+/// that tree are NOT hardened by it.
+///
+/// ## What still protects the host
+///
+/// * a dedicated, hidden, least-privilege local account (not the user's own),
+/// * the kill-on-close Job Object with no breakaway,
+/// * the private desktop,
+/// * the WFP plus firewall egress fence, keyed on the sandbox account SID,
+/// * the deny-read ACEs (the sealed credential directory),
+/// * NO privileges beyond `SeChangeNotifyPrivilege`, all others deleted,
+/// * `BUILTIN\Administrators` and every logon SID disabled on the token,
+/// * `LUA_TOKEN`, which keeps the token at Medium integrity.
 ///
 /// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_workspace_write_token_with_caps_from(
-    base_token: HANDLE,
-    psid_capabilities: &[*mut c_void],
-) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities, &[])
-}
-
-/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
-///
-/// This is intended for the elevated sandbox backend, where the token user is the dedicated
-/// sandbox account rather than the real signed-in user.
-///
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_workspace_write_token_with_caps_and_user_from(
-    base_token: HANDLE,
-    psid_capabilities: &[*mut c_void],
-) -> Result<HANDLE> {
-    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
-    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
-    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
-}
-
-/// Create a restricted token that includes all provided capability SIDs.
-///
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_readonly_token_with_caps_from(
-    base_token: HANDLE,
-    psid_capabilities: &[*mut c_void],
-) -> Result<HANDLE> {
-    create_token_with_caps_from(base_token, psid_capabilities, &[])
-}
-
-/// Create a restricted token that includes all provided capability SIDs plus the token user SID.
-///
-/// This is intended for the elevated sandbox backend, where the token user is the dedicated
-/// sandbox account rather than the real signed-in user.
-///
-/// # Safety
-/// Caller must close the returned token handle; base_token must be a valid primary token.
-pub unsafe fn create_readonly_token_with_caps_and_user_from(
-    base_token: HANDLE,
-    psid_capabilities: &[*mut c_void],
-) -> Result<HANDLE> {
-    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
-    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
-    create_token_with_caps_from(base_token, psid_capabilities, &[psid_user])
-}
-
-unsafe fn create_token_with_caps_from(
-    base_token: HANDLE,
-    psid_capabilities: &[*mut c_void],
-    extra_restricting_sids: &[*mut c_void],
-) -> Result<HANDLE> {
-    if psid_capabilities.is_empty() {
-        return Err(anyhow!("no capability SIDs provided"));
+/// Caller must close the returned token handle; `base_token` must be a valid
+/// primary token (the runner's own token).
+pub unsafe fn create_sandbox_restricted_token_from(base_token: HANDLE) -> Result<HANDLE> {
+    // SidsToDisable: Administrators plus every logon SID on the token. Disabled
+    // SIDs stay present for DENY evaluation but grant nothing.
+    let admins = LocalSid::from_string(BUILTIN_ADMINISTRATORS_SID)?;
+    let mut logon_sid_bytes = scan_token_groups_for_logon(base_token);
+    let mut sids_to_disable: Vec<SID_AND_ATTRIBUTES> =
+        Vec::with_capacity(1 + logon_sid_bytes.len());
+    sids_to_disable.push(SID_AND_ATTRIBUTES {
+        Sid: admins.as_ptr(),
+        Attributes: 0,
+    });
+    for bytes in logon_sid_bytes.iter_mut() {
+        sids_to_disable.push(SID_AND_ATTRIBUTES {
+            Sid: bytes.as_mut_ptr() as *mut c_void,
+            Attributes: 0,
+        });
     }
-    let mut logon_sid_bytes = get_logon_sid_bytes(base_token)?;
-    let psid_logon = logon_sid_bytes.as_mut_ptr() as *mut c_void;
-    let mut everyone = world_sid()?;
-    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
 
-    // Exact order: Capabilities..., ExtraRestricting..., Logon, Everyone
-    let mut entries: Vec<SID_AND_ATTRIBUTES> =
-        vec![std::mem::zeroed(); psid_capabilities.len() + extra_restricting_sids.len() + 2];
-    for (i, psid) in psid_capabilities.iter().enumerate() {
-        entries[i].Sid = *psid;
-        entries[i].Attributes = 0;
-    }
-    let extras_idx = psid_capabilities.len();
-    for (i, psid) in extra_restricting_sids.iter().enumerate() {
-        entries[extras_idx + i].Sid = *psid;
-        entries[extras_idx + i].Attributes = 0;
-    }
-    let logon_idx = extras_idx + extra_restricting_sids.len();
-    entries[logon_idx].Sid = psid_logon;
-    entries[logon_idx].Attributes = 0;
-    entries[logon_idx + 1].Sid = psid_everyone;
-    entries[logon_idx + 1].Attributes = 0;
+    // PrivilegesToDelete: everything except SeChangeNotifyPrivilege.
+    let keep = lookup_privilege_luid(KEPT_PRIVILEGE)?;
+    let privileges_to_delete = select_privileges_to_delete(&token_privileges(base_token)?, &keep);
 
     let mut new_token: HANDLE = 0;
-    let flags = DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED;
     let ok = CreateRestrictedToken(
         base_token,
-        flags,
+        LUA_TOKEN,
+        sids_to_disable.len() as u32,
+        sids_to_disable.as_ptr(),
+        privileges_to_delete.len() as u32,
+        if privileges_to_delete.is_empty() {
+            std::ptr::null()
+        } else {
+            privileges_to_delete.as_ptr()
+        },
+        // RestrictingSids: NULL. See the doc comment above; this is the point.
         0,
         std::ptr::null(),
-        0,
-        std::ptr::null(),
-        entries.len() as u32,
-        entries.as_mut_ptr(),
         &mut new_token,
     );
     if ok == 0 {
         return Err(anyhow!("CreateRestrictedToken failed: {}", GetLastError()));
     }
 
-    let mut dacl_sids: Vec<*mut c_void> = Vec::with_capacity(psid_capabilities.len() + 2);
-    dacl_sids.push(psid_logon);
-    dacl_sids.push(psid_everyone);
-    dacl_sids.extend_from_slice(psid_capabilities);
-    if let Err(e) = set_default_dacl(new_token, &dacl_sids) {
+    // Permissive default DACL so the child can create its own pipes and IPC
+    // objects (PowerShell pipelines hit ACCESS_DENIED without it). Addressed to
+    // the token user (the sandbox account) and Everyone; the logon SID is no
+    // longer usable here because it is disabled above.
+    let mut user_sid_bytes = get_user_sid_bytes(base_token)?;
+    let psid_user = user_sid_bytes.as_mut_ptr() as *mut c_void;
+    let mut everyone = world_sid()?;
+    let psid_everyone = everyone.as_mut_ptr() as *mut c_void;
+    if let Err(e) = set_default_dacl(new_token, &[psid_user, psid_everyone]) {
         CloseHandle(new_token);
         return Err(e);
     }
 
-    if let Err(e) = enable_single_privilege(new_token, "SeChangeNotifyPrivilege") {
+    if let Err(e) = enable_single_privilege(new_token, KEPT_PRIVILEGE) {
         CloseHandle(new_token);
         return Err(e);
     }
     Ok(new_token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn luid(low: u32, high: i32) -> LUID {
+        LUID {
+            LowPart: low,
+            HighPart: high,
+        }
+    }
+
+    fn entry(low: u32, high: i32) -> LUID_AND_ATTRIBUTES {
+        LUID_AND_ATTRIBUTES {
+            Luid: luid(low, high),
+            Attributes: 0,
+        }
+    }
+
+    #[test]
+    fn every_privilege_except_the_kept_one_is_deleted() {
+        let keep = luid(23, 0);
+        let all = [entry(19, 0), entry(23, 0), entry(25, 0)];
+
+        let deleted = select_privileges_to_delete(&all, &keep);
+
+        assert_eq!(deleted.len(), 2);
+        assert!(deleted.iter().all(|e| !luid_eq(&e.Luid, &keep)));
+    }
+
+    #[test]
+    fn high_part_participates_in_luid_identity() {
+        // A LUID differing only in HighPart is a DIFFERENT privilege and must
+        // still be deleted; comparing LowPart alone would silently keep it.
+        let keep = luid(23, 0);
+        let all = [entry(23, 1)];
+
+        assert_eq!(select_privileges_to_delete(&all, &keep).len(), 1);
+    }
+
+    #[test]
+    fn a_token_carrying_only_the_kept_privilege_deletes_nothing() {
+        let keep = luid(23, 0);
+
+        assert!(select_privileges_to_delete(&[entry(23, 0)], &keep).is_empty());
+    }
 }

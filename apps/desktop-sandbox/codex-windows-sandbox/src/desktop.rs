@@ -1,6 +1,7 @@
 use crate::logging;
 use crate::token::get_current_token_for_restriction;
 use crate::token::get_logon_sid_bytes;
+use crate::token::get_user_sid_bytes;
 use crate::winutil::to_wide;
 use anyhow::Result;
 use rand::RngCore;
@@ -70,9 +71,9 @@ const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
 /// shared with the interactive user (a private station would isolate them, but
 /// the sandbox token cannot create one).
 ///
-/// Created RUNNER-side (inside the sandbox-account runner), so the logon SID the
-/// private desktop is granted to is the runner's, which the restricted inner
-/// child shares. See [`PrivateDesktop`].
+/// Created RUNNER-side (inside the sandbox-account runner), so the token user
+/// SID the private desktop is granted to is the sandbox account's, which the
+/// restricted inner child shares. See [`PrivateDesktop`].
 pub struct LaunchDesktop {
     _private: Option<PrivateDesktop>,
     startup_name: Vec<u16>,
@@ -321,13 +322,17 @@ pub struct PrivateDesktop {
 
 impl PrivateDesktop {
     /// Creates the private desktop on the process's CURRENT window station (the
-    /// interactive `WinSta0`) and grants the CURRENT process's logon SID access to
-    /// it. Called RUNNER-side (the runner runs as the sandbox account), so the
-    /// logon SID is the runner's; the restricted inner-child token derives from
-    /// the runner's token and carries that same logon SID in its restricting-SID
-    /// set, so this ONE grant lets the restricted child attach: the logon SID
-    /// satisfies both halves of the `WRITE_RESTRICTED` access check (it is in the
-    /// token's normal groups AND its restricting-SID set).
+    /// interactive `WinSta0`) and grants the CURRENT process's token USER SID and
+    /// logon SID access to it. Called RUNNER-side (the runner runs as the sandbox
+    /// account), so both SIDs are the runner's and the restricted inner-child
+    /// token, derived from the runner's own token, carries them.
+    ///
+    /// The token user SID (the dedicated sandbox account) is the load-bearing
+    /// grant since decision D-013: the child token now DISABLES every logon SID
+    /// it carries, and a disabled SID grants nothing, so a logon-SID-only grant
+    /// would deny the child its desktop attach and the spawn would fail before
+    /// `main` (`0xC0000142`). The logon SID grant is kept alongside it because
+    /// the unrestricted runner itself still attaches through it.
     ///
     /// No process-wide window-station switch is performed (`CreateDesktopW`
     /// targets the current station directly), so there is no station-switch lock
@@ -365,24 +370,37 @@ impl PrivateDesktop {
         &self.startup_name
     }
 
-    /// Grants the current process's logon SID access to the private desktop,
-    /// preserving every existing ACE (the creator keeps full control). See
-    /// [`PrivateDesktop::create`] for why the logon SID is the correct trustee for
-    /// the restricted child.
+    /// Grants the current process's token user SID and logon SID access to the
+    /// private desktop, preserving every existing ACE (the creator keeps full
+    /// control). See [`PrivateDesktop::create`] for why the token user SID is the
+    /// trustee the restricted child actually attaches through.
     fn grant_access(&self) -> Result<()> {
-        // SAFETY: the token helpers return this process's own token and its logon
-        // SID; `psid` points into `logon_sid`, which outlives the grant below.
-        // Each Win32 step inside `merge_grant_on_window_object` is checked.
+        // SAFETY: the token helpers return this process's own token, its user
+        // SID and its logon SID; both `psid` values point into buffers that
+        // outlive the grant below. Each Win32 step inside
+        // `merge_grant_on_window_object` is checked.
         unsafe {
             let token = get_current_token_for_restriction()?;
-            // Close the token on both the success and error paths of
-            // get_logon_sid_bytes: propagating its error with `?` before
-            // CloseHandle would leak the handle.
+            // Close the token on both the success and error paths of the two
+            // lookups: propagating an error with `?` before CloseHandle would
+            // leak the handle.
+            let user_sid_result = get_user_sid_bytes(token);
             let logon_sid_result = get_logon_sid_bytes(token);
             CloseHandle(token);
+            let mut user_sid = user_sid_result?;
             let mut logon_sid = logon_sid_result?;
-            let psid = logon_sid.as_mut_ptr() as *mut c_void;
-            let desktop_entries = [explicit_grant(psid, DESKTOP_ALL_ACCESS, NO_INHERITANCE)];
+            let desktop_entries = [
+                explicit_grant(
+                    user_sid.as_mut_ptr() as *mut c_void,
+                    DESKTOP_ALL_ACCESS,
+                    NO_INHERITANCE,
+                ),
+                explicit_grant(
+                    logon_sid.as_mut_ptr() as *mut c_void,
+                    DESKTOP_ALL_ACCESS,
+                    NO_INHERITANCE,
+                ),
+            ];
             merge_grant_on_window_object(self.desktop, &desktop_entries)?;
         }
         Ok(())

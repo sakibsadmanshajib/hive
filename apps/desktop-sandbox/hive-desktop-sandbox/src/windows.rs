@@ -92,7 +92,7 @@
 //!   + firewall COM fence replaced it).
 //! - Token privilege reduction / the low-privilege sandbox-user variant: owned
 //!   by the elevated compose in [`crate::windows_elevated`] (the sandbox-account
-//!   `CreateProcessWithLogonW` transport, the capability-restricted token
+//!   `CreateProcessWithLogonW` transport, the restricted sandbox token
 //!   derived in the runner, and the per-task ACL assembly), which `launch` now
 //!   dispatches to. The same compose is also exercised directly by the lab-only
 //!   [`crate::windows_elevated::spawn_confined_for_validation`] on `spike307-win`

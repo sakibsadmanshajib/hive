@@ -1174,6 +1174,139 @@ and `===WHOAMI===` (`whoami /groups`) probes in the validator script. They are
 what proved the relaxation was applied and still insufficient, and they will
 serve the same role for the next row 5 hypothesis.
 
+### DELIBERATE DEVIATION: srt-shaped restricted token plus a protected sandbox-home DACL (decision D-013)
+
+This is the follow-on to the reverted experiment above, and it is the first
+place where the token shape deliberately leaves the vendored Codex source and
+follows Anthropic's Sandbox Runtime (srt) instead. Both halves landed in ONE
+commit because either half alone leaves the sandbox in a known-broken state.
+
+Sources:
+
+- Anthropic Sandbox Runtime, `src/token.rs`, which states outright
+  "No RestrictingSids array, that breaks Schannel/LSA RPC" and passes
+  `RestrictingSids` as `None`:
+  https://github.com/anthropic-experimental/sandbox-runtime
+- OpenAI Codex, `codex-rs/windows-sandbox-rs`, the source this tree vendored,
+  which carries the same defect and the same open bug:
+  https://github.com/openai/codex/issues/17459
+
+Why the vendored shape had to go. Schannel client credentials are LSA-held
+objects acquired over SSPI RPC into `lsass`. ANY `RestrictingSids` array on the
+token breaks that acquisition, and there is no ACL that fixes it, because
+`lsass`'s internal client context is not an object anyone can grant access to.
+That is row 5 above (`SEC_E_NO_CREDENTIALS`). Widening the restricting set was
+already tried and reverted (previous section): it did not help and it broke
+containment. Emptying the set is the only shape that can work, and it is the
+shape srt independently arrived at.
+
+Part B, `codex-windows-sandbox/src/token.rs`. The six cap-taking token builders
+and `create_token_with_caps_from` collapse into one
+`create_sandbox_restricted_token_from`, which calls `CreateRestrictedToken`
+with:
+
+- flags `LUA_TOKEN` only (`WRITE_RESTRICTED` and `DISABLE_MAX_PRIVILEGE` are
+  gone), so the token stays at Medium integrity;
+- `SidsToDisable` = `BUILTIN\Administrators` (`S-1-5-32-544`) plus every group
+  SID on the token carrying `SE_GROUP_LOGON_ID`;
+- `PrivilegesToDelete` = every privilege the base token holds EXCEPT
+  `SeChangeNotifyPrivilege`, enumerated by name rather than swept by
+  `DISABLE_MAX_PRIVILEGE`;
+- `RestrictingSids` = NULL.
+
+Everything else is unchanged: the kill-on-close job object with no breakaway,
+the private desktop, the WFP plus firewall egress fence, the deny-read ACEs, and
+the permissive token default DACL (now addressed to the token user and Everyone,
+since the logon SID it previously named is disabled).
+
+Capability SIDs are REMOVED, not merely unused. `cap.rs` is deleted, `pub mod
+cap` is gone from `lib.rs`, and `SpawnRequest::cap_sids` is gone from
+`ipc_framed.rs` (`IPC_PROTOCOL_VERSION` bumped 4 -> 5 so a stale runner binary
+is rejected at the version check). Those synthetic random SIDs were only ever
+supplied as restricting SIDs; with a NULL restricting array they would not
+appear on the child token at all, so every ACL grant addressed to one would have
+become silently dead. The per-task workspace grant in
+`windows_elevated.rs::run_windows_sandbox_capture` now targets the dedicated
+sandbox account SID and nothing else, which is srt's model: a dedicated account
+plus per-task ACEs, no capability SIDs. This also removes the intra-process
+`CAP_SID_LOCK` and the cross-process cap-SID mutex documented as open risk 8
+below, since there is no longer a `cap_sid` file to race on.
+`ResolvedWindowsSandboxPermissions::uses_write_capabilities` is renamed
+`grants_write` for the same reason.
+
+Part A, the enabling prerequisite, `hive-desktop-sandbox`. Dropping
+`WRITE_RESTRICTED` removes the blanket second write check, so NTFS ACLs become
+the ENTIRE write defense, and the previous section established that they
+provided almost none: `C:\hivesbx` carried an inherited
+`NT AUTHORITY\Authenticated Users:(I)(M)` grant and the only per-path deny in the
+tree was on `secrets`. Shipping Part B without Part A would reproduce exactly the
+containment regression that was just reverted. So provisioning now applies an
+explicit, PROTECTED DACL to the sandbox home before the readiness marker:
+
+- `sandbox_home_dacl_entries` (pure, cross-platform, unit-tested on the Linux CI
+  job) builds the trustee list and fails closed on a broad group SID
+  (`S-1-5-11`, `S-1-5-32-545`, `S-1-1-0`, `S-1-5-4`), on an empty SID, and on a
+  sandbox account SID equal to the provisioning user's.
+- `apply_sandbox_home_acl` passes `PROTECTED_DACL_SECURITY_INFORMATION` (breaks
+  inheritance) together with a NULL old-ACL to `SetEntriesInAclW` (so inherited
+  ACEs are not copied forward), then re-reads the DACL and fails closed unless
+  the sandbox account has read but no write and none of the four broad group
+  SIDs has write.
+- Trustees: SYSTEM and `BUILTIN\Administrators` full control; the provisioning
+  user (the desktop app runs NON-elevated as this user and owns the tree) full
+  control; the sandbox account read plus execute only, with no `DELETE` and no
+  `FILE_DELETE_CHILD`, so it can load the materialized runner image out of
+  `.sandbox-bin` but cannot modify anything or unlink a sibling such as
+  `secrets`. The existing `secrets` deny-read ACE is applied AFTER this DACL and
+  is preserved.
+
+Honest limits, for the security reviewer. Part A hardens the sandbox HOME only.
+Any world-writable or user-group-writable location outside it (`C:\Windows\Temp`,
+`%TEMP%`, the sandbox account's own profile, a share granting
+`Authenticated Users` Modify) is now writable by the sandbox account, where
+`WRITE_RESTRICTED` previously blocked it. Related: the read-only permission
+profile is no longer a token-level property at all. Both profiles get the same
+token; read-only means only that the parent adds no allow-write ACE on the
+workspace root, so a task workspace that already grants a broad group Modify is
+writable under the read-only profile too. Neither property is exercised by CI;
+both need the lab.
+
+One more behavioural consequence, already handled in code but lab-unproven:
+because the child token now DISABLES every logon SID, `desktop.rs`'s
+`PrivateDesktop::grant_access` was changed to grant the token USER SID (the
+sandbox account) alongside the logon SID. A logon-SID-only grant would have
+denied the child its desktop attach and failed the spawn with `0xC0000142`
+before `main`.
+
+What `spike307-win` must re-prove before this leaves draft (a green CI run
+proves NOTHING about any of it):
+
+1. Row 5 itself: an allowlisted host completes a real TLS handshake inside the
+   sandbox, no `SEC_E_NO_CREDENTIALS`.
+2. Every confinement assertion in the validator, re-run from scratch, not just
+   the ones row 5 touches: outside-workspace write DENIED in both derivations,
+   inside-workspace write allowed ONLY under the write derivation and denied
+   under read-only, canary-secret read denied, token SID is the sandbox account.
+3. The new sandbox-home DACL: `icacls C:\hivesbx` shows no `(I)` inherited ACEs
+   and no `Authenticated Users` entry at all; the sandbox account can still
+   launch (it must be able to load `.sandbox-bin\hive-command-runner.exe`) but
+   cannot write anywhere under the sandbox home; `secrets` still denies read.
+4. Provisioning is still idempotent and still fail-closed: a second run
+   succeeds, and an induced ACL failure aborts before the readiness marker.
+5. The private desktop still attaches (this is the `0xC0000142` regression
+   surface), and grandchild processes are still confined by the job object.
+6. The egress fence is unchanged and still holds: DenyAll blocks all probes,
+   non-allowlisted hosts still get a clean 403, SID-keying still spares a
+   non-sandbox account.
+7. That `CreateRestrictedToken` itself succeeds. The `SidsToDisable` array names
+   `BUILTIN\Administrators` unconditionally, and the least-privilege sandbox
+   account almost certainly does NOT carry that group. Windows is expected to
+   add an absent disable-SID as a deny-only entry rather than reject the call,
+   but that is an expectation, not something this tree can verify off a real
+   host. If the lab sees `ERROR_INVALID_PARAMETER` here, the fix is to filter
+   the disable list against the token's actual groups (which are already
+   enumerated in the same function for the logon SIDs).
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,

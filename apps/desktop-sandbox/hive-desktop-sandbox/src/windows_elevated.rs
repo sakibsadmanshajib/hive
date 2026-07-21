@@ -26,9 +26,9 @@
 //! `runner_client::spawn_runner_transport`), passing the sandbox account, `.`
 //! domain, and the DPAPI-unsealed password with `LOGON_WITH_PROFILE`. The
 //! command-runner, now running as the low-privilege sandbox account, derives a
-//! capability-restricted primary token FROM ITS OWN token
+//! restricted primary token FROM ITS OWN token
 //! (`get_current_token_for_restriction` +
-//! `create_*_token_with_caps_and_user_from`) and spawns the inner child with
+//! `create_sandbox_restricted_token_from`) and spawns the inner child with
 //! `CreateProcessAsUserW` (via `spawn_process_with_pipes`). A token derived
 //! from the caller's own token is assignable, so that call needs no privilege.
 //! UAC prompts exactly once, at provisioning, when the setup binary runs
@@ -248,6 +248,118 @@ struct SetupMarker {
     username: String,
 }
 
+// ---- Sandbox-home DACL (decision D-013, Part A) ---------------------------
+
+/// `NT AUTHORITY\SYSTEM`.
+const LOCAL_SYSTEM_SID: &str = "S-1-5-18";
+/// `BUILTIN\Administrators`.
+const BUILTIN_ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+
+/// Broad group SIDs that must never be granted anything in the sandbox-home
+/// DACL. The lab found `C:\hivesbx` carrying an INHERITED
+/// `NT AUTHORITY\Authenticated Users:(I)(M)` grant, which is exactly why the
+/// DACL is now protected (inheritance broken) rather than merely appended to.
+/// Any of these as a trustee would re-open the hole the protection closes.
+pub const FORBIDDEN_SANDBOX_HOME_TRUSTEES: [&str; 4] = [
+    "S-1-5-11",     // Authenticated Users
+    "S-1-5-32-545", // BUILTIN\Users
+    "S-1-1-0",      // Everyone
+    "S-1-5-4",      // INTERACTIVE
+];
+
+/// Access one trustee gets on the sandbox home. Both variants are inheritable
+/// so the tree below the root (notably `.sandbox-bin`, which holds the
+/// materialized command-runner image the sandbox account must be able to load)
+/// is covered without a second pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxHomeAccess {
+    /// Full control. Provisioning, helper materialization, log writing, repair
+    /// and uninstall all need it.
+    FullControl,
+    /// Read plus traverse/execute only. No write, no `DELETE`, and in
+    /// particular no `FILE_DELETE_CHILD` on the root, so the holder cannot
+    /// remove sibling entries such as the `secrets` directory.
+    ReadExecute,
+}
+
+/// One ACE of the explicit sandbox-home DACL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SandboxHomeAce {
+    pub sid: String,
+    pub access: SandboxHomeAccess,
+}
+
+/// Builds the explicit, protected DACL for the sandbox home (decision D-013,
+/// Part A).
+///
+/// Removing the restricting-SID set from the child token (see
+/// `codex_windows_sandbox::token::create_sandbox_restricted_token_from`) removes
+/// the blanket second write check that was the only thing suppressing the
+/// inherited `Authenticated Users` Modify grant on this tree. NTFS ACEs are now
+/// the entire write defense here, so the root's DACL is replaced wholesale and
+/// marked protected (inheritance broken, inherited ACEs NOT copied in) rather
+/// than being appended to.
+///
+/// The sandbox account gets read plus execute only: it must be able to load the
+/// materialized runner image out of `.sandbox-bin`, and nothing more. It gets no
+/// write anywhere under the sandbox home; the sealed-credential `secrets`
+/// directory additionally keeps its explicit deny-read ACE, which provisioning
+/// applies after this DACL and which beats the inherited allow-read from here.
+///
+/// Fails closed on a caller that would widen the DACL: a broad group trustee,
+/// an empty SID, or a sandbox account SID equal to the provisioning user's (the
+/// latter would silently promote the sandbox account to full control).
+pub fn sandbox_home_dacl_entries(
+    provisioning_user_sid: &str,
+    sandbox_account_sid: &str,
+) -> Result<Vec<SandboxHomeAce>, String> {
+    if provisioning_user_sid.is_empty() || sandbox_account_sid.is_empty() {
+        return Err(
+            "sandbox-home DACL needs a non-empty provisioning user and sandbox account SID"
+                .to_string(),
+        );
+    }
+    if provisioning_user_sid.eq_ignore_ascii_case(sandbox_account_sid) {
+        return Err(format!(
+            "sandbox account SID {sandbox_account_sid} is also the provisioning user SID; \
+             that would grant the sandbox account full control of its own home"
+        ));
+    }
+    for sid in [provisioning_user_sid, sandbox_account_sid] {
+        if FORBIDDEN_SANDBOX_HOME_TRUSTEES
+            .iter()
+            .any(|forbidden| forbidden.eq_ignore_ascii_case(sid))
+        {
+            return Err(format!(
+                "{sid} is a broad group SID and must never be a sandbox-home DACL trustee"
+            ));
+        }
+    }
+
+    Ok(vec![
+        SandboxHomeAce {
+            sid: LOCAL_SYSTEM_SID.to_string(),
+            access: SandboxHomeAccess::FullControl,
+        },
+        SandboxHomeAce {
+            sid: BUILTIN_ADMINISTRATORS_SID.to_string(),
+            access: SandboxHomeAccess::FullControl,
+        },
+        // The desktop app itself runs NON-elevated as this user and owns the
+        // tree: it materializes the runner helper, seals and reads the
+        // credential, and writes the egress-fence log. Without it, protecting
+        // the DACL would lock the product out of its own sandbox home.
+        SandboxHomeAce {
+            sid: provisioning_user_sid.to_string(),
+            access: SandboxHomeAccess::FullControl,
+        },
+        SandboxHomeAce {
+            sid: sandbox_account_sid.to_string(),
+            access: SandboxHomeAccess::ReadExecute,
+        },
+    ])
+}
+
 // ===========================================================================
 // Windows-only Win32 compose (cross-compiled for windows-gnu; lab-gated)
 // ===========================================================================
@@ -274,10 +386,10 @@ mod windows_impl {
     };
     use codex_windows_sandbox::runner_client::{retry_runner_spawn_once, spawn_runner_transport};
     use codex_windows_sandbox::token::{
-        LocalSid, create_readonly_token_with_caps_and_user_from,
-        create_workspace_write_token_with_caps_and_user_from, get_current_token_for_restriction,
+        LocalSid, create_sandbox_restricted_token_from, get_current_token_for_restriction,
+        get_user_sid_bytes,
     };
-    use codex_windows_sandbox::{acl, cap, dpapi, hide_users, sandbox_users};
+    use codex_windows_sandbox::{acl, dpapi, hide_users, sandbox_users};
     use std::collections::HashMap;
     use std::ffi::c_void;
     use std::fs::File;
@@ -288,9 +400,21 @@ mod windows_impl {
     use windows_sys::Win32::Foundation::{
         CloseHandle, GetLastError, HANDLE, WAIT_ABANDONED, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
+    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, HLOCAL, LocalFree};
     use windows_sys::Win32::Security::Authentication::Identity::{
         LSA_HANDLE, LSA_OBJECT_ATTRIBUTES, LSA_UNICODE_STRING, LsaAddAccountRights, LsaClose,
         LsaOpenPolicy, POLICY_CREATE_ACCOUNT, POLICY_LOOKUP_NAMES,
+    };
+    use windows_sys::Win32::Security::Authorization::{
+        EXPLICIT_ACCESS_W, SetEntriesInAclW, SetNamedSecurityInfoW, TRUSTEE_IS_SID,
+        TRUSTEE_IS_UNKNOWN, TRUSTEE_W,
+    };
+    use windows_sys::Win32::Security::{
+        ACL, DACL_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        DELETE, FILE_ALL_ACCESS, FILE_APPEND_DATA, FILE_DELETE_CHILD, FILE_GENERIC_EXECUTE,
+        FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, FILE_WRITE_EA,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -545,6 +669,13 @@ mod windows_impl {
         sandbox_users::ensure_local_user(SANDBOX_USERNAME, &password, log)?;
         sandbox_users::ensure_local_group_member(SANDBOX_GROUP, SANDBOX_USERNAME)?;
 
+        // 1b. Explicit protected DACL on the sandbox home (decision D-013,
+        //     Part A). Applied as soon as the account exists (its SID is a
+        //     trustee) and BEFORE the secrets deny-read below, so that deny is
+        //     layered on top of this DACL rather than wiped by it. Fail-closed:
+        //     `?` aborts long before the readiness marker is written.
+        apply_sandbox_home_acl(sandbox_home, log)?;
+
         // 2. Logon prerequisites for CreateProcessWithLogonW (A.Q1 invariant).
         grant_interactive_logon_right(SANDBOX_USERNAME)?;
         ensure_seclogon_enabled()?;
@@ -588,6 +719,168 @@ mod windows_impl {
         std::fs::write(setup_marker_path(sandbox_home), bytes)
             .map_err(|e| anyhow::anyhow!("write setup marker: {e}"))?;
         let _ = writeln!(log, "provisioning complete for {SANDBOX_USERNAME}");
+        Ok(())
+    }
+
+    /// Win32 access mask for one [`SandboxHomeAccess`].
+    fn sandbox_home_access_mask(access: SandboxHomeAccess) -> u32 {
+        match access {
+            SandboxHomeAccess::FullControl => FILE_ALL_ACCESS,
+            // Deliberately NOT FILE_ALL_ACCESS and deliberately without DELETE
+            // or FILE_DELETE_CHILD: the sandbox account may read and traverse
+            // the tree (it must load the runner image out of `.sandbox-bin`)
+            // but may neither modify an entry nor unlink a sibling.
+            SandboxHomeAccess::ReadExecute => FILE_GENERIC_READ | FILE_GENERIC_EXECUTE,
+        }
+    }
+
+    /// Inherit to both child containers and child objects, so one ACE on the
+    /// root covers the whole sandbox-home tree.
+    const CONTAINER_AND_OBJECT_INHERIT: u32 = 0x2 | 0x1;
+
+    /// Write-implying access bits ONLY. `FILE_GENERIC_WRITE` cannot be used for
+    /// a "does this trustee have write" probe because it shares `SYNCHRONIZE`
+    /// and `READ_CONTROL` with `FILE_GENERIC_READ`, so an any-bit match against
+    /// it reports true for a pure read grant.
+    const WRITE_IMPLYING_BITS: u32 = FILE_WRITE_DATA
+        | FILE_APPEND_DATA
+        | FILE_WRITE_EA
+        | FILE_WRITE_ATTRIBUTES
+        | DELETE
+        | FILE_DELETE_CHILD;
+
+    /// Replaces the sandbox home's DACL with the explicit, PROTECTED DACL from
+    /// [`sandbox_home_dacl_entries`] (decision D-013, Part A), then verifies
+    /// fail-closed that the result actually denies write to the sandbox account
+    /// and to every broad group trustee.
+    ///
+    /// Protecting the DACL is the whole point: passing
+    /// `PROTECTED_DACL_SECURITY_INFORMATION` breaks inheritance from the parent
+    /// directory, and passing a NULL old-ACL to `SetEntriesInAclW` builds the
+    /// new DACL from these entries alone, so the inherited
+    /// `Authenticated Users:(I)(M)` grant the lab found on `C:\hivesbx` is not
+    /// copied forward.
+    fn apply_sandbox_home_acl(sandbox_home: &Path, log: &mut dyn Write) -> Result<()> {
+        let sandbox_sid = codex_windows_sandbox::winutil::string_from_sid_bytes(
+            &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
+        )
+        .map_err(anyhow::Error::msg)?;
+
+        // The provisioning process runs elevated AS the desktop app's own user;
+        // that user owns this tree and must keep full control (see
+        // `sandbox_home_dacl_entries`).
+        // SAFETY: `get_current_token_for_restriction` returns a token handle
+        // opened with TOKEN_QUERY; `get_user_sid_bytes` copies its user SID out
+        // and the handle is closed on both paths.
+        let user_sid_bytes = unsafe {
+            let token = get_current_token_for_restriction()?;
+            let bytes = get_user_sid_bytes(token);
+            CloseHandle(token);
+            bytes?
+        };
+        let provisioning_user_sid =
+            codex_windows_sandbox::winutil::string_from_sid_bytes(&user_sid_bytes)
+                .map_err(anyhow::Error::msg)?;
+
+        let aces = sandbox_home_dacl_entries(&provisioning_user_sid, &sandbox_sid)
+            .map_err(|e| anyhow::anyhow!("build sandbox-home DACL: {e}"))?;
+        let trustee_sids: Vec<LocalSid> = aces
+            .iter()
+            .map(|ace| LocalSid::from_string(&ace.sid))
+            .collect::<Result<Vec<_>>>()?;
+        let explicit: Vec<EXPLICIT_ACCESS_W> = aces
+            .iter()
+            .zip(trustee_sids.iter())
+            .map(|(ace, sid)| EXPLICIT_ACCESS_W {
+                grfAccessPermissions: sandbox_home_access_mask(ace.access),
+                grfAccessMode: 2, // SET_ACCESS
+                grfInheritance: CONTAINER_AND_OBJECT_INHERIT,
+                Trustee: TRUSTEE_W {
+                    pMultipleTrustee: std::ptr::null_mut(),
+                    MultipleTrusteeOperation: 0,
+                    TrusteeForm: TRUSTEE_IS_SID,
+                    TrusteeType: TRUSTEE_IS_UNKNOWN,
+                    ptstrName: sid.as_ptr() as *mut u16,
+                },
+            })
+            .collect();
+
+        // SAFETY: `explicit` borrows SID pointers owned by `trustee_sids`,
+        // which outlives this block. A NULL old-ACL makes `SetEntriesInAclW`
+        // build a fresh DACL from these entries alone; the resulting ACL is
+        // freed on every path.
+        unsafe {
+            let mut new_dacl: *mut ACL = std::ptr::null_mut();
+            let code = SetEntriesInAclW(
+                explicit.len() as u32,
+                explicit.as_ptr(),
+                std::ptr::null_mut(),
+                &mut new_dacl,
+            );
+            if code != ERROR_SUCCESS {
+                anyhow::bail!("SetEntriesInAclW for sandbox-home DACL failed: {code}");
+            }
+            let mut wide = codex_windows_sandbox::winutil::to_wide(sandbox_home);
+            let code = SetNamedSecurityInfoW(
+                wide.as_mut_ptr(),
+                1, // SE_FILE_OBJECT
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                new_dacl,
+                std::ptr::null_mut(),
+            );
+            if !new_dacl.is_null() {
+                LocalFree(new_dacl as HLOCAL);
+            }
+            if code != ERROR_SUCCESS {
+                anyhow::bail!("SetNamedSecurityInfoW for sandbox-home DACL failed: {code}");
+            }
+        }
+
+        // Fail-closed verification (D-005): re-read the DACL and prove the
+        // properties this whole change depends on, rather than trusting the
+        // Win32 return code. A silent no-op here would leave the sandbox with
+        // NEITHER the restricting-SID write check NOR an ACL write check.
+        let sandbox_local = LocalSid::from_string(&sandbox_sid)?;
+        if acl::path_mask_allows(
+            sandbox_home,
+            &[sandbox_local.as_ptr()],
+            WRITE_IMPLYING_BITS,
+            false,
+        )? {
+            anyhow::bail!(
+                "sandbox account still has write access to {} after applying the protected DACL",
+                sandbox_home.display()
+            );
+        }
+        if !acl::path_mask_allows(
+            sandbox_home,
+            &[sandbox_local.as_ptr()],
+            FILE_GENERIC_READ,
+            false,
+        )? {
+            anyhow::bail!(
+                "sandbox account lost read access to {}; it could not load the runner helper",
+                sandbox_home.display()
+            );
+        }
+        for forbidden in FORBIDDEN_SANDBOX_HOME_TRUSTEES {
+            let sid = LocalSid::from_string(forbidden)?;
+            if acl::path_mask_allows(sandbox_home, &[sid.as_ptr()], WRITE_IMPLYING_BITS, false)? {
+                anyhow::bail!(
+                    "{forbidden} still has write access to {} after protecting the DACL",
+                    sandbox_home.display()
+                );
+            }
+        }
+
+        let _ = writeln!(
+            log,
+            "sandbox-home DACL protected on {} ({} explicit ACEs, sandbox account read+execute only)",
+            sandbox_home.display(),
+            aces.len()
+        );
         Ok(())
     }
 
@@ -710,30 +1003,6 @@ mod windows_impl {
     // Parent-side capture compose (elevated_impl.rs port; tty = false only)
     // -------------------------------------------------------------------
 
-    /// Builds the capability-SID list for the ACL grants and the `SpawnRequest`
-    /// permission profile from the Hive resolver. Port of the cap-selection
-    /// block of `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`.
-    fn cap_sids_for(
-        sandbox_home: &Path,
-        cwd: &Path,
-        permissions: &ResolvedWindowsSandboxPermissions,
-    ) -> Result<Vec<String>> {
-        let caps = cap::load_or_create_cap_sids(sandbox_home)?;
-        if permissions.uses_write_capabilities() {
-            let cap_sids = permissions
-                .writable_roots()
-                .iter()
-                .map(|root| cap::workspace_write_cap_sid_for_root(sandbox_home, cwd, &root.root))
-                .collect::<Result<Vec<_>>>()?;
-            if cap_sids.is_empty() {
-                anyhow::bail!("workspace-write sandbox has no writable-root capability SIDs");
-            }
-            Ok(cap_sids)
-        } else {
-            Ok(vec![caps.readonly])
-        }
-    }
-
     /// Port of the `tty = false` CAPTURE half of
     /// `elevated_impl.rs::run_windows_sandbox_capture_for_permission_profile`,
     /// retargeted to the Hive resolver and sandbox home. Spawns the Hive
@@ -841,7 +1110,6 @@ mod windows_impl {
         let permissions = ResolvedWindowsSandboxPermissions::from_policy(policy, cwd)
             .map_err(|e| anyhow::anyhow!("resolve policy: {e}"))?;
 
-        let cap_sids = cap_sids_for(sandbox_home, cwd, &permissions)?;
         let workspace_roots: Vec<AbsolutePathBuf> = permissions
             .writable_roots()
             .iter()
@@ -854,46 +1122,38 @@ mod windows_impl {
         // sandbox account, which does not own the workspace root and has no
         // WRITE_DAC on it, so its SetNamedSecurityInfoW was denied and no ACE
         // landed -- the (c) "write inside the writable root" failure. This
-        // parent owns the root (it created it) and can rewrite its DACL. On each
-        // writable root we grant:
-        //   * the sandbox-account SID -- the identity present in BOTH the
-        //     WRITE_RESTRICTED token's normal groups AND its restricting-SID set
-        //     (the token adds the sandbox user as an extra restricting SID), so
-        //     a write passes both of the token's access checks. A capability SID
-        //     alone is only in the restricting set, so the normal-groups check
-        //     still denied the write; and
-        //   * each per-workspace capability SID -- the restricting-side gate the
-        //     token carries, kept so the isolation design stays populated.
-        // Fail-closed (D-005): add_allow_ace now returns Err (and verifies the
-        // ACE persisted) so a grant that cannot be applied aborts the launch
-        // rather than proceeding with a workspace the confined child cannot
-        // write.
-        if permissions.uses_write_capabilities() {
+        // parent owns the root (it created it) and can rewrite its DACL.
+        //
+        // Decision D-013: the grant targets the dedicated sandbox account SID
+        // and nothing else. The per-workspace capability SIDs that used to be
+        // granted alongside it are gone: they only ever had effect as
+        // restricting SIDs on the child token, and that array is now NULL (see
+        // `codex_windows_sandbox::token::create_sandbox_restricted_token_from`),
+        // so an ACE addressed to one would match no SID on the token and be
+        // silently dead. This ACE is therefore the ONLY thing separating a
+        // workspace-write task from a read-only one: a read-only task adds no
+        // grant here, and the token itself no longer distinguishes the two.
+        //
+        // Fail-closed (D-005): add_allow_ace returns Err (and verifies the ACE
+        // persisted) so a grant that cannot be applied aborts the launch rather
+        // than proceeding with a workspace the confined child cannot write.
+        if permissions.grants_write() {
             let sandbox_sid_str = codex_windows_sandbox::winutil::string_from_sid_bytes(
                 &sandbox_users::resolve_sid(SANDBOX_USERNAME)?,
             )
             .map_err(anyhow::Error::msg)?;
             let sandbox_local = LocalSid::from_string(&sandbox_sid_str)?;
-            let cap_local_sids: Vec<LocalSid> = cap_sids
-                .iter()
-                .map(|s| LocalSid::from_string(s))
-                .collect::<Result<Vec<_>>>()?;
             for root in &workspace_roots {
                 let root_path = root.as_path();
-                // SAFETY: sandbox_local / cap_local_sids own live SID pointers
-                // that outlive this loop; add_allow_ace reads them and rewrites
-                // the DACL of the validated absolute root path.
+                // SAFETY: `sandbox_local` owns a live SID pointer that outlives
+                // this loop; add_allow_ace reads it and rewrites the DACL of the
+                // validated absolute root path.
                 unsafe { acl::add_allow_ace(root_path, sandbox_local.as_ptr()) }.map_err(|e| {
                     anyhow::anyhow!(
                         "grant sandbox-account write on {}: {e}",
                         root_path.display()
                     )
                 })?;
-                for cap in &cap_local_sids {
-                    unsafe { acl::add_allow_ace(root_path, cap.as_ptr()) }.map_err(|e| {
-                        anyhow::anyhow!("grant capability write on {}: {e}", root_path.display())
-                    })?;
-                }
             }
         }
 
@@ -902,12 +1162,11 @@ mod windows_impl {
             cwd: cwd.to_path_buf(),
             env: env.clone(),
             permission_profile: PermissionProfile {
-                read_only: !permissions.uses_write_capabilities(),
+                read_only: !permissions.grants_write(),
             },
             workspace_roots,
             codex_home: sandbox_home.to_path_buf(),
             real_codex_home: sandbox_home.to_path_buf(),
-            cap_sids,
             timeout_ms: None,
             tty: false,
             stdin_open: false,
@@ -1052,7 +1311,7 @@ mod windows_impl {
 
     /// Runs the Hive command-runner protocol on the two named pipes. This is
     /// the process that `CreateProcessWithLogonW` starts AS the sandbox account;
-    /// it derives a capability-restricted primary token FROM ITS OWN token and
+    /// it derives a restricted primary token FROM ITS OWN token and
     /// spawns the inner child under it (A.Q1). Port of the `tty = false` branch
     /// of `bin/command_runner/win.rs` (upstream lines 339-360) plus the
     /// token/ACL assembly of `spawn_prep.rs`.
@@ -1110,7 +1369,7 @@ mod windows_impl {
 
         // Non-sensitive shape only: NO env values, NO command args, NO creds.
         runner_debug_log(&format!(
-            "spawn request received: program={:?} argc={} tty={} read_only={} cap_sids={} workspace_roots={} env_keys={}",
+            "spawn request received: program={:?} argc={} tty={} read_only={} workspace_roots={} env_keys={}",
             request
                 .command
                 .first()
@@ -1119,7 +1378,6 @@ mod windows_impl {
             request.command.len(),
             request.tty,
             request.permission_profile.read_only,
-            request.cap_sids.len(),
             request.workspace_roots.len(),
             request.env.len(),
         ));
@@ -1160,46 +1418,35 @@ mod windows_impl {
         );
     }
 
-    /// Derives the capability-restricted token from the runner's own token,
+    /// Derives the restricted sandbox token from the runner's own token,
     /// applies the per-task ACL grants, spawns the child via
     /// `spawn_process_with_pipes`, and streams Output/Exit frames.
     fn spawn_and_stream(request: &SpawnRequest, writer: &mut File) -> Result<()> {
-        // Convert the capability SID strings into LocalSid pointers.
-        let cap_sids: Vec<LocalSid> = request
-            .cap_sids
-            .iter()
-            .map(|s| LocalSid::from_string(s))
-            .collect::<Result<Vec<_>>>()?;
-        let cap_ptrs: Vec<*mut c_void> = cap_sids.iter().map(|s| s.as_ptr()).collect();
-
         // The per-task allow-write ACEs are applied by the ELEVATED parent
         // (run_windows_sandbox_capture) BEFORE this runner is launched, because
         // this runner runs as the low-privilege sandbox account and has no
         // WRITE_DAC on the workspace root (a runner-side SetNamedSecurityInfoW
         // was denied, so the ACE never landed -- the (c) write-inside failure).
-        // The cap SIDs below are still what the restricted token carries.
+        //
+        // Decision D-013: the token is now the same in both permission
+        // profiles. `read_only` no longer selects a token shape, because the
+        // restricting-SID array (the only thing that ever differed) is gone;
+        // read-only is expressed by the parent simply not adding the workspace
+        // allow-write ACE. It is logged here purely as launch context.
         runner_debug_log(&format!(
-            "per-task allow ACEs applied parent-side; deriving token with {} cap sid(s)",
-            cap_ptrs.len()
+            "per-task allow ACEs applied parent-side; deriving restricted token (read_only={})",
+            request.permission_profile.read_only
         ));
 
         // SAFETY: get_current_token_for_restriction returns the runner's own
-        // primary token; the *_and_user_from builders derive a capability-
-        // restricted token whose token user is this (sandbox) account. Both
-        // handles are closed below. Because the derived token comes from the
-        // caller's OWN token it is assignable, so the CreateProcessAsUserW
-        // inside spawn_process_with_pipes needs no privilege (A.Q1).
-        runner_debug_log(&format!(
-            "deriving capability-restricted token from own token (read_only={})",
-            request.permission_profile.read_only
-        ));
+        // primary token; create_sandbox_restricted_token_from derives the
+        // sandbox token from it. Both handles are closed below. Because the
+        // derived token comes from the caller's OWN token it is assignable, so
+        // the CreateProcessAsUserW inside spawn_process_with_pipes needs no
+        // privilege (A.Q1).
         let token = unsafe {
             let base = get_current_token_for_restriction()?;
-            let derived = if request.permission_profile.read_only {
-                create_readonly_token_with_caps_and_user_from(base, &cap_ptrs)
-            } else {
-                create_workspace_write_token_with_caps_and_user_from(base, &cap_ptrs)
-            };
+            let derived = create_sandbox_restricted_token_from(base);
             CloseHandle(base);
             derived?
         };
@@ -1583,5 +1830,75 @@ mod tests {
     fn setup_is_incomplete_without_marker() {
         let tmp = tempfile::tempdir().expect("tempdir");
         assert!(!sandbox_setup_is_complete(tmp.path()));
+    }
+
+    // ---- Sandbox-home DACL (decision D-013, Part A) -----------------------
+
+    const USER_SID: &str = "S-1-5-21-111-222-333-1001";
+    const SANDBOX_SID: &str = "S-1-5-21-111-222-333-1002";
+
+    #[test]
+    fn sandbox_home_dacl_grants_the_sandbox_account_read_but_never_write() {
+        let aces = sandbox_home_dacl_entries(USER_SID, SANDBOX_SID).expect("entries");
+
+        let sandbox: Vec<&SandboxHomeAce> =
+            aces.iter().filter(|ace| ace.sid == SANDBOX_SID).collect();
+        assert_eq!(sandbox.len(), 1, "sandbox account must appear exactly once");
+        assert_eq!(sandbox[0].access, SandboxHomeAccess::ReadExecute);
+    }
+
+    #[test]
+    fn sandbox_home_dacl_grants_full_control_only_to_system_admins_and_the_owner() {
+        let aces = sandbox_home_dacl_entries(USER_SID, SANDBOX_SID).expect("entries");
+
+        let full: Vec<&str> = aces
+            .iter()
+            .filter(|ace| ace.access == SandboxHomeAccess::FullControl)
+            .map(|ace| ace.sid.as_str())
+            .collect();
+        assert_eq!(full, vec!["S-1-5-18", "S-1-5-32-544", USER_SID]);
+    }
+
+    #[test]
+    fn sandbox_home_dacl_never_names_a_broad_group_trustee() {
+        let aces = sandbox_home_dacl_entries(USER_SID, SANDBOX_SID).expect("entries");
+
+        for forbidden in FORBIDDEN_SANDBOX_HOME_TRUSTEES {
+            assert!(
+                !aces.iter().any(|ace| ace.sid == forbidden),
+                "{forbidden} must never be a sandbox-home trustee"
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_home_dacl_rejects_a_broad_group_sid_as_input() {
+        for forbidden in FORBIDDEN_SANDBOX_HOME_TRUSTEES {
+            assert!(
+                sandbox_home_dacl_entries(USER_SID, forbidden).is_err(),
+                "{forbidden} must be rejected as the sandbox account SID"
+            );
+            assert!(
+                sandbox_home_dacl_entries(forbidden, SANDBOX_SID).is_err(),
+                "{forbidden} must be rejected as the provisioning user SID"
+            );
+        }
+    }
+
+    #[test]
+    fn sandbox_home_dacl_rejects_a_sandbox_account_equal_to_the_provisioning_user() {
+        // Otherwise the sandbox account inherits the owner's full-control ACE
+        // and the whole protection is silently void.
+        assert!(sandbox_home_dacl_entries(USER_SID, USER_SID).is_err());
+        assert!(
+            sandbox_home_dacl_entries(USER_SID, &USER_SID.to_ascii_lowercase()).is_err(),
+            "SID comparison must be case-insensitive"
+        );
+    }
+
+    #[test]
+    fn sandbox_home_dacl_rejects_empty_sids() {
+        assert!(sandbox_home_dacl_entries("", SANDBOX_SID).is_err());
+        assert!(sandbox_home_dacl_entries(USER_SID, "").is_err());
     }
 }

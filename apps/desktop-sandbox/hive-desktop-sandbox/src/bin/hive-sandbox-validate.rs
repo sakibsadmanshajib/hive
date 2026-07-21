@@ -7,7 +7,7 @@
 //! this crate for `x86_64-pc-windows-gnu`; it never runs the Win32 paths).
 //!
 //! It launches a probe command AS the low-privilege sandbox account under a
-//! capability-restricted token and reports, with raw evidence (never a bare
+//! restricted sandbox token and reports, with raw evidence (never a bare
 //! "pass"):
 //!   (a) the child token user SID (must equal the `hive_sandbox` account SID),
 //!   (b) a write OUTSIDE the writable root is denied,
@@ -17,7 +17,7 @@
 //! Two token derivations are exercised, one per run, because the whole egress
 //! fence rests on the sandbox account staying the token USER (never demoted to
 //! deny-only) in EACH. `windows_elevated` sets `permission_profile.read_only =
-//! !uses_write_capabilities()`, so the writable-root set selects the derivation:
+//! !grants_write()`, so the writable-root set selects the derivation:
 //!   * DenyAll run  (HIVE_VALIDATE_NET unset/"deny"): empty writable_roots ->
 //!     read-only token; an inside-workspace write must be DENIED.
 //!   * AllowHosts run ("allow:host,..."): the workspace is a writable root ->
