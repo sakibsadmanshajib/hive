@@ -50,8 +50,14 @@
 
 #[cfg(windows)]
 pub mod acl;
-#[cfg(windows)]
-pub mod cap;
+// `cap.rs` (upstream's synthetic random capability SIDs) was REMOVED by
+// decision D-013. Those SIDs were only ever supplied to `CreateRestrictedToken`
+// as restricting SIDs, and the restricting-SID array is now NULL (see
+// `token.rs`), so a cap SID would no longer appear on the child token at all
+// and any ACL grant addressed to one would be silently dead. Per-task write
+// grants now target the dedicated sandbox account SID directly, matching the
+// Anthropic Sandbox Runtime model (dedicated account plus per-task ACEs, no
+// capability SIDs).
 #[cfg(windows)]
 pub mod deny_read_acl;
 #[cfg(windows)]

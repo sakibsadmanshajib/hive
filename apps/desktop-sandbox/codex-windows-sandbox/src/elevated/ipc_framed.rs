@@ -41,7 +41,12 @@ use std::path::PathBuf;
 pub const MAX_FRAME_LEN: usize = 8 * 1024 * 1024;
 
 /// Protocol version shared by the parent process and elevated command runner.
-pub const IPC_PROTOCOL_VERSION: u8 = 4;
+///
+/// Bumped to 5 by decision D-013: `SpawnRequest` no longer carries `cap_sids`,
+/// so a stale runner binary left over from an earlier build must be rejected at
+/// the version check rather than silently deserializing a request whose write
+/// semantics it does not implement.
+pub const IPC_PROTOCOL_VERSION: u8 = 5;
 
 /// Length-prefixed, JSON-encoded frame.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,7 +84,9 @@ pub struct SpawnRequest {
     pub workspace_roots: Vec<AbsolutePathBuf>,
     pub codex_home: PathBuf,
     pub real_codex_home: PathBuf,
-    pub cap_sids: Vec<String>,
+    // The upstream `cap_sids: Vec<String>` field was removed by decision D-013
+    // together with `cap.rs`: capability SIDs were only ever passed to
+    // `CreateRestrictedToken` as restricting SIDs, and that array is now NULL.
     pub timeout_ms: Option<u64>,
     pub tty: bool,
     #[serde(default)]

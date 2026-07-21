@@ -70,6 +70,11 @@ windows-sys = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authentication_Identity",
+    # Sandbox-home protected DACL (decision D-013): EXPLICIT_ACCESS_W /
+    # SetEntriesInAclW / SetNamedSecurityInfoW and the FILE_* access masks the
+    # explicit ACEs are built from.
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
     "Win32_System_JobObjects",
     "Win32_System_Services",
     "Win32_System_Threading",

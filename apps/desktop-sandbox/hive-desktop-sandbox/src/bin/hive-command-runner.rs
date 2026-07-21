@@ -3,7 +3,7 @@
 //! This is the per-task runner that `runner_client::spawn_runner_transport`
 //! starts AS the low-privilege sandbox account via `CreateProcessWithLogonW`
 //! (blueprint A.Q1). It speaks the framed named-pipe IPC, derives a
-//! capability-restricted primary token from its OWN token, applies the per-task
+//! restricted primary token from its OWN token, applies the per-task
 //! ACL confinement, and spawns the inner child under that token with
 //! `spawn_process_with_pipes` (the `tty = false` path). A `tty = true` request
 //! is refused fail-closed (ConPTY is Step 5); see

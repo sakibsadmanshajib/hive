@@ -197,7 +197,14 @@ impl ResolvedWindowsSandboxPermissions {
         &self.writable_roots
     }
 
-    pub fn uses_write_capabilities(&self) -> bool {
+    /// `true` when the task has at least one writable root, so the launch path
+    /// must grant the sandbox account an allow-write ACE on it.
+    ///
+    /// Renamed from `grants_write` by decision D-013: there are no
+    /// capability SIDs any more, and since the restricted token no longer
+    /// distinguishes read-only from workspace-write, this predicate is the ONLY
+    /// thing that separates the two profiles.
+    pub fn grants_write(&self) -> bool {
         !self.writable_roots.is_empty()
     }
 
@@ -271,7 +278,7 @@ mod tests {
                 read_only_subpaths: Vec::new(),
             }]
         );
-        assert!(resolved.uses_write_capabilities());
+        assert!(resolved.grants_write());
     }
 
     #[test]
@@ -294,7 +301,7 @@ mod tests {
                 PathBuf::from(r"C:\hive\hooks")
             ]
         );
-        assert!(!resolved.uses_write_capabilities());
+        assert!(!resolved.grants_write());
     }
 
     #[test]
