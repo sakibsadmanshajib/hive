@@ -15,11 +15,18 @@ FROM ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf
 # /opensearch.xml, and the client-rendered <title>/meta description: this
 # 2-line block. WEBUI_NAME itself is still fully configurable via env var
 # (see docker-compose.yml); this only removes the forced suffix.
-RUN sed -i "/if WEBUI_NAME != 'Open WebUI':/,+1d" /app/backend/open_webui/env.py
+RUN sed -i "/if WEBUI_NAME != 'Open WebUI':/,+1d" /app/backend/open_webui/env.py \
+    && ! grep -q '(Open WebUI)' /app/backend/open_webui/env.py
 
 # The pre-hydration static shell (served before the SPA's JS sets the real
 # title from WEBUI_NAME) still literally says "Open WebUI" -- it's baked
 # into the prebuilt frontend bundle, not templated. ponytail: plain string
 # swap, not a full frontend rebuild; add a proper i18n'd title if this
 # static shell ever needs more than a brand name.
-RUN sed -i 's/<title>Open WebUI<\/title>/<title>Hive<\/title>/' /app/build/index.html
+#
+# Both patches assert their own effect (grep -q the old pattern is gone) and
+# fail the build otherwise -- sed exits 0 on a zero-match address, so without
+# this a future digest bump whose upstream source shifted would silently
+# rebuild with "(Open WebUI)" branding back and no build-time signal.
+RUN sed -i 's/<title>Open WebUI<\/title>/<title>Hive<\/title>/' /app/build/index.html \
+    && ! grep -q '<title>Open WebUI</title>' /app/build/index.html
