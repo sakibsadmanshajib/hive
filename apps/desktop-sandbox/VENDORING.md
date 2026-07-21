@@ -904,6 +904,50 @@ returned `SandboxChild` represents a completed confined run rather than a live
 handle. `apps/desktop`'s `RealLauncher` only checks Ok/Err, so it is unaffected
 functionally (noted for a follow-up; not edited here).
 
+### Integration B2 activation: `WinSta0\Default` desktop-grant fix (lab-surfaced, security boundary)
+
+A live `spike307-win` lab run of the activated compose found the confined
+`hive-command-runner.exe` crashed under the dedicated low-privilege
+`hive_sandbox` account with `0xC06D007E` (user32 delay-load failure) BEFORE the
+IPC `spawn_ready` handshake. This closes a latent gap that #400/#401 had only
+band-aided with the build.rs user32 delay-load (the delay-load turned an
+uncatchable pre-`main` `0xC0000142` into a catchable first-call `0xC06D007E`,
+but did not make the desktop attach itself succeed).
+
+Root cause (`desktop.rs::grant_winsta_desktop_access`): the function granted the
+sandbox account access to `WinSta0` correctly (KB165194 dual ACE), but granted
+the DESKTOP ACE on `GetThreadDesktop(GetCurrentThreadId())` of the ELEVATED
+PARENT, not on the `WinSta0\Default` desktop the `CreateProcessWithLogonW`-spawned
+runner actually attaches to. The runner's own process never got a desktop ACE, so
+user32/CSRSS desktop-connect at first user32 call failed. The prior comment bet
+on seclogon auto-granting the runner's fresh logon SID on that desktop; that
+does not happen.
+
+Fix (deviation from upstream `desktop.rs`, edits a file vendored in Integration
+A1): open the real `WinSta0\Default` desktop BY NAME with
+`OpenDesktopW("Default", 0, FALSE, READ_CONTROL | WRITE_DAC)` in the parent's
+`WinSta0` context, add the `DESKTOP_ALL_ACCESS` allow ACE for the sandbox
+account SID (the same SID and mask the old code used, just on the correct
+object), then `CloseDesktop`. The `WinSta0` dual-ACE grant is unchanged. This is
+correct per Win32 access-check semantics: a desktop access check evaluates every
+enabled SID in the runner's primary token, and the token's USER SID is the
+sandbox account, so an allow ACE for that account SID on the object the runner
+attaches to is sufficient and does not depend on the fresh logon SID. Chosen
+over the "parent pre-creates a private desktop and passes
+`STARTUPINFO.lpDesktop`" variant because the runner is DESIGNED to stay on
+`WinSta0\Default` (it creates its child's private desktop itself, RUNNER-side
+via `PrivateDesktop`), so that variant would be a large flow rewrite for no
+isolation gain; the child's private-desktop isolation (B1) is unchanged.
+
+`GetThreadDesktop` / `GetCurrentThreadId` imports were dropped and `OpenDesktopW`
+added. The build.rs doc comment was corrected (it said the runner calls
+`CreateWindowStationW`; it calls `CreateDesktopW`) and reframed to present the
+delay-load as retained defense-in-depth, not the fix. Re-vendoring note: re-copy
+`desktop.rs` verbatim from upstream on a future pass, then re-apply this
+desktop-object fix (check first whether upstream corrected the same
+GetThreadDesktop target). Only lab-provable on `spike307-win` (D-004); the
+CI cross-compile legs type-check it.
+
 The lab matrix (`plan-b2-wfp-egress-2026-07-20.md` §5, rows 1-11) still gates
 un-drafting this PR (D-004): the Win32 fence is compile-checked here but not
 executed, so it must pass `spike307-win` live before this leaves draft.

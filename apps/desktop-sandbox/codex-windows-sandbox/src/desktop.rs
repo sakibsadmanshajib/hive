@@ -40,8 +40,7 @@ use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_DAC;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITE_OWNER;
 use windows_sys::Win32::System::StationsAndDesktops::DESKTOP_WRITEOBJECTS;
 use windows_sys::Win32::System::StationsAndDesktops::GetProcessWindowStation;
-use windows_sys::Win32::System::StationsAndDesktops::GetThreadDesktop;
-use windows_sys::Win32::System::Threading::GetCurrentThreadId;
+use windows_sys::Win32::System::StationsAndDesktops::OpenDesktopW;
 
 const DESKTOP_ALL_ACCESS: u32 = DESKTOP_READOBJECTS
     | DESKTOP_CREATEWINDOW
@@ -110,10 +109,13 @@ impl LaunchDesktop {
     }
 }
 
-/// Grants the named account access to the CURRENT (shared `WinSta0`) window
-/// station and desktop, so the sandbox-account RUNNER launched via
-/// `CreateProcessWithLogonW` can complete user32 process-attach at load (without
-/// it the runner dies with `STATUS_DLL_INIT_FAILED` 0xC0000142 before `main`).
+/// Grants the named sandbox account access to the shared `WinSta0` window
+/// station and its `WinSta0\Default` desktop, so the sandbox-account RUNNER
+/// launched via `CreateProcessWithLogonW` can complete user32's desktop attach
+/// (without it the runner cannot connect to the desktop: user32 init fails as
+/// `STATUS_DLL_INIT_FAILED` 0xC0000142 before `main` when user32 is statically
+/// linked, or as a delay-load `0xC06D007E` at the first user32 call when user32
+/// is delay-loaded, the symptom the lab hit on spike307-win).
 ///
 /// The RUNNER stays on `WinSta0\Default`; the untrusted inner CHILD is moved to a
 /// private DESKTOP on `WinSta0` (via [`LaunchDesktop`] / [`PrivateDesktop`]). The
@@ -124,9 +126,11 @@ impl LaunchDesktop {
 pub fn grant_winsta_desktop_access(sandbox_username: &str) -> Result<()> {
     let sid_bytes = crate::sandbox_users::resolve_sid(sandbox_username)?;
     let psid = crate::sandbox_users::sid_bytes_to_psid(&sid_bytes)?;
-    // SAFETY: `psid` is a live SID from ConvertStringSidToSidW (freed below);
-    // the window-station/desktop handles are process/thread pseudo-handles that
-    // need no close. Every fallible Win32 step is checked.
+    // SAFETY: `psid` is a live SID from ConvertStringSidToSidW (freed below).
+    // The window-station handle from GetProcessWindowStation is a process
+    // pseudo-handle that needs no close; the `WinSta0\Default` desktop handle
+    // from OpenDesktopW is a REAL handle and IS closed with CloseDesktop below.
+    // Every fallible Win32 step is checked.
     let result = unsafe {
         let winsta = GetProcessWindowStation();
         if winsta == 0 {
@@ -148,15 +152,41 @@ pub fn grant_winsta_desktop_access(sandbox_username: &str) -> Result<()> {
             explicit_grant(psid, WINSTA_ALL_ACCESS, NO_INHERITANCE),
         ];
         merge_grant_on_window_object(winsta, &winsta_entries).and_then(|()| {
-            let desktop = GetThreadDesktop(GetCurrentThreadId());
+            // Grant the sandbox USER SID on the REAL `WinSta0\Default` desktop,
+            // opened BY NAME in the `WinSta0` context GetProcessWindowStation
+            // established above, NOT the elevated parent's own GetThreadDesktop
+            // (which is whatever desktop that parent thread happens to be
+            // attached to, and is not guaranteed to be the object the runner
+            // lands on). The runner is launched via CreateProcessWithLogonW with
+            // STARTUPINFO.lpDesktop left NULL and attaches to `WinSta0\Default`;
+            // its primary token's USER SID is this sandbox account, and a Win32
+            // access check evaluates EVERY enabled SID in the token, so an allow
+            // ACE for the account SID on THIS object is exactly what the loader's
+            // user32 desktop-attach access check reads. Correctness does not
+            // depend on the fresh logon SID CreateProcessWithLogonW mints (the
+            // old code bet on seclogon auto-granting that logon SID here, which
+            // does not happen, so the runner's attach was denied and user32 init
+            // failed). READ_CONTROL | WRITE_DAC so the handle can GetSecurityInfo
+            // / SetSecurityInfo (the same rights the private-desktop path opens
+            // its desktop with). fInherit = FALSE: the spawned runner must not
+            // inherit this handle.
+            let default_desktop_name = to_wide("Default");
+            let desktop = OpenDesktopW(
+                default_desktop_name.as_ptr(),
+                0,
+                0,
+                READ_CONTROL | WRITE_DAC,
+            );
             if desktop == 0 {
                 return Err(anyhow::anyhow!(
-                    "GetThreadDesktop failed: {}",
+                    "OpenDesktopW(\"Default\") failed: {}",
                     GetLastError()
                 ));
             }
             let desktop_entries = [explicit_grant(psid, DESKTOP_ALL_ACCESS, NO_INHERITANCE)];
-            merge_grant_on_window_object(desktop, &desktop_entries)
+            let grant = merge_grant_on_window_object(desktop, &desktop_entries);
+            CloseDesktop(desktop);
+            grant
         })
     };
     unsafe {
