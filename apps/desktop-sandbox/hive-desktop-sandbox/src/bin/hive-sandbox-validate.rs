@@ -187,6 +187,17 @@ fn main() -> std::process::ExitCode {
     // self-describing. The harness (and operator) read the raw stdout and derive
     // per-row verdicts; nothing here is executed by this build (compile-only,
     // D-004).
+    //
+    // curl also carries `--connect-timeout 8 --max-time 15` and nslookup
+    // carries `-timeout=5`: under a live DenyAll fence a blackholed SYN (no
+    // RST) rides the OS's own TCP retry ceiling, which on Windows can run to
+    // several minutes per unbounded call -- three unbounded curl probes back
+    // to back stalled a lab run for 20+ minutes with the child sitting at 0%
+    // CPU (blocked in the connect syscall, not hung/crashed). A bound hitting
+    // while blocked is still a valid block observation (the assertion is that
+    // no connection completes), so this shortens the wall clock without
+    // touching what is being asserted. `certutil -user -store My` is a local
+    // store enumeration with no network I/O, so it needs no bound.
     let probe_host = allow_hosts
         .first()
         .map(String::as_str)
@@ -195,10 +206,10 @@ fn main() -> std::process::ExitCode {
         // an unroutable name would prove nothing about the fence.
         .unwrap_or("api.github.com");
     script.push_str(&format!(
-        " & echo ===NET_ALLOWED=== & curl -sS --ssl-no-revoke -o NUL https://{host}/ && echo NET_ALLOWED_OK || echo NET_ALLOWED_FAIL \
-         & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
-         & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
-         & echo ===NET_DNS=== & nslookup {host} \
+        " & echo ===NET_ALLOWED=== & curl -sS --ssl-no-revoke --connect-timeout 8 --max-time 15 -o NUL https://{host}/ && echo NET_ALLOWED_OK || echo NET_ALLOWED_FAIL \
+         & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke --connect-timeout 8 --max-time 15 -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
+         & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --connect-timeout 8 --max-time 15 --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
+         & echo ===NET_DNS=== & nslookup -timeout=5 {host} \
          & echo ===CERTSTORE=== & certutil -user -store My \
          & echo ===WHOAMI=== & whoami /groups",
         host = probe_host,
