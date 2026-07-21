@@ -30,14 +30,21 @@ func TestRagEmbeddingConfigMigrationExists(t *testing.T) {
 }
 
 // TestProvisionQueriesRagEmbeddingConfigByLiteralName pins the table name
-// this package's query uses to the same literal the migration creates, so a
-// rename on one side without the other fails fast in CI instead of only
-// surfacing as a silent "relation does not exist" warning at boot.
+// both independent consumers of the singleton row query by, to the same
+// literal the migration creates. edge-api/internal/rag/config.go queries this
+// table independently of control-plane's provision.go (control-plane writes,
+// edge-api only reads) -- a rename on one side without the other fails fast
+// in CI here instead of only surfacing as a silent "relation does not exist"
+// warning at boot.
 func TestProvisionQueriesRagEmbeddingConfigByLiteralName(t *testing.T) {
-	source := readRagRepoFile(t, "apps/control-plane/internal/rag/provision.go")
-
-	if !strings.Contains(source, "FROM public.rag_embedding_config WHERE id = 1") {
-		t.Fatal("provision.go must read the singleton row from public.rag_embedding_config WHERE id = 1")
+	for _, path := range []string{
+		"apps/control-plane/internal/rag/provision.go",
+		"apps/edge-api/internal/rag/config.go",
+	} {
+		source := readRagRepoFile(t, path)
+		if !strings.Contains(source, "FROM public.rag_embedding_config WHERE id = 1") {
+			t.Fatalf("%s must read the singleton row from public.rag_embedding_config WHERE id = 1", path)
+		}
 	}
 }
 
