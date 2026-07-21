@@ -498,20 +498,18 @@ services:
       # Hive/S-Cubed favicon + splash overrides. STATIC_DIR above points at
       # /data/static (persisted in owui-data, empty by default -- upstream
       # has no bundled-default seeding when STATIC_DIR is overridden), so
-      # these individual file mounts are the only thing populating them.
+      # this directory mount is the only thing populating them. A single
+      # directory bind (not one bind per file) so the mount target exists
+      # regardless of whether owui-data is a fresh/empty named volume --
+      # Docker can refuse individual file-level binds onto a path that
+      # doesn't exist yet inside an empty named volume; one directory bind
+      # creates /data/static itself, sidestepping that.
       # Reused apps/desktop app icon as source; not per-size-optimized
       # (favicon-96x96/apple-touch-icon are the closest available Tauri
       # size, not exact). No dark-mode splash variant -- same PNG for both.
       # Known gap: FONTS_DIR/custom.css/loader.js under STATIC_DIR are still
       # unseeded (pre-existing, not introduced by this change).
-      - ./owui-static/favicon.ico:/data/static/favicon.ico:ro
-      - ./owui-static/favicon.png:/data/static/favicon.png:ro
-      - ./owui-static/favicon-96x96.png:/data/static/favicon-96x96.png:ro
-      - ./owui-static/favicon.svg:/data/static/favicon.svg:ro
-      - ./owui-static/apple-touch-icon.png:/data/static/apple-touch-icon.png:ro
-      - ./owui-static/splash.png:/data/static/splash.png:ro
-      - ./owui-static/splash-dark.png:/data/static/splash-dark.png:ro
-      - ./owui-static/logo.png:/data/static/logo.png:ro
+      - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
       # config keys on this image; they belong to the separate, deprecated
