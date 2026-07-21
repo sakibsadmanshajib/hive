@@ -78,9 +78,11 @@ fn main() -> std::process::ExitCode {
     }
 
     // Network policy under test (Integration B2 matrix, plan §5 rows):
-    //   unset / "deny"       -> NetworkPolicy::DenyAll (rows 1-4: all egress
-    //                           and DNS blocked, only the loopback proxy port
-    //                           reachable and it has no proxy behind it);
+    //   unset / "deny"       -> NetworkPolicy::DenyAll (rows 1-4 and row 7: all
+    //                           egress and DNS blocked, only the loopback proxy
+    //                           port reachable and it has no proxy behind it;
+    //                           the probes below run in this branch too, so the
+    //                           block is proven live rather than config-only);
     //   "allow:host1,host2"  -> NetworkPolicy::AllowHosts([..]) (rows 5-6: the
     //                           allowed host is reachable via the proxy, a
     //                           non-allowed host and any direct connect are not).
@@ -172,20 +174,33 @@ fn main() -> std::process::ExitCode {
         outside = outside.display(),
         canary = canary.display(),
     );
-    // Network matrix probes (plan §5 rows 1-6) for an AllowHosts run. curl uses
-    // `--ssl-no-revoke` for the schannel CRL gotcha on the lab host; each step
-    // prints a marker and an OK/FAIL/BLOCKED tag so stdout is self-describing.
-    // The harness (and operator) read the raw stdout and derive per-row
-    // verdicts; nothing here is executed by this build (compile-only, D-004).
-    if let Some(host) = allow_hosts.first() {
-        script.push_str(&format!(
-            " & echo ===NET_ALLOWED=== & curl -sS --ssl-no-revoke -o NUL https://{host}/ && echo NET_ALLOWED_OK || echo NET_ALLOWED_FAIL \
-             & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
-             & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
-             & echo ===NET_DNS=== & nslookup {host}",
-            host = host,
-        ));
-    }
+    // Network matrix probes (plan §5 rows 1-7). Emitted for BOTH runs so the
+    // DenyAll row is LIVE-probed rather than only config-verified: an AllowHosts
+    // run proves the allowlist decision (rows 5-6), a DenyAll run proves that
+    // every probe is blocked, including the host that WOULD be the allowed one
+    // under an AllowHosts run (row 7). Marker names are identical across the two
+    // runs so the operator parses both the same way; only the EXPECTATIONS
+    // invert, and the legend printed below states which run is which so a
+    // blocked allowed-host probe under DenyAll is not misread as a row 5 failure.
+    // curl uses `--ssl-no-revoke` for the schannel CRL gotcha on the lab host;
+    // each step prints a marker and an OK/FAIL/BLOCKED tag so stdout is
+    // self-describing. The harness (and operator) read the raw stdout and derive
+    // per-row verdicts; nothing here is executed by this build (compile-only,
+    // D-004).
+    let probe_host = allow_hosts
+        .first()
+        .map(String::as_str)
+        // DenyAll has no allowed host, so probe a real, normally reachable host
+        // purely as a target to prove it is blocked. Reachability is the point:
+        // an unroutable name would prove nothing about the fence.
+        .unwrap_or("api.github.com");
+    script.push_str(&format!(
+        " & echo ===NET_ALLOWED=== & curl -sS --ssl-no-revoke -o NUL https://{host}/ && echo NET_ALLOWED_OK || echo NET_ALLOWED_FAIL \
+         & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
+         & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
+         & echo ===NET_DNS=== & nslookup {host}",
+        host = probe_host,
+    ));
     let command = vec![
         r"C:\Windows\System32\cmd.exe".to_string(),
         "/c".to_string(),
@@ -215,17 +230,86 @@ fn main() -> std::process::ExitCode {
     // Minimal, scrubbed environment: enough for cmd/whoami to function
     // (SystemRoot + a System32 PATH), nothing sensitive. Confinement comes from
     // the token + ACLs, not from env starvation.
+    //
+    // This is the HARNESS environment, built here deliberately and kept separate
+    // from the product's own environment construction (`windows.rs::launch`,
+    // which derives the child env from the parent process). Changing one does
+    // not change the other.
+    //
+    // The profile variables below are load-bearing, not decoration. curl on the
+    // lab host uses schannel, and schannel acquires CLIENT credentials out of
+    // the per-user crypto store under the user profile. With no profile
+    // variables set it fails at `AcquireCredentialsHandle` with
+    // `SEC_E_NO_CREDENTIALS (0x8009030E)` before a single byte reaches the wire,
+    // which looks like an egress failure and is not one (this is exactly what
+    // made matrix row 5 fail while the proxy allowlist decision was working).
+    //   USERPROFILE   -> profile root schannel resolves the crypto store from
+    //   APPDATA       -> roaming crypto key containers
+    //   LOCALAPPDATA  -> local crypto key containers and per-user caches
+    //   TEMP / TMP    -> scratch schannel and curl need while building the
+    //                    credential handle (unset TEMP alone can fail the same way)
+    // They point at the SANDBOX ACCOUNT's profile, never the launching user's:
+    // the sandbox account has no access to another user's profile directory.
+    // No deny-read policy path is touched here; the deny-read ACEs apply only to
+    // explicit policy paths, not to the crypto store.
     let mut env: HashMap<String, String> = HashMap::new();
     env.insert("SystemRoot".to_string(), r"C:\Windows".to_string());
     env.insert(
         "PATH".to_string(),
         r"C:\Windows\System32;C:\Windows".to_string(),
     );
+    // Derive the profiles root from this process's own USERPROFILE parent
+    // instead of hardcoding `C:\Users`, so a relocated or non-C: profiles root
+    // still resolves; the account name itself comes from the same constant the
+    // SID lookup above uses, so the two can never drift apart.
+    let profiles_root = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .and_then(|p| p.parent().map(|parent| parent.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from(r"C:\Users"));
+    let sandbox_profile =
+        profiles_root.join(hive_desktop_sandbox::windows_elevated::SANDBOX_USERNAME);
+    let local_appdata = sandbox_profile.join("AppData").join("Local");
+    let sandbox_temp = local_appdata.join("Temp");
+    env.insert(
+        "USERPROFILE".to_string(),
+        sandbox_profile.display().to_string(),
+    );
+    env.insert(
+        "APPDATA".to_string(),
+        sandbox_profile
+            .join("AppData")
+            .join("Roaming")
+            .display()
+            .to_string(),
+    );
+    env.insert(
+        "LOCALAPPDATA".to_string(),
+        local_appdata.display().to_string(),
+    );
+    env.insert("TEMP".to_string(), sandbox_temp.display().to_string());
+    env.insert("TMP".to_string(), sandbox_temp.display().to_string());
+
     println!("== confined-spawn validation ==");
     println!("sandbox_home = {}", sandbox_home.display());
     println!("workspace    = {}", ws.display());
     println!("network      = {net_spec}");
+    println!("child profile = {}", sandbox_profile.display());
     println!("expected sandbox SID = {expected_sid}");
+    // Network expectations, stated per run so the identical NET_* markers are
+    // never misread across the two runs.
+    if allow_hosts.is_empty() {
+        println!(
+            "net expectations (DenyAll, row 7): ALL probes must be blocked -- \
+             NET_ALLOWED_FAIL (probe host {probe_host} is NOT allowed in this run, \
+             a block here is CORRECT and is not a row 5 failure), NET_DENIED_BLOCKED, \
+             NET_DIRECT_BLOCKED, and NET_DNS must not resolve"
+        );
+    } else {
+        println!(
+            "net expectations (AllowHosts, rows 5-6): NET_ALLOWED_OK for {probe_host} via the \
+             proxy, NET_DENIED_BLOCKED, NET_DIRECT_BLOCKED"
+        );
+    }
 
     let result = hive_desktop_sandbox::windows_elevated::spawn_confined_for_validation(
         &sandbox_home,
