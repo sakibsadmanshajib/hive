@@ -449,6 +449,17 @@ services:
       ENABLE_COMMUNITY_SHARING: "false"
       ENABLE_MODEL_FILTER: "true"
       ENABLE_EVALUATION_ARENA_MODELS: "false"
+      # Web search (demo). duckduckgo is the only OWUI-supported engine that
+      # needs zero API key/account signup (backend/open_webui/routers/
+      # retrieval.py engine=='duckduckgo' branch), so it is the fastest safe
+      # path with no time to provision a paid search API or stand up SearXNG.
+      # Both bypass flags skip full-page fetch and RAG-embedding retrieval
+      # for search results (snippet-only), which keeps this feature working
+      # independently of the separate model-routing/embedding path.
+      ENABLE_WEB_SEARCH: "true"
+      WEB_SEARCH_ENGINE: "duckduckgo"
+      BYPASS_WEB_SEARCH_WEB_LOADER: "true"
+      BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: "true"
       # Hive product branding. LICENSE-DECISION.md: latest Open WebUI image with
       # WEBUI_NAME and visible surfaces overridden to "Hive"; upstream Open WebUI
       # branding-preservation license risk is accepted by the project owner.
