@@ -165,9 +165,25 @@ fn main() -> std::process::ExitCode {
     // double-escapes through the argv -> command-line -> cmd re-parse and
     // produces a malformed path. Commands are sequenced with `&`; each step
     // prints a marker so stdout is self-describing. `echo`/`type` are cmd
-    // built-ins (no PATH needed); `whoami` resolves via the minimal PATH below.
+    // built-ins (no PATH needed).
+    //
+    // No `whoami` anywhere in this script (D-013 lab session, 2026-07-21):
+    // `whoami /user` and `whoami /groups` both resolve SIDs to names via
+    // `LookupAccountSid`, an LSA RPC call that blocks indefinitely under this
+    // token (differential-tested: same account, same fence, unrestricted
+    // token -> 403ms; this restricted token -> 10-20+ min, never returned).
+    // Since the whole script runs as one `&`-chained cmd.exe child, ANY
+    // command in it blocking blocks the entire probe run -- there is no
+    // partial result. The SID evidence assertion (a) below now comes from the
+    // `HIVE_SANDBOX_CHILD_SID=` line the runner injects into this same stdout
+    // stream BEFORE spawning this child (see
+    // `windows_elevated.rs::spawn_and_stream`), via
+    // `GetTokenInformation(TokenUser)`, which is not an RPC call and does not
+    // hit this hang. Treat the whoami hang as a standing product limitation,
+    // not a harness bug to route around further: any sandboxed code that
+    // resolves a SID to a name the same way will block the same way.
     let mut script = format!(
-        "whoami /user & echo ===INSIDE=== & echo probe>{inside} & \
+        "echo ===INSIDE=== & echo probe>{inside} & \
          echo ===OUTSIDE=== & echo probe>{outside} & \
          echo ===SECRET=== & type {canary}",
         inside = inside.display(),
@@ -210,8 +226,7 @@ fn main() -> std::process::ExitCode {
          & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke --connect-timeout 8 --max-time 15 -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
          & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --connect-timeout 8 --max-time 15 --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
          & echo ===NET_DNS=== & nslookup -timeout=5 {host} \
-         & echo ===CERTSTORE=== & certutil -user -store My \
-         & echo ===WHOAMI=== & whoami /groups",
+         & echo ===CERTSTORE=== & certutil -user -store My",
         host = probe_host,
     ));
     let command = vec![

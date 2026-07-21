@@ -1444,13 +1444,41 @@ mod windows_impl {
         // derived token comes from the caller's OWN token it is assignable, so
         // the CreateProcessAsUserW inside spawn_process_with_pipes needs no
         // privilege (A.Q1).
-        let token = unsafe {
+        let (token, child_sid) = unsafe {
             let base = get_current_token_for_restriction()?;
             let derived = create_sandbox_restricted_token_from(base);
             CloseHandle(base);
             derived?
         };
-        runner_debug_log("token derived; spawning inner child via CreateProcessAsUserW");
+        runner_debug_log(&format!(
+            "token derived (child SID {child_sid}); spawning inner child via CreateProcessAsUserW"
+        ));
+
+        // Report the derived SID as an Output frame BEFORE spawning the
+        // confined child, reusing the existing stdout-capture path rather than
+        // adding a new IPC message type. This is decision D-013's option 1:
+        // the validator's SID assertion no longer needs the confined child to
+        // run `whoami /user` itself, which was found (2026-07-21 lab session)
+        // to block indefinitely under this token -- `LookupAccountSid` is an
+        // LSA RPC call, and `GetTokenInformation(TokenUser)` (used to derive
+        // `child_sid` above) is not, so it cannot hit the same hang. See
+        // VENDORING.md for the differential evidence and the standing
+        // limitation this leaves for any sandboxed code that resolves a SID to
+        // a name the same way `whoami` does.
+        ipc_framed::write_frame(
+            &mut *writer,
+            &FramedMessage {
+                version: ipc_framed::IPC_PROTOCOL_VERSION,
+                message: Message::Output {
+                    payload: OutputPayload {
+                        data_b64: ipc_framed::encode_bytes(
+                            format!("HIVE_SANDBOX_CHILD_SID={child_sid}\n").as_bytes(),
+                        ),
+                        stream: OutputStream::Stdout,
+                    },
+                },
+            },
+        )?;
 
         let spawn_result = spawn_process_with_pipes(
             token,

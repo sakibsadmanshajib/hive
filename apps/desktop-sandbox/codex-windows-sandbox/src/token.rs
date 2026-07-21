@@ -483,10 +483,21 @@ unsafe fn enable_single_privilege(h_token: HANDLE, name: &str) -> Result<()> {
 /// * `BUILTIN\Administrators` and every logon SID disabled on the token,
 /// * `LUA_TOKEN`, which keeps the token at Medium integrity.
 ///
+/// Returns the new token plus its resolved user SID (string form), so a
+/// caller can report which account the child actually runs as WITHOUT
+/// shelling `whoami /user` into the confined child itself. `whoami /user`
+/// resolves the SID to a name via `LookupAccountSid` (LSA RPC), and D-013's
+/// lab session found that call blocks indefinitely under this exact token
+/// (differential-tested: same account, same fence, unrestricted token ->
+/// 403ms; restricted token -> 10-20+ min, never returned). `GetTokenInformation(TokenUser)`,
+/// used below, reads the SID bytes straight off the token object with no RPC
+/// involved, so it cannot hit the same hang. See VENDORING.md, "known
+/// limitation: LSA name lookups under the D-013 token" for the record.
+///
 /// # Safety
 /// Caller must close the returned token handle; `base_token` must be a valid
 /// primary token (the runner's own token).
-pub unsafe fn create_sandbox_restricted_token_from(base_token: HANDLE) -> Result<HANDLE> {
+pub unsafe fn create_sandbox_restricted_token_from(base_token: HANDLE) -> Result<(HANDLE, String)> {
     // SidsToDisable: Administrators plus every logon SID on the token. Disabled
     // SIDs stay present for DENY evaluation but grant nothing.
     let admins = LocalSid::from_string(BUILTIN_ADMINISTRATORS_SID)?;
@@ -546,7 +557,11 @@ pub unsafe fn create_sandbox_restricted_token_from(base_token: HANDLE) -> Result
         CloseHandle(new_token);
         return Err(e);
     }
-    Ok(new_token)
+    // Same bytes already resolved above for the default-DACL trustee; stringify
+    // for the caller rather than repeat the GetTokenInformation(TokenUser) call.
+    let sid_string = crate::winutil::string_from_sid_bytes(&user_sid_bytes)
+        .map_err(|e| anyhow!("stringify sandbox token SID: {e}"))?;
+    Ok((new_token, sid_string))
 }
 
 #[cfg(test)]

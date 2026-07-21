@@ -1307,6 +1307,57 @@ proves NOTHING about any of it):
    the disable list against the token's actual groups (which are already
    enumerated in the same function for the logon SIDs).
 
+### Lab session 2026-07-21: known limitation, LSA name lookups under the D-013 token
+
+Live `spike307-win` session re-validating D-013 (PR #409). The validator's
+first probe, `whoami /user`, blocked indefinitely (10-20+ min, never
+returned) inside the confined child under the new restricted token, with the
+child sitting at ~0% CPU (blocked in a syscall, not crashed or looping).
+Because the whole probe script is one `&`-chained `cmd.exe` invocation, this
+blocked every subsequent probe too, including the row 5 TLS check.
+
+One-variable differential to isolate cause: same `hive_sandbox` account, same
+provisioned fence, plain `CreateProcessWithLogonW` with NO
+`CreateRestrictedToken` narrowing. `whoami /user` returned in 403.7ms. The
+restricted token is the cause, not the WFP fence.
+
+Verified against upstream, not assumption: fetched
+`anthropic-experimental/sandbox-runtime`, `vendor/srt-win-src/src/token.rs`
+directly (`gh api`). Its `SidsToDisable` is `[BUILTIN\Administrators, every
+SE_GROUP_LOGON_ID SID in the base token]`, `RestrictingSids = None`, with the
+module doc stating the logon-SID disable is "load-bearing": it stops the
+child reading same-session real-user process memory via
+`OpenProcess(VM_READ)` against the broker's logon-session ACE. Our
+`create_sandbox_restricted_token_from` matches this exactly. D-013 does not
+over-reach past srt, and the logon-SID disable is not something to drop: it
+closes a real hole srt's own authors documented.
+
+Root cause: `whoami /user` resolves its SID to a name via `LookupAccountSid`,
+an LSA RPC call. Under `SidsToDisable = [Administrators, every logon SID]`,
+that RPC call blocks rather than failing fast. Exact mechanism (why it blocks
+instead of erroring) not chased further; treat as a standing product
+limitation, not a bug: **any sandboxed code that resolves a SID to a name via
+`LookupAccountSid` (or anything that calls it internally) will block the same
+way under this token.** This is a real, reportable constraint for anything
+that ships inside the sandbox, independent of the harness.
+
+Fix applied (`codex-windows-sandbox/src/token.rs`,
+`create_sandbox_restricted_token_from`; `hive-desktop-sandbox/src/windows_elevated.rs`,
+`spawn_and_stream`): the function already computed the child's SID bytes via
+`GetTokenInformation(TokenUser)` for the default-DACL step -- a local token
+read, not an RPC call, so it cannot hit the same hang. It now also returns
+that SID (string form), and the runner reports it as an `Output` frame on the
+existing stdout-capture IPC channel BEFORE spawning the confined child, no new
+message type or protocol version bump. `hive-sandbox-validate.rs`'s SID
+assertion already did a substring search over captured stdout, so it needed no
+change; `whoami /user` and the later `whoami /groups` diagnostic were removed
+from the probe script (both do the same LSA lookup, both would hang).
+
+Divergence noted, not acted on this session: srt keys its WFP `ALE_USER_ID`
+ACE on a deny-only group SID; we key on the sandbox account SID directly.
+Both are workable; flagging so the D-013 text's "follows srt's shape" claim
+is scoped to the token construction, not every fence detail.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
