@@ -137,16 +137,21 @@ def guard_tenant_slug(existing_tenant, foreign_members):
         sys.exit(1)
 
 
-def guard_account_slug(existing_account, user_id):
-    """Exits loud if existing_account (found by ACCOUNT_SLUG) belongs to a
-    different user -- merging unchecked would silently grant that unrelated
-    account platform-admin (accounts.is_platform_admin)."""
-    if existing_account is not None and existing_account["owner_user_id"] != user_id:
+def guard_account_slug(existing_account, foreign_owners):
+    """Exits loud if existing_account (found by ACCOUNT_SLUG) has an
+    account_memberships row with role='owner' belonging to someone other
+    than our demo user. control-plane's IsPlatformAdmin authorizes ANY
+    owner-role membership on an is_platform_admin account (see
+    apps/control-plane/internal/platform/role_pgx.go), not just
+    accounts.owner_user_id -- so that single column is not a sufficient
+    collision check. Merging unchecked here would silently grant every
+    such co-owner platform-admin too."""
+    if existing_account is not None and foreign_owners:
         print(
             f"error: account slug {ACCOUNT_SLUG!r} already belongs to account "
-            f"{existing_account['id']} owned by a different user -- refusing to merge "
-            "(would silently grant that account is_platform_admin). Pick a different "
-            "ACCOUNT_SLUG for the demo.",
+            f"{existing_account['id']} with {len(foreign_owners)} owner-role member(s) "
+            "that are not the demo user -- refusing to merge (would silently grant them "
+            "is_platform_admin too). Pick a different ACCOUNT_SLUG for the demo.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -281,10 +286,23 @@ def main() -> None:
     # admin panels (feature gates, provider catalog, marketplace, credit
     # grants) -- tenant OWNER above does not imply this; they are unrelated
     # schemas. Same slug-collision risk as the tenant guard above: refuse to
-    # merge onto an existing account owned by a different user, since that
-    # would silently grant that unrelated account platform-admin.
+    # merge onto an existing account that already has a different owner-role
+    # member, since that would silently grant them platform-admin too.
     existing_account = find_by_slug(rest, headers, "accounts", ACCOUNT_SLUG)
-    guard_account_slug(existing_account, user_id)
+    if existing_account is not None:
+        status, owners = request(
+            rest, headers, "GET", "/account_memberships",
+            params={
+                "select": "user_id",
+                "account_id": f"eq.{existing_account['id']}",
+                "role": "eq.owner",
+            },
+        )
+        if status != 200:
+            print(f"error: account membership lookup failed: {status} {owners}", file=sys.stderr)
+            sys.exit(1)
+        foreign_owners = [m for m in owners if m["user_id"] != user_id]
+        guard_account_slug(existing_account, foreign_owners)
 
     status, body = request(
         rest, headers, "POST", "/accounts",

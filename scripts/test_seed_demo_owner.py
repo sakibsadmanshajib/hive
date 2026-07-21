@@ -25,9 +25,9 @@ def exits(fn, *args) -> bool:
 
 
 def main() -> None:
-    # No existing row at all: never a collision, regardless of members/owner.
+    # No existing row at all: never a collision, regardless of members/owners.
     assert not exits(seed_demo_owner.guard_tenant_slug, None, [])
-    assert not exits(seed_demo_owner.guard_account_slug, None, "user-a")
+    assert not exits(seed_demo_owner.guard_account_slug, None, [])
 
     # Existing tenant whose only member is our own demo user: safe re-run.
     assert not exits(
@@ -41,18 +41,21 @@ def main() -> None:
         [{"user_id": "someone-else"}],
     )
 
-    # Existing account owned by our own demo user: safe re-run.
+    # Existing account whose only owner-role member is our own demo user:
+    # safe re-run (a co-owner with role='member' would not appear here at
+    # all -- only role='owner' rows are queried, matching IsPlatformAdmin).
     assert not exits(
-        seed_demo_owner.guard_account_slug,
-        {"id": "a1", "owner_user_id": "user-a"},
-        "user-a",
+        seed_demo_owner.guard_account_slug, {"id": "a1"}, []
     )
 
-    # Existing account owned by a different user: must fail, not merge.
+    # Existing account with a second owner-role member: control-plane's
+    # IsPlatformAdmin (role_pgx.go) authorizes ANY owner-role membership on
+    # an is_platform_admin account, so this second owner would silently
+    # gain platform-admin too -- must fail, not merge.
     assert exits(
         seed_demo_owner.guard_account_slug,
-        {"id": "a1", "owner_user_id": "someone-else"},
-        "user-a",
+        {"id": "a1"},
+        [{"user_id": "someone-else"}],
     )
 
     print("ok: seed-demo-owner.py slug-collision guards")
