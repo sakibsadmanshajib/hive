@@ -1109,6 +1109,13 @@
       "notes": "Hive proprietary (agent subsystem): cancel an agent task."
     },
     {
+      "method": "GET",
+      "path": "/v1/featuregate",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (agent subsystem, issue #293): per-tenant feature-gate read used by agent-console's Cowork gate and Open WebUI's gate Function."
+    },
+    {
       "method": "POST",
       "path": "/v1/artifacts",
       "status": "supported_now",
