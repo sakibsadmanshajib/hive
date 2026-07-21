@@ -107,6 +107,51 @@ def random_password() -> str:
     return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
 
 
+def find_by_slug(rest, headers, table, slug):
+    """Returns the row for slug in table, or None. Used by the tenant/account
+    collision guards below -- both tables are upserted by slug with the
+    service-role key (bypasses RLS), so a caller must know what it is about
+    to merge onto before doing so."""
+    status, body = request(
+        rest, headers, "GET", f"/{table}",
+        params={"select": "*", "slug": f"eq.{slug}"},
+    )
+    if status != 200:
+        print(f"error: {table} slug lookup failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    return body[0] if body else None
+
+
+def guard_tenant_slug(existing_tenant, foreign_members):
+    """Exits loud if existing_tenant (found by TENANT_SLUG) has members other
+    than our own demo user -- see the on_conflict=slug upsert comment below
+    for why merging onto it unchecked would be a privilege-escalation bug."""
+    if existing_tenant is not None and foreign_members:
+        print(
+            f"error: tenant slug {TENANT_SLUG!r} already belongs to tenant "
+            f"{existing_tenant['id']} with {len(foreign_members)} member(s) that are not "
+            "the demo user -- refusing to merge onto a tenant this script did not create. "
+            "Pick a different TENANT_SLUG for the demo.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+def guard_account_slug(existing_account, user_id):
+    """Exits loud if existing_account (found by ACCOUNT_SLUG) belongs to a
+    different user -- merging unchecked would silently grant that unrelated
+    account platform-admin (accounts.is_platform_admin)."""
+    if existing_account is not None and existing_account["owner_user_id"] != user_id:
+        print(
+            f"error: account slug {ACCOUNT_SLUG!r} already belongs to account "
+            f"{existing_account['id']} owned by a different user -- refusing to merge "
+            "(would silently grant that account is_platform_admin). Pick a different "
+            "ACCOUNT_SLUG for the demo.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def main() -> None:
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
@@ -118,10 +163,81 @@ def main() -> None:
     rest = supabase_url + "/rest/v1"
     gotrue = supabase_url + "/auth/v1"
 
-    # 1. Upsert the demo tenant.
+    # 1. Find-or-create the GoTrue user first -- the tenant guard below needs
+    # user_id to tell "our own demo user" apart from an unrelated tenant's
+    # real members. user_metadata.selected_tenant_id is set once the tenant
+    # is resolved, further down. `filter=<email>` does an exact server-side
+    # match (see scripts/seed-owui-e2e-user.py for the `email=` param 500
+    # gotcha on this GoTrue version).
+    status, body = request(gotrue, headers, "GET", "/admin/users", params={"filter": USER_EMAIL})
+    if status != 200:
+        print(f"error: user lookup failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    existing_user = next(
+        (u for u in body.get("users", []) if u.get("email", "").lower() == USER_EMAIL.lower()),
+        None,
+    )
+
+    password = random_password()
+    if existing_user is None:
+        status, body = request(
+            gotrue, headers, "POST", "/admin/users",
+            body={"email": USER_EMAIL, "password": password, "email_confirm": True},
+        )
+        if status not in (200, 201):
+            print(f"error: user create failed: {status} {body}", file=sys.stderr)
+            sys.exit(1)
+        user_id = body["id"]
+    else:
+        user_id = existing_user["id"]
+        # Password rotates every run so no run reuses a prior credential.
+        status, body = request(
+            gotrue, headers, "PUT", f"/admin/users/{user_id}", body={"password": password},
+        )
+        if status != 200:
+            print(f"error: user update failed: {status} {body}", file=sys.stderr)
+            sys.exit(1)
+    print(f"user_id={user_id}", file=sys.stderr)
+
+    # 2. Guard + upsert the demo tenant. slug is user-chosen; an
+    # on_conflict=slug upsert with the service-role key would otherwise
+    # silently merge onto ANY pre-existing tenant with this slug -- adding
+    # our demo user as OWNER and flipping feature gates on for it, even if
+    # that tenant belongs to a real customer. Guard: if the slug already
+    # resolves to a tenant with members other than our own demo user, fail
+    # loud instead of touching it. A tenant with zero members, or whose only
+    # member is our own demo user (a prior run of this exact script), is
+    # safe to reuse. archived_at is force-reset to NULL on every run: this
+    # is a dedicated demo tenant this script owns outright, so reactivating
+    # it (rather than leaving a demo login unable to get a tenant claim) is
+    # the correct default -- see custom_access_token_hook's
+    # `t.archived_at IS NULL` filter.
+    existing_tenant = find_by_slug(rest, headers, "tenants", TENANT_SLUG)
+    if existing_tenant is not None:
+        status, members = request(
+            rest, headers, "GET", "/tenant_users",
+            params={"select": "user_id", "tenant_id": f"eq.{existing_tenant['id']}"},
+        )
+        if status != 200:
+            print(f"error: tenant membership lookup failed: {status} {members}", file=sys.stderr)
+            sys.exit(1)
+        foreign_members = [m for m in members if m["user_id"] != user_id]
+        guard_tenant_slug(existing_tenant, foreign_members)
+        if existing_tenant.get("archived_at"):
+            print(
+                f"tenant {existing_tenant['id']} was archived_at={existing_tenant['archived_at']}; "
+                "reactivating (dedicated demo tenant, safe to un-archive).",
+                file=sys.stderr,
+            )
+
     status, body = request(
         rest, headers, "POST", "/tenants",
-        body={"slug": TENANT_SLUG, "name": TENANT_NAME, "deployment": TENANT_DEPLOYMENT},
+        body={
+            "slug": TENANT_SLUG,
+            "name": TENANT_NAME,
+            "deployment": TENANT_DEPLOYMENT,
+            "archived_at": None,
+        },
         params={"on_conflict": "slug"},
         prefer="resolution=merge-duplicates,return=representation",
     )
@@ -131,48 +247,16 @@ def main() -> None:
     tenant_id = body[0]["id"]
     print(f"tenant_id={tenant_id}", file=sys.stderr)
 
-    # 2. Find-or-create the GoTrue user. `filter=<email>` does an exact
-    # server-side match (see scripts/seed-owui-e2e-user.py for the `email=`
-    # param 500 gotcha on this GoTrue version).
-    status, body = request(gotrue, headers, "GET", "/admin/users", params={"filter": USER_EMAIL})
-    if status != 200:
-        print(f"error: user lookup failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-    existing = next(
-        (u for u in body.get("users", []) if u.get("email", "").lower() == USER_EMAIL.lower()),
-        None,
+    # Now that the tenant is resolved, point the user's selected tenant at
+    # it. GoTrue admin updateUserById MERGES user_metadata, so this only
+    # ever adds/refreshes selected_tenant_id.
+    status, body = request(
+        gotrue, headers, "PUT", f"/admin/users/{user_id}",
+        body={"user_metadata": {"selected_tenant_id": tenant_id}},
     )
-
-    password = random_password()
-    user_metadata = {"selected_tenant_id": tenant_id}
-
-    if existing is None:
-        status, body = request(
-            gotrue, headers, "POST", "/admin/users",
-            body={
-                "email": USER_EMAIL,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": user_metadata,
-            },
-        )
-        if status not in (200, 201):
-            print(f"error: user create failed: {status} {body}", file=sys.stderr)
-            sys.exit(1)
-        user_id = body["id"]
-    else:
-        user_id = existing["id"]
-        # GoTrue admin updateUserById MERGES user_metadata, so this only
-        # ever adds/refreshes selected_tenant_id. Password rotates every run
-        # so no run reuses a prior credential.
-        status, body = request(
-            gotrue, headers, "PUT", f"/admin/users/{user_id}",
-            body={"password": password, "user_metadata": user_metadata},
-        )
-        if status != 200:
-            print(f"error: user update failed: {status} {body}", file=sys.stderr)
-            sys.exit(1)
-    print(f"user_id={user_id}", file=sys.stderr)
+    if status != 200:
+        print(f"error: user metadata update failed: {status} {body}", file=sys.stderr)
+        sys.exit(1)
 
     # 3. Upsert tenant membership: OWNER unlocks agent-console/edge-api's
     # tenant-admin JWT-role claim (custom_access_token_hook) and is the top
@@ -192,10 +276,16 @@ def main() -> None:
         print(f"error: tenant membership upsert failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
 
-    # 4. Upsert the web-console billing account. is_platform_admin=true here
-    # is what unlocks control-plane's RequirePlatformAdmin-gated admin panels
-    # (feature gates, provider catalog, marketplace, credit grants) -- tenant
-    # OWNER above does not imply this; they are unrelated schemas.
+    # 4. Guard + upsert the web-console billing account. is_platform_admin=
+    # true here is what unlocks control-plane's RequirePlatformAdmin-gated
+    # admin panels (feature gates, provider catalog, marketplace, credit
+    # grants) -- tenant OWNER above does not imply this; they are unrelated
+    # schemas. Same slug-collision risk as the tenant guard above: refuse to
+    # merge onto an existing account owned by a different user, since that
+    # would silently grant that unrelated account platform-admin.
+    existing_account = find_by_slug(rest, headers, "accounts", ACCOUNT_SLUG)
+    guard_account_slug(existing_account, user_id)
+
     status, body = request(
         rest, headers, "POST", "/accounts",
         body={
