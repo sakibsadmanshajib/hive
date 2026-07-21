@@ -31,7 +31,7 @@ const fraunces = Fraunces({
 export const metadata: Metadata = {
   title: "Hive Console",
   description:
-    "OpenAI-compatible inference, prepaid credits, and observability for builders in Bangladesh.",
+    "Hive inference API, prepaid credits, and observability for builders in Bangladesh.",
   icons: { icon: "/favicon.ico" },
 };
 
