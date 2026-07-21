@@ -391,10 +391,26 @@ services:
       # NEXT_PUBLIC_* are baked into the client bundle by `next build`
       # (Dockerfile.agent-console runs a production build, not `next dev`),
       # so they must travel as build args, not runtime `environment:`.
+      #
+      # NEXT_PUBLIC_EDGE_API_BASE_URL default is empty (same-origin), not an
+      # absolute host:port. apps/agent-console/lib/edge-api/tasks.ts builds
+      # its task list/create/cancel calls as `${baseUrl}/v1/agent/tasks`
+      # from the BROWSER, not from this container, so a baked-in
+      # http://localhost:8080 resolves against whatever machine the browser
+      # is running on. That only happens to work when the browser and this
+      # docker host are the same machine. It breaks for the desktop app,
+      # whose webview runs on a different host (e.g. Windows) than the
+      # docker engine (e.g. WSL2): localhost:8080 there points at the
+      # browser's own host, which has nothing listening, and task calls
+      # fail silently. Empty string makes the fetch same-origin relative
+      # (/v1/agent/tasks), which Caddyfile.owui already reverse-proxies to
+      # edge-api on the same origin the browser loaded /agent-workspace
+      # from. Override in .env only if edge-api is reachable at a different
+      # absolute origin than the one serving /agent-workspace.
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-        NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-http://localhost:8080}
+        NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-}
     profiles:
       - chat
       - enterprise
