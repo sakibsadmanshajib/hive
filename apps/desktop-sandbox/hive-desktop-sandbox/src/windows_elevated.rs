@@ -1454,32 +1454,6 @@ mod windows_impl {
             "token derived (child SID {child_sid}); spawning inner child via CreateProcessAsUserW"
         ));
 
-        // Report the derived SID as an Output frame BEFORE spawning the
-        // confined child, reusing the existing stdout-capture path rather than
-        // adding a new IPC message type. This is decision D-013's option 1:
-        // the validator's SID assertion no longer needs the confined child to
-        // run `whoami /user` itself, which was found (2026-07-21 lab session)
-        // to block indefinitely under this token -- `LookupAccountSid` is an
-        // LSA RPC call, and `GetTokenInformation(TokenUser)` (used to derive
-        // `child_sid` above) is not, so it cannot hit the same hang. See
-        // VENDORING.md for the differential evidence and the standing
-        // limitation this leaves for any sandboxed code that resolves a SID to
-        // a name the same way `whoami` does.
-        ipc_framed::write_frame(
-            &mut *writer,
-            &FramedMessage {
-                version: ipc_framed::IPC_PROTOCOL_VERSION,
-                message: Message::Output {
-                    payload: OutputPayload {
-                        data_b64: ipc_framed::encode_bytes(
-                            format!("HIVE_SANDBOX_CHILD_SID={child_sid}\n").as_bytes(),
-                        ),
-                        stream: OutputStream::Stdout,
-                    },
-                },
-            },
-        )?;
-
         let spawn_result = spawn_process_with_pipes(
             token,
             &request.command,
@@ -1529,7 +1503,7 @@ mod windows_impl {
             handles.process.dwProcessId
         ));
 
-        let result = stream_child(handles, writer);
+        let result = stream_child(handles, writer, &child_sid);
         // By the time `stream_child` returns `Ok`, the child has already
         // exited (it waits on the process handle before returning), so
         // dropping the job here is a no-op in that case; on `Err` it
@@ -1604,7 +1578,7 @@ mod windows_impl {
 
     /// Streams the child's stdout/stderr as Output frames and its exit as an
     /// Exit frame, after acking with SpawnReady.
-    fn stream_child(handles: PipeSpawnHandles, writer: &mut File) -> Result<()> {
+    fn stream_child(handles: PipeSpawnHandles, writer: &mut File, child_sid: &str) -> Result<()> {
         let process = handles.process.hProcess;
         let pid = handles.process.dwProcessId;
 
@@ -1614,6 +1588,34 @@ mod windows_impl {
                 version: ipc_framed::IPC_PROTOCOL_VERSION,
                 message: Message::SpawnReady {
                     payload: SpawnReady { process_id: pid },
+                },
+            },
+        )?;
+
+        // Report the derived SID as an Output frame right after SpawnReady
+        // (must come after it: the client's handshake expects SpawnReady to be
+        // literally the first frame off the pipe), reusing the existing
+        // stdout-capture path rather than adding a new IPC message type. This
+        // is decision D-013's option 1: the validator's SID assertion no
+        // longer needs the confined child to run `whoami /user` itself, which
+        // was found (2026-07-21 lab session) to block indefinitely under this
+        // token -- `LookupAccountSid` is an LSA RPC call, and
+        // `GetTokenInformation(TokenUser)` (used to derive `child_sid` before
+        // this function was called) is not, so it cannot hit the same hang.
+        // See VENDORING.md for the differential evidence and the standing
+        // limitation this leaves for any sandboxed code that resolves a SID to
+        // a name the same way `whoami` does.
+        ipc_framed::write_frame(
+            &mut *writer,
+            &FramedMessage {
+                version: ipc_framed::IPC_PROTOCOL_VERSION,
+                message: Message::Output {
+                    payload: OutputPayload {
+                        data_b64: ipc_framed::encode_bytes(
+                            format!("HIVE_SANDBOX_CHILD_SID={child_sid}\n").as_bytes(),
+                        ),
+                        stream: OutputStream::Stdout,
+                    },
                 },
             },
         )?;
