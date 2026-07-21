@@ -198,7 +198,9 @@ fn main() -> std::process::ExitCode {
         " & echo ===NET_ALLOWED=== & curl -sS --ssl-no-revoke -o NUL https://{host}/ && echo NET_ALLOWED_OK || echo NET_ALLOWED_FAIL \
          & echo ===NET_DENIED=== & curl -sS --ssl-no-revoke -o NUL https://example.org/ && echo NET_DENIED_REACHED || echo NET_DENIED_BLOCKED \
          & echo ===NET_DIRECT=== & curl -sS --ssl-no-revoke --noproxy * -o NUL https://{host}/ && echo NET_DIRECT_REACHED || echo NET_DIRECT_BLOCKED \
-         & echo ===NET_DNS=== & nslookup {host}",
+         & echo ===NET_DNS=== & nslookup {host} \
+         & echo ===CERTSTORE=== & certutil -user -store My \
+         & echo ===WHOAMI=== & whoami /groups",
         host = probe_host,
     ));
     let command = vec![

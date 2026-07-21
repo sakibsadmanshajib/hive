@@ -1027,6 +1027,129 @@ leaves draft (D-004).
    leaves the broader (more restrictive) block in force (fail toward
    restrictive).
 
+### spike307-win activation lab results (2026-07-21, PR #409 draft `feat/desktop-sandbox-b2-activate`, HEAD `5b9fbd0b`, NOT merged)
+
+Live interactive-console lab run against the four blockers above. Full
+row-by-row matrix and root-cause detail: vault
+`lab-results-b2-wfp-egress-2026-07-21.md`. Summary:
+
+- **F1 hard gate PASS in both derivations.** 9 of 10 exercised matrix rows
+  PASS live: confinement (token SID, outside/inside-workspace write,
+  canary-secret read-deny), fence provisioning (16 WFP filters, Hive
+  GUIDs, firewall rules, fail-closed readiness marker), proxy-endpoint
+  reachability, non-allowlisted-host 403, DenyAll all-probes-blocked
+  (added this pass), SID-keying (non-sandbox account unaffected),
+  grandchild block, mid-run kill (no orphan, loopback rule reverts to
+  full block, no leaked proxy port), and provision fail-closed abort.
+  Rows 1/2/4 (direct-connect/DNS/env-stripped blocked) registered partly
+  via a curl `getaddrinfo()` thread-start error rather than a clean
+  TCP-layer drop — corroborated, not sole, evidence; rows 3/6 (proxy
+  socket I/O works, non-allowlisted host gets a clean 403) are the
+  stronger proof the fence is actually gating egress rather than
+  breaking networking wholesale.
+- **Row 5 (open, functional gap, not a security hole): allowlisted-host
+  TLS fails inside the sandbox.** `curl: (35) schannel:
+  AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030E)`.
+  Proven to be downstream of the proxy (the allowlisted host gets PAST
+  the proxy CONNECT tunnel and dies in local TLS credential
+  acquisition, while a non-allowlisted host in the same run gets a
+  clean 403 from the proxy). Root cause: the RESTRICTED TOKEN blocks
+  the confined child from initializing CryptoAPI/schannel credentials
+  (H2, confirmed). Uninitialized per-user crypto profile (H1) was
+  tested and ruled out (pre-created `Roaming\Microsoft\Crypto`,
+  `Roaming\Microsoft\SystemCertificates`, `Local\Microsoft\Crypto` for
+  the sandbox account changed nothing); `LOGON_WITH_PROFILE` is already
+  passed at `codex-windows-sandbox/src/elevated/runner_client.rs:394`,
+  ruling out "profile not loaded" independently. Implication: any
+  schannel-based HTTPS client (curl, WinHTTP, .NET default TLS) cannot
+  complete TLS in the sandbox today, so `AllowHosts` is not usable end
+  to end for real workloads until this is fixed. It fails closed (no
+  data ever leaves), so it does not weaken DenyAll or the egress-block
+  guarantee itself.
+- Fix A applied this session, commit `7601f5ce`: `grant_winsta_desktop_access`
+  in `codex-windows-sandbox/src/desktop.rs` now grants the sandbox
+  account SID on the real `WinSta0\Default` opened by name via
+  `OpenDesktopW`, instead of the elevated parent's
+  `GetThreadDesktop(GetCurrentThreadId())`. Genuine latent wrong-object
+  bug fix, kept, but it was NOT the cause of two lab boots' worth of
+  spawn crashes — see the window-station lesson below.
+- Commit `5b9fbd0b` (harness only, this session): gave the validator a
+  schannel-intended child env and added a DenyAll `NET_*` probe (row 7
+  above). The DenyAll probe addition is real signal; the env-var change
+  targeted the wrong layer and did not fix row 5.
+- **Lab-method lesson (cost two full lab boots):** processes spawned
+  through Windows OpenSSH land on a NON-INTERACTIVE per-logon service
+  window station (`Service-0x0-<luid>$`), not `WinSta0`. The sandbox
+  grants desktop access based on `GetProcessWindowStation()` of the
+  parent and spawns the runner with `STARTUPINFO.lpDesktop = NULL`, so
+  driving it over SSH puts parent and runner on different stations and
+  the runner's user32 desktop attach is denied (`0xC0000142` before
+  `main`, later `0xC06D007E` VC++ delay-load MODULE_NOT_FOUND on
+  `user32.dll` after the #403 delay-load change) — not a sandbox bug.
+  **Any future Windows sandbox behavioral lab run must drive validation
+  from the guest's INTERACTIVE console session via an elevated
+  interactive scheduled task, never directly over SSH.** Also build
+  with `cargo build --bins`, not plain `cargo build`: the validator
+  needs sibling `hive-command-runner.exe` and `hive-egress-shim.exe`
+  present at spawn time. See `reference_hive_lab_windows.md` (memory)
+  for the full recipe.
+
+Net: blockers 1-4 above are still open (this pass exercised the
+security-relevant confinement/egress-block matrix, not the
+concurrent-task rule-clobber scenarios), plus the new row 5 schannel
+gap. The network refusal in `launch()` stays in place; PR #409 is
+draft, not merged.
+
+### Local deviation from upstream: interactive group SIDs in the restricting set (row 5 schannel fix)
+
+Upstream `codex-windows-sandbox` builds the restricted child token in
+`codex-windows-sandbox/src/token.rs` (`create_token_with_caps_from`) with a
+restricting-SID set of the synthetic random capability SIDs, the token user SID
+(elevated backend only), the logon SID, and Everyone. The token is created
+`WRITE_RESTRICTED`, so every write-type access check must also pass against that
+set.
+
+Hive adds four well known group SIDs to that set:
+
+- `S-1-5-32-545` BUILTIN\Users
+- `S-1-5-4` INTERACTIVE
+- `S-1-5-11` Authenticated Users
+- `S-1-5-12` RESTRICTED
+
+Together these are Chromium's `USER_INTERACTIVE` restriction level.
+
+Reason: the lab row 5 failure above
+(`curl: (35) schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS
+(0x8009030E)`) is a token problem, not an egress-policy problem. The egress
+fence was proven correct in the same run. schannel and CryptoAPI credential
+acquisition performs write-type opens (the LSA and SspiCli ALPC shared section,
+the cryptsvc and KeyIso LRPC endpoints, `CertOpenSystemStore` which opens the
+store read-write by default, and `\Device\KsecDD`). Those objects grant access
+through the groups above rather than through the token user SID or the logon
+SID, and under `WRITE_RESTRICTED` an absent group is a denial. The failure
+surfaces late, after the security support provider is already reached, which is
+why it reads as `SEC_E_NO_CREDENTIALS` instead of an access-denied error.
+
+Security property given up: the child may now perform write-type access to any
+object whose DACL grants these groups, which covers user-writable registry and
+filesystem locations and world or Users writable service endpoints. Filesystem
+confinement therefore now rests on the per-path deny ACLs and on the other
+layers (private desktop, job object, WFP egress fence) rather than on the
+write-restriction backstop.
+
+Explicitly unchanged: the `CreateRestrictedToken` flags stay
+`DISABLE_MAX_PRIVILEGE | LUA_TOKEN | WRITE_RESTRICTED`, `SidsToDisable` stays
+NULL, `PrivilegesToDelete` stays NULL, the capability SIDs are untouched, and
+the integrity level is unchanged. No new privilege is granted and no previously
+disabled SID is enabled.
+
+Follow-up: narrowing the set below `USER_INTERACTIVE`, for instance by dropping
+Authenticated Users, is tracked as a follow-up if the security review wants a
+tighter level. The same pass added `===CERTSTORE===` (`certutil -user -store
+My`) and `===WHOAMI===` (`whoami /groups`) probes to the validator script so the
+next lab run captures whether the user certificate store opens and which group
+SIDs the child token actually carries.
+
 ### Why not `codex-rs/windows-sandbox-rs` for the Windows backend (historical, #395 wave; superseded in part by Step 3 above)
 
 This section predates Step 3 and explains why the #395 wave (the base,
