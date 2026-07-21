@@ -163,6 +163,18 @@ impl Drop for SandboxChild {
     }
 }
 
+// SAFETY: `SandboxChild` exclusively owns `process` and `job` (transferred
+// out of `HandleGuard` via `into_raw` in `launch` below, never aliased), and
+// `pid` is a plain `u32`. Both handles are ordinary Win32 kernel-object
+// handles -- a process handle and a Job Object handle -- neither of which is
+// thread-affine: unlike a window or GDI handle, either can be waited on,
+// queried, or closed from any thread, not only the one that created it.
+// `windows::Win32::Foundation::HANDLE` is `!Send` only because it is a
+// newtype over a raw pointer, which is more conservative than the actual
+// Win32 contract for these two handle kinds. Moving a `SandboxChild` to
+// another thread (as the desktop app's `spawn_with_timeout` does) is sound.
+unsafe impl Send for SandboxChild {}
+
 /// RAII wrapper closing a Win32 handle on drop, so every fallible step below
 /// its acquisition cleans the handle up without an explicit `CloseHandle` on
 /// each error path. Ownership is transferred out with [`HandleGuard::into_raw`]
