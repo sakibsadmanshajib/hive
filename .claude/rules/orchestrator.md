@@ -22,6 +22,7 @@ context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, c
 5. Thread clearing: one agent per PR with a tight read budget. Merge policy: all checks green plus zero unresolved threads, then squash merge with branch deletion.
 6. haiku only for watch loops and single-shot queries, sonnet default, opus for design docs, security review, and quality-critical generation.
 7. After any worktree agent completes, verify the shared checkout is still on main.
+8. Visual proof before merge (non-negotiable, owner directive 2026-07-21): no feature or fix touching a live UI/UX surface merges, and no completion claim reaches the owner, without a fresh screenshot or screen recording taken against the actually-running stack after the change, showing the claimed behavior. The proof artifact itself must be posted in the PR (attached to the PR body or a PR comment), not just described in a subagent's text report or held in a scratch dir. A text description alone is not proof. Bypass only on explicit owner instruction for that specific change. Applies to the main agent's own claims to the owner as much as to builder self-reports.
 
 ## Repetitive work
 When a task pattern repeats three or more times, mint a repo-local skill via skill-creator. Use claude-md-management skills for CLAUDE.md upkeep. Hooks for anything that must fire automatically.
