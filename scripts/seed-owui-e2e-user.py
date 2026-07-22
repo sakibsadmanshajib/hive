@@ -21,7 +21,21 @@ allow_all_models=true -- listing is not billable, so there is no reason to
 depend on default-policy-group alias membership. Rotated every run the same
 way the GoTrue password is.
 
+Also pushes the minted SHIM_KEY straight into Open WebUI's own persisted
+OpenAI-connection config (POST /openai/config/update), not just .env and
+the container's OPENAI_API_KEY env var. OWUI only seeds that config from
+OPENAI_API_KEY on a volume's first boot -- every later container recreate
+on the same volume keeps the OLD key even after .env and the env var move
+on, and the chat UI silently shows "No models available" even though the
+new key works fine directly against edge-api. Confirmed live 2026-07-22.
+This sync step is best-effort: set OWUI_BASE_URL, OWUI_ADMIN_EMAIL, and
+OWUI_ADMIN_PASSWORD to enable it, or it logs a warning to stderr and
+skips (never fatal -- minting the Supabase-side credentials below is
+this script's real job).
+
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+Optional env (OWUI config sync): OWUI_BASE_URL (default
+http://localhost:3003), OWUI_ADMIN_EMAIL, OWUI_ADMIN_PASSWORD
 
 Prints exactly three lines to stdout (and nothing else):
   EMAIL=<email>
@@ -103,6 +117,79 @@ def random_api_key() -> tuple[str, str, str]:
     raw_secret = "hk_" + encoded
     token_hash = hashlib.sha256(raw_secret.encode()).hexdigest()
     return raw_secret, token_hash, raw_secret[-6:]
+
+
+# Internal docker-network hostname edge-api resolves to inside the OWUI
+# container. Not host-reachable -- unlike OWUI_BASE_URL below, which this
+# script itself calls from the host, this is where OWUI's own backend
+# dials out to for chat completions once the config below is saved.
+OWUI_UPSTREAM_BASE_URL = "http://edge-api:8080/v1"
+
+
+def owui_config_body(raw_secret: str) -> dict:
+    """Body shape for OWUI's own POST /openai/config/update. Verified
+    live 2026-07-22 as the fix for the persisted-stale-key incident (see
+    module docstring)."""
+    return {
+        "ENABLE_OPENAI_API": True,
+        "OPENAI_API_BASE_URLS": [OWUI_UPSTREAM_BASE_URL],
+        "OPENAI_API_KEYS": [raw_secret],
+        "OPENAI_API_CONFIGS": {"0": {"enable": True}},
+    }
+
+
+def owui_request(base, headers, method, path, body=None):
+    """Same shape as request() above but never sys.exit on error --
+    sync_owui_config below is best-effort and must always fall through
+    to this script's real job (minting the Supabase-side credentials)."""
+    url = base + path
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers=dict(headers))
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        raw = resp.read()
+        return resp.status, (json.loads(raw) if raw else None)
+
+
+def sync_owui_config(raw_secret: str) -> None:
+    """Best-effort: sign into OWUI as an admin and push raw_secret into
+    its own persisted OpenAI config, so it never drifts from the
+    SHIM_KEY this run just minted. Logs one line to stderr either way,
+    never raises, never sys.exit -- see module docstring for why."""
+    base = os.environ.get("OWUI_BASE_URL", "http://localhost:3003").rstrip("/")
+    email = os.environ.get("OWUI_ADMIN_EMAIL", "").strip()
+    password = os.environ.get("OWUI_ADMIN_PASSWORD", "").strip()
+    # No hardcoded credential defaults. Local/demo test account already
+    # documented above this script's own header comment (asdas@asdas.sda
+    # / asdas) if a caller wants to set these explicitly.
+    if not email or not password:
+        print(
+            "owui config sync skipped: OWUI_ADMIN_EMAIL/OWUI_ADMIN_PASSWORD not set",
+            file=sys.stderr,
+        )
+        return
+    try:
+        status, body = owui_request(
+            base, {"Content-Type": "application/json"}, "POST",
+            "/api/v1/auths/signin", {"email": email, "password": password},
+        )
+        token = (body or {}).get("token")
+        if status != 200 or not token:
+            print(f"owui config sync skipped: signin failed: {status} {body}", file=sys.stderr)
+            return
+        status, body = owui_request(
+            base,
+            {"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            "POST", "/openai/config/update", owui_config_body(raw_secret),
+        )
+        if status != 200:
+            print(f"owui config sync skipped: config update failed: {status} {body}", file=sys.stderr)
+            return
+        print("owui config sync: ok", file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        print(f"owui config sync skipped: {e.code} {raw[:300]!r}", file=sys.stderr)
+    except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
+        print(f"owui config sync skipped: {e}", file=sys.stderr)
 
 
 def main() -> None:
@@ -240,6 +327,11 @@ def main() -> None:
     if status not in (200, 201, 204):
         print(f"error: shim key policy create failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
+
+    # 6. Best-effort: keep OWUI's own persisted config in sync with the
+    # key just minted above (see module docstring). Never touches the
+    # stdout contract below.
+    sync_owui_config(raw_secret)
 
     print(f"EMAIL={USER_EMAIL}")
     print(f"PASSWORD={password}")
