@@ -46,6 +46,20 @@
     }
   }
 
+  # Desktop app entitlement probe (apps/desktop/src-tauri/src/entitlements.rs)
+  # fetches GET {origin}/v1/featuregate on the SAME origin it loads
+  # /agent-workspace from (apps/desktop/src-tauri/src/settings.rs strips the
+  # console base path to derive that origin, it does not track a second host).
+  # Without this route the desktop app's origin never reaches edge-api, which
+  # is the only service that answers /v1/featuregate.
+  @edgeApi path /v1/*
+  reverse_proxy @edgeApi edge-api:8080 {
+    transport http {
+      response_header_timeout 60s
+      dial_timeout 5s
+    }
+  }
+
   reverse_proxy open-webui:8080 {
     transport http {
       response_header_timeout 60s
