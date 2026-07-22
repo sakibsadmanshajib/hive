@@ -18,13 +18,27 @@ import (
 
 // Service encapsulates all accounts business logic.
 type Service struct {
-	repo   Repository
-	policy authz.Policy
+	repo    Repository
+	policy  authz.Policy
+	roleSvc *platform.RoleService // optional — see WithRoleService
 }
 
 // NewService returns a new accounts Service.
 func NewService(repo Repository) *Service {
 	return &Service{repo: repo, policy: authz.NewPolicy()}
+}
+
+// WithRoleService returns a copy of the Service wired with the platform role
+// service so EnsureViewerContext can resolve the real platform-admin overlay
+// for the viewer's Permissions[]. Without it, isAdmin is always false and a
+// real platform admin never sees platform.admin in permissions[], even though
+// admin-gated routes (which resolve their own Actor via roleSvc directly)
+// correctly allow them. That mismatch is what made Feature Gates and
+// Marketplace in web-console refuse to render for real admins.
+func (s *Service) WithRoleService(roleSvc *platform.RoleService) *Service {
+	cloned := *s
+	cloned.roleSvc = roleSvc
+	return &cloned
 }
 
 // EnsureViewerContext returns the full viewer context for the given viewer.
@@ -81,7 +95,18 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 
 	// Phase 18 Plan 04: emit permissions[] — the full granted-permission set for
 	// the chosen workspace actor. Gates fields removed from response wire shape.
-	chosenActor := ActorFor(viewer, chosen, false) // isAdmin=false: workspace-scoped
+	// isAdmin resolves the real platform_admin overlay when roleSvc is wired
+	// (see WithRoleService); nil roleSvc (most unit tests, and any caller that
+	// has not wired it) keeps the prior workspace-scoped false behaviour.
+	isAdmin := false
+	if s.roleSvc != nil {
+		admin, err := s.roleSvc.IsPlatformAdmin(ctx, viewer.UserID)
+		if err != nil {
+			return ViewerContext{}, fmt.Errorf("accounts: platform admin lookup: %w", err)
+		}
+		isAdmin = admin
+	}
+	chosenActor := ActorFor(viewer, chosen, isAdmin)
 	permissions := s.policy.AllGranted(chosenActor)
 	if permissions == nil {
 		permissions = []string{}

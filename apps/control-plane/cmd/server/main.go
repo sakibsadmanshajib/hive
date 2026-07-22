@@ -427,6 +427,13 @@ func main() {
 		// returns 503 "role service unavailable" on every mutating request.
 		budgetsHandler = budgetsHandler.WithRoleService(roleSvc)
 
+		// Wire role service into the accounts handler so GET /api/v1/viewer
+		// reports the real platform-admin overlay in permissions[]. Without
+		// this, platform admins never see platform.admin there and the
+		// web-console Feature Gates/Marketplace pages refuse to render even
+		// though the underlying admin-gated routes already allow them.
+		accountsHandler = accountsHandler.WithRoleService(roleSvc)
+
 		// Phase 18 — wire role service into the apikeys handler so the admin
 		// overlay is reflected in Actor.IsAdmin during PermAPIKeysWrite checks.
 		// Without it, platform admins are silently denied by policy.Can.
