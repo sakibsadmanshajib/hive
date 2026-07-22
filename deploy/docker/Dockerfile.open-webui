@@ -1,0 +1,32 @@
+# Hive-branded Open WebUI image.
+#
+# Upstream Open WebUI hardcodes a license-enforcement suffix: any custom
+# WEBUI_NAME gets " (Open WebUI)" appended (backend/open_webui/env.py,
+# WEBUI_NAME != 'Open WebUI' check) unless the deployment stays at <=50 end
+# users per rolling 30 days, has written vendor permission, or holds an
+# enterprise license (Open WebUI License, clause 4 -- see
+# ghcr.io/open-webui/open-webui:v0.10.2 LICENSE). This demo deployment
+# qualifies under the <=50-user carve-out; owner has authorized full removal
+# regardless. Re-evaluate before any rollout that could exceed 50 users/30
+# days -- get written permission or an enterprise license first.
+FROM ghcr.io/open-webui/open-webui:v0.10.2@sha256:9fcea9c6e32ab60b0498f3986c6cdf651ddbe61db48d2213a3d28048ddd673d4
+
+# Root cause of "(Open WebUI)" in /api/config, /manifest.json,
+# /opensearch.xml, and the client-rendered <title>/meta description: this
+# 2-line block. WEBUI_NAME itself is still fully configurable via env var
+# (see docker-compose.yml); this only removes the forced suffix.
+RUN sed -i "/if WEBUI_NAME != 'Open WebUI':/,+1d" /app/backend/open_webui/env.py \
+    && ! grep -q '(Open WebUI)' /app/backend/open_webui/env.py
+
+# The pre-hydration static shell (served before the SPA's JS sets the real
+# title from WEBUI_NAME) still literally says "Open WebUI" -- it's baked
+# into the prebuilt frontend bundle, not templated. ponytail: plain string
+# swap, not a full frontend rebuild; add a proper i18n'd title if this
+# static shell ever needs more than a brand name.
+#
+# Both patches assert their own effect (grep -q the old pattern is gone) and
+# fail the build otherwise -- sed exits 0 on a zero-match address, so without
+# this a future digest bump whose upstream source shifted would silently
+# rebuild with "(Open WebUI)" branding back and no build-time signal.
+RUN sed -i 's/<title>Open WebUI<\/title>/<title>Hive<\/title>/' /app/build/index.html \
+    && ! grep -q '<title>Open WebUI</title>' /app/build/index.html

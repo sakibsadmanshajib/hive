@@ -410,7 +410,10 @@ services:
   #   enterprise - Hive EnterpriseEdge self-hosted box (includes in-stack redis + Ollama).
   #   chat       - compose on top of cloud profile for a hosted chat front-end.
   open-webui:
-    image: ghcr.io/open-webui/open-webui:main@sha256:74093dadc9c6aabc23987a74fd8c2fb8d995b1a5b22e83b0036fb9d6af590e8c
+    image: hive-open-webui:v0.10.2-branded
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.open-webui
     profiles:
       - local
       - enterprise
@@ -462,11 +465,14 @@ services:
       WEB_SEARCH_ENGINE: ${WEB_SEARCH_ENGINE:-}
       BYPASS_WEB_SEARCH_WEB_LOADER: ${BYPASS_WEB_SEARCH_WEB_LOADER:-false}
       BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL: ${BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL:-false}
-      # Hive product branding. LICENSE-DECISION.md: latest Open WebUI image with
-      # WEBUI_NAME and visible surfaces overridden to "Hive"; upstream Open WebUI
-      # branding-preservation license risk is accepted by the project owner.
+      # Hive product branding. LICENSE-DECISION.md: Open WebUI image built from
+      # Dockerfile.open-webui, which strips the upstream " (Open WebUI)" suffix
+      # that env.py forces onto any custom WEBUI_NAME (see that Dockerfile for
+      # the license clause + <=50-user carve-out this demo relies on).
       WEBUI_NAME: "Hive"
       WEBUI_URL: ${HIVE_CHAT_URL:-http://localhost:3003}
+      # Kills the "A new version (vX.Y.Z) is now available" in-app nag banner.
+      ENABLE_VERSION_UPDATE_CHECK: "false"
       DEFAULT_LOCALE: "en"
       OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       # OWUI_SHIM_KEY MUST be set when the open-webui profile is active. The
@@ -489,6 +495,21 @@ services:
       OWUI_E2E_MODE: ${OWUI_E2E_MODE:-false}
     volumes:
       - owui-data:/data
+      # Hive/S-Cubed favicon + splash overrides. STATIC_DIR above points at
+      # /data/static (persisted in owui-data, empty by default -- upstream
+      # has no bundled-default seeding when STATIC_DIR is overridden), so
+      # this directory mount is the only thing populating them. A single
+      # directory bind (not one bind per file) so the mount target exists
+      # regardless of whether owui-data is a fresh/empty named volume --
+      # Docker can refuse individual file-level binds onto a path that
+      # doesn't exist yet inside an empty named volume; one directory bind
+      # creates /data/static itself, sidestepping that.
+      # Reused apps/desktop app icon as source; not per-size-optimized
+      # (favicon-96x96/apple-touch-icon are the closest available Tauri
+      # size, not exact). No dark-mode splash variant -- same PNG for both.
+      # Known gap: FONTS_DIR/custom.css/loader.js under STATIC_DIR are still
+      # unseeded (pre-existing, not introduced by this change).
+      - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
       # config keys on this image; they belong to the separate, deprecated
