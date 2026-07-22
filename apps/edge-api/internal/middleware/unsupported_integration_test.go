@@ -69,6 +69,11 @@ func TestUnsupportedEndpointMiddleware_AgentSubsystemRoutesReachHandlers(t *test
 		{http.MethodPost, "/v1/artifacts"},
 		{http.MethodPost, "/v1/artifacts/" + id + "/versions"},
 		{http.MethodPost, "/v1/artifacts/" + id + "/share"},
+		// Feature-gate read (issue #293) — internal/featuregate/handler.go.
+		// Consumed by agent-console's isCoworkEnabled() and OWUI's gate
+		// Function; shipped registered on the mux (main.go) but missing from
+		// the matrix, so it 404-ed exactly like the routes above once did.
+		{http.MethodGet, "/v1/featuregate"},
 	}
 
 	for _, tc := range cases {
