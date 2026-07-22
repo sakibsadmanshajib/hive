@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 // Handler handles all accounts-related HTTP routes.
@@ -18,6 +19,17 @@ type Handler struct {
 // NewHandler returns a new accounts Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc, policy: authz.NewPolicy()}
+}
+
+// WithRoleService returns a copy of the handler whose underlying Service is
+// wired with the platform role service, so GET /api/v1/viewer reports the
+// real platform-admin overlay in permissions[]. Mirrors the apikeys/budgets
+// handler idiom. Does not affect handleListMembers, which resolves its own
+// Actor directly (see comment there).
+func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
+	cloned := *h
+	cloned.svc = h.svc.WithRoleService(roleSvc)
+	return &cloned
 }
 
 // ServeHTTP dispatches requests to the appropriate sub-handler.
@@ -72,6 +84,13 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	// isAdmin hardcoded false here too: this Actor is built independently of
+	// EnsureViewerContext's own (now roleSvc-aware) actor, so a real platform
+	// admin who is not a workspace owner is still denied members.invite here.
+	// Known, separate gap from the reported bug (which is scoped to viewer
+	// permissions[] powering Feature Gates/Marketplace); not fixed in this
+	// change to keep the diff scoped. Fix path: give Handler its own roleSvc
+	// field via WithRoleService, same idiom as apikeys/budgets.
 	actor := ActorFor(viewer, Membership{
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
