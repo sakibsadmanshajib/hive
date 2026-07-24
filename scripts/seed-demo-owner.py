@@ -122,36 +122,56 @@ def find_by_slug(rest, headers, table, slug):
     return body[0] if body else None
 
 
-def guard_tenant_slug(existing_tenant, foreign_members):
-    """Exits loud if existing_tenant (found by TENANT_SLUG) has members other
-    than our own demo user -- see the on_conflict=slug upsert comment below
-    for why merging onto it unchecked would be a privilege-escalation bug."""
-    if existing_tenant is not None and foreign_members:
+def guard_tenant_slug(existing_tenant, foreign_members, own_member):
+    """Exits loud unless existing_tenant (found by TENANT_SLUG) is provably
+    ours: our own demo user must already be a member (own_member), proof a
+    prior run of this exact script created it, AND no other member may be
+    present (foreign_members empty) -- see the on_conflict=slug upsert
+    comment below for why merging onto it unchecked would be a
+    privilege-escalation bug. A tenant with zero members at all is NOT safe
+    to reuse just because it has no foreign members: it may be a
+    pre-existing tenant this script never touched (never seeded, or fully
+    cleaned up), so own_member must be true, not merely foreign_members
+    empty (issue #420)."""
+    if existing_tenant is not None and (foreign_members or not own_member):
         print(
             f"error: tenant slug {TENANT_SLUG!r} already belongs to tenant "
-            f"{existing_tenant['id']} with {len(foreign_members)} member(s) that are not "
-            "the demo user -- refusing to merge onto a tenant this script did not create. "
-            "Pick a different TENANT_SLUG for the demo.",
+            f"{existing_tenant['id']} that this script cannot confirm it created -- "
+            f"{len(foreign_members)} member(s) that are not the demo user and/or no "
+            "membership row proving the demo user already belongs to it. Refusing to "
+            "merge onto a tenant this script did not create. Pick a different "
+            "TENANT_SLUG for the demo.",
             file=sys.stderr,
         )
         sys.exit(1)
 
 
-def guard_account_slug(existing_account, foreign_owners):
-    """Exits loud if existing_account (found by ACCOUNT_SLUG) has an
-    account_memberships row with role='owner' belonging to someone other
-    than our demo user. control-plane's IsPlatformAdmin authorizes ANY
+def guard_account_slug(existing_account, foreign_owners, user_id):
+    """Exits loud unless existing_account (found by ACCOUNT_SLUG) is provably
+    ours: accounts.owner_user_id must already equal our own demo user AND no
+    account_memberships row with role='owner' may belong to anyone else
+    (foreign_owners empty). control-plane's IsPlatformAdmin authorizes ANY
     owner-role membership on an is_platform_admin account (see
     apps/control-plane/internal/platform/role_pgx.go), not just
     accounts.owner_user_id -- so that single column is not a sufficient
-    collision check. Merging unchecked here would silently grant every
-    such co-owner platform-admin too."""
-    if existing_account is not None and foreign_owners:
+    collision check on its own. The reverse gap is also real (issue #420):
+    accounts.owner_user_id is not schema-enforced to match any membership
+    row, so an existing account could point owner_user_id at a different
+    user with zero owner-role membership rows at all -- foreign_owners
+    would be empty and the old guard let that through, then the upsert
+    silently replaced owner_user_id and enabled is_platform_admin. Checking
+    owner_user_id against our own user_id directly closes that gap."""
+    if existing_account is not None and (
+        foreign_owners or existing_account.get("owner_user_id") != user_id
+    ):
         print(
             f"error: account slug {ACCOUNT_SLUG!r} already belongs to account "
-            f"{existing_account['id']} with {len(foreign_owners)} owner-role member(s) "
-            "that are not the demo user -- refusing to merge (would silently grant them "
-            "is_platform_admin too). Pick a different ACCOUNT_SLUG for the demo.",
+            f"{existing_account['id']} that this script cannot confirm it owns -- "
+            f"{len(foreign_owners)} owner-role member(s) that are not the demo user "
+            f"and/or owner_user_id={existing_account.get('owner_user_id')!r} does not "
+            "match the demo user. Refusing to merge (would silently grant unrelated "
+            "user(s) is_platform_admin too, or adopt an account we do not own). Pick a "
+            "different ACCOUNT_SLUG for the demo.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -208,14 +228,14 @@ def main() -> None:
     # on_conflict=slug upsert with the service-role key would otherwise
     # silently merge onto ANY pre-existing tenant with this slug -- adding
     # our demo user as OWNER and flipping feature gates on for it, even if
-    # that tenant belongs to a real customer. Guard: if the slug already
-    # resolves to a tenant with members other than our own demo user, fail
-    # loud instead of touching it. A tenant with zero members, or whose only
-    # member is our own demo user (a prior run of this exact script), is
-    # safe to reuse. archived_at is force-reset to NULL on every run: this
-    # is a dedicated demo tenant this script owns outright, so reactivating
-    # it (rather than leaving a demo login unable to get a tenant claim) is
-    # the correct default -- see custom_access_token_hook's
+    # that tenant belongs to a real customer. Guard: only a tenant whose
+    # only member is our own demo user (proof: a prior run of this exact
+    # script) is safe to reuse -- a tenant with zero members is NOT
+    # automatically safe, since it may be a pre-existing tenant this script
+    # never touched (issue #420). archived_at is force-reset to NULL on
+    # every run: this is a dedicated demo tenant this script owns outright,
+    # so reactivating it (rather than leaving a demo login unable to get a
+    # tenant claim) is the correct default -- see custom_access_token_hook's
     # `t.archived_at IS NULL` filter.
     existing_tenant = find_by_slug(rest, headers, "tenants", TENANT_SLUG)
     if existing_tenant is not None:
@@ -227,7 +247,8 @@ def main() -> None:
             print(f"error: tenant membership lookup failed: {status} {members}", file=sys.stderr)
             sys.exit(1)
         foreign_members = [m for m in members if m["user_id"] != user_id]
-        guard_tenant_slug(existing_tenant, foreign_members)
+        own_member = any(m["user_id"] == user_id for m in members)
+        guard_tenant_slug(existing_tenant, foreign_members, own_member)
         if existing_tenant.get("archived_at"):
             print(
                 f"tenant {existing_tenant['id']} was archived_at={existing_tenant['archived_at']}; "
@@ -286,8 +307,11 @@ def main() -> None:
     # admin panels (feature gates, provider catalog, marketplace, credit
     # grants) -- tenant OWNER above does not imply this; they are unrelated
     # schemas. Same slug-collision risk as the tenant guard above: refuse to
-    # merge onto an existing account that already has a different owner-role
-    # member, since that would silently grant them platform-admin too.
+    # merge onto an existing account unless owner_user_id already matches
+    # our demo user AND no other owner-role member exists -- owner_user_id
+    # is not schema-enforced to match any membership row, so checking it
+    # directly closes the desync gap the membership-only check missed
+    # (issue #420).
     existing_account = find_by_slug(rest, headers, "accounts", ACCOUNT_SLUG)
     if existing_account is not None:
         status, owners = request(
@@ -302,7 +326,7 @@ def main() -> None:
             print(f"error: account membership lookup failed: {status} {owners}", file=sys.stderr)
             sys.exit(1)
         foreign_owners = [m for m in owners if m["user_id"] != user_id]
-        guard_account_slug(existing_account, foreign_owners)
+        guard_account_slug(existing_account, foreign_owners, user_id)
 
     status, body = request(
         rest, headers, "POST", "/accounts",
