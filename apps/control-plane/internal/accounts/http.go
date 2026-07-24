@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -12,8 +13,9 @@ import (
 
 // Handler handles all accounts-related HTTP routes.
 type Handler struct {
-	svc    *Service
-	policy authz.Policy
+	svc     *Service
+	roleSvc *platform.RoleService // optional — used by handleListMembers to populate Actor.IsAdmin
+	policy  authz.Policy
 }
 
 // NewHandler returns a new accounts Handler.
@@ -23,12 +25,13 @@ func NewHandler(svc *Service) *Handler {
 
 // WithRoleService returns a copy of the handler whose underlying Service is
 // wired with the platform role service, so GET /api/v1/viewer reports the
-// real platform-admin overlay in permissions[]. Mirrors the apikeys/budgets
-// handler idiom. Does not affect handleListMembers, which resolves its own
-// Actor directly (see comment there).
+// real platform-admin overlay in permissions[], and handleListMembers can
+// resolve the same overlay for its own independently-built Actor. Mirrors the
+// apikeys/budgets handler idiom.
 func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
 	cloned := *h
 	cloned.svc = h.svc.WithRoleService(roleSvc)
+	cloned.roleSvc = roleSvc
 	return &cloned
 }
 
@@ -84,19 +87,28 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
-	// isAdmin hardcoded false here too: this Actor is built independently of
-	// EnsureViewerContext's own (now roleSvc-aware) actor, so a real platform
-	// admin who is not a workspace owner is still denied members.invite here.
-	// Known, separate gap from the reported bug (which is scoped to viewer
-	// permissions[] powering Feature Gates/Marketplace); not fixed in this
-	// change to keep the diff scoped. Fix path: give Handler its own roleSvc
-	// field via WithRoleService, same idiom as apikeys/budgets.
+	// isAdmin resolves the real platform-admin overlay when roleSvc is wired
+	// (see WithRoleService), so a real platform admin who is not a workspace
+	// owner is granted members.invite here too, matching the viewer
+	// permissions[] overlay fixed in EnsureViewerContext.
+	isAdmin := false
+	if h.roleSvc != nil {
+		admin, err := h.roleSvc.IsPlatformAdmin(r.Context(), viewer.UserID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "accounts: platform-admin lookup failed",
+				slog.String("user_id", viewer.UserID.String()),
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization unavailable"})
+			return
+		}
+		isAdmin = admin
+	}
 	actor := ActorFor(viewer, Membership{
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      vc.CurrentAccount.Role,
 		Status:    "active",
-	}, false)
+	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermMembersInvite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing members",

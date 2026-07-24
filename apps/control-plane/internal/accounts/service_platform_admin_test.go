@@ -107,3 +107,61 @@ func TestEnsureViewerContext_NoRoleService_DefaultsToNonAdmin(t *testing.T) {
 		}
 	}
 }
+
+// TestCreateInvitation_PlatformAdminOverlay is a regression guard for issue
+// #424: CreateInvitation hardcoded isAdmin=false when building its Actor, so
+// a real platform admin who is a non-owner member of the target account was
+// silently denied members.invite even though the admin overlay should grant
+// it. A hardcoded-false version returns permission_denied here; the fix must
+// succeed.
+func TestCreateInvitation_PlatformAdminOverlay(t *testing.T) {
+	cases := []struct {
+		name    string
+		isAdmin bool
+		wantErr bool
+	}{
+		{"platform admin non-owner member is granted members.invite", true, false},
+		{"non-admin non-owner member is denied members.invite", false, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubRepo()
+			userID := uuid.New()
+			accountID := uuid.New()
+
+			repo.accountsMap[accountID] = &accounts.Account{
+				ID:          accountID,
+				Slug:        "ws",
+				DisplayName: "WS",
+				AccountType: "personal",
+				OwnerUserID: uuid.New(),
+			}
+			repo.memberships = []accounts.Membership{
+				{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "member", Status: "active"},
+			}
+
+			store := &stubPlatformAdminStore{adminUsers: map[uuid.UUID]bool{}}
+			if tc.isAdmin {
+				store.adminUsers[userID] = true
+			}
+			roleSvc := platform.NewRoleService(store)
+
+			svc := accounts.NewService(repo).WithRoleService(roleSvc)
+
+			viewer := auth.Viewer{
+				UserID:        userID,
+				Email:         "admin-check@example.com",
+				EmailVerified: false,
+			}
+
+			_, err := svc.CreateInvitation(context.Background(), accountID, viewer, "invitee@example.com")
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+		})
+	}
+}

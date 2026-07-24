@@ -14,7 +14,22 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/ledger"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
+
+// stubRoleStore is a minimal platform.RoleStore backing a real
+// *platform.RoleService for tests, keyed by userID -> is_platform_admin.
+type stubRoleStore struct {
+	adminUsers map[uuid.UUID]bool
+}
+
+func (s *stubRoleStore) GetMembershipRole(_ context.Context, _, _ uuid.UUID) (platform.MembershipRole, error) {
+	return "", nil
+}
+
+func (s *stubRoleStore) IsPlatformAdmin(_ context.Context, userID uuid.UUID) (bool, error) {
+	return s.adminUsers[userID], nil
+}
 
 type accountsRepoStub struct {
 	accountsMap map[uuid.UUID]*accounts.Account
@@ -472,5 +487,61 @@ func TestHandler_AuthzMatrix(t *testing.T) {
 				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+// TestCreateReservation_PlatformAdminOverlayGrantsUnverifiedAccess is a
+// regression guard for issue #424: resolveCurrentAccountID hardcoded
+// isAdmin=false when building the Actor, so a real platform admin who is not
+// account-verified was silently denied credit-reservation access even though
+// the admin overlay should grant it. A hardcoded-false version returns 403
+// here; the fix must return 200.
+func TestCreateReservation_PlatformAdminOverlayGrantsUnverifiedAccess(t *testing.T) {
+	accountRepo := newAccountsRepoStub()
+	accountingRepo := newRepoStub()
+	ledgerSvc := &ledgerStub{balance: ledgerBalance(500)}
+	usageSvc := &usageStub{}
+
+	userID := uuid.New()
+	accountID := uuid.New()
+	accountRepo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "workspace-one",
+		DisplayName: "Workspace One",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	accountRepo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "member", Status: "active"},
+	}
+
+	roleSvc := platform.NewRoleService(&stubRoleStore{adminUsers: map[uuid.UUID]bool{userID: true}})
+	accountsSvc := accounts.NewService(accountRepo)
+	accountingSvc := NewService(accountingRepo, ledgerSvc, usageSvc)
+	handler := NewHandler(accountingSvc, accountsSvc).WithRoleService(roleSvc)
+
+	viewer := auth.Viewer{UserID: userID, Email: "admin@example.com", EmailVerified: false}
+
+	body, err := json.Marshal(map[string]any{
+		"request_id":        "req_platform_admin",
+		"attempt_number":    1,
+		"endpoint":          "/v1/responses",
+		"model_alias":       "hive-fast",
+		"estimated_credits": 120,
+		"policy_mode":       string(PolicyModeStrict),
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/credits/reservations", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
 	}
 }

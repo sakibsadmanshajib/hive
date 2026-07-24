@@ -11,7 +11,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
+
+// stubRoleStore is a minimal platform.RoleStore backing a real
+// *platform.RoleService for tests, keyed by userID -> is_platform_admin.
+type stubRoleStore struct {
+	adminUsers map[uuid.UUID]bool
+}
+
+func (s *stubRoleStore) GetMembershipRole(_ context.Context, _, _ uuid.UUID) (platform.MembershipRole, error) {
+	return "", nil
+}
+
+func (s *stubRoleStore) IsPlatformAdmin(_ context.Context, userID uuid.UUID) (bool, error) {
+	return s.adminUsers[userID], nil
+}
 
 func viewerCtx(viewer auth.Viewer) context.Context {
 	return auth.WithViewer(context.Background(), viewer)
@@ -406,5 +421,47 @@ func TestHandler_ProfilesAuthzMatrix(t *testing.T) {
 				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+// TestBillingProfile_PlatformAdminOverlayGrantsAccess is a regression guard
+// for issue #424: resolveVerifiedCurrentAccountID hardcoded isAdmin=false
+// when building the Actor, so a real platform admin who is neither a
+// workspace owner nor account-verified was silently denied billing-profile
+// access even though the admin overlay should grant it. A hardcoded-false
+// version returns 403 (per TestHandler_ProfilesAuthzMatrix's "member
+// unverified" case); the fix must pass authz and reach the not-found path
+// (404, no profile stored), matching the "owner verified" case's behavior.
+func TestBillingProfile_PlatformAdminOverlayGrantsAccess(t *testing.T) {
+	repo := newStubRepo()
+	accountID := uuid.New()
+	userID := uuid.New()
+
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "ws",
+		DisplayName: "WS",
+		AccountType: "personal",
+		OwnerUserID: uuid.New(),
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "member", Status: "active"},
+	}
+
+	roleSvc := platform.NewRoleService(&stubRoleStore{adminUsers: map[uuid.UUID]bool{userID: true}})
+	profileSvc := NewService(repo)
+	accountsSvc := accounts.NewService(repo)
+	handler := NewHandler(profileSvc, accountsSvc).WithRoleService(roleSvc)
+
+	viewer := auth.Viewer{UserID: userID, Email: "admin@example.com", EmailVerified: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/billing-profile", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 (authz passed, no profile stored) for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
 	}
 }

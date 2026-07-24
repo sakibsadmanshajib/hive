@@ -441,6 +441,15 @@ func main() {
 			apikeysHandler = apikeysHandler.WithRoleService(roleSvc)
 		}
 
+		// Issue #424 — wire role service into the remaining handlers that
+		// independently build an Actor with a hardcoded isAdmin=false, so
+		// real platform admins are not silently denied profiles/billing,
+		// credit reservations, ledger, and usage analytics access.
+		profilesHandler = profilesHandler.WithRoleService(roleSvc)
+		accountingHandler = accountingHandler.WithRoleService(roleSvc)
+		ledgerHandler = ledgerHandler.WithRoleService(roleSvc)
+		usageHandler = usageHandler.WithRoleService(roleSvc)
+
 		grantsRepo := grants.NewPgxRepository(pool)
 		grantsSvc := grants.NewService(grantsRepo, roleSvc)
 		grantsHandler = grants.NewHandler(grantsSvc)

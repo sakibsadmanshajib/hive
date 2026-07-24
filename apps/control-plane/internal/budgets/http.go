@@ -3,6 +3,7 @@ package budgets
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"strings"
@@ -148,12 +149,27 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 	}
 
 	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	// isAdmin resolves the real platform-admin overlay when roleSvc is wired
+	// (see WithRoleService); without it, a real platform admin who is not
+	// account-verified is silently denied billing access here.
+	isAdmin := false
+	if h.roleSvc != nil {
+		admin, err := h.roleSvc.IsPlatformAdmin(r.Context(), viewer.UserID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "budgets: platform-admin lookup failed",
+				slog.String("user_id", viewer.UserID.String()),
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization unavailable"})
+			return uuid.Nil, false
+		}
+		isAdmin = admin
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: viewerContext.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      viewerContext.CurrentAccount.Role,
 		Status:    "active",
-	}, false)
+	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing billing",
@@ -201,13 +217,13 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 // only — no USD / FX fields. *big.Int values render as int64 (BDT subunits fit;
 // see types.go documentation).
 type budgetWireFormat struct {
-	WorkspaceID         uuid.UUID `json:"workspace_id"`
-	PeriodStart         time.Time `json:"period_start"`
-	SoftCapBDTSubunits  int64     `json:"soft_cap_bdt_subunits"`
-	HardCapBDTSubunits  int64     `json:"hard_cap_bdt_subunits"`
-	Currency            string    `json:"currency"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	WorkspaceID        uuid.UUID `json:"workspace_id"`
+	PeriodStart        time.Time `json:"period_start"`
+	SoftCapBDTSubunits int64     `json:"soft_cap_bdt_subunits"`
+	HardCapBDTSubunits int64     `json:"hard_cap_bdt_subunits"`
+	Currency           string    `json:"currency"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 type alertWireFormat struct {
@@ -516,12 +532,24 @@ func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, 
 	if isOwner {
 		role = string(platform.RoleOwner)
 	}
+	// isAdmin resolves the real platform-admin overlay (h.roleSvc is already
+	// guaranteed non-nil by the nil check above); without it, a real platform
+	// admin who is not the workspace owner is silently denied this mutation,
+	// even though the overlay should grant it.
+	isAdmin, err := h.roleSvc.IsPlatformAdmin(r.Context(), userID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "budgets: platform-admin lookup failed",
+			slog.String("user_id", userID.String()),
+			slog.String("err", err.Error()))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization unavailable"})
+		return false
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: workspaceID,
 		UserID:    userID,
 		Role:      role,
 		Status:    "active",
-	}, false)
+	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "owner permission required"})
 		return false
@@ -550,12 +578,22 @@ func (h *Handler) requireWorkspaceMembership(r *http.Request, userID, workspaceI
 	if isOwner {
 		role = string(platform.RoleOwner)
 	}
+	// isAdmin resolves the real platform-admin overlay (h.roleSvc is already
+	// guaranteed non-nil by the nil check above); without it, a real platform
+	// admin who is not a workspace member is silently denied read access here.
+	isAdmin, err := h.roleSvc.IsPlatformAdmin(r.Context(), userID)
+	if err != nil {
+		slog.ErrorContext(r.Context(), "budgets: platform-admin lookup failed",
+			slog.String("user_id", userID.String()),
+			slog.String("err", err.Error()))
+		return errors.New("authorization unavailable")
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: workspaceID,
 		UserID:    userID,
 		Role:      role,
 		Status:    "active",
-	}, false)
+	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		return errors.New("not a member")
 	}
@@ -579,13 +617,13 @@ func parseWorkspacePathSuffix(path, prefix string) (uuid.UUID, bool) {
 
 func toBudgetWire(b *Budget) budgetWireFormat {
 	return budgetWireFormat{
-		WorkspaceID:         b.WorkspaceID,
-		PeriodStart:         b.PeriodStart,
-		SoftCapBDTSubunits:  b.SoftCap.Int64(),
-		HardCapBDTSubunits:  b.HardCap.Int64(),
-		Currency:            b.Currency,
-		CreatedAt:           b.CreatedAt,
-		UpdatedAt:           b.UpdatedAt,
+		WorkspaceID:        b.WorkspaceID,
+		PeriodStart:        b.PeriodStart,
+		SoftCapBDTSubunits: b.SoftCap.Int64(),
+		HardCapBDTSubunits: b.HardCap.Int64(),
+		Currency:           b.Currency,
+		CreatedAt:          b.CreatedAt,
+		UpdatedAt:          b.UpdatedAt,
 	}
 }
 
