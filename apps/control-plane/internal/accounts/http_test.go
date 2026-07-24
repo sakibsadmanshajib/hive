@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 // --- helpers ---
@@ -292,6 +293,51 @@ func TestMembersHandler_UnverifiedReturns403(t *testing.T) {
 
 	if rr.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestMembersHandler_PlatformAdminOverlayGrantsAccess is a regression guard
+// for issue #424: handleListMembers hardcoded isAdmin=false when building its
+// own Actor (independent of EnsureViewerContext's roleSvc-aware actor), so a
+// real platform admin who is neither a workspace owner nor account-verified
+// was silently denied members.invite access. A hardcoded-false version
+// returns 403 here (see TestMembersHandler_UnverifiedReturns403); the fix
+// must return 200.
+func TestMembersHandler_PlatformAdminOverlayGrantsAccess(t *testing.T) {
+	repo := newStubRepo()
+
+	userID := uuid.New()
+	accountID := uuid.New()
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "restricted-workspace",
+		DisplayName: "Restricted Workspace",
+		AccountType: "personal",
+		OwnerUserID: uuid.New(),
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "member", Status: "active"},
+	}
+
+	store := &stubPlatformAdminStore{adminUsers: map[uuid.UUID]bool{userID: true}}
+	roleSvc := platform.NewRoleService(store)
+	svc := accounts.NewService(repo)
+	h := accounts.NewHandler(svc).WithRoleService(roleSvc)
+
+	viewer := auth.Viewer{
+		UserID:        userID,
+		Email:         "admin@example.com",
+		EmailVerified: false,
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/members", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
 

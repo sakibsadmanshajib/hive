@@ -3,24 +3,37 @@ package profiles
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 // Handler handles all profile-related HTTP routes.
 type Handler struct {
 	svc         *Service
 	accountsSvc *accounts.Service
+	roleSvc     *platform.RoleService // optional — used to populate Actor.IsAdmin via IsPlatformAdmin
 	policy      authz.Policy
 }
 
 // NewHandler returns a new profiles Handler.
 func NewHandler(svc *Service, accountsSvc *accounts.Service) *Handler {
 	return &Handler{svc: svc, accountsSvc: accountsSvc, policy: authz.NewPolicy()}
+}
+
+// WithRoleService returns a copy of the handler wired with the platform role
+// service so the admin overlay is enabled for Actor construction. Without it,
+// Actor.IsAdmin is always false and platform admins cannot manage billing
+// profiles via this handler unless they are also a verified workspace owner.
+func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
+	cloned := *h
+	cloned.roleSvc = roleSvc
+	return &cloned
 }
 
 // ServeHTTP dispatches requests to the appropriate sub-handler.
@@ -127,7 +140,22 @@ func (h *Handler) resolveVerifiedCurrentAccountID(w http.ResponseWriter, r *http
 	}
 
 	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
-	// Actor is built from the already-resolved viewer context fields.
+	// Actor is built from the already-resolved viewer context fields. isAdmin
+	// resolves the real platform-admin overlay when roleSvc is wired (see
+	// WithRoleService); without it, a real platform admin who is not a
+	// verified workspace owner is silently denied billing access here.
+	isAdmin := false
+	if h.roleSvc != nil {
+		admin, err := h.roleSvc.IsPlatformAdmin(r.Context(), viewerContext.User.ID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "profiles: platform-admin lookup failed",
+				slog.String("user_id", viewerContext.User.ID.String()),
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization unavailable"})
+			return uuid.Nil, false
+		}
+		isAdmin = admin
+	}
 	actor := accounts.ActorFor(
 		auth.Viewer{
 			UserID:        viewerContext.User.ID,
@@ -140,7 +168,7 @@ func (h *Handler) resolveVerifiedCurrentAccountID(w http.ResponseWriter, r *http
 			Role:      viewerContext.CurrentAccount.Role,
 			Status:    "active",
 		},
-		false,
+		isAdmin,
 	)
 	if !h.policy.Can(actor, authz.PermWorkspaceSettings) {
 		writeJSON(w, http.StatusForbidden, map[string]string{

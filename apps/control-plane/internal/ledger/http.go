@@ -3,6 +3,7 @@ package ledger
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,16 +12,28 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 type Handler struct {
 	svc         *Service
 	accountsSvc *accounts.Service
+	roleSvc     *platform.RoleService // optional — used to populate Actor.IsAdmin via IsPlatformAdmin
 	policy      authz.Policy
 }
 
 func NewHandler(svc *Service, accountsSvc *accounts.Service) *Handler {
 	return &Handler{svc: svc, accountsSvc: accountsSvc, policy: authz.NewPolicy()}
+}
+
+// WithRoleService returns a copy of the handler wired with the platform role
+// service so the admin overlay is enabled for Actor construction. Without it,
+// Actor.IsAdmin is always false and platform admins cannot view the credit
+// ledger via this handler unless also account-verified.
+func (h *Handler) WithRoleService(roleSvc *platform.RoleService) *Handler {
+	cloned := *h
+	cloned.roleSvc = roleSvc
+	return &cloned
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -165,12 +178,27 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 	}
 
 	// Phase 18: route authz through policy.Can — replaces bare EmailVerified check.
+	// isAdmin resolves the real platform-admin overlay when roleSvc is wired
+	// (see WithRoleService); without it, a real platform admin who is not
+	// account-verified is silently denied ledger access here.
+	isAdmin := false
+	if h.roleSvc != nil {
+		admin, err := h.roleSvc.IsPlatformAdmin(r.Context(), viewer.UserID)
+		if err != nil {
+			slog.ErrorContext(r.Context(), "ledger: platform-admin lookup failed",
+				slog.String("user_id", viewer.UserID.String()),
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "authorization unavailable"})
+			return uuid.Nil, false
+		}
+		isAdmin = admin
+	}
 	actor := accounts.ActorFor(viewer, accounts.Membership{
 		AccountID: viewerContext.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      viewerContext.CurrentAccount.Role,
 		Status:    "active",
-	}, false)
+	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermLedgerView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "email must be verified before accessing billing",

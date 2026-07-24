@@ -203,7 +203,19 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 	}
 
 	// Phase 18: permission check via policy — replaces bare EmailVerified && role=="owner".
-	actor := ActorFor(viewer, chosen, false) // isAdmin=false: callers with admin overlay use middleware
+	// isAdmin resolves the real platform-admin overlay when roleSvc is wired
+	// (see WithRoleService), matching EnsureViewerContext's idiom: a real
+	// platform admin who is not a workspace owner is still granted
+	// members.invite via the overlay instead of being silently denied.
+	isAdmin := false
+	if s.roleSvc != nil {
+		admin, err := s.roleSvc.IsPlatformAdmin(ctx, viewer.UserID)
+		if err != nil {
+			return InvitationResult{}, fmt.Errorf("accounts: platform admin lookup: %w", err)
+		}
+		isAdmin = admin
+	}
+	actor := ActorFor(viewer, chosen, isAdmin)
 	if !s.policy.Can(actor, authz.PermMembersInvite) {
 		return InvitationResult{}, &GateError{
 			Code:    "permission_denied",

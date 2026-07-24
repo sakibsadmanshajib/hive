@@ -10,7 +10,22 @@ import (
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
+
+// stubRoleStore is a minimal platform.RoleStore backing a real
+// *platform.RoleService for tests, keyed by userID -> is_platform_admin.
+type stubRoleStore struct {
+	adminUsers map[uuid.UUID]bool
+}
+
+func (s *stubRoleStore) GetMembershipRole(_ context.Context, _, _ uuid.UUID) (platform.MembershipRole, error) {
+	return "", nil
+}
+
+func (s *stubRoleStore) IsPlatformAdmin(_ context.Context, userID uuid.UUID) (bool, error) {
+	return s.adminUsers[userID], nil
+}
 
 func viewerCtx(viewer auth.Viewer) context.Context {
 	return auth.WithViewer(context.Background(), viewer)
@@ -227,5 +242,44 @@ func TestHandler_LedgerAuthzMatrix(t *testing.T) {
 				t.Errorf("want %d got %d: %s", tc.wantStatus, rr.Code, rr.Body.String())
 			}
 		})
+	}
+}
+
+// TestGetBalance_PlatformAdminOverlayGrantsUnverifiedAccess is a regression
+// guard for issue #424: resolveCurrentAccountID hardcoded isAdmin=false when
+// building the Actor, so a real platform admin who is not account-verified
+// was silently denied ledger access even though the admin overlay should
+// grant it. A hardcoded-false version returns 403 here; the fix must return 200.
+func TestGetBalance_PlatformAdminOverlayGrantsUnverifiedAccess(t *testing.T) {
+	repo := newStubRepo()
+	userID := uuid.New()
+	accountID := uuid.New()
+
+	repo.accountsMap[accountID] = &accounts.Account{
+		ID:          accountID,
+		Slug:        "workspace-one",
+		DisplayName: "Workspace One",
+		AccountType: "business",
+		OwnerUserID: userID,
+	}
+	repo.memberships = []accounts.Membership{
+		{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: "member", Status: "active"},
+	}
+
+	roleSvc := platform.NewRoleService(&stubRoleStore{adminUsers: map[uuid.UUID]bool{userID: true}})
+	ledgerSvc := NewService(repo)
+	accountsSvc := accounts.NewService(repo)
+	handler := NewHandler(ledgerSvc, accountsSvc).WithRoleService(roleSvc)
+
+	viewer := auth.Viewer{UserID: userID, Email: "admin@example.com", EmailVerified: false}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/credits/balance", nil)
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
