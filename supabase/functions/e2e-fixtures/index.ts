@@ -7,6 +7,16 @@
 // the service-role key out of CI runners entirely — Playwright only
 // needs the edge function's shared `E2E_FIXTURE_SECRET`.
 //
+// Admin client key precedence: projects with asymmetric JWT signing keys
+// (ES256) enabled reject the legacy auto-injected `SUPABASE_SERVICE_ROLE_KEY`
+// on GoTrue's admin API (`unrecognized JWT kid`). Supabase auto-injects a
+// parallel `SUPABASE_SECRET_KEYS` (JSON, keyed by name, e.g. `{"default":
+// "sb_secret_..."}`) alongside it; that new-format key is preferred when
+// present, with `SUPABASE_SERVICE_ROLE_KEY` kept as the fallback for
+// self-hosted/local projects still on the legacy scheme. See
+// https://supabase.com/docs/guides/getting-started/migrating-to-new-api-keys
+// and https://supabase.com/docs/guides/functions/secrets.
+//
 // Deploy:
 //   supabase functions deploy e2e-fixtures \
 //     --project-ref <ref> --no-verify-jwt
@@ -57,6 +67,23 @@ const DEFAULTS = {
   unverifiedPassword: "E2eFixture-Unverified#2026",
   invitationToken: "e2e-invitation-token-2026-fixture",
 };
+
+// Prefers the new-format secret key (SUPABASE_SECRET_KEYS, JSON-encoded,
+// keyed by name) over the legacy SUPABASE_SERVICE_ROLE_KEY. Falls back to
+// the legacy key on parse failure or when the new var is absent (local /
+// self-hosted projects without signing-key migration).
+function resolveServiceKey(): string | undefined {
+  const raw = Deno.env.get("SUPABASE_SECRET_KEYS");
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed?.default) return parsed.default;
+    } catch {
+      // fall through to legacy
+    }
+  }
+  return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+}
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -408,14 +435,16 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "method not allowed" }, 405);
   }
 
-  // Auth: accept EITHER the dedicated E2E_FIXTURE_SECRET (when set) OR the
-  // auto-injected SUPABASE_SERVICE_ROLE_KEY. The service role key is what
-  // every caller in CI / local already has, so accepting it removes the
-  // separate secret-setup step while keeping the endpoint locked to the same
-  // blast radius (root DB access).
+  // Auth: accept the dedicated E2E_FIXTURE_SECRET (when set), the legacy
+  // auto-injected SUPABASE_SERVICE_ROLE_KEY, or the new-format resolved
+  // service key (SUPABASE_SECRET_KEYS). Every caller in CI / local already
+  // has one of these, so accepting them removes the separate secret-setup
+  // step while keeping the endpoint locked to the same blast radius (root
+  // DB access). Additive only — neither existing fallback is removed.
   const acceptedSecrets = [
     Deno.env.get("E2E_FIXTURE_SECRET"),
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"),
+    resolveServiceKey(),
   ].filter((v): v is string => !!v);
   if (acceptedSecrets.length === 0) {
     return jsonResponse(
@@ -440,7 +469,7 @@ Deno.serve(async (req) => {
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
-  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const serviceRoleKey = resolveServiceKey();
   if (!supabaseUrl || !serviceRoleKey) {
     return jsonResponse(
       { error: "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing" },
