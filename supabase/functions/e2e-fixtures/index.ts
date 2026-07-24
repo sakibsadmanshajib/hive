@@ -37,6 +37,17 @@ const FIXED = {
   invitedAccountId: "a45bec1f-e648-4811-9841-3ad28c7f34a9",
   unverifiedAccountId: "8ca58251-dfad-4e91-b2c8-b3649391871b",
   invitationId: "580df639-64b0-4a66-99f1-0cf3e293b78e",
+  // Phase 19 tenant-scope role system (public.tenants / public.tenant_users).
+  // custom_access_token_hook (20260516_07) raises `no_active_membership` and
+  // fails the whole password-grant login for any user with zero active
+  // tenant_users rows, independent of the account_memberships rows above --
+  // the two role systems don't know about each other (see
+  // scripts/seed-demo-owner.py's header comment for the same split).
+  // Only verifiedUser and unverifiedUser sign in through Playwright specs
+  // (inviterUser is only ever an invitation-sender in fixture data, never
+  // used in a signIn() flow), so only those two get a tenant.
+  verifiedTenantId: "6f1c9a2e-2b7a-4b1a-9a3e-4b2f6a1d7c01",
+  unverifiedTenantId: "d3a5f8e1-7c4b-4a9d-8e2f-1b6c9d3a7f02",
 };
 
 const DEFAULTS = {
@@ -79,8 +90,17 @@ async function ensureUser(
     fullName: string;
     appMetadata: Record<string, unknown>;
     accountIdHint: string;
+    // Phase 19 tenant claim custom_access_token_hook reads off
+    // auth.users.raw_user_meta_data->>'selected_tenant_id'. Optional: only
+    // verifiedUser/unverifiedUser pass this, inviterUser doesn't sign in.
+    selectedTenantId?: string;
   },
 ) {
+  const userMetadata: Record<string, unknown> = { full_name: opts.fullName };
+  if (opts.selectedTenantId) {
+    userMetadata.selected_tenant_id = opts.selectedTenantId;
+  }
+
   const { data: ownerRow } = await admin
     .from("accounts")
     .select("owner_user_id")
@@ -95,7 +115,7 @@ async function ensureUser(
         password: opts.password,
         email_confirm: opts.emailConfirm,
         app_metadata: opts.appMetadata,
-        user_metadata: { full_name: opts.fullName },
+        user_metadata: userMetadata,
       },
     );
     if (error) throw new Error(`updateUserById failed: ${error.message}`);
@@ -107,7 +127,7 @@ async function ensureUser(
     password: opts.password,
     email_confirm: opts.emailConfirm,
     app_metadata: opts.appMetadata,
-    user_metadata: { full_name: opts.fullName },
+    user_metadata: userMetadata,
   });
   if (error) {
     if (error.status === 422 || error.status === 400) {
@@ -126,7 +146,7 @@ async function ensureUser(
           password: opts.password,
           email_confirm: opts.emailConfirm,
           app_metadata: opts.appMetadata,
-          user_metadata: { full_name: opts.fullName },
+          user_metadata: userMetadata,
         });
       if (updErr) throw new Error(`updateUserById failed: ${updErr.message}`);
       return upd.user;
@@ -134,6 +154,55 @@ async function ensureUser(
     throw new Error(`createUser failed: ${error.message}`);
   }
   return data.user;
+}
+
+async function seedTenantsAndMemberships(
+  admin: any,
+  users: { verifiedUser: any; unverifiedUser: any },
+) {
+  const { verifiedUser, unverifiedUser } = users;
+
+  const { error: tenantErr } = await admin.from("tenants").upsert(
+    [
+      {
+        id: FIXED.verifiedTenantId,
+        slug: "e2e-verified-tenant",
+        name: "E2E Verified Tenant",
+        deployment: "HIVE_CLOUD",
+        archived_at: null,
+      },
+      {
+        id: FIXED.unverifiedTenantId,
+        slug: "e2e-unverified-tenant",
+        name: "E2E Unverified Tenant",
+        deployment: "HIVE_CLOUD",
+        archived_at: null,
+      },
+    ],
+    { onConflict: "id" },
+  );
+  if (tenantErr) throw new Error(`tenants upsert failed: ${tenantErr.message}`);
+
+  const { error: tenantUserErr } = await admin.from("tenant_users").upsert(
+    [
+      {
+        tenant_id: FIXED.verifiedTenantId,
+        user_id: verifiedUser.id,
+        role: "OWNER",
+        status: "ACTIVE",
+      },
+      {
+        tenant_id: FIXED.unverifiedTenantId,
+        user_id: unverifiedUser.id,
+        role: "OWNER",
+        status: "ACTIVE",
+      },
+    ],
+    { onConflict: "tenant_id,user_id" },
+  );
+  if (tenantUserErr) {
+    throw new Error(`tenant_users upsert failed: ${tenantUserErr.message}`);
+  }
 }
 
 async function seedAccountsAndMemberships(
@@ -464,6 +533,7 @@ Deno.serve(async (req) => {
         appMetadata: { hive_email_verified: true },
         fullName: "E2E Verified Owner",
         accountIdHint: FIXED.verifiedPrimaryAccountId,
+        selectedTenantId: FIXED.verifiedTenantId,
       }),
       ensureUser(admin, {
         email: unverifiedEmail,
@@ -472,6 +542,7 @@ Deno.serve(async (req) => {
         appMetadata: { hive_email_verified: false },
         fullName: "E2E Unverified Owner",
         accountIdHint: FIXED.unverifiedAccountId,
+        selectedTenantId: FIXED.unverifiedTenantId,
       }),
       ensureUser(admin, {
         email: FIXED.inviterEmail,
@@ -488,6 +559,7 @@ Deno.serve(async (req) => {
       unverifiedUser,
       inviterUser,
     });
+    await seedTenantsAndMemberships(admin, { verifiedUser, unverifiedUser });
     await resetProfilesAndInvitation(
       admin,
       { verifiedUser, unverifiedUser, inviterUser },
