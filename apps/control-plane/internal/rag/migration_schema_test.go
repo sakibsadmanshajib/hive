@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,6 +46,28 @@ func TestProvisionQueriesRagEmbeddingConfigByLiteralName(t *testing.T) {
 		if !strings.Contains(source, "FROM public.rag_embedding_config WHERE id = 1") {
 			t.Fatalf("%s must read the singleton row from public.rag_embedding_config WHERE id = 1", path)
 		}
+	}
+}
+
+// TestRagEmbeddingConfigTableExistsAfterMigrations closes the gap the two
+// static tests above cannot: they only prove the migration file's SQL text
+// is correct, not that it was ever actually applied to a real database. This
+// is the exact class of regression found 2026-07-21 -- the migration existed
+// in the repo but was never live on the deployed project, and the
+// string-match test stayed green throughout. Gated on HIVE_TEST_DB_URL the
+// same way provision_test.go gates its live-DB tests (see
+// newProvisionTestPool), this runs the real CI-applied migration set (see
+// .github/workflows/ci.yml) and asserts the table actually resolves.
+func TestRagEmbeddingConfigTableExistsAfterMigrations(t *testing.T) {
+	pool := newProvisionTestPool(t)
+	var exists bool
+	err := pool.QueryRow(context.Background(),
+		`SELECT to_regclass('public.rag_embedding_config') IS NOT NULL`).Scan(&exists)
+	if err != nil {
+		t.Fatalf("query to_regclass: %v", err)
+	}
+	if !exists {
+		t.Fatal("rag_embedding_config missing after migrations applied")
 	}
 }
 
