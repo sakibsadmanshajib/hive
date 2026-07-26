@@ -18,7 +18,7 @@
 # X-Forwarded-Proto would otherwise be attacker-controlled) so anything
 # upstream that derives an absolute URL from request scheme sees the scheme
 # users actually arrive on, same pattern as Caddyfile.owui.
-http://{$CONSOLE_DOMAIN:-console.localhost} {
+http://{$CONSOLE_DOMAIN:console.localhost} {
   reverse_proxy web-console-prod:3000 {
     header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
     transport http {
