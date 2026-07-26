@@ -4,6 +4,8 @@ import { useState, type FormEvent } from "react";
 
 import { BASE_PATH } from "@/lib/base-path";
 import { createClient } from "@/lib/supabase/browser";
+import { AuthShell } from "@/components/brand";
+import { Field, INPUT_CLASS, buttonClass } from "@/components/ui";
 
 export default function SignInPage() {
   const supabase = createClient();
@@ -33,32 +35,25 @@ export default function SignInPage() {
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-sm flex-col justify-center gap-6 px-6">
-      <div className="flex flex-col gap-1">
-        <h1 className="text-xl font-semibold">Agent workspace</h1>
-        <p className="text-sm text-neutral-600">
-          Sign in with your Hive account to start and monitor agent tasks.
-        </p>
-      </div>
+    <AuthShell
+      eyebrow="Agent workspace"
+      title="Sign in to run agent tasks"
+      subtitle="Use your Hive account. This workspace is separate from chat, so signing in here does not sign you out of it."
+    >
       <form onSubmit={handleSubmit} className="flex flex-col gap-4" noValidate>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="email" className="text-sm font-medium">
-            Email
-          </label>
+        <Field label="Email" htmlFor="email" required>
           <input
             id="email"
             type="email"
             required
             autoComplete="email"
+            placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+            className={INPUT_CLASS}
           />
-        </div>
-        <div className="flex flex-col gap-1">
-          <label htmlFor="password" className="text-sm font-medium">
-            Password
-          </label>
+        </Field>
+        <Field label="Password" htmlFor="password" required>
           <input
             id="password"
             type="password"
@@ -66,22 +61,25 @@ export default function SignInPage() {
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded-md border border-neutral-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900"
+            className={INPUT_CLASS}
           />
-        </div>
+        </Field>
         {error ? (
-          <p role="alert" className="text-sm text-red-600">
+          <p
+            role="alert"
+            className="text-xs leading-tight text-[var(--color-danger)]"
+          >
             {error}
           </p>
         ) : null}
         <button
           type="submit"
           disabled={loading}
-          className="rounded-md bg-neutral-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
+          className={`${buttonClass("accent", "lg")} w-full`}
         >
           {loading ? "Signing in…" : "Sign in"}
         </button>
       </form>
-    </main>
+    </AuthShell>
   );
 }
