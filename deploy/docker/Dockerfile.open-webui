@@ -31,6 +31,35 @@ RUN sed -i "/if WEBUI_NAME != 'Open WebUI':/,+1d" /app/backend/open_webui/env.py
 RUN sed -i 's/<title>Open WebUI<\/title>/<title>Hive<\/title>/' /app/build/index.html \
     && ! grep -q '<title>Open WebUI</title>' /app/build/index.html
 
+# Contract check for the empty-state icon override in owui-static/custom.css.
+#
+# That override replaces the emoji glyph upstream uses as the primary visual
+# anchor of its Workspace empty states, and it can only match by structural
+# Tailwind classes because the markup carries no id, data attribute, or i18n
+# hook. Two properties make the override safe, and both are asserted here so a
+# future digest bump fails the build instead of silently un-branding those
+# screens (or, worse, matching something new):
+#
+#   1. The glyph div still uses the `text-3xl mb-3` class pair.
+#   2. Every occurrence of that pair is still an emoji-only glyph -- i.e. no
+#      occurrence is followed by real text. If one ever is, the `font-size: 0`
+#      collapse in custom.css would hide legible content, so the build stops.
+#
+# Same posture as the two sed patches above, which also assert their own effect.
+RUN set -eu; \
+    hits=$(grep -roh 'text-3xl mb-3' /app/build/_app/immutable --include='*.js' | wc -l); \
+    test "$hits" -ge 1 || { \
+      echo "owui-static/custom.css empty-state override is dead: no 'text-3xl mb-3' in this build" >&2; \
+      exit 1; }; \
+    grep -rohP "text-3xl mb-3\">.{0,4}" /app/build/_app/immutable --include='*.js' \
+      | grep -vP "text-3xl mb-3\">[^<[:alnum:][:space:]]" > /tmp/textual || true; \
+    if [ -s /tmp/textual ]; then \
+      echo "owui-static/custom.css empty-state override now matches textual content:" >&2; \
+      cat /tmp/textual >&2; \
+      exit 1; \
+    fi; \
+    echo "empty-state override: $hits emoji-only glyph site(s) confirmed"
+
 # #457: Supabase's third-party OIDC id_token (used for the "Continue with
 # Hive" OAuth login) carries only minimal standard OIDC claims -- no
 # custom owui_role claim, no user_metadata -- so Open WebUI's own

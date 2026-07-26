@@ -99,6 +99,85 @@ func TestWebhook_HappyPath_InsertsMembershipAndAudits(t *testing.T) {
 	require.Contains(t, actions, "OWUI_GROUP_ADD_SUCCESS")
 }
 
+// TestWebhook_HappyPath_GrantsNoCredits is a regression guard for a live bug
+// found and fixed 2026-07-26 (PR #453): the signup page implied a free
+// credit grant that does not exist anywhere in code. Credits are
+// owner-discretionary only (no auto-trial, no signup bonus, no
+// auto-referral reward). This asserts a brand-new signup's credit ledger is
+// genuinely empty — zero rows, zero balance — immediately after the
+// tenant_users membership is created, so a future change that wires an
+// automatic credit grant into the signup path fails this test instead of
+// silently reintroducing the same bug.
+func TestWebhook_HappyPath_GrantsNoCredits(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	tenantID := mustInsertTenant(t, ctx, pool, "credit-check", "ENTERPRISE_EDGE")
+	// tenant_id and account_id share the same UUID by convention — the
+	// credit ledger (supabase/migrations/20260330_01_credits_ledger.sql)
+	// still keys off the pre-Phase-19 public.accounts table, and
+	// apps/control-plane/internal/accounts/repository.go's CreateAccount
+	// takes an explicit id rather than generating one, so real tenant
+	// provisioning creates both rows under one shared id.
+	mustInsertAccount(t, ctx, pool, tenantID, "credit-check-acct")
+	userID := mustInsertAuthUser(t, ctx, pool, "grace@credit-check.example")
+
+	resolver := signup.NewResolver(signup.ResolverDeps{
+		DomainLookup: func(ctx context.Context, domain string) (uuid.UUID, error) {
+			if domain == "credit-check.example" {
+				return tenantID, nil
+			}
+			return uuid.Nil, signup.ErrNoMatch
+		},
+	})
+	logger := audit.NewLogger(audit.LoggerDeps{
+		Sync: audit.NewSyncWriter(pool, audit.WriterConfig{DeploySHA: "s", Env: "test"}),
+		WAL:  &noopWAL{},
+	})
+	// EnsureGroup/AddUser intentionally left nil: OWUI provisioning is
+	// unrelated to credits and is already covered by the happy-path test
+	// above; the webhook logs and continues when they are unset.
+	h := signup.NewWebhook(signup.WebhookDeps{
+		Pool:         pool,
+		Resolver:     resolver,
+		Audit:        logger,
+		SharedSecret: "shh",
+	})
+
+	body, _ := json.Marshal(map[string]any{
+		"user_id": userID,
+		"email":   "grace@credit-check.example",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/internal/auth/user-created", bytes.NewReader(body))
+	req.Header.Set("X-Hive-Signup-Secret", "shh")
+	rec := httptest.NewRecorder()
+
+	h.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusNoContent, rec.Code)
+
+	var membershipCount int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.tenant_users WHERE tenant_id=$1 AND user_id=$2`,
+		tenantID, userID).Scan(&membershipCount))
+	require.Equal(t, 1, membershipCount, "signup must still create the tenant membership")
+
+	var ledgerEntries int
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT count(*) FROM public.credit_ledger_entries WHERE account_id=$1`,
+		tenantID).Scan(&ledgerEntries))
+	require.Equal(t, 0, ledgerEntries,
+		"signup must not create any credit ledger entries — credits are owner-discretionary only, granted by a separate admin action")
+
+	var balance int64
+	require.NoError(t, pool.QueryRow(ctx,
+		`SELECT COALESCE(SUM(credits_delta), 0) FROM public.credit_ledger_entries WHERE account_id=$1`,
+		tenantID).Scan(&balance))
+	require.Equal(t, int64(0), balance, "a brand-new signup must start at exactly zero credits")
+}
+
 func TestWebhook_BadSecret_401(t *testing.T) {
 	h := signup.NewWebhook(signup.WebhookDeps{SharedSecret: "expected"})
 	req := httptest.NewRequest(http.MethodPost, "/internal/auth/user-created", bytes.NewReader([]byte(`{}`)))
@@ -164,6 +243,16 @@ func mustInsertTenant(t *testing.T, ctx context.Context, pool *pgxpool.Pool, slu
 		slug, deployment).Scan(&id)
 	require.NoError(t, err)
 	return id
+}
+
+func mustInsertAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id uuid.UUID, slug string) {
+	t.Helper()
+	ownerID := mustInsertAuthUser(t, ctx, pool, slug+"-owner@example.com")
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.accounts(id, slug, display_name, account_type, owner_user_id)
+		 VALUES ($1, $2, $2, 'business', $3)`,
+		id, slug, ownerID)
+	require.NoError(t, err)
 }
 
 func mustInsertAuthUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool, email string) uuid.UUID {

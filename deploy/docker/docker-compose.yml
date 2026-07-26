@@ -310,6 +310,25 @@ services:
       LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
       LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
+      # Agent task execution (issue #305). See .env.example for the full
+      # explanation: buildAgentEngine (cmd/server/main.go) needs all five of
+      # these non-empty to launch real Apptainer sandboxes; any empty and
+      # tasks stay queued forever by design (agenttask.NotConfiguredEngine).
+      # These were previously documented in .env.example but never forwarded
+      # into this container's environment, so setting them in .env alone did
+      # nothing. Forwarding them here is necessary but not sufficient: this
+      # service still runs inside a golang:1.24-alpine dev container, which
+      # cannot exec the host's Apptainer directly (glibc-linked binary, no
+      # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
+      # privilege on the service holding Stripe/Supabase/payment secrets).
+      # Real sandbox launches require control-plane to run as a bare host
+      # process on whatever box executes agent tasks, not this container.
+      HIVE_AGENT_ENGINE_SIF_PATH: ${HIVE_AGENT_ENGINE_SIF_PATH:-}
+      HIVE_AGENT_ENGINE_PACKS_DIR: ${HIVE_AGENT_ENGINE_PACKS_DIR:-}
+      HIVE_AGENT_ENGINE_WORKSPACE_ROOT: ${HIVE_AGENT_ENGINE_WORKSPACE_ROOT:-}
+      HIVE_AGENT_ENGINE_RUN_DIR: ${HIVE_AGENT_ENGINE_RUN_DIR:-}
+      HIVE_AGENT_ENGINE_PROFILE_ID: ${HIVE_AGENT_ENGINE_PROFILE_ID:-}
+      HIVE_AGENT_ENGINE_SESSION_API_KEY: ${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 5s
@@ -552,10 +571,13 @@ services:
       # forest-green outline + inner cell); sizes are not per-purpose
       # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
       # size, not the ideal one for each use). No dark-mode splash variant --
-      # same asset for both. custom.css and loader.js are seeded (see those
-      # files) purely so index.html's unconditional <link>/<script> tags for
-      # them stop 404ing; both are intentionally near-empty. Known gap:
-      # FONTS_DIR under STATIC_DIR is still unseeded.
+      # same asset for both. custom.css and loader.js are the only supported
+      # hooks for changing a pinned, unforked Open WebUI image, and both now
+      # carry real overrides: the agent-workspace launcher in OWUI's header
+      # band, and a replacement for the emoji glyph upstream uses to anchor its
+      # Workspace empty states. Dockerfile.open-webui asserts the markup
+      # contract the second override depends on. Known gap: FONTS_DIR under
+      # STATIC_DIR is still unseeded.
       - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
