@@ -379,17 +379,18 @@ setup_env() {
     # OWUI_SHIM_KEY: Open WebUI sends this as upstream API key; edge disables
     # the shim-unwrap middleware when it is empty, so a missing key causes chat
     # requests to fail at edge on the enterprise profile.
-    # The random default below is enough for chat completions (the unwrap
-    # middleware rewrites any request carrying a body) but NOT for Open WebUI's
-    # bodyless GET /v1/models probe, which falls through to normal API-key auth
-    # and 401s, leaving the model dropdown empty. Minting a real "hk_" key
-    # needs a running control-plane, which does not exist yet at install time,
-    # hence the note below rather than a hard requirement here.
+    # The random default below covers chat completions, because the unwrap
+    # middleware rewrites any request carrying a body. It does NOT cover Open
+    # WebUI's bodyless GET /v1/models probe: auth.Selector routes any bearer
+    # token without the "hk_" prefix to the JWT handler, which 401s, so the
+    # model dropdown stays empty. Minting a real "hk_" key needs a running
+    # control-plane, which does not exist yet at install time, hence the note
+    # below rather than a hard requirement here.
     _default_owui_shim="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 || printf 'owui-shim-change-me')"
     printf '  Chat works with the generated default, but the model list stays\n'
     printf '  empty until this is a real registered Hive API key. After the\n'
-    printf '  stack is up, mint one with scripts/seed-owui-e2e-user.py and\n'
-    printf '  re-run this installer (or edit .env) with that value.\n'
+    printf '  stack is up, mint one with scripts/seed-owui-e2e-user.py on its\n'
+    printf '  own dedicated billing account, then edit .env with that value.\n'
     prompt_value OWUI_SHIM_KEY "Open WebUI shim key" required "$_default_owui_shim" secret
 
     # ── Optional: Headscale relay ──
