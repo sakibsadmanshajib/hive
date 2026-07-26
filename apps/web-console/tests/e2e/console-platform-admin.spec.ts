@@ -52,15 +52,15 @@ test.describe("platform-admin panels", () => {
     await expect(page.getByText("Admin access required")).toHaveCount(0);
 
     const toggles = page.getByRole("switch");
-    expect(await toggles.count()).toBeGreaterThan(0);
+    await expect(toggles).not.toHaveCount(0);
     await expect(toggles.first()).toHaveAttribute("aria-checked", /true|false/);
   });
 
   test("marketplace renders the curate form", async ({ page }) => {
     await page.goto("/console/marketplace");
-    await expect(page.getByText("Admin access required")).toHaveCount(0);
     await expect(
       page.getByRole("button", { name: "Curate entry" })
     ).toBeVisible();
+    await expect(page.getByText("Admin access required")).toHaveCount(0);
   });
 });
