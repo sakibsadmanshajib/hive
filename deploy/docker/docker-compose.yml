@@ -555,6 +555,11 @@ services:
     depends_on:
       open-webui:
         condition: service_healthy
+    environment:
+      # Scheme users actually arrive on, forwarded to both upstreams so they
+      # build correct absolute URLs. https only when something in front of
+      # this listener terminates TLS (Cloudflare Tunnel on the demo box).
+      HIVE_CHAT_EXTERNAL_SCHEME: ${HIVE_CHAT_EXTERNAL_SCHEME:-http}
     volumes:
       - ./Caddyfile.owui:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
