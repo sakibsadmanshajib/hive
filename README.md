@@ -242,7 +242,7 @@ status.
 | Surface | URL |
 |---------|-----|
 | Edge API (staging) | https://api-hive.scubed.co |
-| Control Plane (staging) | https://cp-hive.scubed.co |
+| Control Plane (staging) | https://control-hive.scubed.co |
 
 ## Project State
 

@@ -370,8 +370,6 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_API_URL: https://api-hive.scubed.co
-          NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp-hive.scubed.co
         run: npm run build:cf
 
       - name: Populate OpenNext incremental cache (no-op without R2)
@@ -394,5 +392,3 @@ jobs:
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
-          NEXT_PUBLIC_API_URL: https://api-hive.scubed.co
-          NEXT_PUBLIC_CONTROL_PLANE_URL: https://cp-hive.scubed.co
