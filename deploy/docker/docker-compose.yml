@@ -394,7 +394,13 @@ services:
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-        NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-http://localhost:8080}
+        # Deliberately empty, and deliberately not inheriting the deployment's
+        # NEXT_PUBLIC_EDGE_API_BASE_URL: the task console fetches from the
+        # browser, edge-api serves no CORS headers, and this app is always
+        # served by the same Caddy listener that proxies /v1/agent/* to
+        # edge-api (deploy/docker/Caddyfile.owui). An empty base makes those
+        # fetches relative, so they stay same-origin and need no CORS.
+        NEXT_PUBLIC_EDGE_API_BASE_URL: ""
     profiles:
       - chat
       - enterprise
