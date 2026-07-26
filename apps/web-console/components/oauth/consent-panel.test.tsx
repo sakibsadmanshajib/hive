@@ -133,6 +133,16 @@ describe("ConsentPanel", () => {
     expect(screen.getByRole("button", { name: /deny/i })).toBeTruthy();
   });
 
+  it("headlines a plain continue-to-app confirmation instead of exposing Hive's internal OAuth client topology (live UI/UX pass, 2026-07-26: 'Let Hive Chat connect to Hive?' read as confusing/circular)", async () => {
+    mockGetSession.mockResolvedValue(AUTHENTICATED_SESSION);
+    mockGetAuthorizationDetails.mockResolvedValue(CONSENT_NEEDED_DETAILS);
+
+    render(<ConsentPanel authorizationId={AUTH_ID} />);
+
+    await screen.findByRole("heading", { name: "Continue to Hive Chat" });
+    expect(screen.queryByText(/connect to hive/i)).toBeNull();
+  });
+
   it("hands off immediately when the server reports the user already consented", async () => {
     mockGetSession.mockResolvedValue(AUTHENTICATED_SESSION);
     mockGetAuthorizationDetails.mockResolvedValue({

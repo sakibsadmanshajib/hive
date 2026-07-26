@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveNextTarget } from "./next-target";
+import { appendNextParam, resolveNextTarget } from "./next-target";
 
 describe("resolveNextTarget", () => {
   it("defaults to /console when next is null", () => {
@@ -13,6 +13,21 @@ describe("resolveNextTarget", () => {
   it("allows the exact /invitations/accept path", () => {
     expect(resolveNextTarget("/invitations/accept")).toBe(
       "/invitations/accept",
+    );
+  });
+
+  // /auth/callback (email-confirmation redirect) shares this same allow-list
+  // so both post-login (sign-in) and post-verification (callback) redirect
+  // checks stay in lockstep instead of drifting apart.
+  it("allows the exact /console/settings/profile path", () => {
+    expect(resolveNextTarget("/console/settings/profile")).toBe(
+      "/console/settings/profile",
+    );
+  });
+
+  it("allows the exact /auth/reset-password path", () => {
+    expect(resolveNextTarget("/auth/reset-password")).toBe(
+      "/auth/reset-password",
     );
   });
 
@@ -40,5 +55,32 @@ describe("resolveNextTarget", () => {
 
   it("rejects a protocol-relative URL (open-redirect attempt)", () => {
     expect(resolveNextTarget("//evil.example.com")).toBe("/console");
+  });
+});
+
+describe("appendNextParam", () => {
+  it("returns the path unchanged when next is null", () => {
+    expect(appendNextParam("/auth/sign-up", null)).toBe("/auth/sign-up");
+  });
+
+  it("returns the path unchanged when next is empty string", () => {
+    expect(appendNextParam("/auth/sign-up", "")).toBe("/auth/sign-up");
+  });
+
+  it("appends next as a query param, URI-encoded", () => {
+    expect(
+      appendNextParam(
+        "/auth/sign-up",
+        "/oauth/consent?authorization_id=abc-123",
+      ),
+    ).toBe(
+      "/auth/sign-up?next=%2Foauth%2Fconsent%3Fauthorization_id%3Dabc-123",
+    );
+  });
+
+  it("uses & when the path already has a query string", () => {
+    expect(appendNextParam("/auth/callback?code=abc", "/console")).toBe(
+      "/auth/callback?code=abc&next=%2Fconsole",
+    );
   });
 });
