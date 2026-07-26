@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -73,11 +74,15 @@ func (r *mockAudioRouting) SelectRoute(_ context.Context, input audio.RouteInput
 // mockAudioAccounting is a stub that tracks reservation calls.
 type mockAudioAccounting struct {
 	reservationID  string
+	createErr      error
 	finalizeCalled bool
 	releaseCalled  bool
 }
 
 func (a *mockAudioAccounting) CreateReservation(_ context.Context, _ audio.ReservationInput) (string, error) {
+	if a.createErr != nil {
+		return "", a.createErr
+	}
 	return a.reservationID, nil
 }
 
@@ -700,5 +705,105 @@ func TestParakeetAPIKeyAbsentWhenNotConfigured(t *testing.T) {
 	}
 	if receivedAuth != "" {
 		t.Errorf("expected no Authorization header forwarded when key not configured, got %q", receivedAuth)
+	}
+}
+
+// --- Reservation failure classification tests ---
+
+// buildAudioHandlerWithAccounting wires the handler to a caller-supplied
+// accounting double so reservation failures can be simulated.
+func buildAudioHandlerWithAccounting(litellmBaseURL string, acc *mockAudioAccounting) *audio.Handler {
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	return audio.NewHandler(auth, routing, acc, litellmBaseURL, "test-key")
+}
+
+func postSpeech(t *testing.T, h *audio.Handler) *httptest.ResponseRecorder {
+	t.Helper()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech",
+		strings.NewReader(`{"model":"hive-tts","input":"hello","voice":"troy"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+func postTranscription(t *testing.T, h *audio.Handler) *httptest.ResponseRecorder {
+	t.Helper()
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "hive-stt")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// A reservation that could not be reached (the live failure: control-plane
+// took longer than the client timeout) must not tell the caller they are out
+// of credits.
+func TestSpeechReservationTransportFailureIsNotQuota(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte("unused"), 200, "audio/mpeg")
+	defer mock.Close()
+
+	acc := &mockAudioAccounting{createErr: fmt.Errorf("create reservation: %w", context.DeadlineExceeded)}
+	w := postSpeech(t, buildAudioHandlerWithAccounting(mock.server.URL, acc))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "insufficient_quota") {
+		t.Errorf("transport failure reported as a quota problem: %s", w.Body.String())
+	}
+}
+
+func TestSpeechReservationQuotaRefusalReturns402(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte("unused"), 200, "audio/mpeg")
+	defer mock.Close()
+
+	acc := &mockAudioAccounting{createErr: fmt.Errorf("create reservation: %w", audio.ErrInsufficientCredits)}
+	w := postSpeech(t, buildAudioHandlerWithAccounting(mock.server.URL, acc))
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "insufficient_quota") {
+		t.Errorf("expected insufficient_quota code, got %s", w.Body.String())
+	}
+}
+
+func TestTranscriptionReservationTransportFailureIsNotQuota(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte(`{"text":"unused"}`), 200, "application/json")
+	defer mock.Close()
+
+	acc := &mockAudioAccounting{createErr: fmt.Errorf("create reservation: %w", context.DeadlineExceeded)}
+	w := postTranscription(t, buildAudioHandlerWithAccounting(mock.server.URL, acc))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d: %s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), "insufficient_quota") {
+		t.Errorf("transport failure reported as a quota problem: %s", w.Body.String())
+	}
+}
+
+func TestTranscriptionReservationQuotaRefusalReturns402(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte(`{"text":"unused"}`), 200, "application/json")
+	defer mock.Close()
+
+	acc := &mockAudioAccounting{createErr: fmt.Errorf("create reservation: %w", audio.ErrInsufficientCredits)}
+	w := postTranscription(t, buildAudioHandlerWithAccounting(mock.server.URL, acc))
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d: %s", w.Code, w.Body.String())
 	}
 }
