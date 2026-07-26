@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Fraunces } from "next/font/google";
+import { Geist, Geist_Mono } from "next/font/google";
 
 import "./globals.css";
 
@@ -16,17 +16,10 @@ const geistMono = Geist_Mono({
   display: "swap",
 });
 
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
-  subsets: ["latin"],
-  display: "swap",
-  // `opsz` is the default axis Next bakes in when building Fraunces;
-  // listing it explicitly here emitted a `Duplicate key "axisIndex"`
-  // esbuild warning during the OpenNext production build, after which
-  // the prerendered RSC payload dropped the root <html> className
-  // entirely. Keep only the non-default `SOFT` axis.
-  axes: ["SOFT"],
-});
+// Fraunces (the former display serif) was dropped on 2026-07-26 along with
+// the editorial type direction it carried; see the type-direction note in
+// app/globals.css. Removing it also takes a variable webfont off the critical
+// path — the console now ships one family plus its mono companion.
 
 export const metadata: Metadata = {
   title: "Hive Console",
@@ -43,7 +36,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable}`}
+      className={`${geistSans.variable} ${geistMono.variable}`}
     >
       {/*
         Browser extensions (Grammarly, etc.) mutate <body> attributes

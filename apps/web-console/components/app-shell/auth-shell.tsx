@@ -1,6 +1,7 @@
 import * as React from "react";
 
 import { cn } from "@/lib/cn";
+import { HiveMark } from "@/components/brand/hive-mark";
 
 interface AuthShellProps {
   eyebrow?: React.ReactNode;
@@ -61,18 +62,9 @@ export function AuthShell({
 
 function Wordmark() {
   return (
-    <div className="flex items-center gap-2 text-[var(--color-ink)]">
-      <div
-        aria-hidden="true"
-        className={cn(
-          "h-7 w-7 rounded-md grid place-items-center",
-          "bg-[var(--color-ink)] text-[var(--color-canvas)]",
-          "font-display text-base leading-none",
-        )}
-      >
-        h
-      </div>
-      <span className="font-display text-lg leading-none tracking-tight">
+    <div className="flex items-center gap-2.5 text-[var(--color-ink)]">
+      <HiveMark size={26} />
+      <span className="font-display text-lg font-semibold leading-none tracking-[-0.03em]">
         Hive
       </span>
     </div>
