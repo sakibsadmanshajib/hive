@@ -6,9 +6,11 @@ import { defineConfig, devices } from "@playwright/test";
 // storageState file. SUPABASE_OAUTH_CLIENT_ID/SECRET gate the OAuth-backed
 // "Continue with Hive" journey the same way OWUI_E2E_EMAIL/PASSWORD gate the
 // seeded test user -- both must mirror owui.setup.ts's own skip condition.
+const hasUserCreds = Boolean(
+  process.env.OWUI_E2E_EMAIL && process.env.OWUI_E2E_PASSWORD,
+);
 const hasCreds = Boolean(
-  process.env.OWUI_E2E_EMAIL &&
-    process.env.OWUI_E2E_PASSWORD &&
+  hasUserCreds &&
     process.env.SUPABASE_OAUTH_CLIENT_ID &&
     process.env.SUPABASE_OAUTH_CLIENT_SECRET,
 );
@@ -46,6 +48,20 @@ export default defineConfig({
       name: "owui-perf",
       testMatch: hasCreds ? /performance\/.*\.spec\.ts$/ : [],
       dependencies: ["owui-setup"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    {
+      // Logs in from scratch against a deployed OWUI_URL, so it takes no
+      // storageState and depends on no setup project. The spec skips itself
+      // when OWUI_URL is localhost, which leaves the nightly unaffected.
+      // Gated on the user credentials only, not on SUPABASE_OAUTH_CLIENT_*:
+      // for a deployed target the OAuth client is configured on that
+      // deployment, not in whatever environment runs this spec.
+      name: "owui-deployed-login",
+      testMatch: hasUserCreds ? /deployed-login\.spec\.ts$/ : [],
+      // The journey crosses two origins over the public internet and ends on
+      // a full SPA load, so it needs more than the 60s default above.
+      timeout: 180_000,
       use: { ...devices["Desktop Chrome"] },
     },
   ],
