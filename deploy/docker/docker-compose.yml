@@ -447,17 +447,38 @@ services:
       # Supabase 302s straight back with error=invalid_request.
       OAUTH_CODE_CHALLENGE_METHOD: "S256"
       ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
-      # owui_role (not the JWT's tenant-authorization 'role' claim) --
-      # OWNER maps to ADMIN here; supabase/migrations/20260726_01_owui_role_claim.sql.
-      OAUTH_ROLES_CLAIM: "owui_role"
+      # #457: Supabase's OAuth Authorization Server issues a separate
+      # id_token for third-party OIDC clients (Open WebUI here) that does
+      # NOT run through custom_access_token_hook -- that hook only fires
+      # for GoTrue's own session/access-token issuance, not this
+      # third-party OAuth-provider token path. Confirmed live (nightly
+      # e2e DEBUG logs, run 30219482725): the owui_role claim this used to
+      # point at was always empty for every second-and-later OAuth login,
+      # so every such user silently fell through to DEFAULT_USER_ROLE
+      # instead of ever being claim-matched to admin -- PR #451's claim
+      # only ever worked by accident, via Open WebUI's separate
+      # unconditional first-user-becomes-admin promotion.
+      # user_metadata IS serialized onto every token GoTrue issues
+      # regardless of hook or flow (base GoTrue claims struct), so
+      # owui_role is mirrored there instead by a trigger on tenant_users
+      # (supabase/migrations/20260726_02_owui_role_metadata.sql), and this
+      # claim path is repointed at it (nested claim, dot-separated).
+      OAUTH_ROLES_CLAIM: "user_metadata.owui_role"
       OAUTH_ALLOWED_ROLES: "ADMIN,MEMBER,VIEWER"
       OAUTH_ADMIN_ROLES: "ADMIN"
       ENABLE_OAUTH_GROUP_MANAGEMENT: "true"
       OAUTH_GROUPS_CLAIM: "tenants"
-      DEFAULT_USER_ROLE: "MEMBER"
-      # ponytail: diagnostic-only, temporary for #457 live repro. Removed
-      # before the real fix commit.
-      GLOBAL_LOG_LEVEL: "DEBUG"
+      # Valid Open WebUI role enum is pending/user/admin (lowercase) --
+      # "MEMBER" was never one of them (open_webui.utils.auth's
+      # get_verified_user gate blocks every role that isn't literally
+      # "user" or "admin", so an invalid value like "MEMBER" behaved
+      # identically to "pending": permanently stuck on Account Activation
+      # Pending). This is now only a fallback for a user with zero active
+      # tenant membership (the trigger above never fires for them), so
+      # "pending" -- Open WebUI's own upstream default -- is correct: an
+      # unaffiliated login should land on the pending-activation screen,
+      # not be silently granted app access.
+      DEFAULT_USER_ROLE: "pending"
       ENABLE_ADMIN_PANEL: "false"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
