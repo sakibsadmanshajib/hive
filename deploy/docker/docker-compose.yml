@@ -548,10 +548,13 @@ services:
       # forest-green outline + inner cell); sizes are not per-purpose
       # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
       # size, not the ideal one for each use). No dark-mode splash variant --
-      # same asset for both. custom.css and loader.js are seeded (see those
-      # files) purely so index.html's unconditional <link>/<script> tags for
-      # them stop 404ing; both are intentionally near-empty. Known gap:
-      # FONTS_DIR under STATIC_DIR is still unseeded.
+      # same asset for both. custom.css and loader.js are the only supported
+      # hooks for changing a pinned, unforked Open WebUI image, and both now
+      # carry real overrides: the agent-workspace launcher in OWUI's header
+      # band, and a replacement for the emoji glyph upstream uses to anchor its
+      # Workspace empty states. Dockerfile.open-webui asserts the markup
+      # contract the second override depends on. Known gap: FONTS_DIR under
+      # STATIC_DIR is still unseeded.
       - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI

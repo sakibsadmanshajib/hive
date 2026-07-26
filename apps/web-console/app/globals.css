@@ -4,15 +4,29 @@
  * Hive console design tokens. CSS-first @theme so Tailwind v4 emits the
  * matching utilities (`bg-surface`, `text-ink`, `font-display`, etc.).
  *
- * Aesthetic anchor: Claude.com — restrained, dense, calm. One accent
- * (sienna), monochrome data, generous letter-spacing on display type,
- * tabular numerals on every numeric surface.
+ * Aesthetic anchor: a technical control surface — restrained, dense, precise.
+ * One accent (sienna), monochrome data, and a strict division of labour in
+ * the type system: sans carries structure, mono carries every number.
+ *
+ * Type direction (2026-07-26): the console is a developer dashboard for API
+ * keys, credits, and usage telemetry, so its voice must read engineered, not
+ * literary. Headings therefore use the same geometric sans as body copy at a
+ * tighter fit, and every metric renders in the mono companion with tabular
+ * figures — the mono numerals, not a display serif, are what makes this
+ * surface feel precise. The previous Fraunces display serif was an
+ * editorial/literary register borrowed from the chat surface, where it is
+ * correct and where it stays. Chat's typography is deliberately untouched.
  */
 @theme {
-  /* Type — display = Fraunces (serif), body = Geist Sans, mono = Geist Mono.
-     Variables are wired via next/font in app/layout.tsx. */
+  /* Type — display and body both = Geist Sans, mono = Geist Mono.
+     Variables are wired via next/font in app/layout.tsx.
+
+     --font-display intentionally resolves to the same family as --font-sans:
+     it stays a named seam so the wordmark and page headings can be retuned in
+     one place, and so call sites keep expressing intent ("this is display
+     type") rather than hardcoding a family. */
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-display: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
 
   /* Type scale — dense, 14px body, 12-step. */
@@ -73,8 +87,27 @@
   --duration-slow: 280ms;
 }
 
+/*
+ * Dark palette.
+ *
+ * This block used to be `@media (prefers-color-scheme: dark) { @theme inline
+ * { ... } }`. Tailwind v4 collects every `@theme` block into its own theme
+ * layer and emits it unconditionally, so the media query around it was
+ * discarded at build time: the compiled stylesheet contained no
+ * `prefers-color-scheme` rule at all and the dark values simply overwrote the
+ * light ones. The console was therefore permanently dark and the light
+ * palette above was dead code — which is what made the sparse Overview page
+ * read as a broken black void rather than the calm light surface it was
+ * designed as (found while shooting before/after proof, 2026-07-26).
+ *
+ * A plain `:root` override inside the media query is the supported v4 pattern:
+ * the non-inline `@theme` above makes every generated utility reference
+ * `var(--color-*)`, so re-pointing those variables here flips the palette at
+ * runtime. Do not reintroduce `@theme` (or `@theme inline`) inside a media
+ * query — it silently stops being conditional.
+ */
 @media (prefers-color-scheme: dark) {
-  @theme inline {
+  :root {
     --color-canvas: oklch(0.16 0.005 90);
     --color-surface: oklch(0.19 0.005 90);
     --color-surface-2: oklch(0.22 0.005 90);
@@ -138,10 +171,13 @@
     border-radius: var(--radius-sm);
   }
 
+  /* Display type is the same geometric sans as body, set tighter and heavier
+     so a heading reads as UI structure. A serif here would pull the surface
+     toward editorial; see the type-direction note at the top of this file. */
   h1, h2 {
     font-family: var(--font-display);
-    letter-spacing: -0.02em;
-    font-weight: 500;
+    letter-spacing: -0.022em;
+    font-weight: 600;
   }
   h3, h4, h5, h6 {
     font-weight: 600;
@@ -170,5 +206,28 @@
   }
   .text-pretty {
     text-wrap: pretty;
+  }
+
+  /*
+   * The one way to set a number in this console. Mono family, tabular figures,
+   * tightened tracking so large mono numerals do not sprawl. Declared once here
+   * rather than repeating `font-mono tabular-nums tracking-tight` at every
+   * metric call site — and it is what carries the "precise, data-focused" half
+   * of the type direction. Pair with a size utility (`metric text-3xl`).
+   *
+   * Note on zeros: this rule does not ask for `slashed-zero`, but Geist Mono
+   * draws a slashed zero as its default glyph, so a lone `0` (an empty credit
+   * balance) carries the slash. Left as-is rather than swapping metrics back to
+   * the sans: the slash is a deliberate trait of the mono the console already
+   * uses for code and identifiers, and the only ambiguous case is a bare zero,
+   * which the card label and the "Posted 0 · Reserved 0" line directly beneath
+   * it disambiguate. Revisit if a currency symbol ever renders next to it.
+   */
+  .metric {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    letter-spacing: -0.02em;
+    font-weight: 500;
   }
 }

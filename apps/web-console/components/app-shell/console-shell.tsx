@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { cn } from "@/lib/cn";
+import { HiveMark } from "@/components/brand/hive-mark";
 
 const NAV_GROUPS: ReadonlyArray<{
   label: string;
@@ -81,12 +82,10 @@ export function ConsoleShell({
         <div className="px-5 py-5 border-b border-[var(--color-border)]">
           <Link
             href="/console"
-            className="flex items-center gap-2 text-[var(--color-ink)] focus-visible:outline-none"
+            className="flex items-center gap-2.5 text-[var(--color-ink)] focus-visible:outline-none"
           >
-            <div className="h-7 w-7 rounded-md grid place-items-center bg-[var(--color-ink)] text-[var(--color-canvas)] font-display text-base leading-none">
-              h
-            </div>
-            <span className="font-display text-base leading-none tracking-tight">
+            <HiveMark size={22} />
+            <span className="font-display text-base font-semibold leading-none tracking-[-0.03em]">
               Hive
             </span>
           </Link>
