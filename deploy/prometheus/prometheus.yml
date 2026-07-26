@@ -4,6 +4,11 @@ global:
 
 rule_files:
   - "/etc/prometheus/alerts.yml"
+  # deploy/prometheus/alerts/*.yml (e.g. rate-limit.yml, added in #133) ship in
+  # the repo but were never mounted into the Prometheus container, so those
+  # rule groups silently never loaded in any profile (local/cloud/enterprise
+  # all share this file). Glob picks up the whole directory automatically.
+  - "/etc/prometheus/alerts/*.yml"
 
 alerting:
   alertmanagers:

@@ -324,7 +324,7 @@ export function CheckoutModal({
                   </span>
                 ) : (
                   <span
-                    className="font-display text-lg tabular-nums text-[var(--color-ink)]"
+                    className="metric text-lg text-[var(--color-ink)]"
                     data-numeric
                   >
                     {formatPrice(computeAmountMinor(), options.currency)}

@@ -8,9 +8,12 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // #269: hive_jwt_forward is an Open WebUI Function (Admin > Functions), not
 // a file the container auto-loads; there is no mount or env var that
 // installs it. It must be created via the Functions REST API by an admin
-// session. Open WebUI auto-promotes the very first signed-in user to admin,
-// which this setup's OIDC login just did, so the authenticated `page`
-// below carries an admin session cookie.
+// session. The real fixture user below signs in with tenant role OWNER,
+// which the owui_role JWT claim maps to Open WebUI's "ADMIN" OAuth role
+// (OAUTH_ADMIN_ROLES in docker-compose.yml), so Open WebUI grants it a real
+// admin session on every login -- not the (separate, and now deliberately
+// consumed by the bootstrap login first) unconditional first-user-becomes-
+// admin promotion.
 const HIVE_JWT_FORWARD_ID = "hive_jwt_forward";
 const HIVE_JWT_FORWARD_SOURCE = path.resolve(
   __dirname,
@@ -84,26 +87,19 @@ async function installHiveJwtForwardFilter(
   }
 }
 
-setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
-  // Run 28681926134: consent can load first, then its client-side session
-  // check bounces to sign-in -- give the retry-heavy journey below real
-  // time to survive that bounce instead of the 30s test default.
-  setup.setTimeout(180_000);
-
-  const email = process.env.OWUI_E2E_EMAIL;
-  const password = process.env.OWUI_E2E_PASSWORD;
-  // SUPABASE_OAUTH_CLIENT_ID/SECRET are a separate, ops-provisioned pair
-  // (Supabase OAuth App registration) -- without them the "Continue with
-  // Hive" button on OWUI has no functional OAuth client behind it, so this
-  // whole journey cannot run yet. Skip cleanly rather than hard-fail.
-  const oauthClientId = process.env.SUPABASE_OAUTH_CLIENT_ID;
-  const oauthClientSecret = process.env.SUPABASE_OAUTH_CLIENT_SECRET;
-  if (!email || !password || !oauthClientId || !oauthClientSecret) {
-    setup.skip(true, "OWUI_E2E_*/SUPABASE_OAUTH_CLIENT_* env not set");
-    return;
-  }
-
-  await page.goto("/");
+/**
+ * Drives one full "Continue with Hive" OAuth round trip: OWUI -> Supabase
+ * authorize -> /oauth/consent (web-console origin) -> optional sign-in ->
+ * optional Approve -> back to an OWUI-origin URL. Shared by the bootstrap
+ * login and the real fixture login below so both exercise the identical
+ * redirect chain.
+ */
+async function signInWithHive(
+  page: Page,
+  email: string,
+  password: string,
+  owuiOrigin: string,
+): Promise<void> {
   // ponytail: OWUI login page has a continuously animating element, so
   // Playwright's click-stability check never settles, and its force-click still
   // requires the element in the viewport, which fails during the same
@@ -174,7 +170,6 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   // previously-granted client+user pair, so the consent screen appears at
   // most once per user+client (first-ever run). Poll for either outcome
   // instead of asserting Approve will always show.
-  const owuiOrigin = new URL(OWUI_URL).origin;
   const approvePollDeadline = Date.now() + 30_000;
   while (
     new URL(page.url()).origin !== owuiOrigin &&
@@ -216,12 +211,96 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page }) => {
   await page.waitForURL((u) => u.origin === owuiOrigin, {
     timeout: 30_000,
   });
+}
+
+setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
+  // Run 28681926134: consent can load first, then its client-side session
+  // check bounces to sign-in -- give the retry-heavy journey below real
+  // time to survive that bounce instead of the 30s test default. The
+  // bootstrap login below adds a second full round trip on top of the
+  // original budget.
+  setup.setTimeout(240_000);
+
+  const email = process.env.OWUI_E2E_EMAIL;
+  const password = process.env.OWUI_E2E_PASSWORD;
+  // SUPABASE_OAUTH_CLIENT_ID/SECRET (a Supabase OAuth App registration) have
+  // been provisioned as repo secrets since 2026-07-03 -- this whole journey
+  // has run for real on every nightly/dispatch/labeled-PR run since. The
+  // bootstrap pair below is not a stored secret; scripts/seed-owui-e2e-user.py
+  // mints it fresh every run the same way it does OWUI_E2E_EMAIL/PASSWORD.
+  // Keep this env check as a defensive skip only (e.g. a fork or a manual
+  // Playwright run missing any of the seeded/ops-provisioned values).
+  const oauthClientId = process.env.SUPABASE_OAUTH_CLIENT_ID;
+  const oauthClientSecret = process.env.SUPABASE_OAUTH_CLIENT_SECRET;
+  const bootstrapEmail = process.env.OWUI_BOOTSTRAP_EMAIL;
+  const bootstrapPassword = process.env.OWUI_BOOTSTRAP_PASSWORD;
+  if (
+    !email ||
+    !password ||
+    !oauthClientId ||
+    !oauthClientSecret ||
+    !bootstrapEmail ||
+    !bootstrapPassword
+  ) {
+    setup.skip(
+      true,
+      "OWUI_E2E_*/SUPABASE_OAUTH_CLIENT_*/OWUI_BOOTSTRAP_* env not set",
+    );
+    return;
+  }
+
+  const owuiOrigin = new URL(OWUI_URL).origin;
+  const newChatButton = page.getByRole("button", { name: /new chat/i });
+
+  // Bootstrap login: Open WebUI auto-promotes the very first user it ever
+  // sees to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM entirely.
+  // The OWUI container in this job is freshly created every run, so without
+  // this step the real fixture user below would always land as that
+  // unconditional first-user admin and never actually exercise the
+  // owui_role allow-list gate PR #451 fixed.
+  //
+  // Runs in its own, throwaway browser context (separate cookie jar), not
+  // signed out and reused in `page` -- components/oauth/consent-panel.tsx
+  // only redirects an unauthenticated visitor to /auth/sign-in; if a
+  // Supabase session already exists (getSession() resolves) it silently
+  // completes the OAuth grant for THAT session's user with no re-prompt. A
+  // shared context would therefore replay the bootstrap user's session on
+  // the "real" login below instead of actually signing in the OWNER
+  // fixture user -- exactly the kind of test that looks green while
+  // proving nothing. A separate context makes that impossible: this
+  // context is closed once the bootstrap login is confirmed, so the real
+  // fixture login below starts from a page with no Supabase session at all.
+  const bootstrapContext = await browser.newContext();
+  const bootstrapPage = await bootstrapContext.newPage();
+  await bootstrapPage.goto(OWUI_URL);
+  await signInWithHive(bootstrapPage, bootstrapEmail, bootstrapPassword, owuiOrigin);
+  await expect(
+    bootstrapPage.getByRole("button", { name: /new chat/i }),
+  ).toBeVisible({ timeout: 60_000 });
+  await bootstrapContext.close();
+
+  // Real fixture login (role OWNER -- see scripts/seed-owui-e2e-user.py),
+  // in the setup test's own context: provably no prior Supabase session.
+  await page.goto("/");
+  await signInWithHive(page, email, password, owuiOrigin);
   // Run 28683831193: the chat input carries no "message" placeholder in
   // OWUI 0.9.5 -- the sidebar New Chat button is the post-login readiness
   // signal instead (present in the failure snapshot alongside the greeting).
-  await expect(
-    page.getByRole("button", { name: /new chat/i }),
-  ).toBeVisible({ timeout: 60_000 });
+  // Race it against the "Account Activation Pending" screen so a regression
+  // of the owui_role claim / OAUTH_ALLOWED_ROLES wiring (PR #451's incident)
+  // fails with a direct diagnosis instead of a bare 60s timeout.
+  const activationPending = page.getByText(/activation pending/i);
+  await expect(newChatButton.or(activationPending)).toBeVisible({
+    timeout: 60_000,
+  });
+  if (await activationPending.isVisible().catch(() => false)) {
+    throw new Error(
+      "OWUI shows 'Account Activation Pending' for the OWNER-role e2e " +
+        "fixture user -- owui_role claim / OAUTH_ALLOWED_ROLES gate " +
+        "regression (see PR #451, supabase/migrations/20260726_01_owui_role_claim.sql, " +
+        "and docker-compose.yml's open-webui OAUTH_ROLES_CLAIM).",
+    );
+  }
   await installHiveJwtForwardFilter(page, owuiOrigin);
   await page.context().storageState({ path: STATE });
 });

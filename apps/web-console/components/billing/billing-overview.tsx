@@ -92,7 +92,7 @@ export function BillingOverview({
         <CardContent className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex flex-col gap-1">
             <p
-              className="font-display text-3xl tabular-nums text-[var(--color-ink)]"
+              className="metric text-3xl text-[var(--color-ink)]"
               data-numeric
             >
               {formatCredits(balance.available_credits)}

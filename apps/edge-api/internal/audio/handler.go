@@ -10,13 +10,14 @@ import (
 	"log"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
-	"github.com/google/uuid"
 )
 
 // Capability flags used when this handler calls the routing layer.
@@ -242,29 +243,50 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dispatch to LiteLLM.
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.litellmBaseURL+"/audio/speech", bytes.NewReader(rewrittenBody))
-	if err != nil {
+	// Dispatch to LiteLLM, retrying up to maxSpeechAttempts times if the
+	// upstream TTS backend returns a 200 with silent (all-zero) WAV sample
+	// data instead of the requested speech. This is a confirmed live defect
+	// in Groq's Orpheus TTS backend -- reproduced identically calling Groq
+	// directly and through LiteLLM's route-groq-tts, so it is not fixable by
+	// swapping providers or LiteLLM versions -- that occurs on a meaningful
+	// fraction of requests (see live_voice_integration_test.go). Retrying
+	// almost always recovers a correct clip.
+	var (
+		lastStatus int
+		lastCT     string
+		lastBody   []byte
+		success    bool
+	)
+	for attempt := 1; attempt <= maxSpeechAttempts; attempt++ {
+		statusCode, ct, respBody, err := h.fetchSpeechOnce(ctx, rewrittenBody)
+		if err != nil {
+			_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+			apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, http.StatusBadGateway, err.Error())
+			return
+		}
+		lastStatus, lastCT, lastBody = statusCode, ct, respBody
+
+		if statusCode < 200 || statusCode >= 300 {
+			break
+		}
+		if data, ok := wavDataChunk(respBody); ok && isDegenerateSilence(data) {
+			log.Printf("audio: speech synthesis attempt %d/%d for alias=%s returned silent WAV, retrying", attempt, maxSpeechAttempts, route.AliasID)
+			continue
+		}
+		success = true
+		break
+	}
+
+	if lastStatus < 200 || lastStatus >= 300 {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, lastStatus, string(lastBody))
+		return
+	}
+	if !success {
+		// Every attempt came back silent.
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
-		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.masterKey)
-
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, http.StatusBadGateway, err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, resp.StatusCode, string(upstreamBody))
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech synthesis is temporarily unavailable. Please retry.", &code)
 		return
 	}
 
@@ -275,16 +297,47 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		ActualCredits: 1000,
 	})
 
-	// Binary relay: copy Content-Type exactly from upstream, pipe body directly.
-	ct := resp.Header.Get("Content-Type")
-	if ct != "" {
-		w.Header().Set("Content-Type", ct)
+	// Binary relay: copy Content-Type exactly from upstream.
+	if lastCT != "" {
+		w.Header().Set("Content-Type", lastCT)
 	}
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(lastBody)))
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, resp.Body) //nolint:errcheck
+	w.Write(lastBody) //nolint:errcheck
+}
+
+// maxSpeechAttempts bounds retries against the silent-WAV defect described
+// above handleSpeech's dispatch loop.
+const maxSpeechAttempts = 3
+
+// maxSpeechResponseBytes bounds how much of the upstream speech response
+// this handler buffers in memory to inspect before relaying to the client.
+// TTS clips for realistic request sizes are well under this.
+const maxSpeechResponseBytes = 25 << 20
+
+// fetchSpeechOnce makes one dispatch attempt to LiteLLM's /audio/speech and
+// returns the upstream status, Content-Type, and buffered body. err is set
+// only for request-construction or transport/read failures; a non-2xx
+// upstream status is returned as a normal (status, body) pair, not an error.
+func (h *Handler) fetchSpeechOnce(ctx context.Context, rewrittenBody []byte) (statusCode int, contentType string, body []byte, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.litellmBaseURL+"/audio/speech", bytes.NewReader(rewrittenBody))
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("build upstream speech request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.masterKey)
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxSpeechResponseBytes))
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("read upstream speech response: %w", err)
+	}
+	return resp.StatusCode, resp.Header.Get("Content-Type"), respBody, nil
 }
 
 // handleTranscription processes POST /v1/audio/transcriptions.
@@ -410,58 +463,58 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 
-	// Capture the LiteLLM model name for use inside the goroutine.
 	litellmModel := route.LiteLLMModelName
 
-	// Rebuild multipart body via io.Pipe for streaming (no disk writes).
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
+	// Rebuild multipart body into an in-memory buffer — bounded by the 25MB
+	// ParseMultipartForm cap above, so buffering the whole thing is safe.
+	// This used to stream through io.Pipe instead, which forces chunked
+	// transfer-encoding on the outgoing request (no Content-Length is known
+	// up front). At least one real provider (Groq) accepts that request
+	// with a 200 but silently truncates the multipart file part instead of
+	// erroring, corrupting the audio the provider actually transcribes.
+	// Buffering first gives the outgoing request a real Content-Length and
+	// avoids that corruption.
+	var multipartBuf bytes.Buffer
+	mw := multipart.NewWriter(&multipartBuf)
 
-	go func() {
-		defer pw.Close()
-		defer mw.Close()
-
-		// Copy all text form fields, rewriting the model field.
-		for key, values := range r.MultipartForm.Value {
-			for _, val := range values {
-				writeVal := val
-				if key == "model" {
-					writeVal = litellmModel
-				}
-				if err := mw.WriteField(key, writeVal); err != nil {
-					pw.CloseWithError(fmt.Errorf("write field %s: %w", key, err))
-					return
-				}
+	// Copy all text form fields, rewriting the model field.
+	for key, values := range r.MultipartForm.Value {
+		for _, val := range values {
+			writeVal := val
+			if key == "model" {
+				writeVal = litellmModel
+			}
+			if err := mw.WriteField(key, writeVal); err != nil {
+				_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild request field.", &code)
+				return
 			}
 		}
+	}
 
-		// Stream all file parts (audio data) directly — no intermediate storage.
-		for fieldName, fileHeaders := range r.MultipartForm.File {
-			for _, fh := range fileHeaders {
-				f, err := fh.Open()
-				if err != nil {
-					pw.CloseWithError(fmt.Errorf("open file %s: %w", fieldName, err))
-					return
-				}
-				fw, err := mw.CreateFormFile(fieldName, fh.Filename)
-				if err != nil {
-					f.Close()
-					pw.CloseWithError(fmt.Errorf("create form file %s: %w", fieldName, err))
-					return
-				}
-				if _, err := io.Copy(fw, f); err != nil {
-					f.Close()
-					pw.CloseWithError(fmt.Errorf("copy audio file %s: %w", fieldName, err))
-					return
-				}
-				f.Close()
+	// Copy all file parts (audio data).
+	for fieldName, fileHeaders := range r.MultipartForm.File {
+		for _, fh := range fileHeaders {
+			if err := copyMultipartFile(mw, fieldName, fh); err != nil {
+				_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read uploaded audio file.", &code)
+				return
 			}
 		}
-	}()
+	}
+
+	if err := mw.Close(); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "internal_error"
+		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to finalize request body.", &code)
+		return
+	}
 
 	// Forward to LiteLLM.
 	upstreamURL := h.litellmBaseURL + litellmPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, pr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, &multipartBuf)
 	if err != nil {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
@@ -513,4 +566,21 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(respBody)
+}
+
+// copyMultipartFile opens one uploaded file part and copies its bytes into a
+// new form file field on mw, under the same field and file name.
+func copyMultipartFile(mw *multipart.Writer, fieldName string, fh *multipart.FileHeader) error {
+	f, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fw, err := mw.CreateFormFile(fieldName, fh.Filename)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(fw, f)
+	return err
 }
