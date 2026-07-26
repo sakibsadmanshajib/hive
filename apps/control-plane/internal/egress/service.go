@@ -16,12 +16,18 @@ import (
 var hostCharPattern = regexp.MustCompile(`^[a-zA-Z0-9.:-]+$`)
 
 // OwnerChecker is the narrow port the service uses to verify the caller owns
-// the workspace being configured. *platform.RoleService satisfies this
+// the tenant being configured. *platform.TenantRoleService satisfies this
 // interface structurally — accepting the interface here (rather than the
 // concrete type) avoids a package dependency and keeps unit tests DB-free
 // (mirrors internal/grants/service.go's AdminChecker).
+//
+// This port is tenant-scoped, not account-scoped: public.egress_policies is
+// keyed by tenant_id and its RLS predicate reads app.current_tenant_id, so the
+// caller's authority has to be read from public.tenant_users. The
+// account-scoped platform.RoleService.IsWorkspaceOwner resolves its id against
+// public.accounts and can never authorize a tenant id.
 type OwnerChecker interface {
-	IsWorkspaceOwner(ctx context.Context, userID, workspaceID uuid.UUID) (bool, error)
+	IsTenantOwner(ctx context.Context, userID, tenantID uuid.UUID) (bool, error)
 }
 
 // Service holds the egress-policy business logic: host-list validation, the
@@ -123,7 +129,7 @@ func (s *Service) DeleteUserOverride(ctx context.Context, callerID, tenantID, ta
 }
 
 func (s *Service) requireOwner(ctx context.Context, callerID, tenantID uuid.UUID) error {
-	isOwner, err := s.owner.IsWorkspaceOwner(ctx, callerID, tenantID)
+	isOwner, err := s.owner.IsTenantOwner(ctx, callerID, tenantID)
 	if err != nil {
 		return err
 	}

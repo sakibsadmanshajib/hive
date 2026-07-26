@@ -70,12 +70,15 @@ type RouterConfig struct {
 	// X-Internal-Token header.
 	InternalToken string
 
-	// ProvidersRouter exposes an InternalMux() for CRUD over custom_providers.
-	// Mounted under /internal/providers (shared-secret) and
-	// /api/v1/admin/providers (platform admin JWT).
+	// ProvidersRouter exposes the two CRUD surfaces over custom_providers:
+	// InternalMux() is mounted under /internal/providers (shared-secret) and
+	// AdminMux() under /api/v1/admin/providers (platform admin JWT). The two
+	// are separate handlers because a ServeMux matches on the whole request
+	// path, so one mux cannot serve both prefixes.
 	// Using a narrow interface avoids an import cycle between platform/http and providers.
 	ProvidersRouter interface {
 		InternalMux() http.Handler
+		AdminMux() http.Handler
 	}
 
 	// RoleSvc is required to gate the /api/v1/admin/providers routes
@@ -274,7 +277,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		if cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
 			adminProviders := cfg.AuthMiddleware.Require(
-				cfg.RoleSvc.RequirePlatformAdmin(cfg.ProvidersRouter.InternalMux()),
+				cfg.RoleSvc.RequirePlatformAdmin(cfg.ProvidersRouter.AdminMux()),
 			)
 			mux.Handle("/api/v1/admin/providers", adminProviders)
 			mux.Handle("/api/v1/admin/providers/", adminProviders)
