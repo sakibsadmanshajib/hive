@@ -44,7 +44,11 @@ try:
     if hive_email and hive_db_url:
         import psycopg2 as hive_psycopg2
 
-        hive_conn = hive_psycopg2.connect(hive_db_url, connect_timeout=5)
+        hive_conn = hive_psycopg2.connect(
+            hive_db_url,
+            connect_timeout=5,
+            options="-c statement_timeout=3000 -c lock_timeout=3000",
+        )
         try:
             with hive_conn.cursor() as hive_cur:
                 hive_cur.execute(
