@@ -37,17 +37,24 @@ jobs:
   deploy-workers:
     name: Deploy web-console to Cloudflare Workers (OpenNext)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: apps/web-console
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: apps/web-console/package-lock.json
+        # No npm cache here: apps/web-console/package-lock.json is also
+        # cached by pull_request workflows that run on fork PRs (e.g.
+        # license-gate), so restoring that cache in this trusted deploy job
+        # would accept a cache a fork PR could have poisoned. `npm ci` still
+        # dominates install time either way.
 
       - name: Install deps
         run: npm ci
@@ -75,6 +82,10 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: apps/web-console
           command: deploy
+          # Pinned to match apps/web-console's own `wrangler: "^4.0.0"` dep
+          # and v4-style wrangler.jsonc config, so the action-installed CLI
+          # can't silently drift onto a newer major than the repo targets.
+          wranglerVersion: "4"
         env:
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}

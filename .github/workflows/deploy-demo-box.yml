@@ -38,6 +38,9 @@ jobs:
   deploy:
     name: Pull + recreate stack on the demo box
     runs-on: [self-hosted, hive-demo]
+    # No GITHUB_TOKEN use at all: this job never checks out the repo (the box
+    # already has its own clone) and never calls the GitHub API.
+    permissions: {}
     timeout-minutes: 15
     steps:
       - name: Pull latest main
@@ -109,6 +112,8 @@ jobs:
     name: SDK replay against the demo box
     needs: deploy
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     timeout-minutes: 5
     env:
       HIVE_BASE_URL: https://api-hive.scubed.co/v1
@@ -117,6 +122,8 @@ jobs:
       HIVE_EMBEDDING_MODEL: hive-embedding-default
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v4
         with:
