@@ -447,7 +447,9 @@ services:
       # Supabase 302s straight back with error=invalid_request.
       OAUTH_CODE_CHALLENGE_METHOD: "S256"
       ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
-      OAUTH_ROLES_CLAIM: "role"
+      # owui_role (not the JWT's tenant-authorization 'role' claim) --
+      # OWNER maps to ADMIN here; supabase/migrations/20260726_01_owui_role_claim.sql.
+      OAUTH_ROLES_CLAIM: "owui_role"
       OAUTH_ALLOWED_ROLES: "ADMIN,MEMBER,VIEWER"
       OAUTH_ADMIN_ROLES: "ADMIN"
       ENABLE_OAUTH_GROUP_MANAGEMENT: "true"
