@@ -2,20 +2,19 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const ALLOWED_NEXT_TARGETS = new Set([
-  "/console",
-  "/console/settings/profile",
-  "/auth/reset-password",
-]);
+import { resolveNextTarget } from "@/lib/auth/next-target";
 
 export async function GET(request: NextRequest) {
   const { searchParams, origin } = new URL(request.url);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "";
+  const next = searchParams.get("next");
   const hiveVerify = searchParams.get("hive_verify") === "1";
 
-  // Only allow explicitly safe redirect targets
-  const safeNext = ALLOWED_NEXT_TARGETS.has(next) ? next : "/console";
+  // Shared allow-list with /auth/sign-in's post-login redirect (see
+  // lib/auth/next-target.ts) so an OAuth-consent signup that requires email
+  // confirmation can round-trip back to /oauth/consent same as a plain
+  // sign-in does, instead of the two redirect checks drifting out of sync.
+  const safeNext = resolveNextTarget(next);
 
   if (code) {
     const cookieStore = await cookies();

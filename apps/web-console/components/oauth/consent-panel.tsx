@@ -159,8 +159,8 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
   return (
     <AuthShell
       eyebrow="Sign-in request"
-      title={`Let ${details.clientName} connect to Hive?`}
-      subtitle="Review what this app is asking to access before continuing."
+      title={`Continue to ${details.clientName}`}
+      subtitle="You're signed in to Hive. Confirm access to continue."
     >
       <div className="flex flex-col gap-4">
         <ul className="flex flex-col gap-1.5 text-sm text-[var(--color-ink-2)]">

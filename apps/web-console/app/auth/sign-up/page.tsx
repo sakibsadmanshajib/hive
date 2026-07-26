@@ -7,6 +7,7 @@ import { Mail } from "lucide-react";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { appendNextParam } from "@/lib/auth/next-target";
 
 // Minimal ambient type for the Cloudflare Turnstile widget. The full SDK type
 // is not installed as a dev dependency; we only need the render/remove surface.
@@ -41,9 +42,20 @@ export default function SignUpPage() {
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  // Populated post-mount (window is unavailable during SSR). Carries an
+  // inbound ?next= target (e.g. an OAuth consent round-trip started on chat)
+  // through to the "Sign in" cross-link and into the verification-email
+  // redirect, so it survives the signup -> confirm-email -> callback chain
+  // instead of dropping the user onto the plain console dashboard (issue
+  // found in live UI/UX pass, 2026-07-26).
+  const [nextParam, setNextParam] = useState<string | null>(null);
 
   const turnstileContainerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    setNextParam(new URLSearchParams(window.location.search).get("next"));
+  }, []);
 
   // Load the Turnstile script and render the widget when a site key is
   // configured. When NEXT_PUBLIC_TURNSTILE_SITE_KEY is unset (local dev),
@@ -135,7 +147,10 @@ export default function SignUpPage() {
         email,
         password,
         options: {
-          emailRedirectTo: `${appUrl}/auth/callback`,
+          emailRedirectTo: appendNextParam(
+            `${appUrl}/auth/callback`,
+            nextParam,
+          ),
         },
       });
 
@@ -179,12 +194,12 @@ export default function SignUpPage() {
     <AuthShell
       eyebrow="Get started"
       title="Create your Hive account"
-      subtitle="Free to start. Pay only for what you use, in BDT."
+      subtitle="Pay only for what you use, in BDT."
       footer={
         <>
           Already have an account?{" "}
           <a
-            href="/auth/sign-in"
+            href={appendNextParam("/auth/sign-in", nextParam)}
             className="text-[var(--color-accent)] underline-offset-4 hover:underline"
           >
             Sign in
