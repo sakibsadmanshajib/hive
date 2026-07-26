@@ -290,6 +290,36 @@ jobs:
       - run: npm run lint:audit-write
       - run: npm run lint:desktop-local-http
 
+  agent-console-unit:
+    name: Agent console (type + unit + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/agent-console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No package-lock.json in this app, so `npm ci` cannot run here and the
+      # setup-node npm cache has no lockfile to key on.
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+      - name: Build (Next.js)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
+
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
