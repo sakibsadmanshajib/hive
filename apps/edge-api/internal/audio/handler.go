@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -55,6 +56,13 @@ type RouteResult struct {
 	AliasID          string
 	LiteLLMModelName string
 }
+
+// ErrInsufficientCredits reports that the accounting layer refused the
+// reservation because the account lacks credits. CreateReservation
+// implementations must wrap it for that case only, so a reservation that
+// could not be reached at all is never reported to the caller as a
+// billing problem.
+var ErrInsufficientCredits = errors.New("audio: insufficient credits")
 
 // AccountingInterface manages credit reservations for audio requests.
 type AccountingInterface interface {
@@ -113,6 +121,21 @@ func NewHandler(
 // instead of LiteLLM. Call before serving requests.
 func (h *Handler) WithSTT(c *stt.TieredClient) {
 	h.stt = c
+}
+
+// writeReservationFailure answers a failed credit reservation. Only a real
+// credit refusal is a 402; a reservation that timed out or errored is an
+// infrastructure fault, logged and reported as retryable so operators are
+// not chasing a phantom billing problem.
+func writeReservationFailure(w http.ResponseWriter, endpoint, alias string, err error) {
+	if errors.Is(err, ErrInsufficientCredits) {
+		code := "insufficient_quota"
+		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		return
+	}
+	log.Printf("audio: create reservation failed for endpoint=%s alias=%s: %v", endpoint, alias, err)
+	code := "upstream_error"
+	apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Credit reservation is temporarily unavailable. Please retry.", &code)
 }
 
 // authorize validates the request API key and writes a 401 on failure.
@@ -198,8 +221,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		EstimatedCredits: 1000,
 	})
 	if err != nil {
-		code := "insufficient_quota"
-		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		writeReservationFailure(w, "/v1/audio/speech", route.AliasID, err)
 		return
 	}
 
@@ -296,8 +318,7 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		EstimatedCredits: 500,
 	})
 	if err != nil {
-		code := "insufficient_quota"
-		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		writeReservationFailure(w, "/v1/audio/transcriptions", "stt", err)
 		return
 	}
 
@@ -385,9 +406,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		EstimatedCredits: 500,
 	})
 	if err != nil {
-		log.Printf("audio: create reservation failed for endpoint=%s alias=%s: %v", accountingEndpoint, route.AliasID, err)
-		code := "insufficient_quota"
-		apierrors.WriteError(w, http.StatusPaymentRequired, "invalid_request_error", "Insufficient credits to complete this request.", &code)
+		writeReservationFailure(w, accountingEndpoint, route.AliasID, err)
 		return
 	}
 
