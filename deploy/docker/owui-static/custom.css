@@ -1,0 +1,12 @@
+/*
+ * Open WebUI's prebuilt index.html unconditionally links this stylesheet
+ * (<link rel="stylesheet" href="/static/custom.css">) from STATIC_DIR. This
+ * file existing is what stops that request 404ing on every page load; it is
+ * not required to contain overrides. Hive branding (name, title, favicon,
+ * logo mark) is already handled by WEBUI_NAME/WEBUI_URL env vars, the
+ * Dockerfile.open-webui title patch, and the real PNG/SVG assets in this
+ * directory, so there is nothing left to override here today.
+ *
+ * ponytail: intentionally near-empty. Add rules here only when a real visual
+ * defect needs a CSS override that env vars and static assets cannot cover.
+ */

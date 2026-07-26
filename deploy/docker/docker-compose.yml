@@ -525,11 +525,14 @@ services:
       # Docker can refuse individual file-level binds onto a path that
       # doesn't exist yet inside an empty named volume; one directory bind
       # creates /data/static itself, sidestepping that.
-      # Reused apps/desktop app icon as source; not per-size-optimized
-      # (favicon-96x96/apple-touch-icon are the closest available Tauri
-      # size, not exact). No dark-mode splash variant -- same PNG for both.
-      # Known gap: FONTS_DIR/custom.css/loader.js under STATIC_DIR are still
-      # unseeded (pre-existing, not introduced by this change).
+      # PNG/ICO assets render the same mark as favicon.svg (cream badge,
+      # forest-green outline + inner cell); sizes are not per-purpose
+      # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
+      # size, not the ideal one for each use). No dark-mode splash variant --
+      # same asset for both. custom.css and loader.js are seeded (see those
+      # files) purely so index.html's unconditional <link>/<script> tags for
+      # them stop 404ing; both are intentionally near-empty. Known gap:
+      # FONTS_DIR under STATIC_DIR is still unseeded.
       - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
