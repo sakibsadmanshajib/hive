@@ -58,6 +58,65 @@ type RoleStore interface {
 	IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
+// TenantRole captures the role string stored in public.tenant_users.role.
+//
+// Deliberately distinct from MembershipRole. These are two independent role
+// systems over two independent id spaces: tenant_users is the Phase 19 tenant
+// scope (uppercase enum, keyed by tenant_id) while account_memberships is the
+// Phase 2 billing-account scope (lowercase enum, keyed by account_id). A
+// tenant_id never resolves in public.accounts and vice versa, so a caller
+// holding a tenant id must use the tenant-scoped predicates below rather than
+// IsWorkspaceOwner.
+type TenantRole string
+
+const (
+	TenantRoleOwner TenantRole = "OWNER"
+	TenantRoleAdmin TenantRole = "ADMIN"
+)
+
+// TenantRoleStore is the narrow data-access interface behind the tenant-scoped
+// role predicates. Kept separate from RoleStore because the two read different
+// tables in different id spaces.
+//
+// Defined here (where it is used) per Go interface-placement convention.
+type TenantRoleStore interface {
+	// GetTenantRole returns the role userID holds on tenantID, considering
+	// only ACTIVE memberships. Returns ("", nil) when there is no such
+	// membership, which callers treat as not-a-member.
+	GetTenantRole(ctx context.Context, userID, tenantID uuid.UUID) (TenantRole, error)
+}
+
+// TenantRoleService wraps a TenantRoleStore behind the tenant-scoped
+// predicates. Construct via NewTenantRoleService and inject into HTTP wiring,
+// mirroring RoleService.
+type TenantRoleService struct {
+	store TenantRoleStore
+}
+
+// NewTenantRoleService returns a TenantRoleService backed by the given store.
+func NewTenantRoleService(store TenantRoleStore) *TenantRoleService {
+	return &TenantRoleService{store: store}
+}
+
+// IsTenantOwner reports whether userID holds an ACTIVE role='OWNER' membership
+// on tenantID.
+//
+// Returns:
+//   - (true,  nil) — active owner membership exists
+//   - (false, nil) — non-owner membership, inactive membership, or no membership
+//   - (false, err) — propagated store error
+//
+// A tenant that does not exist yields (false, nil): no membership row can
+// reference it, so the caller fails closed with a permission error rather than
+// distinguishing "no such tenant" for an unauthorized caller.
+func (s *TenantRoleService) IsTenantOwner(ctx context.Context, userID, tenantID uuid.UUID) (bool, error) {
+	role, err := s.store.GetTenantRole(ctx, userID, tenantID)
+	if err != nil {
+		return false, err
+	}
+	return role == TenantRoleOwner, nil
+}
+
 // RoleService wraps a RoleStore behind the public predicates. Construct via
 // NewRoleService and inject into HTTP wiring.
 type RoleService struct {

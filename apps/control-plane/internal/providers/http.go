@@ -19,8 +19,12 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// InternalMux returns an http.Handler that routes the five CRUD endpoints.
-// Callers should wrap this with RequireInternalToken before mounting.
+const internalPrefix = "/internal/providers"
+const adminPrefix = "/api/v1/admin/providers"
+
+// InternalMux returns an http.Handler that routes the five CRUD endpoints on
+// the service-to-service surface. Callers should wrap this with
+// RequireInternalToken before mounting.
 //
 //	POST   /internal/providers
 //	GET    /internal/providers
@@ -28,9 +32,30 @@ func NewHandler(svc *Service) *Handler {
 //	PUT    /internal/providers/{id}
 //	DELETE /internal/providers/{id}
 func (h *Handler) InternalMux() http.Handler {
+	return h.muxFor(internalPrefix)
+}
+
+// AdminMux returns the same five CRUD endpoints on the platform-admin surface.
+// Callers should wrap this with the auth middleware plus RequirePlatformAdmin
+// before mounting.
+//
+//	POST   /api/v1/admin/providers
+//	GET    /api/v1/admin/providers
+//	GET    /api/v1/admin/providers/{id}
+//	PUT    /api/v1/admin/providers/{id}
+//	DELETE /api/v1/admin/providers/{id}
+//
+// A ServeMux matches on the whole request path, so the internal mux cannot be
+// reused for this mount: its patterns would never match an /api/v1 path and
+// every request would fall through to the default 404.
+func (h *Handler) AdminMux() http.Handler {
+	return h.muxFor(adminPrefix)
+}
+
+func (h *Handler) muxFor(prefix string) http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/internal/providers", h.handleCollection)
-	mux.HandleFunc("/internal/providers/", h.handleItem)
+	mux.HandleFunc(prefix, h.handleCollection)
+	mux.HandleFunc(prefix+"/", h.handleItem)
 	return mux
 }
 

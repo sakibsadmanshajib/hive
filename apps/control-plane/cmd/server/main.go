@@ -796,14 +796,16 @@ func main() {
 	}
 
 	// Issue #308 — egress policy single source of truth. Admin CRUD is
-	// owner-gated via roleSvc.IsWorkspaceOwner (constructed above, in scope
-	// whenever pool != nil). Neither the server-side OpenHands allowed_hosts
+	// owner-gated via tenantRoleSvc.IsTenantOwner: egress_policies is keyed by
+	// tenant_id, so authority comes from public.tenant_users, not from the
+	// account-scoped roleSvc. Neither the server-side OpenHands allowed_hosts
 	// consumer nor the desktop firewall rule generator is wired here.
 	var egressPolicyHandler *egress.Handler
 	var egressSvc *egress.Service
-	if pool != nil && roleSvc != nil {
+	if pool != nil {
 		egressRepo := egress.NewPgxRepository(pool)
-		egressSvc = egress.NewService(egressRepo, roleSvc)
+		tenantRoleSvc := platform.NewTenantRoleService(platform.NewPgxTenantRoleStore(pool))
+		egressSvc = egress.NewService(egressRepo, tenantRoleSvc)
 		egressPolicyHandler = egress.NewHandler(egressSvc)
 	}
 

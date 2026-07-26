@@ -25,6 +25,13 @@ func NewPgxRoleStore(pool *pgxpool.Pool) RoleStore {
 	return &pgxRoleStore{pool: pool}
 }
 
+// NewPgxTenantRoleStore returns a TenantRoleStore backed by the given pgx pool.
+// It queries `public.tenant_users`, the tenant-scoped role table, which is a
+// different id space from the account tables NewPgxRoleStore reads.
+func NewPgxTenantRoleStore(pool *pgxpool.Pool) TenantRoleStore {
+	return &pgxRoleStore{pool: pool}
+}
+
 // GetMembershipRole returns the role for (userID, workspaceID).
 //
 // Returns:
@@ -60,6 +67,25 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 		return "", fmt.Errorf("platform: get membership role: %w", err)
 	}
 	return MembershipRole(role), nil
+}
+
+// GetTenantRole returns the ACTIVE tenant_users role for (userID, tenantID),
+// or ("", nil) when no active membership exists.
+func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.UUID) (TenantRole, error) {
+	var role string
+	err := s.pool.QueryRow(ctx, `
+		SELECT role
+		FROM public.tenant_users
+		WHERE tenant_id = $1 AND user_id = $2 AND status = 'ACTIVE'
+		LIMIT 1
+	`, tenantID, userID).Scan(&role)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("platform: get tenant role: %w", err)
+	}
+	return TenantRole(role), nil
 }
 
 // IsPlatformAdmin returns whether userID owns at least one account row

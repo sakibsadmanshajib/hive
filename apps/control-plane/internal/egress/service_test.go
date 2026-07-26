@@ -62,7 +62,7 @@ type fakeOwner struct {
 	err     error
 }
 
-func (f *fakeOwner) IsWorkspaceOwner(_ context.Context, _, _ uuid.UUID) (bool, error) {
+func (f *fakeOwner) IsTenantOwner(_ context.Context, _, _ uuid.UUID) (bool, error) {
 	return f.isOwner, f.err
 }
 
