@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
@@ -51,10 +48,6 @@ type RouterConfig struct {
 	// MetricsRegistry provides Prometheus counters/histograms for HTTP instrumentation.
 	// When non-nil, all requests are counted and timed via InstrumentHandler middleware.
 	MetricsRegistry *metrics.Registry
-
-	// PrometheusRegistry is the custom prometheus.Registry used to serve /metrics.
-	// When non-nil, the /metrics endpoint is registered on the mux.
-	PrometheusRegistry *prometheus.Registry
 
 	// BudgetsHandler handles budget threshold CRUD and alert dismissal endpoints.
 	BudgetsHandler *budgets.Handler
@@ -125,7 +118,11 @@ type RouterConfig struct {
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
 // If MetricsRegistry is set, all requests are wrapped with Prometheus instrumentation.
-// If PrometheusRegistry is set, a /metrics endpoint is registered on the mux.
+// This router deliberately serves no /metrics endpoint: the Prometheus series
+// carry provider names, payment-rail counts, and the full internal endpoint
+// inventory, and this handler is the one exposed through the public ingress.
+// The scrape endpoint lives on the separate telemetry listener started in
+// cmd/server (metricsListenAddr), which is not published or routed publicly.
 //
 // IMPORTANT: The return type is http.Handler (not *http.ServeMux) so that the
 // instrumentation wrapper can be applied transparently. Plan 01 (Wave 2) depends
@@ -137,11 +134,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	}
 
 	mux.HandleFunc("/health", handleHealth)
-
-	// Register /metrics endpoint using the custom prometheus registry (not DefaultRegistry).
-	if cfg.PrometheusRegistry != nil {
-		mux.Handle("/metrics", promhttp.HandlerFor(cfg.PrometheusRegistry, promhttp.HandlerOpts{}))
-	}
 
 	// internal wraps a service-to-service handler with the shared-secret guard.
 	internal := func(h http.Handler) http.Handler {

@@ -272,6 +272,29 @@ func TestSharedStorageClientSatisfiesFilesStorageBackend(t *testing.T) {
 // apps/edge-api/internal/featuregate's own tests.
 func identityMiddleware(h http.Handler) http.Handler { return h }
 
+// The public mux is served on the port published through the ingress tunnel.
+// hive_upstream_requests_total labels every series with the upstream provider
+// name, which the provider-blind rule forbids exposing to customers, so
+// /metrics belongs on the telemetry listener (metricsListenAddr) and must not
+// be registered alongside the other unauthenticated infrastructure routes.
+func TestRegisterInfraRoutesDoesNotExposeMetrics(t *testing.T) {
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /metrics on the public mux = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	// Guards the assertion above against passing vacuously.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
 func TestRegisterMediaFileBatchRoutesRegistersAllPublicPaths(t *testing.T) {
 	mux := http.NewServeMux()
 	registerMediaFileBatchRoutes(
