@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
@@ -410,58 +409,58 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 
-	// Capture the LiteLLM model name for use inside the goroutine.
 	litellmModel := route.LiteLLMModelName
 
-	// Rebuild multipart body via io.Pipe for streaming (no disk writes).
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
+	// Rebuild multipart body into an in-memory buffer — bounded by the 25MB
+	// ParseMultipartForm cap above, so buffering the whole thing is safe.
+	// This used to stream through io.Pipe instead, which forces chunked
+	// transfer-encoding on the outgoing request (no Content-Length is known
+	// up front). At least one real provider (Groq) accepts that request
+	// with a 200 but silently truncates the multipart file part instead of
+	// erroring, corrupting the audio the provider actually transcribes.
+	// Buffering first gives the outgoing request a real Content-Length and
+	// avoids that corruption.
+	var multipartBuf bytes.Buffer
+	mw := multipart.NewWriter(&multipartBuf)
 
-	go func() {
-		defer pw.Close()
-		defer mw.Close()
-
-		// Copy all text form fields, rewriting the model field.
-		for key, values := range r.MultipartForm.Value {
-			for _, val := range values {
-				writeVal := val
-				if key == "model" {
-					writeVal = litellmModel
-				}
-				if err := mw.WriteField(key, writeVal); err != nil {
-					pw.CloseWithError(fmt.Errorf("write field %s: %w", key, err))
-					return
-				}
+	// Copy all text form fields, rewriting the model field.
+	for key, values := range r.MultipartForm.Value {
+		for _, val := range values {
+			writeVal := val
+			if key == "model" {
+				writeVal = litellmModel
+			}
+			if err := mw.WriteField(key, writeVal); err != nil {
+				_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild request field.", &code)
+				return
 			}
 		}
+	}
 
-		// Stream all file parts (audio data) directly — no intermediate storage.
-		for fieldName, fileHeaders := range r.MultipartForm.File {
-			for _, fh := range fileHeaders {
-				f, err := fh.Open()
-				if err != nil {
-					pw.CloseWithError(fmt.Errorf("open file %s: %w", fieldName, err))
-					return
-				}
-				fw, err := mw.CreateFormFile(fieldName, fh.Filename)
-				if err != nil {
-					f.Close()
-					pw.CloseWithError(fmt.Errorf("create form file %s: %w", fieldName, err))
-					return
-				}
-				if _, err := io.Copy(fw, f); err != nil {
-					f.Close()
-					pw.CloseWithError(fmt.Errorf("copy audio file %s: %w", fieldName, err))
-					return
-				}
-				f.Close()
+	// Copy all file parts (audio data).
+	for fieldName, fileHeaders := range r.MultipartForm.File {
+		for _, fh := range fileHeaders {
+			if err := copyMultipartFile(mw, fieldName, fh); err != nil {
+				_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read uploaded audio file.", &code)
+				return
 			}
 		}
-	}()
+	}
+
+	if err := mw.Close(); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "internal_error"
+		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to finalize request body.", &code)
+		return
+	}
 
 	// Forward to LiteLLM.
 	upstreamURL := h.litellmBaseURL + litellmPath
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, pr)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, &multipartBuf)
 	if err != nil {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
@@ -513,4 +512,21 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(respBody)
+}
+
+// copyMultipartFile opens one uploaded file part and copies its bytes into a
+// new form file field on mw, under the same field and file name.
+func copyMultipartFile(mw *multipart.Writer, fieldName string, fh *multipart.FileHeader) error {
+	f, err := fh.Open()
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	fw, err := mw.CreateFormFile(fieldName, fh.Filename)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(fw, f)
+	return err
 }
