@@ -1,19 +1,16 @@
-# Cloudflare Tunnel is the only ingress in front of this listener and
-# cloudflared terminates nothing, so Caddy itself only ever sees plain HTTP
-# on :80 and would otherwise stamp X-Forwarded-Proto: http on every upstream
-# request. Trusting the tunnel's own forwarded headers is what lets Open
-# WebUI build an https OAuth redirect_uri (authlib derives it from the
-# request scheme, not from WEBUI_URL) and lets the agent console emit https
-# redirects. Same failure family as the Caddyfile.artifacts auto-HTTPS fix
-# (#434): Caddy behind an external TLS terminator needs explicit scheme
-# handling. Only our own compose containers reach this listener, so trusting
-# private ranges does not widen the spoofing surface.
-{
-  servers {
-    trusted_proxies static private_ranges
-  }
-}
-
+# When an external terminator (Cloudflare Tunnel on the demo box) handles TLS,
+# Caddy itself only ever sees plain HTTP on :80 and would stamp
+# X-Forwarded-Proto: http on every upstream request. Both upstreams below
+# derive absolute URLs from that header -- Open WebUI's authlib builds its
+# OAuth redirect_uri from the request scheme rather than from WEBUI_URL, and
+# the agent console builds redirects from request.url -- so an http value
+# makes Supabase reject the redirect_uri with a 400. HIVE_CHAT_EXTERNAL_SCHEME
+# names the scheme users actually arrive on and defaults to http for plain
+# local and enterprise runs. Same failure family as the Caddyfile.artifacts
+# auto-HTTPS fix (#434): Caddy behind an external TLS terminator needs
+# explicit scheme handling. Set rather than trusted from the incoming request
+# on purpose: this listener is published on a host port, so an incoming
+# X-Forwarded-Proto is attacker-controlled and must not be believed.
 :80 {
   # Defence-in-depth admin block. Open WebUI's env flags can regress across
   # releases (admin panel re-enabled by a misconfigured chart), so the proxy
@@ -56,6 +53,7 @@
   # (apps/agent-console/app/page.tsx) -- no separate Caddy redirect needed.
   @agentConsole path /agent-workspace /agent-workspace/*
   reverse_proxy @agentConsole agent-console:3000 {
+    header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
       response_header_timeout 60s
       dial_timeout 5s
@@ -63,6 +61,7 @@
   }
 
   reverse_proxy open-webui:8080 {
+    header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
       response_header_timeout 60s
       dial_timeout 5s
