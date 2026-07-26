@@ -1,0 +1,37 @@
+# Self-hosted production server for web-console (demo/staging box migration
+# off Cloudflare Workers -- `next build` + `next start` on plain Node, not
+# `next dev` (Dockerfile.web-console) and not the Workers-only OpenNext build
+# (`npm run build:cf`, wrangler.jsonc/open-next.config.ts). Same shape as
+# Dockerfile.agent-console, the other Next.js app already running this way in
+# this compose stack's chat/enterprise profiles.
+#
+# NEXT_PUBLIC_* vars are inlined into the client bundle at build time by
+# Next.js (webpack DefinePlugin), not read from the container's runtime
+# environment -- so they must arrive as build args here, supplied by
+# docker-compose.yml's build.args block. CONTROL_PLANE_BASE_URL is
+# server-only (never NEXT_PUBLIC_-prefixed) and stays a plain runtime
+# `environment:` entry instead, same split as Dockerfile.agent-console's
+# EDGE_API_INTERNAL_BASE_URL vs NEXT_PUBLIC_EDGE_API_BASE_URL.
+FROM node:22-slim
+
+WORKDIR /app/apps/web-console
+
+COPY apps/web-console/package.json apps/web-console/package-lock.json* ./
+RUN npm install
+
+COPY apps/web-console/ ./
+
+ARG NEXT_PUBLIC_SUPABASE_URL
+ARG NEXT_PUBLIC_SUPABASE_ANON_KEY
+ARG NEXT_PUBLIC_APP_URL
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
+ENV NEXT_PUBLIC_SUPABASE_URL=$NEXT_PUBLIC_SUPABASE_URL
+ENV NEXT_PUBLIC_SUPABASE_ANON_KEY=$NEXT_PUBLIC_SUPABASE_ANON_KEY
+ENV NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=$NEXT_PUBLIC_TURNSTILE_SITE_KEY
+
+RUN npm run build
+
+EXPOSE 3000
+
+CMD ["npm", "run", "start", "--", "--hostname", "0.0.0.0", "--port", "3000"]

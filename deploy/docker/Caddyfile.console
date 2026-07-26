@@ -1,0 +1,29 @@
+# web-console reverse proxy (self-hosted migration off Cloudflare Workers).
+#
+# Own origin, not shared with caddy-owui or caddy-artifacts: same isolation
+# rationale as Caddyfile.artifacts -- a distinct hostname is what keeps this
+# app's session cookies out of reach of anything served from HIVE_CHAT_URL or
+# ARTIFACTS_DOMAIN, regardless of any in-app defence.
+#
+# The site address keeps the hostname so the host match still holds, and
+# carries an explicit http:// scheme: Caddy turns on automatic HTTPS when a
+# site address has no scheme, which redirects plain-HTTP requests back to
+# itself and loops forever behind an external TLS terminator (Cloudflare
+# Tunnel) -- the same bug already fixed once for Caddyfile.artifacts (PR
+# #434, "fix: stop artifacts Caddy site from redirecting to itself forever").
+# Naming the scheme disables that redirect without giving up host matching.
+#
+# X-Forwarded-Proto is stamped explicitly (not trusted from the incoming
+# request, since this listener is published on a host port and an inbound
+# X-Forwarded-Proto would otherwise be attacker-controlled) so anything
+# upstream that derives an absolute URL from request scheme sees the scheme
+# users actually arrive on, same pattern as Caddyfile.owui.
+http://{$CONSOLE_DOMAIN:-console.localhost} {
+  reverse_proxy web-console-prod:3000 {
+    header_up X-Forwarded-Proto {$CONSOLE_EXTERNAL_SCHEME:http}
+    transport http {
+      response_header_timeout 30s
+      dial_timeout 5s
+    }
+  }
+}

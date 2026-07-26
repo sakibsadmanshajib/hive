@@ -410,6 +410,61 @@ services:
     environment:
       EDGE_API_INTERNAL_BASE_URL: http://edge-api:8080
 
+  # Self-hosted production web-console (migration off Cloudflare Workers --
+  # Workers was chosen originally only because Cloudflare Pages Functions
+  # silently dropped Set-Cookie under Workerd, breaking Supabase SSR session
+  # cookies; that bug is specific to Pages Functions and does not apply to a
+  # plain `next start` Node server). Distinct from the `web-console` service
+  # above, which stays `next dev` for laptop dev and is unaffected by this.
+  # Reached only through caddy-console's own origin (Caddyfile.console), same
+  # posture as agent-console/caddy-owui and caddy-artifacts -- no direct host
+  # port here.
+  web-console-prod:
+    image: hive-web-console-prod:ci
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.web-console.prod
+      # NEXT_PUBLIC_* are baked into the client bundle by `next build`, so
+      # they must travel as build args, not runtime `environment:` (see
+      # Dockerfile.web-console.prod).
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_APP_URL: ${CONSOLE_APP_URL:-https://console-hive.scubed.co}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+    profiles:
+      - chat
+      - enterprise
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      CONTROL_PLANE_BASE_URL: http://control-plane:8081
+    restart: unless-stopped
+
+  # Own Caddy origin for web-console-prod, isolated from caddy-owui and
+  # caddy-artifacts -- same isolation rationale as caddy-artifacts: a served
+  # page's cookies must never be reachable from a different app's origin.
+  # Same image/volume pattern as caddy-owui/caddy-artifacts; own named
+  # volumes so cert/config state never mixes between origins.
+  caddy-console:
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    profiles:
+      - chat
+      - enterprise
+    ports:
+      - "3005:80"
+    environment:
+      CONSOLE_DOMAIN: ${CONSOLE_DOMAIN:-console.localhost}
+      CONSOLE_EXTERNAL_SCHEME: ${CONSOLE_EXTERNAL_SCHEME:-http}
+    depends_on:
+      - web-console-prod
+    volumes:
+      - ./Caddyfile.console:/etc/caddy/Caddyfile:ro
+      - caddy-console-data:/data
+      - caddy-console-config:/config
+    restart: unless-stopped
+
   # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge and cloud chat users.
   # Profiles:
   #   local      - developer laptop with in-stack redis.
@@ -756,6 +811,8 @@ volumes:
   caddy-config:
   caddy-artifacts-data:
   caddy-artifacts-config:
+  caddy-console-data:
+  caddy-console-config:
   # ollama-models persists pulled model weights across container recreates.
   # Active only when the `enterprise` profile is used.
   ollama-models:
