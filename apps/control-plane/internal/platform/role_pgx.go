@@ -10,7 +10,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// pgxRoleStore is the concrete pgxpool-backed implementation of RoleStore.
+// pgxRoleStore is the concrete pgxpool-backed implementation of both RoleStore
+// (account-scoped, public.accounts + public.account_memberships) and
+// TenantRoleStore (tenant-scoped, public.tenant_users). One struct because both
+// need nothing but the pool; the two constructors below return the narrow
+// interface each caller wants.
 // Phase 14 seeds this so main.go can wire RoleService for the owner-gated
 // endpoints. Phase 18 may swap the backing query without changing the
 // interface (RBAC contract stub locked).
@@ -71,9 +75,28 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 
 // GetTenantRole returns the ACTIVE tenant_users role for (userID, tenantID),
 // or ("", nil) when no active membership exists.
+//
+// Runs inside an explicit transaction with app.current_tenant_id set LOCAL,
+// because hive_app is NOT BYPASSRLS and the tenant_users policy this query
+// relies on is keyed on that setting
+// (20260726_01_tenant_users_hive_app_grant.sql). LOCAL scope inside an explicit
+// transaction is required, not incidental: see the withTenantTx comment in
+// apps/control-plane/internal/egress/repository.go for the two ways this was
+// gotten wrong before, one of which leaked the setting across tenants on a
+// pooled connection.
 func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.UUID) (TenantRole, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("platform: begin tenant role tx: %w", err)
+	}
+	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
+		return "", fmt.Errorf("platform: set tenant scope: %w", err)
+	}
+
 	var role string
-	err := s.pool.QueryRow(ctx, `
+	err = tx.QueryRow(ctx, `
 		SELECT role
 		FROM public.tenant_users
 		WHERE tenant_id = $1 AND user_id = $2 AND status = 'ACTIVE'
@@ -84,6 +107,9 @@ func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.
 			return "", nil
 		}
 		return "", fmt.Errorf("platform: get tenant role: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("platform: commit tenant role tx: %w", err)
 	}
 	return TenantRole(role), nil
 }
