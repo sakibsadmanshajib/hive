@@ -8,7 +8,7 @@ const BASE =
   process.env.PLAYWRIGHT_BASE_URL ?? "https://console-hive.scubed.co";
 const API = process.env.HIVE_EDGE_API_URL ?? "https://api-hive.scubed.co";
 const CONTROL_PLANE =
-  process.env.HIVE_CONTROL_PLANE_URL ?? "https://cp-hive.scubed.co";
+  process.env.HIVE_CONTROL_PLANE_URL ?? "https://control-hive.scubed.co";
 
 const QA_TESTER_EMAIL = process.env.HIVE_QA_TESTER_EMAIL ?? "";
 const QA_TESTER_PASSWORD = process.env.HIVE_QA_TESTER_PASSWORD ?? "";

@@ -27,7 +27,14 @@
     // the control-plane via this URL. Non-sensitive (public DNS), so
     // checked in here. Sensitive secrets (e.g. SUPABASE_SERVICE_ROLE_KEY)
     // must be set via `wrangler secret put`, never via `vars`.
-    "CONTROL_PLANE_BASE_URL": "https://cp-hive.scubed.co"
+    //
+    // This must name the control-plane host the current environment
+    // actually serves. The predecessor value (cp-hive.scubed.co) kept
+    // resolving to a retired VM that answered /health but ran an older
+    // build, so /api/v1/viewer came back without the platform.admin
+    // permission and every admin panel rendered "Admin access required".
+    // A reachable host is not evidence of the right host.
+    "CONTROL_PLANE_BASE_URL": "https://control-hive.scubed.co"
   },
   "observability": {
     "enabled": true
