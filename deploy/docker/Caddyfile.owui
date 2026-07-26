@@ -1,3 +1,19 @@
+# Cloudflare Tunnel is the only ingress in front of this listener and
+# cloudflared terminates nothing, so Caddy itself only ever sees plain HTTP
+# on :80 and would otherwise stamp X-Forwarded-Proto: http on every upstream
+# request. Trusting the tunnel's own forwarded headers is what lets Open
+# WebUI build an https OAuth redirect_uri (authlib derives it from the
+# request scheme, not from WEBUI_URL) and lets the agent console emit https
+# redirects. Same failure family as the Caddyfile.artifacts auto-HTTPS fix
+# (#434): Caddy behind an external TLS terminator needs explicit scheme
+# handling. Only our own compose containers reach this listener, so trusting
+# private ranges does not widen the spoofing surface.
+{
+  servers {
+    trusted_proxies static private_ranges
+  }
+}
+
 :80 {
   # Defence-in-depth admin block. Open WebUI's env flags can regress across
   # releases (admin panel re-enabled by a misconfigured chart), so the proxy
