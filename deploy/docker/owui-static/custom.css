@@ -1,12 +1,162 @@
 /*
  * Open WebUI's prebuilt index.html unconditionally links this stylesheet
- * (<link rel="stylesheet" href="/static/custom.css">) from STATIC_DIR. This
- * file existing is what stops that request 404ing on every page load; it is
- * not required to contain overrides. Hive branding (name, title, favicon,
- * logo mark) is already handled by WEBUI_NAME/WEBUI_URL env vars, the
- * Dockerfile.open-webui title patch, and the real PNG/SVG assets in this
- * directory, so there is nothing left to override here today.
+ * (<link rel="stylesheet" href="/static/custom.css">) from STATIC_DIR. Together
+ * with loader.js in this directory it is the only supported way to change how a
+ * pinned, unforked Open WebUI image looks.
  *
- * ponytail: intentionally near-empty. Add rules here only when a real visual
- * defect needs a CSS override that env vars and static assets cannot cover.
+ * Two overrides live here, both added in the 2026-07-26 UI/UX pass:
+ *   1. The agent-workspace launcher injected by loader.js.
+ *   2. Replacing the emoji glyph that stock OWUI uses as the primary visual
+ *      anchor of its Workspace empty states.
+ *
+ * Product branding that env vars and static assets already cover (name, title,
+ * favicon, logo, splash) is deliberately NOT duplicated here.
  */
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 1. Agent-workspace launcher
+ *
+ * Injected into <body> by loader.js, so it is styled by id and cannot collide
+ * with any OWUI utility class. Sits in OWUI's own header band rather than
+ * bottom-right: the header band is empty from just right of the model selector
+ * to just left of OWUI's three header icons at every desktop width, whereas a
+ * bottom-anchored overlay lands on the message composer as soon as the window
+ * narrows. `right: 8rem` keeps roughly two icon-widths of clearance from those
+ * header icons.
+ *
+ * KNOWN LIMITATION (stated rather than hidden): a position-fixed element cannot
+ * reflow OWUI's layout, so below 1024px -- where OWUI's header is dense and its
+ * composer reaches the bottom-right corner -- the launcher is hidden instead of
+ * risking overlap. On those viewports the per-message "Open Agent Workspace"
+ * Action (deploy/docker/pipelines/hive_agent_console_action.py) remains the
+ * entry point. A launcher that is present at every width needs a real nav slot,
+ * i.e. a fork of Open WebUI's frontend. See loader.js for that analysis.
+ * ─────────────────────────────────────────────────────────────────────────── */
+#hive-agent-launcher {
+  position: fixed;
+  top: 0.5rem;
+  right: 8rem;
+  z-index: 30;
+
+  display: none; /* enabled by the media query below */
+  align-items: center;
+  gap: 0.5rem;
+
+  height: 2rem;
+  padding: 0 0.75rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 0.5rem;
+  background: #ffffff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+
+  color: #171717;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+
+#hive-agent-launcher:hover {
+  background: #f5f5f4;
+  border-color: rgba(0, 0, 0, 0.18);
+}
+
+#hive-agent-launcher:focus-visible {
+  outline: 2px solid #0d3b2e;
+  outline-offset: 2px;
+}
+
+#hive-agent-launcher svg {
+  width: 1rem;
+  height: 1rem;
+  flex: none;
+}
+
+/* OWUI sets a `dark` (or `light`) class on <html> from localStorage.theme
+   before the SPA boots -- see the inline theme script in its index.html -- so
+   keying off that class matches the app's own theme rather than the OS. */
+html.dark #hive-agent-launcher {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #1f1f1f;
+  color: #ededed;
+  box-shadow: none;
+}
+
+html.dark #hive-agent-launcher:hover {
+  background: #2a2a2a;
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+html.dark #hive-agent-launcher:focus-visible {
+  outline-color: #ededed;
+}
+
+@media (min-width: 1024px) {
+  #hive-agent-launcher {
+    display: inline-flex;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * 2. Workspace empty-state icon
+ *
+ * Stock Open WebUI anchors its Workspace empty states (Models, Knowledge,
+ * Prompts, Tools, and the admin Functions and Models panels) on a large
+ * confused-face emoji. An emoji standing in for a structural icon reads as an
+ * error state and is the wrong register for a product surface, so it is
+ * replaced with the Hive mark drawn as an empty enclosure: the container with
+ * nothing in it, which is literally what the state means.
+ *
+ * SAFETY OF THIS OVERRIDE (the question a CSS hack into vendored markup has to
+ * answer). Verified against the pinned digest in docker-compose.yml by grepping
+ * the built frontend bundles:
+ *   - The glyph div always appears inside the same three-level structure,
+ *     `.flex.flex-col.justify-center.items-center.my-16.mb-24 >
+ *      .max-w-md.text-center > .text-3xl.mb-3`, at all 10 sites.
+ *   - `text-3xl mb-3` occurs exactly 10 times in the whole bundle, and every
+ *     one of those 10 is an emoji-only empty-state glyph (7x confused face,
+ *     plus one each of the notes, users, and lightning glyphs). There is no
+ *     occurrence carrying real text, so nothing legible can be blanked by the
+ *     font-size collapse below.
+ * A future digest bump could change that markup, which is why
+ * Dockerfile.open-webui now asserts the class signature still exists at build
+ * time: the override fails loudly at build rather than silently rotting, in the
+ * same spirit as the existing `! grep -q` title/suffix assertions there.
+ *
+ * All 10 sites get the same neutral mark. The emoji were differentiated per
+ * tab, but the headline beneath already says which collection is empty, and one
+ * consistent mark is more coherent than four unrelated pictographs.
+ * ─────────────────────────────────────────────────────────────────────────── */
+.flex.flex-col.justify-center.items-center.my-16.mb-24
+  > .max-w-md.text-center
+  > .text-3xl.mb-3 {
+  /* Collapses the emoji text node. Emoji render in their own colour, so
+     `color: transparent` cannot hide them; zeroing the font metrics can. */
+  font-size: 0;
+  line-height: 0;
+}
+
+.flex.flex-col.justify-center.items-center.my-16.mb-24
+  > .max-w-md.text-center
+  > .text-3xl.mb-3::before {
+  content: "";
+  display: block;
+  width: 1.75rem;
+  height: 1.75rem;
+  margin: 0 auto;
+  /* Masked rather than an <img>: the mark then inherits the surrounding text
+     colour and needs no dark-theme variant or extra request. */
+  background-color: currentColor;
+  opacity: 0.3;
+  -webkit-mask: var(--hive-empty-mark) center / contain no-repeat;
+  mask: var(--hive-empty-mark) center / contain no-repeat;
+}
+
+:root {
+  --hive-empty-mark: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20x='11'%20y='11'%20width='42'%20height='42'%20rx='11'%20fill='none'%20stroke='%23000'%20stroke-width='6'/%3E%3C/svg%3E");
+}
