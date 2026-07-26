@@ -55,9 +55,13 @@ type HTTPEmbedClient struct {
 // leave empty for backends that require no auth.
 func NewHTTPEmbedClient(baseURL, model string, reduceTo int, apiKey string) *HTTPEmbedClient {
 	return &HTTPEmbedClient{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		model:    model,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		// 60s for the same reason as edge-api's query-side embedder: LiteLLM's
+		// request_timeout is 45s and a single Qwen3 8B embedding through
+		// OpenRouter measured 35 to 40 seconds, so a 30s client budget aborted
+		// batches the upstream would have answered.
+		client:   &http.Client{Timeout: 60 * time.Second},
 		reduceTo: reduceTo,
 		apiKey:   apiKey,
 	}

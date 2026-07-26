@@ -51,9 +51,15 @@ type HTTPEmbedder struct {
 // leave empty for backends that require no auth.
 func NewHTTPEmbedder(baseURL, model string, reduceTo int, apiKey string) *HTTPEmbedder {
 	return &HTTPEmbedder{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		model:    model,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		// 60s, not 30s: LiteLLM's own request_timeout is 45s
+		// (deploy/litellm/config.yaml), so a 30s client budget gave up before
+		// the upstream it is waiting on had. A single Qwen3 8B embedding
+		// through OpenRouter measured 35 to 40 seconds on the demo stack, so
+		// every query-side embed timed out and RAG search and chat answered
+		// 503 while ingestion of the same corpus succeeded.
+		client:   &http.Client{Timeout: 60 * time.Second},
 		reduceTo: reduceTo,
 		apiKey:   apiKey,
 	}
