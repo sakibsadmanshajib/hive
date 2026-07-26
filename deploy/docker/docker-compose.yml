@@ -478,7 +478,12 @@ services:
       # OWUI_SHIM_KEY MUST be set when the open-webui profile is active. The
       # edge-api OWUI unwrap middleware only fires when this value matches
       # exactly; an empty/unset value disables the middleware and OWUI
-      # traffic will 401. Generate: openssl rand -base64 32
+      # traffic will 401. It must also be a real registered Hive API key
+      # ("hk_" prefix, row in api_keys), not an arbitrary `openssl rand`
+      # string: the unwrap middleware only rewrites requests carrying a body,
+      # so OWUI's bodyless GET /v1/models probe falls through to normal
+      # API-key auth and 401s, leaving the model dropdown empty while chat
+      # completions still work. Mint one with scripts/seed-owui-e2e-user.py.
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
@@ -549,11 +554,6 @@ services:
     depends_on:
       open-webui:
         condition: service_healthy
-    environment:
-      # Scheme users actually arrive on, forwarded to both upstreams so they
-      # build correct absolute URLs. https only when something in front of
-      # this listener terminates TLS (Cloudflare Tunnel on the demo box).
-      HIVE_CHAT_EXTERNAL_SCHEME: ${HIVE_CHAT_EXTERNAL_SCHEME:-http}
     volumes:
       - ./Caddyfile.owui:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
