@@ -5,17 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/stt"
-	"github.com/google/uuid"
 )
 
 // Capability flags used when this handler calls the routing layer.
@@ -241,29 +243,50 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Dispatch to LiteLLM.
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.litellmBaseURL+"/audio/speech", bytes.NewReader(rewrittenBody))
-	if err != nil {
+	// Dispatch to LiteLLM, retrying up to maxSpeechAttempts times if the
+	// upstream TTS backend returns a 200 with silent (all-zero) WAV sample
+	// data instead of the requested speech. This is a confirmed live defect
+	// in Groq's Orpheus TTS backend -- reproduced identically calling Groq
+	// directly and through LiteLLM's route-groq-tts, so it is not fixable by
+	// swapping providers or LiteLLM versions -- that occurs on a meaningful
+	// fraction of requests (see live_voice_integration_test.go). Retrying
+	// almost always recovers a correct clip.
+	var (
+		lastStatus int
+		lastCT     string
+		lastBody   []byte
+		success    bool
+	)
+	for attempt := 1; attempt <= maxSpeechAttempts; attempt++ {
+		statusCode, ct, respBody, err := h.fetchSpeechOnce(ctx, rewrittenBody)
+		if err != nil {
+			_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+			apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, http.StatusBadGateway, err.Error())
+			return
+		}
+		lastStatus, lastCT, lastBody = statusCode, ct, respBody
+
+		if statusCode < 200 || statusCode >= 300 {
+			break
+		}
+		if data, ok := wavDataChunk(respBody); ok && isDegenerateSilence(data) {
+			log.Printf("audio: speech synthesis attempt %d/%d for alias=%s returned silent WAV, retrying", attempt, maxSpeechAttempts, route.AliasID)
+			continue
+		}
+		success = true
+		break
+	}
+
+	if lastStatus < 200 || lastStatus >= 300 {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, lastStatus, string(lastBody))
+		return
+	}
+	if !success {
+		// Every attempt came back silent.
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 		code := "upstream_error"
-		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+h.masterKey)
-
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, http.StatusBadGateway, err.Error())
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
-		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, resp.StatusCode, string(upstreamBody))
+		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech synthesis is temporarily unavailable. Please retry.", &code)
 		return
 	}
 
@@ -274,16 +297,47 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		ActualCredits: 1000,
 	})
 
-	// Binary relay: copy Content-Type exactly from upstream, pipe body directly.
-	ct := resp.Header.Get("Content-Type")
-	if ct != "" {
-		w.Header().Set("Content-Type", ct)
+	// Binary relay: copy Content-Type exactly from upstream.
+	if lastCT != "" {
+		w.Header().Set("Content-Type", lastCT)
 	}
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
+	w.Header().Set("Content-Length", strconv.Itoa(len(lastBody)))
 	w.WriteHeader(http.StatusOK)
-	io.Copy(w, resp.Body) //nolint:errcheck
+	w.Write(lastBody) //nolint:errcheck
+}
+
+// maxSpeechAttempts bounds retries against the silent-WAV defect described
+// above handleSpeech's dispatch loop.
+const maxSpeechAttempts = 3
+
+// maxSpeechResponseBytes bounds how much of the upstream speech response
+// this handler buffers in memory to inspect before relaying to the client.
+// TTS clips for realistic request sizes are well under this.
+const maxSpeechResponseBytes = 25 << 20
+
+// fetchSpeechOnce makes one dispatch attempt to LiteLLM's /audio/speech and
+// returns the upstream status, Content-Type, and buffered body. err is set
+// only for request-construction or transport/read failures; a non-2xx
+// upstream status is returned as a normal (status, body) pair, not an error.
+func (h *Handler) fetchSpeechOnce(ctx context.Context, rewrittenBody []byte) (statusCode int, contentType string, body []byte, err error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.litellmBaseURL+"/audio/speech", bytes.NewReader(rewrittenBody))
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("build upstream speech request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+h.masterKey)
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return 0, "", nil, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxSpeechResponseBytes))
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("read upstream speech response: %w", err)
+	}
+	return resp.StatusCode, resp.Header.Get("Content-Type"), respBody, nil
 }
 
 // handleTranscription processes POST /v1/audio/transcriptions.
