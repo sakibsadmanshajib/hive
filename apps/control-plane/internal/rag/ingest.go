@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 )
 
 // EmbedClient calls the local embedding service (bge-m3 via Ollama/LiteLLM).
@@ -158,9 +162,19 @@ func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float
 	return out, nil
 }
 
+// ingestRepo is the slice of *Repo the Ingester needs. It exists so the
+// ingest tests drive the real Ingest method against a fake store; while the
+// dependency was the concrete *Repo the tests had to re-implement Ingest, and
+// a provenance bug in the real code passed a green suite.
+type ingestRepo interface {
+	UpdateDocumentStatus(ctx context.Context, tenantID, docID uuid.UUID, status, errMsg string) error
+	InsertChunks(ctx context.Context, tenantID, docID uuid.UUID, chunks []Chunk, embeddings [][]float32) error
+	SetEmbeddedProvenance(ctx context.Context, tenantID, docID uuid.UUID, model string, dim int) error
+}
+
 // Ingester chunks a document, embeds each chunk, and stores results.
 type Ingester struct {
-	repo  *Repo
+	repo  ingestRepo
 	embed EmbedClient
 	// batchSize controls how many chunks are embedded in one HTTP call.
 	// ponytail: global constant, tune if embed service has payload limits.
@@ -175,7 +189,7 @@ type Ingester struct {
 // is stamped onto every document as provenance (paired with the current
 // EmbeddingDimension) so a later model swap can find which documents still
 // need re-embedding.
-func NewIngester(repo *Repo, embed EmbedClient, batchSize int, embedModel string) *Ingester {
+func NewIngester(repo ingestRepo, embed EmbedClient, batchSize int, embedModel string) *Ingester {
 	if batchSize <= 0 {
 		batchSize = 32
 	}
@@ -215,8 +229,13 @@ func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ Stri
 	}
 	embeddings, err := embedInBatches(ctx, ing.embed, texts, ing.batchSize)
 	if err != nil {
+		// The document-facing status message stays provider-blind; the wrapped
+		// cause is for the server-side log only (the ingest HTTP boundary logs
+		// it and returns a generic body). Swallowing it here left every embed
+		// failure, from an unsupported request field to a width mismatch,
+		// indistinguishable in the logs.
 		_ = ing.repo.UpdateDocumentStatus(ctx, tid, did, StatusError, "embedding service unavailable")
-		return fmt.Errorf("rag.ingest: embed batch: embedding service unavailable")
+		return fmt.Errorf("rag.ingest: embed batch: %w", err)
 	}
 
 	if err := ing.repo.InsertChunks(ctx, tid, did, chunks, embeddings); err != nil {
@@ -224,5 +243,11 @@ func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ Stri
 		return fmt.Errorf("rag.ingest: store chunks: %w", err)
 	}
 
-	return ing.repo.SetEmbeddedProvenance(ctx, tid, did, ing.embedModel, EmbeddingDimension)
+	// Canonicalize exactly as reembed.go does. EMBEDDING_MODEL is usually a
+	// LiteLLM route alias, while the re-embed worker selects and stamps the
+	// canonical registry id, so stamping the raw alias here made every fresh
+	// document look stale to the catch-up worker (needless paid re-embedding on
+	// the next boot) and made edge-api's consistency guard fail search and chat
+	// closed for a corpus that was in fact consistent.
+	return ing.repo.SetEmbeddedProvenance(ctx, tid, did, embedmodel.Canonical(ing.embedModel), EmbeddingDimension)
 }

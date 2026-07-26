@@ -172,6 +172,12 @@ func (r *Repo) DeleteDocument(ctx context.Context, tenantID, docID uuid.UUID) (b
 // against those chunks would silently mix two incompatible vector spaces.
 // The handler uses this to fail RAG search closed instead (WithEmbeddingGuard);
 // this package does not re-embed anything (PR2).
+//
+// model is canonicalized before the comparison, the same way the control-plane
+// ingest and re-embed paths canonicalize before stamping provenance. Without it
+// a process configured with the LiteLLM route alias compared alias against the
+// canonical id every stored row holds and failed every request closed for a
+// corpus that was in fact embedded under exactly this model.
 func (r *Repo) EmbeddingMismatch(ctx context.Context, tenantID uuid.UUID, model string, dim int) (bool, error) {
 	var mismatch bool
 	err := r.withTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -180,7 +186,7 @@ func (r *Repo) EmbeddingMismatch(ctx context.Context, tenantID uuid.UUID, model 
 				SELECT 1 FROM public.rag_documents
 				WHERE status = 'embedded' AND (embedding_model != $1 OR embedding_dim != $2)
 			)`,
-			model, dim,
+			embedmodel.Canonical(model), dim,
 		).Scan(&mismatch)
 	})
 	if err != nil {
