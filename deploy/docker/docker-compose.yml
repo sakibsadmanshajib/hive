@@ -310,6 +310,25 @@ services:
       LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
       LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
+      # Agent task execution (issue #305). See .env.example for the full
+      # explanation: buildAgentEngine (cmd/server/main.go) needs all five of
+      # these non-empty to launch real Apptainer sandboxes; any empty and
+      # tasks stay queued forever by design (agenttask.NotConfiguredEngine).
+      # These were previously documented in .env.example but never forwarded
+      # into this container's environment, so setting them in .env alone did
+      # nothing. Forwarding them here is necessary but not sufficient: this
+      # service still runs inside a golang:1.24-alpine dev container, which
+      # cannot exec the host's Apptainer directly (glibc-linked binary, no
+      # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
+      # privilege on the service holding Stripe/Supabase/payment secrets).
+      # Real sandbox launches require control-plane to run as a bare host
+      # process on whatever box executes agent tasks, not this container.
+      HIVE_AGENT_ENGINE_SIF_PATH: ${HIVE_AGENT_ENGINE_SIF_PATH:-}
+      HIVE_AGENT_ENGINE_PACKS_DIR: ${HIVE_AGENT_ENGINE_PACKS_DIR:-}
+      HIVE_AGENT_ENGINE_WORKSPACE_ROOT: ${HIVE_AGENT_ENGINE_WORKSPACE_ROOT:-}
+      HIVE_AGENT_ENGINE_RUN_DIR: ${HIVE_AGENT_ENGINE_RUN_DIR:-}
+      HIVE_AGENT_ENGINE_PROFILE_ID: ${HIVE_AGENT_ENGINE_PROFILE_ID:-}
+      HIVE_AGENT_ENGINE_SESSION_API_KEY: ${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 5s
@@ -447,14 +466,37 @@ services:
       # Supabase 302s straight back with error=invalid_request.
       OAUTH_CODE_CHALLENGE_METHOD: "S256"
       ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
-      # owui_role (not the JWT's tenant-authorization 'role' claim) --
-      # OWNER maps to ADMIN here; supabase/migrations/20260726_01_owui_role_claim.sql.
+      # #457: this claim path never actually resolves anything. Confirmed
+      # live (DEBUG logs, both the shared-runner nightly and the physical
+      # demo box): Supabase's OAuth Authorization Server issues a minimal
+      # third-party OIDC id_token for external relying parties like Open
+      # WebUI -- standard OIDC claims only, no custom owui_role claim (that
+      # only reaches GoTrue's own first-party session tokens, not this
+      # OAuth-provider token path) and no user_metadata either (tried and
+      # also confirmed empty). So every OAuth login after Open WebUI's own
+      # unconditional first-user-becomes-admin bypass silently fell through
+      # to DEFAULT_USER_ROLE -- PR #451's claim fix only ever appeared to
+      # work because of that first-user bypass, never because the claim
+      # itself resolved. Left wired to the original claim name in case a
+      # future Supabase change ever starts including it; the real fix is
+      # Dockerfile.open-webui's tenant-role-from-Postgres patch, which
+      # looks the role up directly instead of depending on this claim.
       OAUTH_ROLES_CLAIM: "owui_role"
       OAUTH_ALLOWED_ROLES: "ADMIN,MEMBER,VIEWER"
       OAUTH_ADMIN_ROLES: "ADMIN"
       ENABLE_OAUTH_GROUP_MANAGEMENT: "true"
       OAUTH_GROUPS_CLAIM: "tenants"
-      DEFAULT_USER_ROLE: "MEMBER"
+      # Valid Open WebUI role enum is pending/user/admin (lowercase) --
+      # "MEMBER" was never one of them (open_webui.utils.auth's
+      # get_verified_user gate blocks every role that isn't literally
+      # "user" or "admin", so an invalid value like "MEMBER" behaved
+      # identically to "pending": permanently stuck on Account Activation
+      # Pending). This is now only a fallback for a user with zero active
+      # tenant membership (the trigger above never fires for them), so
+      # "pending" -- Open WebUI's own upstream default -- is correct: an
+      # unaffiliated login should land on the pending-activation screen,
+      # not be silently granted app access.
+      DEFAULT_USER_ROLE: "pending"
       ENABLE_ADMIN_PANEL: "false"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
@@ -529,10 +571,13 @@ services:
       # forest-green outline + inner cell); sizes are not per-purpose
       # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
       # size, not the ideal one for each use). No dark-mode splash variant --
-      # same asset for both. custom.css and loader.js are seeded (see those
-      # files) purely so index.html's unconditional <link>/<script> tags for
-      # them stop 404ing; both are intentionally near-empty. Known gap:
-      # FONTS_DIR under STATIC_DIR is still unseeded.
+      # same asset for both. custom.css and loader.js are the only supported
+      # hooks for changing a pinned, unforked Open WebUI image, and both now
+      # carry real overrides: the agent-workspace launcher in OWUI's header
+      # band, and a replacement for the emoji glyph upstream uses to anchor its
+      # Workspace empty states. Dockerfile.open-webui asserts the markup
+      # contract the second override depends on. Known gap: FONTS_DIR under
+      # STATIC_DIR is still unseeded.
       - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
@@ -707,6 +752,7 @@ services:
     volumes:
       - ../../deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../../deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../../deploy/prometheus/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
