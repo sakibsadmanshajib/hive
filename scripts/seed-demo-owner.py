@@ -29,10 +29,20 @@ existing local OWUI test account (asdas@asdas.sda / asdas) for the chat
 surface demo.
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+Optional env: HIVE_DEMO_PASSWORD -- set the account's password to this value.
 
-Prints exactly two lines to stdout (and nothing else):
+Prints to stdout (and nothing else):
   EMAIL=<email>
-  PASSWORD=<password>
+  PASSWORD=<password>   only when this run actually set a password
+
+A PASSWORD line appears when the account was created by this run, or when
+HIVE_DEMO_PASSWORD was provided. For an account that already exists and no
+HIVE_DEMO_PASSWORD, the password is left untouched and no PASSWORD line is
+printed, because this run does not know it. See password_to_set for why the
+default is no longer to rotate. Callers that need a credential must either pass
+HIVE_DEMO_PASSWORD or already hold one; a caller that reads PASSWORD
+unconditionally will see the line disappear rather than receive a stale value.
+
 Everything else (progress, ids, errors) goes to stderr.
 """
 import json
@@ -105,6 +115,28 @@ def random_password() -> str:
     # policy with room to spare, well under bcrypt's 72-byte limit.
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
     return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
+
+
+def password_to_set(user_exists: bool, env_password: str) -> str | None:
+    """The password this run should write, or None to leave it untouched.
+
+    This script used to rotate unconditionally so that no run reused a prior
+    credential. That was correct while a single operator ran it. Several agents
+    now share this account concurrently, and because the control-plane resolves
+    every bearer against GoTrue on each request, a rotation revokes their live
+    sessions mid-task. It happened repeatedly in one session.
+
+    So the default is now to leave an existing account alone, and a caller that
+    genuinely wants to set the password says so through HIVE_DEMO_PASSWORD.
+    A brand-new account still gets a fresh random password, since there is no
+    session to break and no credential to preserve.
+    """
+    env_password = env_password.strip()
+    if env_password:
+        return env_password
+    if not user_exists:
+        return random_password()
+    return None
 
 
 def find_by_slug(rest, headers, table, slug):
@@ -203,7 +235,7 @@ def main() -> None:
         None,
     )
 
-    password = random_password()
+    password = password_to_set(existing_user is not None, os.environ.get("HIVE_DEMO_PASSWORD", ""))
     if existing_user is None:
         status, body = request(
             gotrue, headers, "POST", "/admin/users",
@@ -215,13 +247,19 @@ def main() -> None:
         user_id = body["id"]
     else:
         user_id = existing_user["id"]
-        # Password rotates every run so no run reuses a prior credential.
-        status, body = request(
-            gotrue, headers, "PUT", f"/admin/users/{user_id}", body={"password": password},
-        )
-        if status != 200:
-            print(f"error: user update failed: {status} {body}", file=sys.stderr)
-            sys.exit(1)
+        if password is None:
+            print(
+                "password left unchanged (set HIVE_DEMO_PASSWORD to change it); "
+                "existing sessions stay valid",
+                file=sys.stderr,
+            )
+        else:
+            status, body = request(
+                gotrue, headers, "PUT", f"/admin/users/{user_id}", body={"password": password},
+            )
+            if status != 200:
+                print(f"error: user update failed: {status} {body}", file=sys.stderr)
+                sys.exit(1)
     print(f"user_id={user_id}", file=sys.stderr)
 
     # 2. Guard + upsert the demo tenant. slug is user-chosen; an
@@ -398,7 +436,8 @@ def main() -> None:
             sys.exit(1)
 
     print(f"EMAIL={USER_EMAIL}")
-    print(f"PASSWORD={password}")
+    if password is not None:
+        print(f"PASSWORD={password}")
 
 
 if __name__ == "__main__":

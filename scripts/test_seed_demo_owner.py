@@ -89,7 +89,21 @@ def main() -> None:
         "demo-user",
     )
 
-    print("ok: seed-demo-owner.py slug-collision guards")
+    # password_to_set: an account that already exists keeps its password unless
+    # the caller explicitly supplies one. Rotating it revokes every live session
+    # for the shared demo account, which broke concurrent agents repeatedly.
+    assert seed_demo_owner.password_to_set(True, "") is None
+    assert seed_demo_owner.password_to_set(True, "  ") is None
+    assert seed_demo_owner.password_to_set(True, "explicit-pw") == "explicit-pw"
+    assert seed_demo_owner.password_to_set(False, "explicit-pw") == "explicit-pw"
+
+    # A brand-new account has no session to break and no credential to keep, so
+    # it still gets a fresh random password.
+    generated = seed_demo_owner.password_to_set(False, "")
+    assert generated is not None and len(generated) == 28
+    assert generated != seed_demo_owner.password_to_set(False, "")
+
+    print("ok: seed-demo-owner.py slug-collision guards + password_to_set")
 
 
 if __name__ == "__main__":
