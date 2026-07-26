@@ -59,3 +59,18 @@ RUN set -eu; \
       exit 1; \
     fi; \
     echo "empty-state override: $hits emoji-only glyph site(s) confirmed"
+
+# #457: Supabase's third-party OIDC id_token (used for the "Continue with
+# Hive" OAuth login) carries only minimal standard OIDC claims -- no
+# custom owui_role claim, no user_metadata -- so Open WebUI's own
+# OAUTH_ROLES_CLAIM machinery can never resolve a real tenant role for
+# any login after its own first-ever-user bypass, permanently stranding
+# every other user on Account Activation Pending (confirmed live against
+# the physical demo box). psycopg2 and a working Postgres connection
+# string (PGVECTOR_DB_URL) already exist in this image for pgvector, so
+# splice in a direct tenant-role lookup instead of trying to route this
+# through OAuth claims Supabase's third-party token flow will never carry.
+COPY deploy/docker/owui-patches/tenant_role_from_db.py /tmp/tenant_role_from_db.py
+COPY deploy/docker/owui-patches/apply_tenant_role_patch.py /tmp/apply_tenant_role_patch.py
+RUN python3 /tmp/apply_tenant_role_patch.py \
+    && grep -q 'hive tenant-role lookup failed' /app/backend/open_webui/utils/oauth.py
