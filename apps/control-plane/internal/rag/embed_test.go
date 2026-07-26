@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
@@ -45,10 +46,16 @@ func TestReduceEmbeddingNoop(t *testing.T) {
 
 // TestHTTPEmbedClientTruncates drives a fake 4096-dim backend through
 // HTTPEmbedClient with reduceTo=1024 and expects a 1024-dim result per item.
+// It also guards against reintroducing the `dimensions` request parameter:
+// LiteLLM's generic openai adapter rejects it for any model name without
+// "text-embedding-3" and ignores drop_params, which failed every ingest.
 func TestHTTPEmbedClientTruncates(t *testing.T) {
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req embedRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &req)
+		_ = json.Unmarshal(raw, &gotBody)
 		vec := make([]float32, 4096)
 		for i := range vec {
 			vec[i] = 0.01
@@ -70,6 +77,9 @@ func TestHTTPEmbedClientTruncates(t *testing.T) {
 	}
 	if len(vecs) != 2 {
 		t.Fatalf("len(vecs) = %d, want 2", len(vecs))
+	}
+	if _, present := gotBody["dimensions"]; present {
+		t.Error("request body carried a dimensions field; LiteLLM's openai adapter 400s on it")
 	}
 	for i, v := range vecs {
 		if len(v) != EmbeddingDimension {

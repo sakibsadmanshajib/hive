@@ -55,17 +55,16 @@ func TestReduceEmbeddingNoop(t *testing.T) {
 	}
 }
 
-// TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions drives a fake backend
-// that ignores `dimensions` and returns 4096-dim; the client-side MRL reduce
-// fallback must bring it to EmbeddingDimension. It also asserts the client
-// asked for the narrower width via `dimensions` (preferred endpoint-native).
-func TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions(t *testing.T) {
-	var gotDims int
+// TestHTTPEmbedderNeverRequestsDimensions is the regression guard for the
+// LiteLLM 400: its generic openai adapter rejects `dimensions` for any model
+// name without "text-embedding-3" and ignores drop_params, so sending the
+// parameter failed every embedding call. The narrower width must be reached by
+// reducing the native-width response client-side instead.
+func TestHTTPEmbedderNeverRequestsDimensions(t *testing.T) {
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req embedReq
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		gotDims = req.Dimensions
-		vec := make([]float32, 4096) // endpoint ignores dimensions, returns native
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		vec := make([]float32, 4096) // native width, as the provider serves it
 		for i := range vec {
 			vec[i] = 0.01
 		}
@@ -82,22 +81,21 @@ func TestHTTPEmbedderReducesWhenEndpointIgnoresDimensions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Embed() error = %v", err)
 	}
-	if gotDims != 1024 {
-		t.Errorf("requested dimensions = %d, want 1024 (endpoint-native preferred)", gotDims)
+	if _, present := gotBody["dimensions"]; present {
+		t.Error("request body carried a dimensions field; LiteLLM's openai adapter 400s on it")
 	}
 	if len(vec) != EmbeddingDimension {
 		t.Errorf("len = %d, want %d", len(vec), EmbeddingDimension)
 	}
 }
 
-// TestHTTPEmbedderEndpointHonorsDimensions covers the preferred path: the
-// endpoint honors `dimensions` and returns EmbeddingDimension natively, so the
-// client-side reduce is a no-op and the strict width check passes.
-func TestHTTPEmbedderEndpointHonorsDimensions(t *testing.T) {
+// TestHTTPEmbedderAcceptsBackendAtTargetWidth covers a backend that already
+// serves the model at the configured width (a local bge-m3 endpoint, or a
+// provider serving Qwen3 reduced): the client-side reduce is a no-op and the
+// strict width check passes.
+func TestHTTPEmbedderAcceptsBackendAtTargetWidth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req embedReq
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		vec := make([]float32, req.Dimensions) // honor the requested width
+		vec := make([]float32, EmbeddingDimension)
 		for i := range vec {
 			vec[i] = 0.02
 		}

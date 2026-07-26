@@ -12,9 +12,9 @@ import (
 // fakeEmbedClient returns a fixed 1024-dim vector for every input.
 // Structurally valid: slice of the correct length, no unsafe casts.
 type fakeEmbedClient struct {
-	calls   int
-	failOn  int // if > 0, return error on this call index (1-based)
-	lastIn  []string
+	calls  int
+	failOn int // if > 0, return error on this call index (1-based)
+	lastIn []string
 }
 
 func (f *fakeEmbedClient) Embed(_ context.Context, inputs []string) ([][]float32, error) {
@@ -34,13 +34,23 @@ func (f *fakeEmbedClient) Embed(_ context.Context, inputs []string) ([][]float32
 	return out, nil
 }
 
-// fakeRepo records calls without a real DB.
+// fakeRepo records calls without a real DB. It satisfies ingestRepo, so the
+// tests below drive the real Ingester.Ingest rather than a copy of it.
 type fakeRepo struct {
-	inserted      []Document
-	statusUpdates []string
-	chunks        []Chunk
-	embeddings    [][]float32
-	getErr        error
+	inserted        []Document
+	statusUpdates   []string
+	chunks          []Chunk
+	embeddings      [][]float32
+	getErr          error
+	provenanceModel string
+	provenanceDim   int
+}
+
+func (f *fakeRepo) SetEmbeddedProvenance(_ context.Context, _, _ uuid.UUID, model string, dim int) error {
+	f.statusUpdates = append(f.statusUpdates, StatusEmbedded)
+	f.provenanceModel = model
+	f.provenanceDim = dim
+	return nil
 }
 
 func (f *fakeRepo) InsertDocument(_ context.Context, d Document) (uuid.UUID, error) {
@@ -59,26 +69,18 @@ func (f *fakeRepo) InsertChunks(_ context.Context, _, _ uuid.UUID, chunks []Chun
 	return nil
 }
 
-// ingestableRepo adapts fakeRepo to the Ingester's Repo dependency.
-// Ingester calls repo.UpdateDocumentStatus and repo.InsertChunks via the real *Repo type.
-// We test the Ingester logic independently by calling the unexported helpers through
-// a thin wrapper that satisfies the same method signatures.
-
 // TestIngester_HappyPath verifies chunking + embedding + storage flow.
 func TestIngester_HappyPath(t *testing.T) {
 	embed := &fakeEmbedClient{}
 	repo := &fakeRepo{}
 
-	// Build a real Repo-shaped struct indirectly via the exported Ingester
-	// by providing a thin test harness that exposes the needed methods.
-	// Since Ingester holds *Repo (concrete), we test via ingesterHarness.
-	harness := newIngesterHarness(repo, embed)
+	ing := NewIngester(repo, embed, 0, "route-openrouter-embedding-fallback")
 
 	tenantID := uuid.New()
 	docID := uuid.New()
 	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 60)
 
-	err := harness.Ingest(context.Background(), tenantID, docID, text)
+	err := ing.Ingest(context.Background(), tenantID, docID, text)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -112,13 +114,37 @@ func TestIngester_HappyPath(t *testing.T) {
 	}
 }
 
+// TestIngester_StampsCanonicalProvenance pins the provenance spelling.
+// EMBEDDING_MODEL is normally a LiteLLM route alias, while the re-embed worker
+// selects and stamps the canonical registry id. Stamping the raw alias made
+// every fresh document look stale to the catch-up worker and tripped edge-api's
+// consistency guard, which failed RAG search and chat closed for a corpus that
+// was embedded under exactly the configured model.
+func TestIngester_StampsCanonicalProvenance(t *testing.T) {
+	embed := &fakeEmbedClient{}
+	repo := &fakeRepo{}
+	ing := NewIngester(repo, embed, 0, "route-openrouter-embedding-fallback")
+
+	if err := ing.Ingest(context.Background(), uuid.New(), uuid.New(),
+		strings.Repeat("Grounding content. ", 50)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if want := "qwen3-embedding-8b"; repo.provenanceModel != want {
+		t.Errorf("provenance model = %q, want canonical %q", repo.provenanceModel, want)
+	}
+	if repo.provenanceDim != EmbeddingDimension {
+		t.Errorf("provenance dim = %d, want %d", repo.provenanceDim, EmbeddingDimension)
+	}
+}
+
 // TestIngester_EmbedFailure verifies provider-blind error propagation and status=error.
 func TestIngester_EmbedFailure(t *testing.T) {
 	embed := &fakeEmbedClient{failOn: 1}
 	repo := &fakeRepo{}
-	harness := newIngesterHarness(repo, embed)
+	ing := NewIngester(repo, embed, 0, "route-openrouter-embedding-fallback")
 
-	err := harness.Ingest(context.Background(), uuid.New(), uuid.New(),
+	err := ing.Ingest(context.Background(), uuid.New(), uuid.New(),
 		strings.Repeat("Some content. ", 50))
 	if err == nil {
 		t.Fatal("expected error from embed failure")
@@ -143,9 +169,9 @@ func TestIngester_EmbedFailure(t *testing.T) {
 func TestIngester_EmptyText(t *testing.T) {
 	embed := &fakeEmbedClient{}
 	repo := &fakeRepo{}
-	harness := newIngesterHarness(repo, embed)
+	ing := NewIngester(repo, embed, 0, "route-openrouter-embedding-fallback")
 
-	err := harness.Ingest(context.Background(), uuid.New(), uuid.New(), "")
+	err := ing.Ingest(context.Background(), uuid.New(), uuid.New(), "")
 	if err == nil {
 		t.Fatal("expected error for empty text")
 	}
@@ -156,70 +182,16 @@ func TestIngester_BatchBoundary(t *testing.T) {
 	embed := &fakeEmbedClient{}
 	repo := &fakeRepo{}
 	// batchSize=1 forces one embed call per chunk; we need >= 3 chunks.
-	harness := newIngesterHarnessWithBatch(repo, embed, 1)
+	ing := NewIngester(repo, embed, 1, "route-openrouter-embedding-fallback")
 
 	// Build text long enough to produce multiple chunks at DefaultChunkTokens.
 	// DefaultChunkTokens=512 => ~2048 chars per chunk. 20000 chars => ~10 chunks.
 	text := strings.Repeat("The quick brown fox jumps over the lazy dog. ", 450)
-	err := harness.Ingest(context.Background(), uuid.New(), uuid.New(), text)
+	err := ing.Ingest(context.Background(), uuid.New(), uuid.New(), text)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if embed.calls < 2 {
 		t.Errorf("expected >= 2 embed calls for batchSize=1, got %d", embed.calls)
 	}
-}
-
-// --- thin ingester harness so we can inject fakeRepo without a real pgxpool ---
-
-type ingesterHarness struct {
-	repo  *fakeRepo
-	embed EmbedClient
-	batch int
-}
-
-func newIngesterHarness(r *fakeRepo, e EmbedClient) *ingesterHarness {
-	return &ingesterHarness{repo: r, embed: e, batch: 32}
-}
-
-func newIngesterHarnessWithBatch(r *fakeRepo, e EmbedClient, batch int) *ingesterHarness {
-	return &ingesterHarness{repo: r, embed: e, batch: batch}
-}
-
-func (h *ingesterHarness) Ingest(ctx context.Context, tenantID, docID uuid.UUID, text string) error {
-	if err := h.repo.UpdateDocumentStatus(ctx, tenantID, docID, StatusProcessing, ""); err != nil {
-		return err
-	}
-
-	chunks := ChunkText(text, DefaultChunkTokens, DefaultOverlapTokens)
-	if len(chunks) == 0 {
-		_ = h.repo.UpdateDocumentStatus(ctx, tenantID, docID, StatusError, "document produced no text chunks")
-		return errors.New("rag.ingest: document produced no text chunks")
-	}
-
-	embeddings := make([][]float32, 0, len(chunks))
-	for start := 0; start < len(chunks); start += h.batch {
-		end := start + h.batch
-		if end > len(chunks) {
-			end = len(chunks)
-		}
-		batch := chunks[start:end]
-		texts := make([]string, len(batch))
-		for i, c := range batch {
-			texts[i] = c.Content
-		}
-		vecs, err := h.embed.Embed(ctx, texts)
-		if err != nil {
-			_ = h.repo.UpdateDocumentStatus(ctx, tenantID, docID, StatusError, "embedding service unavailable")
-			return errors.New("rag.ingest: embed batch: embedding service unavailable")
-		}
-		embeddings = append(embeddings, vecs...)
-	}
-
-	if err := h.repo.InsertChunks(ctx, tenantID, docID, chunks, embeddings); err != nil {
-		_ = h.repo.UpdateDocumentStatus(ctx, tenantID, docID, StatusError, "chunk storage failed")
-		return err
-	}
-
-	return h.repo.UpdateDocumentStatus(ctx, tenantID, docID, StatusEmbedded, "")
 }

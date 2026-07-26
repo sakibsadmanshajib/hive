@@ -54,6 +54,21 @@ Set `HIVE_AGENT_SIF_PATH` in `.env` to the resulting `.sif` path.
 | Caddy (OWUI proxy) | http://localhost:8090 | loads |
 | Artifacts | via caddy-artifacts | static served |
 
+RAG needs more than a health check, because its failure modes are silent
+(a document lands with `status=error`, or search answers 503, while every
+service still reports healthy). Prove the whole path instead:
+
+```bash
+export EDGE_API_URL=http://localhost:8080   # or the deployed edge origin
+python3 scripts/verify-rag-roundtrip.py     # needs the SUPABASE_* vars from .env
+```
+
+It uploads a document with a unique marker, waits for embedding, then requires
+the marker back out of vector search and out of the grounded answer. Prints
+PASS or the first step that could not be proven. Note that the serverless
+embedding route is slow and uneven, so the script retries each step a few
+times and prints every attempt.
+
 Do not present until all are green.
 
 ## Demo walkthrough (per surface)
