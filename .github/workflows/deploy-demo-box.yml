@@ -23,6 +23,8 @@ on:
       - 'apps/edge-api/**'
       - 'apps/control-plane/**'
       - 'apps/agent-console/**'
+      - 'apps/agent-engine/**'
+      - 'packages/**'
       - 'deploy/docker/**'
       - 'deploy/litellm/**'
       - '.github/workflows/deploy-demo-box.yml'
