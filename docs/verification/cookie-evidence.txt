@@ -1,0 +1,31 @@
+url_after_sign_in: http://web-console-prod:3000/console
+
+cookie_after_sign_in: {
+  "name": "sb-yimgflllgdsbcibnaxqe-auth-token",
+  "domain": "web-console-prod",
+  "path": "/",
+  "httpOnly": false,
+  "secure": false,
+  "sameSite": "Lax",
+  "expires": 1819657027.620307,
+  "value_length": 3117,
+  "value_prefix": "base64-eyJhY2Nlc",
+  "value_suffix": "N3b3JkIjpudWxsfQ"
+}
+
+url_after_reload: http://web-console-prod:3000/console
+
+cookie_after_reload: {
+  "name": "sb-yimgflllgdsbcibnaxqe-auth-token",
+  "domain": "web-console-prod",
+  "path": "/",
+  "httpOnly": false,
+  "secure": false,
+  "sameSite": "Lax",
+  "expires": 1819657027.620307,
+  "value_length": 3117,
+  "value_prefix": "base64-eyJhY2Nlc",
+  "value_suffix": "N3b3JkIjpudWxsfQ"
+}
+
+cookie_survived_reload: true
