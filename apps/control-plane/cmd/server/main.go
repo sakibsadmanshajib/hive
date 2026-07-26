@@ -18,6 +18,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
@@ -73,6 +74,10 @@ import (
 	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
+
+// metricsListenAddr is the address of the telemetry-only listener that serves
+// /metrics, kept off the public listener so the Prometheus series stay internal.
+const metricsListenAddr = ":9101"
 
 // ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
 // interface (which returns only error, discarding the LedgerEntry return value).
@@ -740,8 +745,8 @@ func main() {
 		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
 	}
 
-	// Build Prometheus metrics registry before the router so /metrics and
-	// instrumentation middleware are wired in together.
+	// Build Prometheus metrics registry before the router so the instrumentation
+	// middleware and the telemetry listener share one registry.
 	metricsRegistry, promRegistry := metrics.NewRegistry()
 
 	// Create the mux upfront so filestore.RegisterRoutes (which requires *http.ServeMux)
@@ -872,7 +877,6 @@ func main() {
 		RoutingHandler:          routingHandler,
 		UsageHandler:            usageHandler,
 		MetricsRegistry:         metricsRegistry,
-		PrometheusRegistry:      promRegistry,
 		Mux:                     routerMux,
 		InternalToken:           cfg.InternalToken,
 		RoleSvc:                 roleSvc,
@@ -1142,6 +1146,26 @@ func main() {
 	_ = owuiClient
 	_ = auditLogger
 
+	// Telemetry listener. The Prometheus series carry provider names
+	// (hive_upstream_requests_total{provider=...}), payment-rail event counts,
+	// ledger posting counts, and the full /internal/* endpoint inventory, so
+	// /metrics is kept off the public listener: cfg.Port is published to the
+	// host and routed through the ingress tunnel, this port is neither.
+	// Prometheus scrapes it over the container network.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
+	metricsSrv := &http.Server{
+		Addr:              metricsListenAddr,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		log.Printf("control-plane metrics listening on %s", metricsListenAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("metrics ListenAndServe: %v", err)
+		}
+	}()
+
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
 		Addr:         addr,
@@ -1171,6 +1195,9 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("metrics server shutdown error: %v", err)
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown error: %v", err)
 	}
