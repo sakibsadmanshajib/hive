@@ -100,7 +100,13 @@ async function main() {
     const authCookieAfterSignIn = cookiesAfterSignIn.find((c) => c.name.startsWith("sb-"));
     record(`cookie_after_sign_in: ${JSON.stringify(fingerprint(authCookieAfterSignIn), null, 2)}`);
 
-    // Proof #1: authenticated dashboard, not the sign-in form.
+    // Proof #1: authenticated dashboard, not the sign-in form. Timestamped
+    // (not just the pixels) so two genuinely separate capture calls are
+    // provable even if the dashboard itself renders pixel-identical both
+    // times (it is static: zero counters, no per-request content) --
+    // otherwise identical PNG bytes before/after reload are indistinguishable
+    // from a copy-paste bug from the outside.
+    record(`screenshot_01_taken_at: ${new Date().toISOString()}`);
     await page.screenshot({ path: `${OUT_DIR}/01-authenticated.png`, fullPage: true });
 
     // The actual regression test: middleware.ts re-validates the cookie (and
@@ -118,6 +124,7 @@ async function main() {
     record(`cookie_survived_reload: ${Boolean(authCookieAfterReload)}`);
 
     // Proof #2: still authenticated after reload, not bounced to /auth/sign-in.
+    record(`screenshot_02_taken_at: ${new Date().toISOString()}`);
     await page.screenshot({ path: `${OUT_DIR}/02-after-reload.png`, fullPage: true });
 
     writeFileSync(`${OUT_DIR}/cookie-evidence.txt`, evidenceLines.join("\n\n") + "\n");
