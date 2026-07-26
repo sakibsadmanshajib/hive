@@ -30,3 +30,10 @@ RUN sed -i "/if WEBUI_NAME != 'Open WebUI':/,+1d" /app/backend/open_webui/env.py
 # rebuild with "(Open WebUI)" branding back and no build-time signal.
 RUN sed -i 's/<title>Open WebUI<\/title>/<title>Hive<\/title>/' /app/build/index.html \
     && ! grep -q '<title>Open WebUI</title>' /app/build/index.html
+
+# ponytail: diagnostic-only for #457 live repro, reverted before the real
+# fix commit. Dumps the raw OIDC claim set get_user_role actually sees, to
+# confirm which claims Supabase's third-party OAuth id_token carries.
+RUN sed -i "/user_count = await Users.get_num_users()/a\\        log.debug(f'DIAG457 user_data keys: {sorted(user_data.keys())}')" \
+    /app/backend/open_webui/utils/oauth.py \
+    && grep -q 'DIAG457' /app/backend/open_webui/utils/oauth.py
