@@ -8,7 +8,13 @@
 # artifact's own script tries. Only the /artifacts/* serving path is
 # proxied through; the /v1/artifacts/* management API stays on the main
 # edge-api origin and is never reachable from this host.
-{$ARTIFACTS_DOMAIN:artifacts.localhost} {
+#
+# The listener is a bare port, not the domain: a hostname site address turns on
+# Caddy's automatic HTTPS, which redirects plain-HTTP requests back to itself
+# and loops forever behind an external TLS terminator (Cloudflare Tunnel).
+# ARTIFACTS_DOMAIN is bound by whatever fronts this container, same as
+# Caddyfile.owui.
+:80 {
   handle /artifacts/* {
     reverse_proxy edge-api:8080 {
       transport http {
