@@ -68,7 +68,9 @@ placeholder tenant/user, `-dry-run`, its own placeholder `-sif` path ignoring
 
 Real agent-task sandbox launches run inside the `control-plane` process
 itself via `buildAgentEngine` (`apps/control-plane/cmd/server/main.go`), gated
-on five separate `HIVE_AGENT_ENGINE_*` env vars documented in `.env.example`.
+on five required `HIVE_AGENT_ENGINE_*` env vars (plus one optional,
+`HIVE_AGENT_ENGINE_SESSION_API_KEY`) documented in `.env.example`; six total
+are forwarded below.
 `docker-compose.yml` forwards these into the `control-plane` service, but
 setting them alone is not sufficient: `control-plane` here runs inside a
 `golang:1.24-alpine` dev container, which cannot exec the host's Apptainer
