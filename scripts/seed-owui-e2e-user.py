@@ -39,10 +39,25 @@ http://localhost:3003), OWUI_ADMIN_EMAIL, OWUI_ADMIN_PASSWORD,
 EDGE_API_URL_FOR_OWUI (default http://edge-api:8080/v1 -- the docker-network
 hostname OWUI's own backend dials out to; override for a remote OWUI setup)
 
-Prints exactly three lines to stdout (and nothing else):
+Also provisions a second, throwaway "bootstrap" tenant member
+(BOOTSTRAP_EMAIL below). Open WebUI auto-promotes the very first user it
+ever sees to admin, bypassing OAUTH_ALLOWED_ROLES/OAUTH_ROLES_CLAIM
+entirely -- and the OWUI container in the nightly job is freshly created
+every run, so without a bootstrap login the real fixture user below would
+always land as that unconditional first-user admin and never actually
+exercise the owui_role allow-list gate that PR #451 fixed (every OWUI
+container start is a clean slate: no persisted volume carries a prior user
+across runs). The Playwright setup below signs the bootstrap user in and out
+first so the real fixture user is provably the second OWUI account, the same
+position every real tenant's OWNER is in once the OWUI instance already has
+at least one user.
+
+Prints exactly five lines to stdout (and nothing else):
   EMAIL=<email>
   PASSWORD=<password>
   SHIM_KEY=<hk_ api key>
+  BOOTSTRAP_EMAIL=<email>
+  BOOTSTRAP_PASSWORD=<password>
 Everything else (progress, errors) goes to stderr.
 """
 import base64
@@ -69,8 +84,18 @@ TENANT_DEPLOYMENT = "ENTERPRISE_EDGE"
 # verified live against this project's GoTrue instance that it accepts the
 # format (2026-07-03 probe, see PR description).
 USER_EMAIL = "owui-e2e@hive-e2e.invalid"
-MEMBER_ROLE = "MEMBER"
+# OWNER, not MEMBER: every self-serve tenant's first-ever user is OWNER
+# (see PR #451), and that is exactly the role OWUI's OAUTH_ALLOWED_ROLES
+# gate rejected before the owui_role claim fix. Testing OWNER here is what
+# actually exercises the incident's real path; MEMBER (the prior value)
+# never touched it.
+USER_ROLE = "OWNER"
 MEMBER_STATUS = "ACTIVE"
+# Bootstrap identity: see module docstring. Role doesn't matter -- it only
+# needs to complete one OAuth login so it, not the real fixture user,
+# absorbs Open WebUI's unconditional first-user-becomes-admin promotion.
+BOOTSTRAP_EMAIL = "owui-e2e-bootstrap@hive-e2e.invalid"
+BOOTSTRAP_ROLE = "MEMBER"
 
 
 def env(name: str) -> str:
@@ -238,6 +263,69 @@ def sync_owui_config(raw_secret: str) -> None:
         warn(str(e))
 
 
+def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, role: str) -> tuple[str, str]:
+    """Find-or-create a GoTrue user for `email`, upsert its `role` membership
+    in `tenant_id`, and rotate its password. Returns (user_id, password).
+    Shared by the real fixture user and the throwaway bootstrap user (see
+    module docstring)."""
+    # `filter=<email>` does an exact server-side match (verified live; the
+    # `email=` param is NOT supported and 500s on this GoTrue version).
+    status, body = request(gotrue, headers, "GET", "/admin/users", params={"filter": email})
+    if status != 200:
+        print(f"error: user lookup failed for {email}: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    existing = next(
+        (u for u in body.get("users", []) if u.get("email", "").lower() == email.lower()),
+        None,
+    )
+
+    password = random_password()
+    user_metadata = {"selected_tenant_id": tenant_id}
+
+    if existing is None:
+        status, body = request(
+            gotrue, headers, "POST", "/admin/users",
+            body={
+                "email": email,
+                "password": password,
+                "email_confirm": True,
+                "user_metadata": user_metadata,
+            },
+        )
+        if status not in (200, 201):
+            print(f"error: user create failed for {email}: {status} {body}", file=sys.stderr)
+            sys.exit(1)
+        user_id = body["id"]
+    else:
+        user_id = existing["id"]
+        # GoTrue's admin updateUserById MERGES user_metadata (verified
+        # live), so this only ever adds/refreshes selected_tenant_id.
+        # Password is rotated unconditionally on every run.
+        status, body = request(
+            gotrue, headers, "PUT", f"/admin/users/{user_id}",
+            body={"password": password, "user_metadata": user_metadata},
+        )
+        if status != 200:
+            print(f"error: user update failed for {email}: {status} {body}", file=sys.stderr)
+            sys.exit(1)
+
+    status, body = request(
+        rest, headers, "POST", "/tenant_users",
+        body={
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+            "role": role,
+            "status": MEMBER_STATUS,
+        },
+        params={"on_conflict": "tenant_id,user_id"},
+        prefer="resolution=merge-duplicates",
+    )
+    if status not in (200, 201, 204):
+        print(f"error: membership upsert failed for {email}: {status} {body}", file=sys.stderr)
+        sys.exit(1)
+    return user_id, password
+
+
 def main() -> None:
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
@@ -261,63 +349,16 @@ def main() -> None:
         sys.exit(1)
     tenant_id = body[0]["id"]
 
-    # 2. Find-or-create the GoTrue user. `filter=<email>` does an exact
-    # server-side match (verified live; the `email=` param is NOT
-    # supported and 500s on this GoTrue version).
-    status, body = request(gotrue, headers, "GET", "/admin/users", params={"filter": USER_EMAIL})
-    if status != 200:
-        print(f"error: user lookup failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-    existing = next(
-        (u for u in body.get("users", []) if u.get("email", "").lower() == USER_EMAIL.lower()),
-        None,
+    # 2 + 3. Provision the bootstrap user first so it -- not the real fixture
+    # user below -- absorbs Open WebUI's unconditional first-user-becomes-
+    # admin promotion (see module docstring).
+    _, bootstrap_password = provision_tenant_member(
+        rest, gotrue, headers, tenant_id, BOOTSTRAP_EMAIL, BOOTSTRAP_ROLE,
     )
 
-    password = random_password()
-    user_metadata = {"selected_tenant_id": tenant_id}
-
-    if existing is None:
-        status, body = request(
-            gotrue, headers, "POST", "/admin/users",
-            body={
-                "email": USER_EMAIL,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": user_metadata,
-            },
-        )
-        if status not in (200, 201):
-            print(f"error: user create failed: {status} {body}", file=sys.stderr)
-            sys.exit(1)
-        user_id = body["id"]
-    else:
-        user_id = existing["id"]
-        # GoTrue's admin updateUserById MERGES user_metadata (verified
-        # live), so this only ever adds/refreshes selected_tenant_id.
-        # Password is rotated unconditionally on every run.
-        status, body = request(
-            gotrue, headers, "PUT", f"/admin/users/{user_id}",
-            body={"password": password, "user_metadata": user_metadata},
-        )
-        if status != 200:
-            print(f"error: user update failed: {status} {body}", file=sys.stderr)
-            sys.exit(1)
-
-    # 3. Upsert tenant membership.
-    status, body = request(
-        rest, headers, "POST", "/tenant_users",
-        body={
-            "tenant_id": tenant_id,
-            "user_id": user_id,
-            "role": MEMBER_ROLE,
-            "status": MEMBER_STATUS,
-        },
-        params={"on_conflict": "tenant_id,user_id"},
-        prefer="resolution=merge-duplicates",
+    user_id, password = provision_tenant_member(
+        rest, gotrue, headers, tenant_id, USER_EMAIL, USER_ROLE,
     )
-    if status not in (200, 201, 204):
-        print(f"error: membership upsert failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
 
     # 4. Upsert the throwaway shim billing account (older accounts/api_keys
     # schema -- separate from the tenants/tenant_users rows above).
@@ -382,6 +423,8 @@ def main() -> None:
     print(f"EMAIL={USER_EMAIL}")
     print(f"PASSWORD={password}")
     print(f"SHIM_KEY={raw_secret}")
+    print(f"BOOTSTRAP_EMAIL={BOOTSTRAP_EMAIL}")
+    print(f"BOOTSTRAP_PASSWORD={bootstrap_password}")
 
 
 if __name__ == "__main__":
