@@ -17,8 +17,8 @@ Usage (from the repo root, on a host that can reach the stack):
     set -a; . .env; set +a
     python3 scripts/verify-control-plane.py
 
-Required env: SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY,
-CONTROL_PLANE_INTERNAL_TOKEN.
+Required env: SUPABASE_URL, SUPABASE_ANON_KEY, CONTROL_PLANE_INTERNAL_TOKEN,
+and HIVE_VERIFY_PASSWORD for the caller below.
 
 Optional env:
     HIVE_CONTROL_PLANE_URL   default http://localhost:8081
@@ -28,9 +28,14 @@ Optional env:
 
 The caller identified by HIVE_VERIFY_EMAIL must already exist and be both a
 platform admin and an OWNER of the tenant; scripts/seed-demo-owner.py
-provisions exactly that. Its password is rotated through the GoTrue admin API
-on each run, so no credential is ever passed on the command line or printed.
+provisions exactly that.
+
+This script signs in with an existing password and never rotates it. Rotating
+would revoke every live session for that account, and the control-plane
+resolves each bearer against GoTrue on every request, so a rotation here knocks
+out anyone else testing concurrently with the same account.
 """
+import base64
 import hashlib
 import json
 import os
@@ -82,30 +87,14 @@ def check(method, path, headers, want, body=None, base=None):
 def main() -> None:
     supabase = env("SUPABASE_URL").rstrip("/")
     anon = env("SUPABASE_ANON_KEY")
-    service = env("SUPABASE_SERVICE_ROLE_KEY")
     internal_token = env("CONTROL_PLANE_INTERNAL_TOKEN")
-    svc_h = {"Authorization": f"Bearer {service}", "apikey": service, "Content-Type": "application/json"}
+    password = env("HIVE_VERIFY_PASSWORD")
 
     print(f"control-plane {CP} | edge-api {EDGE} | caller {EMAIL}")
 
     print("\n== liveness ==")
     check("GET", "/health", {}, (200,))
 
-    # Resolve the caller and mint a session. The password is rotated rather than
-    # supplied so this script never needs a stored credential.
-    status, raw = http(
-        "GET", f"{supabase}/auth/v1/admin/users?" + urllib.parse.urlencode({"filter": EMAIL}), svc_h
-    )
-    if status != 200:
-        sys.exit(f"error: user lookup failed: {status} {raw[:200]}")
-    user = next((u for u in json.loads(raw).get("users", []) if u.get("email", "").lower() == EMAIL.lower()), None)
-    if user is None:
-        sys.exit(f"error: {EMAIL} does not exist; run scripts/seed-demo-owner.py first")
-
-    password = "Verify-" + os.urandom(12).hex() + "-aA1!"
-    status, raw = http("PUT", f"{supabase}/auth/v1/admin/users/{user['id']}", svc_h, {"password": password})
-    if status != 200:
-        sys.exit(f"error: password rotate failed: {status} {raw[:200]}")
     status, raw = http(
         "POST", f"{supabase}/auth/v1/token?grant_type=password",
         {"apikey": anon, "Content-Type": "application/json"},
@@ -113,16 +102,19 @@ def main() -> None:
     )
     if status != 200:
         sys.exit(f"error: sign-in failed: {status} {raw[:200]}")
-    auth = {"Authorization": f"Bearer {json.loads(raw)['access_token']}", "Content-Type": "application/json"}
+    token = json.loads(raw)["access_token"]
+    auth = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     internal = {"X-Internal-Token": internal_token, "Content-Type": "application/json"}
 
-    status, raw = http(
-        "GET", f"{supabase}/rest/v1/tenants?select=id&slug=eq.{urllib.parse.quote(TENANT_SLUG)}", svc_h
-    )
-    rows = json.loads(raw) if status == 200 else []
-    if not rows:
-        sys.exit(f"error: tenant slug {TENANT_SLUG!r} not found")
-    tenant = rows[0]["id"]
+    # custom_access_token_hook stamps tenant_id on every token it mints and
+    # refuses to mint one at all without an ACTIVE membership, so the claim is
+    # the tenant. Reading it here keeps this a caller-scoped check with no
+    # service-role key.
+    payload = token.split(".")[1]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    tenant = claims.get("tenant_id") or ""
+    if not tenant:
+        sys.exit("error: token carried no tenant_id claim; is the caller an ACTIVE tenant member?")
     print(f"caller resolved, tenant {tenant}")
 
     print("\n== account, profile and billing reads (session JWT) ==")
