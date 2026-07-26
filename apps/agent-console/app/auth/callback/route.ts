@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
+import { BASE_PATH } from "@/lib/base-path";
+
 // Mirrors apps/web-console/app/auth/callback/route.ts. No hive_verify /
 // email-verification finalize step here -- this app has no account-setup
 // flow of its own; it only needs a valid Supabase session to call edge-api.
@@ -40,9 +42,9 @@ export async function GET(request: NextRequest) {
 
     const { error } = await supabase.auth.exchangeCodeForSession(code);
     if (!error) {
-      return NextResponse.redirect(new URL("/tasks", origin));
+      return NextResponse.redirect(new URL(`${BASE_PATH}/tasks`, origin));
     }
   }
 
-  return NextResponse.redirect(new URL("/auth/sign-in", origin));
+  return NextResponse.redirect(new URL(`${BASE_PATH}/auth/sign-in`, origin));
 }

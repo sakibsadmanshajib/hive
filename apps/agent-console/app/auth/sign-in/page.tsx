@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 
+import { BASE_PATH } from "@/lib/base-path";
 import { createClient } from "@/lib/supabase/browser";
 
 export default function SignInPage() {
@@ -27,7 +28,8 @@ export default function SignInPage() {
     // Hard navigation, not router.push: forces the browser to re-issue the
     // request with the freshly-written sb-*-auth-token cookies so middleware
     // sees the session on the very next request (same fix as web-console).
-    window.location.assign("/tasks");
+    // BASE_PATH is explicit because window.location bypasses Next's basePath.
+    window.location.assign(`${BASE_PATH}/tasks`);
   }
 
   return (
