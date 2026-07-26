@@ -485,7 +485,14 @@ services:
       RAG_EMBEDDING_ENGINE: "openai"
       RAG_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       RAG_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
-      RAG_EMBEDDING_MODEL: "text-embedding-3-small"
+      # OWUI's own document RAG embeds through the Hive gateway, so this must
+      # name a Hive catalog alias (public.model_aliases), not an OpenAI model
+      # id. "text-embedding-3-small" is not in the catalog and every document
+      # upload failed alias resolution. OWUI's own embedding calls carry no
+      # request body metadata, so they cannot be unwrapped to a per-user JWT:
+      # OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for this path to
+      # authenticate at all (see scripts/seed-owui-e2e-user.py).
+      RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
       VECTOR_DB: "pgvector"
       PGVECTOR_DB_URL: ${SUPABASE_DB_URL:-}
       RAG_TOP_K: "5"

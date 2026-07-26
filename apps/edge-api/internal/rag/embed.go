@@ -29,10 +29,9 @@ type HTTPEmbedder struct {
 	// chosen dim is below its native width, else 0. It is NOT an independent
 	// operator knob (the old EMBEDDING_TRUNCATE_TO): a non-MRL model at a
 	// non-native dim is rejected at config time, so reduceTo is only ever set
-	// for a model where the reduction is legitimate. It doubles as the
-	// `dimensions` value requested from the endpoint (preferred over client
-	// slicing); when the endpoint honors it and returns a dim-wide vector, the
-	// client-side reduce is a no-op. 0 means require the native width exactly.
+	// for a model where the reduction is legitimate. The reduction is always
+	// applied client-side; see embedReq for why the `dimensions` request
+	// parameter is not sent. 0 means require the native width exactly.
 	reduceTo int
 	// apiKey authenticates to the backend (LiteLLM requires it; a local
 	// bge-m3/Ollama endpoint does not). Empty means send no Authorization header.
@@ -45,8 +44,8 @@ type HTTPEmbedder struct {
 // reduceTo: 0 to require the backend already return EmbeddingDimension;
 //
 //	otherwise the MRL reduction target (== EmbeddingDimension), derived from
-//	embedmodel.Resolve, sent to the endpoint as `dimensions` and applied
-//	client-side only if the endpoint ignores it.
+//	embedmodel.Resolve and applied client-side to the native-width vector the
+//	backend returns.
 //
 // apiKey is sent as a Bearer token when non-empty (LiteLLM's LITELLM_MASTER_KEY);
 // leave empty for backends that require no auth.
@@ -84,14 +83,18 @@ func reduceEmbedding(vec []float32, target int) []float32 {
 	return out
 }
 
+// embedReq deliberately carries no `dimensions` field. LiteLLM's generic
+// `openai/` adapter, which is how every OpenRouter embedding route is declared
+// (deploy/litellm/config.yaml), rejects `dimensions` outright for any model
+// whose name does not contain "text-embedding-3" and raises
+// UnsupportedParamsError with HTTP 400. That check ignores `drop_params`, so no
+// LiteLLM setting can make the parameter safe to send, and the whole embedding
+// route fails rather than degrading. Requesting the narrower width from the
+// endpoint bought nothing anyway: reduceEmbedding performs the identical MRL
+// truncate-and-renormalize on the native-width vector.
 type embedReq struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
-	// Dimensions requests a native N-wide vector from an MRL-capable endpoint
-	// (Qwen3 supports it). Omitted when 0 so non-MRL native-width models are
-	// unaffected. Preferred over client-side slicing; the reduceEmbedding
-	// fallback covers an endpoint that silently ignores the parameter.
-	Dimensions int `json:"dimensions,omitempty"`
 }
 
 type embedResp struct {
@@ -103,7 +106,7 @@ type embedResp struct {
 // Embed embeds a single text string and returns an EmbeddingDimension-wide vector.
 // Errors are provider-blind: no backend URL, model name, or upstream message.
 func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}, Dimensions: e.reduceTo})
+	body, err := json.Marshal(embedReq{Model: e.model, Input: []string{text}})
 	if err != nil {
 		return nil, fmt.Errorf("rag.embed: marshal: %w", err)
 	}
@@ -139,8 +142,8 @@ func (e *HTTPEmbedder) Embed(ctx context.Context, text string) ([]float32, error
 	}
 	vec := result.Data[0].Embedding
 	if e.reduceTo > 0 {
-		// No-op when the endpoint already honored `dimensions` and returned a
-		// reduceTo-wide vector; a legitimate MRL slice otherwise.
+		// Legitimate MRL slice; a no-op for a backend that already serves the
+		// model at reduceTo width.
 		vec = reduceEmbedding(vec, e.reduceTo)
 	}
 	if len(vec) != EmbeddingDimension {
