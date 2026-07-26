@@ -1,17 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 
-// basePath, kept in sync with next.config.ts's literal "/agent-workspace".
 // Verified live (docker build + curl against the production image) that
 // Next.js strips basePath from `request.nextUrl.pathname` before
 // middleware runs -- pathname-based matching below needs no prefix -- but
 // does NOT re-add it when middleware builds a redirect target via
-// `new URL(path, request.url)`. Without this prefix, redirecting to
-// "/auth/sign-in" produced a Location header of plain "/auth/sign-in",
-// which falls outside Caddy's /agent-workspace/* route entirely (see
-// deploy/docker/Caddyfile.owui) and would have been served by Open WebUI's
-// catch-all instead of this app.
-const BASE_PATH = "/agent-workspace";
+// `new URL(path, request.url)`, hence the explicit BASE_PATH below.
+import { BASE_PATH } from "@/lib/base-path";
 
 // Auth model (blueprint Step 3.1, ratified sidecar decision): this app is a
 // standalone console with its own Supabase session, not a cookie handoff

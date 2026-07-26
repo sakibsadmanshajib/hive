@@ -60,6 +60,23 @@
     }
   }
 
+  # Agent-task API on the chat origin. The task console runs in the browser
+  # and calls edge-api directly, but edge-api serves no CORS headers at all,
+  # so a cross-origin base URL (api-hive.scubed.co while the page is served
+  # from the chat host) fails preflight and the console can neither list nor
+  # start tasks. Routing these paths through this same listener makes those
+  # calls same-origin, which needs no CORS. Auth is unchanged: edge-api still
+  # validates the caller's Supabase bearer token on every request. Scoped to
+  # /v1/agent/* on purpose -- the rest of the gateway API stays off this host.
+  @agentApi path /v1/agent/*
+  reverse_proxy @agentApi edge-api:8080 {
+    header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
+    transport http {
+      response_header_timeout 60s
+      dial_timeout 5s
+    }
+  }
+
   reverse_proxy open-webui:8080 {
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
