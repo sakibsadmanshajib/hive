@@ -10,7 +10,7 @@
 package stt
 
 import (
-	"fmt"
+	"bytes"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -94,51 +94,64 @@ func (c *TieredClient) selectBackend(language string) (url, apiKey string) {
 	return strings.TrimRight(c.cfg.FasterWhisperBaseURL, "/"), c.cfg.FasterWhisperAPIKey
 }
 
-// forwardToBackend reconstructs the multipart body from r.MultipartForm (already
-// parsed by Transcribe) and streams it to the selected backend.
-// r.Body is drained after ParseMultipartForm, so we must rebuild — same pattern
-// as audio.Handler.handleMultipartAudio.
+// forwardToBackend reconstructs the multipart body from r.MultipartForm
+// (already parsed by Transcribe) and forwards it to the selected backend.
+// r.Body is drained after ParseMultipartForm, so we must rebuild.
+//
+// The body is buffered into memory rather than streamed through io.Pipe —
+// bounded by the 25MB ParseMultipartForm cap in Transcribe, so buffering the
+// whole thing is safe. Streaming through io.Pipe forces chunked
+// transfer-encoding on the outgoing request (no Content-Length is known up
+// front); at least one real STT provider accepts that request with a 200
+// but silently truncates the multipart file part instead of erroring,
+// corrupting the audio the backend actually transcribes. Buffering first
+// gives the outgoing request a real Content-Length and avoids that.
 func (c *TieredClient) forwardToBackend(w http.ResponseWriter, r *http.Request, backendBase, apiKey string) {
 	upstreamURL := backendBase + "/v1/audio/transcriptions"
 
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
 
-	go func() {
-		defer pw.Close()
-		defer mw.Close()
-		for key, values := range r.MultipartForm.Value {
-			for _, val := range values {
-				if err := mw.WriteField(key, val); err != nil {
-					pw.CloseWithError(fmt.Errorf("write field %s: %w", key, err))
-					return
-				}
+	for key, values := range r.MultipartForm.Value {
+		for _, val := range values {
+			if err := mw.WriteField(key, val); err != nil {
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild request field.", &code)
+				return
 			}
 		}
-		for fieldName, fileHeaders := range r.MultipartForm.File {
-			for _, fh := range fileHeaders {
-				f, err := fh.Open()
-				if err != nil {
-					pw.CloseWithError(fmt.Errorf("open file %s: %w", fieldName, err))
-					return
-				}
-				fw, err := mw.CreateFormFile(fieldName, fh.Filename)
-				if err != nil {
-					f.Close()
-					pw.CloseWithError(fmt.Errorf("create form file %s: %w", fieldName, err))
-					return
-				}
-				if _, err := io.Copy(fw, f); err != nil {
-					f.Close()
-					pw.CloseWithError(fmt.Errorf("copy audio %s: %w", fieldName, err))
-					return
-				}
+	}
+	for fieldName, fileHeaders := range r.MultipartForm.File {
+		for _, fh := range fileHeaders {
+			f, err := fh.Open()
+			if err != nil {
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read uploaded audio file.", &code)
+				return
+			}
+			fw, err := mw.CreateFormFile(fieldName, fh.Filename)
+			if err != nil {
 				f.Close()
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild uploaded audio file.", &code)
+				return
 			}
+			if _, err := io.Copy(fw, f); err != nil {
+				f.Close()
+				code := "invalid_request"
+				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to copy uploaded audio file.", &code)
+				return
+			}
+			f.Close()
 		}
-	}()
+	}
+	if err := mw.Close(); err != nil {
+		code := "internal_error"
+		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to finalize request body.", &code)
+		return
+	}
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, pr)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, &body)
 	if err != nil {
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build transcription request.", &code)
