@@ -18,6 +18,24 @@
 # already computed (DEFAULT_USER_ROLE) if the lookup fails or the user
 # has no active tenant membership, so a lookup/network hiccup degrades
 # to the pre-existing behaviour instead of raising.
+#
+# This Open WebUI instance is shared across every Hive tenant (one
+# instance, not one-per-tenant -- see apps/control-plane/internal/
+# signup/webhook.go's per-tenant OWUI *group* provisioning, which only
+# makes sense against a shared instance). An email-keyed lookup that
+# picks "some" active membership would let a user who owns their own
+# throwaway tenant become Open WebUI admin for everyone, regardless of
+# their role in any OTHER tenant -- a cross-tenant privilege escalation.
+# There is no tenant_id available anywhere in this OAuth callback
+# context to scope against instead: the third-party id_token carries
+# neither the owui_role claim nor user_metadata (both confirmed empty
+# above), so tenant_id would be equally unreachable via that path.
+# Given that, this only ever resolves a role when the email has EXACTLY
+# ONE active tenant membership (the actual shape of the incident: a
+# brand-new self-serve tenant's sole OWNER). Zero or more than one
+# active membership is genuinely ambiguous and must never resolve
+# toward more privilege, so both fail closed to the existing fallback
+# (DEFAULT_USER_ROLE, "pending") rather than guessing.
 try:
     import os as hive_os
 
@@ -32,13 +50,15 @@ try:
                 hive_cur.execute(
                     "SELECT tu.role FROM public.tenant_users tu "
                     "JOIN auth.users u ON u.id = tu.user_id "
-                    "WHERE lower(u.email) = lower(%s) AND tu.status = 'ACTIVE' "
-                    "ORDER BY tu.joined_at DESC LIMIT 1",
+                    "WHERE lower(u.email) = lower(%s) AND tu.status = 'ACTIVE'",
                     (hive_email,),
                 )
-                hive_row = hive_cur.fetchone()
-                if hive_row:
-                    role = 'admin' if hive_row[0] == 'OWNER' else 'user'
+                hive_rows = hive_cur.fetchall()
+                if len(hive_rows) == 1:
+                    role = 'admin' if hive_rows[0][0] == 'OWNER' else 'user'
+                # else: no membership, or more than one (ambiguous which
+                # tenant this login is for) -- leave `role` at whatever
+                # the fallback machinery above already computed.
         finally:
             hive_conn.close()
 except Exception as hive_tenant_role_error:
