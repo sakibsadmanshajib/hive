@@ -455,6 +455,9 @@ services:
       ENABLE_OAUTH_GROUP_MANAGEMENT: "true"
       OAUTH_GROUPS_CLAIM: "tenants"
       DEFAULT_USER_ROLE: "MEMBER"
+      # ponytail: diagnostic-only, temporary for #457 live repro. Removed
+      # before the real fix commit.
+      GLOBAL_LOG_LEVEL: "DEBUG"
       ENABLE_ADMIN_PANEL: "false"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
