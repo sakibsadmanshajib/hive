@@ -1977,6 +1977,21 @@
         "toolchain",
         "silent-failure"
       ]
+    },
+    {
+      "id": "console-caddy-host-mismatch-empty-200",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "error_message": "https://console-hive.scubed.co/ returned HTTP 200 with Content-Length 0 (no body, no redirect) through the Cloudflare Tunnel right after the self-hosted web-console cutover (PR #456); web-console-prod itself worked fine when curled directly inside the box",
+      "root_cause": "Caddyfile.console's site address is http://{$CONSOLE_DOMAIN:console.localhost}, a Host-matched site block. The box's .env never set CONSOLE_DOMAIN or CONSOLE_EXTERNAL_SCHEME (PR #456 introduced the vars but the box's .env predated the PR), so Caddy only matched Host: console.localhost. Cloudflare Tunnel and any real client send Host: console-hive.scubed.co, which matched no site block; Caddy's fallback response for an unmatched Host in this build is 200 empty, not 404 or connection refused, which made the failure look like a working-but-blank origin instead of a routing miss.",
+      "fix": "Append CONSOLE_DOMAIN=console-hive.scubed.co and CONSOLE_EXTERNAL_SCHEME=https to the box's .env (matching the existing HIVE_CHAT_EXTERNAL_SCHEME/ARTIFACTS_DOMAIN pattern), then docker compose --env-file ../../.env up -d --force-recreate caddy-console to pick up the new env at container-create time (a plain restart does not re-resolve compose env substitution). Verified end to end: https://console-hive.scubed.co/ -> 307 to /auth/sign-in -> 200 Hive Console page.",
+      "tags": [
+        "caddy",
+        "cloudflare-tunnel",
+        "web-console",
+        "dns-cutover",
+        "silent-failure"
+      ]
     }
   ]
 }
