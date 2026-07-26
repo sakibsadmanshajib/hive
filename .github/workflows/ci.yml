@@ -302,11 +302,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/agent-console/package-lock.json
 
-      # No package-lock.json in this app, so `npm ci` cannot run here and the
-      # setup-node npm cache has no lockfile to key on.
       - name: Install dependencies
-        run: npm install --no-audit --no-fund
+        run: npm ci
 
       - name: Type check
         run: npx tsc --noEmit

@@ -17,6 +17,7 @@ import SignInPage from "./page";
 
 describe("agent-console sign-in redirect", () => {
   const assign = vi.fn();
+  const realLocation = window.location;
 
   beforeEach(() => {
     signInResult = { error: null };
@@ -30,6 +31,13 @@ describe("agent-console sign-in redirect", () => {
 
   afterEach(() => {
     cleanup();
+    // Vitest's default per-file isolation would hand the next file a fresh
+    // jsdom window anyway, but restoring keeps this suite honest if that
+    // config ever changes.
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: realLocation,
+    });
   });
 
   function submit() {
