@@ -92,16 +92,20 @@ def main() -> None:
     # password_to_set: an account that already exists keeps its password unless
     # the caller explicitly supplies one. Rotating it revokes every live session
     # for the shared demo account, which broke concurrent agents repeatedly.
-    assert seed_demo_owner.password_to_set(True, "") is None
-    assert seed_demo_owner.password_to_set(True, "  ") is None
-    assert seed_demo_owner.password_to_set(True, "explicit-pw") == "explicit-pw"
-    assert seed_demo_owner.password_to_set(False, "explicit-pw") == "explicit-pw"
+    assert seed_demo_owner.password_to_set(True, "", "generated-pw") is None
+    assert seed_demo_owner.password_to_set(True, "  ", "generated-pw") is None
+    assert seed_demo_owner.password_to_set(True, "explicit-pw", "generated-pw") == "explicit-pw"
+    assert seed_demo_owner.password_to_set(False, "explicit-pw", "generated-pw") == "explicit-pw"
 
     # A brand-new account has no session to break and no credential to keep, so
-    # it still gets a fresh random password.
-    generated = seed_demo_owner.password_to_set(False, "")
-    assert generated is not None and len(generated) == 28
-    assert generated != seed_demo_owner.password_to_set(False, "")
+    # it still gets the freshly generated password the caller passed in.
+    assert seed_demo_owner.password_to_set(False, "", "generated-pw") == "generated-pw"
+
+    # random_password itself: length clears GoTrue minimums, prefix guarantees
+    # all four character classes, and consecutive draws differ.
+    generated = seed_demo_owner.random_password()
+    assert len(generated) == 28 and generated.startswith("Aa1!")
+    assert generated != seed_demo_owner.random_password()
 
     print("ok: seed-demo-owner.py slug-collision guards + password_to_set")
 

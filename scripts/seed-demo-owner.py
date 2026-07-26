@@ -36,9 +36,9 @@ Prints to stdout (and nothing else):
   PASSWORD=<password>   only when this run actually set a password
 
 A PASSWORD line appears when the account was created by this run, or when
-HIVE_DEMO_PASSWORD was provided. For an account that already exists and no
-HIVE_DEMO_PASSWORD, the password is left untouched and no PASSWORD line is
-printed, because this run does not know it. See password_to_set for why the
+HIVE_DEMO_PASSWORD contains a non-whitespace value. For an account that already
+exists with no such value, the password is left untouched and no PASSWORD line
+is printed, because this run does not know it. See password_to_set for why the
 default is no longer to rotate. Callers that need a credential must either pass
 HIVE_DEMO_PASSWORD or already hold one; a caller that reads PASSWORD
 unconditionally will see the line disappear rather than receive a stale value.
@@ -117,7 +117,7 @@ def random_password() -> str:
     return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
 
 
-def password_to_set(user_exists: bool, env_password: str) -> str | None:
+def password_to_set(user_exists: bool, env_password: str, new_user_password: str) -> str | None:
     """The password this run should write, or None to leave it untouched.
 
     This script used to rotate unconditionally so that no run reused a prior
@@ -128,14 +128,15 @@ def password_to_set(user_exists: bool, env_password: str) -> str | None:
 
     So the default is now to leave an existing account alone, and a caller that
     genuinely wants to set the password says so through HIVE_DEMO_PASSWORD.
-    A brand-new account still gets a fresh random password, since there is no
-    session to break and no credential to preserve.
+    A brand-new account still gets new_user_password, since there is no session
+    to break and no credential to preserve. Generation stays in the caller so
+    this selector is pure and directly assertable.
     """
     env_password = env_password.strip()
     if env_password:
         return env_password
     if not user_exists:
-        return random_password()
+        return new_user_password
     return None
 
 
@@ -235,7 +236,11 @@ def main() -> None:
         None,
     )
 
-    password = password_to_set(existing_user is not None, os.environ.get("HIVE_DEMO_PASSWORD", ""))
+    password = password_to_set(
+        existing_user is not None,
+        os.environ.get("HIVE_DEMO_PASSWORD", ""),
+        random_password(),
+    )
     if existing_user is None:
         status, body = request(
             gotrue, headers, "POST", "/admin/users",
