@@ -2067,6 +2067,86 @@
         "error-boundary",
         "authz-error-code"
       ]
+    },
+    {
+      "id": "caddy-artifacts-auto-https-redirect-loop",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "error_message": "https://artifacts-hive.scubed.co/ returns HTTP 308 with Location pointing back at itself, infinite redirect loop, curl -L hits 50-redirect cap",
+      "root_cause": "deploy/docker/Caddyfile.artifacts used a bare-hostname site address ({$ARTIFACTS_DOMAIN:artifacts.localhost} {), which triggers Caddy's automatic-HTTPS + HTTP-to-HTTPS auto-redirect. Behind Cloudflare Tunnel (or any external TLS terminator), the origin only ever receives plain HTTP, so Caddy redirects every request to https://<same-host>/ forever. A first-pass fix to bare `:80 {` stopped the loop but removed Caddy's host-header matching entirely, turning the container into a catch-all that would serve /artifacts/* content under ANY Host header -- a real regression against this file's own documented origin-isolation invariant (artifacts must stay on a separate origin from the chat/main-app domain so browser same-origin policy protects cookies). Caught by CodeRabbit + a second review bot on PR #434 before merge.",
+      "fix": "Use an explicit scheme in the site address instead: http://{$ARTIFACTS_DOMAIN:artifacts.localhost} { ... }. Caddy's automatic-HTTPS is triggered by the ABSENCE of an explicit scheme, not by the presence of a hostname -- naming http:// disables auto-HTTPS/redirect while keeping host-header matching intact. Fixed in PR #434 (sakibsadmanshajib/hive), merged 2026-07-26. Verified live against a real Cloudflare-Tunnel-fronted deployment both ways: correct Host = reaches reverse_proxy (no redirect); wrong Host = empty response, artifact content never served.",
+      "tags": [
+        "caddy",
+        "tls",
+        "cloudflare-tunnel",
+        "reverse-proxy",
+        "security-boundary",
+        "code-review-catch"
+      ]
+    },
+    {
+      "id": "caddy-bind-mount-needs-force-recreate",
+      "priority": "P2",
+      "date": "2026-07-26",
+      "error_message": "After `git pull` on a deployed box, a fixed Caddyfile still served the OLD behavior even after `docker compose build` + `up -d --no-deps` + `docker exec caddy reload`",
+      "root_cause": "Caddyfile.* is a single-file bind mount into the caddy-owui/caddy-artifacts containers (image is upstream caddy:2-alpine, no build step). `git pull` writes a NEW inode for the file; Docker's bind mount was already resolved to the OLD inode at container start, so neither `build` (no-op, nothing to build) nor a plain `up -d` (container already Running, not recreated) nor an in-container `reload` (re-reads the stale mounted path) pick up the new content.",
+      "fix": "Any Caddyfile-only change on a running box needs `docker compose ... up -d --no-deps --force-recreate <service>` specifically -- not build, not a bare up, not exec reload.",
+      "tags": [
+        "docker",
+        "caddy",
+        "bind-mount",
+        "deploy"
+      ]
+    },
+    {
+      "id": "agent-console-signin-drops-basepath",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "file": "apps/agent-console/app/auth/sign-in/page.tsx",
+      "error_message": "Sign-in to https://chat-hive.scubed.co/agent-workspace succeeded but the browser landed on Open WebUI's login page (/auth?redirect=%2Ftasks) instead of the Cowork task console",
+      "root_cause": "page.tsx called window.location.assign(\"/tasks\"). Next.js applies basePath to its own primitives (next/link, useRouter, next/navigation redirect) but NOT to raw URLs given to window.location.* or NextResponse.redirect. The bare /tasks fell outside Caddy's /agent-workspace/* matcher, so Open WebUI's catch-all reverse_proxy answered it. app/auth/callback/route.ts had the same defect on both NextResponse.redirect targets. middleware.ts had already hit this and prefixed its own redirects, making this the third occurrence of one mistake.",
+      "fix": "Extracted the literal to apps/agent-console/lib/base-path.ts and imported BASE_PATH in all three call sites (middleware.ts, sign-in page, callback route). Regression tests: app/auth/sign-in/page.test.tsx, app/auth/callback/route.test.ts. PR #438.",
+      "tags": [
+        "nextjs",
+        "basepath",
+        "caddy",
+        "agent-console",
+        "auth-redirect",
+        "open-webui"
+      ]
+    },
+    {
+      "id": "edge-api-no-cors-breaks-browser-task-console",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "file": "deploy/docker/Caddyfile.owui",
+      "error_message": "Task console showed \"Could not load tasks.\" with 10 browser CORS errors: no Access-Control-Allow-Origin on https://api-hive.scubed.co/v1/agent/tasks from origin https://chat-hive.scubed.co",
+      "root_cause": "edge-api implements NO CORS middleware at all (zero Access-Control-* headers anywhere in apps/edge-api). agent-console's task console fetches /v1/agent/tasks from the BROWSER using NEXT_PUBLIC_EDGE_API_BASE_URL, set to the api host while the page is served from the chat host, so every list, create and cancel died in preflight. This never worked in a browser in any environment, including local dev (default base http://localhost:8080 against a page on :3003). Unit tests mock fetch, so they never caught it.",
+      "fix": "Avoided opening a CORS surface on the gateway. Routed /v1/agent/* through the same Caddy listener that already fronts agent-console and built agent-console with NEXT_PUBLIC_EDGE_API_BASE_URL empty, so the client baseUrl falls back to \"\" and fetches are relative and same-origin. Auth unchanged, edge-api still validates the Supabase bearer token. PR #438.",
+      "tags": [
+        "cors",
+        "edge-api",
+        "agent-console",
+        "caddy",
+        "same-origin",
+        "browser-fetch"
+      ]
+    },
+    {
+      "id": "seed-demo-owner-rotates-shared-password",
+      "priority": "P2",
+      "date": "2026-07-26",
+      "file": "scripts/seed-demo-owner.py",
+      "error_message": "Supabase login returned 400 Invalid login credentials for demo@hive-demo.invalid using a password seed-demo-owner.py had printed seconds earlier",
+      "root_cause": "seed-demo-owner.py generates a fresh random password on EVERY run. It is idempotent for the tenant, role and feature-gate rows but not for the password. With several agents running it concurrently against one box, each run rotates the password out from under the others, so everyone sees Invalid login credentials even with a just-printed password.",
+      "fix": "Stopped relying on the shared account for concurrent verification: created a dedicated user with a stable password, granted tenant OWNER on the same demo tenant via tenant_users. For the shared account, reset a stable password through the Supabase admin API and told other agents to stop re-running the seed.",
+      "tags": [
+        "supabase",
+        "seeding",
+        "multi-agent",
+        "demo-box",
+        "password-rotation"
+      ]
     }
   ]
 }
