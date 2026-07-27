@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Noto_Sans_Bengali } from "next/font/google";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale } from "next-intl/server";
 
 import "./globals.css";
 
@@ -13,6 +15,17 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+  display: "swap",
+});
+
+// Geist ships a latin subset only, so Bengali copy renders as tofu boxes
+// without a family that carries the script. Noto Sans Bengali is appended to
+// every font stack in globals.css rather than swapped in conditionally: CSS
+// per-glyph fallback already picks it for Bengali codepoints and leaves Latin
+// text on Geist, which keeps mixed strings ("API কী") correct in one pass.
+const notoSansBengali = Noto_Sans_Bengali({
+  variable: "--font-noto-bengali",
+  subsets: ["bengali"],
   display: "swap",
 });
 
@@ -32,11 +45,13 @@ interface RootLayoutProps {
   children: ReactNode;
 }
 
-export default function RootLayout({ children }: RootLayoutProps) {
+export default async function RootLayout({ children }: RootLayoutProps) {
+  const locale = await getLocale();
+
   return (
     <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable}`}
+      lang={locale}
+      className={`${geistSans.variable} ${geistMono.variable} ${notoSansBengali.variable}`}
     >
       {/*
         Browser extensions (Grammarly, etc.) mutate <body> attributes
@@ -49,7 +64,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
         className="min-h-screen bg-canvas text-ink antialiased"
         suppressHydrationWarning
       >
-        {children}
+        <NextIntlClientProvider>{children}</NextIntlClientProvider>
       </body>
     </html>
   );

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
-import { formatPrice } from "./checkout-modal";
+import { formatCurrency as formatPrice } from "@/lib/format/money";
 
 describe("CheckoutModal BDT compliance", () => {
   it("formats BDT price without USD equivalent or FX language", () => {

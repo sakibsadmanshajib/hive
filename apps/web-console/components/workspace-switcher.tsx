@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import type { ViewerMembership, ViewerAccount } from "@/lib/control-plane/client";
 
 interface WorkspaceSwitcherProps {
@@ -11,6 +13,8 @@ export function WorkspaceSwitcher({
   memberships,
   currentAccount,
 }: WorkspaceSwitcherProps) {
+  const t = useTranslations("WorkspaceSwitcher");
+
   return (
     <div
       style={{
@@ -20,7 +24,7 @@ export function WorkspaceSwitcher({
       }}
     >
       <div style={{ fontWeight: 500, marginBottom: "0.5rem", color: "#6b7280" }}>
-        Workspace
+        {t("label")}
       </div>
       <form method="POST" action="/console/account-switch">
         <select
@@ -41,7 +45,7 @@ export function WorkspaceSwitcher({
           {memberships.map((m) => (
             <option key={m.account_id} value={m.account_id}>
               {m.account_display_name}
-              {m.account_id === currentAccount.id ? " (current)" : ""}
+              {m.account_id === currentAccount.id ? ` (${t("current")})` : ""}
             </option>
           ))}
         </select>

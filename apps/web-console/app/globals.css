@@ -24,10 +24,17 @@
      --font-display intentionally resolves to the same family as --font-sans:
      it stays a named seam so the wordmark and page headings can be retuned in
      one place, and so call sites keep expressing intent ("this is display
-     type") rather than hardcoding a family. */
-  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-display: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-geist-mono), ui-monospace, "SFMono-Regular", monospace;
+     type") rather than hardcoding a family.
+
+     Noto Sans Bengali sits behind Geist in every stack. Geist carries a latin
+     subset only, so the browser falls through to Noto for Bengali codepoints
+     while Latin runs stay on Geist — mixed strings ("API কী") render correctly
+     with no conditional loading. Mono keeps the same fallback so a Bengali
+     label landing in a mono slot is legible rather than tofu; numerals stay
+     pinned to Latin digits by lib/i18n/locales.ts, not by the font. */
+  --font-sans: var(--font-geist-sans), var(--font-noto-bengali), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-geist-sans), var(--font-noto-bengali), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), var(--font-noto-bengali), ui-monospace, "SFMono-Regular", monospace;
 
   /* Type scale — dense, 14px body, 12-step. */
   --text-2xs: 0.6875rem; /* 11 */
@@ -193,6 +200,22 @@
   [data-numeric] {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum", "ss01";
+  }
+
+  /*
+   * Bengali conjuncts are single visual clusters; letter-spacing pulls them
+   * apart into unreadable fragments. The tracked, uppercased eyebrow labels
+   * ("WORKSPACE", "BUILD") are a Latin small-caps device that does not
+   * transfer to the script, so tracking is neutralised whenever Bengali is
+   * the active language. !important is needed because the tracking comes from
+   * Tailwind utility classes, which outrank an ancestor :lang() selector.
+   */
+  html:lang(bn) {
+    letter-spacing: normal;
+  }
+
+  html:lang(bn) [class*="tracking-"] {
+    letter-spacing: normal !important;
   }
 }
 

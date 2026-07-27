@@ -2,6 +2,9 @@
 .next/
 out/
 
+# OpenNext Cloudflare bundle (npm run build:cf)
+.open-next/
+
 # Dependencies
 node_modules/
 
