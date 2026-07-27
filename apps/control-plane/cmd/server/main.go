@@ -259,6 +259,10 @@ func main() {
 	var roleSvc *platform.RoleService
 	var authzMW authz.Middleware // Phase 18: set after roleSvc+accountsSvc are ready
 	var catalogHandler *catalog.Handler
+	// Hoisted: the visibility admin handler is built after the phase-19 block
+	// below, once it is known whether an OWUI client exists to sync to.
+	var catalogSvc *catalog.Service
+	var catalogVisibilityHandler *catalog.VisibilityHandler
 	var providersHandler *providers.Handler
 	var litellmSyncHandler http.Handler
 	var ledgerHandler *ledger.Handler
@@ -308,7 +312,7 @@ func main() {
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
 		catalogRepo := catalog.NewPgxRepository(pool)
-		catalogSvc := catalog.NewService(catalogRepo)
+		catalogSvc = catalog.NewService(catalogRepo)
 		catalogHandler = catalog.NewHandler(catalogSvc)
 
 		providersRepo := providers.NewPgxRepository(pool)
@@ -339,7 +343,10 @@ func main() {
 		log.Println("litellm sync handler ready (Phase 20 Plan 03)")
 
 		routingRepo := routing.NewPgxRepository(pool)
-		routingSvc = routing.NewService(routingRepo)
+		// catalogSvc is the per-tenant entitlement source: route selection and
+		// the catalog listing resolve visibility through the same predicate, so
+		// a tenant cannot invoke a model an admin hid from it.
+		routingSvc = routing.NewService(routingRepo, catalogSvc)
 		routingHandler = routing.NewHandler(routingSvc)
 
 		ledgerRepo := ledger.NewPgxRepository(pool)
@@ -577,6 +584,23 @@ func main() {
 
 			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
 			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")
+		}
+
+		// Tenant model visibility admin routes. The handler type shipped with
+		// Phase 20 Plan 04 but was never constructed here, so
+		// /internal/catalog/visibility/* answered 404 and the admin control had
+		// no reachable write path at all. Route selection now enforces the same
+		// visibility rules, which makes this the surface that turns a model off
+		// for a tenant, so it has to be mounted.
+		if catalogSvc != nil {
+			// Pass a nil interface (not a typed-nil client) when OWUI is not
+			// configured, so syncOWUI's nil check actually fires.
+			var owuiSync catalog.OWUISync
+			if owuiClient != nil {
+				owuiSync = owuiClient
+			}
+			catalogVisibilityHandler = catalog.NewVisibilityHandler(catalogSvc, owuiSync)
+			log.Println("tenant model visibility admin routes registered (Phase 20 Plan 04)")
 		}
 
 		configuredSinks := configuredAuditSinks()
@@ -857,29 +881,30 @@ func main() {
 	}
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:          authMiddleware,
-		AccountsHandler:         accountsHandler,
-		IdentityHandler:         identityHandler,
-		AccountingHandler:       accountingHandler,
-		APIKeysHandler:          apikeysHandler,
-		BudgetsHandler:          budgetsHandler,
-		CatalogHandler:          catalogHandler,
-		LedgerHandler:           ledgerHandler,
-		PaymentsHandler:         paymentsHandler,
-		ProfilesHandler:         profilesHandler,
-		ProvidersRouter:         providersHandler,
-		LiteLLMSyncHandler:      litellmSyncHandler,
-		FeatureGateHandler:      featureGateHandler,
-		FeatureGateAdminHandler: featureGateAdminHandler,
-		EgressPolicyHandler:     egressPolicyHandler,
-		MarketplaceHandler:      marketplaceHandler,
-		AgentTaskHandler:        agentTaskHandler,
-		RoutingHandler:          routingHandler,
-		UsageHandler:            usageHandler,
-		MetricsRegistry:         metricsRegistry,
-		Mux:                     routerMux,
-		InternalToken:           cfg.InternalToken,
-		RoleSvc:                 roleSvc,
+		AuthMiddleware:           authMiddleware,
+		AccountsHandler:          accountsHandler,
+		IdentityHandler:          identityHandler,
+		AccountingHandler:        accountingHandler,
+		APIKeysHandler:           apikeysHandler,
+		BudgetsHandler:           budgetsHandler,
+		CatalogHandler:           catalogHandler,
+		CatalogVisibilityHandler: catalogVisibilityHandler,
+		LedgerHandler:            ledgerHandler,
+		PaymentsHandler:          paymentsHandler,
+		ProfilesHandler:          profilesHandler,
+		ProvidersRouter:          providersHandler,
+		LiteLLMSyncHandler:       litellmSyncHandler,
+		FeatureGateHandler:       featureGateHandler,
+		FeatureGateAdminHandler:  featureGateAdminHandler,
+		EgressPolicyHandler:      egressPolicyHandler,
+		MarketplaceHandler:       marketplaceHandler,
+		AgentTaskHandler:         agentTaskHandler,
+		RoutingHandler:           routingHandler,
+		UsageHandler:             usageHandler,
+		MetricsRegistry:          metricsRegistry,
+		Mux:                      routerMux,
+		InternalToken:            cfg.InternalToken,
+		RoleSvc:                  roleSvc,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.

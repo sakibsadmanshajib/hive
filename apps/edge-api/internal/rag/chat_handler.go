@@ -21,6 +21,12 @@ import (
 // package does not need to import the inference package's routing types.
 var ErrRouteNotFound = errors.New("rag: model not found")
 
+// ErrModelNotEntitled signals the tenant is not entitled to the requested
+// alias. Wiring (main.go) maps inference.ErrModelNotEntitled to this sentinel,
+// same translation pattern as ErrRouteNotFound, so an admin policy verdict
+// surfaces as a 403 refusal instead of a provider-blind 502.
+var ErrModelNotEntitled = errors.New("rag: model not available for this workspace")
+
 // RouteSelectFunc resolves a Hive catalog alias (e.g. "hive-fast") to the
 // concrete LiteLLM route name. Wired to a small adapter around
 // inference.RoutingClient.SelectRoute in main.go; tests inject a stub.
@@ -151,6 +157,10 @@ func (h *Handler) handleChat(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, ErrRouteNotFound) {
 			apierrors.Write(w, http.StatusNotFound, apierrors.CodeInvalidRequest, "model not found")
+			return
+		}
+		if errors.Is(err, ErrModelNotEntitled) {
+			apierrors.Write(w, http.StatusForbidden, apierrors.CodeForbidden, "model not available for this workspace")
 			return
 		}
 		apierrors.WriteProviderBlindUpstreamError(w, req.Model, http.StatusBadGateway, err.Error())

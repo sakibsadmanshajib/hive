@@ -1,7 +1,17 @@
 package routing
 
+import "github.com/google/uuid"
+
 type SelectionInput struct {
-	AliasID             string
+	AliasID string
+	// TenantID scopes the selection to one tenant's model entitlement. It is
+	// filled from the authenticated request context by the caller (edge-api
+	// derives it from auth.TenantID(ctx)), never from client input.
+	//
+	// uuid.Nil means the principal is not tenant-scoped: API keys hang off
+	// accounts, and the batch executor runs per account, so those selections are
+	// governed by the key policy allowlist rather than tenant visibility.
+	TenantID            uuid.UUID
 	NeedResponses       bool
 	NeedChatCompletions bool
 	NeedEmbeddings      bool
@@ -35,10 +45,10 @@ type RouteCandidate struct {
 	SupportsChatCompletions bool
 	SupportsCompletions     bool
 	SupportsEmbeddings      bool
-	SupportsStreaming        bool
-	SupportsReasoning        bool
-	SupportsCacheRead        bool
-	SupportsCacheWrite       bool
+	SupportsStreaming       bool
+	SupportsReasoning       bool
+	SupportsCacheRead       bool
+	SupportsCacheWrite      bool
 	SupportsImageGeneration bool
 	SupportsImageEdit       bool
 	SupportsTTS             bool

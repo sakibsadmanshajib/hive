@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
@@ -17,14 +19,31 @@ var (
 	// ErrNoCapableRoute is returned when RequireToolCapable=true but no route
 	// for the alias has tools_supported=true in provider_capabilities.
 	ErrNoCapableRoute = errors.New("routing: no tool-capable route")
+	// ErrModelNotEntitled is returned when the requesting tenant is not
+	// entitled to the alias (an admin hid it, or it is restricted and the
+	// tenant holds no grant). It is a policy verdict, not a capability
+	// mismatch and not an outage, so callers map it to 403.
+	ErrModelNotEntitled = errors.New("routing: model not entitled for tenant")
 )
 
-type Service struct {
-	repo Repository
+// TenantEntitlements resolves per-tenant model entitlement. *catalog.Service is
+// the production implementation; the interface lives here so routing depends on
+// the behaviour rather than on a concrete service.
+type TenantEntitlements interface {
+	IsAliasVisibleToTenant(ctx context.Context, tenantID uuid.UUID, aliasID string) (bool, error)
 }
 
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo}
+type Service struct {
+	repo         Repository
+	entitlements TenantEntitlements
+}
+
+// NewService wires route selection. entitlements is a required argument rather
+// than an option so a deployment cannot omit the per-tenant entitlement source
+// by accident; when it is nil, tenant-scoped selections fail closed (see
+// SelectRoute) instead of quietly resolving every alias.
+func NewService(repo Repository, entitlements TenantEntitlements) *Service {
+	return &Service{repo: repo, entitlements: entitlements}
 }
 
 func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (SelectionResult, error) {
@@ -36,6 +55,33 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	policy, err := s.repo.LoadAliasPolicy(ctx, aliasID)
 	if err != nil {
 		return SelectionResult{}, err
+	}
+
+	// Per-tenant entitlement, enforced here because every inference path
+	// (JWT chat, RAG chat, audio, images, embeddings) resolves its route
+	// through this one function. Enforcing it only on the catalog listing left
+	// the admin visibility toggle decorative: a tenant could still invoke a
+	// model that had been hidden from it.
+	//
+	// The verdict comes from catalog.AliasVisibleToTenant, the same predicate
+	// behind the catalog listing, so the two can never disagree. An untenanted
+	// principal carries uuid.Nil: api_keys hang off accounts, which are not
+	// tenant-scoped, and those requests stay governed by the key policy
+	// allowlist checked in edge-api's authz.CheckAccess.
+	if input.TenantID != uuid.Nil {
+		if s.entitlements == nil {
+			// Fail closed. A tenant-scoped request with no entitlement source
+			// is refused loudly rather than admitted silently, which is exactly
+			// how the original gap went unnoticed.
+			return SelectionResult{}, fmt.Errorf("%w: entitlement lookup unavailable", ErrModelNotEntitled)
+		}
+		entitled, err := s.entitlements.IsAliasVisibleToTenant(ctx, input.TenantID, aliasID)
+		if err != nil {
+			return SelectionResult{}, fmt.Errorf("routing: entitlement lookup for alias %s: %w", aliasID, err)
+		}
+		if !entitled {
+			return SelectionResult{}, fmt.Errorf("%w: alias %s", ErrModelNotEntitled, aliasID)
+		}
 	}
 
 	if !aliasAllowed(aliasID, input.AllowedAliases) {
@@ -149,6 +195,12 @@ func matchesRequestedCapabilities(candidate RouteCandidate, input SelectionInput
 // is called (see SelectRoute). The SupportsTools field is checked there, not here,
 // so that we can return the specific ErrNoCapableRoute sentinel.
 
+// aliasAllowed applies the API-key policy allowlist. An empty list keeps meaning
+// "this key is not narrowed to specific aliases", which is the documented
+// api_key_policies semantic and is what an unrestricted key stores. That default
+// is deliberately NOT reused for tenant entitlement: entitlement keys off the
+// presence of a tenant identity and fails closed (see SelectRoute), so an
+// unset allowlist can never stand in for an entitlement grant.
 func aliasAllowed(aliasID string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true

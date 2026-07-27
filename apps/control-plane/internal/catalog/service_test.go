@@ -33,29 +33,44 @@ func (s *stubRepository) ListPublicAliases(_ context.Context) ([]ModelAlias, err
 	return out, nil
 }
 
+// rowsForTenant mirrors what tenantVisibilityQuery returns: every alias joined
+// to this tenant's override, with no verdict applied yet. aliasFilter narrows to
+// one alias, exactly as the SQL parameter does.
+func (s *stubRepository) rowsForTenant(tenantID uuid.UUID, aliasFilter string) []aliasWithOverride {
+	overrides := make(map[string]bool)
+	for _, row := range s.visibilityRows {
+		if row.TenantID == tenantID {
+			overrides[row.AliasID] = row.Visible
+		}
+	}
+	var rows []aliasWithOverride
+	for _, alias := range s.aliases {
+		if aliasFilter != "" && alias.AliasID != aliasFilter {
+			continue
+		}
+		row := aliasWithOverride{alias: alias}
+		if visible, hasRow := overrides[alias.AliasID]; hasRow {
+			row.override = &visible
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
 func (s *stubRepository) ListAliasesForTenant(_ context.Context, tenantID uuid.UUID) ([]ModelAlias, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	overrides := make(map[string]TenantModelVisibility)
-	for _, row := range s.visibilityRows {
-		if row.TenantID == tenantID {
-			overrides[row.AliasID] = row
-		}
+	// Resolve through the production predicate rather than a second copy of the
+	// rules, so this stub cannot drift from what the database path decides.
+	return filterVisibleForTenant(s.rowsForTenant(tenantID, "")), nil
+}
+
+func (s *stubRepository) IsAliasVisibleToTenant(_ context.Context, tenantID uuid.UUID, aliasID string) (bool, error) {
+	if s.err != nil {
+		return false, s.err
 	}
-	var result []ModelAlias
-	for _, alias := range s.aliases {
-		row, hasRow := overrides[alias.AliasID]
-		switch {
-		case hasRow && !row.Visible:
-			// Explicitly blocked.
-		case alias.Visibility == "restricted" && (!hasRow || !row.Visible):
-			// Restricted with no active grant.
-		default:
-			result = append(result, alias)
-		}
-	}
-	return result, nil
+	return len(filterVisibleForTenant(s.rowsForTenant(tenantID, aliasID))) > 0, nil
 }
 
 func (s *stubRepository) GetSnapshot(ctx context.Context) (CatalogSnapshot, error) {

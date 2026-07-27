@@ -377,6 +377,9 @@ func main() {
 				if errors.Is(err, inference.ErrRouteNotFound) {
 					return "", edgerag.ErrRouteNotFound
 				}
+				if errors.Is(err, inference.ErrModelNotEntitled) {
+					return "", edgerag.ErrModelNotEntitled
+				}
 				return "", err
 			}
 			return route.LiteLLMModelName, nil
@@ -730,7 +733,31 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Valid API key required to list models, even if not binding to a specific alias.
+		// JWT-session caller: the JWT middleware already authenticated the
+		// request and resolved the tenant, so serve the tenant-filtered list.
+		// It is built from the same visibility predicate the admin toggle
+		// writes, which keeps the listed models and the invokable models equal.
+		if tenantID := auth.TenantID(r.Context()); tenantID != uuid.Nil {
+			snapshot, err := client.FetchSnapshotForTenant(r.Context(), tenantID)
+			if err != nil {
+				writeCatalogUnavailable(w)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"object": "list",
+				"data":   snapshot.Models,
+			})
+			return
+		}
+
+		// API-key caller: valid API key required to list models, even if not
+		// binding to a specific alias. These principals are account-scoped, not
+		// tenant-scoped, so there is no tenant to filter on and the key policy
+		// allowlist governs what they may actually invoke. The OWUI shim key
+		// lands here too: a GET carries no JSON body, so the shim request never
+		// gets unwrapped to a per-user JWT and arrives with no tenant identity.
+		// Tenant-filtering that surface needs the shim to carry a tenant, which
+		// is the shim-auth work tracked separately.
 		if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
 			return
 		}

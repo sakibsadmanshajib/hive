@@ -290,6 +290,7 @@ jobs:
       - run: npm run lint:audit-write
       - run: npm run lint:desktop-local-http
       - run: npm run lint:request-url-origin
+      - run: npm run lint:model-visibility
 
   agent-console-unit:
     name: Agent console (type + unit + build)
