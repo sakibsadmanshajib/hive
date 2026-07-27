@@ -19,7 +19,7 @@ export function InvoiceRow({ invoice }: InvoiceRowProps) {
       <td className="px-3 py-2 text-sm text-[var(--color-ink)]">
         {invoice.period_start} → {invoice.period_end}
       </td>
-      <td className="px-3 py-2 text-sm tabular-nums text-[var(--color-ink)]">
+      <td className="metric px-3 py-2 text-sm text-[var(--color-ink)]">
         {formatTakaSubunits(invoice.total_bdt_subunits)}
       </td>
       <td className="px-3 py-2 text-sm text-[var(--color-ink-3)]">
