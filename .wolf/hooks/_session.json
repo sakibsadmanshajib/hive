@@ -233,7 +233,7 @@
       "first_read": "2026-07-27T20:01:28.757Z"
     },
     "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap_test.go": {
-      "count": 2,
+      "count": 3,
       "tokens": 3906,
       "first_read": "2026-07-27T20:01:55.760Z"
     }
@@ -622,6 +622,12 @@
       "action": "edit",
       "tokens": 325,
       "at": "2026-07-27T20:02:40.415Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap_test.go",
+      "action": "edit",
+      "tokens": 541,
+      "at": "2026-07-27T20:03:20.957Z"
     }
   ],
   "edit_counts": {
@@ -648,11 +654,12 @@
     "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body.md": 3,
     "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/proof-override.yml": 2,
     "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt483/docs/proof/signup-tenant-provisioning-2026-07-27/live-transcript.md": 1,
-    "apps/web-console/e2e/phase-19/owui/deployed-login.spec.ts": 1
+    "apps/web-console/e2e/phase-19/owui/deployed-login.spec.ts": 1,
+    ".claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap_test.go": 1
   },
   "anatomy_hits": 13,
   "anatomy_misses": 32,
-  "repeated_reads_warned": 10,
+  "repeated_reads_warned": 11,
   "cerebrum_warnings": 0,
   "stop_count": 11
 }
