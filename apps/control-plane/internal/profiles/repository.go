@@ -95,6 +95,14 @@ func (r *pgxRepository) UpdateAccountProfile(ctx context.Context, accountID uuid
 	return tx.Commit(ctx)
 }
 
+// GetBillingProfile reads the billing identity for an account, falling back to
+// the account profile and then to empty values for anything not stored yet.
+// Both profile tables are LEFT JOINed on purpose: an account may exist before
+// either row does, and every selected column is already COALESCEd for that
+// case. Inner-joining account_profiles here turned a missing profile row into
+// ErrNotFound, which the console surfaced as a 500 on the billing settings
+// page (see TestGetBillingProfileWithoutAccountProfileRow). Only a missing
+// account is not-found.
 func (r *pgxRepository) GetBillingProfile(ctx context.Context, accountID uuid.UUID) (BillingProfile, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT
@@ -115,7 +123,7 @@ func (r *pgxRepository) GetBillingProfile(ctx context.Context, accountID uuid.UU
 			COALESCE(bp.country_code, ap.country_code, ''),
 			COALESCE(bp.state_region, ap.state_region, '')
 		FROM public.accounts a
-		JOIN public.account_profiles ap ON ap.account_id = a.id
+		LEFT JOIN public.account_profiles ap ON ap.account_id = a.id
 		LEFT JOIN public.account_billing_profiles bp ON bp.account_id = a.id
 		WHERE a.id = $1
 	`, accountID)
