@@ -2147,6 +2147,23 @@
         "demo-box",
         "password-rotation"
       ]
+    },
+    {
+      "id": "ci-noop-echo-satisfies-required-checks",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "file": ".github/workflows/ci-noop.yml",
+      "error_message": "gh pr checks showed required contexts such as Go tests (control-plane) passing in 2 to 4 seconds on pull requests where those jobs genuinely take minutes, making the merge gate unreliable as a signal",
+      "root_cause": "ci.yml was path filtered on the trigger, and a workflow skipped by a trigger path filter never creates its check runs, so required checks stayed Pending and blocked the merge. The workaround was ci-noop.yml, a second workflow that fired on the inverse paths-ignore set and published job names identical to ci.yml's as echo steps. GitHub runs a paths-ignore workflow whenever ANY changed file falls outside the ignore set, so a pull request touching both code and docs fired both workflows and each required context received two check runs, one real and one echo. The repository's visual-proof rule commits screenshots under docs/ alongside code, so that mixed shape is the common case. Proven live on PR #559 commit d05b7ba1: every required context had two check runs, ci.yml run 30301329356 taking 13s to 2m38s and ci-noop.yml run 30301329536 taking 2s to 4s.",
+      "fix": "Deleted ci-noop.yml. Removed the trigger path filters from ci.yml and moved the decision into a leading changes job that lists the changed files through the GitHub API and emits one boolean. Jobs publishing a required check name use if: always() with per-step gating so they always report their own conclusion, which avoids depending on how branch protection treats a check run whose conclusion is skipped; non-required jobs use a plain job-level if:. The allow-list polarity is inverted so anything unrecognized, an API error, or an event with no diff runs the full suite. Removed the web-e2e-shim job, the last remaining pair of jobs sharing a check name, and added .github/ci/lint-workflow-check-names.mjs to the repo policy lints to fail the build on a duplicate check name, a required context with no producer, or a required job that can be skipped.",
+      "tags": [
+        "ci",
+        "github-actions",
+        "branch-protection",
+        "merge-gate",
+        "path-filtering",
+        "required-status-checks"
+      ]
     }
   ]
 }
