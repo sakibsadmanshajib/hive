@@ -27,10 +27,21 @@ export function readTenantIdClaim(
       return null;
     }
 
+    // JWT segments are base64url and unpadded. Restore the standard alphabet
+    // and the "=" padding before decoding: atob is lenient about missing
+    // padding in some runtimes and strict in others, and a throw here would
+    // fail safe to "no claim", which for a user who genuinely has one means
+    // being sent round the provisioning redirect on every request. Pad
+    // explicitly rather than relying on the runtime.
+    const base64 = payloadSegment.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64.padEnd(
+      base64.length + ((4 - (base64.length % 4)) % 4),
+      "=",
+    );
     // atob yields one char per byte; decode those bytes as UTF-8 so non-ASCII
     // claims elsewhere in the payload do not corrupt the parse. Avoids
     // depending on Buffer, which is not guaranteed on the Workers runtime.
-    const binary = atob(payloadSegment.replace(/-/g, "+").replace(/_/g, "/"));
+    const binary = atob(padded);
     const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
     const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
 

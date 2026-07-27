@@ -66,7 +66,20 @@ export async function GET(request: NextRequest) {
   // the token on its own schedule and re-entering /console comes back through
   // here, while the per-user rate limit on the control-plane endpoint is the
   // backstop that bounds the worst case.
-  await supabase.auth.refreshSession();
+  const { data: refreshed } = await supabase.auth.refreshSession();
+
+  // Loop breaker, and the reason this is checked rather than assumed. The
+  // console layout sends every claimless request here, so returning to /console
+  // while the claim is still missing would come straight back, forever. If the
+  // refreshed token does not carry the claim, something disagrees with the
+  // database (the hook is not installed on this project, the refresh failed,
+  // the membership was revoked in between) and the honest answer is the
+  // designed state, which offers an explicit retry.
+  if (!readTenantIdClaim(refreshed.session?.access_token)) {
+    return NextResponse.redirect(new URL("/no-workspace", origin), {
+      status: 303,
+    });
+  }
 
   return NextResponse.redirect(new URL("/console", origin), { status: 303 });
 }

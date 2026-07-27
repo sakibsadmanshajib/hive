@@ -76,4 +76,38 @@ describe("readTenantIdClaim", () => {
   it("returns null when the payload is valid JSON but not an object", () => {
     expect(readTenantIdClaim(tokenWithPayload("\"just-a-string\""))).toBeNull();
   });
+
+  // Real JWT segments are base64url with the padding stripped, so the decoder
+  // has to restore it. atob is lenient about missing padding in some runtimes
+  // and strict in others, and the failure mode matters: a throw fails safe to
+  // "no claim", which for a user who genuinely has one means being sent round
+  // the provisioning redirect on every request. These cover every unpadded
+  // length the encoding can produce.
+  describe("unpadded base64url payloads", () => {
+    it.each([
+      ["remainder 2", "tenant-a"],
+      ["remainder 3", "tenant-ab"],
+      ["no remainder", "tenant-abc"],
+    ])("decodes a payload with %s", (_label, tenantId) => {
+      const payload = JSON.stringify({ tenant_id: tenantId });
+      const token = tokenWithPayload(payload);
+      // Guard the fixture itself: if btoa ever emitted padding here the test
+      // would stop covering what it claims to.
+      expect(token).not.toContain("=");
+      expect(readTenantIdClaim(token)).toBe(tenantId);
+    });
+
+    it("covers all three base64 length remainders across the cases above", () => {
+      const remainders = new Set(
+        ["tenant-a", "tenant-ab", "tenant-abc"].map((tenantId) => {
+          const encoded = btoa(JSON.stringify({ tenant_id: tenantId })).replace(
+            /=+$/,
+            "",
+          );
+          return encoded.length % 4;
+        }),
+      );
+      expect(remainders.size).toBeGreaterThan(1);
+    });
+  });
 });
