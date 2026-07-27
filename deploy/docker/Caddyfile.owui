@@ -31,7 +31,7 @@
   # admin panel under a non-blocked path, mutation verbs are dropped.
   @adminMutation {
     method PUT POST PATCH DELETE
-    path /api/v*/configs* /api/v*/admin* /api/v*/users/* /api/v*/groups* /api/v*/roles*
+    path /api/v*/configs* /api/v*/admin* /api/v*/users/* /api/v*/groups* /api/v*/roles* /api/v*/functions* /api/v*/models*
   }
   respond @adminMutation 404
 
