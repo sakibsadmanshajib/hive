@@ -1,6 +1,6 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-27T20:02:27.647Z
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-27T20:02:40.381Z
 > Files: 1404 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../
@@ -2450,7 +2450,7 @@
 ## .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/
 
 - `owui_unwrap_test.go` — Struct: capturedRequest (~3906 tok)
-- `owui_unwrap.go` — — OWUI body-metadata to Authorization header unwrap. (~3493 tok)
+- `owui_unwrap.go` — — OWUI body-metadata to Authorization header unwrap. (~3778 tok)
 
 ## .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/components/catalog/
 

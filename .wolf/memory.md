@@ -4886,3 +4886,4 @@
 | 16:02 | Edited .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go | modified requiresPerUserAuth() | ~221 |
 | 16:02 | Edited .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go | Warn() → warnMissingUpstreamAuth() | ~38 |
 | 16:02 | Edited .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go | 6→5 lines | ~67 |
+| 16:02 | Edited .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go | modified warnMissingUpstreamAuth() | ~303 |
