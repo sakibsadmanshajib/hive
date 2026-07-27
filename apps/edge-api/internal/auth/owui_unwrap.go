@@ -110,7 +110,7 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !HasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
+			if !hasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -211,17 +211,16 @@ func warnMissingUpstreamAuth(r *http.Request, contentLength int, rejected bool) 
 		"rejected", rejected)
 }
 
-// HasShimAuthorization reports whether the Authorization header value
+// hasShimAuthorization reports whether the Authorization header value
 // is exactly "Bearer <shimKey>". The scheme word is matched case-
 // insensitively per RFC 7235 §2.1; the token body is compared
 // case-sensitively because the shim key is opaque to this layer.
 //
-// Exported so the /v1/models handler can recognise the same credential
-// this middleware recognises, rather than re-deriving the comparison and
-// risking a looser match. Callers must treat an empty shimKey as
-// "shim disabled" before calling; this function does not, because
-// OWUIUnwrap already short-circuits on an empty key.
-func HasShimAuthorization(header, shimKey string) bool {
+// Deliberately unexported: no route outside this middleware should branch
+// on "is this the shim key". Every /v1 route resolves its credential
+// through the normal API-key or JWT path, and the shim key is a real
+// minted API key there like any other.
+func hasShimAuthorization(header, shimKey string) bool {
 	scheme, rest, ok := strings.Cut(header, " ")
 	if !ok {
 		return false

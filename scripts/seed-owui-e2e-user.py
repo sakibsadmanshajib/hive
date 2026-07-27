@@ -13,31 +13,50 @@ body, so edge-api's OWUIUnwrap middleware (which only swaps in a per-user
 JWT when the body carries __metadata) can never rewrite it -- see
 deploy/docker/pipelines/hive_jwt_forward.py's inlet comment. A random,
 unregistered shim value therefore always 401s model listing even on a
-healthy stack (run 28685935882). A real "hk_"-prefixed key routes straight
-through the existing API-key path for that bodyless call. This key lives on
-its own throwaway "owui-e2e-shim" billing account (the older accounts/
-api_keys schema, unrelated to the tenants/tenant_users rows below) with
-allow_all_models=true -- listing is not billable, so there is no reason to
-depend on default-policy-group alias membership. Rotated every run the same
-way the GoTrue password is.
+healthy stack (run 28685935882), and takes OWUI's document-RAG embeddings
+and text-to-speech down with it, since those authenticate as that key and
+nothing else. A real "hk_"-prefixed key routes straight through the
+existing API-key path for all three. This key lives on its own throwaway
+billing account (the older accounts/api_keys schema, unrelated to the
+tenants/tenant_users rows below) with allow_all_models=true.
 
-Also pushes the minted SHIM_KEY straight into Open WebUI's own persisted
-OpenAI-connection config (POST /openai/config/update), not just .env and
-the container's OPENAI_API_KEY env var. OWUI only seeds that config from
-OPENAI_API_KEY on a volume's first boot -- every later container recreate
-on the same volume keeps the OLD key even after .env and the env var move
-on, and the chat UI silently shows "No models available" even though the
-new key works fine directly against edge-api. Confirmed live 2026-07-22.
-This sync step is best-effort: set OWUI_BASE_URL, OWUI_ADMIN_EMAIL, and
-OWUI_ADMIN_PASSWORD to enable it, or it logs a warning to stderr and
-skips (never fatal -- minting the Supabase-side credentials below is
-this script's real job).
+ROTATION AND ACCOUNT SCOPING. Every run mints a fresh key and revokes the
+account's previous ones, the same rotate-every-run posture as the GoTrue
+password: a key's raw secret only exists in the response to its own mint,
+so a re-run cannot hand back an existing key's value. That makes the
+account boundary load-bearing. --account-slug defaults to the CI account,
+which the nightly OWUI job rotates on a schedule; a long-lived deployment
+MUST pass its own slug (for example --account-slug owui-shim-demo-box) so
+a scheduled CI run can never revoke the key that deployment depends on.
+Revocation of the old keys is also deferred until every configured
+consumer has been updated (see below), so a failed sync leaves the
+previous key working rather than stranding the deployment on a dead one.
+
+CONSUMER SYNC. Both consumers of this value are updated before the old key
+is revoked:
+  * --env-file <path> rewrites OWUI_SHIM_KEY in a compose .env in place
+    (atomic replace, mode preserved), so a container recreate or host
+    reboot does not resurrect the old value.
+  * OWUI_BASE_URL plus OWUI_ADMIN_TOKEN (or OWUI_ADMIN_EMAIL and
+    OWUI_ADMIN_PASSWORD) push the key into Open WebUI's own persisted
+    OpenAI-connection config (POST /openai/config/update). OWUI only seeds
+    that config from OPENAI_API_KEY on a volume's first boot -- every later
+    container recreate on the same volume keeps the OLD key even after .env
+    and the env var move on, and the chat UI silently shows "No models
+    available" even though the new key works fine directly against
+    edge-api. Confirmed live 2026-07-22. Prefer OWUI_ADMIN_TOKEN: an
+    OAuth-only Open WebUI has no password-authenticable admin at all.
+Configure neither and the script only mints, which is what CI wants (it
+writes a fresh .env.ci and boots a fresh OWUI container every run). If a
+consumer IS configured and its update fails, the old keys are left active
+and the script exits non-zero.
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 Optional env (OWUI config sync): OWUI_BASE_URL (default
-http://localhost:3003), OWUI_ADMIN_EMAIL, OWUI_ADMIN_PASSWORD,
-EDGE_API_URL_FOR_OWUI (default http://edge-api:8080/v1 -- the docker-network
-hostname OWUI's own backend dials out to; override for a remote OWUI setup)
+http://localhost:3003), OWUI_ADMIN_TOKEN, OWUI_ADMIN_EMAIL,
+OWUI_ADMIN_PASSWORD, EDGE_API_URL_FOR_OWUI (default
+http://edge-api:8080/v1 -- the docker-network hostname OWUI's own backend
+dials out to; override for a remote OWUI setup)
 
 Also provisions a second, throwaway "bootstrap" tenant member
 (BOOTSTRAP_EMAIL below). Open WebUI auto-promotes the very first user it
@@ -60,22 +79,28 @@ Prints exactly five lines to stdout (and nothing else):
   BOOTSTRAP_PASSWORD=<password>
 Everything else (progress, errors) goes to stderr.
 """
+import argparse
 import base64
 import hashlib
 import json
 import os
 import secrets
+import stat
 import string
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
 
 TENANT_SLUG = "owui-e2e"
 TENANT_NAME = "OWUI E2E"
+# Default account is CI's. The nightly OWUI job rotates it on a schedule, so a
+# long-lived deployment must pass its own --account-slug (see module docstring).
 SHIM_ACCOUNT_SLUG = "owui-e2e-shim"
 SHIM_ACCOUNT_NAME = "OWUI E2E Shim"
 SHIM_KEY_NICKNAME = "owui-e2e-shim-key"
+SHIM_ENV_VAR = "OWUI_SHIM_KEY"
 # ponytail: no Go code branches on tenants.deployment today (grep confirmed
 # clean). ENTERPRISE_EDGE picked as the closer conceptual fit for a
 # self-hosted OWUI chat front-end; revisit if that ever becomes load-bearing.
@@ -193,33 +218,33 @@ def owui_request(base, headers, method, path, body=None):
         return resp.status, (json.loads(raw) if raw else None)
 
 
-def sync_owui_config(raw_secret: str) -> None:
-    """Best-effort: sign into OWUI as an admin, fetch its existing
-    persisted OpenAI config, merge raw_secret into it (preserving any
-    other configured connection), and push the merged result back. Logs
-    to stderr either way, never raises, never sys.exit -- see module
-    docstring for why. By the time this runs the OLD key is already
-    deleted from Supabase (step 5 above), so a failure here leaves OWUI
-    pointed at a dead key -- the warn() below spells out manual recovery
-    so that never sits silent."""
+def sync_owui_config(raw_secret: str) -> bool | None:
+    """Sign into OWUI as an admin, fetch its existing persisted OpenAI
+    config, merge raw_secret into it (preserving any other configured
+    connection), and push the merged result back.
+
+    Returns True on success, False on failure, or None when no OWUI admin
+    credential is configured (CI's case, where OWUI is recreated from
+    .env.ci every run and has no persisted config to correct). The caller
+    holds off revoking the previous key until this returns non-False, so a
+    failure here never strands OWUI on a dead key."""
     base = os.environ.get("OWUI_BASE_URL", "http://localhost:3003").rstrip("/")
+    token = os.environ.get("OWUI_ADMIN_TOKEN", "").strip()
     email = os.environ.get("OWUI_ADMIN_EMAIL", "").strip()
     password = os.environ.get("OWUI_ADMIN_PASSWORD", "").strip()
     upstream_url = os.environ.get("EDGE_API_URL_FOR_OWUI", OWUI_UPSTREAM_BASE_URL).rstrip("/")
 
     def warn(reason: str) -> None:
-        print(f"owui config sync skipped: {reason}", file=sys.stderr)
+        print(f"owui config sync FAILED: {reason}", file=sys.stderr)
         print(
-            'owui config sync FAILED: chat UI will show "No models '
-            'available" until this is fixed by hand. Recover with:\n'
-            f"  TOKEN=$(curl -s -X POST {base}/api/v1/auths/signin "
-            '-H "Content-Type: application/json" '
-            '-d \'{"email":"<OWUI_ADMIN_EMAIL>","password":"<OWUI_ADMIN_PASSWORD>"}\' '
-            "| python3 -c \"import sys,json;print(json.load(sys.stdin)['token'])\")\n"
+            'owui config sync FAILED: chat UI will show "No models available" '
+            "until this is fixed. The previous shim key was NOT revoked, so the "
+            "deployment keeps working on it; re-run once Open WebUI is reachable, "
+            "or push the new key by hand:\n"
             f"  curl -s -X POST {base}/openai/config/update "
-            '-H "Content-Type: application/json" -H "Authorization: Bearer $TOKEN" '
+            '-H "Content-Type: application/json" -H "Authorization: Bearer $OWUI_ADMIN_TOKEN" '
             '-d \'{"ENABLE_OPENAI_API":true,"OPENAI_API_BASE_URLS":["' + upstream_url + '"],'
-            '"OPENAI_API_KEYS":["' + raw_secret + '"],"OPENAI_API_CONFIGS":{"0":{"enable":true}}}\'\n'
+            '"OPENAI_API_KEYS":["<the key this run minted>"],"OPENAI_API_CONFIGS":{"0":{"enable":true}}}\'\n'
             "  (the recipe above REPLACES OWUI's whole connection list -- fine for a "
             "single-connection demo box, but check GET " + base + "/openai/config first "
             "if other connections might exist)",
@@ -229,24 +254,31 @@ def sync_owui_config(raw_secret: str) -> None:
     # No hardcoded credential defaults. Local/demo test account already
     # documented in scripts/seed-demo-owner.py's header comment
     # (asdas@asdas.sda / asdas) if a caller wants to set these explicitly.
-    if not email or not password:
-        print("owui config sync skipped: OWUI_ADMIN_EMAIL/OWUI_ADMIN_PASSWORD not set", file=sys.stderr)
-        return
-    try:
-        status, body = owui_request(
-            base, {"Content-Type": "application/json"}, "POST",
-            "/api/v1/auths/signin", {"email": email, "password": password},
+    if not token and not (email and password):
+        print(
+            "owui config sync skipped: set OWUI_ADMIN_TOKEN (preferred) or "
+            "OWUI_ADMIN_EMAIL/OWUI_ADMIN_PASSWORD to enable it",
+            file=sys.stderr,
         )
-        token = body.get("token") if isinstance(body, dict) else None
-        if status != 200 or not token:
-            warn(f"signin failed: {status} {body}")
-            return
+        return None
+    try:
+        if not token:
+            # Password sign-in only works on an Open WebUI that has a local
+            # account; an OAuth-only instance has none, hence OWUI_ADMIN_TOKEN.
+            status, body = owui_request(
+                base, {"Content-Type": "application/json"}, "POST",
+                "/api/v1/auths/signin", {"email": email, "password": password},
+            )
+            token = body.get("token") if isinstance(body, dict) else None
+            if status != 200 or not token:
+                warn(f"signin failed: {status} {body}")
+                return False
 
         auth_headers = {"Content-Type": "application/json", "Authorization": f"Bearer {token}"}
         status, existing = owui_request(base, auth_headers, "GET", "/openai/config")
         if status != 200 or not isinstance(existing, dict):
             warn(f"config fetch failed: {status} {existing}")
-            return
+            return False
 
         status, body = owui_request(
             base, auth_headers, "POST", "/openai/config/update",
@@ -254,13 +286,68 @@ def sync_owui_config(raw_secret: str) -> None:
         )
         if status != 200:
             warn(f"config update failed: {status} {body}")
-            return
+            return False
         print("owui config sync: ok", file=sys.stderr)
+        return True
     except urllib.error.HTTPError as e:
         raw = e.read()
         warn(f"{e.code} {raw[:300]!r}")
+        return False
     except (urllib.error.URLError, OSError, json.JSONDecodeError) as e:
         warn(str(e))
+        return False
+
+
+def rewrite_env_file(path: str, raw_secret: str) -> bool:
+    """Replace (or append) the OWUI_SHIM_KEY assignment in a compose .env.
+
+    Written to a temp file in the same directory and moved into place, so a
+    crash or a full disk can never leave the deployment with a truncated
+    .env. The original file mode is preserved because this file holds every
+    other secret the stack boots with. Returns True on success."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines(keepends=True)
+    except OSError as e:
+        print(f"env file update FAILED: cannot read {path}: {e}", file=sys.stderr)
+        return False
+
+    assignment = f"{SHIM_ENV_VAR}={raw_secret}\n"
+    replaced = False
+    out = []
+    for line in lines:
+        if line.split("=", 1)[0].strip() == SHIM_ENV_VAR and not line.lstrip().startswith("#"):
+            # Only the first assignment wins in docker compose --env-file, but
+            # replace every one so a stale duplicate cannot shadow it later.
+            out.append(assignment)
+            replaced = True
+        else:
+            out.append(line)
+    if not replaced:
+        if out and not out[-1].endswith("\n"):
+            out.append("\n")
+        out.append(assignment)
+
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    try:
+        mode = stat.S_IMODE(os.stat(path).st_mode)
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".env.shimkey.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write("".join(out))
+            os.chmod(tmp_path, mode)
+            os.replace(tmp_path, path)
+        except OSError:
+            os.unlink(tmp_path)
+            raise
+    except OSError as e:
+        print(f"env file update FAILED: cannot write {path}: {e}", file=sys.stderr)
+        return False
+    print(
+        f"env file update: ok ({SHIM_ENV_VAR} {'replaced' if replaced else 'appended'} in {path})",
+        file=sys.stderr,
+    )
+    return True
 
 
 def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, role: str) -> tuple[str, str]:
@@ -326,7 +413,31 @@ def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, r
     return user_id, password
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--account-slug",
+        default=os.environ.get("OWUI_SHIM_ACCOUNT_SLUG", "").strip() or SHIM_ACCOUNT_SLUG,
+        help=(
+            "Billing account the shim key is minted on. Defaults to the CI "
+            f"account ({SHIM_ACCOUNT_SLUG}), which the nightly OWUI job rotates "
+            "on a schedule. A long-lived deployment must pass its own slug so a "
+            "scheduled run cannot revoke the key it depends on."
+        ),
+    )
+    parser.add_argument(
+        "--env-file",
+        default="",
+        help=(
+            f"Path to a compose .env whose {SHIM_ENV_VAR} should be rewritten to "
+            "the newly minted key, before the previous key is revoked."
+        ),
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     supabase_url = env("SUPABASE_URL").rstrip("/")
     service_key = env("SUPABASE_SERVICE_ROLE_KEY")
     headers = {
@@ -362,11 +473,13 @@ def main() -> None:
 
     # 4. Upsert the throwaway shim billing account (older accounts/api_keys
     # schema -- separate from the tenants/tenant_users rows above).
+    account_slug = args.account_slug
+    account_name = SHIM_ACCOUNT_NAME if account_slug == SHIM_ACCOUNT_SLUG else f"OWUI Shim ({account_slug})"
     status, body = request(
         rest, headers, "POST", "/accounts",
         body={
-            "slug": SHIM_ACCOUNT_SLUG,
-            "display_name": SHIM_ACCOUNT_NAME,
+            "slug": account_slug,
+            "display_name": account_name,
             "account_type": "business",
             "owner_user_id": user_id,
         },
@@ -378,17 +491,10 @@ def main() -> None:
         sys.exit(1)
     shim_account_id = body[0]["id"]
 
-    # 5. Rotate the shim API key: drop any previous key(s) for this account
-    # (cascades to their policy rows) then mint a fresh one, same rotate-
-    # every-run posture as the GoTrue password above.
-    status, body = request(
-        rest, headers, "DELETE", "/api_keys",
-        params={"account_id": f"eq.{shim_account_id}"},
-    )
-    if status not in (200, 204):
-        print(f"error: shim key cleanup failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-
+    # 5. Mint the new shim key FIRST, and revoke the account's previous keys
+    # only in step 7, after every configured consumer carries the new value.
+    # The old order (delete, mint, then best-effort consumer sync) left a
+    # deployment on a revoked key whenever the sync failed.
     raw_secret, token_hash, redacted_suffix = random_api_key()
     status, body = request(
         rest, headers, "POST", "/api_keys",
@@ -415,16 +521,42 @@ def main() -> None:
         print(f"error: shim key policy create failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
 
-    # 6. Best-effort: keep OWUI's own persisted config in sync with the
-    # key just minted above (see module docstring). Never touches the
-    # stdout contract below.
-    sync_owui_config(raw_secret)
+    # 6. Update every configured consumer of this value: the compose .env a
+    # restart reads, and Open WebUI's own persisted OpenAI config (which
+    # outlives the env var, see module docstring). Neither is configured in
+    # CI, which materializes a fresh .env.ci and a fresh OWUI container per
+    # run; both are the whole point on a long-lived deployment.
+    consumer_failed = False
+    if args.env_file:
+        consumer_failed = not rewrite_env_file(args.env_file, raw_secret) or consumer_failed
+    consumer_failed = sync_owui_config(raw_secret) is False or consumer_failed
+
+    # 7. Revoke the account's previous keys (cascades to their policy rows),
+    # excluding the one just minted. Held back until the consumers above are
+    # updated: revoking first is what turns a failed sync into an outage.
+    if consumer_failed:
+        print(
+            "error: leaving the previous shim key(s) active because a configured "
+            "consumer was not updated; the deployment keeps working on the old key. "
+            "Fix the failure above and re-run.",
+            file=sys.stderr,
+        )
+    else:
+        status, body = request(
+            rest, headers, "DELETE", "/api_keys",
+            params={"account_id": f"eq.{shim_account_id}", "id": f"neq.{shim_key_id}"},
+        )
+        if status not in (200, 204):
+            print(f"error: shim key cleanup failed: {status} {body}", file=sys.stderr)
+            sys.exit(1)
 
     print(f"EMAIL={USER_EMAIL}")
     print(f"PASSWORD={password}")
     print(f"SHIM_KEY={raw_secret}")
     print(f"BOOTSTRAP_EMAIL={BOOTSTRAP_EMAIL}")
     print(f"BOOTSTRAP_PASSWORD={bootstrap_password}")
+    if consumer_failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

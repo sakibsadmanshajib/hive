@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
@@ -61,7 +67,7 @@ func TestHandleModelsReturnsSeededHiveAliases(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, "").ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -135,7 +141,7 @@ func TestHandleModelsDoesNotLeakProviderNames(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, "").ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if strings.Contains(strings.ToLower(rr.Body.String()), "openrouter") || strings.Contains(strings.ToLower(rr.Body.String()), "groq") {
 		t.Fatalf("expected provider-blind response, got %s", rr.Body.String())
@@ -150,7 +156,7 @@ func TestModelsRouteRequiresValidAPIKey(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_invalid")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, "").ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
@@ -162,99 +168,47 @@ func TestModelsRouteRequiresValidAPIKey(t *testing.T) {
 
 // testOWUIShimKey mirrors the shape a deployment is supposed to configure:
 // OWUI_SHIM_KEY is documented as a minted Hive API key, so it carries the hk_
-// prefix. It deliberately resolves to nothing here, which is the state that
-// matters for these tests and the state the demo box was actually in. The
-// exception under test admits the credential on its own value rather than on a
-// successful key lookup, so it must hold whether or not the key resolves, and
-// the tests below pair it with an authorizer that resolves nothing.
+// prefix. It deliberately resolves to nothing here, which is the state the demo
+// box was actually in when Open WebUI's model picker came up empty.
 const testOWUIShimKey = "hk_owui_shim_test"
 
-// TestModelsRouteAcceptsOWUIShimKeyOnGET pins the narrow exception that
-// unblocks the Open WebUI model picker. OWUI probes GET /v1/models with a
-// bodyless request, so the OWUI unwrap middleware has no body to lift the
-// per-user JWT out of and the shim key stays on Authorization. The model
-// list is identical to the unauthenticated /catalog/models payload, so
-// admitting the shim key here reveals nothing that is not already public.
-func TestModelsRouteAcceptsOWUIShimKeyOnGET(t *testing.T) {
+// TestModelsRouteRejectsUnresolvableOWUIShimKey is the regression guard for the
+// symptom fix this change replaced. An earlier revision admitted the OWUI shim
+// key on GET /v1/models with no key lookup, so the model picker populated while
+// the very same credential still failed on Open WebUI's document-RAG embeddings
+// and text-to-speech, and nothing anywhere named the cause. Model listing must
+// keep requiring a credential this service can resolve, so a dead shim key
+// cannot look healthy.
+func TestModelsRouteRejectsUnresolvableOWUIShimKey(t *testing.T) {
 	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{
 		"models": [
 			{"id":"hive-default","object":"model","created":1716935002,"owned_by":"hive"}
 		],
 		"catalog": []
 	}`))
-	// Deliberately an authorizer that resolves nothing: the shim key must
-	// be admitted without any key lookup succeeding.
 	authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer "+testOWUIShimKey)
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, testOWUIShimKey).ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200 for shim-key model listing, got %d: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for an unresolvable shim key, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if !strings.Contains(rr.Body.String(), "hive-default") {
-		t.Fatalf("expected catalog aliases in response, got %s", rr.Body.String())
-	}
-}
-
-// TestModelsRouteRejectsOWUIShimKeyOnNonGET keeps the exception pinned to
-// the read verb OWUI actually probes with. Any other verb on /v1/models
-// must still require a resolvable credential.
-func TestModelsRouteRejectsOWUIShimKeyOnNonGET(t *testing.T) {
-	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		t.Run(method, func(t *testing.T) {
-			client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{"models":[],"catalog":[]}`))
-			authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
-
-			req := httptest.NewRequest(method, "/v1/models", nil)
-			req.Header.Set("Authorization", "Bearer "+testOWUIShimKey)
-			rr := httptest.NewRecorder()
-
-			handleModels(client, authorizer, testOWUIShimKey).ServeHTTP(rr, req)
-
-			if rr.Code != http.StatusUnauthorized {
-				t.Fatalf("expected 401 for %s with shim key, got %d: %s", method, rr.Code, rr.Body.String())
-			}
-		})
+	if strings.Contains(rr.Body.String(), "hive-default") {
+		t.Fatalf("catalog must not be served to an unresolvable credential, got %s", rr.Body.String())
 	}
 }
 
-// TestModelsRouteRejectsShimKeyWhenShimDisabled covers deployments with no
-// OWUI front-end: an empty shim key must never turn into a wildcard that
-// admits arbitrary bearer tokens.
-func TestModelsRouteRejectsShimKeyWhenShimDisabled(t *testing.T) {
-	for _, name := range []string{"empty", "whitespace"} {
-		t.Run(name, func(t *testing.T) {
-			shim := ""
-			if name == "whitespace" {
-				shim = "   "
-			}
-			client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{"models":[],"catalog":[]}`))
-			authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
-
-			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
-			req.Header.Set("Authorization", "Bearer "+shim)
-			rr := httptest.NewRecorder()
-
-			handleModels(client, authorizer, shim).ServeHTTP(rr, req)
-
-			if rr.Code != http.StatusUnauthorized {
-				t.Fatalf("expected 401 when shim disabled, got %d: %s", rr.Code, rr.Body.String())
-			}
-		})
-	}
-}
-
-// TestOWUIShimKeyIsNotHonouredOutsideModelListing is the containment guard
-// for the exception above. Every other authorized route resolves its
-// credential through authorizeAliasRequest, which knows nothing about the
-// shim key. If a future change moves the exception down into the shared
-// authorizer, this test fails.
-func TestOWUIShimKeyIsNotHonouredOutsideModelListing(t *testing.T) {
+// TestOWUIShimKeyIsNeverSpecialCasedOnAuthorizedRoutes pins containment: no
+// authorized route branches on "is this the OWUI shim key". Every one of them
+// resolves its credential through authorizeAliasRequest, which knows nothing
+// about that value.
+func TestOWUIShimKeyIsNeverSpecialCasedOnAuthorizedRoutes(t *testing.T) {
 	paths := []string{
+		"/v1/models",
 		"/v1/chat/completions",
 		"/v1/embeddings",
 		"/v1/audio/speech",
@@ -313,7 +267,7 @@ func TestModelsRouteUsesLimiter(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_rate_limited")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, "").ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d: %s", rr.Code, rr.Body.String())
@@ -555,7 +509,7 @@ func TestHandleModelsFiltersByTenantForJWTSession(t *testing.T) {
 	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), TenantID: tenantID, Role: "member"}))
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, "").ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200 for a JWT session, got %d: %s", rr.Code, rr.Body.String())
@@ -594,7 +548,7 @@ func TestHandleModelsKeepsGlobalListForAPIKeyCaller(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer, "").ServeHTTP(rr, req)
+	handleModels(client, authorizer).ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -692,4 +646,182 @@ func TestVoiceGateForAPIKeysBypassesGateForAPIKeyCallers(t *testing.T) {
 			t.Fatalf("jwt caller: got status %d, want 403 (gate still enforced)", rec.Code)
 		}
 	})
+}
+
+// stubShimKeyResolver is a canned authz resolver for the OWUI shim-key probe.
+type stubShimKeyResolver struct {
+	snapshot authz.AuthSnapshot
+	err      error
+	calls    atomic.Int64
+	seen     chan struct{}
+}
+
+func (s *stubShimKeyResolver) Resolve(_ context.Context, _ string) (authz.AuthSnapshot, error) {
+	s.calls.Add(1)
+	if s.seen != nil {
+		select {
+		case s.seen <- struct{}{}:
+		default:
+		}
+	}
+	return s.snapshot, s.err
+}
+
+func TestCheckOWUIShimKeyClassifiesEveryUnusableState(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolver *stubShimKeyResolver
+		wantErr  string
+	}{
+		{
+			name:     "unregistered or revoked key does not resolve",
+			resolver: &stubShimKeyResolver{err: errors.New("authz: resolve status 404: not found")},
+			wantErr:  "does not resolve",
+		},
+		{
+			name:     "resolved key is not active",
+			resolver: &stubShimKeyResolver{snapshot: authz.AuthSnapshot{Status: "revoked", AllowAllModels: true}},
+			wantErr:  `status "revoked"`,
+		},
+		{
+			name:     "resolved key permits no models",
+			resolver: &stubShimKeyResolver{snapshot: authz.AuthSnapshot{Status: "active"}},
+			wantErr:  "allowed no models",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkOWUIShimKey(context.Background(), tc.resolver, testOWUIShimKey)
+			if err == nil {
+				t.Fatalf("expected an error naming the cause, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("expected error containing %q, got %q", tc.wantErr, err.Error())
+			}
+		})
+	}
+}
+
+func TestCheckOWUIShimKeyAcceptsAResolvableKey(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		snapshot authz.AuthSnapshot
+	}{
+		{"allow all models", authz.AuthSnapshot{Status: "active", AllowAllModels: true}},
+		{"explicit allowlist", authz.AuthSnapshot{Status: "active", AllowedAliases: []string{"hive-embedding-default"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver := &stubShimKeyResolver{snapshot: tc.snapshot}
+			if err := checkOWUIShimKey(context.Background(), resolver, testOWUIShimKey); err != nil {
+				t.Fatalf("expected a healthy verdict, got %v", err)
+			}
+		})
+	}
+}
+
+// TestWatchOWUIShimKeyReportsAnUnusableKey is the alarm that replaces the empty
+// model picker. A dead shim key must reach the operator log with the cause and
+// the remedy named, not just fail three features quietly.
+func TestWatchOWUIShimKeyReportsAnUnusableKey(t *testing.T) {
+	logged := captureLog(t)
+	resolver := &stubShimKeyResolver{err: errors.New("authz: resolve status 404: not found")}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Hour)
+		close(done)
+	}()
+	waitFor(t, func() bool { return strings.Contains(logged.String(), "OWUI_SHIM_KEY") })
+	cancel()
+	<-done
+
+	out := logged.String()
+	for _, want := range []string{"ERROR", "OWUI_SHIM_KEY", "does not resolve", "scripts/seed-owui-e2e-user.py"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected the log to contain %q, got %q", want, out)
+		}
+	}
+}
+
+// TestWatchOWUIShimKeyLogsRecovery proves the alarm clears, so an operator can
+// tell a fixed key from an unmonitored one.
+func TestWatchOWUIShimKeyLogsRecovery(t *testing.T) {
+	logged := captureLog(t)
+	resolver := &stubShimKeyResolver{
+		err:  errors.New("authz: resolve status 404: not found"),
+		seen: make(chan struct{}, 1),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		watchOWUIShimKey(ctx, resolver, testOWUIShimKey, time.Millisecond)
+		close(done)
+	}()
+	waitFor(t, func() bool { return strings.Contains(logged.String(), "ERROR") })
+	resolver.snapshot = authz.AuthSnapshot{Status: "active", AllowAllModels: true}
+	resolver.err = nil
+	waitFor(t, func() bool { return strings.Contains(logged.String(), "resolves to an active Hive API key") })
+	cancel()
+	<-done
+}
+
+// TestWatchOWUIShimKeyIsANoOpWhenUnset keeps deployments with no Open WebUI
+// front-end silent, and must not probe at all.
+func TestWatchOWUIShimKeyIsANoOpWhenUnset(t *testing.T) {
+	for _, shimKey := range []string{"", "   "} {
+		resolver := &stubShimKeyResolver{}
+		watchOWUIShimKey(context.Background(), resolver, shimKey, time.Millisecond)
+		if got := resolver.calls.Load(); got != 0 {
+			t.Fatalf("expected no probe for shim key %q, got %d calls", shimKey, got)
+		}
+	}
+}
+
+// captureLog redirects the standard logger for one test and returns the buffer.
+func captureLog(t *testing.T) *syncBuffer {
+	t.Helper()
+	buf := &syncBuffer{}
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
+	return buf
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer: the watcher writes from its own
+// goroutine while the test reads.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func waitFor(t *testing.T, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("condition not met within 2s")
 }

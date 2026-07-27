@@ -332,14 +332,10 @@ func TestOWUIUnwrap_CaseInsensitiveScheme(t *testing.T) {
 	}
 }
 
-// TestOWUIUnwrap_GETRequestPassesThrough is kept, not deleted, and its
-// assertion is unchanged: a bodyless GET has no __metadata to lift, so this
-// middleware cannot rewrite it and must leave the shim key in place. That
-// pass-through used to strand the model picker, because the shim key then
-// failed authorization downstream. The fix is not here but in handleModels,
-// which now admits exactly this credential on exactly GET /v1/models
-// (see TestModelsRouteAcceptsOWUIShimKeyOnGET). Keeping this test proves
-// the middleware stayed narrow and the exception lives in one place.
+// TestOWUIUnwrap_GETRequestPassesThrough documents that a bodyless GET has no
+// __metadata to lift, so this middleware cannot rewrite it and leaves the shim
+// key on the header. Downstream authorization then resolves that key like any
+// other API key, which is why OWUI_SHIM_KEY has to be a real minted key.
 func TestOWUIUnwrap_GETRequestPassesThrough(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCaptureHandler()

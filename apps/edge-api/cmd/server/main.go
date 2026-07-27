@@ -125,6 +125,12 @@ func main() {
 	}
 	authorizer := authz.NewAuthorizer(authzClient, limiter, authz.WithFailOpen(failOpen))
 
+	// Open WebUI authenticates its own upstream calls with OWUI_SHIM_KEY alone
+	// (model listing, document-RAG embeddings, text-to-speech). All three fail
+	// silently or with a misleading invalid-key error when that key does not
+	// resolve, so probe it here and keep probing. See watchOWUIShimKey.
+	go watchOWUIShimKey(rootCtx, authzClient, os.Getenv("OWUI_SHIM_KEY"), owuiShimKeyProbeInterval)
+
 	// Initialize Prometheus metrics registry for edge-api.
 	edgeMetrics, promRegistry := proxy.NewEdgeMetrics()
 
@@ -417,7 +423,7 @@ func main() {
 	}
 
 	// API routes
-	mux.Handle("/v1/models", handleModels(catalogClient, authorizer, os.Getenv("OWUI_SHIM_KEY")))
+	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
 	// Feature-gate read seam for Open WebUI (issue #293). OWUI has no in-repo
@@ -733,31 +739,17 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 
 // handleModels serves the OpenAI-compatible model list.
 //
-// owuiShimKey is the value of OWUI_SHIM_KEY. When non-empty, a GET carrying
-// exactly that credential is served without an API-key lookup. Open WebUI
-// probes GET /v1/models with no request body, so the OWUI unwrap middleware
-// has nothing to lift the signed-in user's JWT out of and the shim key stays
-// on the Authorization header, where authorization then fails and the model
-// picker renders empty. An empty picker means the browser never issues a
-// chat request at all, so the whole chat surface looks like a silent no-op.
-//
-// Admitting the shim key here discloses nothing: a shim GET carries no tenant
-// identity, so it takes the account-scoped branch and gets the same unfiltered
-// catalog every API-key caller gets, and byte-for-byte that alias list is
-// already served with no authentication at all on /catalog/models (registered
-// a few lines below the /v1/models route in main). The gate was protecting
-// public data. Tenant-scoped callers are unaffected: they are resolved by the
-// JWT middleware and still get the tenant-filtered list. The exception is
-// deliberately kept as narrow as the problem:
-//
-//   - GET only. Any other verb still requires a resolvable credential.
-//   - This handler only. Every other authorized route resolves its
-//     credential through authorizeAliasRequest, which has no knowledge of
-//     the shim key.
-//   - Exact match on the configured shim key, never a prefix or a
-//     wildcard, and disabled entirely when OWUI_SHIM_KEY is unset.
-func handleModels(client *catalog.Client, authorizer *authz.Authorizer, owuiShimKey string) http.Handler {
-	shimKey := strings.TrimSpace(owuiShimKey)
+// Every caller needs a credential this service can resolve: a signed-in
+// user's JWT (tenant-filtered list) or a registered API key (account-scoped
+// list). There is no exception for the Open WebUI shim key. Open WebUI
+// reaches this route with `OWUI_SHIM_KEY` on the Authorization header and
+// no request body, so the OWUI unwrap middleware has nothing to lift a
+// per-user JWT out of; that credential is expected to be a real minted
+// Hive API key, and when it is, this handler resolves it like any other.
+// An empty model picker in Open WebUI therefore means the configured shim
+// key does not resolve, which is a deployment fault and is reported as
+// such by the startup and periodic shim-key probe (see watchOWUIShimKey).
+func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// JWT-session caller: the JWT middleware already authenticated the
 		// request and resolved the tenant, so serve the tenant-filtered list.
@@ -781,21 +773,11 @@ func handleModels(client *catalog.Client, authorizer *authz.Authorizer, owuiShim
 		// tenant-scoped, so there is no tenant to filter on and the key policy
 		// allowlist governs what they may actually invoke.
 		//
-		// The OWUI shim key lands here too, and is the one credential admitted
-		// without a key lookup succeeding. A GET carries no JSON body, so the
-		// shim request is never unwrapped to a per-user JWT and arrives with no
-		// tenant identity, which is exactly why the tenant branch above does
-		// not catch it. It is then served the same global list every other
-		// account-scoped caller gets rather than a second list source of its
-		// own. Tenant-filtering this surface needs the shim to carry a tenant,
-		// which is the shim-auth work tracked separately.
-		shimListing := shimKey != "" &&
-			r.Method == http.MethodGet &&
-			auth.HasShimAuthorization(r.Header.Get("Authorization"), shimKey)
-		if !shimListing {
-			if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
-				return
-			}
+		// The OWUI shim key lands here too and is resolved exactly like any
+		// other API key. Tenant-filtering that surface needs the shim to carry
+		// a tenant, which is the shim-auth work tracked separately.
+		if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
+			return
 		}
 
 		snapshot, err := client.FetchSnapshot(r.Context())
@@ -1018,6 +1000,89 @@ func authSelectorMiddleware(jwtMW func(http.Handler) http.Handler, next http.Han
 		}
 		selector.ServeHTTP(w, r)
 	})
+}
+
+// owuiShimKeyProbeInterval is how often the OWUI shim-key health probe
+// re-resolves OWUI_SHIM_KEY after its boot check. The key can stop resolving
+// long after startup (revoked, or rotated on one side only), so a boot-only
+// check would miss the failure mode that actually happens.
+const owuiShimKeyProbeInterval = 5 * time.Minute
+
+// owuiShimKeyProbeTimeout bounds a single probe so a stalled control-plane
+// cannot wedge the watch loop.
+const owuiShimKeyProbeTimeout = 10 * time.Second
+
+// shimKeyResolver is the slice of authz.Client the OWUI shim-key probe needs.
+type shimKeyResolver interface {
+	Resolve(ctx context.Context, rawToken string) (authz.AuthSnapshot, error)
+}
+
+// checkOWUIShimKey reports why the configured OWUI shim key cannot serve Open
+// WebUI's own upstream calls, or nil when it can.
+//
+// OWUI_SHIM_KEY is expected to be a real minted Hive API key. Open WebUI
+// presents it, and nothing else, on the upstream calls that carry no
+// signed-in user: the bodyless GET /v1/models the model picker is built from,
+// document-RAG embeddings, and text-to-speech. A key that does not resolve
+// breaks all three, and every one of those failures is either invisible (an
+// empty picker issues no request at all) or reported to the customer as a
+// generic invalid-key error that names no cause. This probe is the signal
+// that names it.
+func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string) error {
+	snapshot, err := resolver.Resolve(ctx, shimKey)
+	if err != nil {
+		return fmt.Errorf("it does not resolve to a Hive API key: %w", err)
+	}
+	if snapshot.Status != "active" {
+		return fmt.Errorf("the key it names has status %q, not active", snapshot.Status)
+	}
+	// A key with neither allow_all_models nor any allowlisted alias resolves
+	// fine and then denies every model, which reaches the operator as the same
+	// silent outage.
+	if !snapshot.AllowAllModels && len(snapshot.AllowedAliases) == 0 {
+		return errors.New("the key it names is allowed no models (allow_all_models is false and its alias allowlist is empty)")
+	}
+	return nil
+}
+
+// watchOWUIShimKey probes the configured OWUI shim key at boot and every
+// interval after that, logging every transition between usable and unusable.
+// Logging only on change keeps a healthy deployment quiet while making a
+// broken one loud, and makes a mid-life revocation visible within one
+// interval rather than never.
+//
+// Deliberately not fatal: edge-api serves API-key and JWT traffic that has
+// nothing to do with Open WebUI, and refusing to boot over a chat-surface
+// credential would turn a degraded chat surface into a total outage. A no-op
+// when OWUI_SHIM_KEY is unset, which is the normal state for a deployment
+// with no Open WebUI front-end.
+func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string, interval time.Duration) {
+	shimKey = strings.TrimSpace(shimKey)
+	if shimKey == "" {
+		return
+	}
+	reported := false
+	lastHealthy := false
+	for {
+		probeCtx, cancel := context.WithTimeout(ctx, owuiShimKeyProbeTimeout)
+		err := checkOWUIShimKey(probeCtx, resolver, shimKey)
+		cancel()
+		healthy := err == nil
+		if !reported || healthy != lastHealthy {
+			if healthy {
+				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key; Open WebUI model listing, document RAG embeddings, and text-to-speech can authenticate")
+			} else {
+				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its document RAG embeddings and text-to-speech will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
+			}
+			reported = true
+			lastHealthy = healthy
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
 }
 
 // authorizeAliasRequest performs hot-path authorization.
