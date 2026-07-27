@@ -76,11 +76,70 @@ test("launcher is present down to 768px and never overlaps the header", async ({
   // than by the launcher; custom.css carries the measurement table. Below it the
   // launcher is deliberately absent and the per-message Action is the entry
   // point, so 375px asserts absence, not presence.
+  // The clearance the gate is built on is consumed by the SELECTED model's id,
+  // so measuring against the short "Select a model" placeholder would prove
+  // nothing. Use the longest id this deployment actually serves, falling back to
+  // the longest realistic OpenRouter-style id when the catalogue is empty (which
+  // it is wherever the shim has no tenant mapping for the test account).
+  const served: string[] = await page.evaluate(async () => {
+    try {
+      const res = await fetch("/api/models", {
+        headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+      });
+      const body = await res.json();
+      return (body?.data ?? []).map((m: { id?: string; name?: string }) =>
+        String(m.id ?? m.name ?? ""),
+      );
+    } catch {
+      return [];
+    }
+  });
+  const longestModelId = [
+    ...served,
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+  ].sort((a, b) => b.length - a.length)[0];
+
   for (const width of [1440, 1024, 900, 768]) {
     await page.setViewportSize({ width, height: 820 });
     await page.goto("/");
     const launcher = page.locator(LAUNCHER);
     await expect(launcher, `launcher at ${width}px`).toBeVisible();
+
+    // loader.js injects before OWUI hydrates, so the launcher exists while the
+    // header is still empty. Wait for OWUI's own selector before measuring
+    // against it, otherwise the clearance check runs on a half-built header.
+    await expect(
+      page.locator('button[aria-label="Select a model"]'),
+      `OWUI model selector at ${width}px`,
+    ).toBeVisible();
+
+    // Push OWUI's model selector out to its worst realistic width first. Its
+    // computed max-width is `none`, so the left-hand header group grows with
+    // this string and is what the launcher has to clear.
+    const selectorGrew = await page.evaluate((label) => {
+      const target = document.querySelector(
+        'button[aria-label="Select a model"]',
+      );
+      if (!target) return null;
+      const before = target.getBoundingClientRect().width;
+      const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+      const nodes: Text[] = [];
+      while (walk.nextNode()) {
+        const node = walk.currentNode;
+        if (node instanceof Text) nodes.push(node);
+      }
+      if (!nodes.length) return null;
+      nodes[0].nodeValue = label;
+      return { before, after: target.getBoundingClientRect().width };
+    }, longestModelId);
+
+    // If this stops finding the selector, the overlap check below is measuring
+    // a header that never widened, which is exactly the false pass to avoid.
+    expect(selectorGrew, `model selector not found at ${width}px`).not.toBeNull();
+    expect(
+      selectorGrew?.after ?? 0,
+      `model selector did not widen at ${width}px`,
+    ).toBeGreaterThan(selectorGrew?.before ?? 0);
 
     // Nothing else in the header band may intersect it: this element sits above
     // OWUI's, so an overlap would swallow clicks meant for OWUI's own controls.
@@ -109,7 +168,10 @@ test("launcher is present down to 768px and never overlaps the header", async ({
             other.tagName,
         );
     }, LAUNCHER);
-    expect(overlaps, `overlaps at ${width}px`).toEqual([]);
+    expect(
+      overlaps,
+      `overlaps at ${width}px with model id "${longestModelId}"`,
+    ).toEqual([]);
 
     // Icon-only below 1024px, matching the shape of OWUI's own header controls.
     const labelShown = await page
@@ -138,14 +200,28 @@ test("launcher survives client-side navigation without duplicating", async ({
   // loader.js runs once per document load, so any duplication or disappearance
   // has to be caused by SvelteKit re-rendering, which is exactly what these
   // hops exercise. The zero-load assertion is what makes them meaningful.
+  //
+  // Every step below asserts the app actually moved, not just that the click
+  // returned. A missing selector or a no-op click would otherwise leave this
+  // test green while exercising no re-render at all.
   await page.locator('button[aria-label="Open Sidebar"]').first().click();
+  // The drawer's own nav links becoming visible is the proof it opened.
+  await expect(
+    page.locator('a[href="/notes"]').first(),
+    "sidebar drawer did not open",
+  ).toBeVisible();
   await expect(page.locator(LAUNCHER)).toHaveCount(1);
 
   for (const href of ["/notes", "/workspace", "/"]) {
     const link = page.locator(`a[href="${href}"]`).first();
-    if ((await link.count()) === 0) continue;
+    await expect(link, `no link to ${href} rendered`).toBeVisible();
     await link.click();
-    await page.waitForTimeout(1500);
+    // Exact match, or one segment deeper: OWUI redirects /workspace to
+    // /workspace/models. Deliberately not a bare startsWith, which "/"
+    // satisfies always and would make this hop assert nothing.
+    const arrived = (pathname: string) =>
+      pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
+    await page.waitForURL((url) => arrived(url.pathname), { timeout: 15_000 });
     await expect(page.locator(LAUNCHER), `after nav to ${href}`).toHaveCount(1);
   }
 

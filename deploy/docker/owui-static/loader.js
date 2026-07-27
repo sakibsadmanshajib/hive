@@ -91,47 +91,52 @@
   // appeared only after the next navigation, which is the worst possible place
   // to lose it.
   //
-  // Two phases, because one interval cannot serve both cases this has to cover:
+  // Two intervals, because one cannot serve both cases this has to cover:
   //
   //   1. Hydration, which resolves in well under a second. FAST_INTERVAL_MS.
   //   2. Sign-in, which is however long a person takes to type a password.
   //      OWUI signs in WITHOUT a document load -- confirmed live: zero `load`
   //      events fire, the SPA just routes from /auth to / -- so this script
-  //      never runs again and the poll is the only thing that can notice. The
-  //      original ~6s ceiling therefore had a real defect behind it: park on
-  //      the sign-in screen for longer than six seconds, which a password
-  //      manager or simply reading the page will do, and the launcher stayed
-  //      absent for the whole session until a manual reload. Reproduced before
-  //      this change and fixed after it.
+  //      never runs again and the poll is the only thing that can notice.
   //
-  // Still terminates: it stops the instant the node exists, and gives up for
-  // good at GIVE_UP_AFTER_MS so an abandoned tab does not keep a timer alive
-  // forever. Each attempt is two synchronous property reads and never touches
-  // OWUI's DOM, so the slow phase costs nothing worth measuring.
+  // The stop condition is the tab being hidden, NOT an elapsed-time ceiling.
+  // Every deadline measured from page load has the same defect, only further
+  // out: whatever the number, a person who sits on the sign-in screen longer
+  // than it loses the launcher for the rest of the session. A ~6s ceiling
+  // shipped first and broke on password managers; a 10 minute one would still
+  // break on someone reading the page. Elapsed time since load is simply not
+  // the signal -- the timer only needs to stop when nobody is looking, which
+  // `document.hidden` answers directly. So it polls while the tab is
+  // foreground, stops when it is backgrounded, and resumes on
+  // visibilitychange. An abandoned tab keeps no timer alive; a tab someone is
+  // actually looking at keeps waiting, which is exactly when it should.
+  //
+  // Each attempt is two synchronous property reads and never touches OWUI's
+  // DOM, so the slow phase costs nothing worth measuring.
   //
   // Sign-OUT needs no equivalent handling: it does trigger a full document
   // load, so the launcher disappears with the rest of the page. Also verified.
   var FAST_INTERVAL_MS = 400;
   var SLOW_INTERVAL_MS = 1000;
   var FAST_ATTEMPTS = 15; // ~6s of hydration cover
-  var GIVE_UP_AFTER_MS = 600000; // 10 minutes
-  var startedAt = Date.now();
   var attempts = 0;
+  var pending = null;
 
   function attempt() {
+    pending = null;
     inject();
     attempts += 1;
-    if (
-      document.getElementById(ID) ||
-      Date.now() - startedAt >= GIVE_UP_AFTER_MS
-    ) {
-      return;
-    }
-    setTimeout(
+    if (document.getElementById(ID) || document.hidden) return;
+    pending = setTimeout(
       attempt,
       attempts < FAST_ATTEMPTS ? FAST_INTERVAL_MS : SLOW_INTERVAL_MS,
     );
   }
+
+  // `pending` keeps a resume from stacking a second timer on top of a live one.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && !pending && !document.getElementById(ID)) attempt();
+  });
 
   attempt();
 })();

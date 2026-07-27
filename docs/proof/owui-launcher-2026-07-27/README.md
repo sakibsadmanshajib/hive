@@ -36,7 +36,16 @@ same properties read `0px 12px`, `8px`, `1px`, `rgb(255, 255, 255)`,
 | `0768-768px-header-BEFORE.png` / `0768-768px-header.png` | Same, at the new floor |
 | `0375-375px-header-BEFORE.png` / `0375-375px-header.png` | Unchanged and deliberately absent, for the reason below |
 | `*-header-model-selected*.png` | The same widths with the seeded default model id (`route-openrouter-default`) in Open WebUI's selector, which is what actually consumes the header's free span |
+| `*-header-long-model-id.png` | The worst realistic case: a 44-character OpenRouter-style id (`meta-llama/llama-4-maverick-17b-128e-instruct`). This is the pair the 768px gate is actually justified by |
 | `*-full.png` | Whole viewport at each width, so the header crops cannot hide a layout problem elsewhere |
+
+Measured clearance with that 44-character id, launcher left edge minus the
+left-hand group's right edge: 643px at 1440, 227px at 1024, 248px at 900, and
+116px at 768. The spec asserts this rather than trusting the numbers: it sets
+the selector's label to the longest id the deployment serves (falling back to the
+44-character one when the catalogue is empty) and fails if the selector does not
+actually widen, so the clearance check can never pass against a header that never
+grew.
 
 Why the floor is 768px and not 375px: Open WebUI's model selector is unclamped
 (`max-width: none`), so its left-hand header group grows with the length of the
@@ -77,6 +86,13 @@ lost the launcher for anyone who spent longer than six seconds on the sign-in
 screen. Sign-out needs no equivalent handling because it does trigger a full
 document load, also verified.
 
+Review follow-up: the first fix replaced that 6s ceiling with a 10 minute one,
+which is the same defect at a larger number. Any deadline measured from page load
+fails whoever sits on the sign-in screen longer than it. The poll now stops on
+`document.hidden` instead and resumes on `visibilitychange`, so there is no
+elapsed-time ceiling at all: an abandoned tab keeps no timer alive, and a tab
+someone is looking at keeps waiting.
+
 ## Capture notes, so the conditions are on the record
 
 - Signed in through Open WebUI's own email and password form, against a local
@@ -95,6 +111,11 @@ document load, also verified.
   a chat send that could not complete without a model.
 - `apps/web-console/e2e/phase-19/owui/09-agent-workspace-launcher.spec.ts`
   encodes all of the above as assertions. Verified in both directions: 4 passed
-  against this change, and the late-sign-in test fails with
-  `element(s) not found` when `loader.js`'s retry schedule is reverted to
-  `origin/main`'s.
+  against this change, and each guard was confirmed to bite by breaking the thing
+  it protects.
+  - Clearance: moving the launcher to `right: 380px` makes the overlap check fail
+    at 1024px, naming the 44-character model id in the failure message.
+  - Navigation: pointing the sidebar click at a non-existent `aria-label` makes
+    the client-side-navigation test fail instead of passing on a no-op.
+  - Late sign-in: reverting `loader.js`'s retry schedule to `origin/main`'s makes
+    it fail with `element(s) not found`.

@@ -34,7 +34,7 @@
  * white-filled, bordered, drop-shadowed pill matched none of that and read as
  * an overlay pasted on top of the app.
  *
- * PLACEMENT. `right: 7.5rem` (120px) is derived, not guessed. OWUI's right-hand
+ * PLACEMENT. `right: 120px` is derived, not guessed. OWUI's right-hand
  * icon cluster never collapses or reflows: measured at 1440, 1280, 1024, 900,
  * 768, 640, 600, 540, 480, 414, 390 and 375px, its left edge stays pinned
  * 116-118px from the viewport's right edge. 120px puts this control just
@@ -74,11 +74,11 @@
  * ─────────────────────────────────────────────────────────────────────────── */
 #hive-agent-launcher {
   position: fixed;
-  /* 7px, not a round rem value, because that is where OWUI's own 34px header
-     buttons sit: flex-centred in a 48px band. Matching it makes the row of
-     icons share one baseline. */
+  /* Both in px, both measured off the live header rather than rounded to a
+     convenient rem: 7px is where OWUI's own 34px header buttons sit, so the row
+     shares one baseline, and 120px clears its icon cluster (see table above). */
   top: 7px;
-  right: 7.5rem;
+  right: 120px;
   z-index: 30;
 
   display: none; /* enabled at 768px by the media queries below */
@@ -98,9 +98,12 @@
   text-decoration: none;
   white-space: nowrap;
 
+  /* cubic-bezier(0.4, 0, 0.2, 1) is what OWUI's own `transition` utility
+     computes to, read off the live page. Omitting it defaults to `ease`, which
+     is a visibly different curve on the same 150ms. */
   transition:
-    background-color 150ms,
-    color 150ms;
+    background-color 150ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 #hive-agent-launcher:hover {
