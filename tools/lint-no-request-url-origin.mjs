@@ -68,8 +68,21 @@ const ORIGIN_COPIES = [
 
 // Only these two come from the request line and are safe to read. Everything
 // else on a NextURL (origin, href, host, protocol, port, toString, clone)
-// carries the server's bind address.
+// carries the server's bind address, and so does the NextURL object itself when
+// it is used as a value rather than read through one of these.
 const SAFE_NEXTURL_MEMBERS = ["searchParams", "pathname"];
+
+// Request headers that carry a client-supplied origin. A route handler must
+// never assemble an origin from these itself; resolveCanonicalOrigin() is the
+// one place that validates them and applies the precedence order.
+const ORIGIN_BEARING_HEADERS = [
+  "host",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-forwarded-port",
+  "x-forwarded-server",
+  "forwarded",
+];
 
 // Property names that carry an origin. Reading any of them off a
 // request-derived object, by member access or by destructuring, is the defect.
@@ -92,12 +105,18 @@ const FORBIDDEN_PATTERNS = [
     what: "an `.origin` read (use resolveCanonicalOrigin() instead)",
   },
   {
-    // Any nextUrl member that is not on the safe list.
+    // Reading an origin-bearing header directly, e.g.
+    // `` `https://${request.headers.get("host")}/console` ``. Every one of these
+    // is client-supplied; only resolveCanonicalOrigin() may read them. The
+    // header name lives inside a string literal, so this runs against the pass
+    // that preserves literals.
     re: new RegExp(
-      String.raw`\bnextUrl\s*\.\s*(?!(?:${SAFE_NEXTURL_MEMBERS.join("|")})\b)[A-Za-z_$]`,
-      "g",
+      String.raw`\.\s*get\s*\(\s*(['"\`])\s*(?:${ORIGIN_BEARING_HEADERS.join("|")})\s*\1`,
+      "gi",
     ),
-    what: `an unsafe request.nextUrl member (only ${SAFE_NEXTURL_MEMBERS.join(" and ")} are safe)`,
+    what:
+      "reading an origin-bearing request header directly (use resolveCanonicalOrigin() instead)",
+    keepLiterals: true,
   },
   {
     // Destructuring an origin-bearing property, e.g.
@@ -297,6 +316,78 @@ function lineOf(text, index) {
   return line;
 }
 
+// Every shape in which `nextUrl` may legitimately appear, as a whitelist.
+//
+// A member-access blacklist is not enough: `new URL(next, request.nextUrl)`
+// reads no member at all, yet the NextURL stringifies to the bind-address URL
+// and so is exactly the original defect written with one fewer character. So
+// the rule is inverted. An occurrence of `nextUrl` is allowed only when it is
+// immediately read through a safe member, or destructured, which the separate
+// destructuring rule then vets for origin-bearing names.
+function findNextUrlMisuse(text) {
+  const safeMember = new RegExp(
+    String.raw`^\s*\.\s*(?:${SAFE_NEXTURL_MEMBERS.join("|")})\b`,
+  );
+  // `const { searchParams } = request.nextUrl` / `} = req.nextUrl`.
+  const destructured = /\}\s*=\s*[A-Za-z_$][\w$]*\s*\.\s*$/;
+  const offenders = [];
+  const re = /\bnextUrl\b/g;
+  let match = re.exec(text);
+  while (match !== null) {
+    const after = text.slice(re.lastIndex, re.lastIndex + 40);
+    const before = text.slice(0, match.index);
+    if (!safeMember.test(after) && !destructured.test(before)) {
+      offenders.push({
+        index: match.index,
+        what:
+          "an unsafe use of request.nextUrl (only " +
+          `${SAFE_NEXTURL_MEMBERS.join(" and ")} may be read from it, and the ` +
+          "NextURL itself must never be used as a value: it stringifies to the bind address)",
+      });
+    }
+    match = re.exec(text);
+  }
+  return offenders;
+}
+
+// The inversion the blacklist cannot express: a two-argument `new URL(path,
+// base)` is the shape that builds an absolute redirect target, so the file that
+// writes one must import the sanctioned origin helper. This is what catches a
+// base smuggled in from outside the scanned directories, for example
+// `new URL(p, originFrom(request))` with `originFrom` defined in lib/, which no
+// amount of pattern matching on this file alone would recognize as an origin.
+//
+// It does not fire on a one-argument `new URL(absoluteUrl)`, which is how a
+// handler legitimately redirects to an origin it did not build (the invoice PDF
+// route redirects to a signed Supabase Storage URL that way).
+function findUnguardedUrlBase(text) {
+  if (/\bresolveCanonicalOrigin\b/.test(text)) return [];
+  const offenders = [];
+  const re = /\bnew\s+URL\s*\(/g;
+  let match = re.exec(text);
+  while (match !== null) {
+    // Walk to the matching close paren, noting a comma at argument depth.
+    let depth = 1;
+    let hasSecondArg = false;
+    for (let i = re.lastIndex; i < text.length && depth > 0; i += 1) {
+      const c = text[i];
+      if (c === "(" || c === "[" || c === "{") depth += 1;
+      else if (c === ")" || c === "]" || c === "}") depth -= 1;
+      else if (c === "," && depth === 1) hasSecondArg = true;
+    }
+    if (hasSecondArg) {
+      offenders.push({
+        index: match.index,
+        what:
+          "a two-argument `new URL(path, base)` in a route handler that does not import " +
+          "resolveCanonicalOrigin (the base must come from it, not from the request)",
+      });
+    }
+    match = re.exec(text);
+  }
+  return offenders;
+}
+
 export function findOffenders(src) {
   const stripped = blankOut(src, { literals: true });
   // Same scan, but string and template text kept. Comments are blanked in both.
@@ -324,6 +415,19 @@ export function findOffenders(src) {
       offenders.push({ line, what, text: (srcLines[line - 1] ?? "").trim() });
       match = re.exec(text);
     }
+  }
+
+  // Rules that need more than a regex can express.
+  for (const found of [
+    ...findNextUrlMisuse(stripped.text),
+    ...findUnguardedUrlBase(stripped.text),
+  ]) {
+    const line = lineOf(stripped.text, found.index);
+    offenders.push({
+      line,
+      what: found.what,
+      text: (srcLines[line - 1] ?? "").trim(),
+    });
   }
 
   return offenders.sort((a, b) => a.line - b.line);
@@ -378,13 +482,43 @@ const MUST_CATCH = [
     "violation on the line after a block comment mentioning https://",
     "/* see https://example.test/docs */\nconst o = new URL(request.url).origin;",
   ],
+  [
+    // Reads no member, so every member-access rule is blind to it, yet the
+    // NextURL stringifies to the bind address. The most likely next occurrence,
+    // since both fixed handlers now literally destructure request.nextUrl.
+    "nextUrl passed as the base of new URL",
+    "import { resolveCanonicalOrigin } from '@/lib/http/origin';\n" +
+      "return NextResponse.redirect(new URL(safeNext, request.nextUrl));",
+  ],
+  [
+    "nextUrl aliased as a value, then used as a base",
+    "import { resolveCanonicalOrigin } from '@/lib/http/origin';\n" +
+      "const nu = request.nextUrl;\nreturn NextResponse.redirect(new URL(p, nu));",
+  ],
+  [
+    "origin assembled from the raw Host header",
+    "const h = request.headers.get('host');\n" +
+      "return NextResponse.redirect(`https://${h}/console`);",
+  ],
+  [
+    "origin assembled from X-Forwarded-Host",
+    'const h = request.headers.get("x-forwarded-host");',
+  ],
+  [
+    // The whole-program gap: the origin is built by a helper outside the
+    // scanned directories, so no expression in this file names it.
+    "base smuggled in from an unscanned helper",
+    "import { originFrom } from '@/lib/whatever';\n" +
+      "return NextResponse.redirect(new URL(safeNext, originFrom(request)));",
+  ],
 ];
 
 // Legitimate code that must NOT be flagged, or the lint is unusable.
 const MUST_ALLOW = [
   [
     "the fixed handler shape",
-    "const { searchParams } = request.nextUrl;\n" +
+    "import { resolveCanonicalOrigin } from '@/lib/http/origin';\n" +
+      "const { searchParams } = request.nextUrl;\n" +
       "const origin = resolveCanonicalOrigin(request);\n" +
       "return NextResponse.redirect(new URL(safeNext, origin));",
   ],
@@ -392,6 +526,20 @@ const MUST_ALLOW = [
   [
     "nextUrl.searchParams member access",
     "const c = request.nextUrl.searchParams.get('code');",
+  ],
+  [
+    // The invoice PDF route: a single-argument new URL redirect to an origin
+    // the handler did not build. Must not be dragged in by the inversion rule.
+    "one-argument redirect to an externally supplied absolute URL",
+    "const url = await getInvoicePdfUrl(id);\nreturn NextResponse.redirect(url, 302);",
+  ],
+  [
+    "a non-origin header read",
+    "const contentType = request.headers.get('content-type') ?? '';",
+  ],
+  [
+    "a nested call with a comma inside a one-argument new URL",
+    "const u = new URL(joinPath(base, suffix));",
   ],
   [
     "a comment naming the forbidden expressions",

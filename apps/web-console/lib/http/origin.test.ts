@@ -118,6 +118,22 @@ describe("resolveCanonicalOrigin precedence", () => {
     ).toBe("http://localhost:3000");
   });
 
+  it("falls through to the Host header when X-Forwarded-Host is unusable", () => {
+    // The documented precedence is a preference order. An unusable value in the
+    // higher-priority header must not shadow a perfectly good lower-priority
+    // one and drop the caller all the way to the localhost fallback.
+    for (const unusable of ["0.0.0.0", "not a host", "", ","]) {
+      expect(
+        resolveCanonicalOrigin(
+          requestWith({
+            "x-forwarded-host": unusable,
+            host: "console-hive.scubed.co",
+          }),
+        ),
+      ).toBe("https://console-hive.scubed.co");
+    }
+  });
+
   it("defaults a non-loopback forwarded host to https when no proto header is present", () => {
     expect(
       resolveCanonicalOrigin(requestWith({ "x-forwarded-host": "console-hive.scubed.co" })),

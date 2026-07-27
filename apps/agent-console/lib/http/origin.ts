@@ -35,11 +35,25 @@
 // A loopback NEXT_PUBLIC_APP_URL is deliberately demoted below the forwarded
 // host. `.env.example` ships `NEXT_PUBLIC_APP_URL=http://localhost:3000`, and a
 // deployment that carries that value forward would otherwise 307 real users to
-// their own machine and mail localhost verification links. This costs nothing
-// in trust: a deployment that configures a real canonical origin still has the
-// header ignored entirely, and the demotion only engages in a state where the
-// app is already unreachable for external users. Loopback still wins when no
-// forwarded host is present, which is exactly local development.
+// their own machine and mail localhost verification links.
+//
+// What the demotion costs, stated precisely rather than waved away: while it is
+// engaged, this helper trusts a request header, so a client that can choose its
+// own Host or X-Forwarded-Host chooses the redirect origin. A deployment that
+// configures a real canonical origin never enters that state, since the header
+// is ignored outright. The exposed window is any listener reachable by a client
+// that is not a browser while NEXT_PUBLIC_APP_URL is loopback, and that window
+// is not empty: deploy/docker/docker-compose.yml publishes the dev console as
+// `3000:3000`, on every interface rather than on 127.0.0.1, so it is reachable
+// across the LAN with the .env.example value in place. Browsers send the real
+// Host, so reaching a victim through this needs a non-browser client or a rogue
+// proxy already on that network. Accepted for a dev-only listener, and the
+// alternative is worse: without the demotion that same deployment emits
+// localhost redirects to every user, which is a guaranteed break rather than a
+// conditional one.
+//
+// Loopback still wins when no forwarded host is present, which is exactly local
+// development.
 //
 // Wildcard bind addresses and unparseable hosts are rejected from every source
 // rather than passed through, so neither `0.0.0.0` nor a crafted header value
@@ -62,9 +76,15 @@ const WILDCARD_HOSTNAMES = new Set(["0.0.0.0", "[::]", "::", "0"]);
 
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
-// Parsing through URL both normalizes the port away and validates the value:
-// anything with a space, path separator or other illegal host character throws
-// instead of being pasted into a Location header.
+// Parsing through URL rejects values that cannot be an authority at all: a
+// space, a control character or an empty host throws instead of being pasted
+// into a Location header.
+//
+// It is not a syntax filter for the whole string. `good.test/../evil` parses
+// happily, with everything from the slash onward landing in `.pathname`. What
+// makes that safe is that callers read back only `.host`, so nothing beyond the
+// authority survives. Read `.href` or `.toString()` here and that stops being
+// true.
 function parseHost(host: string): URL | null {
   try {
     return new URL(`http://${host}`);
@@ -93,21 +113,30 @@ function configuredOrigin(appUrl: string | undefined): URL | null {
 }
 
 function forwardedOrigin(headers: Headers): string | null {
-  // X-Forwarded-Host can arrive as a comma-separated list when more than one
-  // proxy appends to it; the first entry is the original client-facing host.
-  const rawHost = headers.get("x-forwarded-host") ?? headers.get("host");
-  if (!rawHost) return null;
+  // X-Forwarded-Host outranks Host, but an unusable value in it must not
+  // shadow a usable Host. This is a preference order, not one shot at whichever
+  // header happens to be present: `?? headers.get("host")` would fall through
+  // only when X-Forwarded-Host is absent, so a wildcard or malformed value in
+  // it would abandon a perfectly good Host and drop all the way to the
+  // localhost fallback.
+  for (const name of ["x-forwarded-host", "host"]) {
+    const rawHost = headers.get(name);
+    if (!rawHost) continue;
 
-  const host = rawHost.split(",")[0].trim();
-  const parsed = parseHost(host);
-  if (!parsed || !isUsableHostname(parsed.hostname)) return null;
+    // Either header can arrive as a comma-separated list when more than one
+    // proxy appends to it; the first entry is the original client-facing host.
+    const parsed = parseHost(rawHost.split(",")[0].trim());
+    if (!parsed || !isUsableHostname(parsed.hostname)) continue;
 
-  const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0].trim();
-  const proto =
-    forwardedProto ||
-    (isLoopbackHostname(parsed.hostname) ? "http" : "https");
+    const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0].trim();
+    const proto =
+      forwardedProto ||
+      (isLoopbackHostname(parsed.hostname) ? "http" : "https");
 
-  return `${proto}://${parsed.host}`;
+    return `${proto}://${parsed.host}`;
+  }
+
+  return null;
 }
 
 export function resolveCanonicalOrigin(request: { headers: Headers }): string {
@@ -119,4 +148,3 @@ export function resolveCanonicalOrigin(request: { headers: Headers }): string {
 
   return forwardedOrigin(request.headers) ?? configured?.origin ?? FALLBACK_ORIGIN;
 }
-

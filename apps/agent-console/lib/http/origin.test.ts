@@ -90,4 +90,20 @@ describe("resolveCanonicalOrigin precedence", () => {
       resolveCanonicalOrigin(requestWith({ "x-forwarded-host": "not a host/../evil" })),
     ).toBe("http://localhost:3000");
   });
+
+  it("falls through to the Host header when X-Forwarded-Host is unusable", () => {
+    // The documented precedence is a preference order. An unusable value in the
+    // higher-priority header must not shadow a perfectly good lower-priority
+    // one and drop the caller all the way to the localhost fallback.
+    for (const unusable of ["0.0.0.0", "not a host", "", ","]) {
+      expect(
+        resolveCanonicalOrigin(
+          requestWith({
+            "x-forwarded-host": unusable,
+            host: "chat-hive.scubed.co",
+          }),
+        ),
+      ).toBe("https://chat-hive.scubed.co");
+    }
+  });
 });
