@@ -1,10 +1,13 @@
 package catalog
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -99,6 +102,24 @@ func TestCatalogListAndInferenceVerdictAgree(t *testing.T) {
 					row.alias.AliasID, listed[row.alias.AliasID], invokable)
 			}
 		})
+	}
+}
+
+// TestIsAliasVisibleToTenantRefusesEmptyAliasID pins the fail-closed guard. An
+// empty alias id is the "every alias" filter value for the shared query, so
+// without the guard the membership check would pass for any tenant entitled to
+// at least one model. The nil pool asserts the guard returns before any query.
+func TestIsAliasVisibleToTenantRefusesEmptyAliasID(t *testing.T) {
+	repo := &pgxRepository{}
+
+	for _, aliasID := range []string{"", "   "} {
+		visible, err := repo.IsAliasVisibleToTenant(context.Background(), uuid.New(), aliasID)
+		if err != nil {
+			t.Fatalf("IsAliasVisibleToTenant(%q) returned error: %v", aliasID, err)
+		}
+		if visible {
+			t.Fatalf("IsAliasVisibleToTenant(%q) = true, want false (must fail closed)", aliasID)
+		}
 	}
 }
 

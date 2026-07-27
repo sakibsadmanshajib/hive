@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -173,6 +174,15 @@ func (r *pgxRepository) ListAliasesForTenant(ctx context.Context, tenantID uuid.
 // ponytail: one indexed single-row query per inference request. Cache it behind
 // the catalog snapshot if this ever shows up in hot-path latency.
 func (r *pgxRepository) IsAliasVisibleToTenant(ctx context.Context, tenantID uuid.UUID, aliasID string) (bool, error) {
+	// An empty alias id is the "no filter" value for queryTenantVisibility, so
+	// without this guard the query would widen to the whole catalog and the
+	// membership check below would pass for any tenant holding one entitled
+	// alias. Callers are guarded today, but this method is where the lint points
+	// future callers, so it fails closed on its own.
+	if strings.TrimSpace(aliasID) == "" {
+		return false, nil
+	}
+
 	rows, err := r.queryTenantVisibility(ctx, tenantID, aliasID)
 	if err != nil {
 		return false, err
