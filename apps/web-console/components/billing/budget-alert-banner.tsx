@@ -32,7 +32,7 @@ export function BudgetAlertBanner({
 
   const formatted = formatCredits(threshold.threshold_credits);
   const lead = isCrossed
-    ? "Your balance has dropped below your alert threshold of "
+    ? "Your balance has reached or dropped below your alert threshold of "
     : "Your balance is approaching your alert threshold of ";
 
   async function handleDismiss() {

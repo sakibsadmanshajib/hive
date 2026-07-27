@@ -9,7 +9,7 @@ are legible; the sign-in and dark overview shots are full viewport at 1280 by
 
 | File | Shows |
 |------|-------|
-| `01-signin-mark-light.png` | Sign-in screen. The wordmark already renders the real Hive mark, the enclosure and cell lifted from the chat favicon, not a lettered placeholder. Recorded here because the placeholder was reported as still present; it was removed in the same change that introduced the shared mark. |
+| `01-signin-mark-light.png` | Sign-in screen. The wordmark already renders the real Hive mark, the enclosure and cell lifted from the chat favicon, not a lettered placeholder. The screen was reported as still showing a lettered placeholder, so this capture records the state it was already in. Nothing in this change touches it. |
 | `02-wordmark-light.png` / `03-wordmark-dark.png` | The same wordmark cropped in both palettes. It is drawn in `currentColor`, so it inverts with the theme rather than carrying its own brand colour. |
 | `04-credits-before.png` / `05-credits-after.png` | Overview credits card. The headline figure was already a slashed zero in Geist Mono before the change. The `Posted 0 and Reserved 0` line beneath it was set in the sans, where the zero is an unslashed oval; it now runs through the console's `metric` rule and carries the slash. |
 | `06-catalog-table-before.png` / `07-catalog-table-after.png` | Model catalog price columns, the densest numeric table in the console. Before, numeric cells were sans with tabular figures, so `0` in a price column read as an uppercase O. After, they use the mono numerals, and every zero is slashed. |
