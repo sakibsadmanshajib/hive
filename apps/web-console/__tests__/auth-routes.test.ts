@@ -23,9 +23,16 @@ vi.mock("next/server", () => ({
   },
   NextRequest: class {
     url: string;
+    // A real NextRequest always carries headers, and the callback route reads
+    // them via resolveCanonicalOrigin (lib/http/origin.ts) to build its
+    // redirect origin. Without this the stand-in diverges from reality and the
+    // route throws. Origin resolution itself is asserted in
+    // __tests__/redirect-origin.test.ts against the real next/server.
+    headers: Headers;
     nextUrl: { pathname: string; searchParams: URLSearchParams };
-    constructor(url: string) {
+    constructor(url: string, init?: { headers?: Record<string, string> }) {
       this.url = url;
+      this.headers = new Headers(init?.headers ?? {});
       const parsed = new URL(url);
       this.nextUrl = {
         pathname: parsed.pathname,
