@@ -589,7 +589,25 @@ func main() {
 			// signupWebhook is dashboard state rather than repository state, so
 			// a deployment that never created it provisions nobody; this route
 			// makes provisioning reachable from code that ships with the repo.
-			signupViewerHandler = signup.NewViewerHandler(signup.NewProvisioner(signupDeps))
+			// Per-user throttle on the console-driven provisioning route. Keyed
+			// on the authenticated user id, in its own Redis namespace so it
+			// cannot share a counter with the per-IP signup limiter. A nil
+			// Redis client disables it, the same way it disables the signup
+			// limiter, rather than blocking provisioning outright.
+			provisionLimiter := signupguard.NewRateLimiter(
+				signupguard.NewRedisIncrementer(redisClient),
+				signupguard.RateLimitConfig{
+					Limit:     cfg.TenantProvisionRateLimitPerWindow,
+					Window:    cfg.TenantProvisionRateLimitWindow,
+					FailOpen:  cfg.SignupRateLimitFailOpen,
+					Namespace: "provision",
+					Subject:   "user",
+				},
+			)
+			signupViewerHandler = signup.NewViewerHandler(
+				signup.NewProvisioner(signupDeps),
+				provisionLimiter.Allow,
+			)
 
 			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
 			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")

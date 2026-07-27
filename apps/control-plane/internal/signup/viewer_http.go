@@ -30,6 +30,7 @@ package signup
 // the whole point: that principal has no other reachable surface.
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -37,12 +38,31 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 )
 
+// AllowFunc reports whether the given subject may make another provisioning
+// attempt. A non-nil return rejects the attempt. Both over-quota and
+// limiter-unavailable map to the same retryable 429, matching how
+// internal/signupguard/http.go treats its own limiter, so the caller does not
+// have to distinguish them and this package stays free of a signupguard import.
+//
+// Optional. A nil AllowFunc disables throttling, which is what unit tests and
+// any deployment without Redis get.
+type AllowFunc func(ctx context.Context, subject string) error
+
 // ViewerHandler serves the authenticated reconcile endpoint.
-type ViewerHandler struct{ prov *Provisioner }
+type ViewerHandler struct {
+	prov  *Provisioner
+	allow AllowFunc
+}
 
 // NewViewerHandler constructs the handler over the same Provisioner the webhook
 // uses, so there is exactly one implementation of the provisioning write.
-func NewViewerHandler(prov *Provisioner) *ViewerHandler { return &ViewerHandler{prov: prov} }
+//
+// allow throttles per user id. Provisioning is a write path, so it must not be
+// hammerable by an authenticated caller even though each call is idempotent and
+// individually cheap.
+func NewViewerHandler(prov *Provisioner, allow AllowFunc) *ViewerHandler {
+	return &ViewerHandler{prov: prov, allow: allow}
+}
 
 type tenantProvisionResponse struct {
 	Status Outcome `json:"status"`
@@ -67,6 +87,21 @@ func (h *ViewerHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if viewer.Email == "" {
 		writeViewerJSON(w, http.StatusOK, tenantProvisionResponse{Status: OutcomeNoTenant})
 		return
+	}
+
+	// Throttle on the authenticated user id rather than the client IP. The
+	// caller is authenticated, so the user id is the stable subject, and it
+	// cannot be rotated by moving networks. Deliberately after the auth and
+	// method checks so an unauthenticated or wrong-method request cannot
+	// consume somebody's quota.
+	if h.allow != nil {
+		if err := h.allow(r.Context(), viewer.UserID.String()); err != nil {
+			slog.WarnContext(r.Context(), "signup: viewer reconcile throttled",
+				slog.String("user_id", viewer.UserID.String()))
+			w.Header().Set("Retry-After", "60")
+			writeViewerJSON(w, http.StatusTooManyRequests, map[string]string{"error": "too many requests"})
+			return
+		}
 	}
 
 	outcome, err := h.prov.Reconcile(r.Context(), ReconcileInput{

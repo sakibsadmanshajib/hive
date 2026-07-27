@@ -2,6 +2,7 @@ package signup_test
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -174,7 +175,7 @@ func TestViewerHandlerDerivesIdentityFromTokenNotBody(t *testing.T) {
 	fx := newReconcileFixture(t, ctx, pool)
 	victim := mustInsertAuthUser(t, ctx, pool, "victim-"+uuid.NewString()+"@"+fx.domain)
 
-	handler := signup.NewViewerHandler(fx.prov)
+	handler := signup.NewViewerHandler(fx.prov, nil)
 
 	// The attacker controls the body completely: another user id, another
 	// email on the same claiming domain, and an invite token.
@@ -204,10 +205,87 @@ func TestViewerHandlerDerivesIdentityFromTokenNotBody(t *testing.T) {
 		"the authenticated route must never resolve an invite token from a body")
 }
 
+// TestViewerHandlerThrottlesPerUser pins the rate limit. Provisioning is a
+// write path reachable by a principal holding no tenant claim, so even though
+// every call is idempotent and individually cheap it must not be hammerable.
+func TestViewerHandlerThrottlesPerUser(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	fx := newReconcileFixture(t, ctx, pool)
+
+	var subjects []string
+	handler := signup.NewViewerHandler(fx.prov, func(_ context.Context, subject string) error {
+		subjects = append(subjects, subject)
+		if len(subjects) > 2 {
+			return errors.New("rate limited")
+		}
+		return nil
+	})
+
+	call := func() int {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/viewer/tenant-provision", nil)
+		req = req.WithContext(auth.WithViewer(ctx, auth.Viewer{UserID: fx.userID, Email: fx.email}))
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	require.Equal(t, http.StatusOK, call())
+	require.Equal(t, http.StatusOK, call())
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/viewer/tenant-provision", nil)
+	req = req.WithContext(auth.WithViewer(ctx, auth.Viewer{UserID: fx.userID, Email: fx.email}))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusTooManyRequests, rec.Code)
+	require.Equal(t, "60", rec.Header().Get("Retry-After"),
+		"a throttled caller needs to be told when to come back")
+	require.NotContains(t, rec.Body.String(), "rate limited",
+		"the limiter's internal error must not reach the client")
+
+	// Throttling is keyed on the authenticated user id, never on anything the
+	// caller supplies, so it cannot be shed by changing networks or bodies.
+	for _, subject := range subjects {
+		require.Equal(t, fx.userID.String(), subject)
+	}
+}
+
+// TestViewerHandlerThrottleRunsAfterAuthAndMethodChecks stops an anonymous or
+// wrong-method request from burning a real user's quota, and stops the limiter
+// being usable as an unauthenticated amplifier.
+func TestViewerHandlerThrottleRunsAfterAuthAndMethodChecks(t *testing.T) {
+	called := false
+	handler := signup.NewViewerHandler(
+		signup.NewProvisioner(signup.WebhookDeps{}),
+		func(context.Context, string) error {
+			called = true
+			return nil
+		})
+
+	anon := httptest.NewRequest(http.MethodPost, "/api/v1/viewer/tenant-provision", nil)
+	anonRec := httptest.NewRecorder()
+	handler.ServeHTTP(anonRec, anon)
+	require.Equal(t, http.StatusUnauthorized, anonRec.Code)
+	require.False(t, called, "an unauthenticated request must not consume quota")
+
+	wrongMethod := httptest.NewRequest(http.MethodGet, "/api/v1/viewer/tenant-provision", nil)
+	wrongMethod = wrongMethod.WithContext(auth.WithViewer(context.Background(), auth.Viewer{
+		UserID: uuid.New(), Email: "a@b.example",
+	}))
+	methodRec := httptest.NewRecorder()
+	handler.ServeHTTP(methodRec, wrongMethod)
+	require.Equal(t, http.StatusMethodNotAllowed, methodRec.Code)
+	require.False(t, called, "a wrong-method request must not consume quota")
+}
+
 // TestViewerHandlerRequiresAuthentication keeps the route closed to an
 // unauthenticated caller even if it is ever mounted without the middleware.
 func TestViewerHandlerRequiresAuthentication(t *testing.T) {
-	handler := signup.NewViewerHandler(signup.NewProvisioner(signup.WebhookDeps{}))
+	handler := signup.NewViewerHandler(signup.NewProvisioner(signup.WebhookDeps{}), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/viewer/tenant-provision", nil)
 	rec := httptest.NewRecorder()
@@ -219,7 +297,7 @@ func TestViewerHandlerRequiresAuthentication(t *testing.T) {
 // TestViewerHandlerRejectsNonPost stops the route being driven by a plain
 // navigation or an image tag, which is the cheapest form of cross-site request.
 func TestViewerHandlerRejectsNonPost(t *testing.T) {
-	handler := signup.NewViewerHandler(signup.NewProvisioner(signup.WebhookDeps{}))
+	handler := signup.NewViewerHandler(signup.NewProvisioner(signup.WebhookDeps{}), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/viewer/tenant-provision", nil)
 	req = req.WithContext(auth.WithViewer(context.Background(), auth.Viewer{
@@ -237,7 +315,7 @@ func TestViewerHandlerRejectsNonPost(t *testing.T) {
 // travel to the client.
 func TestViewerHandlerLeaksNoInternalsOnFailure(t *testing.T) {
 	// Pool nil, Resolver nil: Reconcile reports misconfiguration.
-	handler := signup.NewViewerHandler(signup.NewProvisioner(signup.WebhookDeps{}))
+	handler := signup.NewViewerHandler(signup.NewProvisioner(signup.WebhookDeps{}), nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/viewer/tenant-provision", nil)
 	req = req.WithContext(auth.WithViewer(context.Background(), auth.Viewer{
