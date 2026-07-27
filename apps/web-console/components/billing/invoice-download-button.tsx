@@ -5,29 +5,12 @@ import { Download } from "lucide-react";
 
 import type { Invoice } from "@/lib/control-plane/client";
 import { Button } from "@/components/ui/button";
+import { formatCredits } from "@/lib/format/credits";
+import { formatLongDate } from "@/lib/format/datetime";
+import { formatCurrency } from "@/lib/format/money";
 
 interface InvoiceDownloadButtonProps {
   invoice: Invoice;
-}
-
-function formatDate(isoString: string): string {
-  try {
-    return new Date(isoString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-    });
-  } catch {
-    return isoString;
-  }
-}
-
-function formatAmount(amountCents: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-  }).format(amountCents / 100);
 }
 
 export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
@@ -92,15 +75,15 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       if (!currency) {
         throw new Error("Invoice is missing local_currency; refusing to render.");
       }
-      const amountDisplay = formatAmount(invoice.amount_local, currency);
+      const amountDisplay = formatCurrency(invoice.amount_local, currency);
 
       const lineItems = Array.isArray(invoice.line_items) ? invoice.line_items : [];
       const extraRows = lineItems.map((item, idx) => {
         const desc = typeof item.description === "string" ? item.description : `Line item ${idx + 1}`;
-        const credits = typeof item.credits === "number" ? item.credits.toLocaleString() : "";
+        const credits = typeof item.credits === "number" ? formatCredits(item.credits) : "";
         const amount =
           typeof item.amount_local === "number"
-            ? formatAmount(item.amount_local, currency)
+            ? formatCurrency(item.amount_local, currency)
             : "";
         return h(
           View,
@@ -121,7 +104,7 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
       );
       const totalCredits = invoice.credits + extraCreditsSum;
       const totalAmountLocal = invoice.amount_local + extraAmountSum;
-      const totalAmountDisplay = formatAmount(totalAmountLocal, currency);
+      const totalAmountDisplay = formatCurrency(totalAmountLocal, currency);
 
       const doc = h(
         Document,
@@ -145,7 +128,7 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
             View,
             { style: styles.metaRow },
             h(Text, { style: styles.metaLabel }, "Date:"),
-            h(Text, { style: styles.metaValue }, formatDate(invoice.created_at)),
+            h(Text, { style: styles.metaValue }, formatLongDate(invoice.created_at)),
           ),
           h(
             View,
@@ -179,9 +162,9 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
             h(
               Text,
               { style: styles.col1 },
-              `Hive Credits — ${invoice.credits.toLocaleString()} credits`,
+              `Hive Credits — ${formatCredits(invoice.credits)} credits`,
             ),
-            h(Text, { style: styles.col2 }, invoice.credits.toLocaleString()),
+            h(Text, { style: styles.col2 }, formatCredits(invoice.credits)),
             h(Text, { style: styles.col3 }, amountDisplay),
           ),
           ...extraRows,
@@ -189,7 +172,7 @@ export function InvoiceDownloadButton({ invoice }: InvoiceDownloadButtonProps) {
             View,
             { style: styles.totalRow },
             h(Text, { style: styles.col1 }, "Total"),
-            h(Text, { style: styles.col2 }, totalCredits.toLocaleString()),
+            h(Text, { style: styles.col2 }, formatCredits(totalCredits)),
             h(Text, { style: styles.col3 }, totalAmountDisplay),
           ),
           h(

@@ -1,0 +1,34 @@
+{
+  "Nav": {
+    "groupBuild": "Build",
+    "groupWorkspace": "Workspace",
+    "groupAdmin": "Admin",
+    "overview": "Overview",
+    "apiKeys": "API keys",
+    "catalog": "Model catalog",
+    "analytics": "Analytics",
+    "billing": "Billing",
+    "members": "Members",
+    "settings": "Settings",
+    "featureGates": "Feature gates",
+    "marketplace": "Marketplace"
+  },
+  "Shell": {
+    "workspace": "Workspace",
+    "workspaceMenu": "Switch workspace",
+    "docs": "Documentation",
+    "signOut": "Sign out",
+    "primaryNav": "Console sections"
+  },
+  "WorkspaceSwitcher": {
+    "label": "Workspace",
+    "current": "current"
+  },
+  "Verification": {
+    "banner": "Please verify your email address to unlock all features."
+  },
+  "LocaleSwitcher": {
+    "label": "Language",
+    "switchTo": "Switch to {language}"
+  }
+}

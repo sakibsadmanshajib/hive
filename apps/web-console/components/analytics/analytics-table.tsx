@@ -1,5 +1,6 @@
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
+import { formatNumber } from "@/lib/format/credits";
 
 interface ColumnDef {
   key: string;
@@ -19,7 +20,7 @@ function isNumber(value: unknown): value is number {
 
 function formatCell(value: unknown): string {
   if (value === null || value === undefined) return "—";
-  if (isNumber(value)) return value.toLocaleString();
+  if (isNumber(value)) return formatNumber(value);
   return String(value);
 }
 

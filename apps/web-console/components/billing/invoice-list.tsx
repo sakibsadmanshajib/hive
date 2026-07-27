@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatCredits, formatShortDate } from "@/lib/format/credits";
+import { formatCurrency } from "@/lib/format/money";
 import { InvoiceDownloadButton } from "./invoice-download-button";
 
 interface InvoiceListProps {
@@ -26,16 +27,6 @@ function statusBadge(status: string): { label: string; tone: ToneName } {
   }
 }
 
-function formatLocalAmount(amountCents: number, currency: string): string {
-  // CONSOLE-13-04 regulatory: never fall back to "USD". The Invoice decoder
-  // already rejects rows missing `local_currency` (returns null), so this
-  // path always receives a non-empty rail currency.
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-  }).format(amountCents / 100);
-}
 
 export function InvoiceList({ invoices }: InvoiceListProps) {
   if (invoices.length === 0) {
@@ -76,7 +67,7 @@ export function InvoiceList({ invoices }: InvoiceListProps) {
       header: "Amount",
       numeric: true,
       align: "right",
-      cell: (row) => formatLocalAmount(row.amount_local, row.local_currency),
+      cell: (row) => formatCurrency(row.amount_local, row.local_currency),
     },
     {
       key: "rail",

@@ -14,41 +14,46 @@ import {
   LogOut,
 } from "lucide-react";
 
+import { useTranslations } from "next-intl";
+
 import { cn } from "@/lib/cn";
 import { HiveMark } from "@/components/brand/hive-mark";
+import { LocaleSwitcher } from "@/components/locale-switcher";
 
+// Labels are message keys resolved at render, not literals — the nav is the
+// one place every console page shares, so it has to follow the active locale.
 const NAV_GROUPS: ReadonlyArray<{
-  label: string;
-  items: ReadonlyArray<{ href: string; label: string; icon: React.ReactNode }>;
+  labelKey: string;
+  items: ReadonlyArray<{ href: string; labelKey: string; icon: React.ReactNode }>;
 }> = [
   {
-    label: "Build",
+    labelKey: "groupBuild",
     items: [
-      { href: "/console", label: "Overview", icon: <LayoutGrid size={14} /> },
-      { href: "/console/api-keys", label: "API keys", icon: <KeyRound size={14} /> },
-      { href: "/console/catalog", label: "Model catalog", icon: <Boxes size={14} /> },
-      { href: "/console/analytics", label: "Analytics", icon: <BarChart3 size={14} /> },
+      { href: "/console", labelKey: "overview", icon: <LayoutGrid size={14} /> },
+      { href: "/console/api-keys", labelKey: "apiKeys", icon: <KeyRound size={14} /> },
+      { href: "/console/catalog", labelKey: "catalog", icon: <Boxes size={14} /> },
+      { href: "/console/analytics", labelKey: "analytics", icon: <BarChart3 size={14} /> },
     ],
   },
   {
-    label: "Workspace",
+    labelKey: "groupWorkspace",
     items: [
-      { href: "/console/billing", label: "Billing", icon: <Wallet size={14} /> },
-      { href: "/console/members", label: "Members", icon: <Users size={14} /> },
-      { href: "/console/settings/profile", label: "Settings", icon: <Settings size={14} /> },
+      { href: "/console/billing", labelKey: "billing", icon: <Wallet size={14} /> },
+      { href: "/console/members", labelKey: "members", icon: <Users size={14} /> },
+      { href: "/console/settings/profile", labelKey: "settings", icon: <Settings size={14} /> },
     ],
   },
   {
-    label: "Admin",
+    labelKey: "groupAdmin",
     items: [
       {
         href: "/console/feature-gates",
-        label: "Feature gates",
+        labelKey: "featureGates",
         icon: <ToggleRight size={14} />,
       },
       {
         href: "/console/marketplace",
-        label: "Marketplace",
+        labelKey: "marketplace",
         icon: <Store size={14} />,
       },
     ],
@@ -76,6 +81,9 @@ export function ConsoleShell({
   children,
   active,
 }: ConsoleShellProps) {
+  const tNav = useTranslations("Nav");
+  const tShell = useTranslations("Shell");
+
   return (
     <div className="min-h-screen grid grid-cols-1 lg:grid-cols-[240px_1fr] bg-[var(--color-canvas)]">
       <aside className="hidden lg:flex flex-col border-r border-[var(--color-border)] bg-[var(--color-surface)]">
@@ -98,10 +106,11 @@ export function ConsoleShell({
               "transition-colors duration-[var(--duration-fast)] hover:border-[var(--color-border-strong)]",
             )}
             aria-haspopup="menu"
+            aria-label={tShell("workspaceMenu")}
           >
             <span className="flex flex-col gap-0.5 min-w-0">
               <span className="text-2xs uppercase tracking-wider text-[var(--color-ink-3)]">
-                Workspace
+                {tShell("workspace")}
               </span>
               <span className="text-sm text-[var(--color-ink)] truncate">
                 {workspace.name}
@@ -110,11 +119,14 @@ export function ConsoleShell({
             <ChevronGlyph />
           </button>
         </div>
-        <nav className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-5">
+        <nav
+          aria-label={tShell("primaryNav")}
+          className="flex-1 overflow-y-auto px-3 py-4 flex flex-col gap-5"
+        >
           {NAV_GROUPS.map((group) => (
-            <div key={group.label} className="flex flex-col gap-1">
+            <div key={group.labelKey} className="flex flex-col gap-1">
               <span className="px-2 text-2xs uppercase tracking-wider text-[var(--color-ink-3)]">
-                {group.label}
+                {tNav(group.labelKey)}
               </span>
               <ul className="flex flex-col gap-0.5">
                 {group.items.map((item) => {
@@ -155,7 +167,7 @@ export function ConsoleShell({
                         >
                           {item.icon}
                         </span>
-                        <span className="truncate">{item.label}</span>
+                        <span className="truncate">{tNav(item.labelKey)}</span>
                       </Link>
                     </li>
                   );
@@ -198,8 +210,9 @@ export function ConsoleShell({
               href="https://hivegpt.io"
               className="text-xs text-[var(--color-ink-3)] hover:text-[var(--color-ink)] transition-colors"
             >
-              Docs
+              {tShell("docs")}
             </Link>
+            <LocaleSwitcher returnTo={active} />
             <SignOutButton className="lg:hidden" />
           </div>
         </header>
@@ -212,12 +225,14 @@ export function ConsoleShell({
 }
 
 function SignOutButton({ className }: { className?: string }) {
+  const label = useTranslations("Shell")("signOut");
+
   return (
     <form action="/auth/sign-out" method="post" className={className}>
       <button
         type="submit"
-        aria-label="Sign out"
-        title="Sign out"
+        aria-label={label}
+        title={label}
         className={cn(
           "h-7 w-7 grid place-items-center rounded-md",
           "text-[var(--color-ink-3)]",

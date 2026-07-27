@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Field, Input } from "@/components/ui/input";
+import { formatShortDate } from "@/lib/format/credits";
 
 interface CreateApiKeyResponse {
   id: string;
@@ -154,7 +155,7 @@ export function ApiKeyCreateForm() {
               <dt className="text-2xs uppercase tracking-wider">Expires</dt>
               <dd className="text-sm text-[var(--color-ink)] tabular-nums">
                 {createdKey.expires_at
-                  ? new Date(createdKey.expires_at).toLocaleDateString()
+                  ? formatShortDate(createdKey.expires_at)
                   : "Never"}
               </dd>
             </div>
