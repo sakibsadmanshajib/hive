@@ -238,18 +238,17 @@
    * metric call site — and it is what carries the "precise, data-focused" half
    * of the type direction. Pair with a size utility (`metric text-3xl`).
    *
-   * Note on zeros: this rule does not ask for `slashed-zero`, but Geist Mono
-   * draws a slashed zero as its default glyph, so a lone `0` (an empty credit
-   * balance) carries the slash. Left as-is rather than swapping metrics back to
-   * the sans: the slash is a deliberate trait of the mono the console already
-   * uses for code and identifiers, and the only ambiguous case is a bare zero,
-   * which the card label and the "Posted 0 · Reserved 0" line directly beneath
-   * it disambiguate. Revisit if a currency symbol ever renders next to it.
+   * Zeros are asked for explicitly. Geist Mono happens to draw a slashed zero
+   * as its default glyph, so this changes no pixels today, but a slashed zero
+   * in a credit or usage figure is a requirement rather than a font default we
+   * inherit: declaring it means a future family swap, or a render that falls
+   * back to a system mono, cannot quietly hand back a zero that reads as an
+   * uppercase O.
    */
   .metric {
     font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    font-feature-settings: "tnum";
+    font-variant-numeric: slashed-zero tabular-nums;
+    font-feature-settings: "tnum", "zero";
     letter-spacing: -0.02em;
     font-weight: 500;
   }

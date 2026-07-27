@@ -143,13 +143,13 @@ export default async function ConsolePage() {
                   >
                     {formatCredits(balance.available_credits)}
                   </p>
-                  <p className="text-xs text-[var(--color-ink-3)] tabular-nums">
+                  <p className="text-xs text-[var(--color-ink-3)]">
                     Posted{" "}
-                    <span className="text-[var(--color-ink-2)]">
+                    <span className="metric text-[var(--color-ink-2)]">
                       {formatCredits(balance.posted_credits)}
                     </span>{" "}
                     · Reserved{" "}
-                    <span className="text-[var(--color-ink-2)]">
+                    <span className="metric text-[var(--color-ink-2)]">
                       {formatCredits(balance.reserved_credits)}
                     </span>
                   </p>
