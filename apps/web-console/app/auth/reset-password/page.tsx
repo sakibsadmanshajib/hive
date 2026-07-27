@@ -6,6 +6,7 @@ import { useState, type FormEvent } from "react";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
 
 export default function ResetPasswordPage() {
   const supabase = createClient();
@@ -28,7 +29,7 @@ export default function ResetPasswordPage() {
     const { error } = await supabase.auth.updateUser({ password });
 
     if (error) {
-      setError(error.message);
+      setError(toUserFacingAuthMessage(error.message));
       setLoading(false);
       return;
     }

@@ -7,6 +7,7 @@ import { Mail } from "lucide-react";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
 import { appendNextParam } from "@/lib/auth/next-target";
 
 // Minimal ambient type for the Cloudflare Turnstile widget. The full SDK type
@@ -155,7 +156,7 @@ export default function SignUpPage() {
       });
 
       if (signUpError) {
-        setError(signUpError.message);
+        setError(toUserFacingAuthMessage(signUpError.message));
         return;
       }
 

@@ -460,6 +460,43 @@ export async function getViewer(): Promise<Viewer> {
   };
 }
 
+// TenantProvisionStatus is the outcome of reconciling the signed-in user
+// against the tenant scope. "provisioned" means they now hold an active tenant
+// membership, either because one already existed or because the control-plane
+// just created it. "no_tenant" means no tenant matched them and an
+// administrator has to invite them.
+export type TenantProvisionStatus = "provisioned" | "no_tenant";
+
+// reconcileTenantMembership asks the control-plane to settle the signed-in
+// user's tenant membership. The user is derived server-side from the validated
+// bearer token, never from a request body, so this cannot be pointed at
+// somebody else's account.
+//
+// Any failure resolves to "no_tenant" rather than throwing: the caller is a
+// layout, and the designed no-workspace state is a far better outcome there
+// than an unhandled error collapsing the whole Server Components tree.
+export async function reconcileTenantMembership(): Promise<TenantProvisionStatus> {
+  const { baseUrl, headers } = await getRequestContext();
+
+  const response = await fetch(`${baseUrl}/api/v1/viewer/tenant-provision`, {
+    method: "POST",
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    return "no_tenant";
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    return "no_tenant";
+  }
+
+  const status = readStringField(payload, "status");
+  return status === "provisioned" ? "provisioned" : "no_tenant";
+}
+
 // FeatureGate is one row of the admin feature-gate table (issue #292): a
 // gate key, its human label + category, and whether it is enabled for the
 // current tenant.
