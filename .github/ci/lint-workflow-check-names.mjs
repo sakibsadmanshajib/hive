@@ -50,6 +50,7 @@ function checkNames(workflow) {
   return Object.entries(workflow?.jobs ?? {}).map(([id, job]) => ({
     id,
     name: typeof job?.name === 'string' ? job.name : id,
+    condition: typeof job?.if === 'string' ? job.if : '',
   }));
 }
 
@@ -64,10 +65,12 @@ if (prWorkflows.length === 0) {
 
 // ---- Check 1: one producer per check name ------------------------------
 const producers = new Map();
+const conditions = new Map();
 for (const { file, doc } of prWorkflows) {
-  for (const { id, name } of checkNames(doc)) {
+  for (const { id, name, condition } of checkNames(doc)) {
     if (!producers.has(name)) producers.set(name, []);
     producers.get(name).push(`${file}#${id}`);
+    conditions.set(`${file}#${id}`, condition);
   }
 }
 
@@ -105,6 +108,24 @@ for (const context of required) {
       `required check "${context}" from ${PROTECTION_FILE} is not published by any pull-request job. ` +
         'Update the workflow job name and branch protection in the same change.',
     );
+    continue;
+  }
+
+  // ---- Check 3: a required job must always report a conclusion --------
+  // A job with a plain job-level `if:` can be skipped, and whether branch
+  // protection accepts a `skipped` conclusion for a required context is
+  // exactly the thing that cannot be tested before merging. Required jobs
+  // therefore carry `if: always()` and gate their individual steps, so the
+  // job always concludes success or failure on its own merits.
+  for (const source of found) {
+    const condition = conditions.get(source) ?? '';
+    if (!/\balways\s*\(\s*\)/.test(condition)) {
+      errors.push(
+        `job ${source} publishes required check "${context}" but its job-level if is ` +
+          `"${condition || '(none)'}". A required job must use \`if: always()\` and gate its steps, ` +
+          'otherwise it can be skipped and the merge gate depends on how branch protection treats a skipped check.',
+      );
+    }
   }
 }
 
