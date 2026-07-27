@@ -58,11 +58,7 @@ const VIEWER_PAYLOAD = {
 };
 
 function jsonResponse(status: number, body: unknown): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => JSON.stringify(body),
-  } as unknown as Response;
+  return new Response(JSON.stringify(body), { status });
 }
 
 /** Routes fetch by path so each endpoint can answer with its own status. */
