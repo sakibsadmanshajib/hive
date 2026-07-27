@@ -46,6 +46,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressproxy"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/quota"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/sandbox"
 )
 
@@ -109,11 +110,40 @@ type Config struct {
 	// ControlReadyTimeout bounds how long Launch waits for the in-SIF shim
 	// to create its control socket. Defaults to 30s.
 	ControlReadyTimeout time.Duration
+
+	// QuotaTenantConcurrency and QuotaUserConcurrency cap how many sessions
+	// one tenant and one user may run at once (issue #308). Non-positive
+	// values fall back to the defaults below.
+	QuotaTenantConcurrency int
+	QuotaUserConcurrency   int
+
+	// MemoryLimit, CPULimit and PidsLimit bound what each individual session
+	// may consume; see sandbox.LaunchConfig's fields of the same name.
+	MemoryLimit string
+	CPULimit    string
+	PidsLimit   int
 }
 
 func (c Config) withDefaults() Config {
 	if c.ControlReadyTimeout <= 0 {
 		c.ControlReadyTimeout = 30 * time.Second
+	}
+	if c.QuotaTenantConcurrency <= 0 {
+		c.QuotaTenantConcurrency = 4
+	}
+	if c.QuotaUserConcurrency <= 0 {
+		c.QuotaUserConcurrency = 2
+	}
+	// Sized for a coding-pack session: an arbitrary build plus the headless
+	// Chromium the browser tool drives.
+	if c.MemoryLimit == "" {
+		c.MemoryLimit = "4G"
+	}
+	if c.CPULimit == "" {
+		c.CPULimit = "2"
+	}
+	if c.PidsLimit <= 0 {
+		c.PidsLimit = 512
 	}
 	return c
 }
@@ -145,14 +175,27 @@ func realStart(argv []string) (process, error) {
 	return &osProcess{cmd: cmd}, nil
 }
 
+// terminalOutcome is a reaped session's final answer, replayed by Status
+// instead of dialling a control socket whose sandbox is already gone.
+type terminalOutcome struct {
+	status        Status
+	resultSummary string
+	errMessage    string
+}
+
 type session struct {
 	conversationID uuid.UUID
 	client         *controlclient.Client
 	proc           process
 	proxySrv       *http.Server
 	proxyListener  net.Listener
-	sessionDir     string // removed on Cancel; holds only Unix sockets
-	workingDir     string // removed on Cancel; the sandbox's /workspace bind mount
+	sessionDir     string // removed when reaped; holds only Unix sockets
+	workingDir     string // removed when reaped; the sandbox's /workspace bind mount
+	release        func() // frees this session's quota slot; safe to call repeatedly
+
+	// reaped and terminal are guarded by SandboxEngine.mu.
+	reaped   bool
+	terminal *terminalOutcome
 }
 
 // SandboxEngine launches, polls, and cancels agent-engine sandbox sessions.
@@ -160,16 +203,31 @@ type session struct {
 type SandboxEngine struct {
 	cfg   Config
 	start func(argv []string) (process, error)
+	q     *quota.Manager
 
-	mu       sync.Mutex
+	mu sync.Mutex
+	// ponytail: a reaped session keeps a small terminal record here instead
+	// of being deleted, so the map grows by one struct per completed task and
+	// only a process restart clears it. Add eviction if one process ever runs
+	// enough tasks for that to matter.
 	sessions map[string]*session
 }
 
 // New constructs a SandboxEngine from cfg.
 func New(cfg Config) *SandboxEngine {
+	cfg = cfg.withDefaults()
+	q, err := quota.New(quota.Limits{
+		TenantConcurrency: cfg.QuotaTenantConcurrency,
+		UserConcurrency:   cfg.QuotaUserConcurrency,
+	})
+	if err != nil {
+		// Unreachable: withDefaults replaces every non-positive limit.
+		panic(err)
+	}
 	return &SandboxEngine{
-		cfg:      cfg.withDefaults(),
+		cfg:      cfg,
 		start:    realStart,
+		q:        q,
 		sessions: make(map[string]*session),
 	}
 }
@@ -198,6 +256,19 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		return "", fmt.Errorf("engine: Task.Pack is required")
 	}
 
+	release, err := e.q.Acquire(t.TenantID, t.UserID)
+	if err != nil {
+		return "", err
+	}
+	// succeeded flips true on the return at the very end of this function; it
+	// gates this cleanup and the resource cleanup registered further down.
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			release()
+		}
+	}()
+
 	allowedHosts, err := e.cfg.ResolveEgressHosts(ctx, t.TenantID, t.UserID)
 	if err != nil {
 		return "", fmt.Errorf("engine: resolve egress policy, refusing to launch: %w", err)
@@ -217,13 +288,11 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	workingDir := filepath.Join(e.cfg.WorkspaceRoot, t.ID.String())
 
 	// Single deferred cleanup for every failure branch below: closes
-	// whatever got started so far and removes both directories. succeeded
-	// flips true only on the return at the very end of this function.
+	// whatever got started so far and removes both directories.
 	var (
 		proxySrv *http.Server
 		proc     process
 	)
-	succeeded := false
 	defer func() {
 		if succeeded {
 			return
@@ -270,6 +339,9 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		ProxySocketPath:  egressSocketPath,
 		ControlSocketDir: controlDir,
 		SessionAPIKey:    e.cfg.SessionAPIKey,
+		MemoryLimit:      e.cfg.MemoryLimit,
+		CPULimit:         e.cfg.CPULimit,
+		PidsLimit:        e.cfg.PidsLimit,
 	}
 
 	argv, err := sandbox.BuildArgv(lc)
@@ -317,6 +389,7 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 		proxyListener:  proxyListener,
 		sessionDir:     sessionDir,
 		workingDir:     workingDir,
+		release:        release,
 	}
 	e.mu.Lock()
 	e.sessions[convo.ID.String()] = sess
@@ -337,6 +410,13 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 		return "", "", "", err
 	}
 
+	e.mu.Lock()
+	replay := sess.terminal
+	e.mu.Unlock()
+	if replay != nil {
+		return replay.status, replay.resultSummary, replay.errMessage, nil
+	}
+
 	info, err := sess.client.GetConversation(ctx, id)
 	if err != nil {
 		return "", "", "", fmt.Errorf("engine: get conversation: %w", err)
@@ -348,19 +428,49 @@ func (e *SandboxEngine) Status(ctx context.Context, sessionRef string) (status S
 		if err != nil {
 			return "", "", "", fmt.Errorf("engine: get final response: %w", err)
 		}
-		return StatusSucceeded, summary, "", nil
+		status, resultSummary = StatusSucceeded, summary
 	case controlclient.StatusErrored, controlclient.StatusStuck:
-		return StatusFailed, "", fmt.Sprintf("agent-server execution_status=%s", info.ExecutionStatus), nil
+		status, errMessage = StatusFailed, fmt.Sprintf("agent-server execution_status=%s", info.ExecutionStatus)
 	case controlclient.StatusPaused, controlclient.StatusDeleting:
 		// paused only ever happens via this package's own Cancel today
 		// (ponytail: an externally-triggered pause would also read as
 		// cancelled here — no other component pauses a conversation yet).
-		return StatusCancelled, "", "", nil
+		status = StatusCancelled
 	case controlclient.StatusIdle:
 		return StatusQueued, "", "", nil
 	default: // running, waiting_for_confirmation, or a future value
 		return StatusRunning, "", "", nil
 	}
+
+	// Terminal. Nothing else ever frees this session: the agent-server is a
+	// server and keeps running after its conversation finishes, and
+	// apps/control-plane/internal/agenttask's poller only records the status,
+	// it never calls Cancel. Reaping here is what stops completed tasks from
+	// leaking their sandbox process, directories and quota slot.
+	_ = e.reap(sess, &terminalOutcome{status: status, resultSummary: resultSummary, errMessage: errMessage})
+	return status, resultSummary, errMessage, nil
+}
+
+// reap frees everything sess holds and records outcome for later Status
+// calls to replay. Idempotent: only the first call per session does the work.
+// The returned error is the sandbox process kill failure, which Cancel
+// surfaces to its caller and Status has nothing useful to do with.
+func (e *SandboxEngine) reap(sess *session, outcome *terminalOutcome) error {
+	e.mu.Lock()
+	if sess.reaped {
+		e.mu.Unlock()
+		return nil
+	}
+	sess.reaped = true
+	sess.terminal = outcome
+	e.mu.Unlock()
+
+	killErr := sess.proc.Kill()
+	_ = sess.proxySrv.Close()
+	_ = os.RemoveAll(sess.sessionDir)
+	_ = os.RemoveAll(sess.workingDir)
+	sess.release()
+	return killErr
 }
 
 // Cancel interrupts sessionRef's conversation and terminates its sandbox
@@ -372,14 +482,11 @@ func (e *SandboxEngine) Cancel(ctx context.Context, sessionRef string) error {
 	}
 
 	interruptErr := sess.client.Interrupt(ctx, id)
-	killErr := sess.proc.Kill()
-	_ = sess.proxySrv.Close()
-	_ = os.RemoveAll(sess.sessionDir)
-	_ = os.RemoveAll(sess.workingDir)
-
-	e.mu.Lock()
-	delete(e.sessions, sessionRef)
-	e.mu.Unlock()
+	// The session entry stays in the map holding its terminal outcome rather
+	// than being deleted: agenttask's poller retries Status whenever its own
+	// Transition call failed, and an unknown-session error there would leave
+	// the task active forever.
+	killErr := e.reap(sess, &terminalOutcome{status: StatusCancelled})
 
 	if interruptErr != nil {
 		return fmt.Errorf("engine: interrupt conversation: %w", interruptErr)

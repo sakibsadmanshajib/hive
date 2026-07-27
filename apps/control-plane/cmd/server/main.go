@@ -1475,6 +1475,14 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 		},
 		AgentProfileID: profileID,
 		SessionAPIKey:  os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
+		// Issue #308 noisy-neighbour controls: how many sessions a tenant or
+		// user may run at once, and what each one may consume. Zero values
+		// fall back to engineapi's own defaults.
+		QuotaTenantConcurrency: parseIntEnv("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
+		QuotaUserConcurrency:   parseIntEnv("HIVE_QUOTA_USER_CONCURRENCY", 2),
+		MemoryLimit:            envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
+		CPULimit:               envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
+		PidsLimit:              parseIntEnv("HIVE_SANDBOX_PIDS_LIMIT", 512),
 	})
 	real := agentengine.New(sandbox)
 	return real, real

@@ -121,6 +121,13 @@ services:
       HIVE_AGENT_SIF_PATH: ${HIVE_AGENT_SIF_PATH:-}
       HIVE_QUOTA_TENANT_CONCURRENCY: ${HIVE_QUOTA_TENANT_CONCURRENCY:-4}
       HIVE_QUOTA_USER_CONCURRENCY: ${HIVE_QUOTA_USER_CONCURRENCY:-2}
+      # Per-session cgroup ceilings (issue #308). Enforced by Apptainer's own
+      # --memory/--cpus/--pids-limit; rootless enforcement needs a cgroups v2
+      # host with systemd delegation, and Apptainer fails the launch loudly
+      # without it rather than running the session unbounded.
+      HIVE_SANDBOX_MEMORY_LIMIT: ${HIVE_SANDBOX_MEMORY_LIMIT:-4G}
+      HIVE_SANDBOX_CPU_LIMIT: ${HIVE_SANDBOX_CPU_LIMIT:-2}
+      HIVE_SANDBOX_PIDS_LIMIT: ${HIVE_SANDBOX_PIDS_LIMIT:-512}
     depends_on:
       control-plane:
         condition: service_healthy
