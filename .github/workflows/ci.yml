@@ -49,10 +49,30 @@ jobs:
   #
   # Filtering inside the workflow removes the second producer entirely:
   # each required check name is published by exactly one job in exactly
-  # one workflow, and that job either does the real work or is skipped
-  # by a conditional. A skipped job reports Success to branch
-  # protection, so a docs-only change still merges, and no `echo` can
-  # ever stand in for a real suite that failed.
+  # one workflow, so no `echo` can ever stand in for a real suite that
+  # failed.
+  #
+  # Two tiers of gating, deliberately different:
+  #
+  #   * Jobs that publish a REQUIRED check name (go-tests,
+  #     repo-policy-lints, web-unit) carry `if: always()` and gate their
+  #     individual steps. They therefore always run to completion and
+  #     always report their own conclusion. This does not rely on how
+  #     branch protection treats a check run whose conclusion is
+  #     `skipped`, which is the one thing that cannot be verified on a
+  #     pull request into a protected branch until after the change is
+  #     already merged. A required job that concludes `success` with no
+  #     real steps executed is unambiguous on every GitHub version.
+  #
+  #   * Jobs that are NOT required (rust-tests, desktop-tests,
+  #     agent-console-unit, docker-build, live-integration, web-e2e,
+  #     egress-firewall-e2e) use a plain job-level `if:` and are simply
+  #     skipped, because a skipped non-required check cannot block
+  #     anything.
+  #
+  # The step-level condition is `!= 'false'` rather than `== 'true'` so
+  # that a `changes` job that failed or was cancelled leaves an empty
+  # output and the real suite runs anyway.
   #
   # Polarity is deliberate. This is an allow-list of paths that are safe
   # to ignore, and ANYTHING else means run=true, including an
@@ -146,8 +166,10 @@ jobs:
   go-tests:
     name: Go tests (${{ matrix.module }})
     runs-on: ubuntu-latest
+    # REQUIRED CHECK. Always runs and always reports its own conclusion; the
+    # docs-only decision is applied per step. See the note above `changes`.
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    if: always()
     # Ephemeral Postgres for HIVE_TEST_DB_URL-gated RLS suites (issue #311
     # follow-up). Version pin: no supabase/config.toml or other in-repo
     # pin exists, so this tracks Supabase's current default managed
@@ -185,8 +207,10 @@ jobs:
             path: ./apps/agent-engine
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-go@v5
+        if: needs.changes.outputs.run != 'false'
         with:
           go-version: '1.24'
           cache-dependency-path: |
@@ -196,10 +220,12 @@ jobs:
             apps/agent-engine/go.sum
 
       - name: go vet
+        if: needs.changes.outputs.run != 'false'
         working-directory: ${{ matrix.path }}
         run: go vet ./...
 
       - name: go test
+        if: needs.changes.outputs.run != 'false'
         working-directory: ${{ matrix.path }}
         run: go test -count=1 -short -race -timeout 5m ./...
 
@@ -217,7 +243,9 @@ jobs:
       # ------------------------------------------------------------------
 
       - name: Bootstrap live Postgres schema (control-plane, edge-api only)
-        if: matrix.module == 'control-plane' || matrix.module == 'edge-api'
+        if: >-
+          needs.changes.outputs.run != 'false' &&
+          (matrix.module == 'control-plane' || matrix.module == 'edge-api')
         run: |
           set -euo pipefail
           dsn="postgresql://postgres:postgres@127.0.0.1:5432/hive_test?sslmode=disable"
@@ -228,7 +256,9 @@ jobs:
           echo "HIVE_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: go test — RLS suites against live Postgres (control-plane, edge-api only)
-        if: matrix.module == 'control-plane' || matrix.module == 'edge-api'
+        if: >-
+          needs.changes.outputs.run != 'false' &&
+          (matrix.module == 'control-plane' || matrix.module == 'edge-api')
         working-directory: ${{ matrix.path }}
         run: |
           set -euo pipefail
@@ -377,30 +407,42 @@ jobs:
     name: Repo policy lints (tenant + audit)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # REQUIRED CHECK. Always runs and always reports its own conclusion; the
+    # docs-only decision is applied per step. See the note above `changes`.
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    if: always()
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.run != 'false'
         with:
           node-version: '20'
 
       - name: Install repo-level dev deps
+        if: needs.changes.outputs.run != 'false'
         run: npm ci --ignore-scripts || npm install --ignore-scripts
 
       # Merge-gate integrity: exactly one job may publish each required
       # check name, and every required context must have a producer.
       # Lives in this job because it is a required check itself, so the
       # guard cannot be bypassed by a change that only touches workflows.
-      - run: node .github/ci/lint-workflow-check-names.mjs
+      - if: needs.changes.outputs.run != 'false'
+        run: node .github/ci/lint-workflow-check-names.mjs
 
-      - run: npm run lint:tenant-setting
-      - run: npm run lint:tenant-id
-      - run: npm run lint:audit-write
-      - run: npm run lint:desktop-local-http
-      - run: npm run lint:request-url-origin
-      - run: npm run lint:model-visibility
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:tenant-setting
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:tenant-id
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:audit-write
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:desktop-local-http
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:request-url-origin
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:model-visibility
 
   agent-console-unit:
     name: Agent console (type + unit + build)
@@ -437,40 +479,50 @@ jobs:
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
+    # REQUIRED CHECK. Always runs and always reports its own conclusion; the
+    # docs-only decision is applied per step. See the note above `changes`.
     needs: changes
-    if: needs.changes.outputs.run == 'true'
+    if: always()
     defaults:
       run:
         working-directory: apps/web-console
     steps:
       - uses: actions/checkout@v4
+        if: needs.changes.outputs.run != 'false'
 
       - uses: actions/setup-node@v4
+        if: needs.changes.outputs.run != 'false'
         with:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: apps/web-console/package-lock.json
 
       - name: Install dependencies
+        if: needs.changes.outputs.run != 'false'
         run: npm ci
 
       - name: Type check
+        if: needs.changes.outputs.run != 'false'
         run: npx tsc --noEmit
 
       - name: Unit tests (vitest)
+        if: needs.changes.outputs.run != 'false'
         run: npm run test:unit
 
       - name: Build (Next.js)
+        if: needs.changes.outputs.run != 'false'
         run: npm run build
         env:
           NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
 
       - name: Lint — no bare role checks outside authz package
+        if: needs.changes.outputs.run != 'false'
         working-directory: .
         run: node packages/openai-contract/scripts/lint-no-bare-role-check.mjs apps/control-plane/internal
 
       - name: Codegen drift — permissions.generated.ts
+        if: needs.changes.outputs.run != 'false'
         working-directory: .
         run: |
           make gen-permissions
