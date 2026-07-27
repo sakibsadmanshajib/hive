@@ -1,0 +1,72 @@
+{
+  "$comment": [
+    "Desired Cloudflare Tunnel ingress for the demo box, plus the DNS shape each",
+    "public hostname must have. This file is the single source of truth for which",
+    "hive hostnames are public and what they reach.",
+    "",
+    "The tunnel is remotely managed: cloudflared on the box runs `tunnel run` with",
+    "only a TUNNEL_TOKEN, so it pulls its ingress from Cloudflare rather than from",
+    "a local config file. That is why this mapping used to exist nowhere in the",
+    "repository, and why a stale hostname could point at a decommissioned VM for",
+    "weeks without any review catching it.",
+    "",
+    "tunnel_id is not a secret: it is already published as the public CNAME target",
+    "of every hostname below. The tunnel TOKEN is the secret and is never stored",
+    "here.",
+    "",
+    "The `config` object below is the exact body accepted by",
+    "PUT /accounts/{account_id}/cfd_tunnel/{tunnel_id}/configurations.",
+    "Run `npm run cloudflare:check` to diff this file against live Cloudflare."
+  ],
+
+  "tunnel_id": "0d09075d-c427-4e88-bf45-a2d0b726778e",
+
+  "dns": {
+    "$comment": [
+      "Every hostname served by the tunnel must be a proxied CNAME to",
+      "<tunnel_id>.cfargotunnel.com. Anything matching managed_suffix that is not",
+      "in the ingress list below is drift and the check fails on it. That is",
+      "exactly the cp-hive.scubed.co defect: a proxied A record to 40.233.86.19,",
+      "a retired VM, which returned 522 on every path while looking like a live",
+      "outage of a service that was in fact healthy under a different hostname."
+    ],
+    "managed_suffix": "-hive.scubed.co",
+    "unmanaged": {
+      "hive.scubed.co": "marketing site on Cloudflare Pages (hive-website-9c1.pages.dev), not tunnel-served"
+    }
+  },
+
+  "config": {
+    "ingress": [
+      {
+        "hostname": "api-hive.scubed.co",
+        "service": "http://localhost:8080",
+        "$service": "edge-api"
+      },
+      {
+        "hostname": "control-hive.scubed.co",
+        "service": "http://localhost:8081",
+        "$service": "control-plane. Public on purpose: payment-rail webhooks and callbacks must reach it. All /internal/* routes are token-gated and answer 401 from the public internet."
+      },
+      {
+        "hostname": "chat-hive.scubed.co",
+        "service": "http://localhost:3003",
+        "$service": "Caddy in front of Open WebUI (Caddyfile.owui)"
+      },
+      {
+        "hostname": "artifacts-hive.scubed.co",
+        "service": "http://localhost:3004",
+        "$service": "Caddy artifacts host (Caddyfile.artifacts)"
+      },
+      {
+        "hostname": "console-hive.scubed.co",
+        "service": "http://localhost:3005",
+        "$service": "Caddy in front of the web-console container (Caddyfile.console)"
+      },
+      {
+        "service": "http_status:404",
+        "$service": "Catch-all. Any hostname without an explicit rule above gets a clean 404 rather than a hanging origin connection."
+      }
+    ]
+  }
+}

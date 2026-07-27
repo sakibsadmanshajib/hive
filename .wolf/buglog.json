@@ -2147,6 +2147,26 @@
         "demo-box",
         "password-rotation"
       ]
+    },
+    {
+      "id": "cp-hive-stale-dns-522-no-tunnel-ingress",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "file": "deploy/cloudflare/tunnel-ingress.json",
+      "error_message": "https://cp-hive.scubed.co returned HTTP 522 (origin connection timeout) on every path (/, /health, /healthz, /v1/health) while hive-control-plane-1 was Up and healthy on the box and api-hive.scubed.co/health returned 200 throughout",
+      "root_cause": "cp-hive.scubed.co was a leftover proxied A record pointing at 40.233.86.19, the retired 1GB VM that docker-compose.staging.yml was written for. It had NO Cloudflare Tunnel ingress rule, so it was never served by the demo box at all: Cloudflare kept trying to open a connection to a dead origin and timed out with 522. The control-plane was healthy the whole time under a different hostname, control-hive.scubed.co, which is the one the web-console Worker actually uses (CONTROL_PLANE_BASE_URL in apps/web-console/wrangler.jsonc). The mapping was invisible to review because cloudflared on the box runs 'tunnel run' with only a TUNNEL_TOKEN and no --config, so the tunnel is remotely managed and its ingress lived only in the Cloudflare dashboard. A resolving hostname that hangs looks like an outage; a hostname that does not resolve does not.",
+      "fix": "Deleted the stale A record (zone record id 42db291d707ca4378f7c8efdc14ad773) so the name no longer resolves, instead of hanging. Brought the hostname map into the repo as deploy/cloudflare/tunnel-ingress.json (the exact body the Cloudflare configurations API accepts) plus deploy/cloudflare/reconcile-tunnel-dns.mjs, wired as npm run cloudflare:check and cloudflare:apply. The checker flags any -hive.scubed.co DNS record that has no tunnel ingress rule behind it, which is exactly this defect: it reproduced the bug before the fix and passes after. Also removed the hardcoded CONTROL_PLANE_PUBLIC_URL https://cp-hive.scubed.co from docker-compose.staging.yml, which fed payment callback URLs (resolveCallbackBaseURL in apps/control-plane/internal/payments/http.go); it is now a required env var so no overlay can bake in a dead hostname.",
+      "tags": [
+        "cloudflare",
+        "tunnel",
+        "dns",
+        "ingress",
+        "522",
+        "control-plane",
+        "demo-box",
+        "host-only-config",
+        "drift"
+      ]
     }
   ]
 }
