@@ -2010,6 +2010,44 @@
         "entitlement",
         "fail-closed"
       ]
+    },
+    {
+      "id": "console-redirect-origin-leaks-bind-address",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "error_message": "https://console-hive.scubed.co/auth/callback returned 307 with Location: https://0.0.0.0:3000/console, and https://chat-hive.scubed.co/agent-workspace/auth/callback returned 307 with Location: https://0.0.0.0:3000/agent-workspace/auth/sign-in. Users completing email verification or an OAuth code exchange landed on a dead host (ERR_CONNECTION_REFUSED) instead of the console.",
+      "root_cause": "Next.js does not build a request's URL from the Host header. With experimental.trustHostHeader unset, resolve-routes.js composes initUrl from the server's OWN bind address: `${protocol}://${formatHostname(opts.hostname || 'localhost')}:${opts.port}${req.url}`, and formatHostname('0.0.0.0') returns it verbatim. Both console containers start with `--hostname 0.0.0.0 --port 3000`, and Caddy/Cloudflare Tunnel supply the scheme via X-Forwarded-Proto, so any route handler resolving an absolute redirect against request.url emitted https://0.0.0.0:3000. The helper for this already existed: PR #157 added apps/web-console/lib/http/origin.ts, whose header comment documents this exact trap, but wired it into only 2 of 5 call sites. A second, compounding cause: the helper preferred NEXT_PUBLIC_APP_URL unconditionally, and .env.example ships http://localhost:3000, so a deployment carrying that value forward would have emitted localhost redirects and mailed localhost verification links.",
+      "fix": "Wired resolveCanonicalOrigin into the three remaining call sites: apps/web-console/app/auth/callback/route.ts, apps/web-console/app/console/account-switch/route.ts (all four targets), and apps/agent-console/app/auth/callback/route.ts (keeping PR #438's BASE_PATH prefix). Query params now come from request.nextUrl.searchParams, which derives from the request line and is unaffected. Corrected the helper's precedence: a loopback NEXT_PUBLIC_APP_URL is demoted below X-Forwarded-Host/Host while a real configured origin still outranks every header (preserving PR #157's anti-spoofing property), and wildcard bind addresses plus unparseable hosts are rejected from every source. agent-console got its own copy of the helper (separate npm package, separate Docker build context, so no shared import is possible) and needed no new build arg. Did NOT use experimental.trustHostHeader: it hardcodes https:// and pastes in the raw attacker-reachable Host header, which is the open-redirect shape origin.ts exists to prevent. Added tools/lint-no-request-url-origin.mjs, which fails CI if any route handler in either app reads request.url or nextUrl.origin, or if the two helper copies drift apart. Middleware is deliberately out of scope: verified live that Next.js emits a relative Location for a same-origin middleware redirect, so both middlewares are correct despite using the same expression. Proven live before/after with the real Dockerfiles behind the real Caddy configs; transcript and browser captures in docs/proof/console-origin-2026-07-27/.",
+      "tags": [
+        "next.js",
+        "redirect",
+        "0.0.0.0",
+        "bind-address",
+        "x-forwarded-host",
+        "web-console",
+        "agent-console",
+        "auth-callback",
+        "open-redirect",
+        "repo-policy-lint",
+        "same-family-as-agent-console-signin-drops-basepath"
+      ]
+    },
+    {
+      "id": "billing-profile-inner-join-500",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "error_message": "/console/settings/billing returned HTTP 500 with a bare Next.js digest page and no recovery for any account that has zero rows in public.account_profiles (7 of 18 accounts on the dev project). Server-side throw: Error: profile not found at getBillingProfile (lib/control-plane/client.ts) from BillingSettingsPage's Promise.all.",
+      "root_cause": "profiles/repository.go GetBillingProfile inner-joined public.account_profiles while every column it selects is already COALESCEd against that table being absent, so a missing profile row produced pgx.ErrNoRows, mapped to ErrNotFound, and returned 404. web-console getBillingProfile threw on any non-OK response (its sibling getAccountProfile already special-cased 404), and there was no error.tsx anywhere under apps/web-console/app, so the throw escaped to the bare digest page.",
+      "fix": "Three layers. 1) LEFT JOIN public.account_profiles in GetBillingProfile so a profile-less account gets the coalesced empty profile (legal_entity_type falls back to individual or private_company by account_type); only a missing account is not-found. 2) getBillingProfile returns an empty billing profile on 404, mirroring getAccountProfile; other statuses still throw. 3) Added apps/web-console/app/console/error.tsx, the app's first error boundary, with an EmptyState and a working reset. Also split the 403 on this endpoint so a verified non-owner gets owner_role_required instead of the false email_verification_required. Verified live: pre-fix control-plane returns 404 and the page 500s, post-fix returns 200 with empty values and the page renders. Live-Postgres repository tests added and ./internal/profiles/... wired into the live-DB CI step.",
+      "tags": [
+        "control-plane",
+        "postgres",
+        "inner-join",
+        "web-console",
+        "server-components",
+        "error-boundary",
+        "authz-error-code"
+      ]
     }
   ]
 }

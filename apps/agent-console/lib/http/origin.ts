@@ -59,11 +59,14 @@
 // rather than passed through, so neither `0.0.0.0` nor a crafted header value
 // can be spliced into a Location.
 //
-// Shared by the auth callback, sign-out, account-switch and members-invite
-// routes so every host-header-dependent redirect resolves the same way.
-// apps/agent-console/lib/http/origin.ts is a deliberate copy of this file (the
-// two apps are separate npm packages with separate build contexts); the
-// tools/lint-no-request-url-origin.mjs guard fails if they drift apart.
+// This file is a deliberate copy of apps/web-console/lib/http/origin.ts. The
+// two apps are separate npm packages with separate lockfiles, tsconfig `@/*`
+// roots and Docker build contexts, so neither can import the other's lib. The
+// tools/lint-no-request-url-origin.mjs guard fails if the two copies drift
+// apart, so edit both together.
+//
+// Used by this app's auth callback so its redirect resolves the same way
+// web-console's does.
 
 const FALLBACK_ORIGIN = "http://localhost:3000";
 
