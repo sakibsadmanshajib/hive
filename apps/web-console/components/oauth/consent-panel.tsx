@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { createClient } from "@/lib/supabase/browser";
+import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
 import { navigate } from "@/lib/navigate";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
@@ -54,7 +55,7 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
         // A transient session-refresh failure is not "no session" -- treat
         // it as a hard error instead of redirecting to sign-in, which would
         // just loop back here with the same stale/broken session.
-        setError(sessionResult.error.message);
+        setError(toUserFacingAuthMessage(sessionResult.error.message));
         setStatus("error");
         return;
       }
@@ -69,7 +70,7 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
       if (cancelled) return;
 
       if (authDetailsResult.error) {
-        setError(authDetailsResult.error.message);
+        setError(toUserFacingAuthMessage(authDetailsResult.error.message));
         setStatus("error");
         return;
       }
@@ -93,7 +94,7 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
       if (cancelled) return;
       setError(
         err instanceof Error
-          ? err.message
+          ? toUserFacingAuthMessage(err.message)
           : "Failed to load the authorization request.",
       );
       setStatus("error");
@@ -122,7 +123,7 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
             });
 
       if (decisionResult.error) {
-        setError(decisionResult.error.message);
+        setError(toUserFacingAuthMessage(decisionResult.error.message));
         return;
       }
 
@@ -130,7 +131,7 @@ export function ConsentPanel({ authorizationId }: ConsentPanelProps) {
     } catch (err: unknown) {
       setError(
         err instanceof Error
-          ? err.message
+          ? toUserFacingAuthMessage(err.message)
           : "Failed to submit your decision.",
       );
     } finally {

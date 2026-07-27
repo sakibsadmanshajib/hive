@@ -1994,6 +1994,25 @@
       ]
     },
     {
+      "id": "signup-no-active-membership-500-no-webhook",
+      "priority": "P0",
+      "date": "2026-07-27",
+      "error_message": "Every password grant for a user with no ACTIVE public.tenant_users row returned HTTP 500 with {\"code\":\"P0001\",\"message\":\"no_active_membership\"}. Sign-up succeeded, first sign-in then failed permanently. 11 of 19 live users were stranded, 92 occurrences in 24 hours. The sign-in and OAuth consent forms rendered the raw upstream string 'Error running hook URI: pg-functions://postgres/public/custom_access_token_hook' to unauthenticated visitors.",
+      "root_cause": "Two faults stacked. First, public.custom_access_token_hook did RAISE EXCEPTION 'no_active_membership' whenever no ACTIVE tenant_users row joined to a non-archived tenant resolved, which denied the user the very request that would provision them, so the state was unrecoverable from the client. Second, and the reason such users existed at all, public.tenant_users was written by exactly one caller: apps/control-plane/internal/signup/webhook.go at POST /internal/auth/user-created, driven by a Supabase Database Webhook on auth.users insert. That webhook is dashboard state, not repository state, and it had never been created on the live project. A query for triggers on auth.users and for any supabase_functions.http_request trigger returned zero rows, so no signup had ever produced a membership. The demo owner only worked because scripts/seed-demo-owner.py had inserted their row directly. A third, separate fault surfaced while auditing the inert-token invariant: apps/control-plane/internal/auth/client.go read the tenant from user_metadata.selected_tenant_id, which GoTrue lets the user write via PUT /auth/v1/user, and never validated it against an ACTIVE membership the way the token hook does, so any signed-in caller could assert an arbitrary tenant id and read another tenant's model visibility list through /api/v1/catalog/models (OptionalRequire, not admin gated).",
+      "fix": "New migration supabase/migrations/20260727_01_token_hook_membershipless_no_raise.sql replaces the RAISE with an early return of the unmodified claims, so a membership-less user receives a valid token carrying no tenant_id, tenants, role or owui_role claim. Absent, never null, so no consumer can read the key and treat null as a wildcard. The member path is byte-for-byte unchanged including the owui_role OWNER to ADMIN remap. Resolution and the membership write were extracted from webhook.go into signup.Provisioner.Reconcile (apps/control-plane/internal/signup/reconcile.go), the single implementation both entry points now call; the webhook keeps working for deployments that do have the Database Webhook. A new authenticated route POST /api/v1/viewer/tenant-provision (apps/control-plane/internal/signup/viewer_http.go) lets the console reconcile on the first request from a tenant-less user; it derives identity solely from auth.ViewerFromContext, decodes no body, and accepts neither a tenant id nor an invite token, so a caller cannot name anybody or anything. Idempotency comes from an existing-ACTIVE-membership short-circuit plus the tenant_users (tenant_id, user_id) primary key with ON CONFLICT DO NOTHING; Reconcile never creates a tenant in either deployment posture, so no race can produce two. The escalation was closed with auth.Client.WithMembershipCheck, wired in main.go to tenantMembershipCheck(pool), which validates the self-asserted tenant against the same ACTIVE-and-not-archived predicate the hook uses and collapses anything unverified to uuid.Nil. Tests: 4 hook tests (static guard plus live-DB member, membership-less and revoked claim assertions), 9 reconcile and endpoint tests including an 8-way concurrency race and a body-cannot-name-a-user security test, 6 control-plane escalation tests, and 3 edge-api inert-token tests covering absent, empty, null, unparseable, all-zero and wrong-type tenant claims. Sanitization of the raw hook string is owned by the web-console client boundary (lib/auth/auth-error.ts), because GoTrue's error text is upstream and web-console is the last hop before the browser.",
+      "tags": [
+        "supabase-auth",
+        "custom-access-token-hook",
+        "tenant-provisioning",
+        "privilege-escalation",
+        "rls",
+        "signup",
+        "database-webhook",
+        "migration",
+        "inert-token"
+      ]
+    },
+    {
       "id": "tenant-model-visibility-not-enforced-on-inference",
       "priority": "P1",
       "date": "2026-07-27",

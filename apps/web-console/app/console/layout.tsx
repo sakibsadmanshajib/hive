@@ -1,10 +1,14 @@
 import type { ReactNode } from "react";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
 import {
   getViewer,
   getBalance,
   getBudgetThreshold,
 } from "@/lib/control-plane/client";
+import { readTenantIdClaim } from "@/lib/auth/tenant-claim";
+import { createClient } from "@/lib/supabase/server";
 import { VerificationBanner } from "@/components/verification-banner";
 import { BudgetAlertBanner } from "@/components/billing/budget-alert-banner";
 import { WorkspaceSwitcher } from "@/components/workspace-switcher";
@@ -22,6 +26,26 @@ interface ConsoleLayoutProps {
 // shell carries its own visible switcher button.
 export default async function ConsoleLayout({ children }: ConsoleLayoutProps) {
   const viewer = await getViewer();
+
+  // A signed-in user can legitimately hold no tenant membership: the Supabase
+  // access-token hook issues a valid token with no tenant_id claim rather than
+  // failing sign-in. Billing accounts are auto-provisioned on first login, so
+  // getViewer() above still succeeds; only the tenant scope can be missing.
+  //
+  // Hand that case to /console/provision rather than settling it here. This is
+  // a layout, so it re-renders on every navigation, and a provisioning write
+  // must not sit on a render path. The handler also needs to write cookies to
+  // refresh the session, which a Server Component cannot do. Reading the claim
+  // is free, so a tenanted user takes exactly the path they took before with no
+  // extra request.
+  const cookieStore = await cookies();
+  const {
+    data: { session },
+  } = await createClient(cookieStore).auth.getSession();
+  if (!readTenantIdClaim(session?.access_token)) {
+    redirect("/console/provision");
+  }
+
   const isUnverified = viewer.user.email_verified === false;
 
   const [balanceSummary, budgetThreshold] = isUnverified

@@ -245,8 +245,16 @@ func main() {
 		log.Println("database pool ready")
 	}
 
-	// Build auth client and middleware.
+	// Build auth client and middleware. The membership check is what makes
+	// Viewer.TenantID trustworthy: it is derived from user-writable
+	// user_metadata.selected_tenant_id, so without validation any caller could
+	// name any tenant. See auth.Client.WithMembershipCheck.
 	authClient := auth.NewClient(cfg.SupabaseURL, cfg.SupabaseAnonKey)
+	if pool != nil {
+		authClient = authClient.WithMembershipCheck(tenantMembershipCheck(pool))
+	} else {
+		log.Println("WARNING: no database pool; selected-tenant membership validation disabled, tenant-scoped routes will deny")
+	}
 	authMiddleware := auth.NewMiddleware(authClient)
 
 	// Build accounts service and handler (requires DB; skip if pool unavailable).
@@ -283,6 +291,7 @@ func main() {
 	var auditLogger *audit.Logger
 	var auditWAL *audit.FileWALWriter
 	var signupWebhook *signup.Webhook
+	var signupViewerHandler *signup.ViewerHandler
 	var tenantsHandler *tenants.Handler
 	// Signup abuse-prevention (issue #116). The disposable-domain blocklist is
 	// parsed once from an embedded file (no network), so it is available even
@@ -570,7 +579,7 @@ func main() {
 				DomainLookup: signupLookupDomain(pool),
 			})
 
-			signupWebhook = signup.NewWebhook(signup.WebhookDeps{
+			signupDeps := signup.WebhookDeps{
 				Pool:        pool,
 				Resolver:    signupResolver,
 				EnsureGroup: owuiClient.EnsureGroup,
@@ -580,7 +589,32 @@ func main() {
 				// that hit Supabase directly and bypass the web-console precheck.
 				DisposableCheck: disposableBlocklist.IsDisposableEmail,
 				SharedSecret:    signupSecret,
-			})
+			}
+			signupWebhook = signup.NewWebhook(signupDeps)
+			// Second entry point into the same provisioning implementation, for
+			// the console. The Supabase Database Webhook that drives
+			// signupWebhook is dashboard state rather than repository state, so
+			// a deployment that never created it provisions nobody; this route
+			// makes provisioning reachable from code that ships with the repo.
+			// Per-user throttle on the console-driven provisioning route. Keyed
+			// on the authenticated user id, in its own Redis namespace so it
+			// cannot share a counter with the per-IP signup limiter. A nil
+			// Redis client disables it, the same way it disables the signup
+			// limiter, rather than blocking provisioning outright.
+			provisionLimiter := signupguard.NewRateLimiter(
+				signupguard.NewRedisIncrementer(redisClient),
+				signupguard.RateLimitConfig{
+					Limit:     cfg.TenantProvisionRateLimitPerWindow,
+					Window:    cfg.TenantProvisionRateLimitWindow,
+					FailOpen:  cfg.SignupRateLimitFailOpen,
+					Namespace: "provision",
+					Subject:   "user",
+				},
+			)
+			signupViewerHandler = signup.NewViewerHandler(
+				signup.NewProvisioner(signupDeps),
+				provisionLimiter.Allow,
+			)
 
 			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
 			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")
@@ -1152,6 +1186,17 @@ func main() {
 		log.Println("signup webhook route registered (Phase 19)")
 	}
 
+	// Authenticated tenant-membership reconcile. The console calls this on the
+	// first request from a user whose token carries no tenant claim, which is
+	// the one thing such a token is meant to be able to do. The exact path
+	// beats the authenticated /api/v1/ catch-all by ServeMux longest-prefix
+	// match, same as the signup precheck below.
+	if signupViewerHandler != nil && authMiddleware != nil {
+		routerMux.Handle("/api/v1/viewer/tenant-provision",
+			authMiddleware.Require(signupViewerHandler))
+		log.Println("viewer tenant-provision route registered")
+	}
+
 	// Signup abuse-prevention precheck (issue #116). Public (no auth bearer —
 	// the caller is not yet a Hive account); the web-console signup page calls
 	// this before invoking Supabase signUp. The exact path beats the
@@ -1267,6 +1312,31 @@ func signupGuardAudit(logger *audit.Logger) signupguard.AuditFunc {
 			Actor:    audit.Actor{Type: audit.ActorSystem},
 			Before:   detail,
 		})
+	}
+}
+
+// tenantMembershipCheck reports whether a user holds a membership the token
+// hook would also accept. The predicate is deliberately identical to the one in
+// public.custom_access_token_hook and in signup.Provisioner.activeMembership:
+// ACTIVE status on a tenant whose archived_at is null. Keep all three in step.
+func tenantMembershipCheck(pool *pgxpool.Pool) auth.MembershipCheckFunc {
+	return func(ctx context.Context, userID, tenantID uuid.UUID) (bool, error) {
+		var exists bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM public.tenant_users tu
+				  JOIN public.tenants t ON t.id = tu.tenant_id
+				 WHERE tu.user_id     = $1
+				   AND tu.tenant_id   = $2
+				   AND tu.status      = 'ACTIVE'
+				   AND t.archived_at IS NULL
+			)
+		`, userID, tenantID).Scan(&exists)
+		if err != nil {
+			return false, fmt.Errorf("auth tenant membership check: %w", err)
+		}
+		return exists, nil
 	}
 }
 
