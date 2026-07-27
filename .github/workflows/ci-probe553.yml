@@ -1,0 +1,113 @@
+# THROWAWAY verification harness for issue 553. Deleted with its branches.
+#
+# A pull request into `main` must carry .github/workflows/ci.yml itself in order
+# to be evaluated by the rebuilt gate, and a workflow file is not a docs-only
+# path, so the run=false branch of the decision cannot be reached on a pull
+# request into main until the fix is already merged. This harness closes that
+# gap: the `changes` job below is copied verbatim out of ci.yml on
+# fix/ci-required-check-integrity, and the job under it has the exact shape of a
+# required job (`if: always()` plus per-step gating). Pull requests into
+# probe/ci553-base therefore exercise both verdicts against the real decision
+# logic.
+
+name: CI probe 553
+
+on:
+  pull_request:
+    branches: [probe/ci553-base]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only this job needs the pull request file list, so the extra scope
+    # is granted here instead of at workflow level.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Decide whether the real suite must run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+
+          run_everything() {
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "verdict: RUN the real suite — $1"
+            exit 0
+          }
+
+          # The API is asked for the same file list GitHub itself would
+          # have path-filtered on, so there is no dependency on clone
+          # depth or on merge-base resolution.
+          case "$EVENT" in
+            pull_request)
+              files=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+                        --jq '.[].filename') \
+                || run_everything "could not list pull request files"
+              ;;
+            push)
+              case "$BEFORE_SHA" in
+                '' | 0000000000000000000000000000000000000000)
+                  run_everything "push event has no usable base commit"
+                  ;;
+              esac
+              files=$(gh api "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" --paginate \
+                        --jq '.files[]?.filename') \
+                || run_everything "could not compare $BEFORE_SHA...$AFTER_SHA"
+              ;;
+            *)
+              run_everything "event '$EVENT' carries no diff"
+              ;;
+          esac
+
+          if [ -z "$files" ]; then
+            run_everything "changed-file list came back empty"
+          fi
+
+          printf '%s\n' "$files" > /tmp/changed-files.txt
+          echo "changed files:"
+          sed 's/^/  /' /tmp/changed-files.txt
+
+          # Allow-list: paths that cannot affect any build, test or lint
+          # in this workflow. Keep it narrow. Adding an entry here weakens
+          # the merge gate for every future pull request.
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              *.md | LICENSE | NOTICE) continue ;;
+              docs/* | .wolf/* | .claude/* | .vscode/* | .cursor/*) continue ;;
+            esac
+            run_everything "'$f' is outside the docs-only allow-list"
+          done < /tmp/changed-files.txt
+
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "verdict: SKIP — every changed path is docs-only"
+
+  probe-required-shaped:
+    name: PROBE required-shaped job
+    runs-on: ubuntu-latest
+    # Identical shape to go-tests / repo-policy-lints / web-unit in ci.yml.
+    needs: changes
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+        if: needs.changes.outputs.run != 'false'
+
+      - name: Stand-in for the real suite
+        if: needs.changes.outputs.run != 'false'
+        run: echo "real work ran"
