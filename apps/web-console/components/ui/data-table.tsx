@@ -82,7 +82,7 @@ export function DataTable<T>({
                       "px-4 py-3 align-middle text-[var(--color-ink)]",
                       col.align === "right" && "text-right",
                       col.align === "center" && "text-center",
-                      col.numeric && "tabular-nums text-[var(--color-ink)]",
+                      col.numeric && "metric text-[var(--color-ink)]",
                       col.className,
                     )}
                   >

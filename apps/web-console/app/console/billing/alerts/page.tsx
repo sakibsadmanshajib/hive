@@ -96,7 +96,7 @@ export default async function SpendAlertsPage() {
                       key={alert.id}
                       className="border-b border-[var(--color-border)]"
                     >
-                      <td className="px-3 py-2 tabular-nums text-[var(--color-ink)]">
+                      <td className="metric px-3 py-2 text-[var(--color-ink)]">
                         {alert.threshold_pct}%
                       </td>
                       <td className="px-3 py-2 text-[var(--color-ink)]">
