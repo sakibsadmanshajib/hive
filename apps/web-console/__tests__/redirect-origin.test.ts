@@ -137,6 +137,25 @@ describe("app/auth/callback/route.ts redirect origin", () => {
     );
   });
 
+  it("ignores a forwarded proto that is not http or https", async () => {
+    // The resolved origin lands in a Location header, so a scheme taken from the
+    // header as-is would let a caller that reaches the app without a proxy
+    // overwriting X-Forwarded-Proto emit a non-http redirect. Anything outside
+    // http/https must fall back to the host-derived scheme instead.
+    const response = await authCallback(
+      new NextRequest("http://0.0.0.0:3000/auth/callback?code=abc", {
+        headers: {
+          "x-forwarded-host": "console-hive.scubed.co",
+          "x-forwarded-proto": "javascript",
+        },
+      }),
+    );
+
+    expect(response.headers.get("location")).toBe(
+      "https://console-hive.scubed.co/console",
+    );
+  });
+
   it("keeps resolving the allow-listed next target against the forwarded host", async () => {
     const response = await authCallback(
       wildcardRequest("/auth/callback?code=abc&next=/auth/reset-password"),

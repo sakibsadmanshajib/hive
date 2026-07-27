@@ -112,6 +112,16 @@ function configuredOrigin(appUrl: string | undefined): URL | null {
   return isUsableHostname(parsed.hostname) ? parsed : null;
 }
 
+function forwardableProto(headers: Headers): "http" | "https" | null {
+  // Only http and https may come out of a header. The result is pasted straight
+  // into a Location header, so an attacker-supplied scheme (a custom app scheme,
+  // or an outright dangerous one like javascript) would be exactly the redirect
+  // injection this helper exists to prevent. Anything else is treated as absent
+  // so the host-derived fallback below decides the scheme.
+  const raw = headers.get("x-forwarded-proto")?.split(",")[0].trim().toLowerCase();
+  return raw === "http" || raw === "https" ? raw : null;
+}
+
 function forwardedOrigin(headers: Headers): string | null {
   // X-Forwarded-Host outranks Host, but an unusable value in it must not
   // shadow a usable Host. This is a preference order, not one shot at whichever
@@ -128,9 +138,8 @@ function forwardedOrigin(headers: Headers): string | null {
     const parsed = parseHost(rawHost.split(",")[0].trim());
     if (!parsed || !isUsableHostname(parsed.hostname)) continue;
 
-    const forwardedProto = headers.get("x-forwarded-proto")?.split(",")[0].trim();
     const proto =
-      forwardedProto ||
+      forwardableProto(headers) ??
       (isLoopbackHostname(parsed.hostname) ? "http" : "https");
 
     return `${proto}://${parsed.host}`;
