@@ -160,10 +160,13 @@ func TestModelsRouteRequiresValidAPIKey(t *testing.T) {
 	}
 }
 
-// testOWUIShimKey mirrors the shape of a real OWUI_SHIM_KEY value: Open
-// WebUI is configured with a minted Hive API key, so the shim credential
-// carries the hk_ prefix and reaches the API-key path. The value here is
-// fabricated and resolves to nothing.
+// testOWUIShimKey mirrors the shape a deployment is supposed to configure:
+// OWUI_SHIM_KEY is documented as a minted Hive API key, so it carries the hk_
+// prefix. It deliberately resolves to nothing here, which is the state that
+// matters for these tests and the state the demo box was actually in. The
+// exception under test admits the credential on its own value rather than on a
+// successful key lookup, so it must hold whether or not the key resolves, and
+// the tests below pair it with an authorizer that resolves nothing.
 const testOWUIShimKey = "hk_owui_shim_test"
 
 // TestModelsRouteAcceptsOWUIShimKeyOnGET pins the narrow exception that

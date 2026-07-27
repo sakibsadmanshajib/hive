@@ -251,6 +251,49 @@ func TestOWUIUnwrap_ChatCompletionsWithoutMetadata_RejectsWithRealReason(t *test
 	}
 }
 
+// TestOWUIUnwrap_ChatCompletionsWithNonJSONBody_StillRejects closes the way
+// around the rejection above. The non-JSON pass-through exists for multipart
+// audio and image uploads, but on the chat completions path it used to run
+// first, so a shim-key POST that simply omitted Content-Type skipped the
+// fail-closed check entirely and reached the API-key path untenanted. A
+// per-user token can only arrive in a JSON __metadata block, so neither of
+// these requests can ever be legitimate here.
+func TestOWUIUnwrap_ChatCompletionsWithNonJSONBody_StillRejects(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+	}{
+		{"absent content type", ""},
+		{"multipart content type", "multipart/form-data; boundary=abc"},
+		{"text content type", "text/plain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+			next, captured := newCaptureHandler()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				bytes.NewReader([]byte(`{"model":"hive-default"}`)))
+			req.Header.Set("Authorization", "Bearer "+testShimKey)
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			} else {
+				req.Header.Del("Content-Type")
+			}
+			rr := httptest.NewRecorder()
+			mw(next).ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+			}
+			if captured.authorization != "" {
+				t.Fatalf("request must not reach the handler, got authorization %q", captured.authorization)
+			}
+			if strings.Contains(strings.ToLower(rr.Body.String()), "incorrect api key") {
+				t.Fatalf("must not report the generic invalid-key reason, got %s", rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestOWUIUnwrap_OverLimitBody_413(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, _ := newCaptureHandler()

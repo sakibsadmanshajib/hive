@@ -592,11 +592,13 @@ services:
       # exactly; an empty/unset value disables the middleware and OWUI
       # traffic will 401. It must also be a real registered Hive API key
       # ("hk_" prefix, row in api_keys) on its own dedicated billing account,
-      # not an arbitrary `openssl rand` string. The unwrap middleware only
-      # rewrites requests carrying a body, so OWUI's bodyless GET /v1/models
-      # probe reaches auth.Selector, which routes any non-"hk_" bearer to the
-      # JWT handler and 401s there. The model dropdown stays empty while chat
-      # completions still work. Mint one with scripts/seed-owui-e2e-user.py.
+      # not an arbitrary `openssl rand` string, because OWUI's own upstream
+      # calls that carry no per-user token authenticate as this key and nothing
+      # else: document-RAG embeddings (RAG_OPENAI_API_KEY below) and
+      # text-to-speech. An unregistered or revoked value breaks those two
+      # silently, with only a generic invalid-key error. The model dropdown is
+      # not a signal for this: GET /v1/models accepts this exact value on its
+      # own. Mint one with scripts/seed-owui-e2e-user.py.
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
