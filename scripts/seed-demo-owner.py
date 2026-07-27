@@ -30,6 +30,11 @@ surface demo.
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 Optional env: HIVE_DEMO_PASSWORD -- set the account's password to this value.
+Optional env (identity, see env_or): HIVE_DEMO_EMAIL, HIVE_DEMO_TENANT_SLUG,
+HIVE_DEMO_TENANT_NAME, HIVE_DEMO_ACCOUNT_SLUG, HIVE_DEMO_ACCOUNT_NAME. Set
+all three of email/tenant-slug/account-slug together to provision a second,
+independent owner alongside the default demo one; overriding only the email
+is refused by the slug guards below, on purpose.
 
 Prints to stdout (and nothing else):
   EMAIL=<email>
@@ -54,15 +59,34 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-TENANT_SLUG = "hive-demo"
-TENANT_NAME = "Hive Demo"
+def env_or(name: str, default: str) -> str:
+    """An optional env override for one of the identity constants below.
+
+    The identity was hardcoded while this script provisioned exactly one
+    account. A deployment needs more than one: the shared demo login that
+    several agents hold sessions against, and a separate named owner login for
+    a real person. Those cannot be the same row -- the guards below (correctly)
+    refuse to merge a second human onto the demo tenant, and rotating the
+    demo password to hand it over revokes every live session on it.
+
+    So slug and email are parameters, not constants. Defaults are the original
+    values, so a call with no overrides set provisions exactly what it always
+    did. Whitespace-only is treated as unset, matching env() below.
+    """
+    return os.environ.get(name, "").strip() or default
+
+
+TENANT_SLUG = env_or("HIVE_DEMO_TENANT_SLUG", "hive-demo")
+TENANT_NAME = env_or("HIVE_DEMO_TENANT_NAME", "Hive Demo")
 TENANT_DEPLOYMENT = "HIVE_CLOUD"
-USER_EMAIL = "demo@hive-demo.invalid"  # .invalid: IANA-reserved TLD (RFC 2606)
+# .invalid: IANA-reserved TLD (RFC 2606). A real deliverable address is fine
+# too -- the account is created with email_confirm=true, so no mail is sent.
+USER_EMAIL = env_or("HIVE_DEMO_EMAIL", "demo@hive-demo.invalid")
 TENANT_ROLE = "OWNER"
 TENANT_STATUS = "ACTIVE"
 
-ACCOUNT_SLUG = "hive-demo-owner"
-ACCOUNT_NAME = "Hive Demo"
+ACCOUNT_SLUG = env_or("HIVE_DEMO_ACCOUNT_SLUG", "hive-demo-owner")
+ACCOUNT_NAME = env_or("HIVE_DEMO_ACCOUNT_NAME", "Hive Demo")
 
 # Demo-relevant tenant_settings feature gates. Excludes payment-rail toggles
 # (bkash/sslcommerz/stripe), audit sinks, and SSO -- none of those are on the
@@ -172,8 +196,8 @@ def guard_tenant_slug(existing_tenant, foreign_members, own_member):
             f"{existing_tenant['id']} that this script cannot confirm it created -- "
             f"{len(foreign_members)} member(s) that are not the demo user and/or no "
             "membership row proving the demo user already belongs to it. Refusing to "
-            "merge onto a tenant this script did not create. Pick a different "
-            "TENANT_SLUG for the demo.",
+            "merge onto a tenant this script did not create. Pick a different slug "
+            "via HIVE_DEMO_TENANT_SLUG.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -204,7 +228,7 @@ def guard_account_slug(existing_account, foreign_owners, user_id):
             f"and/or owner_user_id={existing_account.get('owner_user_id')!r} does not "
             "match the demo user. Refusing to merge (would silently grant unrelated "
             "user(s) is_platform_admin too, or adopt an account we do not own). Pick a "
-            "different ACCOUNT_SLUG for the demo.",
+            "different slug via HIVE_DEMO_ACCOUNT_SLUG.",
             file=sys.stderr,
         )
         sys.exit(1)

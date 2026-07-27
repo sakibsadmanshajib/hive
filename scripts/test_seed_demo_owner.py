@@ -8,6 +8,7 @@ tenant collision). No framework, no network: exercises the two pure guard
 functions directly. Run: python3 scripts/test_seed_demo_owner.py
 """
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,17 @@ spec = importlib.util.spec_from_file_location(
     "seed_demo_owner", Path(__file__).parent / "seed-demo-owner.py"
 )
 seed_demo_owner = importlib.util.module_from_spec(spec)
+# The identity constants resolve at import time, so drop any override the
+# caller's shell happens to export -- this file asserts the defaults, and an
+# operator provisioning a second owner exports exactly these variables.
+for _override in (
+    "HIVE_DEMO_EMAIL",
+    "HIVE_DEMO_TENANT_SLUG",
+    "HIVE_DEMO_TENANT_NAME",
+    "HIVE_DEMO_ACCOUNT_SLUG",
+    "HIVE_DEMO_ACCOUNT_NAME",
+):
+    os.environ.pop(_override, None)
 spec.loader.exec_module(seed_demo_owner)
 
 
@@ -107,7 +119,24 @@ def main() -> None:
     assert len(generated) == 28 and generated.startswith("Aa1!")
     assert generated != seed_demo_owner.random_password()
 
-    print("ok: seed-demo-owner.py slug-collision guards + password_to_set")
+    # env_or: identity overrides. An unset, empty, or whitespace-only variable
+    # keeps the default, so an existing caller that sets nothing provisions the
+    # same demo identity it always did.
+    assert seed_demo_owner.env_or("HIVE_DEMO_TEST_UNSET_VAR", "fallback") == "fallback"
+    for value in ("", "   "):
+        os.environ["HIVE_DEMO_TEST_VAR"] = value
+        assert seed_demo_owner.env_or("HIVE_DEMO_TEST_VAR", "fallback") == "fallback"
+    os.environ["HIVE_DEMO_TEST_VAR"] = "  owner@example.test  "
+    assert seed_demo_owner.env_or("HIVE_DEMO_TEST_VAR", "fallback") == "owner@example.test"
+    del os.environ["HIVE_DEMO_TEST_VAR"]
+
+    # And the constants themselves resolve through it, so a second owner is
+    # provisionable without editing this script.
+    assert seed_demo_owner.USER_EMAIL == "demo@hive-demo.invalid"
+    assert seed_demo_owner.TENANT_SLUG == "hive-demo"
+    assert seed_demo_owner.ACCOUNT_SLUG == "hive-demo-owner"
+
+    print("ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or")
 
 
 if __name__ == "__main__":
