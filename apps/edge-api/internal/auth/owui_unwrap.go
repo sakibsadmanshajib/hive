@@ -105,7 +105,7 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 			return next
 		}
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !hasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
+			if !HasShimAuthorization(r.Header.Get("Authorization"), shimKey) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -138,13 +138,31 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
 				return
 			case unwrapNoMetadata:
-				// Body restored from raw bytes; shim key remains on
-				// Authorization. Surface this so an OWUI pipeline
-				// regression that stops injecting the JWT is loud,
-				// not silently 401-cascading.
+				// Surface this so an OWUI pipeline regression that stops
+				// injecting the JWT is loud, not silently 401-cascading.
 				slog.Warn("owui shim request missing upstream_auth metadata",
 					"path", r.URL.Path,
-					"content_length", len(raw))
+					"content_length", len(raw),
+					"rejected", requiresPerUserAuth(r.URL.Path))
+				if requiresPerUserAuth(r.URL.Path) {
+					// Fail closed and name the real cause. Forwarding is
+					// wrong in both possible states of the shim key: if it
+					// resolves, the completion is billed and audited
+					// against the shim's own account instead of the
+					// signed-in user, defeating the entire reason this
+					// middleware exists; if it does not resolve, the
+					// caller gets "Incorrect API key provided", which
+					// blames the customer for a missing server-side
+					// Function. The customer-facing message stays free of
+					// internal detail; the operator-facing detail is in
+					// the warn log above.
+					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED",
+						"This chat session is not carrying a signed-in user token. Sign in again and retry; if it persists, contact your administrator.")
+					return
+				}
+				// Body restored from raw bytes; shim key remains on
+				// Authorization, which is the intended credential for
+				// this path (see requiresPerUserAuth).
 			}
 			// Forward a clone rather than mutating the inbound request
 			// in place — keeps this middleware side-effect free for any
@@ -163,11 +181,17 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// hasShimAuthorization reports whether the Authorization header value
+// HasShimAuthorization reports whether the Authorization header value
 // is exactly "Bearer <shimKey>". The scheme word is matched case-
 // insensitively per RFC 7235 §2.1; the token body is compared
 // case-sensitively because the shim key is opaque to this layer.
-func hasShimAuthorization(header, shimKey string) bool {
+//
+// Exported so the /v1/models handler can recognise the same credential
+// this middleware recognises, rather than re-deriving the comparison and
+// risking a looser match. Callers must treat an empty shimKey as
+// "shim disabled" before calling; this function does not, because
+// OWUIUnwrap already short-circuits on an empty key.
+func HasShimAuthorization(header, shimKey string) bool {
 	scheme, rest, ok := strings.Cut(header, " ")
 	if !ok {
 		return false
@@ -176,6 +200,24 @@ func hasShimAuthorization(header, shimKey string) bool {
 		return false
 	}
 	return rest == shimKey
+}
+
+// requiresPerUserAuth reports whether a shim-key request on this path must
+// carry a per-user token, i.e. whether a missing `__metadata.upstream_auth`
+// is a failure rather than the expected shape.
+//
+// Chat completions are the only path the `hive_jwt_forward` Function
+// decorates, and the only path where running under the shim principal
+// silently mis-attributes billing and audit. Open WebUI's other upstream
+// calls (document-RAG embeddings via RAG_OPENAI_API_KEY, and text-to-speech)
+// are never decorated and authenticate as the shim account by design, so
+// they must keep passing through.
+//
+// ponytail: exact-path list rather than a prefix rule, because /v1/chat is
+// the only prefix at stake today. If a second per-user OWUI path appears
+// (for example a future OWUI RAG chat route), add it here.
+func requiresPerUserAuth(path string) bool {
+	return path == "/v1/chat/completions"
 }
 
 // isJSONContent reports whether the Content-Type media type is

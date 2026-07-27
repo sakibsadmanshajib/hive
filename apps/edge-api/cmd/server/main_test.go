@@ -61,7 +61,7 @@ func TestHandleModelsReturnsSeededHiveAliases(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer).ServeHTTP(rr, req)
+	handleModels(client, authorizer, "").ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
@@ -135,7 +135,7 @@ func TestHandleModelsDoesNotLeakProviderNames(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_test")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer).ServeHTTP(rr, req)
+	handleModels(client, authorizer, "").ServeHTTP(rr, req)
 
 	if strings.Contains(strings.ToLower(rr.Body.String()), "openrouter") || strings.Contains(strings.ToLower(rr.Body.String()), "groq") {
 		t.Fatalf("expected provider-blind response, got %s", rr.Body.String())
@@ -150,13 +150,127 @@ func TestModelsRouteRequiresValidAPIKey(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_invalid")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer).ServeHTTP(rr, req)
+	handleModels(client, authorizer, "").ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
 	}
 	if !strings.Contains(rr.Body.String(), "invalid_api_key") {
 		t.Fatalf("expected invalid_api_key error, got %s", rr.Body.String())
+	}
+}
+
+// testOWUIShimKey mirrors the shape of a real OWUI_SHIM_KEY value: Open
+// WebUI is configured with a minted Hive API key, so the shim credential
+// carries the hk_ prefix and reaches the API-key path. The value here is
+// fabricated and resolves to nothing.
+const testOWUIShimKey = "hk_owui_shim_test"
+
+// TestModelsRouteAcceptsOWUIShimKeyOnGET pins the narrow exception that
+// unblocks the Open WebUI model picker. OWUI probes GET /v1/models with a
+// bodyless request, so the OWUI unwrap middleware has no body to lift the
+// per-user JWT out of and the shim key stays on Authorization. The model
+// list is identical to the unauthenticated /catalog/models payload, so
+// admitting the shim key here reveals nothing that is not already public.
+func TestModelsRouteAcceptsOWUIShimKeyOnGET(t *testing.T) {
+	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{
+		"models": [
+			{"id":"hive-default","object":"model","created":1716935002,"owned_by":"hive"}
+		],
+		"catalog": []
+	}`))
+	// Deliberately an authorizer that resolves nothing: the shim key must
+	// be admitted without any key lookup succeeding.
+	authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer "+testOWUIShimKey)
+	rr := httptest.NewRecorder()
+
+	handleModels(client, authorizer, testOWUIShimKey).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for shim-key model listing, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "hive-default") {
+		t.Fatalf("expected catalog aliases in response, got %s", rr.Body.String())
+	}
+}
+
+// TestModelsRouteRejectsOWUIShimKeyOnNonGET keeps the exception pinned to
+// the read verb OWUI actually probes with. Any other verb on /v1/models
+// must still require a resolvable credential.
+func TestModelsRouteRejectsOWUIShimKeyOnNonGET(t *testing.T) {
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
+		t.Run(method, func(t *testing.T) {
+			client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{"models":[],"catalog":[]}`))
+			authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
+
+			req := httptest.NewRequest(method, "/v1/models", nil)
+			req.Header.Set("Authorization", "Bearer "+testOWUIShimKey)
+			rr := httptest.NewRecorder()
+
+			handleModels(client, authorizer, testOWUIShimKey).ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 for %s with shim key, got %d: %s", method, rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// TestModelsRouteRejectsShimKeyWhenShimDisabled covers deployments with no
+// OWUI front-end: an empty shim key must never turn into a wildcard that
+// admits arbitrary bearer tokens.
+func TestModelsRouteRejectsShimKeyWhenShimDisabled(t *testing.T) {
+	for _, name := range []string{"empty", "whitespace"} {
+		t.Run(name, func(t *testing.T) {
+			shim := ""
+			if name == "whitespace" {
+				shim = "   "
+			}
+			client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{"models":[],"catalog":[]}`))
+			authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			req.Header.Set("Authorization", "Bearer "+shim)
+			rr := httptest.NewRecorder()
+
+			handleModels(client, authorizer, shim).ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 when shim disabled, got %d: %s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
+// TestOWUIShimKeyIsNotHonouredOutsideModelListing is the containment guard
+// for the exception above. Every other authorized route resolves its
+// credential through authorizeAliasRequest, which knows nothing about the
+// shim key. If a future change moves the exception down into the shared
+// authorizer, this test fails.
+func TestOWUIShimKeyIsNotHonouredOutsideModelListing(t *testing.T) {
+	paths := []string{
+		"/v1/chat/completions",
+		"/v1/embeddings",
+		"/v1/audio/speech",
+		"/v1/responses",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			authorizer := newTestAuthorizer(t, http.StatusNotFound, `{"error":"not found"}`)
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			req.Header.Set("Authorization", "Bearer "+testOWUIShimKey)
+			rr := httptest.NewRecorder()
+
+			if _, ok := authorizeAliasRequest(rr, req, authorizer, "hive-default", 0, 0, 0); ok {
+				t.Fatalf("shim key must not authorize %s", path)
+			}
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401 on %s, got %d: %s", path, rr.Code, rr.Body.String())
+			}
+		})
 	}
 }
 
@@ -196,7 +310,7 @@ func TestModelsRouteUsesLimiter(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer hk_rate_limited")
 	rr := httptest.NewRecorder()
 
-	handleModels(client, authorizer).ServeHTTP(rr, req)
+	handleModels(client, authorizer, "").ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected 429, got %d: %s", rr.Code, rr.Body.String())

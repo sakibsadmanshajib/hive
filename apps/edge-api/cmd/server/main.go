@@ -414,7 +414,7 @@ func main() {
 	}
 
 	// API routes
-	mux.Handle("/v1/models", handleModels(catalogClient, authorizer))
+	mux.Handle("/v1/models", handleModels(catalogClient, authorizer, os.Getenv("OWUI_SHIM_KEY")))
 	mux.Handle("/catalog/models", handleCatalogModels(catalogClient))
 
 	// Feature-gate read seam for Open WebUI (issue #293). OWUI has no in-repo
@@ -728,11 +728,39 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 	}
 }
 
-func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
+// handleModels serves the OpenAI-compatible model list.
+//
+// owuiShimKey is the value of OWUI_SHIM_KEY. When non-empty, a GET carrying
+// exactly that credential is served without an API-key lookup. Open WebUI
+// probes GET /v1/models with no request body, so the OWUI unwrap middleware
+// has nothing to lift the signed-in user's JWT out of and the shim key stays
+// on the Authorization header, where authorization then fails and the model
+// picker renders empty. An empty picker means the browser never issues a
+// chat request at all, so the whole chat surface looks like a silent no-op.
+//
+// Admitting the shim key here discloses nothing: this handler returns the
+// catalog unfiltered, and byte-for-byte the same alias list is already
+// served with no authentication at all on /catalog/models (registered a few
+// lines below the /v1/models route in main). The gate was protecting public
+// data. The exception is deliberately kept as narrow as the problem:
+//
+//   - GET only. Any other verb still requires a resolvable credential.
+//   - This handler only. Every other authorized route resolves its
+//     credential through authorizeAliasRequest, which has no knowledge of
+//     the shim key.
+//   - Exact match on the configured shim key, never a prefix or a
+//     wildcard, and disabled entirely when OWUI_SHIM_KEY is unset.
+func handleModels(client *catalog.Client, authorizer *authz.Authorizer, owuiShimKey string) http.Handler {
+	shimKey := strings.TrimSpace(owuiShimKey)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		shimListing := shimKey != "" &&
+			r.Method == http.MethodGet &&
+			auth.HasShimAuthorization(r.Header.Get("Authorization"), shimKey)
 		// Valid API key required to list models, even if not binding to a specific alias.
-		if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
-			return
+		if !shimListing {
+			if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
+				return
+			}
 		}
 
 		snapshot, err := client.FetchSnapshot(r.Context())
