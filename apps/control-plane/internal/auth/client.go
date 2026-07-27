@@ -69,11 +69,11 @@ func (c *Client) WithMembershipCheck(check MembershipCheckFunc) *Client {
 
 // supabaseUserResponse is the shape returned by GET /auth/v1/user.
 type supabaseUserResponse struct {
-	ID               string         `json:"id"`
-	Email            string         `json:"email"`
-	EmailConfirmedAt *string        `json:"email_confirmed_at"`
-	AppMetadata      appMetadata    `json:"app_metadata"`
-	UserMetadata     userMetadata   `json:"user_metadata"`
+	ID               string       `json:"id"`
+	Email            string       `json:"email"`
+	EmailConfirmedAt *string      `json:"email_confirmed_at"`
+	AppMetadata      appMetadata  `json:"app_metadata"`
+	UserMetadata     userMetadata `json:"user_metadata"`
 }
 
 type userMetadata struct {
