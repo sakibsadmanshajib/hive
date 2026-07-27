@@ -1,12 +1,22 @@
 # Cloudflare Tunnel ingress
 
 The demo box has no open inbound ports. Every public hostname reaches it through
-a single Cloudflare Tunnel, and `cloudflared` on the box runs as a user systemd
-service with only a `TUNNEL_TOKEN`:
+a single Cloudflare Tunnel, and `cloudflared` on the box runs as a **user**
+systemd unit at `~/.config/systemd/user/cloudflared.service`:
 
+```ini
+[Service]
+EnvironmentFile=%h/.cloudflared/env
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --loglevel info tunnel run
+Restart=always
+RestartSec=5
 ```
-/usr/local/bin/cloudflared --no-autoupdate --loglevel info tunnel run
-```
+
+`~/.cloudflared/env` holds only `TUNNEL_TOKEN`. It is a user unit rather than a
+system one, so `systemctl status cloudflared` finds nothing; use
+`systemctl --user status cloudflared` (or `journalctl --user -u cloudflared`).
+`loginctl show-user sakib` reports `Linger=yes`, which is what keeps the tunnel
+up across logouts.
 
 There is no `--config` flag and no local config file, which means the tunnel is
 **remotely managed**: its ingress rules are stored in Cloudflare and pulled at
