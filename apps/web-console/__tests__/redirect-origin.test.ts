@@ -58,7 +58,27 @@ vi.mock("@/lib/supabase/server", () => ({
 import { GET as authCallback } from "../app/auth/callback/route";
 import { POST as accountSwitch } from "../app/console/account-switch/route";
 
-const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL;
+// Snapshot every variable these tests mutate, so the suite cannot leak fake or
+// missing configuration into another suite sharing the same worker.
+const MUTATED_ENV_KEYS = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_APP_URL",
+  "CONTROL_PLANE_BASE_URL",
+];
+const ORIGINAL_ENV = new Map<string, string | undefined>(
+  MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
+function restoreEnv(): void {
+  for (const [key, value] of ORIGINAL_ENV) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+}
 
 function wildcardRequest(path: string): NextRequest {
   return new NextRequest(`http://0.0.0.0:3000${path}`, {
@@ -88,13 +108,7 @@ beforeEach(() => {
   delete process.env.CONTROL_PLANE_BASE_URL;
 });
 
-afterEach(() => {
-  if (ORIGINAL_APP_URL === undefined) {
-    delete process.env.NEXT_PUBLIC_APP_URL;
-  } else {
-    process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL;
-  }
-});
+afterEach(restoreEnv);
 
 describe("app/auth/callback/route.ts redirect origin", () => {
   it("sends a successful exchange to the forwarded host, not the wildcard bind address", async () => {

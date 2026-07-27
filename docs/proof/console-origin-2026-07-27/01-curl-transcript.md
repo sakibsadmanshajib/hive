@@ -23,7 +23,7 @@ convenient one.
 
 `Caddyfile.console`, `CONSOLE_DOMAIN=console.localhost`, `CONSOLE_EXTERNAL_SCHEME=http`.
 
-```
+```console
 $ curl -sI -H 'Host: console.localhost' 'http://localhost/auth/callback?code=bogus'
 HTTP/1.1 307 Temporary Redirect
 Location: http://0.0.0.0:3000/console
@@ -32,7 +32,7 @@ Location: http://0.0.0.0:3000/console
 Same result through the second harness used for the browser capture, where Caddy
 is published on port 3106 so the redirect chain is followable:
 
-```
+```console
 $ curl -sI 'http://localhost:3106/auth/callback?code=bogus'
 HTTP/1.1 307 Temporary Redirect
 Location: http://0.0.0.0:3000/console
@@ -47,7 +47,7 @@ defect; the scheme only changes which unreachable URL is produced.
 
 `Caddyfile.owui`, `HIVE_CHAT_EXTERNAL_SCHEME=https`.
 
-```
+```console
 $ curl -sI -H 'Host: chat-hive.scubed.co' 'http://localhost:3103/agent-workspace/auth/callback?code=bogus'
 HTTP/1.1 307 Temporary Redirect
 Location: https://0.0.0.0:3000/agent-workspace/auth/sign-in
@@ -63,7 +63,7 @@ present and correct in the path, while the origin is still the bind address.
 
 ## C. web-console AFTER
 
-```
+```console
 $ curl -sI -H 'Host: console.localhost' 'http://localhost/auth/callback?code=bogus'
 HTTP/1.1 307 Temporary Redirect
 Location: http://console.localhost/console
@@ -79,7 +79,7 @@ the image, so both halves of the change are demonstrated at once.
 
 ## D. agent-console AFTER
 
-```
+```console
 $ curl -sI -H 'Host: chat-hive.scubed.co' 'http://localhost:3103/agent-workspace/auth/callback?code=bogus'
 HTTP/1.1 307 Temporary Redirect
 Location: https://chat-hive.scubed.co/agent-workspace/auth/sign-in
@@ -96,7 +96,7 @@ Real origin, and the `/agent-workspace` prefix from PR #438 is retained.
 Sent with a client-supplied `X-Forwarded-Host: evil.test` against both AFTER
 surfaces:
 
-```
+```console
 $ curl -sI -H 'Host: console.localhost' -H 'X-Forwarded-Host: evil.test' 'http://localhost/auth/callback?code=bogus'
 HTTP/1.1 307 Temporary Redirect
 Location: http://console.localhost/console
@@ -118,7 +118,7 @@ posture PR #157 established and this change preserves.
 Against the shared running stack, whose container has the correct
 `NEXT_PUBLIC_APP_URL=https://console-hive.scubed.co`:
 
-```
+```console
 $ curl -sI -X POST -H 'Host: console.localhost' 'http://localhost:3005/auth/sign-out'
 HTTP/1.1 303 See Other
 Location: https://console-hive.scubed.co/auth/sign-in
@@ -131,7 +131,7 @@ environment.
 
 ## G. Middleware is not affected, and is deliberately left alone
 
-```
+```console
 $ curl -sI -H 'Host: console.localhost' 'http://localhost:3005/console'
 HTTP/1.1 307 Temporary Redirect
 Location: /auth/sign-in

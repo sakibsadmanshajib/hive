@@ -3,7 +3,7 @@
 // Same runtime constraint as middleware.test.ts: route handlers run in Next's
 // server runtime, where NextResponse rejects a request built with jsdom's
 // Headers implementation.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 
 // Regression guard for the basePath-less redirect: NextResponse.redirect takes
@@ -56,10 +56,22 @@ function forwardedRequest(path: string): NextRequest {
   });
 }
 
+// Snapshot the one variable these tests mutate, so the suite cannot leak
+// missing configuration into another suite sharing the same worker.
+const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL;
+
 describe("agent-console auth callback redirects", () => {
   beforeEach(() => {
     exchangeError = null;
     delete process.env.NEXT_PUBLIC_APP_URL;
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_APP_URL === undefined) {
+      delete process.env.NEXT_PUBLIC_APP_URL;
+    } else {
+      process.env.NEXT_PUBLIC_APP_URL = ORIGINAL_APP_URL;
+    }
   });
 
   it("sends a successful code exchange to the basePath-prefixed task console", async () => {

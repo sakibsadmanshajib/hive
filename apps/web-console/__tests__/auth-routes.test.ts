@@ -10,7 +10,7 @@
  * 6. Forgot-password page exports a default component
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // --- mock next/server for middleware tests ---
 const mockRedirect = vi.fn((url: string) => ({ type: "redirect", url }));
@@ -71,11 +71,33 @@ vi.mock("next/navigation", () => ({
   redirect: vi.fn(),
 }));
 
+// Snapshot every variable these tests mutate, so the suite cannot leak fake
+// configuration into another suite sharing the same worker.
+const MUTATED_ENV_KEYS = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_APP_URL",
+  "CONTROL_PLANE_BASE_URL",
+];
+const ORIGINAL_ENV = new Map<string, string | undefined>(
+  MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key-test";
   process.env.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
+});
+
+afterEach(() => {
+  for (const [key, value] of ORIGINAL_ENV) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 });
 
 describe("middleware.ts", () => {
