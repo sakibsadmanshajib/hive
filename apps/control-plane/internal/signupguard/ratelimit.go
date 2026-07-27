@@ -25,11 +25,17 @@ type Incrementer interface {
 	IncrWithExpiry(ctx context.Context, key string, ttl time.Duration) (int64, error)
 }
 
-// RateLimitConfig configures the per-IP signup limiter.
+// RateLimitConfig configures a fixed-window limiter.
 type RateLimitConfig struct {
-	Limit    int           // max signups per IP per window; <=0 disables the limiter
+	Limit    int           // max attempts per subject per window; <=0 disables the limiter
 	Window   time.Duration // sliding fixed-window length
 	FailOpen bool          // on backend error: false = deny (default), true = admit
+	// Namespace and Subject label the Redis key so two limiters over the same
+	// backend cannot share a counter. Both default to the original signup
+	// values ("signup" and "ip"), so an existing caller that leaves them unset
+	// produces byte-identical keys to before.
+	Namespace string
+	Subject   string
 }
 
 // RateLimiter enforces a fixed-window per-IP signup quota backed by an
@@ -49,31 +55,41 @@ func (rl *RateLimiter) Enabled() bool {
 	return rl != nil && rl.backend != nil && rl.cfg.Limit > 0
 }
 
-// Allow records one signup attempt for the given client IP and reports whether
-// it is within quota. Returns ErrRateLimited when over quota, and
-// ErrRateLimiterUnavailable when the backend errors (FailOpen=false) or the IP
-// is missing (FailOpen=false).
-func (rl *RateLimiter) Allow(ctx context.Context, clientIP string) error {
+// Allow records one attempt for the given subject and reports whether it is
+// within quota. The subject is a client IP for the signup limiter and a user id
+// for the provisioning limiter; see RateLimitConfig.Subject. Returns
+// ErrRateLimited when over quota, and ErrRateLimiterUnavailable when the
+// backend errors (FailOpen=false) or the subject is missing (FailOpen=false).
+func (rl *RateLimiter) Allow(ctx context.Context, subject string) error {
 	if !rl.Enabled() {
 		return nil
 	}
 
-	if clientIP == "" {
-		// No IP to scope on: fail closed unless explicitly told to fail open.
+	if subject == "" {
+		// Nothing to scope on: fail closed unless explicitly told to fail open.
 		if rl.cfg.FailOpen {
 			return nil
 		}
-		return fmt.Errorf("%w: missing client ip", ErrRateLimiterUnavailable)
+		return fmt.Errorf("%w: missing subject", ErrRateLimiterUnavailable)
 	}
 
 	window := rl.cfg.Window
 	if window <= 0 {
 		window = time.Hour
 	}
+	namespace := rl.cfg.Namespace
+	if namespace == "" {
+		namespace = "signup"
+	}
+	subjectLabel := rl.cfg.Subject
+	if subjectLabel == "" {
+		subjectLabel = "ip"
+	}
 	// Bucket the key by window so a fixed-window counter rolls over cleanly and
-	// the TTL is a hard backstop against leaked keys.
+	// the TTL is a hard backstop against leaked keys. The braces are a Redis
+	// Cluster hash tag, keeping a subject's buckets on one slot.
 	bucket := time.Now().Unix() / int64(window/time.Second)
-	key := fmt.Sprintf("signup:rl:{ip:%s}:%d", clientIP, bucket)
+	key := fmt.Sprintf("%s:rl:{%s:%s}:%d", namespace, subjectLabel, subject, bucket)
 
 	count, err := rl.backend.IncrWithExpiry(ctx, key, window)
 	if err != nil {

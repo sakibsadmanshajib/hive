@@ -7,6 +7,7 @@ import { Mail } from "lucide-react";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
 
 export default function ForgotPasswordPage() {
   const supabase = createClient();
@@ -31,7 +32,7 @@ export default function ForgotPasswordPage() {
     });
 
     if (error) {
-      setError(error.message);
+      setError(toUserFacingAuthMessage(error.message));
       setLoading(false);
       return;
     }

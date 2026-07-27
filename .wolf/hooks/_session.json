@@ -1,568 +1,665 @@
 {
-  "session_id": "session-2026-07-19-0607",
-  "started": "2026-07-19T10:07:23.872Z",
+  "session_id": "session-2026-07-27-1059",
+  "started": "2026-07-27T14:59:13.587Z",
   "files_read": {
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/.env.example": {
+    "/home/sakib/hive/.claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/__tests__/billing-profile-missing-row.test.tsx": {
+      "count": 2,
+      "tokens": 1846,
+      "first_read": "2026-07-27T15:01:34.533Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs": {
+      "count": 1,
+      "tokens": 4864,
+      "first_read": "2026-07-27T15:01:34.819Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.ts": {
+      "count": 1,
+      "tokens": 1473,
+      "first_read": "2026-07-27T15:01:35.453Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/app/console/layout.tsx": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:01.024Z"
+      "first_read": "2026-07-27T15:01:42.341Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/.gitignore": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr482-body.txt": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:14.571Z"
+      "first_read": "2026-07-27T15:01:52.795Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/README.md": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr484.diff": {
+      "count": 3,
+      "tokens": 0,
+      "first_read": "2026-07-27T15:01:53.406Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/__tests__/signup-precheck-route.test.ts": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:53.237Z"
+      "first_read": "2026-07-27T15:02:16.384Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/executor/types.go": {
+    "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/app/api/invoices/[id]/pdf/route.ts": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:53.861Z"
+      "first_read": "2026-07-27T15:02:31.800Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/types.go": {
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/components/catalog/model-catalog-table.test.ts": {
+      "count": 1,
+      "tokens": 569,
+      "first_read": "2026-07-27T15:02:34.361Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/deploy/docker/docker-compose.localproof.yml": {
+      "count": 1,
+      "tokens": 192,
+      "first_read": "2026-07-27T15:02:34.951Z"
+    },
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/design-craft-review.md": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:55.056Z"
+      "first_read": "2026-07-27T15:02:49.418Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/local_inference.go": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/ux-workflow-review.md": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:55.865Z"
+      "first_read": "2026-07-27T15:02:49.790Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/usage_clamp.go": {
+    "/home/sakib/hive/.claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/app/layout.tsx": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:56.676Z"
+      "first_read": "2026-07-27T15:02:50.862Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/responses.go": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/recon/recon-findings.md": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:57.912Z"
+      "first_read": "2026-07-27T15:02:53.559Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/tests/e2e/console-fx-guard.spec.ts": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/recon/recon-inventory.md": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:58.672Z"
+      "first_read": "2026-07-27T15:02:54.107Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/lib/control-plane/types.ts": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/parity-matrix.md": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:22:59.644Z"
+      "first_read": "2026-07-27T15:02:58.211Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/website/sovereign/src/layouts/Base.astro": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/auth-failure-diagnosis.md": {
       "count": 1,
-      "tokens": 1674,
-      "first_read": "2026-07-19T10:23:00.611Z"
+      "tokens": 0,
+      "first_read": "2026-07-27T15:02:59.008Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/live-blocker-triage.md": {
+      "count": 1,
+      "tokens": 0,
+      "first_read": "2026-07-27T15:02:59.408Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/main.go": {
+      "count": 4,
+      "tokens": 11703,
+      "first_read": "2026-07-27T15:04:34.188Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/components/catalog/model-catalog-table.tsx": {
+      "count": 1,
+      "tokens": 1122,
+      "first_read": "2026-07-27T15:04:43.798Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.test.ts": {
+      "count": 1,
+      "tokens": 1332,
+      "first_read": "2026-07-27T15:06:13.550Z"
+    },
+    "/home/sakib/hive/apps/web-console/lib/api-keys.ts": {
+      "count": 1,
+      "tokens": 0,
+      "first_read": "2026-07-27T15:08:52.465Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/repository.go": {
+      "count": 1,
+      "tokens": 3979,
+      "first_read": "2026-07-27T15:10:59.067Z"
+    },
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body-2.md": {
+      "count": 1,
+      "tokens": 0,
+      "first_read": "2026-07-27T15:15:05.072Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/.playwright-mcp/owui-model-picker-populated-after.png": {
+      "count": 1,
+      "tokens": 0,
+      "first_read": "2026-07-27T15:15:27.913Z"
+    },
+    "/home/sakib/hive/.playwright-mcp/owui-model-picker-populated-after.png": {
+      "count": 1,
+      "tokens": 0,
+      "first_read": "2026-07-27T15:17:51.481Z"
+    },
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py": {
       "count": 2,
       "tokens": 0,
-      "first_read": "2026-07-19T10:23:01.403Z"
+      "first_read": "2026-07-27T15:20:04.324Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/services/searxng/README.md": {
+    "/home/sakib/hive/.playwright-mcp/catalog-badges-before.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:23:02.577Z"
+      "first_read": "2026-07-27T15:21:25.099Z"
     },
-    "/home/sakib/hive/apps/control-plane/internal/tenant/settings/resolver.go": {
+    "/home/sakib/hive/.playwright-mcp/catalog-badges-after.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:23:45.165Z"
+      "first_read": "2026-07-27T15:21:31.578Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/.wolf/buglog.json": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:25:00.189Z"
+      "first_read": "2026-07-27T18:48:44.683Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx": {
-      "count": 1,
-      "tokens": 819,
-      "first_read": "2026-07-19T10:25:33.563Z"
-    },
-    "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/go_test_out.log": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/lib/http/origin.ts": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:27:17.971Z"
+      "first_read": "2026-07-27T19:00:21.856Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/CLAUDE.md": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/__tests__/redirect-origin.test.ts": {
+      "count": 3,
+      "tokens": 0,
+      "first_read": "2026-07-27T19:01:44.984Z"
+    },
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/e2e/phase-19/owui/owui.setup.ts": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:27:46.476Z"
+      "first_read": "2026-07-27T19:02:36.434Z"
     },
-    "/home/sakib/.claude/hooks/skill-rules.json": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/.wolf/buglog.json": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:29:39.683Z"
+      "first_read": "2026-07-27T19:15:33.930Z"
     },
-    "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-17-gateway-posture-and-network.md": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/apps/control-plane/internal/catalog/visibility_test.go": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:33:32.114Z"
+      "first_read": "2026-07-27T19:17:18.835Z"
     },
-    "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted": {
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/docs/proof/owui-model-list-shim-auth-2026-07-27/01-after-owui-model-picker-populated.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:33:37.050Z"
+      "first_read": "2026-07-27T19:20:26.373Z"
     },
-    "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/archive/planning-mvp.md": {
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/docs/proof/owui-model-list-shim-auth-2026-07-27/03-after-real-completion-in-chat.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:35:59.871Z"
+      "first_read": "2026-07-27T19:20:34.470Z"
     },
-    "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md": {
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/docs/proof/owui-model-list-shim-auth-2026-07-27/04-before-catalog-badges-unavailable.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:36:28.552Z"
+      "first_read": "2026-07-27T19:20:43.109Z"
     },
-    "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/MOC-roadmap-current.md": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt483/docs/proof/signup-tenant-provisioning-2026-07-27/01-membershipless-signin-lands-on-no-workspace.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:36:35.397Z"
+      "first_read": "2026-07-27T19:40:13.619Z"
     },
-    "/tmp/claude-1001/-home-sakib-hive/2497c1f4-0b8c-4446-b8a4-bd8508b6f357/scratchpad/straggler_diffs.diff": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/01-after-owui-model-picker-populated.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T10:37:05.856Z"
+      "first_read": "2026-07-27T19:56:29.820Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/branch-protection-main.json": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/03-after-real-completion-in-chat.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T11:06:40.640Z"
+      "first_read": "2026-07-27T19:56:36.347Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/MERGE-POLICY.md": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/02-after-honest-missing-jwt-reason.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T11:06:41.762Z"
+      "first_read": "2026-07-27T19:56:43.859Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/deploy-staging.yml": {
+    "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/05-after-catalog-badges-available.png": {
       "count": 1,
       "tokens": 0,
-      "first_read": "2026-07-19T11:06:42.112Z"
+      "first_read": "2026-07-27T19:56:51.419Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml": {
-      "count": 2,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:07:49.192Z"
-    },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/package.json": {
+    "/home/sakib/hive/apps/web-console/e2e/phase-19/owui/deployed-login.spec.ts": {
       "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:10:41.226Z"
+      "tokens": 1404,
+      "first_read": "2026-07-27T19:58:15.542Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/payments/integration_fx_zero_leak_test.go": {
+    "/home/sakib/hive/apps/web-console/e2e/phase-19/owui/playwright.owui.config.ts": {
       "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:11:07.338Z"
+      "tokens": 852,
+      "first_read": "2026-07-27T19:58:28.283Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/payments/http_error_fx_leak_test.go": {
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go": {
       "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:11:28.880Z"
+      "tokens": 3428,
+      "first_read": "2026-07-27T20:01:28.757Z"
     },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/payments/invoices/pdf_fx_zero_leak_test.go": {
-      "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:11:54.149Z"
-    },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/ledger/types_fx_zero_leak_test.go": {
-      "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:11:54.601Z"
-    },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/payments/service_fx_zero_leak_test.go": {
-      "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:11:55.372Z"
-    },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/payments/http_fx_zero_leak_test.go": {
-      "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:11:55.318Z"
-    },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/apps/control-plane/internal/payments/http_bd_regulatory_test.go": {
-      "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:12:11.559Z"
-    },
-    "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md": {
-      "count": 1,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:19:13.490Z"
-    },
-    "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/CLAUDE.md": {
-      "count": 2,
-      "tokens": 0,
-      "first_read": "2026-07-19T11:22:28.791Z"
+    "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap_test.go": {
+      "count": 3,
+      "tokens": 3906,
+      "first_read": "2026-07-27T20:01:55.760Z"
     }
   },
   "files_written": [
     {
-      "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/project_stale_purge_2026_07_19.md",
-      "action": "create",
-      "tokens": 408,
-      "at": "2026-07-19T10:22:06.561Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/.gitignore",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs",
       "action": "edit",
-      "tokens": 29,
-      "at": "2026-07-19T10:22:21.321Z"
+      "tokens": 210,
+      "at": "2026-07-27T15:03:42.697Z"
     },
     {
-      "file": "/home/sakib/.claude/projects/-home-sakib-hive/memory/MEMORY.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs",
       "action": "edit",
-      "tokens": 90,
-      "at": "2026-07-19T10:22:23.638Z"
+      "tokens": 172,
+      "at": "2026-07-27T15:03:55.570Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/README.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs",
       "action": "edit",
-      "tokens": 48,
-      "at": "2026-07-19T10:24:33.345Z"
+      "tokens": 911,
+      "at": "2026-07-27T15:04:15.309Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/README.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs",
       "action": "edit",
-      "tokens": 109,
-      "at": "2026-07-19T10:24:36.507Z"
+      "tokens": 220,
+      "at": "2026-07-27T15:04:23.921Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/executor/types.go",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs",
       "action": "edit",
-      "tokens": 52,
-      "at": "2026-07-19T10:24:38.932Z"
+      "tokens": 410,
+      "at": "2026-07-27T15:04:35.958Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/types.go",
-      "action": "edit",
-      "tokens": 51,
-      "at": "2026-07-19T10:24:40.901Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/local_inference.go",
-      "action": "edit",
-      "tokens": 89,
-      "at": "2026-07-19T10:24:43.226Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/usage_clamp.go",
-      "action": "edit",
-      "tokens": 39,
-      "at": "2026-07-19T10:24:45.033Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/responses.go",
-      "action": "edit",
-      "tokens": 60,
-      "at": "2026-07-19T10:24:46.837Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/tests/e2e/console-fx-guard.spec.ts",
-      "action": "edit",
-      "tokens": 29,
-      "at": "2026-07-19T10:24:47.980Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/lib/control-plane/types.ts",
-      "action": "edit",
-      "tokens": 42,
-      "at": "2026-07-19T10:24:49.588Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/website/sovereign/src/layouts/Base.astro",
-      "action": "edit",
-      "tokens": 64,
-      "at": "2026-07-19T10:24:51.614Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml",
-      "action": "edit",
-      "tokens": 40,
-      "at": "2026-07-19T10:24:53.452Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml",
-      "action": "edit",
-      "tokens": 38,
-      "at": "2026-07-19T10:24:54.671Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml",
-      "action": "edit",
-      "tokens": 100,
-      "at": "2026-07-19T10:24:57.002Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a8b1c914d8e7e795e/services/searxng/README.md",
-      "action": "edit",
-      "tokens": 23,
-      "at": "2026-07-19T10:24:58.178Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go",
-      "action": "edit",
-      "tokens": 126,
-      "at": "2026-07-19T10:25:07.903Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go",
-      "action": "edit",
-      "tokens": 145,
-      "at": "2026-07-19T10:25:15.013Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go",
-      "action": "edit",
-      "tokens": 28,
-      "at": "2026-07-19T10:25:18.566Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/admin_test.go",
-      "action": "edit",
-      "tokens": 23,
-      "at": "2026-07-19T10:25:23.038Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/admin_test.go",
-      "action": "edit",
-      "tokens": 26,
-      "at": "2026-07-19T10:25:27.297Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx",
-      "action": "edit",
-      "tokens": 6,
-      "at": "2026-07-19T10:25:29.689Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx",
-      "action": "edit",
-      "tokens": 26,
-      "at": "2026-07-19T10:25:39.443Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx",
-      "action": "edit",
-      "tokens": 19,
-      "at": "2026-07-19T10:25:43.980Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver.go",
-      "action": "edit",
-      "tokens": 271,
-      "at": "2026-07-19T10:25:54.584Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver.go",
-      "action": "edit",
-      "tokens": 178,
-      "at": "2026-07-19T10:25:59.500Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/keys.go",
-      "action": "edit",
-      "tokens": 36,
-      "at": "2026-07-19T10:26:03.935Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/handler.go",
-      "action": "edit",
-      "tokens": 22,
-      "at": "2026-07-19T10:26:08.337Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/handler.go",
-      "action": "edit",
-      "tokens": 23,
-      "at": "2026-07-19T10:26:13.556Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/edge-api/internal/featuregate/handler.go",
-      "action": "edit",
-      "tokens": 22,
-      "at": "2026-07-19T10:26:23.125Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.tsx",
-      "action": "edit",
-      "tokens": 26,
-      "at": "2026-07-19T10:26:25.515Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a32217066fcbe4054/supabase/migrations/20260719_01_rename_carl_feature_category.sql",
-      "action": "create",
-      "tokens": 592,
-      "at": "2026-07-19T10:26:42.465Z"
-    },
-    {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted",
-      "action": "create",
-      "tokens": 4419,
-      "at": "2026-07-19T10:31:17.494Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md",
-      "action": "create",
-      "tokens": 640,
-      "at": "2026-07-19T10:32:59.319Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/archive/ARCHIVE-SUMMARY.md",
-      "action": "create",
-      "tokens": 2027,
-      "at": "2026-07-19T10:33:24.871Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-17-gateway-posture-and-network.md",
-      "action": "edit",
-      "tokens": 95,
-      "at": "2026-07-19T10:33:39.413Z"
-    },
-    {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted",
-      "action": "edit",
-      "tokens": 24,
-      "at": "2026-07-19T10:34:18.378Z"
-    },
-    {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted",
-      "action": "edit",
-      "tokens": 78,
-      "at": "2026-07-19T10:34:20.582Z"
-    },
-    {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted",
-      "action": "edit",
-      "tokens": 78,
-      "at": "2026-07-19T10:34:23.664Z"
-    },
-    {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted",
-      "action": "edit",
-      "tokens": 141,
-      "at": "2026-07-19T10:34:39.806Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md",
-      "action": "edit",
-      "tokens": 75,
-      "at": "2026-07-19T10:35:26.425Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-07-one-product-two-modes.md",
-      "action": "create",
-      "tokens": 470,
-      "at": "2026-07-19T10:36:20.904Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md",
-      "action": "edit",
-      "tokens": 65,
-      "at": "2026-07-19T10:36:32.829Z"
-    },
-    {
-      "file": "/mnt/c/Users/sakib/Documents/ObsidianVault/hive/MOC-roadmap-current.md",
-      "action": "edit",
-      "tokens": 40,
-      "at": "2026-07-19T10:36:38.880Z"
-    },
-    {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/branch-protection-main.json",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/main.go",
       "action": "edit",
       "tokens": 12,
-      "at": "2026-07-19T11:07:42.159Z"
+      "at": "2026-07-27T15:04:39.872Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/MERGE-POLICY.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go",
       "action": "edit",
-      "tokens": 60,
-      "at": "2026-07-19T11:07:44.677Z"
+      "tokens": 17,
+      "at": "2026-07-27T15:04:41.309Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs",
       "action": "edit",
-      "tokens": 7,
-      "at": "2026-07-19T11:07:57.444Z"
+      "tokens": 300,
+      "at": "2026-07-27T15:04:46.708Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/components/catalog/model-catalog-table.tsx",
       "action": "edit",
-      "tokens": 12,
-      "at": "2026-07-19T11:07:59.041Z"
+      "tokens": 33,
+      "at": "2026-07-27T15:04:49.649Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.ts",
       "action": "edit",
-      "tokens": 18,
-      "at": "2026-07-19T11:08:00.772Z"
+      "tokens": 159,
+      "at": "2026-07-27T15:05:35.143Z"
     },
     {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.ts",
       "action": "edit",
-      "tokens": 104,
-      "at": "2026-07-19T11:19:20.745Z"
+      "tokens": 322,
+      "at": "2026-07-27T15:05:43.922Z"
     },
     {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.test.ts",
       "action": "edit",
-      "tokens": 136,
-      "at": "2026-07-19T11:19:23.686Z"
+      "tokens": 204,
+      "at": "2026-07-27T15:06:21.485Z"
     },
     {
-      "file": "/tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md",
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/agent-console/lib/http/origin.test.ts",
+      "action": "edit",
+      "tokens": 244,
+      "at": "2026-07-27T15:06:48.297Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/repository.go",
+      "action": "edit",
+      "tokens": 172,
+      "at": "2026-07-27T15:11:09.726Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/repository.go",
+      "action": "edit",
+      "tokens": 16,
+      "at": "2026-07-27T15:11:20.164Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/visibility_test.go",
+      "action": "edit",
+      "tokens": 240,
+      "at": "2026-07-27T15:11:30.616Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/visibility_test.go",
       "action": "edit",
       "tokens": 27,
-      "at": "2026-07-19T11:19:24.227Z"
+      "at": "2026-07-27T15:11:36.062Z"
     },
     {
-      "file": "/home/sakib/hive/.claude/worktrees/agent-a15d27bdd575bd375/CLAUDE.md",
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issue-anthropic.md",
+      "action": "create",
+      "tokens": 783,
+      "at": "2026-07-27T15:12:21.080Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issue-shim-ui.md",
+      "action": "create",
+      "tokens": 847,
+      "at": "2026-07-27T15:12:41.755Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "create",
+      "tokens": 3360,
+      "at": "2026-07-27T15:14:09.980Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.ts",
       "action": "edit",
-      "tokens": 92,
-      "at": "2026-07-19T11:22:55.550Z"
+      "tokens": 415,
+      "at": "2026-07-27T15:14:15.253Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 2737,
+      "at": "2026-07-27T15:14:51.203Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body-2.md",
+      "action": "edit",
+      "tokens": 1120,
+      "at": "2026-07-27T15:15:28.088Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 3888,
+      "at": "2026-07-27T15:15:39.278Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 3840,
+      "at": "2026-07-27T15:16:35.014Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 4719,
+      "at": "2026-07-27T15:17:35.138Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 3570,
+      "at": "2026-07-27T15:18:21.562Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 3128,
+      "at": "2026-07-27T15:19:08.880Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 326,
+      "at": "2026-07-27T15:19:19.348Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 1887,
+      "at": "2026-07-27T15:19:51.111Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 25,
+      "at": "2026-07-27T15:21:36.192Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 28,
+      "at": "2026-07-27T15:21:37.814Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 25,
+      "at": "2026-07-27T15:21:39.286Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 26,
+      "at": "2026-07-27T15:21:40.781Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 28,
+      "at": "2026-07-27T15:21:41.978Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 28,
+      "at": "2026-07-27T15:21:43.595Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 18,
+      "at": "2026-07-27T15:21:44.612Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 34,
+      "at": "2026-07-27T15:21:45.792Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py",
+      "action": "edit",
+      "tokens": 13,
+      "at": "2026-07-27T15:22:23.024Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/.wolf/buglog.json",
+      "action": "edit",
+      "tokens": 18,
+      "at": "2026-07-27T18:49:01.603Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/.wolf/buglog.json",
+      "action": "edit",
+      "tokens": 37,
+      "at": "2026-07-27T18:49:07.596Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/.wolf/buglog.json",
+      "action": "edit",
+      "tokens": 10,
+      "at": "2026-07-27T18:49:12.747Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/main.go",
+      "action": "edit",
+      "tokens": 80,
+      "at": "2026-07-27T18:52:53.595Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/lib/http/origin.ts",
+      "action": "edit",
+      "tokens": 189,
+      "at": "2026-07-27T19:00:50.638Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/lib/http/origin.ts",
+      "action": "edit",
+      "tokens": 34,
+      "at": "2026-07-27T19:00:57.466Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/agent-console/lib/http/origin.ts",
+      "action": "edit",
+      "tokens": 189,
+      "at": "2026-07-27T19:01:20.990Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/agent-console/lib/http/origin.ts",
+      "action": "edit",
+      "tokens": 34,
+      "at": "2026-07-27T19:01:27.655Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/__tests__/redirect-origin.test.ts",
+      "action": "edit",
+      "tokens": 242,
+      "at": "2026-07-27T19:02:09.981Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/.github/workflows/ci.yml",
+      "action": "edit",
+      "tokens": 25,
+      "at": "2026-07-27T19:15:13.999Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/package.json",
+      "action": "edit",
+      "tokens": 48,
+      "at": "2026-07-27T19:15:21.417Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/docs/proof/owui-model-list-shim-auth-2026-07-27/06-models-before-after.md",
+      "action": "edit",
+      "tokens": 4,
+      "at": "2026-07-27T19:20:09.506Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body.md",
+      "action": "create",
+      "tokens": 2740,
+      "at": "2026-07-27T19:22:00.968Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/proof-override.yml",
+      "action": "create",
+      "tokens": 66,
+      "at": "2026-07-27T19:35:13.198Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/proof-override.yml",
+      "action": "create",
+      "tokens": 72,
+      "at": "2026-07-27T19:36:07.559Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/main.go",
+      "action": "edit",
+      "tokens": 488,
+      "at": "2026-07-27T19:36:19.640Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/main.go",
+      "action": "edit",
+      "tokens": 169,
+      "at": "2026-07-27T19:36:56.455Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body.md",
+      "action": "edit",
+      "tokens": 139,
+      "at": "2026-07-27T19:40:11.732Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body.md",
+      "action": "edit",
+      "tokens": 205,
+      "at": "2026-07-27T19:40:22.683Z"
+    },
+    {
+      "file": "/tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt483/docs/proof/signup-tenant-provisioning-2026-07-27/live-transcript.md",
+      "action": "create",
+      "tokens": 1076,
+      "at": "2026-07-27T19:40:55.216Z"
+    },
+    {
+      "file": "/home/sakib/hive/apps/web-console/e2e/phase-19/owui/deployed-login.spec.ts",
+      "action": "edit",
+      "tokens": 244,
+      "at": "2026-07-27T20:01:38.132Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go",
+      "action": "edit",
+      "tokens": 236,
+      "at": "2026-07-27T20:02:09.199Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go",
+      "action": "edit",
+      "tokens": 40,
+      "at": "2026-07-27T20:02:19.039Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go",
+      "action": "edit",
+      "tokens": 72,
+      "at": "2026-07-27T20:02:27.677Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go",
+      "action": "edit",
+      "tokens": 325,
+      "at": "2026-07-27T20:02:40.415Z"
+    },
+    {
+      "file": "/home/sakib/hive/.claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap_test.go",
+      "action": "edit",
+      "tokens": 541,
+      "at": "2026-07-27T20:03:20.957Z"
     }
   ],
   "edit_counts": {
-    "../.claude/projects/-home-sakib-hive/memory/project_stale_purge_2026_07_19.md": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/.gitignore": 1,
-    "../.claude/projects/-home-sakib-hive/memory/MEMORY.md": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/README.md": 2,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/executor/types.go": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/types.go": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/control-plane/internal/batchstore/local_inference.go": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/usage_clamp.go": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/edge-api/internal/inference/responses.go": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/tests/e2e/console-fx-guard.spec.ts": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/apps/web-console/lib/control-plane/types.ts": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/website/sovereign/src/layouts/Base.astro": 1,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/deploy/litellm/config.yaml": 3,
-    ".claude/worktrees/agent-a8b1c914d8e7e795e/services/searxng/README.md": 1,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver_test.go": 3,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/admin_test.go": 2,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.test.tsx": 3,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/resolver.go": 2,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/tenant/settings/keys.go": 1,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/control-plane/internal/featuregate/handler.go": 2,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/edge-api/internal/featuregate/handler.go": 1,
-    ".claude/worktrees/agent-a32217066fcbe4054/apps/web-console/components/feature-gates/feature-gate-manager.tsx": 1,
-    ".claude/worktrees/agent-a32217066fcbe4054/supabase/migrations/20260719_01_rename_carl_feature_category.sql": 1,
-    "../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/CLAUDE.md.drafted": 5,
-    "../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/README.md": 3,
-    "../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/archive/ARCHIVE-SUMMARY.md": 1,
-    "../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-17-gateway-posture-and-network.md": 1,
-    "../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/decision-2026-07-07-one-product-two-modes.md": 1,
-    "../../../mnt/c/Users/sakib/Documents/ObsidianVault/hive/MOC-roadmap-current.md": 1,
-    ".claude/worktrees/agent-aea42a311d28a5ad0/.github/branch-protection-main.json": 1,
-    ".claude/worktrees/agent-aea42a311d28a5ad0/.github/MERGE-POLICY.md": 1,
-    ".claude/worktrees/agent-aea42a311d28a5ad0/.github/workflows/owui-nightly.yml": 3,
-    "../../../tmp/claude-1001/-home-sakib-hive/560d51a1-ace3-4e6b-88df-0deb8fab1640/scratchpad/pr377body.md": 3,
-    ".claude/worktrees/agent-a15d27bdd575bd375/CLAUDE.md": 1
+    ".claude/worktrees/agent-a6a55528e369c104b/tools/lint-no-request-url-origin.mjs": 6,
+    ".claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/main.go": 4,
+    ".claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap.go": 5,
+    ".claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/components/catalog/model-catalog-table.tsx": 1,
+    ".claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.ts": 3,
+    ".claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/origin.test.ts": 1,
+    ".claude/worktrees/agent-a6a55528e369c104b/apps/agent-console/lib/http/origin.test.ts": 1,
+    ".claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/repository.go": 2,
+    ".claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/visibility_test.go": 2,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issue-anthropic.md": 1,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issue-shim-ui.md": 1,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/file_issues.py": 18,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body-2.md": 1,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/.wolf/buglog.json": 3,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/lib/http/origin.ts": 2,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/agent-console/lib/http/origin.ts": 2,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/__tests__/redirect-origin.test.ts": 1,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/.github/workflows/ci.yml": 1,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/package.json": 1,
+    ".claude/worktrees/agent-ad6f26a92ffb7ebb4/docs/proof/owui-model-list-shim-auth-2026-07-27/06-models-before-after.md": 1,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/pr-body.md": 3,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/proof-override.yml": 2,
+    "../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt483/docs/proof/signup-tenant-provisioning-2026-07-27/live-transcript.md": 1,
+    "apps/web-console/e2e/phase-19/owui/deployed-login.spec.ts": 1,
+    ".claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/owui_unwrap_test.go": 1
   },
-  "anatomy_hits": 2,
-  "anatomy_misses": 37,
-  "repeated_reads_warned": 3,
+  "anatomy_hits": 13,
+  "anatomy_misses": 32,
+  "repeated_reads_warned": 11,
   "cerebrum_warnings": 0,
-  "stop_count": 41
+  "stop_count": 11
 }

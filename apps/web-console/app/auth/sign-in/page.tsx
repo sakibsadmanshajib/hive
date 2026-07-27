@@ -7,6 +7,7 @@ import { ArrowRight } from "lucide-react";
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
+import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
 import { appendNextParam, resolveNextTarget } from "@/lib/auth/next-target";
 import { navigate } from "@/lib/navigate";
 
@@ -38,7 +39,7 @@ export default function SignInPage() {
     });
 
     if (error) {
-      setError(error.message);
+      setError(toUserFacingAuthMessage(error.message));
       setLoading(false);
       return;
     }

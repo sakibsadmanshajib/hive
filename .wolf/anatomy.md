@@ -1,7 +1,7 @@
 # anatomy.md
 
-> Auto-maintained by OpenWolf. Last scanned: 2026-07-19T18:20:05.015Z
-> Files: 958 tracked | Anatomy hits: 0 | Misses: 0
+> Auto-maintained by OpenWolf. Last scanned: 2026-07-27T20:03:20.926Z
+> Files: 1404 tracked | Anatomy hits: 0 | Misses: 0
 
 ## ../
 
@@ -12,9 +12,11 @@
 - `decision-2026-07-07-one-product-two-modes.md` — One Product, Two Modes (2026-07-07) (~412 tok)
 - `decision-2026-07-17-gateway-posture-and-network.md` — Gateway posture and network decisions (2026-07-17) (~591 tok)
 - `decision-2026-07-17-network-access-posture.md` — Decision: network access posture, web versus desktop (~938 tok)
+- `decision-2026-07-27-competitor-parity-build-rulings.md` — Competitor-parity build rulings (2026-07-27) (~2729 tok)
 - `demo-guide.md` — Hive Enterprise Demo Guide (~3318 tok)
 - `demo-host-provisioning-2026-07-17.md` — Demo host provisioning: two owner-side blockers (~1676 tok)
 - `demo-verification-2026-07-17.md` — Hive demo live feature verification — 2026-07-17 (~2002 tok)
+- `discussion-2026-07-26-claude-parity-update.md` — Adversarial UI/UX review + Claude parity update (2026-07-26) (~2012 tok)
 - `docs-compliance-soc2-log-coverage.md` — SOC 2 Type II — Audit Log Coverage Report (~188 tok)
 - `docs-enterprise-sso.md` — Enterprise SSO Integration Guide (~2630 tok)
 - `docs-license-allowlist.md` — Licence Exception Allowlist (~876 tok)
@@ -31,6 +33,7 @@
 - `log-2026-07-17-demo-readiness-session.md` — Demo readiness session, 2026-07-17 (~827 tok)
 - `MOC-coding-agent-spec.md` — MOC: Coding-Agent / Cowork Spec (~2481 tok)
 - `MOC-index.md` — MOC: Index — Start Here (~921 tok)
+- `MOC-plans.md` — MOC: Plans and Decisions (~433 tok)
 - `MOC-provider-catalog.md` — MOC: Provider Catalog (Phase 20) (~582 tok)
 - `MOC-roadmap-current.md` — MOC: Roadmap & Current State (~903 tok)
 - `MOC-security-compliance.md` — MOC — Security & Compliance (~758 tok)
@@ -38,6 +41,7 @@
 - `MOC-timeline.md` — MOC: Timeline (Chain of Events) (~982 tok)
 - `MOC-v1.0-launch-archive.md` — MOC: v1.0 Launch Archive (~4394 tok)
 - `MOC-v1.1-chatapp-owui-transition.md` — MOC: Hive Chat / OWUI Transition (~1011 tok)
+- `overnight-consolidation-2026-07-26.md` — Overnight consolidation: bugs fixed, infra migrated, what's still open (2026-07-26) (~2521 tok)
 - `parity-gap-map-2026-07-19.md` — Hive Enterprise vs Claude Enterprise: Parity Gap Map (2026-07-19) (~1018 tok)
 - `plan-2026-07-15-agent-subsystem-blueprint.md` — Agent Subsystem Construction Blueprint (demo-first) (~6571 tok)
 - `plan-2026-07-17-desktop-local-runtime.md` — Desktop local agent runtime port (~889 tok)
@@ -88,6 +92,42 @@
 - `gen-hero.mjs` — parseEnv: generate (~2090 tok)
 - `moc_debug_log.md` — MOC: Debug Log (~119 tok)
 - `upscale.mjs` — Declares src (~203 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive--claude-worktrees-voice-verify-fix/eb74729a-e192-4710-b300-4677dba3178a/scratchpad/
+
+- `apply-migrations.sh` (~90 tok)
+- `authcheck.mjs` — Declares envValue (~276 tok)
+- `console-session-verify.mjs` — Signs in against the self-hosted web-console-prod container via a real (~870 tok)
+- `demo-compose.yml` — Docker Compose: 2 services (~10270 tok)
+- `demo-compose2.yml` — Docker Compose: 2 services (~10279 tok)
+- `demo-compose3.yml` — Docker Compose: 2 services (~10275 tok)
+- `demo-compose4.yml` — Docker Compose: 2 services (~10266 tok)
+- `gen_owui_icons.py` — Regenerate OWUI static PNG/ICO branding assets from favicon.svg's own (~596 tok)
+- `grafana_env_append.txt` — Monitoring stack (Grafana admin login). Added for --profile monitoring bring-up. (~39 tok)
+- `ports.override.yml` — Local visual-proof override only. Not part of the repo. (~200 tok)
+- `pr-body.md` — 1. The agent workspace was unbranded and undiscoverable (~3310 tok)
+- `seed.py` — Local wrapper: load the dev .env, then run seed-demo-owner under a (~358 tok)
+- `shoot.mjs` — Throwaway local screenshot runner (not part of the repo). (~1654 tok)
+- `stub.mjs` — Throwaway local Supabase Auth stub (not part of the repo). Answers the (~612 tok)
+- `wait_health.sh` (~66 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive--claude-worktrees-voice-verify-fix/eb74729a-e192-4710-b300-4677dba3178a/scratchpad/cf-deploy/
+
+- `cf.env` (~32 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive--claude-worktrees-voice-verify-fix/eb74729a-e192-4710-b300-4677dba3178a/scratchpad/cf-dns/
+
+- `cf.env` (~32 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive--claude-worktrees-voice-verify-fix/eb74729a-e192-4710-b300-4677dba3178a/scratchpad/voice-repro/
+
+- `curl-loop-direct-groq.sh` (~181 tok)
+- `curl-loop.sh` (~161 tok)
+- `demo-box-repro.sh` (~194 tok)
+- `demo-box-stt-check.sh` (~108 tok)
+- `run-against-demo-box.sh` (~170 tok)
+- `run-direct-groq-test.sh` (~137 tok)
+- `stt-loop.sh` (~126 tok)
 
 ## ../../../tmp/claude-1001/-home-sakib-hive/12343136-3d4f-4d35-a16d-7ba8c145a138/scratchpad/
 
@@ -282,6 +322,99 @@
 
 - `hive-enterprise-technical-brief.tex` — Declares AI (~13611 tok)
 
+## ../../../tmp/claude-1001/-home-sakib-hive/85ee3c8a-fbad-440b-86c0-911f035e545d/scratchpad/
+
+- `Caddyfile.artifacts` — Artifacts hosting reverse proxy (issue #312). (~330 tok)
+- `cf.sh` — helper: sources CF creds from hive .env, exposes cfapi() ; never echoes secrets (~192 tok)
+- `cfg.sh` — helper: global-key auth for tunnel ops (scoped tokens lack Cloudflare Tunnel:Edit) (~311 tok)
+- `dns.py` — env, call (~483 tok)
+- `provision.sh` (~762 tok)
+- `pwssh.py` (~187 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/85ee3c8a-fbad-440b-86c0-911f035e545d/scratchpad/wt-artifacts/deploy/docker/
+
+- `Caddyfile.artifacts` — Artifacts hosting reverse proxy (issue #312). (~301 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/
+
+- `apply_oauth_env.py` — Merge freshly minted OAuth client_id/client_secret into the box's .env (~350 tok)
+- `build_branch.py` — Build the fix branch via the GitHub git-data API, never touching the shared checkout. (~1819 tok)
+- `build_flakefix.py` — Fix the one-shot count read flagged in review, on a fresh branch off main. (~1169 tok)
+- `build_followup.py` — Second commit on the PR branch: answer both review threads with real coverage. (~1574 tok)
+- `console-platform-admin.spec.ts` — Guards the platform-admin panels against a silently wrong control-plane. (~728 tok)
+- `control-plane-host.test.ts` — control-plane-host.test.ts (~846 tok)
+- `cp-verify.py` — Live control-plane verification, run ON the demo box. (~1790 tok)
+- `cp-verify.sh` — Control-plane live verification. Runs ON the demo box. Secrets stay local to (~1720 tok)
+- `cp-verify2.py` — Round 2: corrected paths, api-key lifecycle, full auth chain through edge-api. (~1338 tok)
+- `cp-verify3.py` — Round 3: corrected paths. Does not re-run the seed script (its tenant-slug (~1405 tok)
+- `diag-auth.py` — Diagnose why the seeded demo-owner credential is rejected by GoTrue. (~1025 tok)
+- `diag-db.py` — Confirm the live DB has every table the control-plane depends on, and that (~361 tok)
+- `diag-seed-login.py` — Run the seed script and immediately try its printed credential, no shell in (~456 tok)
+- `diag-tenant.py` — Who is in the hive-demo tenant, and when did they join. (~359 tok)
+- `issue271.md` — Resolved on 2026-07-26 (~1463 tok)
+- `live-login.mjs` — Declares EMAIL (~975 tok)
+- `live-proof.sh` — Build control-plane from the fix branch and run it as a throwaway container on (~239 tok)
+- `merge_env.py` — Merge KEY=VALUE lines from stdin into a target env file. Update in place if the (~370 tok)
+- `pr-body-cp.md` — Problem (~1403 tok)
+- `pr-body-metrics-listener.md` — Problem (~1017 tok)
+- `pr-body-seed.md` — Problem (~794 tok)
+- `pr-body.md` — Problem (~2691 tok)
+- `pr441-review-response.md` — HIGH: hive_app had no access to public.tenant_users (~1282 tok)
+- `pr445-proof.md` — Live proof, demo box (~627 tok)
+- `probe_oauth.py` — call (~491 tok)
+- `proof-negative.py` — Negative authorization proof for the fixed egress admin gate, then restore (~1418 tok)
+- `proof.py` — Side-by-side proof: same request, same credential, against the running main (~923 tok)
+- `register_client.py` (~535 tok)
+- `reset_pw.py` — Rotate the existing owui-e2e user's password only. No tenant/api-key writes. (~476 tok)
+- `verify-hive-app-rls.sql` — Prove the tenant_users grant + policy behave correctly under hive_app, the (~522 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/main/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~9831 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/main/scripts/
+
+- `install.sh` — Hive EnterpriseEdge one-line installer (~11880 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~16534 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/apps/control-plane/internal/egress/
+
+- `owner_port_test.go` — Struct: stubTenantRoleStore (~723 tok)
+- `service_test.go` — Struct: fakeRepo (~2814 tok)
+- `service.go` — Interface: OwnerChecker (~1685 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/apps/control-plane/internal/platform/
+
+- `role_pgx.go` — Struct: pgxRoleStore (~1343 tok)
+- `role_rls_test.go` — TestIsTenantOwner_RLS_ReadsOwnerMembershipAsHiveApp, TestIsTenantOwner_RLS_NonOwnerAndInactiveAreNot (~1695 tok)
+- `role.go` — — Phase 14 RBAC contract stub. (~2017 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/apps/control-plane/internal/platform/http/
+
+- `router_providers_test.go` — Struct: fakeProvidersRouter (~1106 tok)
+- `router.go` — Struct: healthResponse (~4395 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/apps/control-plane/internal/providers/
+
+- `admin_mux_test.go` — TestAdminMuxRoutesAdminPrefix, TestAdminMuxUnknownIDReturns404, TestAdminAndInternalMuxResolveSamePr (~887 tok)
+- `http.go` — HTTP handlers: mapServiceError, extractID, writeJSONError, writeJSON (~1803 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/scripts/
+
+- `verify-control-plane.py` — Assert every control-plane surface answers correctly on a running stack. (~2605 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-cp-admin/supabase/migrations/
+
+- `20260726_01_tenant_users_hive_app_grant.sql` — supabase/migrations/20260726_01_tenant_users_hive_app_grant.sql (~813 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/a034b341-f4f6-4317-b4a9-fb9c0c33d98d/scratchpad/wt-seed/scripts/
+
+- `seed-demo-owner.py` — Idempotently provision the cross-surface Hive demo account. (~5652 tok)
+- `test_seed_demo_owner.py` — Self-check for the slug-collision guards in seed-demo-owner.py (P1 fix: (~1333 tok)
+
 ## ../../../tmp/claude-1001/-home-sakib-hive/acdabf30-bd33-4a51-b504-d311e131fecc/scratchpad/
 
 - `autounattend.xml` (~2403 tok)
@@ -325,6 +458,138 @@
 ## ../../../tmp/claude-1001/-home-sakib-hive/cc725038-f225-4a8c-9617-443c069b3648/scratchpad/pr265-fix/apps/edge-api/internal/featuregate/
 
 - `gate.go` — resolves per-tenant feature flags lazily from the (~1708 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/dcce3a0d-3f46-44e8-bf8f-2fa4f336e557/scratchpad/
+
+- `before.mjs` — Declares BASE (~1114 tok)
+- `final.mjs` — BASE: open, label (~2550 tok)
+- `issue1.md` (~290 tok)
+- `issue2.md` (~290 tok)
+- `issue3.md` (~288 tok)
+- `issue4.md` (~296 tok)
+- `measure.mjs` — Declares BASE (~838 tok)
+- `measure2.mjs` — Declares BASE (~926 tok)
+- `pr-body-final.md` — 1. Visual parity with Open WebUI's own header buttons (~2917 tok)
+- `probe.mjs` — Declares BASE (~807 tok)
+- `probe2.mjs` — Declares BASE (~291 tok)
+- `probe3.mjs` — Declares BASE (~403 tok)
+- `review-472.md` — Review: launcher native polish (~1680 tok)
+- `shot.mjs` — Declares BASE (~636 tok)
+- `shot1.mjs` — argv: <locale|none> <path> <outfile> [click:<label>] (~520 tok)
+- `shots.mjs` — Declares BASE (~830 tok)
+- `spa.mjs` — Declares BASE (~1545 tok)
+- `sweep.mjs` — Declares BASE (~943 tok)
+- `verify.mjs` — BASE: signedInPage (~2690 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/de5b47c5-e7fc-4767-95d4-6e5d8e03c02b/scratchpad/
+
+- `apply_migrations.sh` (~140 tok)
+- `e2e-fixtures-debug.ts` — Supabase Edge Function: e2e-fixtures (~6220 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/
+
+- `add_bug.py` (~1178 tok)
+- `api-check.sh` — Signs in as the QA tester against Supabase and compares the billing-profile (~271 tok)
+- `auth-failure-diagnosis.md` — Live console auth failure — root cause diagnosis (~3194 tok)
+- `auth-failure-fixes.md` — Auth failure: 0.0.0.0 root cause, live seed fix, and proposed code fixes (~4612 tok)
+- `buglog_add.py` — Declares tenant (~1468 tok)
+- `buglog_fix.py` (~278 tok)
+- `buglog-append.py` (~833 tok)
+- `ciwatch.sh` — Emit each PR 483 check as it reaches a terminal state, then exit. (~232 tok)
+- `commit-msg.txt` (~516 tok)
+- `contrast.mjs` — oklch -> sRGB -> WCAG 2.x relative luminance -> contrast ratio (~1184 tok)
+- `design-craft-review.md` — Hive console design-craft audit (~6832 tok)
+- `fix_consent_test.py` — Declares AUTH_ID (~648 tok)
+- `hive-surface-inventory.md` — Hive UI Surface + Verification Script Inventory (~4351 tok)
+- `issue-anthropic.md` — Summary (~685 tok)
+- `issue-shim-ui.md` — Summary (~741 tok)
+- `live-blocker-triage.md` — Live blocker triage (~5551 tok)
+- `msg1.txt` — Declares of (~892 tok)
+- `msg2.txt` — Declares path (~589 tok)
+- `msg3.txt` (~831 tok)
+- `msg4.txt` (~469 tok)
+- `owui.js` — OWUI picker proof. Usage: PROOF_PW=... node owui.js <before|after> (~896 tok)
+- `parity-matrix.md` — Claude vs Codex vs Hive: Parity Matrix and Structural Decisions (~9738 tok)
+- `pgup.sh` (~341 tok)
+- `pr-body-2.md` — The defect (~3933 tok)
+- `pr-body-origin-leak.md` — What broke (~2874 tok)
+- `pr-body-signup-tenant-provisioning.md` — The failure (~5424 tok)
+- `pr-body.md` — 1. The model listing could not authenticate (blocker) (~2705 tok)
+- `pr471_body.md` — What this does (~2301 tok)
+- `proof-curl.sh` — Live checks against control-plane (branch build) + real migrated Postgres. (~903 tok)
+- `proof-db.sh` — Stand up an isolated scratch Postgres, apply the real migration chain, and seed (~379 tok)
+- `proof-override.yml` (~72 tok)
+- `proof.js` — Local visual-proof driver for the OWUI model-list fix. (~1617 tok)
+- `research-claude-surfaces.md` — Claude Ecosystem Surface Inventory (public sources only) (~7074 tok)
+- `research-codex-surfaces.md` — OpenAI Codex Product Surfaces: Feature + UX Inventory (~4279 tok)
+- `research-cognee-memory.md` — cognee (topoteretes/cognee) — Decision-Grade Research for Hive Memory Subsystem (~3986 tok)
+- `revoke-verify.sh` — Verifies Supabase session revocation without ever printing token values. (~651 tok)
+- `rlscheck.sql` — Does a membership-less token actually get denied by RLS? (~735 tok)
+- `rlscheck2.sql` (~574 tok)
+- `ux-workflow-review.md` — Hive UX + workflow audit (journeys, seams, jobs-to-be-done) (~8510 tok)
+- `waitproof.sh` (~96 tok)
+- `wcbuild.sh` (~159 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/issues/
+
+- `file_issues.py` — ` routes become unreachable by clicking once the viewport (~27222 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/proof/
+
+- `apply_migrations.sh` — Applies deploy/supabase/init/00-extensions.sql equivalent already ran via (~302 tok)
+- `bootstrap_platform_role.sql` — Not a repo migration. Supabase-hosted projects auto-provision (~186 tok)
+- `build_env.py` — ENTERPRISE_DISABLE_SIGNUP=false (~435 tok)
+- `capture.mjs` — One-shot Playwright capture script for the signup/tenant-provisioning (~2323 tok)
+- `dummy.env` (~88 tok)
+- `mint_jwt.py` — b64url, mint (~269 tok)
+- `override.yml` (~637 tok)
+- `test-override.yml` (~53 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/recon/
+
+- `recon-findings.md` — Live Hive Deployment Recon — Findings (~3911 tok)
+- `recon-inventory.md` — Live Hive Deployment Recon — Route Inventory (~3002 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/recon/scripts/
+
+- `aria-leak-check.mjs` — Does Playwright's ARIA snapshot (the thing written into error-context.md) (~345 tok)
+- `check-auth-500.mjs` — Isolate whether the Supabase password-grant 500 seen in the browser repros (~466 tok)
+- `check-error-ux.mjs` — Single, non-repeating login attempt against console-hive.scubed.co to see (~330 tok)
+- `playwright.owui.config.ts` — Copy of apps/web-console/e2e/phase-19/owui/playwright.owui.config.ts, (~315 tok)
+- `probe-auth-safe.mjs` — Safe variant of check-auth-500.mjs: prints status + error fields only, never (~713 tok)
+- `recon-authed-2.mjs` — Follow-up fixes after reviewing recon-authed.mjs screenshots: (~2028 tok)
+- `recon-authed-3-send.mjs` — Third attempt at a real chat completion: select a model first (the send (~860 tok)
+- `recon-authed.mjs` — Re-run of every pass finding #1 (auth outage, now fixed) blocked. (~4015 tok)
+- `recon.mjs` — Live recon of deployed Hive surfaces. Read-only: navigates + screenshots + (~4917 tok)
+- `verify-console-signin.mjs` — Live console sign-in verification after the tenant_users seed. (~514 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/.wolf/
+
+- `buglog.json` — Declares annotation (~24011 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/agent-console/lib/http/
+
+- `origin.ts` — resolveCanonicalOrigin returns a trustworthy origin for server-side redirects. (~2092 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/__tests__/
+
+- `redirect-origin.test.ts` — Regression guard for the `0.0.0.0` redirect family. (~2382 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt481/apps/web-console/lib/http/
+
+- `origin.ts` — resolveCanonicalOrigin returns a trustworthy origin for server-side redirects. (~2073 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt483/docs/proof/signup-tenant-provisioning-2026-07-27/
+
+- `live-transcript.md` — Live verification, membership-less user reaches the no-workspace state (~941 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/
+
+- `package.json` — Node.js package manifest (~228 tok)
+
+## ../../../tmp/claude-1001/-home-sakib-hive/e6590fc5-3992-411e-b435-9b80d3ab8ed2/scratchpad/wt484/.github/workflows/
+
+- `ci.yml` — CI: CI (~11475 tok)
 
 ## ../../../tmp/claude-1001/wt-art-33/apps/edge-api/cmd/server/
 
@@ -974,19 +1239,20 @@
 ## ../.claude/projects/-home-sakib-hive/memory/
 
 - `feedback_agent_owns_full_pr_loop.md` (~502 tok)
+- `feedback_caveman_wenyan_enforcement_gap.md` (~642 tok)
 - `feedback_external_proposal_docs.md` (~856 tok)
 - `feedback_gateguard_git_api.md` (~539 tok)
 - `feedback_hardware_agnostic_product.md` (~451 tok)
 - `feedback_no_bandaid_embedding_admin_dim.md` (~462 tok)
 - `feedback_session_autonomy_dev_env.md` (~235 tok)
 - `feedback_worktree_builder_dispatch.md` (~444 tok)
-- `MEMORY.md` — Memory Index (~2258 tok)
+- `MEMORY.md` — Memory Index (~2658 tok)
 - `project_agent_subsystem_kickoff.md` — Wave 1 shipped 2026-07-15 (control-plane spine) (~3705 tok)
 - `project_bd_planning_commission_tech_brief.md` (~1376 tok)
 - `project_carl_sovereign_edge.md` (~1771 tok)
 - `project_coderabbit_merge_ops.md` (~876 tok)
 - `project_coding_agent_spec.md` (~519 tok)
-- `project_demo_staging.md` (~663 tok)
+- `project_demo_staging.md` (~771 tok)
 - `project_docs_vault_migration.md` — `, component READMEs, and two non-markdown files that briefly got caught in scope by a naive `git rm (~743 tok)
 - `project_edge_architecture.md` — Declares only (~1265 tok)
 - `project_enterprise_parity_demo.md` (~867 tok)
@@ -995,15 +1261,17 @@
 - `project_marketing_site.md` (~2592 tok)
 - `project_one_product_two_modes.md` (~1285 tok)
 - `project_owui_oidc_gap.md` (~910 tok)
+- `project_physical_demo_box.md` (~1600 tok)
 - `project_pivot_sovereign_enterprise.md` (~695 tok)
 - `project_provider_catalog.md` (~303 tok)
 - `project_rag_embedding_dim_demo_blocker.md` — RESOLVED 2026-07-17: full RAG chain fixed, demo grounded-chat works e2e (~1088 tok)
+- `project_staging_redis_upstash.md` (~504 tok)
 - `project_stale_purge_2026_07_19.md` (~386 tok)
 - `reference_hive_lab_windows.md` — Provisioned 2026-07-15 (wired IP now 192.168.68.56) (~1747 tok)
 
 ## ../.ssh/
 
-- `config` (~45 tok)
+- `config` (~90 tok)
 
 ## ../fundmoreai/.claude/
 
@@ -1030,9 +1298,26 @@
 - `CLAUDE.md` — OpenWolf (~3942 tok)
 - `DEMO.md` — Hive Enterprise Demo Guide (~1432 tok)
 
+## .claude/
+
+- `settings.json` — Declares per (~1010 tok)
+
+## .claude/worktrees/agent-a05e592298c4b24dd/scripts/
+
+- `seed-demo-owner.py` — Idempotently provision the cross-surface Hive demo account. (~5059 tok)
+- `test_seed_demo_owner.py` — Self-check for the slug-collision guards in seed-demo-owner.py (P1 fix: (~1000 tok)
+
 ## .claude/worktrees/agent-a0601818c191bc2f3/.github/workflows/
 
 - `ci.yml` — CI: CI (~8192 tok)
+
+## .claude/worktrees/agent-a114ec8154469e0f2/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~10231 tok)
+
+## .claude/worktrees/agent-a114ec8154469e0f2/deploy/prometheus/
+
+- `prometheus.yml` (~347 tok)
 
 ## .claude/worktrees/agent-a142ccd3a4d6a4643/apps/control-plane/cmd/server/
 
@@ -1072,9 +1357,24 @@
 
 - `client.ts` — API routes: GET (1 endpoints) (~18761 tok)
 
+## .claude/worktrees/agent-a14448a9442f17b35/deploy/docker/
+
+- `Caddyfile.console` — web-console reverse proxy (self-hosted migration off Cloudflare Workers). (~396 tok)
+- `docker-compose.yml` — Docker Compose services (~10904 tok)
+- `Dockerfile.web-console.prod` — Self-hosted production server for web-console (demo/staging box migration (~414 tok)
+- `verify-console-session.mjs` — Verifies the one regression that matters for the web-console self-hosted (~1632 tok)
+
+## .claude/worktrees/agent-a155dfce30347c723/supabase/functions/e2e-fixtures/
+
+- `index.ts` — Supabase Edge Function: e2e-fixtures (~5417 tok)
+
 ## .claude/worktrees/agent-a15d27bdd575bd375/
 
 - `CLAUDE.md` — OpenWolf (~3895 tok)
+
+## .claude/worktrees/agent-a1eab68c310a11bfb/apps/control-plane/internal/rag/
+
+- `migration_schema_test.go` — TestRagEmbeddingConfigMigrationExists, TestProvisionQueriesRagEmbeddingConfigByLiteralName, TestRagE (~1164 tok)
 
 ## .claude/worktrees/agent-a23761961789c1fc1/website/sovereign/src/content/pages/
 
@@ -1083,6 +1383,10 @@
 ## .claude/worktrees/agent-a23761961789c1fc1/website/sovereign/src/pages/
 
 - `security.astro` — Security & Data Residency page (scope: onprem). Highest claim-risk page on (~3558 tok)
+
+## .claude/worktrees/agent-a256acabdc565fe29/supabase/functions/e2e-fixtures/
+
+- `index.ts` — Supabase Edge Function: e2e-fixtures (~5806 tok)
 
 ## .claude/worktrees/agent-a27f6a57bb6f094fe/.github/workflows/
 
@@ -1117,6 +1421,58 @@
 ## .claude/worktrees/agent-a288cd6ab6f43002d/deploy/litellm/
 
 - `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~1773 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/agent-console/app/
+
+- `globals.css` — Styles: 4 rules, 56 vars (~1274 tok)
+- `globals.tokens.test.ts` — Extracts `--name: value` pairs from the first top-level `@theme { ... }`. (~1100 tok)
+- `layout.tsx` — Same two families, same CSS variable names, as apps/web-console -- the two (~290 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/agent-console/app/auth/sign-in/
+
+- `page.tsx` — SignInPage — renders form (~769 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/agent-console/app/tasks/
+
+- `page.tsx` — TasksPage (~463 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/agent-console/components/
+
+- `brand.tsx` — Top bar for the signed-in workspace. Names the product, names this surface, (~1312 tok)
+- `task-console.tsx` — POLL_INTERVAL_MS (~2228 tok)
+- `ui.tsx` — INPUT_CLASS (~972 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/web-console/app/
+
+- `globals.css` — Styles: 5 rules, 65 vars (~2489 tok)
+- `layout.tsx` — geistSans (~464 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/web-console/app/console/
+
+- `page.tsx` — NEXT_STEPS (~2954 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/web-console/components/app-shell/
+
+- `auth-shell.tsx` — AuthShell (~609 tok)
+- `console-shell.tsx` — NAV_GROUPS — renders form (~2513 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/apps/web-console/components/brand/
+
+- `hive-mark.tsx` — HiveMark (~377 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~10275 tok)
+- `Dockerfile.open-webui` — Hive-branded Open WebUI image. (~959 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/deploy/docker/owui-static/
+
+- `custom.css` — Styles: 7 rules, 1 vars (~1822 tok)
+- `loader.js` — Open WebUI's prebuilt index.html unconditionally loads this script (~1289 tok)
+
+## .claude/worktrees/agent-a290ef4fc2f1c9876/docs/proof/ui-ux-2026-07-26/
+
+- `README.md` — Project documentation (~624 tok)
 
 ## .claude/worktrees/agent-a2e35737dbb42549b/apps/control-plane/cmd/server/
 
@@ -1176,6 +1532,88 @@
 
 - `chat_completions_integration_test.go` — go:build integration (~2668 tok)
 
+## .claude/worktrees/agent-a34e67d3e7f3783b6/
+
+- `package.json` — Node.js package manifest (~206 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/.github/workflows/
+
+- `ci.yml` — CI: CI (~11455 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~17366 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/catalog/
+
+- `http.go` — HTTP handlers: writeJSON (~2999 tok)
+- `repository.go` — Interface: Repository (~4094 tok)
+- `service_test.go` — Struct: stubRepository (~3417 tok)
+- `service.go` — Struct: Service (~969 tok)
+- `visibility_test.go` — TestAliasVisibleToTenantRules, TestZeroVisibilityRowsKeepsPublicAndPreviewAliases, TestCatalogListAn (~2070 tok)
+- `visibility.go` — AliasVisibleToTenant (~400 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/platform/http/
+
+- `router.go` — Struct: healthResponse (~4411 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/control-plane/internal/routing/
+
+- `http_test.go` — TestSelectRouteHandlerReturnsRouteAndFallbacks, TestSelectRouteHandlerRejectsMissingAliasID, TestSel (~1689 tok)
+- `http.go` — HTTP handlers: writeRoutingError, writeJSON (~1233 tok)
+- `service_test.go` — Struct: stubRepository (~6030 tok)
+- `service.go` — Interface: TenantEntitlements (~2423 tok)
+- `types.go` — Struct: SelectionInput (~574 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/edge-api/cmd/server/
+
+- `main_test.go` — TestResolveSpecPathDefaultsToGeneratedHiveContract, TestResolveSpecPathHonorsOverride, TestHandleMod (~5373 tok)
+- `main.go` — Struct: jwtAuthEnv (~11203 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/edge-api/internal/catalog/
+
+- `client.go` — Struct: Model (~804 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/edge-api/internal/chat/
+
+- `dispatch_test.go` — TestDispatchHappyPathWritesLLMTraceAndAuditsChatRequest, TestDispatchNoTenantReturnsNoTenant, TestDi (~3070 tok)
+- `dispatch.go` — Struct: Deps (~2358 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/edge-api/internal/inference/
+
+- `routing_client_test.go` — TestSelectRouteBindsTenantFromRequestContext, TestSelectRouteSendsNoTenantForAPIKeyContext, TestSele (~1139 tok)
+- `routing_client.go` — Struct: SelectRouteInput (~1407 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/apps/edge-api/internal/rag/
+
+- `chat_handler_test.go` — Struct: dispatchedRequest (~6512 tok)
+- `chat_handler.go` — Declares RouteSelectFunc (~4851 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/docs/proof/tenant-model-entitlement/
+
+- `live-transcript.md` — Live proof: per-tenant model entitlement on the inference path (~1620 tok)
+- `run-proof.sh` — Reproduce docs/proof/tenant-model-entitlement/live-transcript.md. (~1496 tok)
+- `seed.sql` — Proof fixture for per-tenant model entitlement on the inference path. (~883 tok)
+
+## .claude/worktrees/agent-a34e67d3e7f3783b6/tools/
+
+- `lint-no-direct-tenant-id.mjs` — tools/lint-no-direct-tenant-id.mjs (~1290 tok)
+- `lint-tenant-model-visibility-single-source.mjs` — tools/lint-tenant-model-visibility-single-source.mjs (~623 tok)
+
+## .claude/worktrees/agent-a39ec808800e7ca0b/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~10696 tok)
+- `Dockerfile.open-webui` — Hive-branded Open WebUI image. (~1231 tok)
+
+## .claude/worktrees/agent-a39ec808800e7ca0b/deploy/docker/owui-patches/
+
+- `apply_tenant_role_patch.py` — Build-time splice: insert tenant_role_from_db.py's fragment into (~795 tok)
+- `tenant_role_from_db.py` — #457: Supabase's OAuth Authorization Server issues a minimal (~1046 tok)
+
+## .claude/worktrees/agent-a39ec808800e7ca0b/supabase/migrations/
+
+- `20260726_02_owui_role_metadata.sql` — supabase/migrations/20260726_02_owui_role_metadata.sql (~1134 tok)
+
 ## .claude/worktrees/agent-a3b25362a1e614702/.planning/outreach/
 
 - `susana-martins-email.md` — Email: Sakib to Susana Martins (WEtech Alliance) (~502 tok)
@@ -1195,6 +1633,13 @@
 ## .claude/worktrees/agent-a3bb93632248fa399/packages/openai-contract/scripts/
 
 - `lint-no-customer-usd.mjs` — Customer-USD / FX zero-leak lint primitive. (~2535 tok)
+
+## .claude/worktrees/agent-a3d4cd5ea95deab0d/apps/edge-api/internal/audio/
+
+- `handler.go` — HTTP handlers: writeReservationFailure (~5565 tok)
+- `live_voice_integration_test.go` — go:build integration (~4078 tok)
+- `speech_silence_retry_test.go` — Struct: sequencedSpeechServer (~1354 tok)
+- `wav_silence.go` (~477 tok)
 
 ## .claude/worktrees/agent-a3df8e27ee45b377a/deploy/docker/
 
@@ -1296,6 +1741,11 @@
 
 - `susana-martins-email.md` — Email: Sakib to Susana Martins (WEtech Alliance) (~520 tok)
 
+## .claude/worktrees/agent-a5e726c56834e3e35/.github/workflows/
+
+- `deploy-demo-box.yml` — CI: deploy-demo-box (~1800 tok)
+- `deploy-web-console-workers.yml` — CI: deploy-web-console-workers (~1076 tok)
+
 ## .claude/worktrees/agent-a61391e1a3425a31c/website/sovereign/src/content/pages/
 
 - `pricing.mdx` — Declares onpremHardware (~2935 tok)
@@ -1338,6 +1788,42 @@
 
 - `20260625_06_sso_featuregate_keys.sql` — Add SSO provider feature gate keys to the tenant_setting_key enum. (~217 tok)
 - `20260625_07_sso_featuregate_keys.sql` — Add SSO provider feature gate keys to the tenant_setting_key enum. (~184 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~16494 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/internal/accounting/
+
+- `http_test.go` — Struct: stubRoleStore (~4863 tok)
+- `http.go` — Struct: Handler (~3788 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/internal/accounts/
+
+- `http_test.go` — TestViewerHandler_ReturnsViewerContext, TestViewerHandler_AcceptsXHiveAccountIDHeader, TestViewerHan (~3597 tok)
+- `http.go` — HTTP handlers: writeJSON (~2258 tok)
+- `service_platform_admin_test.go` — Struct: stubPlatformAdminStore (~1412 tok)
+- `service.go` — Struct: Service (~3036 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/internal/budgets/
+
+- `http_test.go` — Struct: stubRoleStore (~3424 tok)
+- `http.go` — HTTP handlers: writeBudgetError, writeJSON (~6101 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/internal/ledger/
+
+- `http_test.go` — Struct: stubRoleStore (~2281 tok)
+- `http.go` — HTTP handlers: writeLedgerError, writeJSON (~1919 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/internal/profiles/
+
+- `http_test.go` — Struct: stubRoleStore (~3799 tok)
+- `http.go` — HTTP handlers: writeProfileError, writeJSON (~1918 tok)
+
+## .claude/worktrees/agent-a65347cb7a18633db/apps/control-plane/internal/usage/
+
+- `http_test.go` — Struct: stubRoleStore (~3941 tok)
+- `http.go` — HTTP handlers: parseAnalyticsFilter (~3770 tok)
 
 ## .claude/worktrees/agent-a665e6c81cb8d0f9a/deploy/docker/
 
@@ -1387,6 +1873,60 @@
 - `gate_test.go` — tests — TDD RED first. (~3018 tok)
 - `gate.go` — resolves per-tenant feature flags lazily from the (~1585 tok)
 
+## .claude/worktrees/agent-a683f30b9a3a7bf1a/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~16359 tok)
+
+## .claude/worktrees/agent-a683f30b9a3a7bf1a/apps/control-plane/internal/accounts/
+
+- `http.go` — HTTP handlers: writeJSON (~2169 tok)
+- `service_platform_admin_test.go` — Struct: stubPlatformAdminStore (~930 tok)
+- `service.go` — Struct: Service (~2915 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/
+
+- `package.json` — Node.js package manifest (~202 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/.github/workflows/
+
+- `ci.yml` — CI: CI (~11456 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/apps/agent-console/app/auth/callback/
+
+- `route.test.ts` — Same runtime constraint as middleware.test.ts: route handlers run in Next's (~1470 tok)
+- `route.ts` — Mirrors apps/web-console/app/auth/callback/route.ts. No hive_verify / (~591 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/apps/agent-console/lib/http/
+
+- `origin.test.ts` — Precedence contract for this app's copy of resolveCanonicalOrigin. Mirrors (~1096 tok)
+- `origin.ts` — resolveCanonicalOrigin returns a trustworthy origin for server-side redirects. (~1493 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/apps/web-console/__tests__/
+
+- `auth-routes.test.ts` — TDD: Auth route and middleware contracts. (~3105 tok)
+- `redirect-origin.test.ts` — Regression guard for the `0.0.0.0` redirect family. (~2166 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/apps/web-console/app/auth/callback/
+
+- `route.ts` — Next.js API route: GET (~1286 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/apps/web-console/app/console/account-switch/
+
+- `route.ts` — Next.js API route: POST (~489 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/apps/web-console/lib/http/
+
+- `origin.test.ts` — Precedence contract for resolveCanonicalOrigin. The same matrix is asserted (~1509 tok)
+- `origin.ts` — resolveCanonicalOrigin returns a trustworthy origin for server-side redirects. (~1922 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/docs/proof/console-origin-2026-07-27/
+
+- `01-curl-transcript.md` — Redirect-origin fix: live before/after proof (~1617 tok)
+
+## .claude/worktrees/agent-a6a55528e369c104b/tools/
+
+- `lint-no-request-url-origin.mjs` — Structural guard against the `0.0.0.0` redirect-origin bug family. (~6495 tok)
+
 ## .claude/worktrees/agent-a6e2bb346c404e627/website/sovereign/
 
 - `.gitignore` — Git ignore rules (~45 tok)
@@ -1415,6 +1955,34 @@
 ## .claude/worktrees/agent-a6e2bb346c404e627/website/sovereign/src/styles/
 
 - `tokens.css` — Styles: 1 rules, 36 vars (~552 tok)
+
+## .claude/worktrees/agent-a7138ac67a3f23193/apps/web-console/__tests__/
+
+- `auth-routes.test.ts` — TDD: Auth route and middleware contracts. (~2794 tok)
+- `sign-in-next-redirect.test.tsx` — TDD: /auth/sign-in honors the `?next=` redirect param on successful (~1294 tok)
+- `sign-up-next-redirect.test.tsx` — TDD: /auth/sign-up copy + next-param propagation (live UI/UX pass, (~1058 tok)
+
+## .claude/worktrees/agent-a7138ac67a3f23193/apps/web-console/app/auth/callback/
+
+- `route.ts` — Next.js API route: GET (~1174 tok)
+
+## .claude/worktrees/agent-a7138ac67a3f23193/apps/web-console/app/auth/sign-in/
+
+- `page.tsx` — SignInPage — renders form (~1178 tok)
+
+## .claude/worktrees/agent-a7138ac67a3f23193/apps/web-console/app/auth/sign-up/
+
+- `page.tsx` — TURNSTILE_SITE_KEY — renders form (~2374 tok)
+
+## .claude/worktrees/agent-a7138ac67a3f23193/apps/web-console/components/oauth/
+
+- `consent-panel.test.tsx` — TDD: the OWUI OIDC consent page (issue #269). (~2900 tok)
+- `consent-panel.tsx` — Builds the /auth/sign-in?next=... URL that round-trips an unauthenticated (~1691 tok)
+
+## .claude/worktrees/agent-a7138ac67a3f23193/apps/web-console/lib/auth/
+
+- `next-target.test.ts` (~821 tok)
+- `next-target.ts` — Resolves a `next` query param into a safe relative redirect target. Falls (~511 tok)
 
 ## .claude/worktrees/agent-a79c0c82d5938c6cb/deploy/docker/
 
@@ -1632,6 +2200,37 @@
 - `20260625_01_audit_taxonomy_extension.sql` — supabase/migrations/20260625_01_audit_taxonomy_extension.sql (~1385 tok)
 - `20260625_03_audit_taxonomy_extension.sql` — supabase/migrations/20260625_03_audit_taxonomy_extension.sql (~1385 tok)
 
+## .claude/worktrees/agent-abef28941cdb4c007/.github/workflows/
+
+- `ci.yml` — CI: CI (~11443 tok)
+
+## .claude/worktrees/agent-abef28941cdb4c007/apps/control-plane/internal/payments/
+
+- `http_test.go` — Struct: stubPaymentService (~4935 tok)
+- `http.go` — HTTP handlers: writePaymentJSON (~3270 tok)
+
+## .claude/worktrees/agent-abef28941cdb4c007/apps/control-plane/internal/signup/
+
+- `webhook_test.go` — Struct: noopWAL (~2628 tok)
+
+## .claude/worktrees/agent-abef28941cdb4c007/apps/edge-api/internal/audio/
+
+- `handler.go` — HTTP handlers: writeReservationFailure (~4960 tok)
+- `live_voice_integration_test.go` — go:build integration (~2333 tok)
+- `zz_debug_test.go` — go:build integration (~317 tok)
+
+## .claude/worktrees/agent-abef28941cdb4c007/apps/edge-api/internal/stt/
+
+- `client.go` — provides a two-tier speech-to-text client that dispatches (~2086 tok)
+
+## .claude/worktrees/agent-abef28941cdb4c007/deploy/docker/
+
+- `apply_migrations.sh` (~158 tok)
+- `dbg4.go` (~325 tok)
+- `dbg5.go` (~315 tok)
+- `dbg6.go` (~452 tok)
+- `dbg7.go` (~392 tok)
+
 ## .claude/worktrees/agent-ac3cbdba513e2459e/apps/control-plane/cmd/server/
 
 - `main.go` — Struct: ledgerGrantAdapter (~13467 tok)
@@ -1656,6 +2255,87 @@
 
 - `20260715_01_license_state.sql` — supabase/migrations/20260715_01_license_state.sql (~687 tok)
 - `20260715_02_license_state.sql` — supabase/migrations/20260715_02_license_state.sql (~687 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~17864 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/control-plane/internal/auth/
+
+- `client.go` — Struct: Client (~1617 tok)
+- `selected_tenant_test.go` — TestSelectedTenantDeniedWithoutActiveMembership, TestSelectedTenantAllowedWithActiveMembership, Test (~1739 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/control-plane/internal/platform/config/
+
+- `config.go` — Struct: Config (~1918 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/control-plane/internal/signup/
+
+- `hook_claims_test.go` — TestTokenHookNeverRaisesForMembershiplessUser, TestTokenHookOmitsTenantClaimsForMembershiplessUser, (~2919 tok)
+- `reconcile_test.go` — TestReconcileProvisionsMembershipForDomainMatch, TestReconcileIsIdempotentOnRepeatCalls, TestReconci (~4437 tok)
+- `reconcile.go` — Struct: ReconcileInput (~3647 tok)
+- `viewer_http.go` — HTTP handlers: writeViewerJSON (~1477 tok)
+- `webhook.go` — resolves and provisions the tenant membership a new sign-up (~1525 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/control-plane/internal/signupguard/
+
+- `ratelimit.go` — Interface: Incrementer (~1246 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/edge-api/internal/auth/
+
+- `inert_token_test.go` — TestParseYieldsNilTenantForEveryAbsentForm, TestJWTMiddlewareRejectsTokenWithoutTenantClaim, TestJWT (~1884 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/auth/forgot-password/
+
+- `page.tsx` — ForgotPasswordPage — renders form (~1012 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/auth/reset-password/
+
+- `page.tsx` — ResetPasswordPage — renders form (~724 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/auth/sign-in/
+
+- `page.tsx` — SignInPage — renders form (~1204 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/auth/sign-up/
+
+- `page.tsx` — TURNSTILE_SITE_KEY — renders form (~2399 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/console/
+
+- `layout.tsx` — ConsoleLayout (~862 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/console/provision/
+
+- `route.ts` — Tenant-membership provisioning gate. (~1210 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/app/no-workspace/
+
+- `page.tsx` — Terminal state for a signed-in user whom no workspace claims. (~343 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/components/console/
+
+- `no-workspace-state.tsx` — NoWorkspaceState — renders form (~762 tok)
+- `tenant-claim-refresh.tsx` — TenantClaimRefresh (~466 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/components/oauth/
+
+- `consent-panel.tsx` — Builds the /auth/sign-in?next=... URL that round-trips an unauthenticated (~1746 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/lib/auth/
+
+- `auth-error.test.ts` — Guards the auth-error sanitization boundary. The concrete regression: a user (~1534 tok)
+- `auth-error.ts` — Sanitization boundary for authentication error copy. (~1357 tok)
+- `tenant-claim.test.ts` — Builds an unsigned token shaped like a JWT. The claim reader never verifies (~1159 tok)
+- `tenant-claim.ts` — Reads the `tenant_id` claim out of a Supabase access token. (~669 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/apps/web-console/lib/control-plane/
+
+- `client.ts` — API routes: GET (1 endpoints) (~21050 tok)
+
+## .claude/worktrees/agent-ac5128047409fc6f6/supabase/migrations/
+
+- `20260727_01_token_hook_membershipless_no_raise.sql` — supabase/migrations/20260727_01_token_hook_membershipless_no_raise.sql (~1938 tok)
 
 ## .claude/worktrees/agent-ac8486d870776d3c9/website/sovereign/
 
@@ -1761,6 +2441,39 @@
 ## .claude/worktrees/agent-ad2aa7f7ea7104fe9/supabase/migrations/
 
 - `20260715_05_rag_rls_nullif_guard.sql` — supabase/migrations/20260715_05_rag_rls_nullif_guard.sql (~497 tok)
+
+## .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/cmd/server/
+
+- `main_test.go` — TestResolveSpecPathDefaultsToGeneratedHiveContract, TestResolveSpecPathHonorsOverride, TestHandleMod (~5697 tok)
+- `main.go` — Struct: jwtAuthEnv (~11761 tok)
+
+## .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/edge-api/internal/auth/
+
+- `owui_unwrap_test.go` — Struct: capturedRequest (~4379 tok)
+- `owui_unwrap.go` — — OWUI body-metadata to Authorization header unwrap. (~3778 tok)
+
+## .claude/worktrees/agent-ad6f26a92ffb7ebb4/apps/web-console/components/catalog/
+
+- `model-catalog-table.test.ts` — The lifecycle enum is owned by the database: public.model_aliases carries (~569 tok)
+- `model-catalog-table.tsx` — capabilityTone — renders table (~1097 tok)
+
+## .claude/worktrees/agent-ad6f26a92ffb7ebb4/deploy/docker/
+
+- `docker-compose.localproof.yml` — Local-verification-only override. NOT committed. (~192 tok)
+
+## .claude/worktrees/agent-ad6f26a92ffb7ebb4/docs/proof/owui-model-list-shim-auth-2026-07-27/
+
+- `06-models-before-after.md` — GET /v1/models with the Open WebUI shim key, before and after (~479 tok)
+
+## .claude/worktrees/agent-ad6f26a92ffb7ebb4/scripts/
+
+- `tmp-owui-models-probe.sh` — Temporary local verification helper for the OWUI model-list fix. (~405 tok)
+- `tmp-paid-probe.sh` — ONE authorized paid completion probe. Deleted before commit. (~119 tok)
+
+## .claude/worktrees/agent-ad7ce31e09df910e8/scripts/
+
+- `seed-owui-e2e-user.py` — Idempotently provision the OWUI e2e test user, tenant, and membership. (~4764 tok)
+- `test_seed_owui_e2e_user.py` — Self-check for the OWUI config sync in seed-owui-e2e-user.py (fix for (~2558 tok)
 
 ## .claude/worktrees/agent-adcdf7d97fb5b9998/.github/workflows/
 
@@ -1905,6 +2618,24 @@
 
 - `owui-nightly.yml` — CI: OWUI nightly e2e (~4542 tok)
 
+## .claude/worktrees/agent-aeae22e9555d84e27/.github/workflows/
+
+- `_scratch-jwt-claim-probe.yml` — CI: SCRATCH jwt claim probe (~277 tok)
+- `owui-nightly.yml` — CI: OWUI nightly e2e (~4934 tok)
+
+## .claude/worktrees/agent-aeae22e9555d84e27/apps/web-console/e2e/phase-19/owui/
+
+- `owui.setup.ts` — Installs (idempotently) and fully activates the hive_jwt_forward Open (~3855 tok)
+
+## .claude/worktrees/agent-aeae22e9555d84e27/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~10248 tok)
+
+## .claude/worktrees/agent-aeae22e9555d84e27/scripts/
+
+- `_scratch_jwt_claim_probe.py` — SCRATCH DIAGNOSTIC, not for merge. Signs in as OWUI_E2E_EMAIL/PASSWORD via (~629 tok)
+- `seed-owui-e2e-user.py` — Idempotently provision the OWUI e2e test user, tenant, and membership. (~5444 tok)
+
 ## .claude/worktrees/agent-aed6ec5a141dfc70f/apps/control-plane/internal/auditarchive/
 
 - `archiver_test.go` — Struct: fakeRepo (~5442 tok)
@@ -1915,6 +2646,42 @@
 ## .claude/worktrees/agent-aed6ec5a141dfc70f/supabase/migrations/
 
 - `20260703_01_audit_log_tenant_ts_seq_index.sql` — supabase/migrations/20260703_01_audit_log_tenant_ts_seq_index.sql (~612 tok)
+
+## .claude/worktrees/agent-aee6bac24d19fb3f6/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~10166 tok)
+
+## .claude/worktrees/agent-aee6bac24d19fb3f6/deploy/docker/owui-static/
+
+- `custom.css` — Stylesheet (~194 tok)
+- `loader.js` — Open WebUI's prebuilt index.html unconditionally loads this script (~142 tok)
+
+## .claude/worktrees/agent-af07b8ddc5d56fb56/.github/workflows/
+
+- `ci.yml` — CI: CI (~11450 tok)
+
+## .claude/worktrees/agent-af07b8ddc5d56fb56/.wolf/
+
+- `buglog.json` — Declares annotation (~23033 tok)
+
+## .claude/worktrees/agent-af07b8ddc5d56fb56/apps/control-plane/internal/profiles/
+
+- `http_test.go` — Struct: stubRoleStore (~4351 tok)
+- `http.go` — HTTP handlers: writeProfileError, writeJSON (~2043 tok)
+- `repository_billing_join_test.go` — TestGetBillingProfileWithoutAccountProfileRow, TestGetBillingProfileWithAccountProfileRowUnchanged (~1563 tok)
+- `repository.go` — Interface: Repository (~1710 tok)
+
+## .claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/__tests__/
+
+- `billing-profile-missing-row.test.tsx` — Routes fetch by path so each endpoint can answer with its own status. (~1846 tok)
+
+## .claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/app/console/
+
+- `error.tsx` — ConsoleError (~318 tok)
+
+## .claude/worktrees/agent-af07b8ddc5d56fb56/apps/web-console/lib/control-plane/
+
+- `client.ts` — API routes: GET (1 endpoints) (~20822 tok)
 
 ## .claude/worktrees/agent-af26bf44e2dbb6621/deploy/docker/
 
@@ -2057,9 +2824,246 @@
 
 - `hive_jwt_forward.py` — name: inlet, outlet (~1120 tok)
 
+## .claude/worktrees/agent-afecb057e6b216d25/.github/workflows/
+
+- `ci.yml` — CI: CI (~11216 tok)
+
+## .claude/worktrees/agent-afecb057e6b216d25/apps/control-plane/internal/tenants/
+
+- `access_token_hook_test.go` — TestCustomAccessTokenHook_AddsOwuiRoleWithoutChangingRoleClaim (~852 tok)
+
+## .claude/worktrees/agent-afecb057e6b216d25/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~9742 tok)
+
+## .claude/worktrees/agent-afecb057e6b216d25/supabase/migrations/
+
+- `20260726_01_owui_role_claim.sql` — supabase/migrations/20260726_01_owui_role_claim.sql (~1517 tok)
+
+## .claude/worktrees/agent-console-basepath/
+
+- `.gitignore` — Git ignore rules (~557 tok)
+
+## .claude/worktrees/agent-console-basepath/.github/workflows/
+
+- `ci.yml` — CI: CI (~11275 tok)
+
+## .claude/worktrees/agent-console-basepath/apps/agent-console/
+
+- `middleware.ts` — Verified live (docker build + curl against the production image) that (~801 tok)
+
+## .claude/worktrees/agent-console-basepath/apps/agent-console/app/auth/callback/
+
+- `route.test.ts` — Same runtime constraint as middleware.test.ts: route handlers run in Next's (~574 tok)
+- `route.ts` — Mirrors apps/web-console/app/auth/callback/route.ts. No hive_verify / (~461 tok)
+
+## .claude/worktrees/agent-console-basepath/apps/agent-console/app/auth/sign-in/
+
+- `page.test.tsx` — Regression guard: a successful sign-in used to navigate to a bare "/tasks", (~683 tok)
+- `page.tsx` — SignInPage — renders form (~865 tok)
+
+## .claude/worktrees/agent-console-basepath/apps/agent-console/lib/
+
+- `base-path.ts` — basePath, kept in sync with next.config.ts's literal "/agent-workspace". (~164 tok)
+
+## .claude/worktrees/agent-console-basepath/apps/web-console/tests/e2e/_probe/
+
+- `agent-workspace-flows.spec.ts` — Live probe for the agent-console sidecar (apps/agent-console), which is (~1226 tok)
+
+## .claude/worktrees/agent-console-basepath/deploy/docker/
+
+- `Caddyfile.owui` (~943 tok)
+- `docker-compose.yml` — Docker Compose services (~9719 tok)
+
+## .claude/worktrees/caddy-admin-matcher/deploy/docker/
+
+- `Caddyfile.owui` — When an external terminator (Cloudflare Tunnel on the demo box) handles TLS, (~1244 tok)
+
+## .claude/worktrees/design-veto-fix/apps/web-console/app/
+
+- `globals.css` — Styles: 5 rules, 65 vars (~2455 tok)
+
+## .claude/worktrees/design-veto-fix/apps/web-console/app/console/
+
+- `page.tsx` — NEXT_STEPS (~2954 tok)
+
+## .claude/worktrees/design-veto-fix/apps/web-console/app/console/billing/alerts/
+
+- `page.tsx` — Phase 14 FIX-14-26 — workspace spend-alerts page (BDT-only). (~1209 tok)
+
+## .claude/worktrees/design-veto-fix/apps/web-console/components/billing/
+
+- `billing-overview.tsx` — entryTypeLabel — renders table (~1494 tok)
+- `budget-alert-banner.tsx` — BudgetAlertBanner (~510 tok)
+- `invoice-row.tsx` — Phase 14 FIX-14-27 — workspace invoice row (BDT-only). (~385 tok)
+
+## .claude/worktrees/design-veto-fix/apps/web-console/components/ui/
+
+- `data-table.tsx` — DataTable — renders table (~810 tok)
+
+## .claude/worktrees/design-veto-fix/apps/web-console/tests/unit/
+
+- `metric-slashed-zero.test.ts` — A slashed zero in a credit, usage, or invoice figure is a requirement, not a (~328 tok)
+
+## .claude/worktrees/design-veto-fix/docs/proof/console-numerals-2026-07-27/
+
+- `README.md` — Project documentation (~1038 tok)
+
 ## .claude/worktrees/fix-nightly-db-url/.github/workflows/
 
 - `phase-19-owui-nightly.yml` — CI: phase-19-owui-nightly (~1974 tok)
+
+## .claude/worktrees/i18n-phase01/apps/agent-console/
+
+- `.gitignore` — Git ignore rules (~26 tok)
+
+## .claude/worktrees/i18n-phase01/apps/agent-console/app/
+
+- `globals.css` — Styles: 4 rules, 56 vars (~1419 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/
+
+- `.gitignore` — Git ignore rules (~105 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/__tests__/
+
+- `locale-route.test.ts` — Redirect-target contract for the locale switcher route. (~606 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/app/
+
+- `globals.css` — Styles: 5 rules, 65 vars (~2815 tok)
+- `layout.tsx` — geistSans (~679 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/app/actions/
+
+- `set-locale.ts` — Persist the viewer's language choice. (~342 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/app/console/billing/alerts/
+
+- `page.tsx` — Phase 14 FIX-14-26 — workspace spend-alerts page (BDT-only). (~1221 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/app/console/locale/
+
+- `route.ts` — Next.js API route: POST (~364 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/components/
+
+- `locale-switcher.tsx` — Path to come back to, so switching language keeps the current page. (~586 tok)
+- `verification-banner.tsx` — VerificationBanner (~137 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/components/billing/
+
+- `invoice-list.tsx` — statusBadge — renders table (~752 tok)
+- `invoice-row.tsx` — Phase 14 FIX-14-27 — workspace invoice row (BDT-only). (~386 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/i18n/
+
+- `request.ts` — Statically imported rather than `await import(\`../messages/${locale}.json\`)`: (~224 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/lib/format/
+
+- `credits.ts` — Format integer credit values for display in the console. Credits are (~635 tok)
+- `datetime.ts` — Format an ISO timestamp with a short month plus wall-clock time, for (~367 tok)
+- `format.test.ts` — Declares iso (~922 tok)
+- `money.ts` — Render a minor-unit amount in its own rail currency. (~501 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/lib/http/
+
+- `return-to.ts` — Resolve an untrusted `return_to` form value into a safe redirect target. (~409 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/lib/i18n/
+
+- `locales.ts` — Supported console locales. The active locale lives in a cookie rather than (~669 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/messages/
+
+- `bn.json` (~240 tok)
+- `en.json` (~237 tok)
+
+## .claude/worktrees/i18n-phase01/apps/web-console/tests/e2e/
+
+- `i18n-bengali.spec.ts` — i18n-bengali.spec.ts (~833 tok)
+
+## .claude/worktrees/metrics-exposure-fix/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~16830 tok)
+
+## .claude/worktrees/metrics-exposure-fix/apps/control-plane/internal/platform/http/
+
+- `router_test.go` — TestNewRouterDoesNotServeMetrics, TestNewRouterServesHealth (~309 tok)
+- `router.go` — Struct: healthResponse (~4289 tok)
+
+## .claude/worktrees/metrics-exposure-fix/apps/edge-api/cmd/server/
+
+- `main_test.go` — TestResolveSpecPathDefaultsToGeneratedHiveContract, TestResolveSpecPathHonorsOverride, TestHandleMod (~4446 tok)
+- `main.go` — Struct: jwtAuthEnv (~10883 tok)
+
+## .claude/worktrees/metrics-exposure-fix/deploy/prometheus/
+
+- `prometheus.yml` (~249 tok)
+
+## .claude/worktrees/rag-embed-dim/
+
+- `DEMO.md` — Hive Enterprise Demo Guide (~1695 tok)
+
+## .claude/worktrees/rag-embed-dim/apps/control-plane/internal/rag/
+
+- `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedClientTruncates, TestHTTPEmbedClientStric (~1331 tok)
+- `ingest_test.go` — Struct: fakeEmbedClient (~1730 tok)
+- `ingest.go` — Interface: EmbedClient (~2792 tok)
+
+## .claude/worktrees/rag-embed-dim/apps/edge-api/internal/rag/
+
+- `embed_test.go` — TestReduceEmbedding, TestReduceEmbeddingNoop, TestHTTPEmbedderNeverRequestsDimensions, TestHTTPEmbed (~1590 tok)
+- `embed.go` — Interface: Embedder (~1547 tok)
+- `repository.go` — Struct: DocRow (~2562 tok)
+
+## .claude/worktrees/rag-embed-dim/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~9766 tok)
+
+## .claude/worktrees/rag-embed-dim/deploy/litellm/
+
+- `config.yaml` — ─── Hive Cloud Demo — LiteLLM config (OpenRouter + Groq, cloud models only) ─ (~2649 tok)
+
+## .claude/worktrees/rag-embed-dim/scripts/
+
+- `verify-rag-roundtrip.py` — End-to-end check of the Hive RAG pipeline against a running stack. (~3203 tok)
+
+## .claude/worktrees/sandbox-quota-cgroups/apps/agent-engine/cmd/agent-engine/
+
+- `main.go` — Command agent-engine launches one Apptainer rootless coding-pack or (~2268 tok)
+
+## .claude/worktrees/sandbox-quota-cgroups/apps/agent-engine/internal/engine/
+
+- `engine_test.go` — Struct: fakeAgentServer (~4329 tok)
+- `engine.go` — composes apps/agent-engine/internal/sandbox (the Apptainer (~4839 tok)
+
+## .claude/worktrees/sandbox-quota-cgroups/apps/agent-engine/internal/sandbox/
+
+- `launcher_test.go` — TestBuildArgv_AlwaysIncludesPidAndContainall, TestBuildArgv_AlwaysIsolatesNetwork, TestBuildArgv_App (~3648 tok)
+- `launcher.go` — constructs the Apptainer rootless launch command for a (~4499 tok)
+
+## .claude/worktrees/sandbox-quota-cgroups/apps/control-plane/cmd/server/
+
+- `main.go` — Struct: ledgerGrantAdapter (~17010 tok)
+
+## .claude/worktrees/sandbox-quota-cgroups/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~11991 tok)
+
+## .claude/worktrees/sidebar-launcher-polish/apps/web-console/e2e/phase-19/owui/
+
+- `09-agent-workspace-launcher.spec.ts` — Declares Locator (~3229 tok)
+
+## .claude/worktrees/sidebar-launcher-polish/deploy/docker/owui-static/
+
+- `custom.css` — Styles: 8 rules, 1 vars (~2750 tok)
+- `loader.js` — Open WebUI's prebuilt index.html unconditionally loads this script (~2038 tok)
+
+## .claude/worktrees/sidebar-launcher-polish/docs/proof/owui-launcher-2026-07-27/
+
+- `README.md` — Project documentation (~1991 tok)
 
 ## .claude/worktrees/sov-usecases/website/sovereign/src/content/pages/
 
@@ -2070,6 +3074,33 @@
 
 - `index.astro` — Home route for the Hive sovereign site (hive.scubed.co). (~4546 tok)
 - `use-cases.astro` — Use Cases page (template: usecase, scope: both). (~2960 tok)
+
+## .claude/worktrees/voice-verify-fix/.wolf/
+
+- `buglog.json` — Declares annotation (~22453 tok)
+
+## .claude/worktrees/voice-verify-fix/apps/edge-api/internal/audio/
+
+- `accounting_adapter_test.go` — TestAccountingAdapterCreateReservationUsesStrictPolicy, TestAccountingAdapterClassifiesReservationFa (~1018 tok)
+- `accounting_adapter.go` — Struct: AccountingAdapter (~641 tok)
+- `handler_test.go` — Struct: mockLiteLLMAudio (~7374 tok)
+- `handler.go` — HTTP handlers: writeReservationFailure (~4663 tok)
+
+## .claude/worktrees/voice-verify-fix/apps/edge-api/internal/inference/
+
+- `accounting_client.go` — Struct: AccountingClient (~1967 tok)
+
+## .claude/worktrees/voice-verify-fix/deploy/apptainer/
+
+- `README.md` — Project documentation (~939 tok)
+
+## .claude/worktrees/voice-verify-fix/deploy/docker/
+
+- `docker-compose.yml` — Docker Compose services (~10634 tok)
+
+## .claude/worktrees/voice-verify-fix/scripts/
+
+- `install.sh` — Hive EnterpriseEdge one-line installer (~11862 tok)
 
 ## .planning/carl/
 
@@ -2153,12 +3184,18 @@
 - `repository.go` — Struct: DocRow (~2454 tok)
 - `search_query_test.go` — TestSearchChunksQueryCast (~398 tok)
 
+## apps/web-console/e2e/phase-19/owui/
+
+- `deployed-login.spec.ts` — Deployed-origin OIDC sign-in smoke. owui.setup.ts already covers this (~1541 tok)
+- `playwright.owui.config.ts` — ponytail: without creds, owui.setup.ts skips and never writes storageState. (~852 tok)
+
 ## deploy/
 
 
 ## deploy/docker/
 
-- `docker-compose.yml` — Docker Compose services (~8458 tok)
+- `Caddyfile.owui` — When an external terminator (Cloudflare Tunnel on the demo box) handles TLS, (~1020 tok)
+- `docker-compose.yml` — Docker Compose services (~9695 tok)
 
 ## docs/superpowers/specs/
 

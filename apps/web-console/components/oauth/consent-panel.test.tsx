@@ -50,6 +50,14 @@ const mockNavigate = vi.mocked(navigate);
 
 const AUTH_ID = "auth-req-abc123";
 
+// Raw upstream auth error text no longer reaches the DOM: lib/auth/auth-error.ts
+// is an allow-list, so anything that is not known GoTrue user-facing copy is
+// replaced with this. The assertions below check for it rather than for the
+// message the mock supplied, which proves both halves of what these tests are
+// about: an error is still surfaced (no silent redirect, no button stuck
+// disabled), and the upstream string did not leak to the user.
+const SANITIZED_ERROR_PREFIX = "Something went wrong on our end.";
+
 const AUTHENTICATED_SESSION = {
   data: { session: { access_token: "session-token" } },
   error: null,
@@ -114,7 +122,8 @@ describe("ConsentPanel", () => {
     render(<ConsentPanel authorizationId={AUTH_ID} />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("session refresh failed");
+    expect(alert.textContent).toContain(SANITIZED_ERROR_PREFIX);
+    expect(alert.textContent).not.toContain("session refresh failed");
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(mockGetAuthorizationDetails).not.toHaveBeenCalled();
   });
@@ -213,7 +222,8 @@ describe("ConsentPanel", () => {
     render(<ConsentPanel authorizationId={AUTH_ID} />);
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("authorization request expired");
+    expect(alert.textContent).toContain(SANITIZED_ERROR_PREFIX);
+    expect(alert.textContent).not.toContain("authorization request expired");
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -230,7 +240,8 @@ describe("ConsentPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("network error");
+    expect(alert.textContent).toContain(SANITIZED_ERROR_PREFIX);
+    expect(alert.textContent).not.toContain("network error");
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -247,7 +258,8 @@ describe("ConsentPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /deny/i }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("network error");
+    expect(alert.textContent).toContain(SANITIZED_ERROR_PREFIX);
+    expect(alert.textContent).not.toContain("network error");
     expect(mockNavigate).not.toHaveBeenCalled();
   });
 
@@ -261,7 +273,8 @@ describe("ConsentPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: /approve/i }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("fetch failed");
+    expect(alert.textContent).toContain(SANITIZED_ERROR_PREFIX);
+    expect(alert.textContent).not.toContain("fetch failed");
     expect(mockNavigate).not.toHaveBeenCalled();
     expect(
       screen.getByRole("button", { name: /approve/i }).hasAttribute("disabled"),
