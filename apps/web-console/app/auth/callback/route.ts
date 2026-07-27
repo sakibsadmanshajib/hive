@@ -3,9 +3,15 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 import { resolveNextTarget } from "@/lib/auth/next-target";
+import { resolveCanonicalOrigin } from "@/lib/http/origin";
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  // Query params come from the request line and are safe to read here, but the
+  // origin must not: Next.js builds request.url from the server's own
+  // `--hostname 0.0.0.0` bind address, so resolving a redirect against it
+  // emitted `https://0.0.0.0:3000/console`. See lib/http/origin.ts.
+  const { searchParams } = request.nextUrl;
+  const origin = resolveCanonicalOrigin(request);
   const code = searchParams.get("code");
   const next = searchParams.get("next");
   const hiveVerify = searchParams.get("hive_verify") === "1";

@@ -44,7 +44,7 @@ func TestSelectRouteHandlerReturnsRouteAndFallbacks(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(NewService(repo))
+	handler := NewHandler(NewService(repo, &stubEntitlements{visible: true}))
 	body := bytes.NewBufferString(`{
 		"alias_id":"hive-fast",
 		"need_responses":true,
@@ -78,7 +78,7 @@ func TestSelectRouteHandlerReturnsRouteAndFallbacks(t *testing.T) {
 }
 
 func TestSelectRouteHandlerRejectsMissingAliasID(t *testing.T) {
-	handler := NewHandler(NewService(&stubRepository{}))
+	handler := NewHandler(NewService(&stubRepository{}, &stubEntitlements{visible: true}))
 	req := httptest.NewRequest(http.MethodPost, "/internal/routing/select", bytes.NewBufferString(`{"need_responses":true}`))
 	rr := httptest.NewRecorder()
 
@@ -112,7 +112,7 @@ func TestSelectRouteHandlerRejectsIneligibleRoute(t *testing.T) {
 		},
 	}
 
-	handler := NewHandler(NewService(repo))
+	handler := NewHandler(NewService(repo, &stubEntitlements{visible: true}))
 	body := bytes.NewBufferString(`{
 		"alias_id":"hive-fast",
 		"need_responses":true,
@@ -127,5 +127,67 @@ func TestSelectRouteHandlerRejectsIneligibleRoute(t *testing.T) {
 
 	if rr.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected 422, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestSelectRouteHandlerRefusesUnentitledTenantWith403 pins the status for the
+// new refusal. A 5xx would misreport an admin policy decision as an outage, and
+// a 404 would be indistinguishable from an unknown model.
+func TestSelectRouteHandlerRefusesUnentitledTenantWith403(t *testing.T) {
+	repo := entitlementTestRepo()
+	handler := NewHandler(NewService(repo, &stubEntitlements{visible: false}))
+	body := bytes.NewBufferString(`{
+		"alias_id":"hive-fast",
+		"tenant_id":"3f6c1d9e-2b7a-4c53-9f21-8a4d6e0b7c11",
+		"need_chat_completions":true
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/routing/select", body)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an unentitled tenant, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestSelectRouteHandlerForwardsTenantToEntitlementCheck asserts the wire
+// tenant_id reaches the entitlement check rather than being decoded and dropped.
+func TestSelectRouteHandlerForwardsTenantToEntitlementCheck(t *testing.T) {
+	repo := entitlementTestRepo()
+	entitlements := &stubEntitlements{visible: true}
+	handler := NewHandler(NewService(repo, entitlements))
+	body := bytes.NewBufferString(`{
+		"alias_id":"hive-fast",
+		"tenant_id":"3f6c1d9e-2b7a-4c53-9f21-8a4d6e0b7c11",
+		"need_chat_completions":true
+	}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/routing/select", body)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if entitlements.calls != 1 {
+		t.Fatalf("expected the decoded tenant to drive one entitlement lookup, got %d", entitlements.calls)
+	}
+}
+
+func TestSelectRouteHandlerRejectsMalformedTenantID(t *testing.T) {
+	repo := entitlementTestRepo()
+	handler := NewHandler(NewService(repo, &stubEntitlements{visible: true}))
+	body := bytes.NewBufferString(`{"alias_id":"hive-fast","tenant_id":"not-a-uuid"}`)
+
+	req := httptest.NewRequest(http.MethodPost, "/internal/routing/select", body)
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a malformed tenant_id, got %d: %s", rr.Code, rr.Body.String())
 	}
 }

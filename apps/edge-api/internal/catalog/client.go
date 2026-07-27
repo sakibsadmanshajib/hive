@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
 
@@ -55,8 +56,20 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
+// FetchSnapshot returns the global catalog snapshot (no tenant filtering).
 func (c *Client) FetchSnapshot(ctx context.Context) (Snapshot, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/internal/catalog/snapshot", nil)
+	return c.fetchSnapshot(ctx, "/internal/catalog/snapshot")
+}
+
+// FetchSnapshotForTenant returns the snapshot filtered to one tenant's model
+// entitlement, so a model list matches what that tenant may actually invoke.
+// The tenant travels as a path segment; the endpoint is shared-secret gated.
+func (c *Client) FetchSnapshotForTenant(ctx context.Context, tenantID uuid.UUID) (Snapshot, error) {
+	return c.fetchSnapshot(ctx, "/internal/catalog/snapshot/tenant/"+tenantID.String())
+}
+
+func (c *Client) fetchSnapshot(ctx context.Context, path string) (Snapshot, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("catalog client: build snapshot request: %w", err)
 	}

@@ -106,9 +106,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		slog.Warn("dispatch route selection failed", "err", err, "alias", parsed.Model)
-		if errors.Is(err, inference.ErrRouteNotFound) {
+		switch {
+		case errors.Is(err, inference.ErrRouteNotFound):
 			apierr.Write(w, http.StatusNotFound, apierr.CodeInvalidRequest, "model not found")
-		} else {
+		case errors.Is(err, inference.ErrModelNotEntitled):
+			// The tenant is not entitled to this model. This is an
+			// administrative policy verdict, so it must not surface as the
+			// transient 503 below. The message names only the model the caller
+			// already asked for: it never enumerates what other tenants can see.
+			apierr.Write(w, http.StatusForbidden, apierr.CodeForbidden,
+				"model not available for this workspace")
+		default:
 			// Transport failure or unexpected control-plane status --
 			// not a verdict on the alias itself. Reporting 404 here
 			// would misrepresent a transient routing outage as a

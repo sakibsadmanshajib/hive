@@ -377,6 +377,9 @@ func main() {
 				if errors.Is(err, inference.ErrRouteNotFound) {
 					return "", edgerag.ErrRouteNotFound
 				}
+				if errors.Is(err, inference.ErrModelNotEntitled) {
+					return "", edgerag.ErrModelNotEntitled
+				}
 				return "", err
 			}
 			return route.LiteLLMModelName, nil
@@ -738,11 +741,14 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 // picker renders empty. An empty picker means the browser never issues a
 // chat request at all, so the whole chat surface looks like a silent no-op.
 //
-// Admitting the shim key here discloses nothing: this handler returns the
-// catalog unfiltered, and byte-for-byte the same alias list is already
-// served with no authentication at all on /catalog/models (registered a few
-// lines below the /v1/models route in main). The gate was protecting public
-// data. The exception is deliberately kept as narrow as the problem:
+// Admitting the shim key here discloses nothing: a shim GET carries no tenant
+// identity, so it takes the account-scoped branch and gets the same unfiltered
+// catalog every API-key caller gets, and byte-for-byte that alias list is
+// already served with no authentication at all on /catalog/models (registered
+// a few lines below the /v1/models route in main). The gate was protecting
+// public data. Tenant-scoped callers are unaffected: they are resolved by the
+// JWT middleware and still get the tenant-filtered list. The exception is
+// deliberately kept as narrow as the problem:
 //
 //   - GET only. Any other verb still requires a resolvable credential.
 //   - This handler only. Every other authorized route resolves its
@@ -753,10 +759,39 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer, owuiShimKey string) http.Handler {
 	shimKey := strings.TrimSpace(owuiShimKey)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// JWT-session caller: the JWT middleware already authenticated the
+		// request and resolved the tenant, so serve the tenant-filtered list.
+		// It is built from the same visibility predicate the admin toggle
+		// writes, which keeps the listed models and the invokable models equal.
+		if tenantID := auth.TenantID(r.Context()); tenantID != uuid.Nil {
+			snapshot, err := client.FetchSnapshotForTenant(r.Context(), tenantID)
+			if err != nil {
+				writeCatalogUnavailable(w)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"object": "list",
+				"data":   snapshot.Models,
+			})
+			return
+		}
+
+		// API-key caller: valid API key required to list models, even if not
+		// binding to a specific alias. These principals are account-scoped, not
+		// tenant-scoped, so there is no tenant to filter on and the key policy
+		// allowlist governs what they may actually invoke.
+		//
+		// The OWUI shim key lands here too, and is the one credential admitted
+		// without a key lookup succeeding. A GET carries no JSON body, so the
+		// shim request is never unwrapped to a per-user JWT and arrives with no
+		// tenant identity, which is exactly why the tenant branch above does
+		// not catch it. It is then served the same global list every other
+		// account-scoped caller gets rather than a second list source of its
+		// own. Tenant-filtering this surface needs the shim to carry a tenant,
+		// which is the shim-auth work tracked separately.
 		shimListing := shimKey != "" &&
 			r.Method == http.MethodGet &&
 			auth.HasShimAuthorization(r.Header.Get("Authorization"), shimKey)
-		// Valid API key required to list models, even if not binding to a specific alias.
 		if !shimListing {
 			if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
 				return

@@ -28,6 +28,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/internal/catalog/snapshot":
 		h.handleSnapshot(w, r)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, tenantSnapshotPrefix):
+		h.handleTenantSnapshot(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/catalog/models":
 		h.handlePublicCatalog(w, r)
 	default:
@@ -35,8 +37,36 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// tenantSnapshotPrefix is the internal, shared-secret-gated snapshot route
+// scoped to one tenant: /internal/catalog/snapshot/tenant/{tenantID}.
+//
+// The tenant travels as a path segment parsed with uuid.Parse (never a body
+// field or query parameter) because the only caller is edge-api, which fills it
+// from auth.TenantID(ctx) on an already-authenticated request.
+const tenantSnapshotPrefix = "/internal/catalog/snapshot/tenant/"
+
 func (h *Handler) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := h.svc.GetSnapshot(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog snapshot unavailable"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, snapshot)
+}
+
+// handleTenantSnapshot returns the catalog snapshot filtered to one tenant's
+// entitlement, so /v1/models can serve a list that matches what the tenant may
+// actually invoke.
+func (h *Handler) handleTenantSnapshot(w http.ResponseWriter, r *http.Request) {
+	raw := strings.Trim(strings.TrimPrefix(r.URL.Path, tenantSnapshotPrefix), "/")
+	tenantID, err := uuid.Parse(raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid tenant id"})
+		return
+	}
+
+	snapshot, err := h.svc.GetSnapshotForTenant(r.Context(), tenantID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "catalog snapshot unavailable"})
 		return

@@ -3,12 +3,19 @@ import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
 import { BASE_PATH } from "@/lib/base-path";
+import { resolveCanonicalOrigin } from "@/lib/http/origin";
 
 // Mirrors apps/web-console/app/auth/callback/route.ts. No hive_verify /
 // email-verification finalize step here -- this app has no account-setup
 // flow of its own; it only needs a valid Supabase session to call edge-api.
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  // Both halves of the same trap. BASE_PATH covers the path (Next.js does not
+  // prepend basePath to an absolute URL), and resolveCanonicalOrigin covers the
+  // origin (Next.js builds request.url from this container's `--hostname
+  // 0.0.0.0` bind address, so the old target was
+  // `https://0.0.0.0:3000/agent-workspace/...`). See lib/http/origin.ts.
+  const { searchParams } = request.nextUrl;
+  const origin = resolveCanonicalOrigin(request);
   const code = searchParams.get("code");
 
   if (code) {
