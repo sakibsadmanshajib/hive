@@ -87,5 +87,24 @@ supabase/.temp/
 /r1-*.png
 /rev-*.png
 
-# OpenWolf token ledger: machine generated, grows every session
+# OpenWolf per-tool-call telemetry. The hooks in .wolf/hooks/ rewrite these on
+# every Read, Write, and Edit, so tracking them makes every session dirty the
+# working tree continuously: `git pull --ff-only` gets blocked by churn that
+# regenerates between commands, and parallel agents in separate worktrees each
+# produce a different, equally valid version of the same file. All of it is
+# derived from the working tree or from one session's activity, so none of it
+# belongs in git.
+#
+# Durable OpenWolf knowledge stays tracked and reviewable: cerebrum.md,
+# decisions.md, buglog.jsonl, GOAL.md, fleet.json, cost-ledger.md, and the hook
+# sources themselves.
+.wolf/anatomy.md
+.wolf/memory.md
 .wolf/token-ledger.json
+.wolf/hooks/_session.json
+# Generated projection of the tracked .wolf/buglog.jsonl, rebuilt by the
+# session-start hook (or `node .wolf/hooks/bugstore.js sync`) so that
+# `openwolf bug search` and the dashboard keep working. It also carries the
+# post-write hook's `auto-detected` guesses for the rest of the session, which is
+# why it is generated rather than tracked.
+.wolf/buglog.json

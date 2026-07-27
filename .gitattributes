@@ -1,0 +1,10 @@
+# OpenWolf bug memory is an append-only JSON Lines log: one JSON object per
+# line, no shared closing bracket and no trailing comma to fight over. `union`
+# is a git built-in, so every clone and worktree resolves concurrent appends
+# from parallel branches automatically with no local `git config` step. A single
+# shared JSON array could not do this: a union merge of that shape drops the
+# comma between the two branches' last entries and yields invalid JSON.
+#
+# Union merge keeps both sides' lines. Entries are therefore never rewritten in
+# place; see the store contract in .wolf/hooks/shared.js.
+.wolf/buglog.jsonl merge=union

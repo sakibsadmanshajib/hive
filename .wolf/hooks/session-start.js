@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, writeJSON, appendMarkdown, readJSON, timestamp, timeShort } from "./shared.js";
+import { getWolfDir, ensureWolfDir, writeJSON, appendMarkdown, readJSON, timestamp, timeShort, syncBugAggregate } from "./shared.js";
 async function main() {
     ensureWolfDir();
     const wolfDir = getWolfDir();
@@ -57,12 +57,13 @@ async function main() {
         }
     }
     catch { }
-    // Check buglog — remind if empty
+    // Rebuild the generated buglog.json aggregate from the tracked buglog.jsonl,
+    // absorbing anything `openwolf bug add` wrote straight into the aggregate, so
+    // `openwolf bug search` reads current data in a fresh clone or worktree.
     try {
-        const buglogPath = path.join(wolfDir, "buglog.json");
-        const buglog = readJSON(buglogPath, { bugs: [] });
-        if (buglog.bugs.length === 0) {
-            process.stderr.write(`📋 OpenWolf: buglog.json is empty. If you encounter or fix any bugs, errors, or failed tests this session, log them to .wolf/buglog.json.\n`);
+        const bugCount = syncBugAggregate(wolfDir);
+        if (bugCount === 0) {
+            process.stderr.write(`📋 OpenWolf: buglog.jsonl is empty. If you encounter or fix any bugs, errors, or failed tests this session, log them to .wolf/buglog.jsonl.\n`);
         }
     }
     catch { }

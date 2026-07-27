@@ -4,6 +4,8 @@
 
 Project use OpenWolf for context mgmt. Read + follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files. Check .wolf/decisions.md before any design, spec, plan, or implementation, and inject the relevant decisions into every subagent brief (detail lives in the vault, this is the terse index).
 
+**.wolf/ state files.** Tracked and curated: `cerebrum.md`, `decisions.md`, `buglog.jsonl`, `GOAL.md`, `fleet.json`, `cost-ledger.md`, `hooks/*.js`. Untracked telemetry, hook-owned and gitignored: `anatomy.md`, `memory.md`, `token-ledger.json`, `hooks/_session.json`, `buglog.json`. Never hand-edit or commit telemetry and never `git add -f` it: the hooks rewrite it on every tool call, which blocks `git pull --ff-only` on the shared checkout and produces competing versions across parallel worktrees. Bug memory is appended to `.wolf/buglog.jsonl`, one JSON object per line, `merge=union` per `.gitattributes`. Full protocol: `.claude/rules/openwolf.md`.
+
 ## Orchestrator Contract
 
 The main agent is bound by `.claude/rules/orchestrator.md`. Read it at session start. It defines persona, delegation rules, communication protocol, agent fleet rules, and context hygiene for the CTO orchestrator role.

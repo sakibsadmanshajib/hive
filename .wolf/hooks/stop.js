@@ -119,10 +119,11 @@ function checkForMissingBugLogs(wolfDir, session) {
         .map(([file]) => path.basename(file));
     if (multiEditFiles.length === 0)
         return;
-    // Check if buglog was written to this session
-    const buglogWritten = session.files_written.some(w => w.file.includes("buglog.json"));
+    // Check if buglog was written to this session. Matches both the tracked
+    // buglog.jsonl and the generated buglog.json aggregate.
+    const buglogWritten = session.files_written.some(w => w.file.includes("buglog"));
     if (!buglogWritten) {
-        process.stderr.write(`⚠️ OpenWolf: Files edited 3+ times this session (${multiEditFiles.join(", ")}) but buglog.json was not updated. If you fixed bugs, please log them.\n`);
+        process.stderr.write(`⚠️ OpenWolf: Files edited 3+ times this session (${multiEditFiles.join(", ")}) but buglog.jsonl was not updated. If you fixed bugs, please log them.\n`);
     }
 }
 /**
