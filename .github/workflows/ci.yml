@@ -1,27 +1,14 @@
 name: CI
 
+# Deliberately NO `paths:` / `paths-ignore:` filter on any trigger. See the
+# `changes` job below: path filtering happens inside the workflow so that this
+# file is the only producer of every required check name (issue #553).
 on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'deploy/**'
-      - 'supabase/**'
-      - 'go.work'
-      - 'go.work.sum'
-      - '.github/workflows/ci.yml'
   push:
     branches: [main]
-    paths:
-      - 'apps/**'
-      - 'packages/**'
-      - 'deploy/**'
-      - 'supabase/**'
-      - 'go.work'
-      - 'go.work.sum'
-      - '.github/workflows/ci.yml'
   schedule:
     # Daily fidelity run on main: exercises paid hive-default model to catch
     # provider regressions that a free-tier model might silently swallow.
@@ -44,12 +31,123 @@ env:
 
 jobs:
   # ------------------------------------------------------------------
+  # Single source of truth for "does this diff need the real suite?".
+  #
+  # Path filtering used to live in the `on:` trigger. GitHub skips the
+  # whole workflow when a trigger path filter does not match, and a
+  # skipped workflow never creates its check runs, so every required
+  # check stayed Pending and blocked the merge. The previous workaround
+  # was a second workflow (ci-noop.yml) that fired on the inverse path
+  # set and published job names identical to the ones here as trivial
+  # `echo` steps. Because `paths-ignore` matches when ANY changed file
+  # falls outside the ignore set, a pull request touching both code and
+  # docs fired BOTH workflows, and the echo could report success on
+  # every required context in seconds. That made the merge gate
+  # ambiguous on this repo's most common pull request shape (the visual
+  # proof rule means most substantive changes commit screenshots under
+  # docs/ alongside code). Issue #553.
+  #
+  # Filtering inside the workflow removes the second producer entirely:
+  # each required check name is published by exactly one job in exactly
+  # one workflow, and that job either does the real work or is skipped
+  # by a conditional. A skipped job reports Success to branch
+  # protection, so a docs-only change still merges, and no `echo` can
+  # ever stand in for a real suite that failed.
+  #
+  # Polarity is deliberate. This is an allow-list of paths that are safe
+  # to ignore, and ANYTHING else means run=true, including an
+  # unrecognized path, an API error, or an event that carries no diff
+  # (schedule, workflow_dispatch). A false "run" costs CI minutes. A
+  # false "skip" would defeat the merge gate, so the default must never
+  # be "skip".
+  # ------------------------------------------------------------------
+
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only this job needs the pull request file list, so the extra scope
+    # is granted here instead of at workflow level.
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - name: Decide whether the real suite must run
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+
+          run_everything() {
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "verdict: RUN the real suite — $1"
+            exit 0
+          }
+
+          # The API is asked for the same file list GitHub itself would
+          # have path-filtered on, so there is no dependency on clone
+          # depth or on merge-base resolution.
+          case "$EVENT" in
+            pull_request)
+              files=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+                        --jq '.[].filename') \
+                || run_everything "could not list pull request files"
+              ;;
+            push)
+              case "$BEFORE_SHA" in
+                '' | 0000000000000000000000000000000000000000)
+                  run_everything "push event has no usable base commit"
+                  ;;
+              esac
+              files=$(gh api "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" --paginate \
+                        --jq '.files[]?.filename') \
+                || run_everything "could not compare $BEFORE_SHA...$AFTER_SHA"
+              ;;
+            *)
+              run_everything "event '$EVENT' carries no diff"
+              ;;
+          esac
+
+          if [ -z "$files" ]; then
+            run_everything "changed-file list came back empty"
+          fi
+
+          printf '%s\n' "$files" > /tmp/changed-files.txt
+          echo "changed files:"
+          sed 's/^/  /' /tmp/changed-files.txt
+
+          # Allow-list: paths that cannot affect any build, test or lint
+          # in this workflow. Keep it narrow. Adding an entry here weakens
+          # the merge gate for every future pull request.
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              *.md | LICENSE | NOTICE) continue ;;
+              docs/* | .wolf/* | .claude/* | .vscode/* | .cursor/*) continue ;;
+            esac
+            run_everything "'$f' is outside the docs-only allow-list"
+          done < /tmp/changed-files.txt
+
+          echo "run=false" >> "$GITHUB_OUTPUT"
+          echo "verdict: SKIP — every changed path is docs-only"
+
+  # ------------------------------------------------------------------
   # Unit-level jobs (run on every PR including forks)
   # ------------------------------------------------------------------
 
   go-tests:
     name: Go tests (${{ matrix.module }})
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     # Ephemeral Postgres for HIVE_TEST_DB_URL-gated RLS suites (issue #311
     # follow-up). Version pin: no supabase/config.toml or other in-repo
     # pin exists, so this tracks Supabase's current default managed
@@ -151,6 +249,8 @@ jobs:
   rust-tests:
     name: Rust tests (desktop-sandbox)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     defaults:
       run:
         working-directory: apps/desktop-sandbox
@@ -210,6 +310,8 @@ jobs:
   desktop-tests:
     name: Desktop app (Rust + TS)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -275,6 +377,8 @@ jobs:
     name: Repo policy lints (tenant + audit)
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -284,6 +388,12 @@ jobs:
 
       - name: Install repo-level dev deps
         run: npm ci --ignore-scripts || npm install --ignore-scripts
+
+      # Merge-gate integrity: exactly one job may publish each required
+      # check name, and every required context must have a producer.
+      # Lives in this job because it is a required check itself, so the
+      # guard cannot be bypassed by a change that only touches workflows.
+      - run: node .github/ci/lint-workflow-check-names.mjs
 
       - run: npm run lint:tenant-setting
       - run: npm run lint:tenant-id
@@ -295,6 +405,8 @@ jobs:
   agent-console-unit:
     name: Agent console (type + unit + build)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     defaults:
       run:
         working-directory: apps/agent-console
@@ -325,6 +437,8 @@ jobs:
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     defaults:
       run:
         working-directory: apps/web-console
@@ -372,7 +486,11 @@ jobs:
   docker-build:
     name: Docker build smoke (fork PRs only)
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+    needs: changes
+    if: >-
+      needs.changes.outputs.run == 'true' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name != github.repository
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
@@ -406,12 +524,13 @@ jobs:
     # Fork PRs are excluded: GitHub does not expose secrets to fork
     # runners on pull_request events, so no secret can leak.
     if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'pull_request' &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
-       contains(github.event.pull_request.labels.*.name, 'run-live-integration'))
-    needs: [go-tests, web-unit]
+      needs.changes.outputs.run == 'true' &&
+      (github.event_name == 'push' ||
+       github.event_name == 'schedule' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        contains(github.event.pull_request.labels.*.name, 'run-live-integration')))
+    needs: [changes, go-tests, web-unit]
     # Job-level env: docker compose will interpolate ${VAR} from process env,
     # so we skip the fragile .env heredoc entirely.
     env:
@@ -648,12 +767,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     if: >-
-      github.event_name == 'push' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
+      needs.changes.outputs.run == 'true' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     # Independently boots its own Go stack + Next.js. Decoupled from
     # `live-integration` so a flaky external provider (e.g. OpenRouter
     # 429 on the SDK suites) no longer blocks the UI test coverage.
-    needs: [web-unit, go-tests]
+    needs: [changes, web-unit, go-tests]
     env:
       # Activate the in-stack docker redis profile for every compose call
       # in this job (see live-integration job for the rationale).
@@ -893,34 +1014,6 @@ jobs:
         run: docker compose down -v --remove-orphans || true
 
   # ------------------------------------------------------------------
-  # Required-check shim for "Web E2E (full stack)".
-  #
-  # GitHub leaves a required check in "Pending" (never passing) when
-  # the job that normally reports it is skipped: either because the
-  # job's own `if:` condition evaluated to false (fork PR, or the
-  # event_name guard), or because a `needs` dependency failed and
-  # GitHub cascade-skipped this job. This shim runs whenever the real
-  # web-e2e job was skipped and reports success under the same check
-  # name, so backend-only PRs (deploy/, supabase/, .github/-only diffs)
-  # are not permanently blocked.
-  #
-  # The shim does NOT trigger when web-e2e actually failed -- in that
-  # case the failure must remain visible as a blocking signal.
-  # ------------------------------------------------------------------
-
-  web-e2e-shim:
-    name: Web E2E (full stack)
-    runs-on: ubuntu-latest
-    needs: [web-unit, go-tests, web-e2e]
-    if: >-
-      always() &&
-      needs.web-e2e.result == 'skipped' &&
-      needs.web-unit.result == 'success' &&
-      needs.go-tests.result == 'success'
-    steps:
-      - run: echo "Web E2E skipped (no frontend or stack paths changed); reporting success."
-
-  # ------------------------------------------------------------------
   # Egress firewall e2e (issue #342 item 6). Live proof that the Linux
   # desktop egress allowlist blocks disallowed outbound traffic inside a
   # real bubblewrap sandbox, and lets allowlisted traffic through. Runs
@@ -937,6 +1030,8 @@ jobs:
   egress-firewall-e2e:
     name: Egress firewall e2e (bwrap)
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     defaults:
       run:
         working-directory: apps/desktop-sandbox
