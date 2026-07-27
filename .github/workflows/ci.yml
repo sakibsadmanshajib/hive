@@ -135,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ matrix.module }}" = "control-plane" ]; then
-            go test -count=1 -v ./internal/agenttask/... ./internal/egress/... ./internal/rag/... ./internal/tenants/... ./internal/signup/...
+            go test -count=1 -v ./internal/agenttask/... ./internal/egress/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/...
           else
             go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
           fi
@@ -289,6 +289,8 @@ jobs:
       - run: npm run lint:tenant-id
       - run: npm run lint:audit-write
       - run: npm run lint:desktop-local-http
+      - run: npm run lint:request-url-origin
+      - run: npm run lint:model-visibility
 
   agent-console-unit:
     name: Agent console (type + unit + build)

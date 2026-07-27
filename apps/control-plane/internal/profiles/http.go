@@ -171,9 +171,20 @@ func (h *Handler) resolveVerifiedCurrentAccountID(w http.ResponseWriter, r *http
 		isAdmin,
 	)
 	if !h.policy.Can(actor, authz.PermWorkspaceSettings) {
+		// PermWorkspaceSettings denies both unverified actors and verified
+		// non-owners. Reporting email_verification_required for every denial
+		// told a verified member to verify an already-verified email, so name
+		// the cause that actually applies.
+		if !actor.Verified {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "email must be verified before accessing billing",
+				"code":  "email_verification_required",
+			})
+			return uuid.Nil, false
+		}
 		writeJSON(w, http.StatusForbidden, map[string]string{
-			"error": "email must be verified before accessing billing",
-			"code":  "email_verification_required",
+			"error": "account owner role required to access billing",
+			"code":  "owner_role_required",
 		})
 		return uuid.Nil, false
 	}

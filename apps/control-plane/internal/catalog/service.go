@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	"github.com/google/uuid"
@@ -38,6 +39,35 @@ func (s *Service) ListModelsForTenant(ctx context.Context, tenantID uuid.UUID) (
 		return s.repo.ListPublicAliases(ctx)
 	}
 	return s.repo.ListAliasesForTenant(ctx, tenantID)
+}
+
+// GetSnapshotForTenant is GetSnapshot narrowed to one tenant's entitlement. It
+// backs the tenant-scoped /v1/models list so the models a tenant is shown are
+// exactly the models the tenant may invoke.
+func (s *Service) GetSnapshotForTenant(ctx context.Context, tenantID uuid.UUID) (CatalogSnapshot, error) {
+	aliases, err := s.ListModelsForTenant(ctx, tenantID)
+	if err != nil {
+		return CatalogSnapshot{}, err
+	}
+
+	return buildCatalogSnapshot(aliases), nil
+}
+
+// IsAliasVisibleToTenant reports whether tenantID may invoke aliasID. It is the
+// inference-time half of the same entitlement decision the catalog listing
+// makes, and satisfies routing.TenantEntitlements.
+//
+// A zero tenantID is refused rather than treated as "no restriction": callers on
+// the tenant-scoped path must supply a real tenant, and an untenanted principal
+// must not reach this check at all.
+func (s *Service) IsAliasVisibleToTenant(ctx context.Context, tenantID uuid.UUID, aliasID string) (bool, error) {
+	if tenantID == uuid.Nil {
+		return false, errors.New("catalog: tenant id is required for an entitlement check")
+	}
+	if strings.TrimSpace(aliasID) == "" {
+		return false, errors.New("catalog: alias id is required for an entitlement check")
+	}
+	return s.repo.IsAliasVisibleToTenant(ctx, tenantID, aliasID)
 }
 
 func buildCatalogSnapshot(aliases []ModelAlias) CatalogSnapshot {

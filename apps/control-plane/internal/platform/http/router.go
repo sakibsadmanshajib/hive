@@ -145,6 +145,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	if cfg.CatalogHandler != nil {
 		mux.Handle("/internal/catalog/snapshot", internal(cfg.CatalogHandler))
+		// Tenant-scoped snapshot (/internal/catalog/snapshot/tenant/{tenantID}).
+		// edge-api calls this for /v1/models so the list a tenant is shown is the
+		// same set the tenant is entitled to invoke.
+		mux.Handle("/internal/catalog/snapshot/", internal(cfg.CatalogHandler))
 		// Public catalog endpoint — optional auth: if a valid bearer token is present
 		// the Viewer (with TenantID from raw_user_meta_data.selected_tenant_id) is
 		// stored in context so tenant-specific visibility filtering applies.
