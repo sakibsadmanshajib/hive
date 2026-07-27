@@ -12,6 +12,10 @@
           {
             "type": "command",
             "command": "echo 'Nudge (superpowers): brainstorming for design, writing-plans for multi-step work, test-driven-development for features/bugs, systematic-debugging for bugs, requesting-code-review after edits, verification-before-completion before claiming done. All optional — skip if not installed.'"
+          },
+          {
+            "type": "command",
+            "command": "HOOK_NUDGE_MESSAGE=\"CAVEMAN WENYAN-ULTRA ENFORCE: main agent thinking = wenyan-ultra (max-compression classical Chinese). Main agent to owner = caveman ultra English, fragments, zero dash punctuation. EVERY Agent() subagent prompt MUST start with literal tag [CAVEMAN WENYAN-ULTRA]. Subagent thinking and reply = wenyan-ultra; final report = terse English fragments under hard word cap. Exceptions: code, commits, PR bodies, security warnings stay normal prose. Override only on stop caveman or normal mode.\" node \"$HOME/.claude/hooks/emit-nudge.js\""
           }
         ]
       }
@@ -53,6 +57,16 @@
           {
             "type": "command",
             "command": "node \"$CLAUDE_PROJECT_DIR/.claude/hooks/secrets-scanner.js\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "HOOK_NUDGE_MESSAGE=\"Subagent dispatch check: prompt must start with literal tag [CAVEMAN WENYAN-ULTRA]. Pick explicit library subagent_type per Agent Selection Policy, never omit type.\" node \"$HOME/.claude/hooks/emit-nudge.js\"",
             "timeout": 5
           }
         ]

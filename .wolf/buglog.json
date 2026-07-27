@@ -1977,6 +1977,176 @@
         "toolchain",
         "silent-failure"
       ]
+    },
+    {
+      "id": "console-caddy-host-mismatch-empty-200",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "error_message": "https://console-hive.scubed.co/ returned HTTP 200 with Content-Length 0 (no body, no redirect) through the Cloudflare Tunnel right after the self-hosted web-console cutover (PR #456); web-console-prod itself worked fine when curled directly inside the box",
+      "root_cause": "Caddyfile.console's site address is http://{$CONSOLE_DOMAIN:console.localhost}, a Host-matched site block. The box's .env never set CONSOLE_DOMAIN or CONSOLE_EXTERNAL_SCHEME (PR #456 introduced the vars but the box's .env predated the PR), so Caddy only matched Host: console.localhost. Cloudflare Tunnel and any real client send Host: console-hive.scubed.co, which matched no site block; Caddy's fallback response for an unmatched Host in this build is 200 empty, not 404 or connection refused, which made the failure look like a working-but-blank origin instead of a routing miss.",
+      "fix": "Append CONSOLE_DOMAIN=console-hive.scubed.co and CONSOLE_EXTERNAL_SCHEME=https to the box's .env (matching the existing HIVE_CHAT_EXTERNAL_SCHEME/ARTIFACTS_DOMAIN pattern), then docker compose --env-file ../../.env up -d --force-recreate caddy-console to pick up the new env at container-create time (a plain restart does not re-resolve compose env substitution). Verified end to end: https://console-hive.scubed.co/ -> 307 to /auth/sign-in -> 200 Hive Console page.",
+      "tags": [
+        "caddy",
+        "cloudflare-tunnel",
+        "web-console",
+        "dns-cutover",
+        "silent-failure"
+      ]
+    },
+    {
+      "id": "signup-no-active-membership-500-no-webhook",
+      "priority": "P0",
+      "date": "2026-07-27",
+      "error_message": "Every password grant for a user with no ACTIVE public.tenant_users row returned HTTP 500 with {\"code\":\"P0001\",\"message\":\"no_active_membership\"}. Sign-up succeeded, first sign-in then failed permanently. 11 of 19 live users were stranded, 92 occurrences in 24 hours. The sign-in and OAuth consent forms rendered the raw upstream string 'Error running hook URI: pg-functions://postgres/public/custom_access_token_hook' to unauthenticated visitors.",
+      "root_cause": "Two faults stacked. First, public.custom_access_token_hook did RAISE EXCEPTION 'no_active_membership' whenever no ACTIVE tenant_users row joined to a non-archived tenant resolved, which denied the user the very request that would provision them, so the state was unrecoverable from the client. Second, and the reason such users existed at all, public.tenant_users was written by exactly one caller: apps/control-plane/internal/signup/webhook.go at POST /internal/auth/user-created, driven by a Supabase Database Webhook on auth.users insert. That webhook is dashboard state, not repository state, and it had never been created on the live project. A query for triggers on auth.users and for any supabase_functions.http_request trigger returned zero rows, so no signup had ever produced a membership. The demo owner only worked because scripts/seed-demo-owner.py had inserted their row directly. A third, separate fault surfaced while auditing the inert-token invariant: apps/control-plane/internal/auth/client.go read the tenant from user_metadata.selected_tenant_id, which GoTrue lets the user write via PUT /auth/v1/user, and never validated it against an ACTIVE membership the way the token hook does, so any signed-in caller could assert an arbitrary tenant id and read another tenant's model visibility list through /api/v1/catalog/models (OptionalRequire, not admin gated).",
+      "fix": "New migration supabase/migrations/20260727_01_token_hook_membershipless_no_raise.sql replaces the RAISE with an early return of the unmodified claims, so a membership-less user receives a valid token carrying no tenant_id, tenants, role or owui_role claim. Absent, never null, so no consumer can read the key and treat null as a wildcard. The member path is byte-for-byte unchanged including the owui_role OWNER to ADMIN remap. Resolution and the membership write were extracted from webhook.go into signup.Provisioner.Reconcile (apps/control-plane/internal/signup/reconcile.go), the single implementation both entry points now call; the webhook keeps working for deployments that do have the Database Webhook. A new authenticated route POST /api/v1/viewer/tenant-provision (apps/control-plane/internal/signup/viewer_http.go) lets the console reconcile on the first request from a tenant-less user; it derives identity solely from auth.ViewerFromContext, decodes no body, and accepts neither a tenant id nor an invite token, so a caller cannot name anybody or anything. Idempotency comes from an existing-ACTIVE-membership short-circuit plus the tenant_users (tenant_id, user_id) primary key with ON CONFLICT DO NOTHING; Reconcile never creates a tenant in either deployment posture, so no race can produce two. The escalation was closed with auth.Client.WithMembershipCheck, wired in main.go to tenantMembershipCheck(pool), which validates the self-asserted tenant against the same ACTIVE-and-not-archived predicate the hook uses and collapses anything unverified to uuid.Nil. Tests: 4 hook tests (static guard plus live-DB member, membership-less and revoked claim assertions), 9 reconcile and endpoint tests including an 8-way concurrency race and a body-cannot-name-a-user security test, 6 control-plane escalation tests, and 3 edge-api inert-token tests covering absent, empty, null, unparseable, all-zero and wrong-type tenant claims. Sanitization of the raw hook string is owned by the web-console client boundary (lib/auth/auth-error.ts), because GoTrue's error text is upstream and web-console is the last hop before the browser.",
+      "tags": [
+        "supabase-auth",
+        "custom-access-token-hook",
+        "tenant-provisioning",
+        "privilege-escalation",
+        "rls",
+        "signup",
+        "database-webhook",
+        "migration",
+        "inert-token"
+      ]
+    },
+    {
+      "id": "tenant-model-visibility-not-enforced-on-inference",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "error_message": "A tenant could invoke any routed model alias regardless of the per-tenant model visibility an admin had configured. tenant_model_visibility was consulted only when listing the catalog; POST /v1/chat/completions resolved a route for a hidden alias and streamed a normal completion. Compounding it, /internal/catalog/visibility/* answered 404, so the admin control had no reachable write path at all.",
+      "root_cause": "Enforcement lived in the catalog listing query (catalog/repository.go ListAliasesForTenant) instead of in the path that grants access. edge-api chat dispatch called SelectRoute with only AliasID plus capability flags and never sent a tenant, and routing/service.go aliasAllowed returns true for an empty allowlist, so the empty list meant allow-all. /v1/models served the global ListPublicAliases snapshot for the same reason. Separately, catalog.NewVisibilityHandler was never constructed in control-plane cmd/server/main.go, so router.go skipped mounting the admin visibility routes.",
+      "fix": "Extracted the verdict into catalog.AliasVisibleToTenant and made it the single decider: one query (tenantVisibilityQuery) with an optional alias filter feeds one predicate, so ListAliasesForTenant and the new IsAliasVisibleToTenant cannot disagree. routing.Service takes a required TenantEntitlements dependency and refuses tenant-scoped selections for unentitled aliases with ErrModelNotEntitled (403), failing closed when the dependency is nil. edge-api RoutingClient.SelectRoute binds the tenant from auth.TenantID(ctx) and discards any caller-supplied value, so every JWT inference path (chat, RAG, audio, images) is covered at one seam. /v1/models reads a new tenant-scoped snapshot endpoint for JWT sessions. Mounted the visibility admin handler. Added tools/lint-tenant-model-visibility-single-source.mjs so a second copy of the rules cannot be written outside the catalog package. Empty-means-allow for public and preview aliases was preserved deliberately: tenant_model_visibility is empty on every deployment, so deny-by-default would have revoked chat for every tenant.",
+      "tags": [
+        "tenancy",
+        "authz",
+        "routing",
+        "catalog",
+        "control-plane",
+        "edge-api",
+        "entitlement",
+        "fail-closed"
+      ]
+    },
+    {
+      "id": "console-redirect-origin-leaks-bind-address",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "error_message": "https://console-hive.scubed.co/auth/callback returned 307 with Location: https://0.0.0.0:3000/console, and https://chat-hive.scubed.co/agent-workspace/auth/callback returned 307 with Location: https://0.0.0.0:3000/agent-workspace/auth/sign-in. Users completing email verification or an OAuth code exchange landed on a dead host (ERR_CONNECTION_REFUSED) instead of the console.",
+      "root_cause": "Next.js does not build a request's URL from the Host header. With experimental.trustHostHeader unset, resolve-routes.js composes initUrl from the server's OWN bind address: `${protocol}://${formatHostname(opts.hostname || 'localhost')}:${opts.port}${req.url}`, and formatHostname('0.0.0.0') returns it verbatim. Both console containers start with `--hostname 0.0.0.0 --port 3000`, and Caddy/Cloudflare Tunnel supply the scheme via X-Forwarded-Proto, so any route handler resolving an absolute redirect against request.url emitted https://0.0.0.0:3000. The helper for this already existed: PR #157 added apps/web-console/lib/http/origin.ts, whose header comment documents this exact trap, but wired it into only 2 of 5 call sites. A second, compounding cause: the helper preferred NEXT_PUBLIC_APP_URL unconditionally, and .env.example ships http://localhost:3000, so a deployment carrying that value forward would have emitted localhost redirects and mailed localhost verification links.",
+      "fix": "Wired resolveCanonicalOrigin into the three remaining call sites: apps/web-console/app/auth/callback/route.ts, apps/web-console/app/console/account-switch/route.ts (all four targets), and apps/agent-console/app/auth/callback/route.ts (keeping PR #438's BASE_PATH prefix). Query params now come from request.nextUrl.searchParams, which derives from the request line and is unaffected. Corrected the helper's precedence: a loopback NEXT_PUBLIC_APP_URL is demoted below X-Forwarded-Host/Host while a real configured origin still outranks every header (preserving PR #157's anti-spoofing property), and wildcard bind addresses plus unparseable hosts are rejected from every source. agent-console got its own copy of the helper (separate npm package, separate Docker build context, so no shared import is possible) and needed no new build arg. Did NOT use experimental.trustHostHeader: it hardcodes https:// and pastes in the raw attacker-reachable Host header, which is the open-redirect shape origin.ts exists to prevent. Added tools/lint-no-request-url-origin.mjs, which fails CI if any route handler in either app reads request.url or nextUrl.origin, or if the two helper copies drift apart. Middleware is deliberately out of scope: verified live that Next.js emits a relative Location for a same-origin middleware redirect, so both middlewares are correct despite using the same expression. Proven live before/after with the real Dockerfiles behind the real Caddy configs; transcript and browser captures in docs/proof/console-origin-2026-07-27/.",
+      "tags": [
+        "next.js",
+        "redirect",
+        "0.0.0.0",
+        "bind-address",
+        "x-forwarded-host",
+        "web-console",
+        "agent-console",
+        "auth-callback",
+        "open-redirect",
+        "repo-policy-lint",
+        "same-family-as-agent-console-signin-drops-basepath"
+      ]
+    },
+    {
+      "id": "billing-profile-inner-join-500",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "error_message": "/console/settings/billing returned HTTP 500 with a bare Next.js digest page and no recovery for any account that has zero rows in public.account_profiles (7 of 18 accounts on the dev project). Server-side throw: Error: profile not found at getBillingProfile (lib/control-plane/client.ts) from BillingSettingsPage's Promise.all.",
+      "root_cause": "profiles/repository.go GetBillingProfile inner-joined public.account_profiles while every column it selects is already COALESCEd against that table being absent, so a missing profile row produced pgx.ErrNoRows, mapped to ErrNotFound, and returned 404. web-console getBillingProfile threw on any non-OK response (its sibling getAccountProfile already special-cased 404), and there was no error.tsx anywhere under apps/web-console/app, so the throw escaped to the bare digest page.",
+      "fix": "Three layers. 1) LEFT JOIN public.account_profiles in GetBillingProfile so a profile-less account gets the coalesced empty profile (legal_entity_type falls back to individual or private_company by account_type); only a missing account is not-found. 2) getBillingProfile returns an empty billing profile on 404, mirroring getAccountProfile; other statuses still throw. 3) Added apps/web-console/app/console/error.tsx, the app's first error boundary, with an EmptyState and a working reset. Also split the 403 on this endpoint so a verified non-owner gets owner_role_required instead of the false email_verification_required. Verified live: pre-fix control-plane returns 404 and the page 500s, post-fix returns 200 with empty values and the page renders. Live-Postgres repository tests added and ./internal/profiles/... wired into the live-DB CI step.",
+      "tags": [
+        "control-plane",
+        "postgres",
+        "inner-join",
+        "web-console",
+        "server-components",
+        "error-boundary",
+        "authz-error-code"
+      ]
+    },
+    {
+      "id": "caddy-artifacts-auto-https-redirect-loop",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "error_message": "https://artifacts-hive.scubed.co/ returns HTTP 308 with Location pointing back at itself, infinite redirect loop, curl -L hits 50-redirect cap",
+      "root_cause": "deploy/docker/Caddyfile.artifacts used a bare-hostname site address ({$ARTIFACTS_DOMAIN:artifacts.localhost} {), which triggers Caddy's automatic-HTTPS + HTTP-to-HTTPS auto-redirect. Behind Cloudflare Tunnel (or any external TLS terminator), the origin only ever receives plain HTTP, so Caddy redirects every request to https://<same-host>/ forever. A first-pass fix to bare `:80 {` stopped the loop but removed Caddy's host-header matching entirely, turning the container into a catch-all that would serve /artifacts/* content under ANY Host header -- a real regression against this file's own documented origin-isolation invariant (artifacts must stay on a separate origin from the chat/main-app domain so browser same-origin policy protects cookies). Caught by CodeRabbit + a second review bot on PR #434 before merge.",
+      "fix": "Use an explicit scheme in the site address instead: http://{$ARTIFACTS_DOMAIN:artifacts.localhost} { ... }. Caddy's automatic-HTTPS is triggered by the ABSENCE of an explicit scheme, not by the presence of a hostname -- naming http:// disables auto-HTTPS/redirect while keeping host-header matching intact. Fixed in PR #434 (sakibsadmanshajib/hive), merged 2026-07-26. Verified live against a real Cloudflare-Tunnel-fronted deployment both ways: correct Host = reaches reverse_proxy (no redirect); wrong Host = empty response, artifact content never served.",
+      "tags": [
+        "caddy",
+        "tls",
+        "cloudflare-tunnel",
+        "reverse-proxy",
+        "security-boundary",
+        "code-review-catch"
+      ]
+    },
+    {
+      "id": "caddy-bind-mount-needs-force-recreate",
+      "priority": "P2",
+      "date": "2026-07-26",
+      "error_message": "After `git pull` on a deployed box, a fixed Caddyfile still served the OLD behavior even after `docker compose build` + `up -d --no-deps` + `docker exec caddy reload`",
+      "root_cause": "Caddyfile.* is a single-file bind mount into the caddy-owui/caddy-artifacts containers (image is upstream caddy:2-alpine, no build step). `git pull` writes a NEW inode for the file; Docker's bind mount was already resolved to the OLD inode at container start, so neither `build` (no-op, nothing to build) nor a plain `up -d` (container already Running, not recreated) nor an in-container `reload` (re-reads the stale mounted path) pick up the new content.",
+      "fix": "Any Caddyfile-only change on a running box needs `docker compose ... up -d --no-deps --force-recreate <service>` specifically -- not build, not a bare up, not exec reload.",
+      "tags": [
+        "docker",
+        "caddy",
+        "bind-mount",
+        "deploy"
+      ]
+    },
+    {
+      "id": "agent-console-signin-drops-basepath",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "file": "apps/agent-console/app/auth/sign-in/page.tsx",
+      "error_message": "Sign-in to https://chat-hive.scubed.co/agent-workspace succeeded but the browser landed on Open WebUI's login page (/auth?redirect=%2Ftasks) instead of the Cowork task console",
+      "root_cause": "page.tsx called window.location.assign(\"/tasks\"). Next.js applies basePath to its own primitives (next/link, useRouter, next/navigation redirect) but NOT to raw URLs given to window.location.* or NextResponse.redirect. The bare /tasks fell outside Caddy's /agent-workspace/* matcher, so Open WebUI's catch-all reverse_proxy answered it. app/auth/callback/route.ts had the same defect on both NextResponse.redirect targets. middleware.ts had already hit this and prefixed its own redirects, making this the third occurrence of one mistake.",
+      "fix": "Extracted the literal to apps/agent-console/lib/base-path.ts and imported BASE_PATH in all three call sites (middleware.ts, sign-in page, callback route). Regression tests: app/auth/sign-in/page.test.tsx, app/auth/callback/route.test.ts. PR #438.",
+      "tags": [
+        "nextjs",
+        "basepath",
+        "caddy",
+        "agent-console",
+        "auth-redirect",
+        "open-webui"
+      ]
+    },
+    {
+      "id": "edge-api-no-cors-breaks-browser-task-console",
+      "priority": "P1",
+      "date": "2026-07-26",
+      "file": "deploy/docker/Caddyfile.owui",
+      "error_message": "Task console showed \"Could not load tasks.\" with 10 browser CORS errors: no Access-Control-Allow-Origin on https://api-hive.scubed.co/v1/agent/tasks from origin https://chat-hive.scubed.co",
+      "root_cause": "edge-api implements NO CORS middleware at all (zero Access-Control-* headers anywhere in apps/edge-api). agent-console's task console fetches /v1/agent/tasks from the BROWSER using NEXT_PUBLIC_EDGE_API_BASE_URL, set to the api host while the page is served from the chat host, so every list, create and cancel died in preflight. This never worked in a browser in any environment, including local dev (default base http://localhost:8080 against a page on :3003). Unit tests mock fetch, so they never caught it.",
+      "fix": "Avoided opening a CORS surface on the gateway. Routed /v1/agent/* through the same Caddy listener that already fronts agent-console and built agent-console with NEXT_PUBLIC_EDGE_API_BASE_URL empty, so the client baseUrl falls back to \"\" and fetches are relative and same-origin. Auth unchanged, edge-api still validates the Supabase bearer token. PR #438.",
+      "tags": [
+        "cors",
+        "edge-api",
+        "agent-console",
+        "caddy",
+        "same-origin",
+        "browser-fetch"
+      ]
+    },
+    {
+      "id": "seed-demo-owner-rotates-shared-password",
+      "priority": "P2",
+      "date": "2026-07-26",
+      "file": "scripts/seed-demo-owner.py",
+      "error_message": "Supabase login returned 400 Invalid login credentials for demo@hive-demo.invalid using a password seed-demo-owner.py had printed seconds earlier",
+      "root_cause": "seed-demo-owner.py generates a fresh random password on EVERY run. It is idempotent for the tenant, role and feature-gate rows but not for the password. With several agents running it concurrently against one box, each run rotates the password out from under the others, so everyone sees Invalid login credentials even with a just-printed password.",
+      "fix": "Stopped relying on the shared account for concurrent verification: created a dedicated user with a stable password, granted tenant OWNER on the same demo tenant via tenant_users. For the shared account, reset a stable password through the Supabase admin API and told other agents to stop re-running the seed.",
+      "tags": [
+        "supabase",
+        "seeding",
+        "multi-agent",
+        "demo-box",
+        "password-rotation"
+      ]
     }
   ]
 }
