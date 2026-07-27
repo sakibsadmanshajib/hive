@@ -2013,6 +2013,23 @@
         "repo-policy-lint",
         "same-family-as-agent-console-signin-drops-basepath"
       ]
+    },
+    {
+      "id": "billing-profile-inner-join-500",
+      "priority": "P1",
+      "date": "2026-07-27",
+      "error_message": "/console/settings/billing returned HTTP 500 with a bare Next.js digest page and no recovery for any account that has zero rows in public.account_profiles (7 of 18 accounts on the dev project). Server-side throw: Error: profile not found at getBillingProfile (lib/control-plane/client.ts) from BillingSettingsPage's Promise.all.",
+      "root_cause": "profiles/repository.go GetBillingProfile inner-joined public.account_profiles while every column it selects is already COALESCEd against that table being absent, so a missing profile row produced pgx.ErrNoRows, mapped to ErrNotFound, and returned 404. web-console getBillingProfile threw on any non-OK response (its sibling getAccountProfile already special-cased 404), and there was no error.tsx anywhere under apps/web-console/app, so the throw escaped to the bare digest page.",
+      "fix": "Three layers. 1) LEFT JOIN public.account_profiles in GetBillingProfile so a profile-less account gets the coalesced empty profile (legal_entity_type falls back to individual or private_company by account_type); only a missing account is not-found. 2) getBillingProfile returns an empty billing profile on 404, mirroring getAccountProfile; other statuses still throw. 3) Added apps/web-console/app/console/error.tsx, the app's first error boundary, with an EmptyState and a working reset. Also split the 403 on this endpoint so a verified non-owner gets owner_role_required instead of the false email_verification_required. Verified live: pre-fix control-plane returns 404 and the page 500s, post-fix returns 200 with empty values and the page renders. Live-Postgres repository tests added and ./internal/profiles/... wired into the live-DB CI step.",
+      "tags": [
+        "control-plane",
+        "postgres",
+        "inner-join",
+        "web-console",
+        "server-components",
+        "error-boundary",
+        "authz-error-code"
+      ]
     }
   ]
 }
