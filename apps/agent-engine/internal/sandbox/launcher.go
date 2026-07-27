@@ -119,6 +119,20 @@ type LaunchConfig struct {
 	HostPort        int    // passed to the agent-server's own --host/--port; reachable from the host only via ControlSocketDir, see package doc
 	ProxySocketPath string // host path of the per-session egressproxy.Proxy's Unix socket listener
 
+	// MemoryLimit, CPULimit and PidsLimit bound what one session can take
+	// from the host, enforced by Apptainer's own cgroup flags (--memory,
+	// --cpus, --pids-limit). All three are required: the concurrency
+	// ceilings in apps/agent-engine/internal/quota cap how many sessions run
+	// at once but say nothing about what each one consumes, and a coding-pack
+	// session runs arbitrary builds plus headless Chromium. Rootless
+	// enforcement needs a cgroups v2 host with systemd delegation
+	// (https://apptainer.org/docs/user/main/cgroups.html); on a host without
+	// it Apptainer fails the launch, which is the correct outcome — issue
+	// #308 exists because unbounded sessions starve their neighbours.
+	MemoryLimit string // Apptainer --memory, e.g. "4G"
+	CPULimit    string // Apptainer --cpus, e.g. "2"
+	PidsLimit   int    // Apptainer --pids-limit
+
 	// ControlSocketDir is a host directory, created empty by the caller
 	// before launch, bind-mounted read-write into the sandbox at
 	// ControlSocketContainerDir. See the package doc and
@@ -155,6 +169,7 @@ var (
 	ErrMissingConfigDir        = errors.New("sandbox: Pack.ConfigDir is required")
 	ErrMissingWorkingDir       = errors.New("sandbox: Pack.WorkingDir is required")
 	ErrInvalidHostPort         = errors.New("sandbox: HostPort must be positive")
+	ErrMissingResourceLimit    = errors.New("sandbox: MemoryLimit, CPULimit and PidsLimit are required")
 	ErrNilTenant               = errors.New("sandbox: TenantID must not be uuid.Nil")
 	ErrNilUser                 = errors.New("sandbox: UserID must not be uuid.Nil")
 
@@ -182,6 +197,8 @@ func (c LaunchConfig) validate() error {
 		return ErrMissingWorkingDir
 	case c.HostPort <= 0:
 		return ErrInvalidHostPort
+	case c.MemoryLimit == "", c.CPULimit == "", c.PidsLimit <= 0:
+		return ErrMissingResourceLimit
 	}
 	return nil
 }
@@ -284,6 +301,9 @@ func BuildArgv(cfg LaunchConfig) (argv []string, err error) {
 		"--network", "none",
 		"--no-mount", "hostfs",
 		"--no-mount", "bind-paths",
+		"--memory", cfg.MemoryLimit,
+		"--cpus", cfg.CPULimit,
+		"--pids-limit", strconv.Itoa(cfg.PidsLimit),
 		"--env", "HTTP_PROXY=" + proxyURL,
 		"--env", "HTTPS_PROXY=" + proxyURL,
 		"--env", "NO_PROXY=127.0.0.1,localhost",
