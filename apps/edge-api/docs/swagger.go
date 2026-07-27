@@ -1,3 +1,4 @@
+// Throwaway comment for the issue 553 harness. Case: code plus docs.
 package docs
 
 import (
