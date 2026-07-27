@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/catalog"
 )
 
@@ -34,6 +36,155 @@ func (s *stubRepository) ListRouteCandidates(_ context.Context, _ string) ([]Rou
 	}
 
 	return append([]RouteCandidate(nil), s.candidates...), nil
+}
+
+// stubEntitlements stands in for catalog.Service, the production
+// TenantEntitlements implementation.
+type stubEntitlements struct {
+	visible bool
+	err     error
+	calls   int
+	sawIDs  []string
+}
+
+func (s *stubEntitlements) IsAliasVisibleToTenant(_ context.Context, _ uuid.UUID, aliasID string) (bool, error) {
+	s.calls++
+	s.sawIDs = append(s.sawIDs, aliasID)
+	if s.err != nil {
+		return false, s.err
+	}
+	return s.visible, nil
+}
+
+func entitlementTestRepo() *stubRepository {
+	return &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-fast",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+		},
+		candidates: []RouteCandidate{
+			{
+				RouteID:                 "route-groq-fast",
+				AliasID:                 "hive-fast",
+				Provider:                "groq",
+				LiteLLMModelName:        "route-groq-fast",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsChatCompletions: true,
+				SupportsStreaming:       true,
+			},
+		},
+	}
+}
+
+// TestSelectRouteAllowsAliasVisibleToTenant is the entitled happy path: a
+// tenant-scoped request for a model the tenant may see resolves normally.
+func TestSelectRouteAllowsAliasVisibleToTenant(t *testing.T) {
+	repo := entitlementTestRepo()
+	entitlements := &stubEntitlements{visible: true}
+	svc := NewService(repo, entitlements)
+	tenantID := uuid.New()
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            tenantID,
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error for entitled alias: %v", err)
+	}
+	if result.RouteID != "route-groq-fast" {
+		t.Fatalf("expected route-groq-fast, got %q", result.RouteID)
+	}
+	if entitlements.calls != 1 {
+		t.Fatalf("expected exactly one entitlement lookup, got %d", entitlements.calls)
+	}
+	if len(entitlements.sawIDs) != 1 || entitlements.sawIDs[0] != "hive-fast" {
+		t.Fatalf("expected entitlement lookup for hive-fast, got %v", entitlements.sawIDs)
+	}
+}
+
+// TestSelectRouteDeniesAliasHiddenFromTenant is the defect this change fixes:
+// an alias the admin hid from the tenant must not resolve to a route.
+func TestSelectRouteDeniesAliasHiddenFromTenant(t *testing.T) {
+	repo := entitlementTestRepo()
+	svc := NewService(repo, &stubEntitlements{visible: false})
+
+	_, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            uuid.New(),
+		NeedChatCompletions: true,
+	})
+	if err == nil {
+		t.Fatal("expected an unentitled alias to be refused")
+	}
+	if !errors.Is(err, ErrModelNotEntitled) {
+		t.Fatalf("expected ErrModelNotEntitled, got %v", err)
+	}
+	if repo.listCalls != 0 {
+		t.Fatalf("expected candidate list to be skipped for an unentitled alias, got %d calls", repo.listCalls)
+	}
+}
+
+// TestSelectRouteFailsClosedWhenEntitlementsUnwired asserts a tenant-scoped
+// request is refused, not silently allowed, when no entitlement source is
+// configured. An implicit allow-all default is how the original gap shipped.
+func TestSelectRouteFailsClosedWhenEntitlementsUnwired(t *testing.T) {
+	repo := entitlementTestRepo()
+	svc := NewService(repo, nil)
+
+	_, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            uuid.New(),
+		NeedChatCompletions: true,
+	})
+	if !errors.Is(err, ErrModelNotEntitled) {
+		t.Fatalf("expected ErrModelNotEntitled when entitlements are unwired, got %v", err)
+	}
+}
+
+// TestSelectRouteSurfacesEntitlementLookupFailure asserts a lookup error is not
+// mistaken for a verdict: it must propagate rather than admit the request.
+func TestSelectRouteSurfacesEntitlementLookupFailure(t *testing.T) {
+	repo := entitlementTestRepo()
+	svc := NewService(repo, &stubEntitlements{err: errors.New("db down")})
+
+	_, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            uuid.New(),
+		NeedChatCompletions: true,
+	})
+	if err == nil {
+		t.Fatal("expected entitlement lookup failure to be surfaced")
+	}
+	if repo.listCalls != 0 {
+		t.Fatalf("expected no candidate listing after a failed entitlement lookup, got %d", repo.listCalls)
+	}
+}
+
+// TestSelectRouteSkipsEntitlementLookupWithoutTenant covers the API-key path:
+// api_keys hang off accounts, which are not tenant-scoped, so those requests
+// carry no tenant and stay governed by the key policy allowlist.
+func TestSelectRouteSkipsEntitlementLookupWithoutTenant(t *testing.T) {
+	repo := entitlementTestRepo()
+	entitlements := &stubEntitlements{visible: false}
+	svc := NewService(repo, entitlements)
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("untenanted selection must not consult tenant entitlement: %v", err)
+	}
+	if result.RouteID != "route-groq-fast" {
+		t.Fatalf("expected route-groq-fast, got %q", result.RouteID)
+	}
+	if entitlements.calls != 0 {
+		t.Fatalf("expected no entitlement lookup without a tenant, got %d", entitlements.calls)
+	}
 }
 
 func TestSelectRouteHonorsCapabilityMatrix(t *testing.T) {
@@ -100,7 +251,7 @@ func TestSelectRouteHonorsCapabilityMatrix(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-fast",
@@ -151,7 +302,7 @@ func TestSelectRouteRejectsDisallowedAlias(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	_, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:        "hive-fast",
@@ -215,7 +366,7 @@ func TestSelectRouteKeepsSamePriceClassByDefault(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-fast",
@@ -269,7 +420,7 @@ func TestSelectRouteAllowsExplicitPriceClassWidening(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-auto",
@@ -311,7 +462,7 @@ func TestSelectRouteSucceedsForSeededMediaAndBatchCapabilities(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	tests := []struct {
 		name  string
@@ -365,7 +516,7 @@ func TestSelectRoutePropagatesAliasLookupErrors(t *testing.T) {
 		policyErr: errors.New("alias not found"),
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	_, err := svc.SelectRoute(context.Background(), SelectionInput{AliasID: "missing"})
 	if err == nil {
@@ -412,7 +563,7 @@ func TestRequireToolCapable_CapableRouteSelected(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-tools",
@@ -451,7 +602,7 @@ func TestRequireToolCapable_NoCapableRoute(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	_, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-basic",
@@ -491,7 +642,7 @@ func TestRequireToolCapable_FalseAllowsMixedRoutes(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-mixed",
@@ -545,7 +696,7 @@ func TestRequireToolCapable_MixedProviderOnlyCapableSelected(t *testing.T) {
 		},
 	}
 
-	svc := NewService(repo)
+	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
 		AliasID:             "hive-tools",

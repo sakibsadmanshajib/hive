@@ -8,6 +8,7 @@
     "lint:tenant-setting": "node tools/lint-no-direct-tenant-setting.mjs",
     "lint:tenant-id": "node tools/lint-no-direct-tenant-id.mjs",
     "lint:desktop-local-http": "node tools/lint-no-desktop-local-http.mjs",
+    "lint:model-visibility": "node tools/lint-tenant-model-visibility-single-source.mjs",
     "soc2:report": "node tools/soc2-coverage-report.mjs",
     "soc2:check": "node tools/soc2-coverage-report.mjs --check"
   },

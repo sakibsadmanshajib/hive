@@ -16,6 +16,10 @@ type Repository interface {
 	// applying the visibility rules: public by default, restricted by grant,
 	// explicitly blocked when visible=false row exists.
 	ListAliasesForTenant(ctx context.Context, tenantID uuid.UUID) ([]ModelAlias, error)
+	// IsAliasVisibleToTenant answers the same question as ListAliasesForTenant
+	// for a single alias, through the same query and the same predicate. This is
+	// the inference-time entitlement check.
+	IsAliasVisibleToTenant(ctx context.Context, tenantID uuid.UUID, aliasID string) (bool, error)
 	GetSnapshot(ctx context.Context) (CatalogSnapshot, error)
 	// GetAlias fetches a single model alias by its alias_id.
 	// Used by syncOWUI to determine the alias visibility class before choosing
@@ -78,58 +82,102 @@ func (r *pgxRepository) ListPublicAliases(ctx context.Context) ([]ModelAlias, er
 	return aliases, nil
 }
 
-// ListAliasesForTenant implements the tenant visibility filtering rules using a
-// LEFT JOIN against tenant_model_visibility. Rules (in priority order):
-//  1. If a tenant_model_visibility row with visible=false exists, exclude.
-//  2. If visibility='restricted' and no visible=true row exists, exclude.
-//  3. Otherwise include (covers public, preview with no override).
-func (r *pgxRepository) ListAliasesForTenant(ctx context.Context, tenantID uuid.UUID) ([]ModelAlias, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT
-			a.alias_id,
-			a.owned_by,
-			a.display_name,
-			a.summary,
-			a.visibility,
-			a.lifecycle,
-			a.capability_badges,
-			a.input_price_credits,
-			a.output_price_credits,
-			a.cache_read_price_credits,
-			a.cache_write_price_credits,
-			a.created_at,
-			a.updated_at
-		FROM public.model_aliases a
-		LEFT JOIN public.tenant_model_visibility v
-			ON v.alias_id = a.alias_id AND v.tenant_id = $1
-		WHERE
-			-- Explicitly blocked rows are always excluded.
-			(v.visible IS NULL OR v.visible = true)
-			AND (
-				-- Public / preview: visible by default.
-				a.visibility IN ('public', 'preview')
-				-- Restricted: only if a visible=true row exists.
-				OR (a.visibility = 'restricted' AND v.visible = true)
-			)
-		ORDER BY a.alias_id ASC
-	`, tenantID)
+// tenantVisibilityQuery is the only query that reads tenant_model_visibility for
+// an entitlement decision. $2 is an optional alias filter (empty string = every
+// alias) so the catalog listing and the single-alias entitlement check read the
+// same rows and hand them to the same predicate. The SQL deliberately carries no
+// visibility logic of its own: the verdict lives in AliasVisibleToTenant, which
+// keeps the list a tenant sees and the models a tenant may invoke in lockstep.
+const tenantVisibilityQuery = `
+	SELECT
+		a.alias_id,
+		a.owned_by,
+		a.display_name,
+		a.summary,
+		a.visibility,
+		a.lifecycle,
+		a.capability_badges,
+		a.input_price_credits,
+		a.output_price_credits,
+		a.cache_read_price_credits,
+		a.cache_write_price_credits,
+		a.created_at,
+		a.updated_at,
+		v.visible
+	FROM public.model_aliases a
+	LEFT JOIN public.tenant_model_visibility v
+		ON v.alias_id = a.alias_id AND v.tenant_id = $1
+	WHERE $2::text = '' OR a.alias_id = $2::text
+	ORDER BY a.alias_id ASC
+`
+
+// aliasWithOverride pairs an alias with the requesting tenant's
+// tenant_model_visibility.visible value (nil when the tenant has no row).
+type aliasWithOverride struct {
+	alias    ModelAlias
+	override *bool
+}
+
+// filterVisibleForTenant applies the entitlement predicate to a scanned row set.
+// Both entry points below funnel through it.
+func filterVisibleForTenant(rows []aliasWithOverride) []ModelAlias {
+	var visible []ModelAlias
+	for _, row := range rows {
+		if !AliasVisibleToTenant(row.alias.Visibility, row.override) {
+			continue
+		}
+		visible = append(visible, row.alias)
+	}
+	return visible
+}
+
+// queryTenantVisibility runs tenantVisibilityQuery. aliasFilter narrows the row
+// set to a single alias; pass "" for the whole catalog.
+func (r *pgxRepository) queryTenantVisibility(ctx context.Context, tenantID uuid.UUID, aliasFilter string) ([]aliasWithOverride, error) {
+	rows, err := r.pool.Query(ctx, tenantVisibilityQuery, tenantID, aliasFilter)
 	if err != nil {
-		return nil, fmt.Errorf("catalog: list aliases for tenant: %w", err)
+		return nil, fmt.Errorf("catalog: query tenant visibility: %w", err)
 	}
 	defer rows.Close()
 
-	var aliases []ModelAlias
+	var out []aliasWithOverride
 	for rows.Next() {
-		alias, err := scanModelAlias(rows)
+		var override *bool
+		alias, err := scanModelAlias(rows, &override)
 		if err != nil {
 			return nil, err
 		}
-		aliases = append(aliases, alias)
+		out = append(out, aliasWithOverride{alias: alias, override: override})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("catalog: iterate tenant aliases: %w", err)
+		return nil, fmt.Errorf("catalog: iterate tenant visibility rows: %w", err)
 	}
-	return aliases, nil
+	return out, nil
+}
+
+// ListAliasesForTenant returns the aliases the tenant is entitled to. See
+// AliasVisibleToTenant for the rules.
+func (r *pgxRepository) ListAliasesForTenant(ctx context.Context, tenantID uuid.UUID) ([]ModelAlias, error) {
+	rows, err := r.queryTenantVisibility(ctx, tenantID, "")
+	if err != nil {
+		return nil, err
+	}
+	return filterVisibleForTenant(rows), nil
+}
+
+// IsAliasVisibleToTenant reports whether the tenant may invoke aliasID. It is
+// literally "is this alias in the tenant's entitled list", narrowed to one row
+// by the query, so the inference verdict cannot drift from the catalog listing.
+// An unknown alias returns false.
+//
+// ponytail: one indexed single-row query per inference request. Cache it behind
+// the catalog snapshot if this ever shows up in hot-path latency.
+func (r *pgxRepository) IsAliasVisibleToTenant(ctx context.Context, tenantID uuid.UUID, aliasID string) (bool, error) {
+	rows, err := r.queryTenantVisibility(ctx, tenantID, aliasID)
+	if err != nil {
+		return false, err
+	}
+	return len(filterVisibleForTenant(rows)) > 0, nil
 }
 
 // GetAlias returns a single model alias by its alias_id.
@@ -274,11 +322,14 @@ type aliasScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanModelAlias(scanner aliasScanner) (ModelAlias, error) {
+// scanModelAlias scans the standard alias column list. extra receives any
+// trailing columns a caller selected after the alias columns (the tenant
+// visibility query appends v.visible).
+func scanModelAlias(scanner aliasScanner, extra ...any) (ModelAlias, error) {
 	var alias ModelAlias
 	var capabilityBadges []byte
 
-	if err := scanner.Scan(
+	dest := []any{
 		&alias.AliasID,
 		&alias.OwnedBy,
 		&alias.DisplayName,
@@ -292,7 +343,10 @@ func scanModelAlias(scanner aliasScanner) (ModelAlias, error) {
 		&alias.CacheWritePriceCredits,
 		&alias.CreatedAt,
 		&alias.UpdatedAt,
-	); err != nil {
+	}
+	dest = append(dest, extra...)
+
+	if err := scanner.Scan(dest...); err != nil {
 		if err == pgx.ErrNoRows {
 			return ModelAlias{}, fmt.Errorf("catalog: model alias not found")
 		}

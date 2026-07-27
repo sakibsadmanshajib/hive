@@ -409,6 +409,26 @@ func TestHandleChat_RouteNotFound_Returns404(t *testing.T) {
 	}
 }
 
+// TestHandleChat_ModelNotEntitled_Returns403 covers grounded chat, the second
+// JWT-session inference path: a model the tenant may not use is an admin policy
+// refusal, not a provider-blind 502.
+func TestHandleChat_ModelNotEntitled_Returns403(t *testing.T) {
+	var audits []auditRecord
+	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
+		fakeSelectRoute("", ErrModelNotEntitled), fakeDispatch(http.StatusOK, canned200Response, nil))
+
+	req := chatReq(t, ChatRequest{
+		Model:    "hive-blocked",
+		Messages: []ChatMessage{{Role: "user", Content: "hi"}},
+	}, uuid.New())
+	w := httptest.NewRecorder()
+	h.handleChat(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 for an unentitled model, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestHandleChat_RouteTransportError_ProviderBlind(t *testing.T) {
 	var audits []auditRecord
 	h := newChatTestHandler(newFakeStore(), &fakeEmbedder{}, &audits,
