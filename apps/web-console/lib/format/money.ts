@@ -28,7 +28,8 @@ export function formatCurrency(
  *
  * BigInt math — the wire shape is a JSON string (Go `,string` tag) so totals
  * beyond Number.MAX_SAFE_INTEGER (2^53−1) preserve full BIGINT precision. A
- * Number-based path silently rounds very large monthly totals.
+ * Number-based path silently rounds very large monthly totals, so the bigint
+ * is handed to Intl as-is.
  *
  * Uses the Bangla taka glyph (৳) directly rather than `style: "currency"`,
  * because the regulatory rule is BDT only and the glyph must never be
@@ -47,11 +48,10 @@ export function formatTakaSubunits(
   if (n < 0n) return "৳0.00";
   const integer = n / 100n;
   const fraction = n % 100n;
-  const integerDisplay =
-    integer <= BigInt(Number.MAX_SAFE_INTEGER)
-      ? new Intl.NumberFormat(intlTag(locale, "grouping")).format(
-          Number(integer),
-        )
-      : integer.toString();
+  // Intl formats a bigint directly, so grouping survives past
+  // Number.MAX_SAFE_INTEGER without a lossy Number() hop.
+  const integerDisplay = new Intl.NumberFormat(
+    intlTag(locale, "grouping"),
+  ).format(integer);
   return `৳${integerDisplay}.${fraction.toString().padStart(2, "0")}`;
 }

@@ -73,11 +73,16 @@ describe("money formatting", () => {
     expect(formatCurrency(120000, "BDT")).toContain("1,200.00");
   });
 
-  it("keeps BigInt precision beyond MAX_SAFE_INTEGER", () => {
+  it("keeps BigInt precision and grouping beyond MAX_SAFE_INTEGER", () => {
     expect(formatTakaSubunits("100050")).toBe("৳1,000.50");
     expect(formatTakaSubunits("9007199254740993000")).toBe(
-      "৳90071992547409930.00",
+      "৳90,071,992,547,409,930.00",
     );
+  });
+
+  it("groups taka by lakh/crore for Bengali", () => {
+    expect(formatTakaSubunits("100050", "bn")).toBe("৳1,000.50");
+    expect(formatTakaSubunits("12345678900", "bn")).toBe("৳12,34,56,789.00");
   });
 
   it("floors negative and unparseable totals", () => {

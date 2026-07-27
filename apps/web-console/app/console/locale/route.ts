@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
+import { resolveReturnTo } from "@/lib/http/return-to";
 import { LOCALE_COOKIE, resolveLocale } from "@/lib/i18n/locales";
 
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
@@ -18,8 +19,9 @@ export async function POST(request: NextRequest) {
     typeof submitted === "string" ? submitted : undefined,
   );
 
+  const origin = resolveCanonicalOrigin(request);
   const response = NextResponse.redirect(
-    new URL(resolveReturnTo(formData.get("return_to")), resolveCanonicalOrigin(request)),
+    new URL(resolveReturnTo(formData.get("return_to"), origin), origin),
     { status: 303 },
   );
 
@@ -31,16 +33,4 @@ export async function POST(request: NextRequest) {
   });
 
   return response;
-}
-
-/**
- * Only relative console paths are honoured, so a crafted `return_to` cannot
- * turn the language switcher into an open redirect. Rejecting anything with
- * "//" also covers protocol-relative targets.
- */
-function resolveReturnTo(value: FormDataEntryValue | null): string {
-  if (typeof value !== "string") return "/console";
-  if (!value.startsWith("/console")) return "/console";
-  if (value.includes("//") || value.includes("\\")) return "/console";
-  return value;
 }
