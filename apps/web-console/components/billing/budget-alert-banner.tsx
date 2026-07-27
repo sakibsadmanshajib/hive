@@ -31,9 +31,9 @@ export function BudgetAlertBanner({
   }
 
   const formatted = formatCredits(threshold.threshold_credits);
-  const message = isCrossed
-    ? `Your balance has dropped below your alert threshold of ${formatted} credits.`
-    : `Your balance is approaching your alert threshold of ${formatted} credits.`;
+  const lead = isCrossed
+    ? "Your balance has reached or dropped below your alert threshold of "
+    : "Your balance is approaching your alert threshold of ";
 
   async function handleDismiss() {
     try {
@@ -49,7 +49,10 @@ export function BudgetAlertBanner({
       role="status"
       className="flex items-center justify-between gap-3 border-b border-[var(--color-warning)]/30 bg-[var(--color-warning-soft)] px-6 py-2 text-xs text-[var(--color-warning)]"
     >
-      <p className="m-0 tabular-nums">{message}</p>
+      <p className="m-0">
+        {lead}
+        <span className="metric">{formatted}</span> credits.
+      </p>
       <Button
         type="button"
         variant="secondary"

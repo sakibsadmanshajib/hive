@@ -272,6 +272,29 @@ func TestSharedStorageClientSatisfiesFilesStorageBackend(t *testing.T) {
 // apps/edge-api/internal/featuregate's own tests.
 func identityMiddleware(h http.Handler) http.Handler { return h }
 
+// The public mux is served on the port published through the ingress tunnel.
+// hive_upstream_requests_total labels every series with the upstream provider
+// name, which the provider-blind rule forbids exposing to customers, so
+// /metrics belongs on the telemetry listener (metricsListenAddr) and must not
+// be registered alongside the other unauthenticated infrastructure routes.
+func TestRegisterInfraRoutesDoesNotExposeMetrics(t *testing.T) {
+	mux := http.NewServeMux()
+	registerInfraRoutes(mux, "testdata/openapi.yaml")
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /metrics on the public mux = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+
+	// Guards the assertion above against passing vacuously.
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /health = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
 func TestRegisterMediaFileBatchRoutesRegistersAllPublicPaths(t *testing.T) {
 	mux := http.NewServeMux()
 	registerMediaFileBatchRoutes(
@@ -375,6 +398,93 @@ func newCatalogSnapshotServer(t *testing.T, body string) string {
 	t.Cleanup(server.Close)
 
 	return server.URL
+}
+
+// newTenantCatalogSnapshotServer answers both snapshot shapes: the global
+// snapshot and the per-tenant one. It records which path was requested so a
+// test can assert the tenant-scoped list is the one served.
+func newTenantCatalogSnapshotServer(t *testing.T, globalBody, tenantBody string, sawPath *string) string {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*sawPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasPrefix(r.URL.Path, "/internal/catalog/snapshot/tenant/") {
+			_, _ = w.Write([]byte(tenantBody))
+			return
+		}
+		_, _ = w.Write([]byte(globalBody))
+	}))
+	t.Cleanup(server.Close)
+
+	return server.URL
+}
+
+// TestHandleModelsFiltersByTenantForJWTSession asserts /v1/models serves the
+// tenant-filtered list for a JWT session, so the list a tenant sees matches
+// what the tenant may actually invoke.
+func TestHandleModelsFiltersByTenantForJWTSession(t *testing.T) {
+	var sawPath string
+	client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t,
+		`{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"},{"id":"hive-blocked","object":"model","created":2,"owned_by":"hive"}],"catalog":[]}`,
+		`{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"}],"catalog":[]}`,
+		&sawPath,
+	))
+	// No API key on this request: the JWT middleware already authenticated it.
+	authorizer := newTestAuthorizer(t, http.StatusNotFound, `{}`)
+
+	tenantID := uuid.New()
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req = req.WithContext(auth.WithUser(req.Context(), &auth.User{ID: uuid.New(), TenantID: tenantID, Role: "member"}))
+	rr := httptest.NewRecorder()
+
+	handleModels(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 for a JWT session, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if want := "/internal/catalog/snapshot/tenant/" + tenantID.String(); sawPath != want {
+		t.Fatalf("expected tenant snapshot path %q, got %q", want, sawPath)
+	}
+	if strings.Contains(rr.Body.String(), "hive-blocked") {
+		t.Fatalf("tenant-filtered list must not include a hidden alias: %s", rr.Body.String())
+	}
+}
+
+// TestHandleModelsKeepsGlobalListForAPIKeyCaller pins the untouched API-key
+// behaviour: api_keys hang off accounts, which carry no tenant, so those callers
+// keep the global list and the key policy governs invocation.
+func TestHandleModelsKeepsGlobalListForAPIKeyCaller(t *testing.T) {
+	var sawPath string
+	client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t,
+		`{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"}],"catalog":[]}`,
+		`{"models":[],"catalog":[]}`,
+		&sawPath,
+	))
+	authorizer := newTestAuthorizer(t, http.StatusOK, `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"policy_version":1
+	}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_test")
+	rr := httptest.NewRecorder()
+
+	handleModels(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if sawPath != "/internal/catalog/snapshot" {
+		t.Fatalf("expected the global snapshot path for an API-key caller, got %q", sawPath)
+	}
 }
 
 func newTestAuthorizer(t *testing.T, status int, body string) *authz.Authorizer {

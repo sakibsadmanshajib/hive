@@ -2,7 +2,9 @@ package audio
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
 )
@@ -30,6 +32,13 @@ func (a *AccountingAdapter) CreateReservation(ctx context.Context, input Reserva
 		PolicyMode:       "strict",
 	})
 	if err != nil {
+		// Control-plane answers 409 when the credit policy rejects the hold
+		// (accounting.PolicyError). Every other failure is an infrastructure
+		// fault and must not be billed to the caller as a quota problem.
+		var statusErr *inference.StatusError
+		if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusConflict {
+			return "", fmt.Errorf("audio: create reservation: %w: %w", ErrInsufficientCredits, err)
+		}
 		return "", fmt.Errorf("audio: create reservation: %w", err)
 	}
 	return result.ID, nil

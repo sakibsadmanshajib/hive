@@ -48,13 +48,24 @@ type Config struct {
 	// PrecheckMaxConcurrent is the global concurrent-request ceiling for the
 	// precheck handler (default 100). PrecheckTimeoutSeconds is the per-request
 	// deadline in seconds (default 8).
-	SignupRateLimitPerWindow int
-	SignupRateLimitWindow    time.Duration
-	SignupRateLimitFailOpen  bool
-	TurnstileSecretKey       string
-	TrustedProxyCIDRs        []*net.IPNet
-	PrecheckMaxConcurrent    int
-	PrecheckTimeoutSeconds   int
+	//
+	// TenantProvisionRateLimitPerWindow and TenantProvisionRateLimitWindow
+	// throttle POST /api/v1/viewer/tenant-provision per authenticated user id.
+	// That route is a write path reachable by a principal holding no tenant
+	// claim, which is the one thing such a token can do, so it must not be
+	// hammerable even though every call is idempotent. The default of 20 per
+	// ten minutes is far above the one call per session the console makes and
+	// still leaves room for a user retrying after an administrator invites
+	// them. Shares RATE_LIMIT_FAIL_OPEN with the signup limiter.
+	SignupRateLimitPerWindow          int
+	SignupRateLimitWindow             time.Duration
+	SignupRateLimitFailOpen           bool
+	TenantProvisionRateLimitPerWindow int
+	TenantProvisionRateLimitWindow    time.Duration
+	TurnstileSecretKey                string
+	TrustedProxyCIDRs                 []*net.IPNet
+	PrecheckMaxConcurrent             int
+	PrecheckTimeoutSeconds            int
 
 	// Licensing entitlement seam (issue #304, D9). LicenseFilePath set means
 	// Hive Enterprise mode: an offline signed license file is read from this
@@ -97,26 +108,28 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		Port:                             port,
-		SupabaseURL:                      supabaseURL,
-		SupabaseAnonKey:                  os.Getenv("SUPABASE_ANON_KEY"),
-		SupabaseDBURL:                    os.Getenv("SUPABASE_DB_URL"),
-		RedisURL:                         os.Getenv("REDIS_URL"),
-		InternalToken:                    os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"),
-		BatchExecutorConcurrency:         intEnv("BATCH_EXECUTOR_CONCURRENCY", 8),
-		BatchExecutorMaxRetries:          intEnv("BATCH_EXECUTOR_MAX_RETRIES", 3),
-		BatchExecutorLineTimeoutMs:       intEnv("BATCH_EXECUTOR_LINE_TIMEOUT_MS", 60000),
-		BatchExecutorKind:                stringEnv("BATCH_EXECUTOR_KIND", "auto"),
-		SignupRateLimitPerWindow:         intEnv("SIGNUP_RATE_LIMIT_PER_WINDOW", 5),
-		SignupRateLimitWindow:            time.Duration(intEnv("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", 3600)) * time.Second,
-		SignupRateLimitFailOpen:          boolEnv("RATE_LIMIT_FAIL_OPEN", false),
-		TurnstileSecretKey:               os.Getenv("TURNSTILE_SECRET_KEY"),
-		TrustedProxyCIDRs:                trustedCIDRs,
-		PrecheckMaxConcurrent:            intEnv("SIGNUP_PRECHECK_MAX_CONCURRENT", 100),
-		PrecheckTimeoutSeconds:           intEnv("SIGNUP_PRECHECK_TIMEOUT_SECONDS", 8),
-		LicenseFilePath:                  licenseFilePath,
-		LicensePublicKeyB64:              licensePublicKeyB64,
-		LicenseRevalidateIntervalSeconds: intEnv("LICENSE_REVALIDATE_INTERVAL_SECONDS", 300),
+		Port:                              port,
+		SupabaseURL:                       supabaseURL,
+		SupabaseAnonKey:                   os.Getenv("SUPABASE_ANON_KEY"),
+		SupabaseDBURL:                     os.Getenv("SUPABASE_DB_URL"),
+		RedisURL:                          os.Getenv("REDIS_URL"),
+		InternalToken:                     os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"),
+		BatchExecutorConcurrency:          intEnv("BATCH_EXECUTOR_CONCURRENCY", 8),
+		BatchExecutorMaxRetries:           intEnv("BATCH_EXECUTOR_MAX_RETRIES", 3),
+		BatchExecutorLineTimeoutMs:        intEnv("BATCH_EXECUTOR_LINE_TIMEOUT_MS", 60000),
+		BatchExecutorKind:                 stringEnv("BATCH_EXECUTOR_KIND", "auto"),
+		SignupRateLimitPerWindow:          intEnv("SIGNUP_RATE_LIMIT_PER_WINDOW", 5),
+		SignupRateLimitWindow:             time.Duration(intEnv("SIGNUP_RATE_LIMIT_WINDOW_SECONDS", 3600)) * time.Second,
+		SignupRateLimitFailOpen:           boolEnv("RATE_LIMIT_FAIL_OPEN", false),
+		TenantProvisionRateLimitPerWindow: intEnv("TENANT_PROVISION_RATE_LIMIT_PER_WINDOW", 20),
+		TenantProvisionRateLimitWindow:    time.Duration(intEnv("TENANT_PROVISION_RATE_LIMIT_WINDOW_SECONDS", 600)) * time.Second,
+		TurnstileSecretKey:                os.Getenv("TURNSTILE_SECRET_KEY"),
+		TrustedProxyCIDRs:                 trustedCIDRs,
+		PrecheckMaxConcurrent:             intEnv("SIGNUP_PRECHECK_MAX_CONCURRENT", 100),
+		PrecheckTimeoutSeconds:            intEnv("SIGNUP_PRECHECK_TIMEOUT_SECONDS", 8),
+		LicenseFilePath:                   licenseFilePath,
+		LicensePublicKeyB64:               licensePublicKeyB64,
+		LicenseRevalidateIntervalSeconds:  intEnv("LICENSE_REVALIDATE_INTERVAL_SECONDS", 300),
 	}, nil
 }
 

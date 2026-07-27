@@ -19,12 +19,32 @@ type AccountingClient struct {
 	httpClient *http.Client
 }
 
+// accountingTimeout bounds a single control-plane accounting call. A
+// reservation is six sequential round trips to Postgres, so it takes 4-8s
+// when the database is a region away from the gateway (measured on the demo
+// box against Supabase us-east-1). The former 5s budget cut that call off
+// mid-flight: control-plane still committed the reservation while edge-api
+// saw a timeout, so /v1/audio/* answered 402 and the credit hold leaked.
+const accountingTimeout = 30 * time.Second
+
 // NewAccountingClient creates a new AccountingClient.
 func NewAccountingClient(baseURL string) *AccountingClient {
 	return &AccountingClient{
 		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: &http.Client{Timeout: 5 * time.Second},
+		httpClient: &http.Client{Timeout: accountingTimeout},
 	}
+}
+
+// StatusError reports a non-2xx response from a control-plane accounting or
+// usage call. Callers match on StatusCode to tell a business rejection (409,
+// credit policy) from an infrastructure fault (5xx, timeout, auth).
+type StatusError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *StatusError) Error() string {
+	return fmt.Sprintf("status %d: %s", e.StatusCode, e.Body)
 }
 
 // --- Reservation types ---
@@ -168,7 +188,7 @@ func (c *AccountingClient) post(ctx context.Context, path string, input any, out
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		return &StatusError{StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(respBody))}
 	}
 
 	if output != nil {

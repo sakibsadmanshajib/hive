@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/controlclient"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/quota"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/sandbox"
 )
 
@@ -172,7 +173,15 @@ func shortTempDir(t *testing.T) string {
 
 func newTestEngine(t *testing.T, captured **fakeAgentServer) *SandboxEngine {
 	t.Helper()
+	return newTestEngineWithQuota(t, captured, 4, 2)
+}
+
+func newTestEngineWithQuota(t *testing.T, captured **fakeAgentServer, tenantConcurrency, userConcurrency int) *SandboxEngine {
+	t.Helper()
 	cfg := Config{
+		QuotaTenantConcurrency: tenantConcurrency,
+		QuotaUserConcurrency:   userConcurrency,
+
 		SIFPath:       "/fake/agent-server.sif",
 		PacksDir:      t.TempDir(),
 		WorkspaceRoot: t.TempDir(),
@@ -201,6 +210,92 @@ func newTestEngine(t *testing.T, captured **fakeAgentServer) *SandboxEngine {
 
 func testTask() Task {
 	return Task{ID: uuid.New(), TenantID: uuid.New(), UserID: uuid.New(), Pack: "coding-pack"}
+}
+
+// Issue #308: the quota package existed but nothing on the production launch
+// path ever acquired a slot, so one tenant could saturate the box.
+func TestSandboxEngine_Launch_EnforcesTenantQuota(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngineWithQuota(t, &fake, 1, 1)
+
+	first := testTask()
+	if _, err := e.Launch(context.Background(), first); err != nil {
+		t.Fatalf("first Launch: %v", err)
+	}
+
+	// Same tenant, different user: isolates the tenant ceiling from the
+	// per-user one.
+	second := testTask()
+	second.TenantID = first.TenantID
+	if _, err := e.Launch(context.Background(), second); !errors.Is(err, quota.ErrTenantQuotaExceeded) {
+		t.Fatalf("expected ErrTenantQuotaExceeded, got %v", err)
+	}
+}
+
+func TestSandboxEngine_Launch_EnforcesUserQuota(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngineWithQuota(t, &fake, 4, 1)
+
+	first := testTask()
+	if _, err := e.Launch(context.Background(), first); err != nil {
+		t.Fatalf("first Launch: %v", err)
+	}
+
+	second := testTask()
+	second.TenantID = first.TenantID
+	second.UserID = first.UserID
+	if _, err := e.Launch(context.Background(), second); !errors.Is(err, quota.ErrUserQuotaExceeded) {
+		t.Fatalf("expected ErrUserQuotaExceeded, got %v", err)
+	}
+}
+
+// The agent-server is a server: it keeps running after the conversation
+// finishes, and apps/control-plane/internal/agenttask's poller only records
+// the terminal status, it never calls Cancel. Without reaping here every
+// completed task leaked its sandbox process, its session directories and
+// (once quota is wired) its concurrency slot forever.
+func TestSandboxEngine_Status_TerminalReapsSandboxAndFreesQuota(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngineWithQuota(t, &fake, 1, 1)
+
+	task := testTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	first := fake
+
+	first.setFinalResponse("done")
+	first.setStatus(controlclient.StatusFinished)
+
+	status, summary, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if status != StatusSucceeded || summary != "done" {
+		t.Fatalf("expected succeeded/done, got %s/%q", status, summary)
+	}
+	if !first.wasKilled() {
+		t.Fatal("expected terminal Status to kill the sandbox process")
+	}
+
+	// The poller retries Status whenever its own Transition call failed, so a
+	// reaped session must keep answering instead of becoming unknown.
+	status, summary, _, err = e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("repeat Status after reap: %v", err)
+	}
+	if status != StatusSucceeded || summary != "done" {
+		t.Fatalf("expected repeat Status to still report succeeded/done, got %s/%q", status, summary)
+	}
+
+	// The freed slot is the point: the same tenant/user can launch again.
+	next := testTask()
+	next.TenantID = task.TenantID
+	next.UserID = task.UserID
+	if _, err := e.Launch(context.Background(), next); err != nil {
+		t.Fatalf("expected quota slot freed by the reap, got %v", err)
+	}
 }
 
 func TestSandboxEngine_Launch_StartsAndRunsConversation(t *testing.T) {
@@ -425,7 +520,14 @@ func TestSandboxEngine_Cancel_InterruptsAndKillsProcess(t *testing.T) {
 		t.Fatal("expected Cancel to kill the sandbox process")
 	}
 
-	if _, _, _, err := e.Status(context.Background(), sessionRef); !errors.Is(err, ErrUnknownSession) {
-		t.Fatalf("expected session to be forgotten after Cancel, got %v", err)
+	// A cancelled session keeps answering Status with its terminal outcome
+	// rather than becoming unknown: agenttask's poller retries Status whenever
+	// its own Transition failed, and an error there leaves the task active.
+	status, _, _, err := e.Status(context.Background(), sessionRef)
+	if err != nil {
+		t.Fatalf("Status after Cancel: %v", err)
+	}
+	if status != StatusCancelled {
+		t.Fatalf("expected cancelled after Cancel, got %s", status)
 	}
 }

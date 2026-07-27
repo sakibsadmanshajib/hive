@@ -78,6 +78,29 @@ describe("app/auth/sign-in/page.tsx next-target redirect", () => {
     await vi.waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/console"));
   });
 
+  it("plain 'Create one' link has no next param when none is present", async () => {
+    render(<SignInPage />);
+    const link = await screen.findByRole("link", { name: /create one/i });
+    expect(link.getAttribute("href")).toBe("/auth/sign-up");
+  });
+
+  it("'Create one' link carries the current next param through to sign-up (issue: OAuth consent round-trip dropped on signup)", async () => {
+    window.history.pushState(
+      {},
+      "",
+      `/auth/sign-in?next=${encodeURIComponent(
+        "/oauth/consent?authorization_id=auth-req-123",
+      )}`,
+    );
+    render(<SignInPage />);
+    const link = await screen.findByRole("link", { name: /create one/i });
+    expect(link.getAttribute("href")).toBe(
+      `/auth/sign-up?next=${encodeURIComponent(
+        "/oauth/consent?authorization_id=auth-req-123",
+      )}`,
+    );
+  });
+
   it("does not redirect when sign-in fails", async () => {
     mockSignInWithPassword.mockResolvedValue({
       error: { message: "Invalid credentials" },

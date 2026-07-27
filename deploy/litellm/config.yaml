@@ -148,8 +148,13 @@ model_list:
 # Covers 429/5xx automatically. `fallbacks:` kicks in only after retries
 # exhaust. `cooldown_time` prevents hammering a model that just failed.
 # `drop_params: true` silently drops provider-unsupported request fields
-# (e.g. some OpenRouter free embedding providers reject `encoding_format`
-# or `dimensions`) instead of returning a hard 400 to the client.
+# (e.g. some OpenRouter free embedding providers reject `encoding_format`)
+# instead of returning a hard 400 to the client. It does NOT cover
+# `dimensions` on the embedding routes below: LiteLLM's generic openai adapter
+# raises UnsupportedParamsError for any model name without "text-embedding-3"
+# before consulting drop_params, so callers must not send that field at all
+# (see apps/edge-api/internal/rag/embed.go and
+# apps/control-plane/internal/rag/ingest.go, which reduce client-side instead).
 litellm_settings:
   # Sovereign edge: disable all LiteLLM telemetry so no call metadata is
   # sent to LiteLLM's hosted services. Must be set to False (string form)

@@ -92,18 +92,18 @@ export function BillingOverview({
         <CardContent className="flex flex-col gap-5 px-5 py-5 sm:flex-row sm:items-end sm:justify-between">
           <div className="flex flex-col gap-1">
             <p
-              className="font-display text-3xl tabular-nums text-[var(--color-ink)]"
+              className="metric text-3xl text-[var(--color-ink)]"
               data-numeric
             >
               {formatCredits(balance.available_credits)}
             </p>
-            <p className="text-xs text-[var(--color-ink-3)] tabular-nums">
+            <p className="text-xs text-[var(--color-ink-3)]">
               Posted{" "}
-              <span className="text-[var(--color-ink-2)]">
+              <span className="metric text-[var(--color-ink-2)]">
                 {formatCredits(balance.posted_credits)}
               </span>{" "}
               · Reserved{" "}
-              <span className="text-[var(--color-ink-2)]">
+              <span className="metric text-[var(--color-ink-2)]">
                 {formatCredits(balance.reserved_credits)}
               </span>{" "}
               <span className="ml-1 text-[var(--color-ink-3)]">credits</span>

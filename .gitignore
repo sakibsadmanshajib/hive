@@ -26,6 +26,11 @@
 !/vendor/openhands/
 node_modules/
 package-lock.json
+# Apps whose CI job installs with `npm ci` need their lockfile committed, so
+# they are re-included from the blanket rule above. apps/web-console and
+# apps/desktop predate that rule and are already tracked, which is why they
+# need no negation here.
+!/apps/agent-console/package-lock.json
 
 # Rust (apps/desktop-sandbox) — Cargo.lock is committed for reproducible
 # builds of the codex-bwrap binary; only the build output is ignored.

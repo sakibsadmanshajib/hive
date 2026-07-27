@@ -6,6 +6,7 @@ import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/cn";
 import { formatCredits } from "@/lib/format/credits";
+import { formatDateTime } from "@/lib/format/datetime";
 import { LedgerCsvExport } from "./ledger-csv-export";
 
 interface LedgerTableProps {
@@ -32,20 +33,6 @@ function entryTypeLabel(entryType: string): string {
     default:
       return entryType;
   }
-}
-
-function formatDateTime(isoString: string): string {
-  const date = new Date(isoString);
-  if (Number.isNaN(date.getTime())) {
-    return isoString;
-  }
-  return new Intl.DateTimeFormat("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }
 
 interface FilterOption {

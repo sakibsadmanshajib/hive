@@ -62,6 +62,13 @@ jobs:
         # (moved from after it) because that step consumes the minted
         # OWUI_SHIM_KEY. Removes the need for hand-managed OWUI_E2E_EMAIL /
         # OWUI_E2E_PASSWORD repo secrets.
+        #
+        # Also captures OWUI_BOOTSTRAP_EMAIL/PASSWORD: a second throwaway
+        # user owui.setup.ts signs in and out of before the real fixture
+        # login, so the real fixture user (role OWNER, the exact role PR
+        # #451 fixed) is provably not Open WebUI's unconditional first-user
+        # admin, and actually exercises the OAUTH_ALLOWED_ROLES gate. See
+        # scripts/seed-owui-e2e-user.py's module docstring.
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -71,15 +78,20 @@ jobs:
           email=$(printf '%s\n' "$out" | grep '^EMAIL=' | cut -d= -f2-)
           password=$(printf '%s\n' "$out" | grep '^PASSWORD=' | cut -d= -f2-)
           shim_key=$(printf '%s\n' "$out" | grep '^SHIM_KEY=' | cut -d= -f2-)
-          if [ -z "$email" ] || [ -z "$password" ] || [ -z "$shim_key" ]; then
-            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD/SHIM_KEY"
+          bootstrap_email=$(printf '%s\n' "$out" | grep '^BOOTSTRAP_EMAIL=' | cut -d= -f2-)
+          bootstrap_password=$(printf '%s\n' "$out" | grep '^BOOTSTRAP_PASSWORD=' | cut -d= -f2-)
+          if [ -z "$email" ] || [ -z "$password" ] || [ -z "$shim_key" ] || [ -z "$bootstrap_email" ] || [ -z "$bootstrap_password" ]; then
+            echo "::error::seed-owui-e2e-user.py did not print EMAIL/PASSWORD/SHIM_KEY/BOOTSTRAP_EMAIL/BOOTSTRAP_PASSWORD"
             exit 1
           fi
           echo "::add-mask::$password"
           echo "::add-mask::$shim_key"
+          echo "::add-mask::$bootstrap_password"
           echo "OWUI_E2E_EMAIL=$email" >> "$GITHUB_ENV"
           echo "OWUI_E2E_PASSWORD=$password" >> "$GITHUB_ENV"
           echo "OWUI_SHIM_KEY=$shim_key" >> "$GITHUB_ENV"
+          echo "OWUI_BOOTSTRAP_EMAIL=$bootstrap_email" >> "$GITHUB_ENV"
+          echo "OWUI_BOOTSTRAP_PASSWORD=$bootstrap_password" >> "$GITHUB_ENV"
       - name: Materialize .env.ci
         # local/test profiles boot control-plane + edge-api + open-webui +
         # web-console, all of which fail fast without real Supabase/S3/LLM
@@ -236,14 +248,16 @@ jobs:
           print('token-endpoint', r.status_code, round(time.time() - t, 2), 's')
           " || true
       - name: Run OWUI Playwright suite
-        # OWUI_E2E_EMAIL/PASSWORD are always provisioned by the "Seed OWUI
-        # e2e test user" step above (schedule, workflow_dispatch, and
-        # labeled pull_request runs all reach this step). SUPABASE_OAUTH_
-        # CLIENT_ID/SECRET are a separate, ops-provisioned pair (Supabase
-        # OAuth App registration) that do not exist yet -- owui.setup.ts and
-        # playwright.owui.config.ts's hasCreds gate both skip cleanly on
-        # their absence (mirrors #266's OWUI_E2E_* skip mechanism), so this
-        # step still exits 0 until they're provisioned.
+        # OWUI_E2E_EMAIL/PASSWORD/OWUI_BOOTSTRAP_EMAIL/PASSWORD are always
+        # provisioned by the "Seed OWUI e2e test user" step above (schedule,
+        # workflow_dispatch, and labeled pull_request runs all reach this
+        # step). SUPABASE_OAUTH_CLIENT_ID/SECRET are a separate, ops-
+        # provisioned pair (Supabase OAuth App registration) that HAVE been
+        # provisioned as repo secrets since 2026-07-03 -- this step actually
+        # runs the real OAuth journey, it does not skip. owui.setup.ts and
+        # playwright.owui.config.ts's hasCreds gate remain in place as a
+        # defensive skip only (mirrors #266's OWUI_E2E_* skip mechanism), for
+        # a fork or any environment missing one of these values.
         env:
           SUPABASE_OAUTH_CLIENT_ID: ${{ secrets.SUPABASE_OAUTH_CLIENT_ID }}
           SUPABASE_OAUTH_CLIENT_SECRET: ${{ secrets.SUPABASE_OAUTH_CLIENT_SECRET }}

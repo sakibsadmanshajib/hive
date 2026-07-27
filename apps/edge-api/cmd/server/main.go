@@ -131,15 +131,9 @@ func main() {
 	// Create the main mux
 	mux := http.NewServeMux()
 
-	// Infrastructure routes (no unsupported middleware)
-	mux.HandleFunc("/health", handleHealth)
-
-	// Prometheus metrics endpoint — served from the custom registry (not DefaultRegistry).
-	mux.Handle("/metrics", proxy.MetricsHandler(promRegistry))
-
-	// Swagger docs (no unsupported middleware)
-	swaggerHandler := docs.SwaggerHandler(specPath)
-	mux.Handle("/docs/", swaggerHandler)
+	// Infrastructure routes (no unsupported middleware). /metrics is not among
+	// them; it is served on metricsListenAddr instead.
+	registerInfraRoutes(mux, specPath)
 
 	// Inference routes
 	routingClient := inference.NewRoutingClient(resolveControlPlaneBaseURL())
@@ -383,6 +377,9 @@ func main() {
 				if errors.Is(err, inference.ErrRouteNotFound) {
 					return "", edgerag.ErrRouteNotFound
 				}
+				if errors.Is(err, inference.ErrModelNotEntitled) {
+					return "", edgerag.ErrModelNotEntitled
+				}
 				return "", err
 			}
 			return route.LiteLLMModelName, nil
@@ -551,6 +548,23 @@ func main() {
 	// inner limit takes effect first. Chat keeps its own 4 MiB internal limit.
 	// MaxBytesHandler only bounds the inbound request body, so SSE streaming
 	// responses are unaffected.
+	// Telemetry listener. Prometheus scrapes this port over the container
+	// network; it is deliberately not published to the host and not routed
+	// through the public ingress.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", proxy.MetricsHandler(promRegistry))
+	go func() {
+		metricsSrv := &http.Server{
+			Addr:              metricsListenAddr,
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+		log.Printf("edge-api metrics listening on %s", metricsListenAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil {
+			log.Fatalf("metrics server failed: %v", err)
+		}
+	}()
+
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: http.MaxBytesHandler(handler, globalMaxBody),
@@ -584,6 +598,23 @@ func openOptionalDBPool(ctx context.Context) *pgxpool.Pool {
 		return nil
 	}
 	return pool
+}
+
+// metricsListenAddr is the address of the telemetry-only listener that serves
+// /metrics. It is separate from the public listener because the public port is
+// the one published to the host and routed through the ingress tunnel, so
+// anything mounted on it is internet-reachable. The edge-api series include
+// hive_upstream_requests_total{provider=...}, which names upstream providers
+// and must never reach a customer, plus the full endpoint inventory and traffic
+// volumes. Prometheus reaches this port over the container network only.
+const metricsListenAddr = ":9102"
+
+// registerInfraRoutes registers the unauthenticated infrastructure endpoints on
+// the public mux. /metrics is deliberately not registered here; see
+// metricsListenAddr.
+func registerInfraRoutes(mux *http.ServeMux, specPath string) {
+	mux.HandleFunc("/health", handleHealth)
+	mux.Handle("/docs/", docs.SwaggerHandler(specPath))
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -702,7 +733,31 @@ func voiceGateForAPIKeys(gate func(http.Handler) http.Handler) func(http.Handler
 
 func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Valid API key required to list models, even if not binding to a specific alias.
+		// JWT-session caller: the JWT middleware already authenticated the
+		// request and resolved the tenant, so serve the tenant-filtered list.
+		// It is built from the same visibility predicate the admin toggle
+		// writes, which keeps the listed models and the invokable models equal.
+		if tenantID := auth.TenantID(r.Context()); tenantID != uuid.Nil {
+			snapshot, err := client.FetchSnapshotForTenant(r.Context(), tenantID)
+			if err != nil {
+				writeCatalogUnavailable(w)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"object": "list",
+				"data":   snapshot.Models,
+			})
+			return
+		}
+
+		// API-key caller: valid API key required to list models, even if not
+		// binding to a specific alias. These principals are account-scoped, not
+		// tenant-scoped, so there is no tenant to filter on and the key policy
+		// allowlist governs what they may actually invoke. The OWUI shim key
+		// lands here too: a GET carries no JSON body, so the shim request never
+		// gets unwrapped to a per-user JWT and arrives with no tenant identity.
+		// Tenant-filtering that surface needs the shim to carry a tenant, which
+		// is the shim-auth work tracked separately.
 		if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
 			return
 		}
@@ -902,7 +957,7 @@ func jwtAuditLogger() auth.AuditFailFunc {
 }
 
 // authSelectorMiddleware routes only Hive-versioned `/v1/*` traffic through
-// the auth Selector. Infrastructure endpoints (/health, /metrics, /docs/,
+// the auth Selector. Infrastructure endpoints (/health, /docs/,
 // /catalog/models) bypass authentication so probes and the Swagger UI keep
 // working. Within /v1, an OWUI body-metadata unwrap runs first so requests
 // arriving from Open WebUI (which sets the static shim key in Authorization

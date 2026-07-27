@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -63,5 +64,46 @@ func TestAccountingAdapterCreateReservationUsesStrictPolicy(t *testing.T) {
 	}
 	if got.EstimatedCredits != 1000 {
 		t.Fatalf("CreateReservation() estimated_credits = %d, want %d", got.EstimatedCredits, 1000)
+	}
+}
+
+// Control-plane answers 409 (accounting.PolicyError) when the credit policy
+// refuses a hold, and 5xx or a timeout when it simply cannot answer. Only the
+// former may surface as insufficient credits.
+func TestAccountingAdapterClassifiesReservationFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		status    int
+		wantQuota bool
+	}{
+		{name: "policy refusal", status: http.StatusConflict, wantQuota: true},
+		{name: "control plane error", status: http.StatusInternalServerError, wantQuota: false},
+		{name: "internal auth rejected", status: http.StatusUnauthorized, wantQuota: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(`{"error":"reservation exceeds available credits"}`))
+			}))
+			defer server.Close()
+
+			adapter := NewAccountingAdapter(inference.NewAccountingClient(server.URL))
+			_, err := adapter.CreateReservation(context.Background(), ReservationInput{
+				AccountID:        "account-1",
+				APIKeyID:         "11111111-1111-1111-1111-111111111111",
+				RequestID:        "req-1",
+				Endpoint:         "/v1/audio/speech",
+				ModelAlias:       "hive-tts",
+				EstimatedCredits: 1000,
+			})
+			if err == nil {
+				t.Fatal("CreateReservation() error = nil, want failure")
+			}
+			if got := errors.Is(err, ErrInsufficientCredits); got != tc.wantQuota {
+				t.Fatalf("errors.Is(err, ErrInsufficientCredits) = %v, want %v (err = %v)", got, tc.wantQuota, err)
+			}
+		})
 	}
 }

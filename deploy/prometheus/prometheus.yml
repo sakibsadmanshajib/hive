@@ -4,6 +4,11 @@ global:
 
 rule_files:
   - "/etc/prometheus/alerts.yml"
+  # deploy/prometheus/alerts/*.yml (e.g. rate-limit.yml, added in #133) ship in
+  # the repo but were never mounted into the Prometheus container, so those
+  # rule groups silently never loaded in any profile (local/cloud/enterprise
+  # all share this file). Glob picks up the whole directory automatically.
+  - "/etc/prometheus/alerts/*.yml"
 
 alerting:
   alertmanagers:
@@ -11,14 +16,19 @@ alerting:
         - targets: ['alertmanager:9093']
 
 scrape_configs:
+  # Both services serve /metrics on a telemetry-only port, not on their public
+  # port (8081 / 8080). The public ports are published to the host and routed
+  # through the ingress tunnel, and the series carry provider names, payment
+  # rail counts, and the internal endpoint inventory. These ports are reachable
+  # over the container network only, which is where Prometheus runs.
   - job_name: 'control-plane'
     static_configs:
-      - targets: ['control-plane:8081']
+      - targets: ['control-plane:9101']
     metrics_path: /metrics
     scrape_interval: 10s
 
   - job_name: 'edge-api'
     static_configs:
-      - targets: ['edge-api:8080']
+      - targets: ['edge-api:9102']
     metrics_path: /metrics
     scrape_interval: 10s

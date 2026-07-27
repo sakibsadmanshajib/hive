@@ -9,17 +9,7 @@ import type {
 } from "@/lib/control-plane/client";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
-
-// REGULATORY: never display USD equivalents, FX rates, or any conversion
-// language to BD accounts. The total is rendered in the rail's local
-// currency only.
-export function formatPrice(amountCents: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-  }).format(amountCents / 100);
-}
+import { formatCurrency } from "@/lib/format/money";
 
 interface CheckoutModalProps {
   accountCountryCode: string;
@@ -324,10 +314,10 @@ export function CheckoutModal({
                   </span>
                 ) : (
                   <span
-                    className="font-display text-lg tabular-nums text-[var(--color-ink)]"
+                    className="metric text-lg text-[var(--color-ink)]"
                     data-numeric
                   >
-                    {formatPrice(computeAmountMinor(), options.currency)}
+                    {formatCurrency(computeAmountMinor(), options.currency)}
                   </span>
                 )}
               </div>

@@ -144,6 +144,9 @@ func main() {
 		ProxySocketPath:  proxySocketPath,
 		ControlSocketDir: ctlDir,
 		MCPConfigPath:    mcpConfigPath,
+		MemoryLimit:      envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
+		CPULimit:         envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
+		PidsLimit:        envInt("HIVE_SANDBOX_PIDS_LIMIT", 512),
 	}
 
 	argv, err := sandbox.BuildArgv(cfg)

@@ -24,6 +24,9 @@ func validConfig() sandbox.LaunchConfig {
 		HostPort:         38080,
 		ProxySocketPath:  "/srv/hive/run/t1/egress.sock",
 		ControlSocketDir: "/srv/hive/run/t1/control",
+		MemoryLimit:      "4G",
+		CPULimit:         "2",
+		PidsLimit:        512,
 	}
 }
 
@@ -49,6 +52,27 @@ func TestBuildArgv_AlwaysIsolatesNetwork(t *testing.T) {
 	joined := strings.Join(argv, " ")
 	if !strings.Contains(joined, "--net --network none") {
 		t.Fatalf("expected --net --network none present as an adjacent pair, got argv: %v", argv)
+	}
+}
+
+// Issue #308's other half: concurrency counting alone does not stop one
+// session's build plus headless Chromium from exhausting the host's RAM and
+// starving every other tenant on the box. These are Apptainer's own cgroup
+// flags, usable rootless on a cgroups v2 host with systemd delegation
+// (https://apptainer.org/docs/user/main/cgroups.html).
+func TestBuildArgv_AppliesResourceLimits(t *testing.T) {
+	argv, err := sandbox.BuildArgv(validConfig())
+	if err != nil {
+		t.Fatalf("BuildArgv: %v", err)
+	}
+	for _, want := range [][2]string{
+		{"--memory", "4G"},
+		{"--cpus", "2"},
+		{"--pids-limit", "512"},
+	} {
+		if !strings.Contains(strings.Join(argv, " "), want[0]+" "+want[1]) {
+			t.Fatalf("expected %s %s present as an adjacent pair, got argv: %v", want[0], want[1], argv)
+		}
 	}
 }
 
@@ -169,6 +193,9 @@ func TestBuildArgv_RejectsInvalidConfig(t *testing.T) {
 		{"empty pack working dir", func(c *sandbox.LaunchConfig) { c.Pack.WorkingDir = "" }, sandbox.ErrMissingWorkingDir},
 		{"zero host port", func(c *sandbox.LaunchConfig) { c.HostPort = 0 }, sandbox.ErrInvalidHostPort},
 		{"negative host port", func(c *sandbox.LaunchConfig) { c.HostPort = -1 }, sandbox.ErrInvalidHostPort},
+		{"empty memory limit", func(c *sandbox.LaunchConfig) { c.MemoryLimit = "" }, sandbox.ErrMissingResourceLimit},
+		{"empty cpu limit", func(c *sandbox.LaunchConfig) { c.CPULimit = "" }, sandbox.ErrMissingResourceLimit},
+		{"zero pids limit", func(c *sandbox.LaunchConfig) { c.PidsLimit = 0 }, sandbox.ErrMissingResourceLimit},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

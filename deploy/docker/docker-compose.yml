@@ -121,6 +121,13 @@ services:
       HIVE_AGENT_SIF_PATH: ${HIVE_AGENT_SIF_PATH:-}
       HIVE_QUOTA_TENANT_CONCURRENCY: ${HIVE_QUOTA_TENANT_CONCURRENCY:-4}
       HIVE_QUOTA_USER_CONCURRENCY: ${HIVE_QUOTA_USER_CONCURRENCY:-2}
+      # Per-session cgroup ceilings (issue #308). Enforced by Apptainer's own
+      # --memory/--cpus/--pids-limit; rootless enforcement needs a cgroups v2
+      # host with systemd delegation, and Apptainer fails the launch loudly
+      # without it rather than running the session unbounded.
+      HIVE_SANDBOX_MEMORY_LIMIT: ${HIVE_SANDBOX_MEMORY_LIMIT:-4G}
+      HIVE_SANDBOX_CPU_LIMIT: ${HIVE_SANDBOX_CPU_LIMIT:-2}
+      HIVE_SANDBOX_PIDS_LIMIT: ${HIVE_SANDBOX_PIDS_LIMIT:-512}
     depends_on:
       control-plane:
         condition: service_healthy
@@ -310,6 +317,25 @@ services:
       LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
       LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
+      # Agent task execution (issue #305). See .env.example for the full
+      # explanation: buildAgentEngine (cmd/server/main.go) needs all five of
+      # these non-empty to launch real Apptainer sandboxes; any empty and
+      # tasks stay queued forever by design (agenttask.NotConfiguredEngine).
+      # These were previously documented in .env.example but never forwarded
+      # into this container's environment, so setting them in .env alone did
+      # nothing. Forwarding them here is necessary but not sufficient: this
+      # service still runs inside a golang:1.24-alpine dev container, which
+      # cannot exec the host's Apptainer directly (glibc-linked binary, no
+      # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
+      # privilege on the service holding Stripe/Supabase/payment secrets).
+      # Real sandbox launches require control-plane to run as a bare host
+      # process on whatever box executes agent tasks, not this container.
+      HIVE_AGENT_ENGINE_SIF_PATH: ${HIVE_AGENT_ENGINE_SIF_PATH:-}
+      HIVE_AGENT_ENGINE_PACKS_DIR: ${HIVE_AGENT_ENGINE_PACKS_DIR:-}
+      HIVE_AGENT_ENGINE_WORKSPACE_ROOT: ${HIVE_AGENT_ENGINE_WORKSPACE_ROOT:-}
+      HIVE_AGENT_ENGINE_RUN_DIR: ${HIVE_AGENT_ENGINE_RUN_DIR:-}
+      HIVE_AGENT_ENGINE_PROFILE_ID: ${HIVE_AGENT_ENGINE_PROFILE_ID:-}
+      HIVE_AGENT_ENGINE_SESSION_API_KEY: ${HIVE_AGENT_ENGINE_SESSION_API_KEY:-}
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
       interval: 5s
@@ -394,7 +420,13 @@ services:
       args:
         NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
         NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
-        NEXT_PUBLIC_EDGE_API_BASE_URL: ${NEXT_PUBLIC_EDGE_API_BASE_URL:-http://localhost:8080}
+        # Deliberately empty, and deliberately not inheriting the deployment's
+        # NEXT_PUBLIC_EDGE_API_BASE_URL: the task console fetches from the
+        # browser, edge-api serves no CORS headers, and this app is always
+        # served by the same Caddy listener that proxies /v1/agent/* to
+        # edge-api (deploy/docker/Caddyfile.owui). An empty base makes those
+        # fetches relative, so they stay same-origin and need no CORS.
+        NEXT_PUBLIC_EDGE_API_BASE_URL: ""
     profiles:
       - chat
       - enterprise
@@ -403,6 +435,61 @@ services:
         condition: service_healthy
     environment:
       EDGE_API_INTERNAL_BASE_URL: http://edge-api:8080
+
+  # Self-hosted production web-console (migration off Cloudflare Workers --
+  # Workers was chosen originally only because Cloudflare Pages Functions
+  # silently dropped Set-Cookie under Workerd, breaking Supabase SSR session
+  # cookies; that bug is specific to Pages Functions and does not apply to a
+  # plain `next start` Node server). Distinct from the `web-console` service
+  # above, which stays `next dev` for laptop dev and is unaffected by this.
+  # Reached only through caddy-console's own origin (Caddyfile.console), same
+  # posture as agent-console/caddy-owui and caddy-artifacts -- no direct host
+  # port here.
+  web-console-prod:
+    image: hive-web-console-prod:ci
+    build:
+      context: ../../
+      dockerfile: deploy/docker/Dockerfile.web-console.prod
+      # NEXT_PUBLIC_* are baked into the client bundle by `next build`, so
+      # they must travel as build args, not runtime `environment:` (see
+      # Dockerfile.web-console.prod).
+      args:
+        NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_APP_URL: ${CONSOLE_APP_URL:-https://console-hive.scubed.co}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${NEXT_PUBLIC_TURNSTILE_SITE_KEY:-}
+    profiles:
+      - chat
+      - enterprise
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      CONTROL_PLANE_BASE_URL: http://control-plane:8081
+    restart: unless-stopped
+
+  # Own Caddy origin for web-console-prod, isolated from caddy-owui and
+  # caddy-artifacts -- same isolation rationale as caddy-artifacts: a served
+  # page's cookies must never be reachable from a different app's origin.
+  # Same image/volume pattern as caddy-owui/caddy-artifacts; own named
+  # volumes so cert/config state never mixes between origins.
+  caddy-console:
+    image: caddy:2-alpine@sha256:86deaf5e3d3408a6ccec08fbb79989783dd26e206ae10bcf78a801dc8c9ab794
+    profiles:
+      - chat
+      - enterprise
+    ports:
+      - "3005:80"
+    environment:
+      CONSOLE_DOMAIN: ${CONSOLE_DOMAIN:-console.localhost}
+      CONSOLE_EXTERNAL_SCHEME: ${CONSOLE_EXTERNAL_SCHEME:-http}
+    depends_on:
+      - web-console-prod
+    volumes:
+      - ./Caddyfile.console:/etc/caddy/Caddyfile:ro
+      - caddy-console-data:/data
+      - caddy-console-config:/config
+    restart: unless-stopped
 
   # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge and cloud chat users.
   # Profiles:
@@ -441,12 +528,37 @@ services:
       # Supabase 302s straight back with error=invalid_request.
       OAUTH_CODE_CHALLENGE_METHOD: "S256"
       ENABLE_OAUTH_ROLE_MANAGEMENT: "true"
-      OAUTH_ROLES_CLAIM: "role"
+      # #457: this claim path never actually resolves anything. Confirmed
+      # live (DEBUG logs, both the shared-runner nightly and the physical
+      # demo box): Supabase's OAuth Authorization Server issues a minimal
+      # third-party OIDC id_token for external relying parties like Open
+      # WebUI -- standard OIDC claims only, no custom owui_role claim (that
+      # only reaches GoTrue's own first-party session tokens, not this
+      # OAuth-provider token path) and no user_metadata either (tried and
+      # also confirmed empty). So every OAuth login after Open WebUI's own
+      # unconditional first-user-becomes-admin bypass silently fell through
+      # to DEFAULT_USER_ROLE -- PR #451's claim fix only ever appeared to
+      # work because of that first-user bypass, never because the claim
+      # itself resolved. Left wired to the original claim name in case a
+      # future Supabase change ever starts including it; the real fix is
+      # Dockerfile.open-webui's tenant-role-from-Postgres patch, which
+      # looks the role up directly instead of depending on this claim.
+      OAUTH_ROLES_CLAIM: "owui_role"
       OAUTH_ALLOWED_ROLES: "ADMIN,MEMBER,VIEWER"
       OAUTH_ADMIN_ROLES: "ADMIN"
       ENABLE_OAUTH_GROUP_MANAGEMENT: "true"
       OAUTH_GROUPS_CLAIM: "tenants"
-      DEFAULT_USER_ROLE: "MEMBER"
+      # Valid Open WebUI role enum is pending/user/admin (lowercase) --
+      # "MEMBER" was never one of them (open_webui.utils.auth's
+      # get_verified_user gate blocks every role that isn't literally
+      # "user" or "admin", so an invalid value like "MEMBER" behaved
+      # identically to "pending": permanently stuck on Account Activation
+      # Pending). This is now only a fallback for a user with zero active
+      # tenant membership (the trigger above never fires for them), so
+      # "pending" -- Open WebUI's own upstream default -- is correct: an
+      # unaffiliated login should land on the pending-activation screen,
+      # not be silently granted app access.
+      DEFAULT_USER_ROLE: "pending"
       ENABLE_ADMIN_PANEL: "false"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
@@ -478,14 +590,27 @@ services:
       # OWUI_SHIM_KEY MUST be set when the open-webui profile is active. The
       # edge-api OWUI unwrap middleware only fires when this value matches
       # exactly; an empty/unset value disables the middleware and OWUI
-      # traffic will 401. Generate: openssl rand -base64 32
+      # traffic will 401. It must also be a real registered Hive API key
+      # ("hk_" prefix, row in api_keys) on its own dedicated billing account,
+      # not an arbitrary `openssl rand` string. The unwrap middleware only
+      # rewrites requests carrying a body, so OWUI's bodyless GET /v1/models
+      # probe reaches auth.Selector, which routes any non-"hk_" bearer to the
+      # JWT handler and 401s there. The model dropdown stays empty while chat
+      # completions still work. Mint one with scripts/seed-owui-e2e-user.py.
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
       RAG_EMBEDDING_ENGINE: "openai"
       RAG_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       RAG_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
-      RAG_EMBEDDING_MODEL: "text-embedding-3-small"
+      # OWUI's own document RAG embeds through the Hive gateway, so this must
+      # name a Hive catalog alias (public.model_aliases), not an OpenAI model
+      # id. "text-embedding-3-small" is not in the catalog and every document
+      # upload failed alias resolution. OWUI's own embedding calls carry no
+      # request body metadata, so they cannot be unwrapped to a per-user JWT:
+      # OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for this path to
+      # authenticate at all (see scripts/seed-owui-e2e-user.py).
+      RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
       VECTOR_DB: "pgvector"
       PGVECTOR_DB_URL: ${SUPABASE_DB_URL:-}
       RAG_TOP_K: "5"
@@ -504,11 +629,17 @@ services:
       # Docker can refuse individual file-level binds onto a path that
       # doesn't exist yet inside an empty named volume; one directory bind
       # creates /data/static itself, sidestepping that.
-      # Reused apps/desktop app icon as source; not per-size-optimized
-      # (favicon-96x96/apple-touch-icon are the closest available Tauri
-      # size, not exact). No dark-mode splash variant -- same PNG for both.
-      # Known gap: FONTS_DIR/custom.css/loader.js under STATIC_DIR are still
-      # unseeded (pre-existing, not introduced by this change).
+      # PNG/ICO assets render the same mark as favicon.svg (cream badge,
+      # forest-green outline + inner cell); sizes are not per-purpose
+      # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
+      # size, not the ideal one for each use). No dark-mode splash variant --
+      # same asset for both. custom.css and loader.js are the only supported
+      # hooks for changing a pinned, unforked Open WebUI image, and both now
+      # carry real overrides: the agent-workspace launcher in OWUI's header
+      # band, and a replacement for the emoji glyph upstream uses to anchor its
+      # Workspace empty states. Dockerfile.open-webui asserts the markup
+      # contract the second override depends on. Known gap: FONTS_DIR under
+      # STATIC_DIR is still unseeded.
       - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
@@ -683,6 +814,7 @@ services:
     volumes:
       - ../../deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ../../deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ../../deploy/prometheus/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -732,6 +864,8 @@ volumes:
   caddy-config:
   caddy-artifacts-data:
   caddy-artifacts-config:
+  caddy-console-data:
+  caddy-console-config:
   # ollama-models persists pulled model weights across container recreates.
   # Active only when the `enterprise` profile is used.
   ollama-models:

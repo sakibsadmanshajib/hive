@@ -2,20 +2,25 @@ import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { cookies } from "next/headers";
 
-const ALLOWED_NEXT_TARGETS = new Set([
-  "/console",
-  "/console/settings/profile",
-  "/auth/reset-password",
-]);
+import { resolveNextTarget } from "@/lib/auth/next-target";
+import { resolveCanonicalOrigin } from "@/lib/http/origin";
 
 export async function GET(request: NextRequest) {
-  const { searchParams, origin } = new URL(request.url);
+  // Query params come from the request line and are safe to read here, but the
+  // origin must not: Next.js builds request.url from the server's own
+  // `--hostname 0.0.0.0` bind address, so resolving a redirect against it
+  // emitted `https://0.0.0.0:3000/console`. See lib/http/origin.ts.
+  const { searchParams } = request.nextUrl;
+  const origin = resolveCanonicalOrigin(request);
   const code = searchParams.get("code");
-  const next = searchParams.get("next") ?? "";
+  const next = searchParams.get("next");
   const hiveVerify = searchParams.get("hive_verify") === "1";
 
-  // Only allow explicitly safe redirect targets
-  const safeNext = ALLOWED_NEXT_TARGETS.has(next) ? next : "/console";
+  // Shared allow-list with /auth/sign-in's post-login redirect (see
+  // lib/auth/next-target.ts) so an OAuth-consent signup that requires email
+  // confirmation can round-trip back to /oauth/consent same as a plain
+  // sign-in does, instead of the two redirect checks drifting out of sync.
+  const safeNext = resolveNextTarget(next);
 
   if (code) {
     const cookieStore = await cookies();

@@ -75,7 +75,7 @@ function SummaryCard({ label, value }: SummaryCardProps) {
           {label}
         </p>
         <p
-          className="font-display text-2xl tabular-nums text-[var(--color-ink)]"
+          className="metric text-2xl text-[var(--color-ink)]"
           data-numeric
         >
           {value}

@@ -1,6 +1,8 @@
 import type { ReactNode } from "react";
 import type { Metadata } from "next";
-import { Geist, Geist_Mono, Fraunces } from "next/font/google";
+import { Geist, Geist_Mono, Noto_Sans_Bengali } from "next/font/google";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale } from "next-intl/server";
 
 import "./globals.css";
 
@@ -16,17 +18,21 @@ const geistMono = Geist_Mono({
   display: "swap",
 });
 
-const fraunces = Fraunces({
-  variable: "--font-fraunces",
-  subsets: ["latin"],
+// Geist ships a latin subset only, so Bengali copy renders as tofu boxes
+// without a family that carries the script. Noto Sans Bengali is appended to
+// every font stack in globals.css rather than swapped in conditionally: CSS
+// per-glyph fallback already picks it for Bengali codepoints and leaves Latin
+// text on Geist, which keeps mixed strings ("API কী") correct in one pass.
+const notoSansBengali = Noto_Sans_Bengali({
+  variable: "--font-noto-bengali",
+  subsets: ["bengali"],
   display: "swap",
-  // `opsz` is the default axis Next bakes in when building Fraunces;
-  // listing it explicitly here emitted a `Duplicate key "axisIndex"`
-  // esbuild warning during the OpenNext production build, after which
-  // the prerendered RSC payload dropped the root <html> className
-  // entirely. Keep only the non-default `SOFT` axis.
-  axes: ["SOFT"],
 });
+
+// Fraunces (the former display serif) was dropped on 2026-07-26 along with
+// the editorial type direction it carried; see the type-direction note in
+// app/globals.css. Removing it also takes a variable webfont off the critical
+// path — the console now ships one family plus its mono companion.
 
 export const metadata: Metadata = {
   title: "Hive Console",
@@ -39,11 +45,13 @@ interface RootLayoutProps {
   children: ReactNode;
 }
 
-export default function RootLayout({ children }: RootLayoutProps) {
+export default async function RootLayout({ children }: RootLayoutProps) {
+  const locale = await getLocale();
+
   return (
     <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable}`}
+      lang={locale}
+      className={`${geistSans.variable} ${geistMono.variable} ${notoSansBengali.variable}`}
     >
       {/*
         Browser extensions (Grammarly, etc.) mutate <body> attributes
@@ -56,7 +64,7 @@ export default function RootLayout({ children }: RootLayoutProps) {
         className="min-h-screen bg-canvas text-ink antialiased"
         suppressHydrationWarning
       >
-        {children}
+        <NextIntlClientProvider>{children}</NextIntlClientProvider>
       </body>
     </html>
   );

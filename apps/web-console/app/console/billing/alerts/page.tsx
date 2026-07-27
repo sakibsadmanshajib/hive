@@ -15,6 +15,7 @@ import {
 import { SpendAlertForm } from "@/components/billing/spend-alert-form";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
+import { formatDateTime } from "@/lib/format/datetime";
 import {
   Card,
   CardContent,
@@ -26,7 +27,7 @@ import {
 function formatTimestamp(value: string | null): string {
   if (!value) return "—";
   try {
-    return new Date(value).toLocaleString("en-BD");
+    return formatDateTime(value);
   } catch {
     return value;
   }
@@ -95,7 +96,7 @@ export default async function SpendAlertsPage() {
                       key={alert.id}
                       className="border-b border-[var(--color-border)]"
                     >
-                      <td className="px-3 py-2 tabular-nums text-[var(--color-ink)]">
+                      <td className="metric px-3 py-2 text-[var(--color-ink)]">
                         {alert.threshold_pct}%
                       </td>
                       <td className="px-3 py-2 text-[var(--color-ink)]">

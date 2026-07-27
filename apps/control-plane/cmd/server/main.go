@@ -18,6 +18,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
@@ -73,6 +74,10 @@ import (
 	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 	"github.com/sakibsadmanshajib/hive/packages/storage"
 )
+
+// metricsListenAddr is the address of the telemetry-only listener that serves
+// /metrics, kept off the public listener so the Prometheus series stay internal.
+const metricsListenAddr = ":9101"
 
 // ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
 // interface (which returns only error, discarding the LedgerEntry return value).
@@ -240,8 +245,16 @@ func main() {
 		log.Println("database pool ready")
 	}
 
-	// Build auth client and middleware.
+	// Build auth client and middleware. The membership check is what makes
+	// Viewer.TenantID trustworthy: it is derived from user-writable
+	// user_metadata.selected_tenant_id, so without validation any caller could
+	// name any tenant. See auth.Client.WithMembershipCheck.
 	authClient := auth.NewClient(cfg.SupabaseURL, cfg.SupabaseAnonKey)
+	if pool != nil {
+		authClient = authClient.WithMembershipCheck(tenantMembershipCheck(pool))
+	} else {
+		log.Println("WARNING: no database pool; selected-tenant membership validation disabled, tenant-scoped routes will deny")
+	}
 	authMiddleware := auth.NewMiddleware(authClient)
 
 	// Build accounts service and handler (requires DB; skip if pool unavailable).
@@ -254,6 +267,10 @@ func main() {
 	var roleSvc *platform.RoleService
 	var authzMW authz.Middleware // Phase 18: set after roleSvc+accountsSvc are ready
 	var catalogHandler *catalog.Handler
+	// Hoisted: the visibility admin handler is built after the phase-19 block
+	// below, once it is known whether an OWUI client exists to sync to.
+	var catalogSvc *catalog.Service
+	var catalogVisibilityHandler *catalog.VisibilityHandler
 	var providersHandler *providers.Handler
 	var litellmSyncHandler http.Handler
 	var ledgerHandler *ledger.Handler
@@ -274,6 +291,7 @@ func main() {
 	var auditLogger *audit.Logger
 	var auditWAL *audit.FileWALWriter
 	var signupWebhook *signup.Webhook
+	var signupViewerHandler *signup.ViewerHandler
 	var tenantsHandler *tenants.Handler
 	// Signup abuse-prevention (issue #116). The disposable-domain blocklist is
 	// parsed once from an embedded file (no network), so it is available even
@@ -303,7 +321,7 @@ func main() {
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
 		catalogRepo := catalog.NewPgxRepository(pool)
-		catalogSvc := catalog.NewService(catalogRepo)
+		catalogSvc = catalog.NewService(catalogRepo)
 		catalogHandler = catalog.NewHandler(catalogSvc)
 
 		providersRepo := providers.NewPgxRepository(pool)
@@ -334,7 +352,10 @@ func main() {
 		log.Println("litellm sync handler ready (Phase 20 Plan 03)")
 
 		routingRepo := routing.NewPgxRepository(pool)
-		routingSvc = routing.NewService(routingRepo)
+		// catalogSvc is the per-tenant entitlement source: route selection and
+		// the catalog listing resolve visibility through the same predicate, so
+		// a tenant cannot invoke a model an admin hid from it.
+		routingSvc = routing.NewService(routingRepo, catalogSvc)
 		routingHandler = routing.NewHandler(routingSvc)
 
 		ledgerRepo := ledger.NewPgxRepository(pool)
@@ -558,7 +579,7 @@ func main() {
 				DomainLookup: signupLookupDomain(pool),
 			})
 
-			signupWebhook = signup.NewWebhook(signup.WebhookDeps{
+			signupDeps := signup.WebhookDeps{
 				Pool:        pool,
 				Resolver:    signupResolver,
 				EnsureGroup: owuiClient.EnsureGroup,
@@ -568,10 +589,52 @@ func main() {
 				// that hit Supabase directly and bypass the web-console precheck.
 				DisposableCheck: disposableBlocklist.IsDisposableEmail,
 				SharedSecret:    signupSecret,
-			})
+			}
+			signupWebhook = signup.NewWebhook(signupDeps)
+			// Second entry point into the same provisioning implementation, for
+			// the console. The Supabase Database Webhook that drives
+			// signupWebhook is dashboard state rather than repository state, so
+			// a deployment that never created it provisions nobody; this route
+			// makes provisioning reachable from code that ships with the repo.
+			// Per-user throttle on the console-driven provisioning route. Keyed
+			// on the authenticated user id, in its own Redis namespace so it
+			// cannot share a counter with the per-IP signup limiter. A nil
+			// Redis client disables it, the same way it disables the signup
+			// limiter, rather than blocking provisioning outright.
+			provisionLimiter := signupguard.NewRateLimiter(
+				signupguard.NewRedisIncrementer(redisClient),
+				signupguard.RateLimitConfig{
+					Limit:     cfg.TenantProvisionRateLimitPerWindow,
+					Window:    cfg.TenantProvisionRateLimitWindow,
+					FailOpen:  cfg.SignupRateLimitFailOpen,
+					Namespace: "provision",
+					Subject:   "user",
+				},
+			)
+			signupViewerHandler = signup.NewViewerHandler(
+				signup.NewProvisioner(signupDeps),
+				provisionLimiter.Allow,
+			)
 
 			tenantsHandler = tenants.NewHandler(tenants.Deps{Pool: pool, Audit: auditLogger})
 			log.Println("phase-19 identity wiring ready (signup webhook + tenants router)")
+		}
+
+		// Tenant model visibility admin routes. The handler type shipped with
+		// Phase 20 Plan 04 but was never constructed here, so
+		// /internal/catalog/visibility/* answered 404 and the admin control had
+		// no reachable write path at all. Route selection now enforces the same
+		// visibility rules, which makes this the surface that turns a model off
+		// for a tenant, so it has to be mounted.
+		if catalogSvc != nil {
+			// Pass a nil interface (not a typed-nil client) when OWUI is not
+			// configured, so syncOWUI's nil check actually fires.
+			var owuiSync catalog.OWUISync
+			if owuiClient != nil {
+				owuiSync = owuiClient
+			}
+			catalogVisibilityHandler = catalog.NewVisibilityHandler(catalogSvc, owuiSync)
+			log.Println("tenant model visibility admin routes registered (Phase 20 Plan 04)")
 		}
 
 		configuredSinks := configuredAuditSinks()
@@ -740,8 +803,8 @@ func main() {
 		paymentsHandler = payments.NewHandler(paymentsSvc, &accountsResolverAdapter{svc: accountsSvc})
 	}
 
-	// Build Prometheus metrics registry before the router so /metrics and
-	// instrumentation middleware are wired in together.
+	// Build Prometheus metrics registry before the router so the instrumentation
+	// middleware and the telemetry listener share one registry.
 	metricsRegistry, promRegistry := metrics.NewRegistry()
 
 	// Create the mux upfront so filestore.RegisterRoutes (which requires *http.ServeMux)
@@ -796,14 +859,16 @@ func main() {
 	}
 
 	// Issue #308 — egress policy single source of truth. Admin CRUD is
-	// owner-gated via roleSvc.IsWorkspaceOwner (constructed above, in scope
-	// whenever pool != nil). Neither the server-side OpenHands allowed_hosts
+	// owner-gated via tenantRoleSvc.IsTenantOwner: egress_policies is keyed by
+	// tenant_id, so authority comes from public.tenant_users, not from the
+	// account-scoped roleSvc. Neither the server-side OpenHands allowed_hosts
 	// consumer nor the desktop firewall rule generator is wired here.
 	var egressPolicyHandler *egress.Handler
 	var egressSvc *egress.Service
-	if pool != nil && roleSvc != nil {
+	if pool != nil {
 		egressRepo := egress.NewPgxRepository(pool)
-		egressSvc = egress.NewService(egressRepo, roleSvc)
+		tenantRoleSvc := platform.NewTenantRoleService(platform.NewPgxTenantRoleStore(pool))
+		egressSvc = egress.NewService(egressRepo, tenantRoleSvc)
 		egressPolicyHandler = egress.NewHandler(egressSvc)
 	}
 
@@ -850,30 +915,30 @@ func main() {
 	}
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
-		AuthMiddleware:          authMiddleware,
-		AccountsHandler:         accountsHandler,
-		IdentityHandler:         identityHandler,
-		AccountingHandler:       accountingHandler,
-		APIKeysHandler:          apikeysHandler,
-		BudgetsHandler:          budgetsHandler,
-		CatalogHandler:          catalogHandler,
-		LedgerHandler:           ledgerHandler,
-		PaymentsHandler:         paymentsHandler,
-		ProfilesHandler:         profilesHandler,
-		ProvidersRouter:         providersHandler,
-		LiteLLMSyncHandler:      litellmSyncHandler,
-		FeatureGateHandler:      featureGateHandler,
-		FeatureGateAdminHandler: featureGateAdminHandler,
-		EgressPolicyHandler:     egressPolicyHandler,
-		MarketplaceHandler:      marketplaceHandler,
-		AgentTaskHandler:        agentTaskHandler,
-		RoutingHandler:          routingHandler,
-		UsageHandler:            usageHandler,
-		MetricsRegistry:         metricsRegistry,
-		PrometheusRegistry:      promRegistry,
-		Mux:                     routerMux,
-		InternalToken:           cfg.InternalToken,
-		RoleSvc:                 roleSvc,
+		AuthMiddleware:           authMiddleware,
+		AccountsHandler:          accountsHandler,
+		IdentityHandler:          identityHandler,
+		AccountingHandler:        accountingHandler,
+		APIKeysHandler:           apikeysHandler,
+		BudgetsHandler:           budgetsHandler,
+		CatalogHandler:           catalogHandler,
+		CatalogVisibilityHandler: catalogVisibilityHandler,
+		LedgerHandler:            ledgerHandler,
+		PaymentsHandler:          paymentsHandler,
+		ProfilesHandler:          profilesHandler,
+		ProvidersRouter:          providersHandler,
+		LiteLLMSyncHandler:       litellmSyncHandler,
+		FeatureGateHandler:       featureGateHandler,
+		FeatureGateAdminHandler:  featureGateAdminHandler,
+		EgressPolicyHandler:      egressPolicyHandler,
+		MarketplaceHandler:       marketplaceHandler,
+		AgentTaskHandler:         agentTaskHandler,
+		RoutingHandler:           routingHandler,
+		UsageHandler:             usageHandler,
+		MetricsRegistry:          metricsRegistry,
+		Mux:                      routerMux,
+		InternalToken:            cfg.InternalToken,
+		RoleSvc:                  roleSvc,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
@@ -1121,6 +1186,17 @@ func main() {
 		log.Println("signup webhook route registered (Phase 19)")
 	}
 
+	// Authenticated tenant-membership reconcile. The console calls this on the
+	// first request from a user whose token carries no tenant claim, which is
+	// the one thing such a token is meant to be able to do. The exact path
+	// beats the authenticated /api/v1/ catch-all by ServeMux longest-prefix
+	// match, same as the signup precheck below.
+	if signupViewerHandler != nil && authMiddleware != nil {
+		routerMux.Handle("/api/v1/viewer/tenant-provision",
+			authMiddleware.Require(signupViewerHandler))
+		log.Println("viewer tenant-provision route registered")
+	}
+
 	// Signup abuse-prevention precheck (issue #116). Public (no auth bearer —
 	// the caller is not yet a Hive account); the web-console signup page calls
 	// this before invoking Supabase signUp. The exact path beats the
@@ -1139,6 +1215,26 @@ func main() {
 	// can wire it without rebuilding the import graph.
 	_ = owuiClient
 	_ = auditLogger
+
+	// Telemetry listener. The Prometheus series carry provider names
+	// (hive_upstream_requests_total{provider=...}), payment-rail event counts,
+	// ledger posting counts, and the full /internal/* endpoint inventory, so
+	// /metrics is kept off the public listener: cfg.Port is published to the
+	// host and routed through the ingress tunnel, this port is neither.
+	// Prometheus scrapes it over the container network.
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.HandlerFor(promRegistry, promhttp.HandlerOpts{}))
+	metricsSrv := &http.Server{
+		Addr:              metricsListenAddr,
+		Handler:           metricsMux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		log.Printf("control-plane metrics listening on %s", metricsListenAddr)
+		if err := metricsSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("metrics ListenAndServe: %v", err)
+		}
+	}()
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
@@ -1169,6 +1265,9 @@ func main() {
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
+	if err := metricsSrv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("metrics server shutdown error: %v", err)
+	}
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Fatalf("server shutdown error: %v", err)
 	}
@@ -1213,6 +1312,31 @@ func signupGuardAudit(logger *audit.Logger) signupguard.AuditFunc {
 			Actor:    audit.Actor{Type: audit.ActorSystem},
 			Before:   detail,
 		})
+	}
+}
+
+// tenantMembershipCheck reports whether a user holds a membership the token
+// hook would also accept. The predicate is deliberately identical to the one in
+// public.custom_access_token_hook and in signup.Provisioner.activeMembership:
+// ACTIVE status on a tenant whose archived_at is null. Keep all three in step.
+func tenantMembershipCheck(pool *pgxpool.Pool) auth.MembershipCheckFunc {
+	return func(ctx context.Context, userID, tenantID uuid.UUID) (bool, error) {
+		var exists bool
+		err := pool.QueryRow(ctx, `
+			SELECT EXISTS (
+				SELECT 1
+				  FROM public.tenant_users tu
+				  JOIN public.tenants t ON t.id = tu.tenant_id
+				 WHERE tu.user_id     = $1
+				   AND tu.tenant_id   = $2
+				   AND tu.status      = 'ACTIVE'
+				   AND t.archived_at IS NULL
+			)
+		`, userID, tenantID).Scan(&exists)
+		if err != nil {
+			return false, fmt.Errorf("auth tenant membership check: %w", err)
+		}
+		return exists, nil
 	}
 }
 
@@ -1446,6 +1570,14 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 		},
 		AgentProfileID: profileID,
 		SessionAPIKey:  os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
+		// Issue #308 noisy-neighbour controls: how many sessions a tenant or
+		// user may run at once, and what each one may consume. Zero values
+		// fall back to engineapi's own defaults.
+		QuotaTenantConcurrency: parseIntEnv("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
+		QuotaUserConcurrency:   parseIntEnv("HIVE_QUOTA_USER_CONCURRENCY", 2),
+		MemoryLimit:            envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
+		CPULimit:               envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
+		PidsLimit:              parseIntEnv("HIVE_SANDBOX_PIDS_LIMIT", 512),
 	})
 	real := agentengine.New(sandbox)
 	return real, real

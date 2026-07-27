@@ -10,7 +10,7 @@
  * 6. Forgot-password page exports a default component
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // --- mock next/server for middleware tests ---
 const mockRedirect = vi.fn((url: string) => ({ type: "redirect", url }));
@@ -23,9 +23,16 @@ vi.mock("next/server", () => ({
   },
   NextRequest: class {
     url: string;
+    // A real NextRequest always carries headers, and the callback route reads
+    // them via resolveCanonicalOrigin (lib/http/origin.ts) to build its
+    // redirect origin. Without this the stand-in diverges from reality and the
+    // route throws. Origin resolution itself is asserted in
+    // __tests__/redirect-origin.test.ts against the real next/server.
+    headers: Headers;
     nextUrl: { pathname: string; searchParams: URLSearchParams };
-    constructor(url: string) {
+    constructor(url: string, init?: { headers?: Record<string, string> }) {
       this.url = url;
+      this.headers = new Headers(init?.headers ?? {});
       const parsed = new URL(url);
       this.nextUrl = {
         pathname: parsed.pathname,
@@ -64,11 +71,33 @@ vi.mock("next/navigation", () => ({
   redirect: vi.fn(),
 }));
 
+// Snapshot every variable these tests mutate, so the suite cannot leak fake
+// configuration into another suite sharing the same worker.
+const MUTATED_ENV_KEYS = [
+  "NEXT_PUBLIC_SUPABASE_URL",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_APP_URL",
+  "CONTROL_PLANE_BASE_URL",
+];
+const ORIGINAL_ENV = new Map<string, string | undefined>(
+  MUTATED_ENV_KEYS.map((key) => [key, process.env[key]]),
+);
+
 beforeEach(() => {
   vi.clearAllMocks();
   process.env.NEXT_PUBLIC_SUPABASE_URL = "https://test.supabase.co";
   process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = "anon-key-test";
   process.env.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
+});
+
+afterEach(() => {
+  for (const [key, value] of ORIGINAL_ENV) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
 });
 
 describe("middleware.ts", () => {
@@ -147,6 +176,27 @@ describe("app/auth/callback/route.ts", () => {
 
     expect(mockRedirect).toHaveBeenCalledWith(
       expect.objectContaining({ href: expect.stringContaining("/console/settings/profile") })
+    );
+  });
+
+  it("allows /oauth/consent (with authorization_id) as a valid next target -- an OAuth-consent signup that needed email confirmation must round-trip back to consent same as sign-in does", async () => {
+    const { NextRequest } = await import("next/server");
+    mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
+
+    const mod = await import("../app/auth/callback/route");
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      `http://localhost:3000/auth/callback?code=abc&next=${encodeURIComponent(
+        "/oauth/consent?authorization_id=auth-req-123",
+      )}`
+    );
+    await mod.GET(req);
+
+    expect(mockRedirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        href: expect.stringContaining(
+          "/oauth/consent?authorization_id=auth-req-123"
+        ),
+      })
     );
   });
 

@@ -1,13 +1,14 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/browser";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRight } from "lucide-react";
 
 import { AuthShell } from "@/components/app-shell/auth-shell";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/input";
-import { resolveNextTarget } from "@/lib/auth/next-target";
+import { toUserFacingAuthMessage } from "@/lib/auth/auth-error";
+import { appendNextParam, resolveNextTarget } from "@/lib/auth/next-target";
 import { navigate } from "@/lib/navigate";
 
 export default function SignInPage() {
@@ -16,6 +17,16 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Populated post-mount (window is unavailable during SSR) so the
+  // "Create one" link can carry the same ?next= target the user arrived
+  // with -- e.g. an OAuth consent round-trip started on chat -- through to
+  // sign-up instead of stranding them on the plain console dashboard after
+  // signup (issue found in live UI/UX pass, 2026-07-26).
+  const [nextParam, setNextParam] = useState<string | null>(null);
+
+  useEffect(() => {
+    setNextParam(new URLSearchParams(window.location.search).get("next"));
+  }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -28,7 +39,7 @@ export default function SignInPage() {
     });
 
     if (error) {
-      setError(error.message);
+      setError(toUserFacingAuthMessage(error.message));
       setLoading(false);
       return;
     }
@@ -51,7 +62,7 @@ export default function SignInPage() {
         <>
           Don&rsquo;t have an account?{" "}
           <a
-            href="/auth/sign-up"
+            href={appendNextParam("/auth/sign-up", nextParam)}
             className="text-[var(--color-accent)] underline-offset-4 hover:underline"
           >
             Create one

@@ -4,9 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounting"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/accounts"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
@@ -52,10 +49,6 @@ type RouterConfig struct {
 	// When non-nil, all requests are counted and timed via InstrumentHandler middleware.
 	MetricsRegistry *metrics.Registry
 
-	// PrometheusRegistry is the custom prometheus.Registry used to serve /metrics.
-	// When non-nil, the /metrics endpoint is registered on the mux.
-	PrometheusRegistry *prometheus.Registry
-
 	// BudgetsHandler handles budget threshold CRUD and alert dismissal endpoints.
 	BudgetsHandler *budgets.Handler
 
@@ -70,12 +63,15 @@ type RouterConfig struct {
 	// X-Internal-Token header.
 	InternalToken string
 
-	// ProvidersRouter exposes an InternalMux() for CRUD over custom_providers.
-	// Mounted under /internal/providers (shared-secret) and
-	// /api/v1/admin/providers (platform admin JWT).
+	// ProvidersRouter exposes the two CRUD surfaces over custom_providers:
+	// InternalMux() is mounted under /internal/providers (shared-secret) and
+	// AdminMux() under /api/v1/admin/providers (platform admin JWT). The two
+	// are separate handlers because a ServeMux matches on the whole request
+	// path, so one mux cannot serve both prefixes.
 	// Using a narrow interface avoids an import cycle between platform/http and providers.
 	ProvidersRouter interface {
 		InternalMux() http.Handler
+		AdminMux() http.Handler
 	}
 
 	// RoleSvc is required to gate the /api/v1/admin/providers routes
@@ -125,7 +121,11 @@ type RouterConfig struct {
 
 // NewRouter returns a configured http.Handler with all platform routes registered.
 // If MetricsRegistry is set, all requests are wrapped with Prometheus instrumentation.
-// If PrometheusRegistry is set, a /metrics endpoint is registered on the mux.
+// This router deliberately serves no /metrics endpoint: the Prometheus series
+// carry provider names, payment-rail counts, and the full internal endpoint
+// inventory, and this handler is the one exposed through the public ingress.
+// The scrape endpoint lives on the separate telemetry listener started in
+// cmd/server (metricsListenAddr), which is not published or routed publicly.
 //
 // IMPORTANT: The return type is http.Handler (not *http.ServeMux) so that the
 // instrumentation wrapper can be applied transparently. Plan 01 (Wave 2) depends
@@ -138,11 +138,6 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	mux.HandleFunc("/health", handleHealth)
 
-	// Register /metrics endpoint using the custom prometheus registry (not DefaultRegistry).
-	if cfg.PrometheusRegistry != nil {
-		mux.Handle("/metrics", promhttp.HandlerFor(cfg.PrometheusRegistry, promhttp.HandlerOpts{}))
-	}
-
 	// internal wraps a service-to-service handler with the shared-secret guard.
 	internal := func(h http.Handler) http.Handler {
 		return RequireInternalToken(cfg.InternalToken, h)
@@ -150,6 +145,10 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 	if cfg.CatalogHandler != nil {
 		mux.Handle("/internal/catalog/snapshot", internal(cfg.CatalogHandler))
+		// Tenant-scoped snapshot (/internal/catalog/snapshot/tenant/{tenantID}).
+		// edge-api calls this for /v1/models so the list a tenant is shown is the
+		// same set the tenant is entitled to invoke.
+		mux.Handle("/internal/catalog/snapshot/", internal(cfg.CatalogHandler))
 		// Public catalog endpoint — optional auth: if a valid bearer token is present
 		// the Viewer (with TenantID from raw_user_meta_data.selected_tenant_id) is
 		// stored in context so tenant-specific visibility filtering applies.
@@ -274,7 +273,7 @@ func NewRouter(cfg RouterConfig) http.Handler {
 
 		if cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
 			adminProviders := cfg.AuthMiddleware.Require(
-				cfg.RoleSvc.RequirePlatformAdmin(cfg.ProvidersRouter.InternalMux()),
+				cfg.RoleSvc.RequirePlatformAdmin(cfg.ProvidersRouter.AdminMux()),
 			)
 			mux.Handle("/api/v1/admin/providers", adminProviders)
 			mux.Handle("/api/v1/admin/providers/", adminProviders)

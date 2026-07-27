@@ -135,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ matrix.module }}" = "control-plane" ]; then
-            go test -count=1 -v ./internal/agenttask/... ./internal/egress/... ./internal/rag/...
+            go test -count=1 -v ./internal/agenttask/... ./internal/egress/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/...
           else
             go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
           fi
@@ -289,6 +289,38 @@ jobs:
       - run: npm run lint:tenant-id
       - run: npm run lint:audit-write
       - run: npm run lint:desktop-local-http
+      - run: npm run lint:request-url-origin
+      - run: npm run lint:model-visibility
+
+  agent-console-unit:
+    name: Agent console (type + unit + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/agent-console
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/agent-console/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Unit tests (vitest)
+        run: npm run test:unit
+
+      - name: Build (Next.js)
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://ci-placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-placeholder-anon-key
 
   web-unit:
     name: Web console (type + unit + build)
@@ -820,12 +852,19 @@ jobs:
           E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
           E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
+          # Platform-admin fixture for console-platform-admin.spec.ts.
+          # Unset leaves that spec skipped, which is why the required
+          # coverage for a mispointed control-plane is the unit-level
+          # drift guard in tests/unit/control-plane-host.test.ts. This
+          # spec is the rendered-symptom check on top of it.
+          E2E_PLATFORM_ADMIN_EMAIL: ${{ secrets.E2E_PLATFORM_ADMIN_EMAIL }}
+          E2E_PLATFORM_ADMIN_PASSWORD: ${{ secrets.E2E_PLATFORM_ADMIN_PASSWORD }}
         # `openai-sdk.spec.ts` is covered by the `live-integration` job and
         # is deliberately skipped here. It depends on an actual LLM
         # completion round-trip through OpenRouter, which currently rate-
         # limits the free `hive-default` model tier and produces 429 flakes
         # that are unrelated to anything the UI suite exercises.
-        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts
+        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts tests/e2e/console-platform-admin.spec.ts
 
       - name: Dump compose logs on failure
         if: failure()

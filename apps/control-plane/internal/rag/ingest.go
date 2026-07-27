@@ -10,6 +10,10 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/packages/embedmodel"
 )
 
 // EmbedClient calls the local embedding service (bge-m3 via Ollama/LiteLLM).
@@ -31,8 +35,8 @@ type HTTPEmbedClient struct {
 	// chosen dim is below its native width, else 0. Not an independent operator
 	// knob (the old EMBEDDING_TRUNCATE_TO): a non-MRL model at a non-native dim
 	// is rejected at config time, so reduceTo is only set where the reduction
-	// is legitimate. It doubles as the `dimensions` value requested from the
-	// endpoint; the client-side reduce is a no-op when the endpoint honors it.
+	// is legitimate. The reduction is always applied client-side; see
+	// embedRequest for why the `dimensions` request parameter is not sent.
 	// 0 means require the native width exactly.
 	reduceTo int
 	// apiKey authenticates to the backend (LiteLLM requires it; a local
@@ -45,15 +49,19 @@ type HTTPEmbedClient struct {
 // model must be the alias returning EmbeddingDimension vectors, e.g. "bge-m3".
 // reduceTo: 0 requires the backend already return EmbeddingDimension; otherwise
 // the MRL reduction target (== EmbeddingDimension) derived from
-// embedmodel.Resolve, sent as `dimensions` and applied client-side only if the
-// endpoint ignores it.
+// embedmodel.Resolve, applied client-side to the native-width vector the
+// backend returns.
 // apiKey is sent as a Bearer token when non-empty (LiteLLM's LITELLM_MASTER_KEY);
 // leave empty for backends that require no auth.
 func NewHTTPEmbedClient(baseURL, model string, reduceTo int, apiKey string) *HTTPEmbedClient {
 	return &HTTPEmbedClient{
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		model:    model,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		baseURL: strings.TrimRight(baseURL, "/"),
+		model:   model,
+		// 60s for the same reason as edge-api's query-side embedder: LiteLLM's
+		// request_timeout is 45s and a single Qwen3 8B embedding through
+		// OpenRouter measured 35 to 40 seconds, so a 30s client budget aborted
+		// batches the upstream would have answered.
+		client:   &http.Client{Timeout: 60 * time.Second},
 		reduceTo: reduceTo,
 		apiKey:   apiKey,
 	}
@@ -83,13 +91,18 @@ func reduceEmbedding(vec []float32, target int) []float32 {
 	return out
 }
 
+// embedRequest deliberately carries no `dimensions` field. LiteLLM's generic
+// `openai/` adapter, which is how every OpenRouter embedding route is declared
+// (deploy/litellm/config.yaml), rejects `dimensions` outright for any model
+// whose name does not contain "text-embedding-3" and raises
+// UnsupportedParamsError with HTTP 400. That check ignores `drop_params`, so no
+// LiteLLM setting can make the parameter safe to send, and ingestion failed for
+// every document rather than degrading. Requesting the narrower width from the
+// endpoint bought nothing anyway: reduceEmbedding performs the identical MRL
+// truncate-and-renormalize on the native-width vector.
 type embedRequest struct {
 	Model string   `json:"model"`
 	Input []string `json:"input"`
-	// Dimensions requests a native N-wide vector from an MRL-capable endpoint
-	// (Qwen3 supports it). Omitted when 0; the reduceEmbedding fallback covers
-	// an endpoint that ignores it.
-	Dimensions int `json:"dimensions,omitempty"`
 }
 
 type embedResponse struct {
@@ -102,7 +115,7 @@ type embedResponse struct {
 // Errors are wrapped with a provider-blind message — callers must not
 // expose the raw error to customers.
 func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float32, error) {
-	body, err := json.Marshal(embedRequest{Model: c.model, Input: inputs, Dimensions: c.reduceTo})
+	body, err := json.Marshal(embedRequest{Model: c.model, Input: inputs})
 	if err != nil {
 		return nil, fmt.Errorf("rag.embed: marshal: %w", err)
 	}
@@ -153,9 +166,19 @@ func (c *HTTPEmbedClient) Embed(ctx context.Context, inputs []string) ([][]float
 	return out, nil
 }
 
+// ingestRepo is the slice of *Repo the Ingester needs. It exists so the
+// ingest tests drive the real Ingest method against a fake store; while the
+// dependency was the concrete *Repo the tests had to re-implement Ingest, and
+// a provenance bug in the real code passed a green suite.
+type ingestRepo interface {
+	UpdateDocumentStatus(ctx context.Context, tenantID, docID uuid.UUID, status, errMsg string) error
+	InsertChunks(ctx context.Context, tenantID, docID uuid.UUID, chunks []Chunk, embeddings [][]float32) error
+	SetEmbeddedProvenance(ctx context.Context, tenantID, docID uuid.UUID, model string, dim int) error
+}
+
 // Ingester chunks a document, embeds each chunk, and stores results.
 type Ingester struct {
-	repo  *Repo
+	repo  ingestRepo
 	embed EmbedClient
 	// batchSize controls how many chunks are embedded in one HTTP call.
 	// ponytail: global constant, tune if embed service has payload limits.
@@ -170,7 +193,7 @@ type Ingester struct {
 // is stamped onto every document as provenance (paired with the current
 // EmbeddingDimension) so a later model swap can find which documents still
 // need re-embedding.
-func NewIngester(repo *Repo, embed EmbedClient, batchSize int, embedModel string) *Ingester {
+func NewIngester(repo ingestRepo, embed EmbedClient, batchSize int, embedModel string) *Ingester {
 	if batchSize <= 0 {
 		batchSize = 32
 	}
@@ -210,8 +233,13 @@ func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ Stri
 	}
 	embeddings, err := embedInBatches(ctx, ing.embed, texts, ing.batchSize)
 	if err != nil {
+		// The document-facing status message stays provider-blind; the wrapped
+		// cause is for the server-side log only (the ingest HTTP boundary logs
+		// it and returns a generic body). Swallowing it here left every embed
+		// failure, from an unsupported request field to a width mismatch,
+		// indistinguishable in the logs.
 		_ = ing.repo.UpdateDocumentStatus(ctx, tid, did, StatusError, "embedding service unavailable")
-		return fmt.Errorf("rag.ingest: embed batch: embedding service unavailable")
+		return fmt.Errorf("rag.ingest: embed batch: %w", err)
 	}
 
 	if err := ing.repo.InsertChunks(ctx, tid, did, chunks, embeddings); err != nil {
@@ -219,5 +247,11 @@ func (ing *Ingester) Ingest(ctx context.Context, tenantID, docID interface{ Stri
 		return fmt.Errorf("rag.ingest: store chunks: %w", err)
 	}
 
-	return ing.repo.SetEmbeddedProvenance(ctx, tid, did, ing.embedModel, EmbeddingDimension)
+	// Canonicalize exactly as reembed.go does. EMBEDDING_MODEL is usually a
+	// LiteLLM route alias, while the re-embed worker selects and stamps the
+	// canonical registry id, so stamping the raw alias here made every fresh
+	// document look stale to the catch-up worker (needless paid re-embedding on
+	// the next boot) and made edge-api's consistency guard fail search and chat
+	// closed for a corpus that was in fact consistent.
+	return ing.repo.SetEmbeddedProvenance(ctx, tid, did, embedmodel.Canonical(ing.embedModel), EmbeddingDimension)
 }
