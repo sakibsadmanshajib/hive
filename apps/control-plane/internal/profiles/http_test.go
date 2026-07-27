@@ -465,3 +465,61 @@ func TestBillingProfile_PlatformAdminOverlayGrantsAccess(t *testing.T) {
 		t.Fatalf("expected 404 (authz passed, no profile stored) for platform admin overlay, got %d: %s", rr.Code, rr.Body.String())
 	}
 }
+
+// TestBillingProfileForbiddenReasonMatchesActualCause guards against the
+// product stating a false refusal reason. PermWorkspaceSettings denies both
+// unverified actors and verified non-owners, but the 403 body reported
+// email_verification_required for every denial, so a verified member was told
+// to verify an already-verified email. Each denial must name its real cause.
+func TestBillingProfileForbiddenReasonMatchesActualCause(t *testing.T) {
+	cases := []struct {
+		name     string
+		role     string
+		verified bool
+		wantCode string
+	}{
+		{"unverified owner is told to verify email", "owner", false, "email_verification_required"},
+		{"verified member is told the owner role is required", "member", true, "owner_role_required"},
+		{"unverified member is told to verify email first", "member", false, "email_verification_required"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubRepo()
+			accountID := uuid.New()
+			userID := uuid.New()
+
+			repo.accountsMap[accountID] = &accounts.Account{
+				ID:          accountID,
+				Slug:        "ws",
+				DisplayName: "WS",
+				AccountType: "personal",
+				OwnerUserID: userID,
+			}
+			repo.memberships = []accounts.Membership{
+				{ID: uuid.New(), AccountID: accountID, UserID: userID, Role: tc.role, Status: "active"},
+			}
+
+			handler := newHTTPHandler(repo)
+			viewer := auth.Viewer{UserID: userID, Email: "u@example.com", EmailVerified: tc.verified}
+
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/current/billing-profile", nil)
+			req = req.WithContext(viewerCtx(viewer))
+			rr := httptest.NewRecorder()
+			handler.ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusForbidden {
+				t.Fatalf("expected 403, got %d: %s", rr.Code, rr.Body.String())
+			}
+
+			var body map[string]string
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatalf("invalid response JSON: %v", err)
+			}
+			if body["code"] != tc.wantCode {
+				t.Fatalf("expected code %q, got %q (error: %q)", tc.wantCode, body["code"], body["error"])
+			}
+		})
+	}
+}

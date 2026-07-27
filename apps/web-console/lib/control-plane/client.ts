@@ -894,6 +894,26 @@ export async function getBillingProfile(): Promise<BillingProfile> {
     cache: "no-store",
   });
 
+  // Same posture as getAccountProfile above: an account with nothing stored
+  // yet is a 404, not an outage. Surface it as an empty, not-yet-set-up
+  // billing profile so the billing settings page renders its blank form
+  // instead of crashing the Server Components tree. Any other failure still
+  // throws so real outages stay visible.
+  if (response.status === 404) {
+    return {
+      billing_contact_name: "",
+      billing_contact_email: "",
+      legal_entity_name: "",
+      legal_entity_type: "",
+      business_registration_number: "",
+      vat_number: "",
+      tax_id_type: "",
+      tax_id_value: "",
+      country_code: "",
+      state_region: "",
+    };
+  }
+
   if (!response.ok) {
     throw new Error(await readResponseError(response, "Failed to fetch billing profile"));
   }
