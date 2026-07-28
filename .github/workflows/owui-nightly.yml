@@ -175,11 +175,11 @@ jobs:
           OWUI_SHIM_KEY=${OWUI_SHIM_KEY}
           EOF
           chmod 600 .env.ci
-      - name: Boot stack with test-owui + observability-langfuse profiles
+      - name: Boot stack with local profile
         run: |
           cd deploy/docker
           docker compose --env-file ../../.env.ci \
-            --profile local --profile test --profile test-owui --profile observability-langfuse \
+            --profile local \
             up -d --build
           healthy=0
           for i in $(seq 1 60); do
