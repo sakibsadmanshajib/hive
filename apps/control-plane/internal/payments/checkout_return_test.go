@@ -102,12 +102,13 @@ func TestValidateReturnBaseURLRejectsUnusableValues(t *testing.T) {
 // payment callbacks at a decommissioned host and made the breakage invisible.
 func TestResolveConsoleBaseURLHasNoHardcodedDefault(t *testing.T) {
 	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "")
+	t.Setenv("CONSOLE_APP_URL", "")
 	t.Setenv("NEXT_PUBLIC_APP_URL", "")
 
-	if got := ResolveConsoleBaseURL(); got != "" {
+	if got := ResolveConsoleBaseURL(false); got != "" {
 		t.Fatalf("expected no default origin, got %q", got)
 	}
-	if err := ValidateReturnBaseURL(ResolveConsoleBaseURL()); err == nil {
+	if err := ValidateReturnBaseURL(ResolveConsoleBaseURL(false)); err == nil {
 		t.Fatal("an unconfigured console origin must fail validation")
 	}
 	if !strings.Contains(ValidateReturnBaseURL("").Error(), "WEB_CONSOLE_PUBLIC_URL") {
@@ -117,14 +118,61 @@ func TestResolveConsoleBaseURLHasNoHardcodedDefault(t *testing.T) {
 
 func TestResolveConsoleBaseURLPrefersItsOwnVariableThenTheConsoleOrigin(t *testing.T) {
 	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "https://console.example.com/")
+	t.Setenv("CONSOLE_APP_URL", "https://deployed.example.com")
 	t.Setenv("NEXT_PUBLIC_APP_URL", "https://other.example.com")
-	if got := ResolveConsoleBaseURL(); got != "https://console.example.com" {
+	if got := ResolveConsoleBaseURL(false); got != "https://console.example.com" {
 		t.Errorf("expected the dedicated variable to win, got %q", got)
 	}
 
 	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "")
-	if got := ResolveConsoleBaseURL(); got != "https://other.example.com" {
-		t.Errorf("expected the console's own origin as fallback, got %q", got)
+	if got := ResolveConsoleBaseURL(false); got != "https://deployed.example.com" {
+		t.Errorf("expected the deployed console origin next, got %q", got)
+	}
+
+	t.Setenv("CONSOLE_APP_URL", "")
+	if got := ResolveConsoleBaseURL(false); got != "https://other.example.com" {
+		t.Errorf("expected the console's own build-time origin last, got %q", got)
+	}
+}
+
+// TestResolveConsoleBaseURLRefusesALoopbackOriginForARemotePayer is the return-leg
+// twin of the callback-leg loopback demotion. `.env.example` ships
+// NEXT_PUBLIC_APP_URL=http://localhost:3000, so without this a deployed box would
+// bake `http://localhost:3000` into a live SSLCommerz success_url and send the
+// payer to their own machine.
+func TestResolveConsoleBaseURLRefusesALoopbackOriginForARemotePayer(t *testing.T) {
+	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "")
+	t.Setenv("CONSOLE_APP_URL", "")
+	t.Setenv("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
+
+	got := ResolveConsoleBaseURL(false)
+	if got != "" {
+		t.Fatalf("a remote payer must never be returned to loopback, got %q", got)
+	}
+	if err := ValidateReturnBaseURL(got); err == nil {
+		t.Error("expected the checkout to be refused rather than silently using loopback")
+	}
+}
+
+func TestResolveConsoleBaseURLDemotesLoopbackBelowARealOrigin(t *testing.T) {
+	// The loopback placeholder is listed first here; a real origin further down
+	// the preference order must still win.
+	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "http://127.0.0.1:3000")
+	t.Setenv("CONSOLE_APP_URL", "https://console-hive.example.co")
+	t.Setenv("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
+
+	if got := ResolveConsoleBaseURL(false); got != "https://console-hive.example.co" {
+		t.Fatalf("expected the real origin to win over loopback, got %q", got)
+	}
+}
+
+func TestResolveConsoleBaseURLKeepsLoopbackForALocalPayer(t *testing.T) {
+	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "")
+	t.Setenv("CONSOLE_APP_URL", "")
+	t.Setenv("NEXT_PUBLIC_APP_URL", "http://localhost:3000")
+
+	if got := ResolveConsoleBaseURL(true); got != "http://localhost:3000" {
+		t.Fatalf("local development must keep loopback, got %q", got)
 	}
 }
 
@@ -187,9 +235,10 @@ func TestResolveCallbackBaseURLFallsBackToTheRequestHostWhenUnset(t *testing.T) 
 func TestBrowserReturnNeverDependsOnTheControlPlaneOrigin(t *testing.T) {
 	t.Setenv("CONTROL_PLANE_PUBLIC_URL", "http://localhost:8081")
 	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "https://console.example.com")
+	t.Setenv("CONSOLE_APP_URL", "")
 	t.Setenv("NEXT_PUBLIC_APP_URL", "")
 
-	got := ResolveConsoleBaseURL()
+	got := ResolveConsoleBaseURL(false)
 	if got != "https://console.example.com" {
 		t.Fatalf("expected the console origin, got %q", got)
 	}
@@ -200,7 +249,7 @@ func TestBrowserReturnNeverDependsOnTheControlPlaneOrigin(t *testing.T) {
 	// And with no console origin configured at all, the return URL is refused
 	// rather than silently borrowing the control-plane value.
 	t.Setenv("WEB_CONSOLE_PUBLIC_URL", "")
-	if err := ValidateReturnBaseURL(ResolveConsoleBaseURL()); err == nil {
+	if err := ValidateReturnBaseURL(ResolveConsoleBaseURL(false)); err == nil {
 		t.Error("expected checkout to be refused when only the control-plane origin is set")
 	}
 }

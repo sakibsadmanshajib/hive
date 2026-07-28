@@ -3,6 +3,7 @@ package payments
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -52,12 +53,20 @@ const (
 
 	// consoleBaseURLEnv names the console origin that browsers are returned to.
 	consoleBaseURLEnv = "WEB_CONSOLE_PUBLIC_URL"
-
-	// consoleBaseURLFallbackEnv is the variable the console itself already uses
-	// for its own canonical origin. Accepting it as a fallback keeps one value in
-	// one place instead of a second copy that can drift.
-	consoleBaseURLFallbackEnv = "NEXT_PUBLIC_APP_URL"
 )
+
+// consoleBaseURLEnvs is the preference order for the console origin.
+//
+// CONSOLE_APP_URL is the deployed console origin (`.env.example` sets it to the
+// real host, and compose feeds it to the console's NEXT_PUBLIC_APP_URL build
+// arg). NEXT_PUBLIC_APP_URL is last because `.env.example` ships it as
+// `http://localhost:3000` for local development, so it is the value most likely
+// to be a loopback placeholder rather than a real origin.
+var consoleBaseURLEnvs = []string{
+	consoleBaseURLEnv,
+	"CONSOLE_APP_URL",
+	"NEXT_PUBLIC_APP_URL",
+}
 
 // ReturnState is the customer-facing outcome rendered on the return page. It is
 // always derived from the stored payment intent, never from a request parameter.
@@ -123,7 +132,7 @@ var ErrReturnURLNotConfigured = errors.New("payments: console return base URL is
 func ValidateReturnBaseURL(base string) error {
 	trimmed := strings.TrimSpace(base)
 	if trimmed == "" {
-		return fmt.Errorf("%w (set %s or %s)", ErrReturnURLNotConfigured, consoleBaseURLEnv, consoleBaseURLFallbackEnv)
+		return fmt.Errorf("%w (set one of %s)", ErrReturnURLNotConfigured, strings.Join(consoleBaseURLEnvs, ", "))
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
@@ -139,21 +148,54 @@ func ValidateReturnBaseURL(base string) error {
 }
 
 // ResolveConsoleBaseURL returns the console origin browsers are returned to,
-// or the empty string when no origin is configured.
+// or the empty string when no usable origin is configured.
 //
 // There is deliberately no hardcoded default. A base URL with a plausible
 // looking built-in default is exactly how this system already produced an
-// outage: the staging overlay carried a hardcoded control-plane hostname that
-// pointed at a decommissioned machine, so every callback dialled a dead host and
-// the misconfiguration was invisible until a customer hit it. An empty value here
-// fails the checkout loudly at ValidateReturnBaseURL, naming the variable to set,
-// which is strictly better on a money path than silently redirecting a payer
-// somewhere that does not answer.
-func ResolveConsoleBaseURL() string {
-	for _, key := range []string{consoleBaseURLEnv, consoleBaseURLFallbackEnv} {
-		if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-			return strings.TrimRight(v, "/")
+// outage: compose injected a loopback CONTROL_PLANE_PUBLIC_URL, so every
+// provider callback dialled an address no provider can reach, and the
+// misconfiguration was invisible until a customer hit it. An empty value here
+// fails the checkout loudly at ValidateReturnBaseURL, naming the variables to
+// set, which is strictly better on a money path than silently redirecting a
+// payer somewhere that does not answer.
+//
+// requestIsLoopback reports whether the checkout request itself arrived on
+// loopback, which is what makes a loopback console origin legitimate. A loopback
+// candidate is otherwise demoted below any real origin and, if it is the only
+// candidate, refused outright. This is the same policy resolveCallbackBaseURL
+// applies to the webhook leg, and it exists because `.env.example` ships
+// NEXT_PUBLIC_APP_URL=http://localhost:3000: without the demotion a deployed box
+// would bake `http://localhost:3000` into a live SSLCommerz success_url and the
+// payer would be sent to their own machine. The code refuses the value rather
+// than relying on an operator remembering to override it.
+func ResolveConsoleBaseURL(requestIsLoopback bool) string {
+	var loopbackCandidate, loopbackKey string
+
+	for _, key := range consoleBaseURLEnvs {
+		v := strings.TrimRight(strings.TrimSpace(os.Getenv(key)), "/")
+		if v == "" {
+			continue
 		}
+		if !isLoopbackBaseURL(v) {
+			return v
+		}
+		if loopbackCandidate == "" {
+			loopbackCandidate, loopbackKey = v, key
+		}
+	}
+
+	// Local development: the payer's browser is on this machine, so a loopback
+	// console origin is the correct answer.
+	if requestIsLoopback {
+		return loopbackCandidate
+	}
+
+	if loopbackCandidate != "" {
+		log.Printf(
+			"payments: refusing to return a paying customer to %s=%q because it is a loopback address "+
+				"and this checkout did not arrive on loopback. Set %s to the publicly reachable console origin.",
+			loopbackKey, loopbackCandidate, consoleBaseURLEnv,
+		)
 	}
 	return ""
 }

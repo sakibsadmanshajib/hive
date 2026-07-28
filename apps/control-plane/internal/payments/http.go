@@ -188,7 +188,9 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 	}
 
 	callbackBaseURL := resolveCallbackBaseURL(r)
-	returnBaseURL := ResolveConsoleBaseURL()
+	// A loopback console origin is only legitimate when the payer's browser is on
+	// this machine, which is what the request host tells us.
+	returnBaseURL := ResolveConsoleBaseURL(isLoopbackHost(r.Host))
 
 	intent, err := h.svc.InitiateCheckout(r.Context(), accountID, req.Rail, req.Credits, callbackBaseURL, returnBaseURL, req.IdempotencyKey)
 	if err != nil {

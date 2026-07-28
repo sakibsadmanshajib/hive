@@ -150,6 +150,18 @@ func (r *Rail) ProcessEvent(_ context.Context, rawBody []byte, headers map[strin
 		eventType = "payment.failed"
 	case "checkout.session.expired":
 		eventType = "payment.expired"
+	case "payment_intent.succeeded", "payment_intent.payment_failed", "payment_intent.canceled":
+		// Loud on purpose. This rail settles on the Checkout Session, so a
+		// PaymentIntent event means the Stripe webhook endpoint is still
+		// subscribed to the old event set. Silently returning "unsupported" here
+		// would let a prepaid customer pay and never be credited, which is worse
+		// than a noisy failure.
+		return payments.RailEvent{}, fmt.Errorf(
+			"stripe: MISCONFIGURED WEBHOOK ENDPOINT: received %s, but this rail settles on Checkout Sessions. "+
+				"No payment will ever settle until the Stripe endpoint subscribes to "+
+				"checkout.session.completed, checkout.session.async_payment_succeeded, "+
+				"checkout.session.async_payment_failed and checkout.session.expired",
+			event.Type)
 	default:
 		return payments.RailEvent{}, fmt.Errorf("stripe: unsupported event type: %s", event.Type)
 	}

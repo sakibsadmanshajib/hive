@@ -3,6 +3,7 @@ package stripe_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,10 +87,19 @@ func TestStripeProcessEvent_PaymentIntentEventsAreNotASettlementPath(t *testing.
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
-			if _, err := rail.ProcessEvent(ctx, rawBody, map[string]string{
+			_, err := rail.ProcessEvent(ctx, rawBody, map[string]string{
 				"Stripe-Signature": sig,
-			}); err == nil {
+			})
+			if err == nil {
 				t.Fatalf("expected %s to be rejected, got no error", eventType)
+			}
+			// Loud, not quiet: an operator reading the log must be told the
+			// endpoint subscription is wrong, otherwise a prepaid customer pays
+			// and is never credited.
+			for _, want := range []string{"MISCONFIGURED WEBHOOK ENDPOINT", "checkout.session.completed"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("expected the error to mention %q, got: %v", want, err)
+				}
 			}
 		})
 	}
