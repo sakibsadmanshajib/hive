@@ -480,6 +480,8 @@ jobs:
         run: npm run lint:proof-tokens
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:litellm-routing
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:pgx-dsn
 
   agent-console-unit:
     name: Agent console (type + unit + build)

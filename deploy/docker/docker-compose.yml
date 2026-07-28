@@ -669,7 +669,14 @@ services:
       # (owui-patches/tenant_role_from_db.py) opens and closes its own psycopg2
       # connection per login with no session state. Unset falls back to the
       # session DSN, so local and enterprise stacks are unaffected.
-      PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL:-${SUPABASE_DB_URL:-}}
+      #
+      # The _LIBPQ flavour, never SUPABASE_DB_POOL_URL itself. `pool_max_conns`
+      # and `default_query_exec_mode` are pgx DSN parameters; libpq has no such
+      # connection options and rejects the entire DSN on an unknown one. Handing
+      # psycopg2 the pgx flavour produced
+      # `invalid dsn: invalid connection option "pool_max_conns"`, which
+      # crash-looped this container and returned 502 on chat-hive.scubed.co.
+      PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL_LIBPQ:-${SUPABASE_DB_URL:-}}
       RAG_TOP_K: "5"
       ENABLE_RAG_HYBRID_SEARCH: "true"
       DATA_DIR: "/data"
