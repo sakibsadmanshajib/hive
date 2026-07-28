@@ -4,12 +4,20 @@
 // explicit list of known-safe relative paths instead of trusting whatever
 // the caller passes, and stops the two call sites drifting out of sync.
 const ALLOWED_NEXT_EXACT = new Set<string>([
-  "/invitations/accept",
   "/console/settings/profile",
   "/auth/reset-password",
 ]);
 
-const ALLOWED_NEXT_PREFIXES = ["/oauth/consent"];
+// Paths allowed with their own query string attached. The match is either the
+// bare path or the path followed by "?", so "/oauth/consent-evil" and
+// "/invitations/accept-evil" are still rejected -- a prefix is only honoured at
+// a real path/query boundary.
+//
+// /invitations/accept needs its query preserved because the acceptance token
+// travels in it: an invitee who is not signed in is bounced to /auth/sign-in
+// with next=/invitations/accept?token=..., and dropping the query made
+// acceptance impossible for anyone without an existing account (issue #534).
+const ALLOWED_NEXT_PREFIXES = ["/oauth/consent", "/invitations/accept"];
 
 const DEFAULT_NEXT_TARGET = "/console";
 

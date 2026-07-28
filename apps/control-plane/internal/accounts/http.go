@@ -2,8 +2,10 @@ package accounts
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
@@ -42,6 +44,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetViewer(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/accounts/current/members":
 		h.handleListMembers(w, r)
+	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, memberRolePathPrefix):
+		h.handleUpdateMemberRole(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/accounts/current/invitations":
 		h.handleCreateInvitation(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/invitations/accept":
@@ -125,6 +129,7 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 
 	type memberItem struct {
 		UserID string `json:"user_id"`
+		Email  string `json:"email"`
 		Role   string `json:"role"`
 		Status string `json:"status"`
 	}
@@ -132,6 +137,7 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 	for _, m := range members {
 		items = append(items, memberItem{
 			UserID: m.UserID.String(),
+			Email:  m.Email,
 			Role:   m.Role,
 			Status: m.Status,
 		})
@@ -149,6 +155,7 @@ func (h *Handler) handleCreateInvitation(w http.ResponseWriter, r *http.Request)
 
 	var body struct {
 		Email string `json:"email"`
+		Role  string `json:"role"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Email == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "email is required"})
@@ -163,26 +170,128 @@ func (h *Handler) handleCreateInvitation(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	result, err := h.svc.CreateInvitation(r.Context(), vc.CurrentAccount.ID, viewer, body.Email)
+	result, err := h.svc.CreateInvitation(r.Context(), vc.CurrentAccount.ID, viewer, body.Email, body.Role)
 	if err != nil {
 		var gateErr *GateError
-		if AsGateError(err, &gateErr) {
+		switch {
+		case AsGateError(err, &gateErr):
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": gateErr.Message,
 				"code":  gateErr.Code,
 			})
-			return
+		case errors.Is(err, ErrInvalidRole):
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "role must be owner or member",
+				"code":  "invalid_role",
+			})
+		default:
+			slog.ErrorContext(r.Context(), "accounts: create invitation failed",
+				slog.String("err", err.Error()))
+			writeJSON(w, http.StatusInternalServerError, map[string]string{
+				"error": "could not create the invitation",
+			})
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"id":         result.ID.String(),
 		"email":      result.Email,
+		"role":       result.Role,
 		"token":      result.Token,
 		"expires_at": result.ExpiresAt,
 	})
+}
+
+// handleUpdateMemberRole implements PATCH /api/v1/accounts/current/members/{user_id}
+func (h *Handler) handleUpdateMemberRole(w http.ResponseWriter, r *http.Request) {
+	viewer, ok := auth.ViewerFromContext(r.Context())
+	if !ok {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	rawUserID := strings.Trim(strings.TrimPrefix(r.URL.Path, memberRolePathPrefix), "/")
+	targetUserID, err := uuid.Parse(rawUserID)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "a valid member id is required",
+			"code":  "invalid_user_id",
+		})
+		return
+	}
+
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "role is required",
+			"code":  "invalid_role",
+		})
+		return
+	}
+
+	vc, err := h.svc.EnsureViewerContext(r.Context(), viewer, parseAccountHeader(r))
+	if err != nil {
+		slog.ErrorContext(r.Context(), "accounts: viewer context failed",
+			slog.String("err", err.Error()))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "authorization unavailable",
+		})
+		return
+	}
+
+	err = h.svc.UpdateMemberRole(r.Context(), vc.CurrentAccount.ID, viewer, targetUserID, body.Role)
+	if err != nil {
+		writeMemberRoleError(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"user_id": targetUserID.String(),
+		"role":    body.Role,
+	})
+}
+
+// writeMemberRoleError maps a role-change failure onto a status plus a stable
+// machine code. Every branch is a truthful, provider-blind reason; internal
+// error text is logged, never returned.
+func writeMemberRoleError(w http.ResponseWriter, r *http.Request, err error) {
+	var gateErr *GateError
+	switch {
+	case AsGateError(err, &gateErr):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": gateErr.Message,
+			"code":  gateErr.Code,
+		})
+	case errors.Is(err, ErrInvalidRole):
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "role must be owner or member",
+			"code":  "invalid_role",
+		})
+	case errors.Is(err, ErrSelfRoleChange):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "you cannot change your own role",
+			"code":  "self_role_change_forbidden",
+		})
+	case errors.Is(err, ErrLastOwner):
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "the workspace must keep at least one owner",
+			"code":  "last_owner_required",
+		})
+	case errors.Is(err, ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "that member is not part of this workspace",
+			"code":  "member_not_found",
+		})
+	default:
+		slog.ErrorContext(r.Context(), "accounts: update member role failed",
+			slog.String("err", err.Error()))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not update the member role",
+		})
+	}
 }
 
 // handleAcceptInvitation implements POST /api/v1/invitations/accept
@@ -203,7 +312,7 @@ func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request)
 
 	accountID, err := h.svc.AcceptInvitation(r.Context(), viewer, body.Token)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeAcceptInvitationError(w, r, err)
 		return
 	}
 
@@ -212,7 +321,51 @@ func (h *Handler) handleAcceptInvitation(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// writeAcceptInvitationError maps an acceptance failure onto a status plus a
+// stable machine code so the console can state the real reason (and the real
+// next action) instead of always suggesting a fresh link. Internal error text
+// is logged, never returned.
+func writeAcceptInvitationError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, ErrExpired):
+		writeJSON(w, http.StatusGone, map[string]string{
+			"error": "this invitation has expired",
+			"code":  "invitation_expired",
+		})
+	case errors.Is(err, ErrAlreadyAccepted):
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "this invitation has already been accepted",
+			"code":  "invitation_already_accepted",
+		})
+	case errors.Is(err, ErrAlreadyMember):
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "you are already a member of this workspace",
+			"code":  "invitation_already_member",
+		})
+	case errors.Is(err, ErrEmailMismatch):
+		writeJSON(w, http.StatusForbidden, map[string]string{
+			"error": "this invitation was sent to a different email address",
+			"code":  "invitation_email_mismatch",
+		})
+	case errors.Is(err, ErrNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{
+			"error": "this invitation link is not valid",
+			"code":  "invitation_not_found",
+		})
+	default:
+		slog.ErrorContext(r.Context(), "accounts: accept invitation failed",
+			slog.String("err", err.Error()))
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "could not accept the invitation",
+		})
+	}
+}
+
 // --- helpers ---
+
+// memberRolePathPrefix is the route prefix for per-member role updates:
+// PATCH /api/v1/accounts/current/members/{user_id}
+const memberRolePathPrefix = "/api/v1/accounts/current/members/"
 
 func parseAccountHeader(r *http.Request) uuid.UUID {
 	val := r.Header.Get("X-Hive-Account-ID")

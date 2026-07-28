@@ -90,7 +90,15 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 
 	snapshot, err := a.client.Resolve(ctx, rawToken)
 	if err != nil {
-		// All resolution failures (not found, revoked, network error mapping) manifest as invalid key.
+		// All resolution failures (not found, revoked, control-plane/network
+		// error) manifest to the CALLER as the same generic invalid-key
+		// message, deliberately: distinguishing them client-side would let a
+		// caller enumerate which keys exist. Server-side, collapsing them the
+		// same way is a bug, not a feature -- log the real cause (err already
+		// carries the resolve-path outcome, e.g. control-plane status code
+		// for not-found/revoked vs a transport error) so an outage is
+		// diagnosable from logs instead of guesswork across reruns.
+		log.Printf("authz: key resolution failed err=%v", err)
 		code := "invalid_api_key"
 		return AuthSnapshot{}, nil, newErr(
 			"invalid_request_error",
@@ -103,6 +111,10 @@ func (a *Authorizer) Authorize(ctx context.Context, authHeader string, aliasID s
 	if !check.Allowed {
 		switch check.DenyCode {
 		case "invalid_api_key":
+			// check.DenyMsg already differentiates revoked/disabled/expired
+			// for the client message below; log it too so the same cause is
+			// visible server-side without grepping response bodies.
+			log.Printf("authz: access denied alias=%q reason=%q", aliasID, check.DenyMsg)
 			code := "invalid_api_key"
 			return AuthSnapshot{}, nil, newErr(
 				"invalid_request_error",

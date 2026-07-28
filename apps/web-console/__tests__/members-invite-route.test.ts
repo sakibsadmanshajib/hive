@@ -27,8 +27,10 @@ vi.mock("../lib/control-plane/client", () => ({
   },
 }));
 
-function formRequest(email: string): Request {
-  const body = new URLSearchParams({ email });
+function formRequest(email: string, role?: string): Request {
+  const body = new URLSearchParams(
+    role === undefined ? { email } : { email, role },
+  );
   return new Request("http://localhost:3000/api/console/members", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -50,11 +52,34 @@ describe("app/api/console/members/route.ts POST", () => {
     const { POST } = await import("../app/api/console/members/route");
     const res = await POST(formRequest("teammate@example.com"));
 
-    expect(mockCreateInvitation).toHaveBeenCalledWith("teammate@example.com");
+    expect(mockCreateInvitation).toHaveBeenCalledWith(
+      "teammate@example.com",
+      "member",
+    );
     expect(res.status).toBe(303);
     const location = res.headers.get("location") ?? "";
     expect(location).toContain("/console/members");
     expect(location).toContain("invited=1");
+  });
+
+  // Issue #536: the invite form now carries a role selector.
+  it("forwards the selected owner role", async () => {
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(formRequest("coowner@example.com", "owner"));
+
+    expect(mockCreateInvitation).toHaveBeenCalledWith(
+      "coowner@example.com",
+      "owner",
+    );
+    expect(res.status).toBe(303);
+  });
+
+  it("rejects an unsupported role with 400 and never proxies", async () => {
+    const { POST } = await import("../app/api/console/members/route");
+    const res = await POST(formRequest("teammate@example.com", "root"));
+
+    expect(res.status).toBe(400);
+    expect(mockCreateInvitation).not.toHaveBeenCalled();
   });
 
   it("rejects unauthenticated callers with 401 and never proxies", async () => {
