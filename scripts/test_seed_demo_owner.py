@@ -136,7 +136,46 @@ def main() -> None:
     assert seed_demo_owner.TENANT_SLUG == "hive-demo"
     assert seed_demo_owner.ACCOUNT_SLUG == "hive-demo-owner"
 
-    print("ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or")
+    # validate_identity_overrides: the three identity variables must be set
+    # together or not at all. A partial override (e.g. slugs set, email left
+    # to its default) would otherwise silently attach the new tenant/account
+    # to the SHARED default demo user instead of a separate owner.
+    EMAIL, TSLUG, ASLUG = (
+        "HIVE_DEMO_EMAIL",
+        "HIVE_DEMO_TENANT_SLUG",
+        "HIVE_DEMO_ACCOUNT_SLUG",
+    )
+
+    # None set: proceeds, the existing single-identity default is unchanged.
+    assert not exits(seed_demo_owner.validate_identity_overrides, {})
+
+    # All three set: proceeds, this is how a second, independent owner is
+    # provisioned.
+    assert not exits(
+        seed_demo_owner.validate_identity_overrides,
+        {EMAIL: "owner2@example.test", TSLUG: "second-tenant", ASLUG: "second-account"},
+    )
+
+    # Every partial combination (one or two of the three set) is refused.
+    partial_combos = [
+        {EMAIL: "owner2@example.test"},
+        {TSLUG: "second-tenant"},
+        {ASLUG: "second-account"},
+        {EMAIL: "owner2@example.test", TSLUG: "second-tenant"},
+        {EMAIL: "owner2@example.test", ASLUG: "second-account"},
+        {TSLUG: "second-tenant", ASLUG: "second-account"},
+    ]
+    for combo in partial_combos:
+        assert exits(seed_demo_owner.validate_identity_overrides, combo), combo
+
+    # Whitespace-only counts as unset, matching env_or's own stripping: this
+    # is still a partial override (email effectively missing), must refuse.
+    assert exits(
+        seed_demo_owner.validate_identity_overrides,
+        {EMAIL: "   ", TSLUG: "second-tenant", ASLUG: "second-account"},
+    )
+
+    print("ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or + identity guard")
 
 
 if __name__ == "__main__":
