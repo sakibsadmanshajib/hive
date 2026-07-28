@@ -31,7 +31,16 @@ jobs:
         env:
           HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          # 6543, not secrets.SUPABASE_DB_PORT (5432, session mode). This job
+          # only ever runs single ad-hoc statements or short BEGIN/COMMIT
+          # blocks, never a long-lived session, so it fits Supavisor's
+          # transaction-mode pooler exactly: the server connection returns to
+          # the pool after each transaction instead of being held for the
+          # job's whole 10-minute timeout window. Session mode's pool is a
+          # shared 15-client ceiling with every other job hitting this same
+          # project; this job failing with EMAXCONNSESSION under load is what
+          # sent it here in the first place, see issue tracking the pool.
+          PGPORT: 6543
           PGUSER: ${{ secrets.SUPABASE_DB_USER }}
           PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -70,7 +79,7 @@ jobs:
         id: paths
         env:
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGPORT: 6543
           PGUSER: ${{ secrets.SUPABASE_DB_USER }}
           PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -126,7 +135,7 @@ jobs:
         if: steps.keys.outputs.skip != '1'
         env:
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGPORT: 6543
           PGUSER: ${{ secrets.SUPABASE_DB_USER }}
           PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
