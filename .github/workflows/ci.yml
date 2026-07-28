@@ -6,7 +6,11 @@ name: CI
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
+    # `ready_for_review` is required: none of the default activity types fire
+    # when a draft pull request is marked ready with no further pushes, so
+    # without it this workflow never runs and every required check stays
+    # unpublished. Enforced by .github/ci/lint-workflow-check-names.mjs.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   push:
     branches: [main]
   schedule:

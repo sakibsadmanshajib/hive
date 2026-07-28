@@ -23,6 +23,12 @@
 //      context stays Pending. That is the original deadlock; path filtering
 //      has to happen inside the workflow instead.
 //
+//   4. If a workflow publishing a required context does not listen for
+//      `ready_for_review`, a pull request opened as a draft and then marked
+//      ready with no further pushes fires no event that workflow reacts to.
+//      No check run is created, so the required contexts are never published
+//      and the pull request is unmergeable with nothing visibly failing.
+//
 // This script fails the build on any of those. It is intentionally scoped to
 // workflows that can report on a pull request, because those are the only ones
 // that feed the merge gate; deploy and release workflows are free to reuse job
@@ -71,6 +77,25 @@ function pathFilters(workflow) {
       ? ['paths', 'paths-ignore'].filter((key) => key in config).map((key) => `${event}.${key}`)
       : [],
   );
+}
+
+// The `pull_request` activity types a workflow must react to before it can be
+// trusted to publish a required context, and the ones it is missing. GitHub
+// defaults to opened, synchronize and reopened when `types:` is omitted, and
+// none of those fire when a draft pull request is marked ready for review with
+// no further pushes, so `ready_for_review` has to be listed explicitly.
+// Workflows that never declare a `pull_request` trigger are out of scope.
+const REQUIRED_PR_TYPES = ['opened', 'synchronize', 'reopened', 'ready_for_review'];
+
+function missingPullRequestTypes(workflow) {
+  const on = onBlock(workflow);
+  if (!on || typeof on !== 'object' || Array.isArray(on) || !('pull_request' in on)) return [];
+  const config = on.pull_request;
+  const declared =
+    config && typeof config === 'object' && !Array.isArray(config) && Array.isArray(config.types)
+      ? config.types
+      : [];
+  return REQUIRED_PR_TYPES.filter((type) => !declared.includes(type));
 }
 
 // The concrete matrix legs GitHub will run, so a templated job name can be
@@ -239,12 +264,29 @@ for (const context of required) {
     // match the diff, and a skipped workflow never creates its check runs, so
     // the required context stays Pending and blocks the merge forever. Path
     // filtering for a required workflow has to happen inside the workflow.
-    const filters = pathFilters(prWorkflows.find((w) => w.file === file)?.doc);
+    const doc = prWorkflows.find((w) => w.file === file)?.doc;
+    const filters = pathFilters(doc);
     if (filters.length > 0) {
       errors.push(
         `${file} publishes required check "${context}" but path-filters its triggers ` +
           `(${filters.join(', ')}). A workflow skipped by a trigger path filter never creates its ` +
           'check runs, so the required context stays Pending. Filter inside the workflow instead.',
+      );
+    }
+
+    // ---- Check 5: a required workflow must run on ready_for_review ----
+    // Failure mode: a pull request opened as a draft and then marked ready
+    // for review with no further pushes. None of the default activity types
+    // fire on that transition, so the workflow never runs, zero required
+    // checks are published, and the pull request blocks forever with nothing
+    // visibly red.
+    const missingTypes = missingPullRequestTypes(doc);
+    if (missingTypes.length > 0) {
+      errors.push(
+        `${file} publishes required check "${context}" but its pull_request trigger does not react to ` +
+          `${missingTypes.join(', ')}. List all of ${REQUIRED_PR_TYPES.join(', ')} under ` +
+          '`on.pull_request.types`, otherwise a draft marked ready for review with no further pushes ' +
+          'publishes no check runs at all and the merge gate can never be satisfied.',
       );
     }
   }
@@ -259,5 +301,5 @@ if (errors.length > 0) {
 console.log(
   `Merge-gate integrity OK: ${producers.size} check names across ${prWorkflows.length} pull-request workflows, ` +
     `${required.length} required contexts each published by exactly one always()-running job in a ` +
-    'workflow with no trigger path filter.',
+    'workflow with no trigger path filter that reacts to every pull_request type the merge gate needs.',
 );

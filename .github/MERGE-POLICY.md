@@ -72,7 +72,12 @@ issue #553 and it is why the rule below is now enforced automatically.
 > - two pull-request jobs publish the same check name;
 > - a required context in the config below has no producer, or more than one;
 > - a job publishing a required context can be skipped (no `if: always()`);
-> - a workflow publishing a required context path-filters its triggers.
+> - a workflow publishing a required context path-filters its triggers;
+> - a workflow publishing a required context does not list every
+>   `pull_request` type the gate needs (`opened`, `synchronize`, `reopened`,
+>   `ready_for_review`). Without `ready_for_review`, a draft marked ready with
+>   no further pushes fires no event, so no required check is ever published
+>   and the pull request blocks forever with nothing visibly failing.
 >
 > Matrix job names are expanded against the real `strategy.matrix` values, so
 > `Go tests (${{ matrix.module }})` is compared as the four concrete names it
