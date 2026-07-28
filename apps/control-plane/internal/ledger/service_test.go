@@ -195,6 +195,18 @@ func (s *stubRepo) ListMembersByAccountID(_ context.Context, accountID uuid.UUID
 	return members, nil
 }
 
+func (s *stubRepo) UpdateMembershipRole(_ context.Context, accountID, userID uuid.UUID, role string) error {
+	for i := range s.memberships {
+		if s.memberships[i].AccountID == accountID && s.memberships[i].UserID == userID {
+			updated := s.memberships[i]
+			updated.Role = role
+			s.memberships[i] = updated
+			return nil
+		}
+	}
+	return accounts.ErrNotFound
+}
+
 func TestBalanceCalculation(t *testing.T) {
 	repo := newStubRepo()
 	svc := NewService(repo)

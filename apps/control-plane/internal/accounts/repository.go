@@ -20,6 +20,7 @@ type Repository interface {
 	FindInvitationByTokenHash(ctx context.Context, tokenHash string) (*Invitation, error)
 	AcceptInvitation(ctx context.Context, invitationID uuid.UUID, acceptedAt time.Time) error
 	ListMembersByAccountID(ctx context.Context, accountID uuid.UUID) ([]Member, error)
+	UpdateMembershipRole(ctx context.Context, accountID, userID uuid.UUID, role string) error
 }
 
 // pgxRepository is the production implementation backed by Supabase Postgres.
@@ -135,11 +136,17 @@ func (r *pgxRepository) AcceptInvitation(ctx context.Context, invitationID uuid.
 	return err
 }
 
+// ListMembersByAccountID returns the account's memberships joined to the
+// member's auth.users email, so callers can render a human identity instead of
+// a bare UUID. The join is a LEFT JOIN and email is coalesced: a membership
+// whose auth row has no email still lists.
 func (r *pgxRepository) ListMembersByAccountID(ctx context.Context, accountID uuid.UUID) ([]Member, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT user_id, role, status
-		FROM public.account_memberships
-		WHERE account_id = $1
+		SELECT m.user_id, coalesce(u.email, ''), m.role, m.status
+		FROM public.account_memberships m
+		LEFT JOIN auth.users u ON u.id = m.user_id
+		WHERE m.account_id = $1
+		ORDER BY m.created_at
 	`, accountID)
 	if err != nil {
 		return nil, err
@@ -149,10 +156,59 @@ func (r *pgxRepository) ListMembersByAccountID(ctx context.Context, accountID uu
 	var members []Member
 	for rows.Next() {
 		var m Member
-		if err := rows.Scan(&m.UserID, &m.Role, &m.Status); err != nil {
+		if err := rows.Scan(&m.UserID, &m.Email, &m.Role, &m.Status); err != nil {
 			return nil, err
 		}
 		members = append(members, m)
 	}
 	return members, rows.Err()
+}
+
+// UpdateMembershipRole writes a new role onto an active membership.
+//
+// The statement carries its own last-owner guard: demoting an owner only
+// matches while another active owner exists. The service checks the same
+// invariant first (so the caller gets a precise error), but two concurrent
+// demotions could each pass that read-then-write check, and an ownerless
+// workspace is unrecoverable without support. Zero rows affected therefore
+// means "not an active member, or this write would have removed the last
+// owner", and surfaces as ErrNotFound / ErrLastOwner respectively.
+func (r *pgxRepository) UpdateMembershipRole(ctx context.Context, accountID, userID uuid.UUID, role string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE public.account_memberships AS m
+		SET role = $3
+		WHERE m.account_id = $1
+		  AND m.user_id = $2
+		  AND m.status = 'active'
+		  AND (
+		    $3 = 'owner'
+		    OR m.role <> 'owner'
+		    OR (
+		      SELECT count(*) FROM public.account_memberships o
+		      WHERE o.account_id = $1 AND o.role = 'owner' AND o.status = 'active'
+		    ) > 1
+		  )
+	`, accountID, userID, role)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// Distinguish the two zero-row causes so the HTTP layer stays truthful.
+		var currentRole string
+		var activeOwners int
+		if scanErr := r.pool.QueryRow(ctx, `
+			SELECT m.role,
+			       (SELECT count(*) FROM public.account_memberships o
+			        WHERE o.account_id = $1 AND o.role = 'owner' AND o.status = 'active')
+			FROM public.account_memberships m
+			WHERE m.account_id = $1 AND m.user_id = $2 AND m.status = 'active'
+		`, accountID, userID).Scan(&currentRole, &activeOwners); scanErr != nil {
+			return ErrNotFound
+		}
+		if currentRole == RoleOwner && role != RoleOwner && activeOwners <= 1 {
+			return ErrLastOwner
+		}
+		return ErrNotFound
+	}
+	return nil
 }
