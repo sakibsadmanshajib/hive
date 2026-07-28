@@ -5,8 +5,9 @@ export default defineConfig({
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   // E2E specs share a single Supabase fixture state (reset in beforeEach via
-  // the e2e-fixtures edge function). Running multiple workers concurrently
-  // races on that reset and flaps sessions mid-test, so we serialize.
+  // tests/e2e/support/e2e-auth-fixtures.mjs). Running multiple workers
+  // concurrently races on that reset and flaps sessions mid-test, so we
+  // serialize.
   workers: 1,
   reporter: process.env.CI
     ? [["list"], ["html", { open: "never" }]]

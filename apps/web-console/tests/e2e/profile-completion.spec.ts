@@ -71,9 +71,8 @@ test.describe("profile completion", () => {
 
     // The preceding "setup saves profile" test sets profile_setup_complete=true.
     // Reset it before this test so the dashboard renders the "Complete setup" CTA.
-    // resetProfileBetweenSpecs is a no-op when E2E_FIXTURE_URL/SECRET are absent.
-    test.beforeEach(async () => {
-      await resetProfileBetweenSpecs({ email: VERIFIED_EMAIL });
+    test.beforeEach(() => {
+      resetProfileBetweenSpecs({ email: VERIFIED_EMAIL });
     });
 
     test("dashboard shows setup reminder instead of forcing setup after completion", async ({
