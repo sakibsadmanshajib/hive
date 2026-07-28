@@ -1,10 +1,14 @@
 package authz
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"testing"
+
+	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 )
 
 // #51: a Redis-backed limiter that cannot evaluate (transient outage,
@@ -85,6 +89,99 @@ func TestAuthorizeFailsOpenWhenExplicitlyEnabled(t *testing.T) {
 	if snapshot.KeyID != "key-1" {
 		t.Fatalf("expected resolved snapshot returned on fail-open, got %#v", snapshot)
 	}
+}
+
+// #566/#569 postmortem: a key-resolution failure (not found, revoked,
+// control-plane/network error) must reach the caller as the same generic
+// invalid_api_key message regardless of cause -- never let a caller
+// enumerate which keys exist -- but the real cause must still be visible
+// server-side, or an outage like this one is undiagnosable from logs alone.
+func TestAuthorizeLogsResolutionFailureCauseButKeepsClientMessageGeneric(t *testing.T) {
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{}, errors.New(`authz: status 404: {"error":"key not found"}`)
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	var logOutput string
+	var err *apierrors.OpenAIError
+	logOutput = captureAuthzLogs(t, func() {
+		_, _, err = authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	})
+
+	// Client-facing half: byte-identical generic message, no hint of the
+	// underlying resolve-path outcome.
+	if err == nil {
+		t.Fatal("expected invalid_api_key error")
+	}
+	if err.Error.Type != "invalid_request_error" {
+		t.Fatalf("type = %q, want %q", err.Error.Type, "invalid_request_error")
+	}
+	if err.Error.Code == nil || *err.Error.Code != "invalid_api_key" {
+		t.Fatalf("code = %v, want %q", err.Error.Code, "invalid_api_key")
+	}
+	if err.Error.Message != "Incorrect API key provided." {
+		t.Fatalf("message = %q, want byte-identical generic message", err.Error.Message)
+	}
+
+	// Internal half: the distinguishable cause must be visible in logs.
+	if !strings.Contains(logOutput, "key not found") {
+		t.Fatalf("expected resolution failure cause in internal log, got %q", logOutput)
+	}
+}
+
+// Companion case for the CheckAccess deny path (key found but revoked):
+// check.DenyMsg already differentiates this from a not-found/network failure
+// in the client message (pre-existing behavior, unchanged by this test), and
+// that same cause must now also land in the internal log.
+func TestAuthorizeLogsDeniedReasonForRevokedKey(t *testing.T) {
+	client := &Client{
+		ResolveOverride: func(_ context.Context, _ string) (AuthSnapshot, error) {
+			return AuthSnapshot{
+				KeyID:     "key-1",
+				AccountID: "acc-1",
+				Status:    "revoked",
+			}, nil
+		},
+	}
+
+	authorizer := NewAuthorizer(client, nil)
+
+	var err *apierrors.OpenAIError
+	logOutput := captureAuthzLogs(t, func() {
+		_, _, err = authorizer.Authorize(context.Background(), "Bearer hk_test", "hive-default", 50, 100, 20)
+	})
+
+	if err == nil {
+		t.Fatal("expected invalid_api_key error")
+	}
+	if err.Error.Code == nil || *err.Error.Code != "invalid_api_key" {
+		t.Fatalf("code = %v, want %q", err.Error.Code, "invalid_api_key")
+	}
+	if err.Error.Message != "Incorrect API key provided: API key is revoked" {
+		t.Fatalf("message = %q, want unchanged revoked message", err.Error.Message)
+	}
+
+	if !strings.Contains(logOutput, "revoked") {
+		t.Fatalf("expected revoked reason in internal log, got %q", logOutput)
+	}
+}
+
+func captureAuthzLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	var buf bytes.Buffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	defer log.SetOutput(originalWriter)
+	defer log.SetFlags(originalFlags)
+
+	fn()
+	return buf.String()
 }
 
 func containsAny(s string, subs ...string) bool {
