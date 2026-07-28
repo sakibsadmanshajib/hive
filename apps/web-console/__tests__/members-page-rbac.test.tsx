@@ -34,6 +34,16 @@ vi.mock("../lib/control-plane/client", () => ({
   getViewer: mockGetViewer,
   getMembers: mockGetMembers,
   getAccountProfile: mockGetAccountProfile,
+  ControlPlaneError: class ControlPlaneError extends Error {
+    status: number;
+    code: string | null;
+    constructor(status: number, message: string, code: string | null = null) {
+      super(message);
+      this.name = "ControlPlaneError";
+      this.status = status;
+      this.code = code;
+    }
+  },
 }));
 
 // The shell pulls in next-intl's useTranslations, which needs a provider this
@@ -205,6 +215,30 @@ describe("app/console/members/page.tsx", () => {
       screen.getByText(/only workspace owners can invite teammates/i),
     ).toBeTruthy();
     expect(screen.queryByText(/verify your email/i)).toBeNull();
+  });
+
+  // The control-plane restricts the member list to owners. A member landing here
+  // used to hit the console error boundary because the refusal was thrown.
+  it("explains an owner-only member list instead of crashing the page", async () => {
+    const { ControlPlaneError } = await import("../lib/control-plane/client");
+    mockGetMembers.mockRejectedValue(
+      new ControlPlaneError(403, "email must be verified before accessing members"),
+    );
+    await renderMembersPage({}, ["analytics.view"]);
+
+    expect(screen.getByText(/member list is owner-only/i)).toBeTruthy();
+    expect(screen.queryByText(/something went wrong/i)).toBeNull();
+  });
+
+  it("still surfaces a non-permission member-list failure", async () => {
+    const { ControlPlaneError } = await import("../lib/control-plane/client");
+    mockGetMembers.mockRejectedValue(new ControlPlaneError(500, "upstream down"));
+    mockGetViewer.mockResolvedValue(viewerPayload(["members.invite"]));
+    const mod = await import("../app/console/members/page");
+
+    await expect(
+      mod.default({ searchParams: Promise.resolve({}) }),
+    ).rejects.toThrow(/upstream down/);
   });
 
   it("states the permission gate on role controls for a viewer without members.manage", async () => {

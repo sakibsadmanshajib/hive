@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { Mail } from "lucide-react";
 
 import {
+  ControlPlaneError,
   getAccountProfile,
   getMembers,
   getViewer,
@@ -127,12 +128,33 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
   const canInvite = inviteBlockedReason === null;
   const canManageRoles = can(viewer, "members.manage");
 
-  const [members, profile] = await Promise.all([
-    session ? getMembers(session.access_token) : Promise.resolve([]),
+  // The control-plane restricts the member list to owners. A plain member is a
+  // legitimate visitor here (they can see who they work with is a workspace
+  // question, and the page still explains their own standing), so a refusal
+  // becomes an explanation rather than an error boundary. Anything that is not a
+  // refusal still throws, so a real outage stays visible.
+  async function loadMembers(): Promise<{
+    members: AccountMember[];
+    restricted: boolean;
+  }> {
+    if (!session) return { members: [], restricted: false };
+    try {
+      return { members: await getMembers(session.access_token), restricted: false };
+    } catch (err: unknown) {
+      if (err instanceof ControlPlaneError && err.status === 403) {
+        return { members: [], restricted: true };
+      }
+      throw err;
+    }
+  }
+
+  const [memberList, profile] = await Promise.all([
+    loadMembers(),
     getAccountProfile().catch(
       (): { owner_name: string } => ({ owner_name: "" }),
     ),
   ]);
+  const members = memberList.members;
 
   const activeOwners = members.filter(
     (member) => member.role === "owner" && member.status === "active",
@@ -320,7 +342,12 @@ export default async function MembersPage({ searchParams }: MembersPageProps) {
           </CardContent>
         </Card>
 
-        {members.length === 0 ? (
+        {memberList.restricted ? (
+          <EmptyState
+            title="Member list is owner-only"
+            description="Only workspace owners can see who else belongs to this workspace. Ask an owner if you need the list."
+          />
+        ) : members.length === 0 ? (
           <EmptyState
             title="No members yet"
             description="Once teammates accept their invites they&rsquo;ll appear here with their role and status."

@@ -129,6 +129,11 @@ var ErrEmailMismatch = errors.New("accounts: email mismatch")
 // A fresh link is required; retrying the same one can never succeed.
 var ErrAlreadyAccepted = errors.New("accounts: invitation already accepted")
 
+// ErrAlreadyMember is returned when the accepting user already holds a
+// membership on the invited workspace. The invitation is moot rather than
+// broken, and asking for a fresh link would not help.
+var ErrAlreadyMember = errors.New("accounts: already a member of this workspace")
+
 // ErrInvalidRole is returned when a caller supplies a membership role outside
 // the supported set (see RoleOwner, RoleMember).
 var ErrInvalidRole = errors.New("accounts: invalid role")

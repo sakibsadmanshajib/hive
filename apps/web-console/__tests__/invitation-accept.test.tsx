@@ -185,6 +185,17 @@ describe("app/invitations/accept/page.tsx", () => {
     expect(screen.queryByText(/new invitation/i)).toBeNull();
   });
 
+  it("tells an existing member they already belong to the workspace", async () => {
+    await renderAcceptFailure(409, {
+      error: "you are already a member of this workspace",
+      code: "invitation_already_member",
+    });
+
+    expect(screen.getByText(/already in this workspace/i)).toBeTruthy();
+    expect(screen.getByText(/workspace switcher/i)).toBeTruthy();
+    expect(screen.queryByText(/new invitation/i)).toBeNull();
+  });
+
   it("tells an unknown-token visitor the link is not valid", async () => {
     await renderAcceptFailure(404, {
       error: "this invitation link is not valid",

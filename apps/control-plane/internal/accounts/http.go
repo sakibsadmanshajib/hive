@@ -337,6 +337,11 @@ func writeAcceptInvitationError(w http.ResponseWriter, r *http.Request, err erro
 			"error": "this invitation has already been accepted",
 			"code":  "invitation_already_accepted",
 		})
+	case errors.Is(err, ErrAlreadyMember):
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": "you are already a member of this workspace",
+			"code":  "invitation_already_member",
+		})
 	case errors.Is(err, ErrEmailMismatch):
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "this invitation was sent to a different email address",

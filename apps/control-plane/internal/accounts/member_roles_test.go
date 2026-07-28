@@ -197,6 +197,38 @@ func TestAcceptInvitation_AlreadyAcceptedTokenIsRejected(t *testing.T) {
 	}
 }
 
+// Accepting an invitation for a workspace the user already belongs to used to
+// surface the membership unique-constraint violation as an opaque server error.
+// The reason is knowable, so it must be stated.
+func TestAcceptInvitation_AlreadyAMemberIsRejectedTruthfully(t *testing.T) {
+	repo := newStubRepo()
+	ownerID := uuid.New()
+	memberID := uuid.New()
+	accountID := uuid.New()
+	workspaceFixture(repo,
+		membership(accountID, ownerID, "owner"),
+		membership(accountID, memberID, "member"),
+	)
+
+	rawToken := "second-invite-token"
+	repo.invitations[accounts.HashToken(rawToken)] = &accounts.Invitation{
+		ID:              uuid.New(),
+		AccountID:       accountID,
+		Email:           "member@example.com",
+		Role:            "member",
+		TokenHash:       accounts.HashToken(rawToken),
+		ExpiresAt:       time.Now().Add(72 * time.Hour),
+		InvitedByUserID: ownerID,
+	}
+
+	svc := accounts.NewService(repo)
+	_, err := svc.AcceptInvitation(context.Background(),
+		verifiedViewer(memberID, "member@example.com"), rawToken)
+	if !errors.Is(err, accounts.ErrAlreadyMember) {
+		t.Fatalf("expected ErrAlreadyMember, got %v", err)
+	}
+}
+
 // --- role editing invariants (#536) ---
 
 func TestUpdateMemberRole_OwnerPromotesAMember(t *testing.T) {
@@ -631,6 +663,14 @@ func TestAcceptInvitationHandler_LifecycleErrorCodes(t *testing.T) {
 			token:      "lifecycle-token",
 			wantStatus: http.StatusForbidden,
 			wantCode:   "invitation_email_mismatch",
+		},
+		{
+			name:       "already a member",
+			mutate:     func(inv *accounts.Invitation) { inv.Email = "owner@example.com" },
+			viewer:     verifiedViewer(ownerID, "owner@example.com"),
+			token:      "lifecycle-token",
+			wantStatus: http.StatusConflict,
+			wantCode:   "invitation_already_member",
 		},
 		{
 			name:       "unknown token",

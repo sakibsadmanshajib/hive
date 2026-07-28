@@ -248,6 +248,19 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 		return uuid.Nil, ErrAlreadyAccepted
 	}
 
+	// Already a member: the invitation is moot, not broken. Detected before any
+	// write so the caller gets a truthful reason instead of the unique-constraint
+	// violation surfacing as an opaque server error.
+	existing, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("accounts: list memberships: %w", err)
+	}
+	for _, m := range existing {
+		if m.AccountID == inv.AccountID {
+			return uuid.Nil, ErrAlreadyMember
+		}
+	}
+
 	// The membership carries the role the workspace chose at invite time. An
 	// unrecognised stored value falls back to the least-privileged role rather
 	// than granting something unintended.

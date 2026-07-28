@@ -2041,8 +2041,11 @@ export async function getMembers(accessToken: string): Promise<AccountMember[]> 
     cache: "no-store",
   });
 
+  // ControlPlaneError rather than a bare Error: the members page has to tell a
+  // plain member "only owners can see the member list" apart from a real outage,
+  // and it can only do that from the upstream status.
   if (!response.ok) {
-    throw new Error(`Failed to fetch members: ${response.status}`);
+    await throwControlPlaneError(response, "Failed to fetch members");
   }
 
   const payload = parseJsonValue(await readResponseText(response));

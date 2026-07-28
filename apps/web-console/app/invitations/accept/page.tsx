@@ -179,6 +179,22 @@ function renderFailure(failure: InvitationFailure, signedInEmail: string) {
         </AuthShell>
       );
 
+    case "invitation_already_member":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="You are already in this workspace"
+          subtitle="This invitation is for a workspace you already belong to. Pick it from the workspace switcher in the console sidebar."
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+
     case "invitation_email_mismatch":
       return (
         <AuthShell
