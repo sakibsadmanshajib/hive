@@ -10,6 +10,7 @@
     "lint:desktop-local-http": "node tools/lint-no-desktop-local-http.mjs",
     "lint:request-url-origin": "node tools/lint-no-request-url-origin.mjs",
     "lint:model-visibility": "node tools/lint-tenant-model-visibility-single-source.mjs",
+    "lint:litellm-routing": "node tools/lint-litellm-dispatch-requires-routing.mjs",
     "soc2:report": "node tools/soc2-coverage-report.mjs",
     "soc2:check": "node tools/soc2-coverage-report.mjs --check"
   },

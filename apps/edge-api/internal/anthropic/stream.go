@@ -46,6 +46,13 @@ type SSETranslator struct {
 	openBlockIndex int  // index of the currently open content block
 	hasOpenBlock   bool // whether a content_block_start has been emitted without stop
 
+	// started records whether message_start has been emitted, and done whether
+	// the terminal sequence has. Both live on the translator (rather than in a
+	// single read loop) so bytes can be fed in incrementally as the delegated
+	// handler writes them.
+	started bool
+	done    bool
+
 	// tool call accumulation: keyed by upstream tool_calls[].index
 	toolBlocks map[int]toolBlockState
 
@@ -84,66 +91,12 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 
-	firstChunk := true
 	for scanner.Scan() {
 		if t.writeErr != nil {
 			break
 		}
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		if !bytes.HasPrefix(line, []byte("data: ")) {
-			continue
-		}
-		payload := bytes.TrimPrefix(line, []byte("data: "))
-		if bytes.Equal(payload, []byte("[DONE]")) {
+		if streamEnded := t.FeedLine(scanner.Bytes()); streamEnded {
 			break
-		}
-
-		var chunk OAIChunk
-		if err := json.Unmarshal(payload, &chunk); err != nil {
-			continue
-		}
-
-		if firstChunk {
-			firstChunk = false
-			// Use the upstream chunk ID when present, otherwise generate a
-			// unique ID per stream so concurrent streams never collide.
-			t.messageID = chunk.ID
-			if t.messageID == "" {
-				t.messageID = "msg_" + uuid.New().String()
-			} else if !strings.HasPrefix(t.messageID, "msg_") {
-				t.messageID = "msg_" + t.messageID
-			}
-			t.emitMessageStart()
-		}
-
-		if chunk.Usage != nil {
-			t.inputTokens = chunk.Usage.PromptTokens
-			t.outputTokens = chunk.Usage.CompletionTokens
-		}
-
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		choice := chunk.Choices[0]
-
-		if choice.FinishReason != "" {
-			t.stopReason = mapFinishReason(choice.FinishReason)
-		}
-
-		delta := choice.Delta
-
-		if delta.Content != "" {
-			if !t.hasOpenBlock {
-				t.openTextBlock()
-			}
-			t.emitTextDelta(delta.Content)
-		}
-
-		for _, tc := range delta.ToolCalls {
-			t.handleToolCallDelta(tc)
 		}
 	}
 
@@ -151,19 +104,100 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 		return t.writeErr
 	}
 
-	// Emit terminal sequence.
-	if t.hasOpenBlock {
-		t.emitContentBlockStop(t.openBlockIndex)
-		t.hasOpenBlock = false
-	}
-	t.emitMessageDelta()
-	t.emitMessageStop()
+	t.Finish()
 
 	if t.writeErr != nil {
 		return t.writeErr
 	}
 	return scanner.Err()
 }
+
+// FeedLine consumes one raw line of an upstream OpenAI SSE body and emits any
+// Anthropic events it implies. It reports whether the upstream stream has ended
+// (the [DONE] sentinel), after which further lines are ignored.
+//
+// Feeding line by line, rather than only reading from an io.Reader, is what lets
+// a translator sit in front of an in-process handler: the delegated handler
+// writes bytes to a ResponseWriter, so there is no reader to scan, and buffering
+// the whole response to create one would destroy time-to-first-token.
+func (t *SSETranslator) FeedLine(line []byte) bool {
+	if t.done || t.writeErr != nil {
+		return t.done
+	}
+	if len(line) == 0 || !bytes.HasPrefix(line, []byte("data: ")) {
+		return false
+	}
+	payload := bytes.TrimPrefix(line, []byte("data: "))
+	if bytes.Equal(payload, []byte("[DONE]")) {
+		return true
+	}
+
+	var chunk OAIChunk
+	if err := json.Unmarshal(payload, &chunk); err != nil {
+		return false
+	}
+
+	if !t.started {
+		t.started = true
+		// Use the upstream chunk ID when present, otherwise generate a
+		// unique ID per stream so concurrent streams never collide.
+		t.messageID = chunk.ID
+		if t.messageID == "" {
+			t.messageID = "msg_" + uuid.New().String()
+		} else if !strings.HasPrefix(t.messageID, "msg_") {
+			t.messageID = "msg_" + t.messageID
+		}
+		t.emitMessageStart()
+	}
+
+	if chunk.Usage != nil {
+		t.inputTokens = chunk.Usage.PromptTokens
+		t.outputTokens = chunk.Usage.CompletionTokens
+	}
+
+	if len(chunk.Choices) == 0 {
+		return false
+	}
+	choice := chunk.Choices[0]
+
+	if choice.FinishReason != "" {
+		t.stopReason = mapFinishReason(choice.FinishReason)
+	}
+
+	delta := choice.Delta
+
+	if delta.Content != "" {
+		if !t.hasOpenBlock {
+			t.openTextBlock()
+		}
+		t.emitTextDelta(delta.Content)
+	}
+
+	for _, tc := range delta.ToolCalls {
+		t.handleToolCallDelta(tc)
+	}
+
+	return false
+}
+
+// Finish emits the terminal Anthropic event sequence. It is idempotent, so a
+// caller that has already seen [DONE] can still call it unconditionally.
+func (t *SSETranslator) Finish() {
+	if t.done {
+		return
+	}
+	t.done = true
+
+	if t.hasOpenBlock {
+		t.emitContentBlockStop(t.openBlockIndex)
+		t.hasOpenBlock = false
+	}
+	t.emitMessageDelta()
+	t.emitMessageStop()
+}
+
+// WriteErr returns the first write error the translator hit, if any.
+func (t *SSETranslator) WriteErr() error { return t.writeErr }
 
 // --- emitters ---
 

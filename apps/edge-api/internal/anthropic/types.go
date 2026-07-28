@@ -1,7 +1,9 @@
 // Package anthropic provides a translation layer between the Anthropic Messages
 // wire format and the internal OpenAI-shaped dispatch core. It never calls real
-// Anthropic; requests are lowered to the internal chat shape, dispatched through
-// the existing LiteLLM path, and responses are lifted back to Anthropic shape.
+// Anthropic, and it never dispatches upstream itself: requests are lowered to the
+// internal chat shape, handed to the wired POST /v1/chat/completions chain (which
+// owns alias resolution, entitlement, metering and the upstream boundary), and
+// responses are lifted back to Anthropic shape.
 package anthropic
 
 import "encoding/json"
@@ -275,15 +277,24 @@ func (tc OAIToolChoice) MarshalJSON() ([]byte, error) {
 
 // OAIRequest is the OpenAI chat completions request shape.
 type OAIRequest struct {
-	Model       string        `json:"model"`
-	Messages    []OAIMessage  `json:"messages"`
-	Tools       []OAITool     `json:"tools,omitempty"`
-	ToolChoice  *OAIToolChoice `json:"tool_choice,omitempty"`
-	MaxTokens   *int          `json:"max_tokens,omitempty"`
-	Stop        []string      `json:"stop,omitempty"`
-	Temperature *float64      `json:"temperature,omitempty"`
-	TopP        *float64      `json:"top_p,omitempty"`
-	Stream      bool          `json:"stream,omitempty"`
+	Model         string            `json:"model"`
+	Messages      []OAIMessage      `json:"messages"`
+	Tools         []OAITool         `json:"tools,omitempty"`
+	ToolChoice    *OAIToolChoice    `json:"tool_choice,omitempty"`
+	MaxTokens     *int              `json:"max_tokens,omitempty"`
+	Stop          []string          `json:"stop,omitempty"`
+	Temperature   *float64          `json:"temperature,omitempty"`
+	TopP          *float64          `json:"top_p,omitempty"`
+	Stream        bool              `json:"stream,omitempty"`
+	StreamOptions *OAIStreamOptions `json:"stream_options,omitempty"`
+}
+
+// OAIStreamOptions mirrors OpenAI's stream_options object. IncludeUsage asks
+// upstream for a terminal usage frame, which is what lets the metered dispatch
+// path settle a credit reservation at real token counts instead of the flat
+// pre-dispatch estimate.
+type OAIStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 // OAIMessageContent is a typed union for an OAI message's content field.
