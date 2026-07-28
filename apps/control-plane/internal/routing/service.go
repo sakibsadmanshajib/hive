@@ -141,12 +141,24 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 		fallbacks = append(fallbacks, candidate.RouteID)
 	}
 
+	// Pricing is a property of the alias, not of whichever candidate ended up
+	// primary vs. fallback, so it is resolved once here, after a route has
+	// actually been selected. Deferring it to this point (rather than up
+	// front, alongside LoadAliasPolicy) also means an alias that gets
+	// refused earlier -- unentitled, disallowed, no eligible routes -- never
+	// pays for a pricing lookup it will not use.
+	pricing, err := s.repo.LoadAliasPricing(ctx, aliasID)
+	if err != nil {
+		return SelectionResult{}, fmt.Errorf("routing: load alias pricing for %s: %w", aliasID, err)
+	}
+
 	return SelectionResult{
 		AliasID:          aliasID,
 		RouteID:          selected.RouteID,
 		LiteLLMModelName: selected.LiteLLMModelName,
 		Provider:         selected.Provider,
 		FallbackRouteIDs: fallbacks,
+		Pricing:          pricing,
 	}, nil
 }
 

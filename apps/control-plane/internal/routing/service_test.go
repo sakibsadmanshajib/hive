@@ -18,6 +18,11 @@ type stubRepository struct {
 	candidatesErr   error
 	listCalls       int
 	loadPolicyCalls int
+
+	pricing            catalog.CatalogPricing
+	pricingErr         error
+	pricingCalls       int
+	sawPricingAliasIDs []string
 }
 
 func (s *stubRepository) LoadAliasPolicy(_ context.Context, _ string) (catalog.AliasPolicySnapshot, error) {
@@ -36,6 +41,16 @@ func (s *stubRepository) ListRouteCandidates(_ context.Context, _ string) ([]Rou
 	}
 
 	return append([]RouteCandidate(nil), s.candidates...), nil
+}
+
+func (s *stubRepository) LoadAliasPricing(_ context.Context, aliasID string) (catalog.CatalogPricing, error) {
+	s.pricingCalls++
+	s.sawPricingAliasIDs = append(s.sawPricingAliasIDs, aliasID)
+	if s.pricingErr != nil {
+		return catalog.CatalogPricing{}, s.pricingErr
+	}
+
+	return s.pricing, nil
 }
 
 // stubEntitlements stands in for catalog.Service, the production
@@ -710,5 +725,180 @@ func TestRequireToolCapable_MixedProviderOnlyCapableSelected(t *testing.T) {
 	// share the same provider slug.
 	if result.RouteID != "route-tools" {
 		t.Fatalf("expected route-tools (capable), got %q", result.RouteID)
+	}
+}
+
+// TestSelectRouteCarriesAliasPricing is metering step 2 wave 1a's core
+// assertion: SelectRoute must surface the alias's per-model credit price on
+// the result so a caller (edge-api's metering gate, wired in a later wave)
+// can price a request without a second round trip. Two aliases with
+// different prices must produce different Pricing values for identical
+// token counts (spec 8.2 item 9's regression guard against reverting to a
+// flat total-tokens estimate).
+func TestSelectRouteCarriesAliasPricing(t *testing.T) {
+	repo := entitlementTestRepo()
+	cacheRead := int64(1)
+	cacheWrite := int64(5)
+	repo.pricing = catalog.CatalogPricing{
+		InputPriceCredits:      12,
+		OutputPriceCredits:     36,
+		CacheReadPriceCredits:  &cacheRead,
+		CacheWritePriceCredits: &cacheWrite,
+	}
+
+	svc := NewService(repo, &stubEntitlements{visible: true})
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            uuid.New(),
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+	if result.Pricing.InputPriceCredits != 12 {
+		t.Fatalf("expected input price 12, got %d", result.Pricing.InputPriceCredits)
+	}
+	if result.Pricing.OutputPriceCredits != 36 {
+		t.Fatalf("expected output price 36, got %d", result.Pricing.OutputPriceCredits)
+	}
+	if result.Pricing.CacheReadPriceCredits == nil || *result.Pricing.CacheReadPriceCredits != 1 {
+		t.Fatalf("expected cache read price 1, got %v", result.Pricing.CacheReadPriceCredits)
+	}
+	if result.Pricing.CacheWritePriceCredits == nil || *result.Pricing.CacheWritePriceCredits != 5 {
+		t.Fatalf("expected cache write price 5, got %v", result.Pricing.CacheWritePriceCredits)
+	}
+	if repo.pricingCalls != 1 {
+		t.Fatalf("expected exactly one pricing lookup, got %d", repo.pricingCalls)
+	}
+	if len(repo.sawPricingAliasIDs) != 1 || repo.sawPricingAliasIDs[0] != "hive-fast" {
+		t.Fatalf("expected pricing lookup for hive-fast, got %v", repo.sawPricingAliasIDs)
+	}
+}
+
+// TestSelectRouteHandlesZeroPricingWithoutPanic covers an alias with no
+// model_aliases row (a data-inconsistency case, not a customer-facing
+// error): the repository returns the catalog.CatalogPricing zero value, and
+// SelectRoute must return it as-is rather than panic or fail the selection.
+// A missing price is "no cost basis", a verdict shadow-mode logs, not a
+// reason to break a route the routing tables already approved.
+func TestSelectRouteHandlesZeroPricingWithoutPanic(t *testing.T) {
+	repo := entitlementTestRepo()
+	// repo.pricing left at its zero value deliberately.
+
+	svc := NewService(repo, &stubEntitlements{visible: true})
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error for zero pricing: %v", err)
+	}
+	if result.Pricing.InputPriceCredits != 0 || result.Pricing.OutputPriceCredits != 0 {
+		t.Fatalf("expected zero-value pricing, got %+v", result.Pricing)
+	}
+	if result.Pricing.CacheReadPriceCredits != nil || result.Pricing.CacheWritePriceCredits != nil {
+		t.Fatalf("expected nil cache pricing pointers, got %+v", result.Pricing)
+	}
+}
+
+// TestSelectRoutePriceIsAliasStableAcrossFallback asserts spec decision 15:
+// price is a property of the alias, not of whichever route within it gets
+// selected as primary vs. fallback. The same alias with multiple eligible
+// routes must report one price, not a per-route price that could silently
+// vary when the fallback order changes.
+func TestSelectRoutePriceIsAliasStableAcrossFallback(t *testing.T) {
+	repo := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-fast",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+			FallbackOrder:           []string{"route-groq-fast", "route-openrouter-fast-fallback"},
+		},
+		candidates: []RouteCandidate{
+			{
+				RouteID:                 "route-groq-fast",
+				AliasID:                 "hive-fast",
+				Provider:                "groq",
+				LiteLLMModelName:        "route-groq-fast",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                10,
+				SupportsChatCompletions: true,
+			},
+			{
+				RouteID:                 "route-openrouter-fast-fallback",
+				AliasID:                 "hive-fast",
+				Provider:                "openrouter",
+				LiteLLMModelName:        "route-openrouter-fast-fallback",
+				PriceClass:              "standard",
+				HealthState:             "healthy",
+				Priority:                20,
+				SupportsChatCompletions: true,
+			},
+		},
+		pricing: catalog.CatalogPricing{InputPriceCredits: 8, OutputPriceCredits: 24},
+	}
+
+	svc := NewService(repo, &stubEntitlements{visible: true})
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+	if result.RouteID != "route-groq-fast" {
+		t.Fatalf("expected primary route-groq-fast, got %q", result.RouteID)
+	}
+	if len(result.FallbackRouteIDs) != 1 || result.FallbackRouteIDs[0] != "route-openrouter-fast-fallback" {
+		t.Fatalf("expected one fallback route-openrouter-fast-fallback, got %v", result.FallbackRouteIDs)
+	}
+	if result.Pricing.InputPriceCredits != 8 || result.Pricing.OutputPriceCredits != 24 {
+		t.Fatalf("expected alias-level pricing 8/24 regardless of which route was primary, got %+v", result.Pricing)
+	}
+}
+
+// TestSelectRoutePropagatesPricingLookupFailure matches the repo's existing
+// convention (TestSelectRoutePropagatesAliasLookupErrors): a genuine
+// infrastructure failure resolving pricing (DB unreachable, etc., as
+// distinct from "no row for this alias", which LoadAliasPricing must treat
+// as a zero-value, non-error result) surfaces to the caller rather than
+// being silently swallowed into a wrong zero price.
+func TestSelectRoutePropagatesPricingLookupFailure(t *testing.T) {
+	repo := entitlementTestRepo()
+	repo.pricingErr = errors.New("pricing db down")
+
+	svc := NewService(repo, &stubEntitlements{visible: true})
+
+	_, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		NeedChatCompletions: true,
+	})
+	if err == nil {
+		t.Fatal("expected pricing lookup failure to be surfaced")
+	}
+}
+
+// TestSelectRouteSkipsPricingLookupOnEarlyRefusal asserts the pricing
+// lookup is not a wasted query on a path that was always going to fail: an
+// unentitled alias must be refused before any pricing read, exactly as it
+// already skips ListRouteCandidates (TestSelectRouteDeniesAliasHiddenFromTenant).
+func TestSelectRouteSkipsPricingLookupOnEarlyRefusal(t *testing.T) {
+	repo := entitlementTestRepo()
+	svc := NewService(repo, &stubEntitlements{visible: false})
+
+	_, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            uuid.New(),
+		NeedChatCompletions: true,
+	})
+	if err == nil {
+		t.Fatal("expected an unentitled alias to be refused")
+	}
+	if repo.pricingCalls != 0 {
+		t.Fatalf("expected pricing lookup to be skipped for an unentitled alias, got %d calls", repo.pricingCalls)
 	}
 }
