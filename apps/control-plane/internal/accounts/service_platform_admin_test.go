@@ -155,7 +155,7 @@ func TestCreateInvitation_PlatformAdminOverlay(t *testing.T) {
 				EmailVerified: false,
 			}
 
-			_, err := svc.CreateInvitation(context.Background(), accountID, viewer, "invitee@example.com")
+			_, err := svc.CreateInvitation(context.Background(), accountID, viewer, "invitee@example.com", "member")
 			if tc.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
 			}
