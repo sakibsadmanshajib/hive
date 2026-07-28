@@ -1,7 +1,7 @@
 # Fixed: streaming works end to end
 
 Target      : http://localhost:8099  (fixed binary)
-Principal   : Supabase session JWT. user_id=0d9e118e-d455-4390-bc67-2020af4f46b5 tenant_id=f52897a7-d866-4718-b87a-ee495b001707
+Principal   : Supabase session JWT. user_id=11111111-1111-4111-8111-111111111111 tenant_id=22222222-2222-4222-8222-222222222222
 Expectation : 200 text/event-stream carrying the Anthropic event sequence (message_start, content_block_delta, message_delta, message_stop)
 Captured    : 2026-07-28T08:03:39Z
 
@@ -28,7 +28,7 @@ Content-Type: application/json
 
 ## Response  (HTTP 200, 3565 ms)
 
-```
+```http
 Cache-Control: no-cache
 Content-Type: text/event-stream
 

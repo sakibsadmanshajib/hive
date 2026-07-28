@@ -381,6 +381,44 @@ func TestHandler_StreamTranslatesDownstreamSSE(t *testing.T) {
 	}
 }
 
+// A downstream chain that keeps writing after the [DONE] sentinel must not
+// produce extra Anthropic events. The translator is fed line by line here (the
+// delegated path writes into a ResponseWriter, so nothing consumes FeedLine's
+// return value), which is exactly the caller shape that would otherwise
+// translate trailing frames.
+func TestHandler_StreamIgnoresDownstreamFramesAfterDone(t *testing.T) {
+	chat := &fakeChat{respond: func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		for _, chunk := range []string{
+			`data: {"id":"chatcmpl-s","choices":[{"index":0,"delta":{"content":"Hi"}}]}`,
+			`data: [DONE]`,
+			`data: {"id":"chatcmpl-s","choices":[{"index":0,"delta":{"content":"TRAILING"}}]}`,
+		} {
+			fmt.Fprintf(w, "%s\n\n", chunk)
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+	}}
+	h := anthropic.NewHandler(anthropic.Deps{OpenAIChat: chat})
+	rec := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+	h.ServeHTTP(rec, newAuthedRequest(t,
+		`{"model":"my-alias","messages":[{"role":"user","content":"hi"}],"max_tokens":5,"stream":true}`))
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "Hi") {
+		t.Errorf("content before [DONE] missing: %s", body)
+	}
+	if strings.Contains(body, "TRAILING") {
+		t.Errorf("frame after [DONE] was translated: %s", body)
+	}
+	if got := strings.Count(body, "event: message_stop"); got != 1 {
+		t.Errorf("message_stop count: want 1 got %d: %s", got, body)
+	}
+}
+
 // Errors raised by the delegated chain are already provider-blind (that path
 // owns the upstream boundary), so they are forwarded unchanged rather than
 // re-wrapped, status included.

@@ -53,6 +53,12 @@ type SSETranslator struct {
 	started bool
 	done    bool
 
+	// ended records that the upstream [DONE] sentinel arrived. It is separate
+	// from done because a caller that feeds lines one at a time may ignore the
+	// FeedLine return value, and the promise in FeedLine's contract is that
+	// lines after the sentinel are dropped rather than translated.
+	ended bool
+
 	// tool call accumulation: keyed by upstream tool_calls[].index
 	toolBlocks map[int]toolBlockState
 
@@ -121,14 +127,15 @@ func (t *SSETranslator) Translate(body io.Reader) error {
 // writes bytes to a ResponseWriter, so there is no reader to scan, and buffering
 // the whole response to create one would destroy time-to-first-token.
 func (t *SSETranslator) FeedLine(line []byte) bool {
-	if t.done || t.writeErr != nil {
-		return t.done
+	if t.ended || t.done || t.writeErr != nil {
+		return t.ended || t.done
 	}
 	if len(line) == 0 || !bytes.HasPrefix(line, []byte("data: ")) {
 		return false
 	}
 	payload := bytes.TrimPrefix(line, []byte("data: "))
 	if bytes.Equal(payload, []byte("[DONE]")) {
+		t.ended = true
 		return true
 	}
 

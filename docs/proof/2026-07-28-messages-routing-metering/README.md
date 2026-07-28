@@ -35,6 +35,13 @@ Two throwaway principals were created for the capture and used by nothing else:
 * a billing account with an `hk_` API key and a credit grant, for the API-key
   principal.
 
+Every `user_id`, `tenant_id` and `account_id` printed in these captures has been
+replaced with a synthetic placeholder. The same placeholder stands for the same
+principal across every file, so the accounting rows in
+[10](10-accounting-rows.md) still tie to the API-key probes in
+[08](08-fixed-apikey-raw-route-id.md) and
+[09](09-fixed-apikey-entitled-alias-metered.md).
+
 The pre-fix binary had to be given the support-matrix registration too, because
 without it `UnsupportedEndpointMiddleware` 404s `/v1/messages` before any handler
 runs. That is a second defect this branch fixes: the Anthropic surface has been
@@ -69,7 +76,7 @@ From [10](10-accounting-rows.md): the proof account holds exactly one
 `credit_reservations` row for the two API-key probes, and it belongs to the
 alias, not the refused route id.
 
-```
+```text
 status     | reserved_credits | consumed_credits | released_credits | terminal_usage_confirmed
 finalized  | 10000            | 110              | 9890             | true
 ```

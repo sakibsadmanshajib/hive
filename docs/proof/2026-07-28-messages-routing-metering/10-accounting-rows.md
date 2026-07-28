@@ -2,14 +2,14 @@
 
 Two throwaway principals were created for this capture and used by nothing else, so every row below was produced by the probes in this directory:
 
-* billing account `e518472a-30df-4c27-bffb-9625be0c8513` (the `hk_` API-key principal)
-* tenant `f52897a7-d866-4718-b87a-ee495b001707` (the session principal)
+* billing account `33333333-3333-4333-8333-333333333333` (the `hk_` API-key principal)
+* tenant `22222222-2222-4222-8222-222222222222` (the session principal)
 
 Rows read back through the database's REST interface with the service role, after the probes ran. The direct Postgres pooler was at its session-mode client limit from other stacks on this box, which is a local capacity detail and not a property of the change.
 
 ## credit_reservations for the proof account
 
-```
+```text
 status    | policy_mode | reserved_credits | consumed_credits | released_credits | terminal_usage_confirmed | created_at                      
 ----------+-------------+------------------+------------------+------------------+--------------------------+---------------------------------
 finalized | strict      | 10000            | 110              | 9890             | True                     | 2026-07-28T08:10:26.519128+00:00
@@ -17,7 +17,7 @@ finalized | strict      | 10000            | 110              | 9890            
 
 ## credit_reservation_events (the append-only ledger for those reservations)
 
-```
+```text
 event_type | credits_delta | reason    | created_at                      
 -----------+---------------+-----------+---------------------------------
 reserved   | 10000         | reserved  | 2026-07-28T08:10:26.519128+00:00
@@ -32,7 +32,7 @@ Before this change no such row could exist for `/v1/messages` at all. The surfac
 
 ## usage_events for the proof account
 
-```
+```text
 event_type          | status    | endpoint         | model_alias | input_tokens | output_tokens | hive_credit_delta
 --------------------+-----------+------------------+-------------+--------------+---------------+------------------
 completed           | completed | chat_completions | hive-fast   | 72           | 16            | 88               
@@ -44,7 +44,7 @@ completed           | completed | chat_completions | hive-fast   | 78           
 
 ## request_attempts for the proof account
 
-```
+```text
 status    | endpoint         | model_alias | attempt_number | started_at                      
 ----------+------------------+-------------+----------------+---------------------------------
 streaming | chat_completions | hive-fast   | 1              | 2026-07-28T08:05:01.413413+00:00
@@ -58,7 +58,7 @@ The endpoint recorded is `/v1/chat/completions` because the Anthropic surface no
 
 The session path meters through `llm_traces` plus `audit_log` rather than credit reservations, exactly as `/v1/chat/completions` does for a session principal (quota enforcement for session traffic is pre-billing by design, see the phase-19-plan-03 note in edge-api's main.go). The pre-fix `/v1/messages` wrote neither, so a session's Anthropic traffic was invisible to both billing and tracing.
 
-```
+```text
 model     | provider | in_tokens | out_tokens | cost_credits | finish_reason | ts                              
 ----------+----------+-----------+------------+--------------+---------------+---------------------------------
 hive-fast | groq     | 78        | 32         | 110          | length        | 2026-07-28T08:03:32.664575+00:00

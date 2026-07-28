@@ -1,7 +1,7 @@
 # Fixed: an entitled alias succeeds and the call is metered
 
 Target      : http://localhost:8099  (fixed binary)
-Principal   : Hive API key (hk_ prefix), account_id=e518472a-30df-4c27-bffb-9625be0c8513, allow_all_models
+Principal   : Hive API key (`hk_` prefix), account_id=33333333-3333-4333-8333-333333333333, allow_all_models
 Expectation : 200, with a credit reservation held before dispatch and settled at the upstream token count afterwards
 Captured    : 2026-07-28T08:10:42Z
 
@@ -27,7 +27,7 @@ Content-Type: application/json
 
 ## Response  (HTTP 200, 17358 ms)
 
-```
+```http
 Content-Type: application/json
 
 {"id":"msg_chatcmpl-03662298-b1e5-42d5-b3b2-e0c94043b9e8","type":"message","role":"assistant","model":"hive-fast","content":null,"stop_reason":"max_tokens","usage":{"input_tokens":78,"output_tokens":32}}
