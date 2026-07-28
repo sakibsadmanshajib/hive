@@ -175,57 +175,27 @@ func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Vie
 	return nil
 }
 
-// CreateInvitation creates a new invitation for email on accountID.
+// CreateInvitation creates a new invitation for email on accountID with the
+// given membership role ("owner" or "member"; empty defaults to "member").
 // The viewer must hold members.invite permission (verified owner, or admin overlay).
-func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer, email string) (InvitationResult, error) {
-	// Resolve the viewer's membership for this account to build an Actor.
-	memberships, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
+func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer, email, role string) (InvitationResult, error) {
+	// Validate the requested role before any write. An unsupported role is a
+	// client error, never a coerced default.
+	invitedRole, err := NormalizeRole(role)
 	if err != nil {
-		return InvitationResult{}, fmt.Errorf("accounts: list memberships: %w", err)
+		return InvitationResult{}, err
 	}
 
-	var chosen Membership
-	found := false
-	for _, m := range memberships {
-		if m.AccountID == accountID && m.Status == "active" {
-			chosen = m
-			found = true
-			break
-		}
+	actor, err := s.resolveWorkspaceActor(ctx, accountID, viewer)
+	if err != nil {
+		return InvitationResult{}, err
 	}
-	if !found {
-		// Non-member invitation attempts are an authorization failure, not a
-		// server error. Surface a GateError so the HTTP layer maps to 403.
-		return InvitationResult{}, &GateError{
-			Code:    "permission_denied",
-			Message: fmt.Sprintf("viewer is not an active member of account %s", accountID),
-		}
-	}
-
-	// Phase 18: permission check via policy — replaces bare EmailVerified && role=="owner".
-	// isAdmin resolves the real platform-admin overlay when roleSvc is wired
-	// (see WithRoleService), matching EnsureViewerContext's idiom: a real
-	// platform admin who is not a workspace owner is still granted
-	// members.invite via the overlay instead of being silently denied.
-	isAdmin := false
-	if s.roleSvc != nil {
-		admin, err := s.roleSvc.IsPlatformAdmin(ctx, viewer.UserID)
-		if err != nil {
-			return InvitationResult{}, fmt.Errorf("accounts: platform admin lookup: %w", err)
-		}
-		isAdmin = admin
-	}
-	actor := ActorFor(viewer, chosen, isAdmin)
 	if !s.policy.Can(actor, authz.PermMembersInvite) {
 		return InvitationResult{}, &GateError{
 			Code:    "permission_denied",
 			Message: "members.invite permission required",
 		}
 	}
-
-	// Build the membership role for logging/audit. RoleOwner ensures the
-	// membership row carries the expected platform.MembershipRole value.
-	_ = platform.RoleOwner // imported for type alignment; actor.Role carries the value
 
 	rawToken, tokenHash, err := generateToken()
 	if err != nil {
@@ -237,7 +207,7 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 		ID:              uuid.New(),
 		AccountID:       accountID,
 		Email:           email,
-		Role:            "member",
+		Role:            invitedRole,
 		TokenHash:       tokenHash,
 		ExpiresAt:       expiresAt,
 		InvitedByUserID: viewer.UserID,
@@ -249,6 +219,7 @@ func (s *Service) CreateInvitation(ctx context.Context, accountID uuid.UUID, vie
 	return InvitationResult{
 		ID:        inv.ID,
 		Email:     email,
+		Role:      invitedRole,
 		Token:     rawToken,
 		ExpiresAt: expiresAt,
 	}, nil
@@ -274,7 +245,28 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 	}
 
 	if inv.AcceptedAt != nil {
-		return uuid.Nil, fmt.Errorf("accounts: invitation already accepted")
+		return uuid.Nil, ErrAlreadyAccepted
+	}
+
+	// Already a member: the invitation is moot, not broken. Detected before any
+	// write so the caller gets a truthful reason instead of the unique-constraint
+	// violation surfacing as an opaque server error.
+	existing, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("accounts: list memberships: %w", err)
+	}
+	for _, m := range existing {
+		if m.AccountID == inv.AccountID {
+			return uuid.Nil, ErrAlreadyMember
+		}
+	}
+
+	// The membership carries the role the workspace chose at invite time. An
+	// unrecognised stored value falls back to the least-privileged role rather
+	// than granting something unintended.
+	grantedRole, err := NormalizeRole(inv.Role)
+	if err != nil {
+		grantedRole = RoleMember
 	}
 
 	now := time.Now()
@@ -286,7 +278,7 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 		ID:        uuid.New(),
 		AccountID: inv.AccountID,
 		UserID:    viewer.UserID,
-		Role:      "member",
+		Role:      grantedRole,
 		Status:    "active",
 	}
 	if err := s.repo.CreateMembership(ctx, membership); err != nil {
@@ -299,6 +291,118 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 // ListMembers returns all members of the given account.
 func (s *Service) ListMembers(ctx context.Context, accountID uuid.UUID) ([]Member, error) {
 	return s.repo.ListMembersByAccountID(ctx, accountID)
+}
+
+// UpdateMemberRole changes targetUserID's role within accountID. The decision is
+// made entirely server-side from the viewer's own membership and the workspace's
+// current owner count; nothing about the caller's claimed authority is trusted.
+//
+// Refusal order, so every rejection names its real reason:
+//  1. invalid role -> ErrInvalidRole.
+//  2. viewer lacks members.manage (or is not an active member) -> GateError.
+//  3. target is not an active member -> ErrNotFound.
+//  4. change would leave the workspace with no active owner -> ErrLastOwner.
+//  5. viewer is the target -> ErrSelfRoleChange (no self escalation, and no
+//     self demotion either: privileges are granted by someone else or not at all).
+func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer, targetUserID uuid.UUID, role string) error {
+	newRole, err := NormalizeRole(role)
+	if err != nil {
+		return err
+	}
+
+	actor, err := s.resolveWorkspaceActor(ctx, accountID, viewer)
+	if err != nil {
+		return err
+	}
+	if !s.policy.Can(actor, authz.PermMembersManage) {
+		return &GateError{
+			Code:    "permission_denied",
+			Message: "members.manage permission required",
+		}
+	}
+
+	members, err := s.repo.ListMembersByAccountID(ctx, accountID)
+	if err != nil {
+		return fmt.Errorf("accounts: list members: %w", err)
+	}
+
+	var target Member
+	found := false
+	activeOwners := 0
+	for _, m := range members {
+		if m.Status != "active" {
+			continue
+		}
+		if m.Role == RoleOwner {
+			activeOwners++
+		}
+		if m.UserID == targetUserID {
+			target = m
+			found = true
+		}
+	}
+	if !found {
+		return ErrNotFound
+	}
+
+	if target.Role == RoleOwner && newRole != RoleOwner && activeOwners <= 1 {
+		return ErrLastOwner
+	}
+
+	if targetUserID == viewer.UserID {
+		return ErrSelfRoleChange
+	}
+
+	if target.Role == newRole {
+		// Already the requested role: nothing to write.
+		return nil
+	}
+
+	if err := s.repo.UpdateMembershipRole(ctx, accountID, targetUserID, newRole); err != nil {
+		return err
+	}
+	return nil
+}
+
+// resolveWorkspaceActor loads the viewer's active membership for accountID and
+// maps it (plus the platform-admin overlay when a role service is wired) into an
+// authz.Actor. A viewer with no active membership is an authorization failure,
+// not a server error, so the caller can map it to 403.
+func (s *Service) resolveWorkspaceActor(ctx context.Context, accountID uuid.UUID, viewer auth.Viewer) (authz.Actor, error) {
+	memberships, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
+	if err != nil {
+		return authz.Actor{}, fmt.Errorf("accounts: list memberships: %w", err)
+	}
+
+	var chosen Membership
+	found := false
+	for _, m := range memberships {
+		if m.AccountID == accountID && m.Status == "active" {
+			chosen = m
+			found = true
+			break
+		}
+	}
+	if !found {
+		return authz.Actor{}, &GateError{
+			Code:    "permission_denied",
+			Message: fmt.Sprintf("viewer is not an active member of account %s", accountID),
+		}
+	}
+
+	// isAdmin resolves the real platform-admin overlay when roleSvc is wired
+	// (see WithRoleService): a real platform admin who is not a workspace owner
+	// still holds members.* via the overlay instead of being silently denied.
+	isAdmin := false
+	if s.roleSvc != nil {
+		admin, err := s.roleSvc.IsPlatformAdmin(ctx, viewer.UserID)
+		if err != nil {
+			return authz.Actor{}, fmt.Errorf("accounts: platform admin lookup: %w", err)
+		}
+		isAdmin = admin
+	}
+
+	return ActorFor(viewer, chosen, isAdmin), nil
 }
 
 // --- helpers ---

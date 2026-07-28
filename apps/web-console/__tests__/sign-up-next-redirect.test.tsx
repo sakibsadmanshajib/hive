@@ -103,4 +103,24 @@ describe("app/auth/sign-up/page.tsx", () => {
       )}`,
     );
   });
+
+  // Issue #534: an invitee with no account signs UP. The acceptance token has
+  // to survive signup, the verification email, and the callback, or the invite
+  // is unusable for exactly the people invites are for.
+  it("emailRedirectTo carries an invitation token through to /auth/callback", async () => {
+    window.history.pushState(
+      {},
+      "",
+      `/auth/sign-up?next=${encodeURIComponent(
+        "/invitations/accept?token=invite-token-9",
+      )}`,
+    );
+    await submitForm();
+    const call = mockSignUp.mock.calls[0][0];
+    expect(call.options.emailRedirectTo).toBe(
+      `http://localhost:3000/auth/callback?next=${encodeURIComponent(
+        "/invitations/accept?token=invite-token-9",
+      )}`,
+    );
+  });
 });
