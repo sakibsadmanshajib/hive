@@ -1097,11 +1097,25 @@ jobs:
           # `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (already exposed
           # as job-level env for the Next.js server). Keeps local dev and
           # staged rollouts working without coupling the two changes.
-          E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
+          #
+          # E2E_RUN_KEY, and the three identity values below it, namespace
+          # every fixture row this job's specs touch (see
+          # supabase/functions/e2e-fixtures/index.ts, buildIds). Without
+          # this, every concurrent Web E2E job (another PR, a push to main)
+          # shared one hardcoded set of accounts and users against the same
+          # live Supabase project and could delete or reassign rows out from
+          # under this job's own reads mid-test. github.run_attempt makes a
+          # manual re-run of a flake get a fresh identity too, not the one
+          # the previous attempt already consumed. Passwords stay the shared
+          # default (from secrets, or e2e-fixtures' own DEFAULTS when those
+          # secrets are unset): nothing looks a user up by password, so they
+          # never need to be unique per run.
+          E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+          E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
-          E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
+          E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
-          E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
+          E2E_INVITATION_TOKEN: e2e-invitation-token-2026-fixture-${{ github.run_id }}-${{ github.run_attempt }}
           # Platform-admin fixture for console-platform-admin.spec.ts.
           # Unset leaves that spec skipped, which is why the required
           # coverage for a mispointed control-plane is the unit-level

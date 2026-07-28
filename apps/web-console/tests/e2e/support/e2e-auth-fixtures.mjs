@@ -47,6 +47,16 @@ export const E2E_UNVERIFIED_EMAIL = envOrDefault(
   DEFAULTS.unverifiedEmail,
   { validator: isValidEmail }
 );
+export const E2E_INVITATION_TOKEN = envOrDefault(
+  "E2E_INVITATION_TOKEN",
+  DEFAULTS.invitationToken,
+  { minLength: DEFAULTS.minTokenLength }
+);
+// Set by CI to one value per job attempt (see .github/workflows/ci.yml),
+// e.g. `${{ github.run_id }}-${{ github.run_attempt }}`. Empty for local /
+// manual runs, which is exactly "no run key" as far as the edge function is
+// concerned: it falls back to the single shared fixture identity.
+export const E2E_RUN_KEY = process.env.E2E_RUN_KEY || undefined;
 
 function maskEmail(value) {
   const [local = "", domain = ""] = value.split("@");
@@ -87,7 +97,16 @@ export async function prepareE2EAuthFixtures() {
       "X-E2E-Secret": secret,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ action: "reset" }),
+    // runKey plus the credentials this process already resolved: the edge
+    // function seeds exactly this identity instead of a second, independent
+    // derivation of the same run-scoped strings (see e2e-fixtures/index.ts).
+    body: JSON.stringify({
+      action: "reset",
+      runKey: E2E_RUN_KEY,
+      verifiedEmail: E2E_VERIFIED_EMAIL,
+      unverifiedEmail: E2E_UNVERIFIED_EMAIL,
+      invitationToken: E2E_INVITATION_TOKEN,
+    }),
   });
   const text = await response.text();
   let data = null;

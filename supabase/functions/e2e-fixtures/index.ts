@@ -25,7 +25,8 @@
 // Caller contract:
 //   POST /functions/v1/e2e-fixtures
 //   Headers: X-E2E-Secret: <E2E_FIXTURE_SECRET>
-//   Body:    { "action": "reset" }
+//   Body:    { "action": "reset", "runKey"?: string, "verifiedEmail"?: string,
+//              "unverifiedEmail"?: string, "invitationToken"?: string }
 //   200:     { verifiedEmail, unverifiedEmail, verifiedPassword,
 //              unverifiedPassword, invitationToken, verifiedUserId,
 //              unverifiedUserId, inviterUserId,
@@ -36,11 +37,28 @@
 // users exist and are password-reset, one invitation is pending for
 // the verified user, and all profile/billing mutations from prior
 // runs are cleared.
+//
+// runKey namespaces every id and email this call touches (see buildIds
+// below), so concurrent callers with different run keys never share a row.
+// Omit it (every caller before this field existed, and any local/manual
+// call) to get the single shared fixture identity this function always
+// used to manage; that behaviour is unchanged. CI sets runKey to one value
+// per job attempt and additionally passes the exact verifiedEmail /
+// unverifiedEmail / invitationToken its Playwright processes already
+// resolved, so this function seeds precisely what the specs expect instead
+// of the two sides deriving the same run-scoped string independently and
+// risking drift. Every reset call also opportunistically deletes any
+// run-key-derived fixture rows older than a few hours (sweepStaleFixtureRuns
+// below), so a namespaced run's rows do not accumulate in this project
+// forever even without a dedicated teardown step.
 
 // deno-lint-ignore-file no-explicit-any
 import { createClient } from "npm:@supabase/supabase-js@2";
 
-const FIXED = {
+// The plain object every caller used to import directly. Kept as the return
+// value of buildIds("") (no run key) below, so a caller that never heard of
+// run-key isolation gets byte-identical ids to before.
+const LOCAL_IDS = {
   inviterEmail: "e2e-inviter@scubed.com.bd",
   verifiedPrimaryAccountId: "31aadd76-fba0-46e6-827d-e3cfef50324c",
   verifiedSecondaryAccountId: "c420b965-aed6-4bfd-a7f9-e934458b3b5a",
@@ -58,7 +76,77 @@ const FIXED = {
   // used in a signIn() flow), so only those two get a tenant.
   verifiedTenantId: "6f1c9a2e-2b7a-4b1a-9a3e-4b2f6a1d7c01",
   unverifiedTenantId: "d3a5f8e1-7c4b-4a9d-8e2f-1b6c9d3a7f02",
+  // accounts.slug is UNIQUE. Empty for the unnamespaced (local/default)
+  // identity, so the original literal slugs below are untouched; a runKey
+  // gets a short, stable, per-run suffix so concurrent runs never collide
+  // on that constraint the way they used to on accounts.id alone.
+  slugSuffix: "",
 };
+
+// deriveUuid turns an arbitrary string into a stable, valid uuid column
+// value: same input always produces the same output, different inputs
+// (almost certainly) don't collide. Good enough for fixture rows that only
+// need to be unique per run key, not cryptographically unguessable. Not
+// RFC 4122 version/variant compliant, Postgres's uuid type doesn't check
+// those bits.
+async function deriveUuid(seed: string): Promise<string> {
+  const hex = await sha256Hex(seed);
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
+// buildIds returns LOCAL_IDS unchanged when runKey is empty (every existing
+// caller: local dev, and any request that predates run-key isolation), or a
+// full set of ids deterministically derived from runKey when it is set (CI,
+// one runKey per job attempt). Two concurrent callers with different run
+// keys get entirely disjoint rows in every table this function touches, so
+// they can never race each other the way a single shared identity set did.
+async function buildIds(runKey: string): Promise<typeof LOCAL_IDS> {
+  if (!runKey) return LOCAL_IDS;
+  const [
+    verifiedPrimaryAccountId,
+    verifiedSecondaryAccountId,
+    invitedAccountId,
+    unverifiedAccountId,
+    invitationId,
+    verifiedTenantId,
+    unverifiedTenantId,
+  ] = await Promise.all([
+    deriveUuid(`verifiedPrimaryAccount:${runKey}`),
+    deriveUuid(`verifiedSecondaryAccount:${runKey}`),
+    deriveUuid(`invitedAccount:${runKey}`),
+    deriveUuid(`unverifiedAccount:${runKey}`),
+    deriveUuid(`invitation:${runKey}`),
+    deriveUuid(`verifiedTenant:${runKey}`),
+    deriveUuid(`unverifiedTenant:${runKey}`),
+  ]);
+  const slugSuffix = `-${(await deriveUuid(`slug:${runKey}`)).slice(0, 8)}`;
+  return {
+    inviterEmail: withRunKey(LOCAL_IDS.inviterEmail, runKey),
+    verifiedPrimaryAccountId,
+    verifiedSecondaryAccountId,
+    invitedAccountId,
+    unverifiedAccountId,
+    invitationId,
+    verifiedTenantId,
+    unverifiedTenantId,
+    slugSuffix,
+  };
+}
+
+// withRunKey tags an email's local part (foo@x.com -> foo+key@x.com) so a
+// namespaced run gets a genuinely distinct auth.users row rather than
+// colliding with the shared default identity or another run's.
+function withRunKey(email: string, runKey: string): string {
+  const at = email.indexOf("@");
+  if (at === -1) return `${email}+${runKey}`;
+  return `${email.slice(0, at)}+${runKey}${email.slice(at)}`;
+}
 
 const DEFAULTS = {
   verifiedEmail: "e2e-verified@scubed.com.bd",
@@ -185,6 +273,7 @@ async function ensureUser(
 
 async function seedTenantsAndMemberships(
   admin: any,
+  ids: typeof LOCAL_IDS,
   users: { verifiedUser: any; unverifiedUser: any },
 ) {
   const { verifiedUser, unverifiedUser } = users;
@@ -192,15 +281,15 @@ async function seedTenantsAndMemberships(
   const { error: tenantErr } = await admin.from("tenants").upsert(
     [
       {
-        id: FIXED.verifiedTenantId,
-        slug: "e2e-verified-tenant",
+        id: ids.verifiedTenantId,
+        slug: `e2e-verified-tenant${ids.slugSuffix}`,
         name: "E2E Verified Tenant",
         deployment: "HIVE_CLOUD",
         archived_at: null,
       },
       {
-        id: FIXED.unverifiedTenantId,
-        slug: "e2e-unverified-tenant",
+        id: ids.unverifiedTenantId,
+        slug: `e2e-unverified-tenant${ids.slugSuffix}`,
         name: "E2E Unverified Tenant",
         deployment: "HIVE_CLOUD",
         archived_at: null,
@@ -213,13 +302,13 @@ async function seedTenantsAndMemberships(
   const { error: tenantUserErr } = await admin.from("tenant_users").upsert(
     [
       {
-        tenant_id: FIXED.verifiedTenantId,
+        tenant_id: ids.verifiedTenantId,
         user_id: verifiedUser.id,
         role: "OWNER",
         status: "ACTIVE",
       },
       {
-        tenant_id: FIXED.unverifiedTenantId,
+        tenant_id: ids.unverifiedTenantId,
         user_id: unverifiedUser.id,
         role: "OWNER",
         status: "ACTIVE",
@@ -234,6 +323,7 @@ async function seedTenantsAndMemberships(
 
 async function seedAccountsAndMemberships(
   admin: any,
+  ids: typeof LOCAL_IDS,
   users: { verifiedUser: any; unverifiedUser: any; inviterUser: any },
 ) {
   const { verifiedUser, unverifiedUser, inviterUser } = users;
@@ -241,29 +331,29 @@ async function seedAccountsAndMemberships(
   const { error: accErr } = await admin.from("accounts").upsert(
     [
       {
-        id: FIXED.verifiedPrimaryAccountId,
-        slug: "e2e-verified-workspace",
+        id: ids.verifiedPrimaryAccountId,
+        slug: `e2e-verified-workspace${ids.slugSuffix}`,
         display_name: "E2E Verified Workspace",
         account_type: "personal",
         owner_user_id: verifiedUser.id,
       },
       {
-        id: FIXED.verifiedSecondaryAccountId,
-        slug: "e2e-shared-workspace",
+        id: ids.verifiedSecondaryAccountId,
+        slug: `e2e-shared-workspace${ids.slugSuffix}`,
         display_name: "E2E Shared Workspace",
         account_type: "personal",
         owner_user_id: inviterUser.id,
       },
       {
-        id: FIXED.invitedAccountId,
-        slug: "e2e-invited-workspace",
+        id: ids.invitedAccountId,
+        slug: `e2e-invited-workspace${ids.slugSuffix}`,
         display_name: "E2E Invited Workspace",
         account_type: "personal",
         owner_user_id: inviterUser.id,
       },
       {
-        id: FIXED.unverifiedAccountId,
-        slug: "e2e-unverified-workspace",
+        id: ids.unverifiedAccountId,
+        slug: `e2e-unverified-workspace${ids.slugSuffix}`,
         display_name: "E2E Unverified Workspace",
         account_type: "personal",
         owner_user_id: unverifiedUser.id,
@@ -294,11 +384,11 @@ async function seedAccountsAndMemberships(
   const { error: clearErr } = await admin
     .from("account_memberships")
     .delete()
-    .eq("account_id", FIXED.invitedAccountId)
+    .eq("account_id", ids.invitedAccountId)
     .eq("user_id", verifiedUser.id);
   if (clearErr) {
     throw new Error(
-      `membership delete failed (${FIXED.invitedAccountId}/${verifiedUser.id}): ${clearErr.message}`,
+      `membership delete failed (${ids.invitedAccountId}/${verifiedUser.id}): ${clearErr.message}`,
     );
   }
 
@@ -307,31 +397,31 @@ async function seedAccountsAndMemberships(
     .upsert(
       [
         {
-          account_id: FIXED.verifiedPrimaryAccountId,
+          account_id: ids.verifiedPrimaryAccountId,
           user_id: verifiedUser.id,
           role: "owner",
           status: "active",
         },
         {
-          account_id: FIXED.verifiedSecondaryAccountId,
+          account_id: ids.verifiedSecondaryAccountId,
           user_id: verifiedUser.id,
           role: "member",
           status: "active",
         },
         {
-          account_id: FIXED.unverifiedAccountId,
+          account_id: ids.unverifiedAccountId,
           user_id: unverifiedUser.id,
           role: "owner",
           status: "active",
         },
         {
-          account_id: FIXED.verifiedSecondaryAccountId,
+          account_id: ids.verifiedSecondaryAccountId,
           user_id: inviterUser.id,
           role: "owner",
           status: "active",
         },
         {
-          account_id: FIXED.invitedAccountId,
+          account_id: ids.invitedAccountId,
           user_id: inviterUser.id,
           role: "owner",
           status: "active",
@@ -344,6 +434,7 @@ async function seedAccountsAndMemberships(
 
 async function resetProfilesAndInvitation(
   admin: any,
+  ids: typeof LOCAL_IDS,
   users: { verifiedUser: any; unverifiedUser: any; inviterUser: any },
   invitationTokenHash: string,
   invitationEmail: string,
@@ -354,7 +445,7 @@ async function resetProfilesAndInvitation(
   const { error: profErr } = await admin.from("account_profiles").upsert(
     [
       {
-        account_id: FIXED.verifiedPrimaryAccountId,
+        account_id: ids.verifiedPrimaryAccountId,
         owner_name: "E2E Verified Owner",
         login_email: invitationEmail,
         country_code: null,
@@ -362,7 +453,7 @@ async function resetProfilesAndInvitation(
         profile_setup_complete: false,
       },
       {
-        account_id: FIXED.verifiedSecondaryAccountId,
+        account_id: ids.verifiedSecondaryAccountId,
         owner_name: "E2E Shared Owner",
         login_email: invitationEmail,
         country_code: null,
@@ -370,7 +461,7 @@ async function resetProfilesAndInvitation(
         profile_setup_complete: false,
       },
       {
-        account_id: FIXED.invitedAccountId,
+        account_id: ids.invitedAccountId,
         owner_name: "E2E Inviter Owner",
         login_email: invitationEmail,
         country_code: null,
@@ -378,7 +469,7 @@ async function resetProfilesAndInvitation(
         profile_setup_complete: false,
       },
       {
-        account_id: FIXED.unverifiedAccountId,
+        account_id: ids.unverifiedAccountId,
         owner_name: "E2E Unverified Owner",
         login_email: unverifiedEmail,
         country_code: null,
@@ -391,10 +482,10 @@ async function resetProfilesAndInvitation(
   if (profErr) throw new Error(`profiles upsert failed: ${profErr.message}`);
 
   const accountIds = [
-    FIXED.verifiedPrimaryAccountId,
-    FIXED.verifiedSecondaryAccountId,
-    FIXED.invitedAccountId,
-    FIXED.unverifiedAccountId,
+    ids.verifiedPrimaryAccountId,
+    ids.verifiedSecondaryAccountId,
+    ids.invitedAccountId,
+    ids.unverifiedAccountId,
   ];
   for (const accountId of accountIds) {
     const { error } = await admin
@@ -408,22 +499,17 @@ async function resetProfilesAndInvitation(
     }
   }
 
-  const { error: delInvErr } = await admin
-    .from("account_invitations")
-    .delete()
-    .eq("account_id", FIXED.invitedAccountId)
-    .eq("email", invitationEmail);
-  if (delInvErr) {
-    throw new Error(`invitation delete failed: ${delInvErr.message}`);
-  }
-
+  // No delete before this upsert: onConflict on id already rewrites every
+  // field (including accepted_at back to null) in one atomic statement, the
+  // same fix as the account_memberships one above, closed here too since it
+  // is the same file and the same shape of bug.
   const { error: upInvErr } = await admin
     .from("account_invitations")
     .upsert(
       [
         {
-          id: FIXED.invitationId,
-          account_id: FIXED.invitedAccountId,
+          id: ids.invitationId,
+          account_id: ids.invitedAccountId,
           email: invitationEmail,
           role: "member",
           token_hash: invitationTokenHash,
@@ -435,6 +521,71 @@ async function resetProfilesAndInvitation(
       { onConflict: "id" },
     );
   if (upInvErr) throw new Error(`invitation upsert failed: ${upInvErr.message}`);
+}
+
+// A CI job's run key (see buildIds) is only ever reused by retries of that
+// exact job attempt, never by a later one, so any namespaced fixture row
+// older than a job could plausibly still be running is abandoned. Swept on
+// every reset call rather than on a schedule or a dedicated teardown step,
+// so it needs no new CI wiring and runs from the one entrypoint every
+// caller already goes through. Scoped to accounts with an "e2e-" slug AND a
+// profile login_email containing "+" (only ever true for a run-key-derived
+// email, see withRunKey): the slug rules out ever touching a real customer
+// account, the email rules out the shared local/default identity, which has
+// no run key and can be arbitrarily old.
+const STALE_RUN_HOURS = 3;
+
+async function sweepStaleFixtureRuns(admin: any): Promise<void> {
+  const cutoffIso = new Date(Date.now() - STALE_RUN_HOURS * 3600 * 1000)
+    .toISOString();
+
+  // Both conditions matter: slug is the belt (every account this function
+  // ever creates is prefixed "e2e-", nothing else in this project is), the
+  // "+" email check on the profile join below is the suspenders (rules out
+  // a real customer account that happens to also start with that prefix).
+  // Sweeping on the email pattern alone would have deleted any real account
+  // whose owner happens to use a "+" Gmail-style address, which is common
+  // enough in the wild that this is not a hypothetical.
+  const { data: oldAccounts, error: accErr } = await admin
+    .from("accounts")
+    .select("id, owner_user_id")
+    .like("slug", "e2e-%")
+    .lt("created_at", cutoffIso);
+  if (accErr || !oldAccounts?.length) return;
+
+  const { data: profiles, error: profErr } = await admin
+    .from("account_profiles")
+    .select("account_id")
+    .in("account_id", oldAccounts.map((a: any) => a.id))
+    .like("login_email", "%+%@%");
+  if (profErr || !profiles?.length) return;
+
+  const staleAccountIds = new Set(profiles.map((p: any) => p.account_id));
+  const stale = oldAccounts.filter((a: any) => staleAccountIds.has(a.id));
+
+  for (const acct of stale) {
+    // accounts.id cascades to every account-scoped table (memberships,
+    // profiles, billing, invitations, credits, api keys, ...). Deleting it
+    // first is what makes the user delete below legal: accounts.owner_
+    // user_id has no ON DELETE CASCADE, so a user who still owns an account
+    // cannot be deleted.
+    const { error: delAcctErr } = await admin
+      .from("accounts")
+      .delete()
+      .eq("id", acct.id);
+    if (delAcctErr) {
+      console.error(`sweep: delete account ${acct.id} failed: ${delAcctErr.message}`);
+      continue;
+    }
+    const { error: delUserErr } = await admin.auth.admin.deleteUser(
+      acct.owner_user_id,
+    );
+    if (delUserErr) {
+      console.error(
+        `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`,
+      );
+    }
+  }
 }
 
 Deno.serve(async (req) => {
@@ -464,7 +615,20 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "unauthorized" }, 401);
   }
 
-  let body: { action?: string } = {};
+  let body: {
+    action?: string;
+    // runKey namespaces every id and email this call touches (see buildIds).
+    // CI sets it to one value per job attempt; local/manual callers omit it
+    // and get the original shared fixture identity, unchanged.
+    runKey?: string;
+    // Only meaningful alongside runKey: the emails and invitation token CI
+    // already resolved for its Playwright processes (see e2e-auth-fixtures.
+    // mjs), so this function seeds the exact identity the specs expect
+    // instead of independently re-deriving the same string twice.
+    verifiedEmail?: string;
+    unverifiedEmail?: string;
+    invitationToken?: string;
+  } = {};
   try {
     body = await req.json();
   } catch {
@@ -548,19 +712,30 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true, email: targetEmail, account_id: membership.account_id });
   }
 
+  const runKey = typeof body.runKey === "string" ? body.runKey.trim() : "";
+  const ids = await buildIds(runKey);
+
   const verifiedEmail =
-    Deno.env.get("E2E_DEFAULT_VERIFIED_EMAIL") ?? DEFAULTS.verifiedEmail;
+    body.verifiedEmail ??
+    Deno.env.get("E2E_DEFAULT_VERIFIED_EMAIL") ??
+    DEFAULTS.verifiedEmail;
   const unverifiedEmail =
-    Deno.env.get("E2E_DEFAULT_UNVERIFIED_EMAIL") ?? DEFAULTS.unverifiedEmail;
+    body.unverifiedEmail ??
+    Deno.env.get("E2E_DEFAULT_UNVERIFIED_EMAIL") ??
+    DEFAULTS.unverifiedEmail;
   const verifiedPassword =
     Deno.env.get("E2E_DEFAULT_VERIFIED_PASSWORD") ?? DEFAULTS.verifiedPassword;
   const unverifiedPassword =
     Deno.env.get("E2E_DEFAULT_UNVERIFIED_PASSWORD") ??
     DEFAULTS.unverifiedPassword;
   const invitationToken =
-    Deno.env.get("E2E_DEFAULT_INVITATION_TOKEN") ?? DEFAULTS.invitationToken;
+    body.invitationToken ??
+    Deno.env.get("E2E_DEFAULT_INVITATION_TOKEN") ??
+    DEFAULTS.invitationToken;
 
   try {
+    await sweepStaleFixtureRuns(admin);
+
     const [verifiedUser, unverifiedUser, inviterUser] = await Promise.all([
       ensureUser(admin, {
         email: verifiedEmail,
@@ -568,8 +743,8 @@ Deno.serve(async (req) => {
         emailConfirm: true,
         appMetadata: { hive_email_verified: true },
         fullName: "E2E Verified Owner",
-        accountIdHint: FIXED.verifiedPrimaryAccountId,
-        selectedTenantId: FIXED.verifiedTenantId,
+        accountIdHint: ids.verifiedPrimaryAccountId,
+        selectedTenantId: ids.verifiedTenantId,
       }),
       ensureUser(admin, {
         email: unverifiedEmail,
@@ -577,27 +752,28 @@ Deno.serve(async (req) => {
         emailConfirm: true,
         appMetadata: { hive_email_verified: false },
         fullName: "E2E Unverified Owner",
-        accountIdHint: FIXED.unverifiedAccountId,
-        selectedTenantId: FIXED.unverifiedTenantId,
+        accountIdHint: ids.unverifiedAccountId,
+        selectedTenantId: ids.unverifiedTenantId,
       }),
       ensureUser(admin, {
-        email: FIXED.inviterEmail,
+        email: ids.inviterEmail,
         password: randomPassword(),
         emailConfirm: true,
         appMetadata: { hive_email_verified: true },
         fullName: "E2E Inviter Owner",
-        accountIdHint: FIXED.verifiedSecondaryAccountId,
+        accountIdHint: ids.verifiedSecondaryAccountId,
       }),
     ]);
 
-    await seedAccountsAndMemberships(admin, {
+    await seedAccountsAndMemberships(admin, ids, {
       verifiedUser,
       unverifiedUser,
       inviterUser,
     });
-    await seedTenantsAndMemberships(admin, { verifiedUser, unverifiedUser });
+    await seedTenantsAndMemberships(admin, ids, { verifiedUser, unverifiedUser });
     await resetProfilesAndInvitation(
       admin,
+      ids,
       { verifiedUser, unverifiedUser, inviterUser },
       await sha256Hex(invitationToken),
       verifiedEmail,
@@ -613,10 +789,10 @@ Deno.serve(async (req) => {
       verifiedUserId: verifiedUser.id,
       unverifiedUserId: unverifiedUser.id,
       inviterUserId: inviterUser.id,
-      verifiedPrimaryAccountId: FIXED.verifiedPrimaryAccountId,
-      verifiedSecondaryAccountId: FIXED.verifiedSecondaryAccountId,
-      invitedAccountId: FIXED.invitedAccountId,
-      unverifiedAccountId: FIXED.unverifiedAccountId,
+      verifiedPrimaryAccountId: ids.verifiedPrimaryAccountId,
+      verifiedSecondaryAccountId: ids.verifiedSecondaryAccountId,
+      invitedAccountId: ids.invitedAccountId,
+      unverifiedAccountId: ids.unverifiedAccountId,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
