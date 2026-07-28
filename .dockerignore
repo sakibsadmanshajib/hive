@@ -20,6 +20,18 @@
 # node_modules it installs for itself.
 **/node_modules
 **/.next
+
+# None of the below are ever COPYed by any Dockerfile in this repo; excluding
+# them shrinks every build context and removes other paths that could hit
+# the same class of stray-local-artifact collision as node_modules above.
 .git
 .pnpm-store
 **/.pnpm-store
+**/playwright-report*
+**/test-results
+.wolf
+
+# Built on a different host (linux/amd64 apptainer), never present in a
+# Docker build context on purpose, but if one is ever built locally it would
+# be several GB; excluded so a future build never accidentally ships it.
+**/*.sif
