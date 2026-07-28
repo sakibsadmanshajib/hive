@@ -298,7 +298,20 @@ services:
       SSLCOMMERZ_BASE_URL: ${SSLCOMMERZ_BASE_URL:-}
       XE_ACCOUNT_ID: ${XE_ACCOUNT_ID:-}
       XE_API_KEY: ${XE_API_KEY:-}
-      CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL:-http://localhost:8081}
+      # Public base URL used to build payment-rail callback and redirect URLs
+      # (resolveCallbackBaseURL in apps/control-plane/internal/payments/http.go).
+      # Deliberately has NO default. When the variable is empty the Go handler
+      # derives the base from the request Host, which is already correct in
+      # every shape this file is used in: http://localhost:8081 in local dev,
+      # and https://control-hive.scubed.co behind the Cloudflare Tunnel, since
+      # cloudflared forwards the public Host through to localhost:8081.
+      # A compose default of http://localhost:8081 was worse than no value at
+      # all: it guaranteed the variable was always set, so the host-derived
+      # fallback could never run, and live payment providers were handed a
+      # loopback callback URL that nothing outside the box can reach.
+      # Set it explicitly only where the public base URL is not the request
+      # Host, for example behind a proxy that rewrites Host.
+      CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL:-}
       OWUI_BASE_URL: ${OWUI_BASE_URL:-http://open-webui:8080}
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}
