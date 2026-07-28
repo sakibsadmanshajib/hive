@@ -88,29 +88,54 @@ of a healthy service. The record was deleted on 2026-07-27. The name now fails
 DNS resolution outright, and any future stray hostname hits the tunnel catch-all
 and gets a clean 404 instead of hanging.
 
-`cp-hive.scubed.co` must never be reintroduced. It is also asserted against by
-`apps/web-console/tests/unit/control-plane-host.test.ts`, which pins the
-control-plane hostname across every file that writes it down.
+`cp-hive.scubed.co` must never be reintroduced.
+`apps/web-console/tests/unit/control-plane-host.test.ts` enforces that in the
+required unit check, with no credentials and no network: it pins the
+control-plane hostname across the files that write it down, and it scans every
+tracked text file under `deploy/` and fails on any `scubed.co` hostname that
+`tunnel-ingress.json` does not declare. This directory is deliberately excluded
+from that scan, because it is the registry and has to be able to name retired
+hostnames in prose.
 
 ## Checking and applying
 
 ```bash
-export CLOUDFLARE_API_TOKEN=...    # needs Zone:DNS:Read and Account:Tunnel:Read
+export CLOUDFLARE_API_TOKEN=...    # check: Zone:DNS:Read + Account:Tunnel:Read
+                                   # apply: also Account:Cloudflare Tunnel:Edit
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_ZONE_ID=...
 
 npm run cloudflare:check           # diff this repo against live Cloudflare
-npm run cloudflare:apply           # push tunnel ingress from tunnel-ingress.json
+npm run cloudflare:apply           # print the plan, confirm, then push ingress
+npm run cloudflare:apply -- --yes  # same, non-interactive (CI or scripted runs)
 ```
 
 `cloudflare:check` fails when the live ingress and the spec disagree, when a
-hostname with an ingress rule has no proxied CNAME to the tunnel, or when a
-`-hive.scubed.co` record exists with no ingress rule behind it. That last check
-is the one that catches the `cp-hive` class of defect. It reports the exact
-record id to act on.
+hostname with an ingress rule has no proxied CNAME to the tunnel, or when an
+address record (`A`, `AAAA` or `CNAME`) under `-hive.scubed.co` exists with no
+ingress rule behind it. That last check is the one that catches the `cp-hive`
+class of defect, and it reports the exact record id to act on. It ignores
+non-address record types, because a `TXT`, `CAA` or `MX` record under a managed
+name does not resolve to an origin and so cannot produce the 522.
 
-`cloudflare:apply` writes tunnel ingress only. DNS records are never created or
-deleted automatically, because deleting a DNS record is not something to retry
+## What `--apply` does, in order
+
+The configurations endpoint replaces tunnel ingress **wholesale**, so a live rule
+that is missing from `tunnel-ingress.json` is deleted by the write. `--apply`
+therefore never writes first:
+
+1. Reads live ingress and prints the full plan, listing every rule it would add,
+   change, `REMOVE`, or `DROP` (a top-level config key present live and absent
+   from the spec).
+2. Stops if the plan is empty and issues no write at all, so a repeated apply is
+   a genuine no-op rather than a rewrite.
+3. Otherwise waits for the operator to type `apply`. Without a terminal it
+   refuses unless `--yes` was passed, so it cannot silently destroy rules from a
+   pipeline.
+4. Writes, then re-reads and fails if live ingress still differs from the spec.
+
+`cloudflare:apply` writes tunnel ingress only, in every mode. DNS records are
+never created or deleted, because deleting a DNS record is not something to retry
 your way out of. The check prints what to change and a human does it.
 
 The token is only needed for these commands and is not required to deploy the

@@ -37,6 +37,16 @@
   },
 
   "config": {
+    "$comment": [
+      "warp-routing is pinned here because the configurations endpoint replaces",
+      "the whole config object: a spec that omitted it would silently drop the",
+      "live setting on the first apply. It is disabled, and should stay disabled",
+      "unless private network routing is deliberately introduced, which would be",
+      "a much larger decision than an ingress change."
+    ],
+    "warp-routing": {
+      "enabled": false
+    },
     "ingress": [
       {
         "hostname": "api-hive.scubed.co",

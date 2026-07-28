@@ -87,11 +87,15 @@ jobs:
         # retry with backoff instead of failing on the first miss.
         #
         # control-hive.scubed.co is the demo box's control-plane hostname
-        # (Cloudflare Tunnel maps it to localhost:8081 on this box). A second
-        # hostname, cp-hive.scubed.co, also currently resolves 200 but is a
-        # separate, older VM (40.233.86.19) that this job does not deploy to
-        # (see PR #440) — that stale DNS duplication is noted here for
-        # visibility, not resolved by this change.
+        # (Cloudflare Tunnel maps it to localhost:8081 on this box) and is the
+        # only one. An older second hostname, cp-hive.scubed.co, was a proxied
+        # A record to a retired VM (40.233.86.19) with no tunnel ingress rule
+        # behind it, so it timed out with 522 on every path rather than
+        # answering 200. That DNS record was deleted on 2026-07-27 and the name
+        # no longer resolves at all, which is why nothing below asserts it.
+        # deploy/cloudflare/tunnel-ingress.json is now the source of truth for
+        # which hostnames are public, and `npm run cloudflare:check` fails on
+        # any -hive.scubed.co record with no ingress rule behind it.
         run: |
           for i in $(seq 1 12); do
             api_ok=0; cp_ok=0; chat_ok=0
