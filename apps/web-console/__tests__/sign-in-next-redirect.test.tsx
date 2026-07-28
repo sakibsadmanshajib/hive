@@ -56,6 +56,24 @@ describe("app/auth/sign-in/page.tsx next-target redirect", () => {
     await vi.waitFor(() => expect(mockNavigate).toHaveBeenCalledWith("/console"));
   });
 
+  // Issue #534: the invitee arrives from an invite link, signs in, and must land
+  // back on acceptance with the token intact.
+  it("redirects back to /invitations/accept with the token preserved", async () => {
+    window.history.pushState(
+      {},
+      "",
+      `/auth/sign-in?next=${encodeURIComponent(
+        "/invitations/accept?token=invite-token-9",
+      )}`,
+    );
+    await submitForm();
+    await vi.waitFor(() =>
+      expect(mockNavigate).toHaveBeenCalledWith(
+        "/invitations/accept?token=invite-token-9",
+      ),
+    );
+  });
+
   it("redirects to the allow-listed /oauth/consent next target, preserving authorization_id", async () => {
     window.history.pushState(
       {},

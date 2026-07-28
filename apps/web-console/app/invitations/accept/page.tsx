@@ -3,8 +3,9 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { createClient } from "@/lib/supabase/server";
+import { appendNextParam } from "@/lib/auth/next-target";
 import { AuthShell } from "@/components/app-shell/auth-shell";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 
 interface AcceptPageProps {
   searchParams: Promise<{ token?: string }>;
@@ -12,24 +13,45 @@ interface AcceptPageProps {
 
 interface InvitationErrorBody {
   error?: string;
+  code?: string;
 }
 
-function readErrorMessage(text: string): string | null {
-  if (!text) return null;
+interface InvitationFailure {
+  code: string | null;
+  message: string | null;
+}
+
+function readErrorBody(text: string): InvitationFailure {
+  if (!text) return { code: null, message: null };
 
   try {
     const payload: unknown = JSON.parse(text);
-    if (payload === null || typeof payload !== "object") return null;
+    if (payload === null || typeof payload !== "object") {
+      return { code: null, message: null };
+    }
     const candidate = payload as InvitationErrorBody;
-    return typeof candidate.error === "string" ? candidate.error : null;
+    return {
+      code: typeof candidate.code === "string" ? candidate.code : null,
+      message: typeof candidate.error === "string" ? candidate.error : null,
+    };
   } catch {
-    return null;
+    return { code: null, message: null };
   }
 }
 
 export default async function AcceptInvitationPage({
   searchParams,
 }: AcceptPageProps) {
+  // Read the token before the auth check: a signed-out invitee has to carry it
+  // through sign-in (or sign-up plus email confirmation) and back here, or the
+  // invitation is unusable for exactly the people invitations are for. The
+  // `next` value stays a relative, allow-listed path, so this does not widen
+  // the open-redirect surface (see lib/auth/next-target.ts) (issue #534).
+  const { token } = await searchParams;
+  const returnTarget = token
+    ? `/invitations/accept?token=${encodeURIComponent(token)}`
+    : "/invitations/accept";
+
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
 
@@ -40,7 +62,7 @@ export default async function AcceptInvitationPage({
   } = await supabase.auth.getUser();
 
   if (!user) {
-    redirect("/auth/sign-in?next=/invitations/accept");
+    redirect(appendNextParam("/auth/sign-in", returnTarget));
   }
 
   const {
@@ -48,17 +70,15 @@ export default async function AcceptInvitationPage({
   } = await supabase.auth.getSession();
 
   if (!session) {
-    redirect("/auth/sign-in?next=/invitations/accept");
+    redirect(appendNextParam("/auth/sign-in", returnTarget));
   }
-
-  const { token } = await searchParams;
 
   if (!token) {
     return (
       <AuthShell
         eyebrow="Invitation"
         title="Invalid invitation"
-        subtitle="No invitation token was provided. Ask the workspace owner for a fresh link."
+        subtitle="This link carried no invitation token. Ask the workspace owner to send a new invitation."
       >
         <Link
           href="/console"
@@ -72,7 +92,7 @@ export default async function AcceptInvitationPage({
 
   const baseUrl = process.env.CONTROL_PLANE_BASE_URL;
 
-  let errorMessage: string | null = null;
+  let failure: InvitationFailure = { code: null, message: null };
   let accepted = false;
 
   if (baseUrl) {
@@ -90,20 +110,26 @@ export default async function AcceptInvitationPage({
       if (response.ok) {
         accepted = true;
       } else {
-        const responseText = await response.text().catch((): string => "");
-        errorMessage =
-          readErrorMessage(responseText) ??
-          `Failed to accept invitation (${response.status})`;
+        failure = readErrorBody(await response.text().catch((): string => ""));
+        if (!failure.message) {
+          failure = {
+            code: failure.code,
+            message: `Failed to accept invitation (${response.status})`,
+          };
+        }
       }
-    } catch (err: unknown) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Failed to connect to the server. Please try again.";
-      errorMessage = message;
+    } catch {
+      failure = {
+        code: "network_error",
+        message:
+          "We could not reach the server. Check your connection and open the invitation link again.",
+      };
     }
   } else {
-    errorMessage = "Server configuration error. Please contact support.";
+    failure = {
+      code: "server_configuration",
+      message: "Server configuration error. Please contact support.",
+    };
   }
 
   if (accepted) {
@@ -112,18 +138,126 @@ export default async function AcceptInvitationPage({
     redirect("/console/members?joined=1");
   }
 
-  return (
-    <AuthShell
-      eyebrow="Invitation"
-      title="Invitation error"
-      subtitle={errorMessage ?? "We couldn't accept this invitation."}
-    >
-      <Link
-        href="/console"
-        className={buttonVariants({ variant: "primary", size: "lg" })}
-      >
-        Go to console
-      </Link>
-    </AuthShell>
-  );
+  return renderFailure(failure, user.email ?? "");
+}
+
+// renderFailure states the real reason acceptance failed and offers the action
+// that can actually resolve it. Telling every invitee to request a fresh link is
+// wrong for a used token (a new link is not needed) and for the wrong signed-in
+// account (a new link fails identically) (issue #534).
+function renderFailure(failure: InvitationFailure, signedInEmail: string) {
+  switch (failure.code) {
+    case "invitation_expired":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="This invitation has expired"
+          subtitle="Invitations are valid for 72 hours. Ask the workspace owner to send a new invitation, then open the newest link."
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+
+    case "invitation_already_accepted":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="This invitation has already been accepted"
+          subtitle="Nothing more to do. The workspace is available from the workspace switcher in the console sidebar."
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+
+    case "invitation_already_member":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="You are already in this workspace"
+          subtitle="This invitation is for a workspace you already belong to. Pick it from the workspace switcher in the console sidebar."
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+
+    case "invitation_email_mismatch":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="Signed in as the wrong account"
+          subtitle={
+            <>
+              This invitation was sent to a different email address than the one
+              you are signed in with
+              {signedInEmail ? (
+                <>
+                  {" ("}
+                  <span className="font-mono text-[var(--color-ink)]">
+                    {signedInEmail}
+                  </span>
+                  {")"}
+                </>
+              ) : null}
+              . Sign out, sign in with the invited address, then open the
+              invitation link again.
+            </>
+          }
+        >
+          {/* Sign-out is POST-only so SameSite=Lax cookies cannot be used to
+              terminate a session through a cross-site navigation. */}
+          <form method="POST" action="/auth/sign-out">
+            <Button type="submit" variant="primary" size="lg">
+              Sign out
+            </Button>
+          </form>
+        </AuthShell>
+      );
+
+    case "invitation_not_found":
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="This invitation link is not valid"
+          subtitle="The link may have been altered or the invitation may have been withdrawn. Ask the workspace owner to send a new invitation."
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+
+    default:
+      return (
+        <AuthShell
+          eyebrow="Invitation"
+          title="Invitation error"
+          subtitle={failure.message ?? "We couldn't accept this invitation."}
+        >
+          <Link
+            href="/console"
+            className={buttonVariants({ variant: "primary", size: "lg" })}
+          >
+            Go to console
+          </Link>
+        </AuthShell>
+      );
+  }
 }
