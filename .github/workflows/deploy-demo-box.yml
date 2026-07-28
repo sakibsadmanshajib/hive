@@ -52,6 +52,36 @@ jobs:
           git fetch origin
           git pull --ff-only origin main
 
+      - name: Derive the pooler DSN split from the box's own .env
+        # The box's .env holds one SUPABASE_DB_URL, pointing at Supavisor's
+        # SESSION-mode port. Session-mode clients are 1:1 with server
+        # connections and capped at the project's pool_size of 15, shared by
+        # this stack, every CI job that boots a stack, the purge job and any
+        # one-off psql. That is why recreating open-webui here has been failing
+        # with EMAXCONNSESSION while the build itself succeeded.
+        #
+        # Derive both DSNs from that single value rather than adding a secret or
+        # editing the box's .env: a capped session DSN for control-plane, which
+        # needs session state, and a transaction-mode DSN for everyone who does
+        # not. Shell environment beats --env-file in compose interpolation, so
+        # exporting them here is enough for the compose file to pick them up.
+        working-directory: /home/sakib/hive
+        run: |
+          set -euo pipefail
+          existing=$(grep -E '^SUPABASE_DB_URL=' .env | head -1 | cut -d= -f2-)
+          # A hand-edited .env may quote the value; the DSN parser must not see
+          # the quotes.
+          existing="${existing%\"}"; existing="${existing#\"}"
+          existing="${existing%\'}"; existing="${existing#\'}"
+          if [ -z "$existing" ]; then
+            echo "::error::SUPABASE_DB_URL is missing or empty in the box's .env"
+            exit 1
+          fi
+          python3 scripts/derive-pooler-dsn.py --self-test
+          # stdout is the KEY=value pairs; the script logs a password-free
+          # host/port/params summary on stderr.
+          python3 scripts/derive-pooler-dsn.py --dsn "$existing" >> "$GITHUB_ENV"
+
       - name: Rebuild + recreate changed services
         # `--build` only rebuilds layers whose inputs changed (Docker build
         # cache), so this is cheap even though no service list is scoped out.
