@@ -13,6 +13,12 @@ import (
 type Repository interface {
 	LoadAliasPolicy(ctx context.Context, aliasID string) (catalog.AliasPolicySnapshot, error)
 	ListRouteCandidates(ctx context.Context, aliasID string) ([]RouteCandidate, error)
+	// LoadAliasPricing reads the alias's per-model credit price from
+	// public.model_aliases. A missing row is not an error: it returns the
+	// catalog.CatalogPricing zero value so a data-inconsistency on the
+	// pricing side never blocks a route the routing tables already
+	// approved (metering step 2, shadow mode; see SelectionResult.Pricing).
+	LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error)
 }
 
 type pgxRepository struct {
@@ -108,6 +114,43 @@ func (r *pgxRepository) ListRouteCandidates(ctx context.Context, aliasID string)
 	}
 
 	return candidates, nil
+}
+
+// LoadAliasPricing reads public.model_aliases directly rather than going
+// through catalog.Service: routing already depends on the catalog package
+// for AliasPolicySnapshot, and a same-transactionable direct read keeps this
+// addition to one query on the pool routing already holds, with no new
+// cross-package call and no new network hop (metering step 2 brief section
+// 2.5).
+func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error) {
+	row := r.pool.QueryRow(ctx, `
+		SELECT
+			input_price_credits,
+			output_price_credits,
+			cache_read_price_credits,
+			cache_write_price_credits
+		FROM public.model_aliases
+		WHERE alias_id = $1
+	`, aliasID)
+
+	var pricing catalog.CatalogPricing
+	if err := row.Scan(
+		&pricing.InputPriceCredits,
+		&pricing.OutputPriceCredits,
+		&pricing.CacheReadPriceCredits,
+		&pricing.CacheWritePriceCredits,
+	); err != nil {
+		if err == pgx.ErrNoRows {
+			// No model_aliases row for an alias the routing tables already
+			// resolved is a data-inconsistency case, not a request-level
+			// error: return the zero value so SelectRoute keeps working and
+			// the caller reads it as "no cost basis available".
+			return catalog.CatalogPricing{}, nil
+		}
+		return catalog.CatalogPricing{}, fmt.Errorf("routing: load alias pricing: %w", err)
+	}
+
+	return pricing, nil
 }
 
 type rowScanner interface {
