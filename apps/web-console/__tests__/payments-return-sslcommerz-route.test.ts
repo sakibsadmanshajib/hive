@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
 
 // The SSLCommerz browser return is a cross-site form POST, which a Next.js page
 // cannot serve. This route absorbs the POST and redirects the browser onward to
@@ -11,8 +12,8 @@ vi.mock("next/headers", () => ({
 
 const INTENT = "123e4567-e89b-12d3-a456-426614174000";
 
-function formPost(body: Record<string, string>, search = ""): Request {
-  return new Request(`http://localhost:3000/api/payments/return/sslcommerz${search}`, {
+function formPost(body: Record<string, string>, search = ""): NextRequest {
+  return new NextRequest(`http://localhost:3000/api/payments/return/sslcommerz${search}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -82,7 +83,7 @@ describe("app/api/payments/return/sslcommerz/route.ts", () => {
   it("redirects on GET too, since a provider may return the browser without a POST", async () => {
     const { GET } = await import("../app/api/payments/return/sslcommerz/route");
     const res = await GET(
-      new Request(`http://localhost:3000/api/payments/return/sslcommerz?intent=${INTENT}`, {
+      new NextRequest(`http://localhost:3000/api/payments/return/sslcommerz?intent=${INTENT}`, {
         headers: { host: "localhost:3000" },
       }),
     );

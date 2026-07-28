@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
 import {
@@ -23,9 +23,10 @@ import {
 //     cookies anyway; the redirect that follows is a top-level navigation, so the
 //     return page itself is authenticated normally.
 
-async function intentIdFromRequest(request: Request): Promise<string | null> {
-  const url = new URL(request.url);
-  const fromQuery = parseIntentId(url.searchParams.get("intent"));
+// nextUrl, not request.url: Next derives request.url from the server's own bind
+// address, so reading it is banned by tools/lint-no-request-url-origin.mjs.
+async function intentIdFromRequest(request: NextRequest): Promise<string | null> {
+  const fromQuery = parseIntentId(request.nextUrl.searchParams.get("intent"));
   if (fromQuery) return fromQuery;
 
   if (request.method !== "POST") return null;
@@ -39,14 +40,14 @@ async function intentIdFromRequest(request: Request): Promise<string | null> {
   }
 }
 
-function redirectTo(request: Request, path: string, params: URLSearchParams): Response {
+function redirectTo(request: NextRequest, path: string, params: URLSearchParams): Response {
   const target = new URL(path, resolveCanonicalOrigin(request));
   target.search = params.toString();
   // 303 so the browser follows with a GET regardless of how it arrived here.
   return NextResponse.redirect(target, 303);
 }
 
-async function handle(request: Request): Promise<Response> {
+async function handle(request: NextRequest): Promise<Response> {
   const intentId = await intentIdFromRequest(request);
 
   if (!intentId) {
@@ -56,7 +57,7 @@ async function handle(request: Request): Promise<Response> {
   }
 
   const params = new URLSearchParams({ rail: "sslcommerz", intent: intentId });
-  const hint = parseReturnHint(new URL(request.url).searchParams.get("hint"));
+  const hint = parseReturnHint(request.nextUrl.searchParams.get("hint"));
   if (hint) {
     params.set("hint", hint);
   }
@@ -64,10 +65,10 @@ async function handle(request: Request): Promise<Response> {
   return redirectTo(request, CHECKOUT_RETURN_PATH, params);
 }
 
-export async function POST(request: Request): Promise<Response> {
+export async function POST(request: NextRequest): Promise<Response> {
   return handle(request);
 }
 
-export async function GET(request: Request): Promise<Response> {
+export async function GET(request: NextRequest): Promise<Response> {
   return handle(request);
 }

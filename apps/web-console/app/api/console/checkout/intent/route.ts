@@ -1,5 +1,5 @@
 import { cookies } from "next/headers";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import { ControlPlaneError, getCheckoutIntent } from "@/lib/control-plane/client";
@@ -11,7 +11,7 @@ import { parseIntentId } from "@/lib/payments/checkout-return";
 // GET-only and forwards a read; it can neither settle a payment nor grant a
 // credit. Ownership is enforced upstream: the control-plane scopes the lookup to
 // the authenticated viewer's account and answers 404 for anything else.
-export async function GET(request: Request): Promise<Response> {
+export async function GET(request: NextRequest): Promise<Response> {
   const cookieStore = await cookies();
   const supabase = createClient(cookieStore);
   const {
@@ -22,7 +22,9 @@ export async function GET(request: Request): Promise<Response> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const intentId = parseIntentId(new URL(request.url).searchParams.get("payment_intent_id"));
+  // nextUrl, not request.url: Next derives request.url from the server's own
+  // bind address, so reading it is banned by tools/lint-no-request-url-origin.mjs.
+  const intentId = parseIntentId(request.nextUrl.searchParams.get("payment_intent_id"));
   if (!intentId) {
     return NextResponse.json(
       { error: "payment_intent_id must be a UUID" },
