@@ -689,12 +689,18 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          # Password is stored in its raw decoded form — URL-encode it here so the
-          # resulting URL round-trips through pgx/pgconn URL parsing correctly.
-          ENC_PW=$(python3 -c 'import os,urllib.parse as u; print(u.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
-          url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
-          echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
-          echo "reconstructed DB URL (host=${SUPABASE_DB_HOST}, port=${SUPABASE_DB_PORT}, user=${SUPABASE_DB_USER}, db=${SUPABASE_DB_NAME})"
+          # The script URL-encodes the password, which is stored in its raw
+          # decoded form, and emits both DSNs: a capped session-mode
+          # SUPABASE_DB_URL for control-plane, which needs session state, and a
+          # transaction-mode SUPABASE_DB_POOL_URL for edge-api and open-webui,
+          # which do not. Session-mode clients are capped at the project's
+          # pool_size of 15 and shared with the live demo stack, so a CI job that
+          # booted a stack on session mode alone could take chat-hive offline.
+          python3 scripts/derive-pooler-dsn.py --self-test
+          python3 scripts/derive-pooler-dsn.py \
+            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
+            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
+            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Pre-verify secrets reached runner env
         shell: bash
@@ -968,9 +974,16 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           set -euo pipefail
-          ENC_PW=$(python3 -c 'import os,urllib.parse as u; print(u.quote(os.environ["SUPABASE_DB_PASSWORD"], safe=""))')
-          url="postgresql://${SUPABASE_DB_USER}:${ENC_PW}@${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}/${SUPABASE_DB_NAME}"
-          echo "SUPABASE_DB_URL=$url" >> "$GITHUB_ENV"
+          # Emits a capped session-mode SUPABASE_DB_URL for control-plane and a
+          # transaction-mode SUPABASE_DB_POOL_URL for edge-api and open-webui.
+          # Session-mode clients are capped at the project's pool_size of 15 and
+          # shared with the live demo stack, so a CI job that booted a stack on
+          # session mode alone could take chat-hive offline.
+          python3 scripts/derive-pooler-dsn.py --self-test
+          python3 scripts/derive-pooler-dsn.py \
+            --host "$SUPABASE_DB_HOST" --port "$SUPABASE_DB_PORT" \
+            --user "$SUPABASE_DB_USER" --dbname "$SUPABASE_DB_NAME" \
+            --password "$SUPABASE_DB_PASSWORD" >> "$GITHUB_ENV"
 
       - name: Cache third-party images (redis, litellm)
         id: img-cache
