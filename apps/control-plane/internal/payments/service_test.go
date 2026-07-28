@@ -272,7 +272,7 @@ func TestInitiateCheckout_HappyPath_Stripe(t *testing.T) {
 	stripeRail := newStubRail(RailStripe)
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: stripeRail})
 
-	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://app.example.com", "idem-001")
+	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://cp.example.com", "https://console.example.com", "idem-001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -318,7 +318,7 @@ func TestInitiateCheckout_BDRail_CreatesFXSnapshot(t *testing.T) {
 	bkashRail := newStubRail(RailBkash)
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailBkash: bkashRail})
 
-	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, 100_000, "https://app.example.com", "idem-bd-001")
+	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, 100_000, "https://cp.example.com", "https://console.example.com", "idem-bd-001")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -346,7 +346,7 @@ func TestInitiateCheckout_RejectsMissingBillingProfile(t *testing.T) {
 	fxProv := &stubFXProvider{}
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://app.example.com", "idem-002")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://cp.example.com", "https://console.example.com", "idem-002")
 	if !errors.Is(err, ErrBillingProfileRequired) {
 		t.Errorf("expected ErrBillingProfileRequired, got %v", err)
 	}
@@ -365,7 +365,7 @@ func TestInitiateCheckout_RejectsEmptyBillingContactName(t *testing.T) {
 	fxProv := &stubFXProvider{}
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://app.example.com", "idem-003")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 100_000, "https://cp.example.com", "https://console.example.com", "idem-003")
 	if !errors.Is(err, ErrBillingProfileRequired) {
 		t.Errorf("expected ErrBillingProfileRequired, got %v", err)
 	}
@@ -381,7 +381,7 @@ func TestInitiateCheckout_RejectsInvalidCredits(t *testing.T) {
 	fxProv := &stubFXProvider{}
 	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 500, "https://app.example.com", "idem-004")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 500, "https://cp.example.com", "https://console.example.com", "idem-004")
 	if err == nil {
 		t.Error("expected error for non-multiple-of-1000 credits, got nil")
 	}
@@ -401,7 +401,7 @@ func TestInitiateCheckout_RejectsUnavailableRail(t *testing.T) {
 		RailBkash:  newStubRail(RailBkash),
 	})
 
-	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, 100_000, "https://app.example.com", "idem-005")
+	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailBkash, 100_000, "https://cp.example.com", "https://console.example.com", "idem-005")
 	if err == nil {
 		t.Error("expected error for unavailable rail (bkash for US account), got nil")
 	}

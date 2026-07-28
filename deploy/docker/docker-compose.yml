@@ -312,6 +312,18 @@ services:
       # Set it explicitly only where the public base URL is not the request
       # Host, for example behind a proxy that rewrites Host.
       CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL:-}
+      # Console origin the payment rails return the customer's BROWSER to
+      # (issue #538). This is a different concern from CONTROL_PLANE_PUBLIC_URL
+      # above: that one is where a provider posts its server-to-server webhook,
+      # this one is where the paying customer's browser is sent afterwards.
+      # Same no-default rule for the same reason. A loopback value here is
+      # demoted below any real origin and refused outright for a non-loopback
+      # request, so a box cannot silently return a payer to localhost.
+      # CONSOLE_APP_URL is the deployed console origin and is consulted next,
+      # then NEXT_PUBLIC_APP_URL, which ships as a localhost placeholder.
+      WEB_CONSOLE_PUBLIC_URL: ${WEB_CONSOLE_PUBLIC_URL:-}
+      CONSOLE_APP_URL: ${CONSOLE_APP_URL:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       OWUI_BASE_URL: ${OWUI_BASE_URL:-http://open-webui:8080}
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}

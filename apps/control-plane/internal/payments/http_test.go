@@ -30,23 +30,42 @@ type stubPaymentService struct {
 
 	handleEventErr error
 
+	intentView *payments.CheckoutIntentView
+	intentErr  error
+
 	// recorded args
-	lastHandleRail payments.Rail
-	lastHandleBody []byte
+	lastHandleRail    payments.Rail
+	lastHandleBody    []byte
+	handleEventCalls  int
+	lastCallbackURL   string
+	lastReturnBaseURL string
+	lastIntentAccount uuid.UUID
+	lastIntentID      uuid.UUID
+	intentCalls       int
 }
 
 func (s *stubPaymentService) GetCheckoutOptions(_ context.Context, _ uuid.UUID) (*payments.CheckoutOptions, error) {
 	return s.checkoutOptions, s.checkoutErr
 }
 
-func (s *stubPaymentService) InitiateCheckout(_ context.Context, _ uuid.UUID, _ payments.Rail, _ int64, _, _ string) (*payments.PaymentIntent, error) {
+func (s *stubPaymentService) InitiateCheckout(_ context.Context, _ uuid.UUID, _ payments.Rail, _ int64, callbackBaseURL, returnBaseURL, _ string) (*payments.PaymentIntent, error) {
+	s.lastCallbackURL = callbackBaseURL
+	s.lastReturnBaseURL = returnBaseURL
 	return s.initiateResult, s.initiateErr
 }
 
 func (s *stubPaymentService) HandleProviderEvent(_ context.Context, rail payments.Rail, rawBody []byte, _ map[string]string) error {
 	s.lastHandleRail = rail
 	s.lastHandleBody = rawBody
+	s.handleEventCalls++
 	return s.handleEventErr
+}
+
+func (s *stubPaymentService) GetCheckoutIntent(_ context.Context, accountID, intentID uuid.UUID) (*payments.CheckoutIntentView, error) {
+	s.intentCalls++
+	s.lastIntentAccount = accountID
+	s.lastIntentID = intentID
+	return s.intentView, s.intentErr
 }
 
 // stubAccountResolver always returns a fixed accountID or an error.
