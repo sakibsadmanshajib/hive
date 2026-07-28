@@ -23,7 +23,16 @@ services:
       # SUPABASE_DB_URL: For the enterprise profile set this to the local DSN:
       #   postgres://postgres:<ENTERPRISE_DB_PASSWORD>@supabase-db:5432/postgres
       # For cloud/local profiles set this to the hosted Supabase DB URL.
-      SUPABASE_DB_URL: ${SUPABASE_DB_URL}
+      #
+      # edge-api prefers the TRANSACTION-mode pooler when one is configured.
+      # Session-mode clients are capped at the project's pool_size of 15 and
+      # every consumer shares that ceiling, so a service that does not need
+      # session state should not hold a slot. edge-api only ever takes
+      # pg_advisory_xact_lock and SET LOCAL, both transaction scoped, so it is
+      # safe here. control-plane is not; see its own SUPABASE_DB_URL below.
+      # Unset SUPABASE_DB_POOL_URL falls back to the session DSN, so an
+      # enterprise or local Postgres deployment behaves exactly as before.
+      SUPABASE_DB_URL: ${SUPABASE_DB_POOL_URL:-${SUPABASE_DB_URL}}
       S3_ENDPOINT: ${S3_ENDPOINT}
       S3_ACCESS_KEY: ${S3_ACCESS_KEY}
       S3_SECRET_KEY: ${S3_SECRET_KEY}
@@ -271,6 +280,14 @@ services:
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY}
       # Enterprise profile: set to local Postgres DSN:
       #   postgres://postgres:<ENTERPRISE_DB_PASSWORD>@supabase-db:5432/postgres
+      #
+      # Deliberately the SESSION-mode DSN, never SUPABASE_DB_POOL_URL.
+      # control-plane holds one connection open for the process lifetime on
+      # LISTEN tenant_settings_changed, and takes a session-scoped
+      # pg_advisory_lock that it holds across a whole credit reservation. Under
+      # a transaction-mode pooler both keep looking healthy while doing nothing.
+      # platformdb.Open refuses port 6543 outright so this cannot be changed by
+      # accident.
       SUPABASE_DB_URL: ${SUPABASE_DB_URL}
       REDIS_URL: ${REDIS_URL}
       # Enterprise profile: set to local Storage endpoint:
@@ -641,7 +658,18 @@ services:
       # authenticate at all (see scripts/seed-owui-e2e-user.py).
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
       VECTOR_DB: "pgvector"
-      PGVECTOR_DB_URL: ${SUPABASE_DB_URL:-}
+      # TRANSACTION-mode pooler when one is configured. This is the connection
+      # that has actually been failing: a recreated open-webui could not get a
+      # session-mode client (FATAL: (EMAXCONNSESSION) max clients reached in
+      # session mode, pool_size 15) because the Go services and CI had already
+      # taken the slots, so the container crash-looped and took chat-hive with
+      # it. Both users of this DSN are safe under transaction mode: SQLAlchemy
+      # here talks to pgvector through psycopg2, which uses no server-side
+      # prepared statements, and the #457 tenant-role patch
+      # (owui-patches/tenant_role_from_db.py) opens and closes its own psycopg2
+      # connection per login with no session state. Unset falls back to the
+      # session DSN, so local and enterprise stacks are unaffected.
+      PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL:-${SUPABASE_DB_URL:-}}
       RAG_TOP_K: "5"
       ENABLE_RAG_HYBRID_SEARCH: "true"
       DATA_DIR: "/data"

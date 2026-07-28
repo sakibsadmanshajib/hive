@@ -26,12 +26,32 @@ jobs:
           sudo apt-get install -y -qq postgresql-client jq
           python3 -m pip install --quiet --upgrade awscli
 
+      - name: Pick the transaction-mode pooler port
+        # This job is short lived and needs no session state, so it has no
+        # business holding one of the project's 15 session-mode client slots.
+        # Those slots are shared with the live demo stack, and this job failing
+        # on EMAXCONNSESSION means CI fixture rows are never purged, which grows
+        # the shared-fixture surface and drives more contention: a closed loop.
+        # A direct Postgres serves every mode on its one port, so only a
+        # Supavisor pooler host gets the 6543 override.
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+        run: |
+          set -euo pipefail
+          port="$PGPORT"
+          case "$PGHOST" in
+            *.pooler.supabase.com) port=6543 ;;
+          esac
+          echo "PG_POOL_PORT=$port" >> "$GITHUB_ENV"
+          echo "psql will connect to $PGHOST:$port"
+
       - name: Resolve CI api_key_id + account_id
         id: keys
         env:
           HIVE_API_KEY: ${{ secrets.HIVE_API_KEY }}
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGPORT: ${{ env.PG_POOL_PORT }}
           PGUSER: ${{ secrets.SUPABASE_DB_USER }}
           PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -70,7 +90,7 @@ jobs:
         id: paths
         env:
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGPORT: ${{ env.PG_POOL_PORT }}
           PGUSER: ${{ secrets.SUPABASE_DB_USER }}
           PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -126,7 +146,7 @@ jobs:
         if: steps.keys.outputs.skip != '1'
         env:
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
-          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+          PGPORT: ${{ env.PG_POOL_PORT }}
           PGUSER: ${{ secrets.SUPABASE_DB_USER }}
           PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
