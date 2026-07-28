@@ -273,26 +273,33 @@ async function seedAccountsAndMemberships(
   );
   if (accErr) throw new Error(`accounts upsert failed: ${accErr.message}`);
 
-  const pairsToClear: Array<[string, string]> = [
-    [FIXED.verifiedPrimaryAccountId, verifiedUser.id],
-    [FIXED.verifiedSecondaryAccountId, verifiedUser.id],
-    [FIXED.invitedAccountId, verifiedUser.id],
-    [FIXED.unverifiedAccountId, unverifiedUser.id],
-    [FIXED.verifiedSecondaryAccountId, inviterUser.id],
-    [FIXED.invitedAccountId, inviterUser.id],
-  ];
-
-  for (const [accountId, userId] of pairsToClear) {
-    const { error } = await admin
-      .from("account_memberships")
-      .delete()
-      .eq("account_id", accountId)
-      .eq("user_id", userId);
-    if (error) {
-      throw new Error(
-        `membership delete failed (${accountId}/${userId}): ${error.message}`,
-      );
-    }
+  // Only one (account_id, user_id) pair needs to be cleared rather than
+  // upserted: verifiedUser's membership in the invited workspace, which must
+  // start each reset UNACCEPTED so the invitation-acceptance spec has
+  // something to accept. Every other pair below is already going to be
+  // written by the upsert immediately after this, so it never needs a
+  // separate delete first.
+  //
+  // This used to delete all six pairs, then upsert five of them back a
+  // moment later in a second, non-atomic Supabase call. Between those two
+  // calls every one of those rows briefly had zero memberships. A read
+  // landing in that window (this job's own, or a concurrent CI job's,
+  // hitting these same fixed ids) saw an empty membership list and tripped
+  // control-plane's EnsureViewerContext into provisionDefaultWorkspace,
+  // handing the signed-in user a brand new, unrelated workspace instead of
+  // the fixture's intended one. That is what produced auth-shell.spec.ts's
+  // "members page redirects unverified users" failure: a genuine server
+  // error, not stale data, from a page whose Promise.all had nothing to
+  // catch it.
+  const { error: clearErr } = await admin
+    .from("account_memberships")
+    .delete()
+    .eq("account_id", FIXED.invitedAccountId)
+    .eq("user_id", verifiedUser.id);
+  if (clearErr) {
+    throw new Error(
+      `membership delete failed (${FIXED.invitedAccountId}/${verifiedUser.id}): ${clearErr.message}`,
+    );
   }
 
   const { error: memErr } = await admin
