@@ -36,22 +36,76 @@ import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import assert from "node:assert/strict";
 
-// A file names the LiteLLM proxy: its address, its credential, or its client.
-// A whitelist of identifier shapes, not a blacklist of one wrong expression, so
-// renaming a variable cannot slip past.
-const LITELLM_TARGET =
-  /litellm(url|baseurl|base_url|base|key|masterkey|master_key|client)/i;
+// A file mentions the LiteLLM proxy at all: its address, its credential, its
+// client type, a receiver named after it, or the environment variables carrying
+// it. Deliberately the widest possible match rather than a list of the
+// identifier shapes that happen to exist today, because this repo's origin lint
+// taught it the hard way that a guard matching only the shapes already fixed
+// catches no new variant. A file mentioning LiteLLM only in a comment is
+// harmless: it is flagged only if it also dispatches (see DISPATCH), and a false
+// positive costs a reviewer one line of explanation while a false negative costs
+// unmetered inference.
+const LITELLM_TARGET = /litellm/i;
 
-// ...and actually sends a request somewhere.
-const DISPATCH = /http\.NewRequest|http\.Post|httpClient\.Do|HTTP\.Do|\.Do\(/;
+// ...and actually sends the request. Covers a hand-built request on any client
+// (including a fresh http.Client rather than an injected one), the convenience
+// helpers, and dispatch through the shared LiteLLM client's methods, which is
+// how a new handler would most plausibly reach the proxy without writing any
+// HTTP itself.
+const DISPATCH = new RegExp([
+  "http\\.NewRequest",
+  "http\\.Post",
+  "http\\.Get",
+  "http\\.Client\\{",
+  "\\.Do\\(",
+  "dispatchWithRetry",
+  "\\.ChatCompletion\\(",
+  "\\.Completion\\(",
+  "\\.Embeddings\\(",
+  "\\.Speech\\(",
+  "\\.ImageGeneration\\(",
+  "\\.ImageEditRaw\\(",
+  "\\.TranscriptionRaw\\(",
+  "\\.dispatch\\(",
+].join("|"));
 
 // ...and resolves a client alias to a route.
 const ROUTE_SELECTION = /SelectRoute/;
 
 const SCAN_PREFIX = "apps/edge-api/internal/";
 
+// The single wiring site where the LiteLLM address and credential enter the
+// process. Whatever a handler calls its own field, its value comes from here, so
+// this is the choke point that catches a dispatcher whose own identifiers avoid
+// the word "litellm" entirely.
+const WIRING_FILE = "apps/edge-api/cmd/server/main.go";
+const WIRING_RESOLVERS = /resolveLiteLLM(BaseURL|MasterKey)\(\)/;
+const PACKAGE_QUALIFIER = /\b([a-z][a-z0-9]*)\.[A-Z][A-Za-z0-9]*/g;
+
 function dispatchesToLiteLLM(source) {
   return LITELLM_TARGET.test(source) && DISPATCH.test(source);
+}
+
+// packagesGivenTheLiteLLMTarget returns the package qualifiers that receive the
+// LiteLLM address or master key at the wiring site, e.g. "chat" from
+// `chat.NewDispatch(chat.Deps{ ... LiteLLMURL: resolveLiteLLMBaseURL() ... })`.
+// It walks back from each resolver call to the nearest constructor or composite
+// literal, which is a heuristic but a stable one: Go composite literals name
+// their type, and the wiring site is a flat list of them.
+function packagesGivenTheLiteLLMTarget(source) {
+  const lines = source.split("\n");
+  const packages = new Set();
+  lines.forEach((line, index) => {
+    if (!WIRING_RESOLVERS.test(line)) return;
+    for (let back = index; back >= Math.max(0, index - 20); back--) {
+      const matches = [...lines[back].matchAll(PACKAGE_QUALIFIER)];
+      if (matches.length > 0) {
+        packages.add(matches[matches.length - 1][1]);
+        return;
+      }
+    }
+  });
+  return packages;
 }
 
 function selfTest() {
@@ -75,6 +129,50 @@ function selfTest() {
     dispatchesToLiteLLM(benign),
     false,
     "detector flags in-process delegation to the OpenAI chat path",
+  );
+
+  // Variants a future handler could plausibly be written in. Each must still be
+  // caught, because the origin lint in this repo taught us that a guard matching
+  // only the shapes already fixed is a guard that catches nothing new.
+  const variants = {
+    "its own http.Client rather than an injected one": `
+      client := &http.Client{Timeout: time.Minute}
+      resp, err := client.Post(cfg.LiteLLMBaseURL+"/v1/chat/completions", "application/json", body)
+    `,
+    "the shared LiteLLM client's method, writing no HTTP itself": `
+      resp, err := h.litellmClient.ChatCompletion(ctx, req.Model, body)
+    `,
+    "the retry helper": `
+      resp, err := dispatchWithRetry(ctx, req.Model, body, h.litellm.ChatCompletion)
+    `,
+    "a plain http.Post to an env-sourced address": `
+      base := os.Getenv("LITELLM_BASE_URL")
+      resp, err := http.Post(base+"/chat/completions", "application/json", body)
+    `,
+    "a differently named field on a LiteLLM client type": `
+      upstream, err := http.NewRequestWithContext(ctx, http.MethodPost, c.proxyBase+"/chat/completions", body)
+      resp, err := c.transport.Do(upstream)
+      var _ LiteLLMClient
+    `,
+  };
+  for (const [label, sample] of Object.entries(variants)) {
+    assert.equal(dispatchesToLiteLLM(sample), true, `detector misses ${label}`);
+  }
+
+  // The wiring-site rule: a handler whose own identifiers avoid the word
+  // "litellm" is still caught, because the address it is handed comes from the
+  // one resolver in main.go.
+  const wiring = `
+	rogueHandler := rogue.NewHandler(rogue.Deps{
+		UpstreamURL: resolveLiteLLMBaseURL(),
+		UpstreamKey: resolveLiteLLMMasterKey(),
+	})
+  `;
+  const wired = packagesGivenTheLiteLLMTarget(wiring);
+  assert.equal(
+    wired.has("rogue"),
+    true,
+    "wiring-site rule no longer attributes the LiteLLM address to the package that receives it",
   );
 }
 
@@ -108,16 +206,39 @@ if (dispatchers.size === 0) {
   process.exit(1);
 }
 
+const EXPLANATION =
+  `  LiteLLM model names are route ids, so an unresolved dispatch lets a caller address a\n` +
+  `  route directly and skip per-tenant model entitlement, the API-key alias allowlist, and\n` +
+  `  credit metering. Resolve the client alias through inference.RoutingClient.SelectRoute,\n` +
+  `  or delegate to a handler that does.`;
+
 let violations = 0;
 for (const [pkgDir, offenders] of dispatchers) {
   if (resolvers.has(pkgDir)) continue;
   violations++;
   console.error(
     `${pkgDir}: dispatches to LiteLLM but never calls SelectRoute (${offenders.join(", ")})\n` +
-      `  LiteLLM model names are route ids, so an unresolved dispatch lets a caller address a\n` +
-      `  route directly and skip per-tenant model entitlement, the API-key alias allowlist, and\n` +
-      `  credit metering. Resolve the client alias through inference.RoutingClient.SelectRoute,\n` +
-      `  or delegate to a handler that does.`,
+      EXPLANATION,
+  );
+}
+
+// Second rule: whoever is handed the LiteLLM address or master key at the wiring
+// site must resolve aliases, whatever it calls its own fields.
+const wiringSource = readFileSync(WIRING_FILE, "utf8");
+const wiredPackages = packagesGivenTheLiteLLMTarget(wiringSource);
+const knownPackages = new Map(); // package name -> dir
+for (const file of files) {
+  const pkgDir = file.slice(0, file.lastIndexOf("/"));
+  knownPackages.set(pkgDir.slice(pkgDir.lastIndexOf("/") + 1), pkgDir);
+}
+for (const pkgName of wiredPackages) {
+  const pkgDir = knownPackages.get(pkgName);
+  if (!pkgDir) continue; // not an edge-api internal package (e.g. the inference transport itself)
+  if (resolvers.has(pkgDir)) continue;
+  violations++;
+  console.error(
+    `${pkgDir}: is handed the LiteLLM address or master key in ${WIRING_FILE} but never ` +
+      `calls SelectRoute\n` + EXPLANATION,
   );
 }
 

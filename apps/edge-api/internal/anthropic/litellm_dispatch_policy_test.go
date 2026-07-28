@@ -23,13 +23,22 @@ import (
 )
 
 var (
-	// liteLLMTargetRegex matches a reference to the LiteLLM proxy's address or
-	// credential. It is a whitelist of the identifier shapes the codebase uses
-	// for them, not a blacklist of one wrong expression, so renaming a variable
-	// does not slip past the guard.
-	liteLLMTargetRegex = regexp.MustCompile(`(?i)litellm(url|baseurl|base_url|base|key|masterkey|master_key|client)`)
-	// liteLLMDispatchRegex matches actually sending a request somewhere.
-	liteLLMDispatchRegex = regexp.MustCompile(`http\.NewRequest|http\.Post|httpClient\.Do|HTTP\.Do|\.Do\(`)
+	// liteLLMTargetRegex matches any mention of the LiteLLM proxy: its address,
+	// its credential, its client type, or a receiver named after it. It is
+	// deliberately the widest possible match rather than a list of the identifier
+	// shapes that exist today, because a guard matching only the shapes already
+	// fixed catches no new variant. A file that mentions LiteLLM only in a comment
+	// is flagged only if it also dispatches, and a false positive costs one line
+	// of explanation while a false negative costs unmetered inference.
+	liteLLMTargetRegex = regexp.MustCompile(`(?i)litellm`)
+	// liteLLMDispatchRegex matches actually sending the request: a hand-built
+	// request on any client, the convenience helpers, or dispatch through the
+	// shared LiteLLM client's methods, which is how a new handler would most
+	// plausibly reach the proxy without writing any HTTP itself.
+	liteLLMDispatchRegex = regexp.MustCompile(
+		`http\.NewRequest|http\.Post|http\.Get|http\.Client\{|\.Do\(|dispatchWithRetry|` +
+			`\.ChatCompletion\(|\.Completion\(|\.Embeddings\(|\.Speech\(|\.ImageGeneration\(|` +
+			`\.ImageEditRaw\(|\.TranscriptionRaw\(|\.dispatch\(`)
 	// routeSelectionRegex matches resolving a client alias to a route.
 	routeSelectionRegex = regexp.MustCompile(`SelectRoute`)
 )
@@ -61,6 +70,31 @@ func TestLiteLLMDispatchDetectorIsNotVacuous(t *testing.T) {
 	`
 	if dispatchesToLiteLLM(benign) {
 		t.Fatal("detector flags in-process delegation to the OpenAI chat path")
+	}
+
+	// Variants a future handler could plausibly be written in. Each must still be
+	// caught: a guard that only recognises the shape already fixed is a guard that
+	// catches nothing new.
+	variants := map[string]string{
+		"its own http.Client rather than an injected one": `
+			client := &http.Client{Timeout: time.Minute}
+			resp, err := client.Post(cfg.LiteLLMBaseURL+"/v1/chat/completions", "application/json", body)
+		`,
+		"the shared LiteLLM client's method, writing no HTTP itself": `
+			resp, err := h.litellmClient.ChatCompletion(ctx, req.Model, body)
+		`,
+		"the retry helper": `
+			resp, err := dispatchWithRetry(ctx, req.Model, body, h.litellm.ChatCompletion)
+		`,
+		"a plain http.Post to an env-sourced address": `
+			base := os.Getenv("LITELLM_BASE_URL")
+			resp, err := http.Post(base+"/chat/completions", "application/json", body)
+		`,
+	}
+	for label, sample := range variants {
+		if !dispatchesToLiteLLM(sample) {
+			t.Errorf("detector misses %s", label)
+		}
 	}
 }
 
