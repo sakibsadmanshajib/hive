@@ -246,6 +246,15 @@ func (p *Provisioner) provision(ctx context.Context, tenantID uuid.UUID, in Reco
 		return fmt.Errorf("insert tenant_users: %w", err)
 	}
 
+	// Backend metering (vault spec-2026-07-28-backend-metering.md section
+	// 9.2, Step 1) needs every tenant mapped to a billing account before the
+	// gate can meter it. Best-effort and non-fatal: a billing-account gap is
+	// caught later by the metering gate's own fail-closed check, so it must
+	// never block a user from getting their tenant membership.
+	if err := p.ensureTenantBillingAccount(ctx, tenantID); err != nil {
+		log.Printf("signup: tenant billing account not resolved tenant=%s: %v", tenantID, err)
+	}
+
 	_ = p.deps.Audit.Log(ctx, audit.Event{
 		TenantID: tenantID,
 		Actor:    audit.Actor{ID: in.UserID, Type: audit.ActorUser},
@@ -300,5 +309,69 @@ func (p *Provisioner) provision(ctx context.Context, tenantID uuid.UUID, in Reco
 		Severity: audit.SeverityInfo,
 		After:    map[string]string{"group_id": groupID, "email_sha256": emailToken, "domain": emailDomain},
 	})
+	return nil
+}
+
+// ensureTenantBillingAccount maps tenantID to a billing account in
+// public.tenant_billing_accounts, the table introduced by migration
+// 20260728_01_tenant_billing_account.sql (vault
+// spec-2026-07-28-backend-metering.md section 3.2). It is deliberately
+// conservative and mirrors the one-time backfill migration
+// (20260728_03_tenant_billing_account_backfill.sql) rather than inventing a
+// second rule: a mapping is only ever created when it is unambiguous, never
+// guessed.
+//
+// A mapping is resolvable here in exactly one case: tenantID has no mapping
+// yet, and the member just reconciled is its only ACTIVE member, and that
+// member holds exactly one ACTIVE account membership. That combination can
+// only occur the first time anyone is reconciled into a brand new tenant, so
+// "their one account becomes the tenant's account" is a fact about the data,
+// not a per-request policy choice, and it never runs again once a tenant has
+// a second member. Per D-005, this function does NOT fall back to picking an
+// account by owner_user_id, and does NOT create a new account: an
+// unresolvable tenant is left unmapped, exactly like the backfill migration
+// leaves ambiguous tenants unmapped, and surfaces the same way (the metering
+// gate's fail-closed 403 once that ships, not silently here).
+func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID uuid.UUID) error {
+	var alreadyMapped bool
+	if err := p.deps.Pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM public.tenant_billing_accounts WHERE tenant_id = $1)
+	`, tenantID).Scan(&alreadyMapped); err != nil {
+		return fmt.Errorf("check existing billing mapping: %w", err)
+	}
+	if alreadyMapped {
+		return nil
+	}
+
+	_, err := p.deps.Pool.Exec(ctx, `
+		INSERT INTO public.tenant_billing_accounts (tenant_id, account_id)
+		SELECT candidate.tenant_id, candidate.account_id
+		FROM (
+			SELECT
+				t.id AS tenant_id,
+				(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1] AS account_id,
+				count(DISTINCT tu.user_id) AS distinct_members,
+				count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL) AS distinct_accounts
+			FROM public.tenants t
+			JOIN public.tenant_users tu
+			  ON tu.tenant_id = t.id
+			 AND tu.status = 'ACTIVE'
+			LEFT JOIN public.account_memberships am
+			  ON am.user_id = tu.user_id
+			 AND am.status = 'active'
+			WHERE t.id = $1
+			GROUP BY t.id
+		) candidate
+		WHERE candidate.distinct_members = 1
+		  AND candidate.distinct_accounts = 1
+		  AND NOT EXISTS (
+		      SELECT 1 FROM public.tenant_billing_accounts existing
+		       WHERE existing.account_id = candidate.account_id
+		  )
+		ON CONFLICT (tenant_id) DO NOTHING
+	`, tenantID)
+	if err != nil {
+		return fmt.Errorf("insert billing mapping: %w", err)
+	}
 	return nil
 }
