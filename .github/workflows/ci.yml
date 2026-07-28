@@ -482,6 +482,8 @@ jobs:
         run: npm run lint:litellm-routing
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:pgx-dsn
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:litellm-config
 
   agent-console-unit:
     name: Agent console (type + unit + build)
