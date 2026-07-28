@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { getWolfDir, ensureWolfDir, readJSON, writeJSON, parseAnatomy, serializeAnatomy, extractDescription, estimateTokens, appendMarkdown, timeShort, readStdin, normalizePath } from "./shared.js";
+import { getWolfDir, ensureWolfDir, readJSON, writeJSON, parseAnatomy, serializeAnatomy, extractDescription, estimateTokens, appendMarkdown, timeShort, readStdin, normalizePath, readAllBugs, appendVolatileBug, newBugId } from "./shared.js";
 async function main() {
     ensureWolfDir();
     const wolfDir = getWolfDir();
@@ -242,8 +242,6 @@ function extractCalls(code) {
 }
 // ─── Auto Bug Detection ──────────────────────────────────────────
 function autoDetectBugFix(wolfDir, absolutePath, projectRoot, oldStr, newStr) {
-    const bugLogPath = path.join(wolfDir, "buglog.json");
-    const bugLog = readJSON(bugLogPath, { version: 1, bugs: [] });
     const relFile = normalizePath(path.relative(projectRoot, absolutePath));
     const basename = path.basename(absolutePath);
     const ext = path.extname(basename).toLowerCase();
@@ -251,31 +249,33 @@ function autoDetectBugFix(wolfDir, absolutePath, projectRoot, oldStr, newStr) {
     const detection = detectFixPattern(oldStr, newStr, ext);
     if (!detection)
         return;
-    // Check for recent duplicate (same file + same category within 5 min)
-    const recentDupe = bugLog.bugs.find(b => {
-        if (path.basename(b.file) !== basename)
+    // Skip a recent duplicate (same file + same category within 5 min). The store
+    // is append only, so noisy repeats are dropped rather than folded into an
+    // existing entry; rewriting a line would put back the merge conflict the
+    // JSONL format exists to avoid.
+    const recentDupe = readAllBugs(wolfDir).some(b => {
+        // Compare the full relative path, not the basename: a/index.ts and
+        // b/index.ts are different files, and collapsing them suppresses a valid
+        // detection.
+        if (typeof b.file !== "string" || normalizePath(b.file) !== relFile)
+            return false;
+        if (!Array.isArray(b.tags))
             return false;
         if (!b.tags.includes("auto-detected"))
             return false;
         if (!b.tags.includes(detection.category))
             return false;
         const bugTime = new Date(b.last_seen).getTime();
-        return (Date.now() - bugTime) < 5 * 60 * 1000;
+        return Number.isFinite(bugTime) && (Date.now() - bugTime) < 5 * 60 * 1000;
     });
-    if (recentDupe) {
-        recentDupe.occurrences++;
-        recentDupe.last_seen = new Date().toISOString();
-        // Append additional context
-        if (detection.context && !recentDupe.fix.includes(detection.context)) {
-            recentDupe.fix += ` | Also: ${detection.context}`;
-        }
-        writeJSON(bugLogPath, bugLog);
+    if (recentDupe)
         return;
-    }
-    const nextId = `bug-${String(bugLog.bugs.length + 1).padStart(3, "0")}`;
-    bugLog.bugs.push({
-        id: nextId,
-        timestamp: new Date().toISOString(),
+    // Aggregate only: this is a guess from the shape of a diff, not memory worth
+    // committing, and a hook must never dirty a tracked file.
+    const now = new Date().toISOString();
+    appendVolatileBug(wolfDir, {
+        id: newBugId(),
+        timestamp: now,
         error_message: detection.summary,
         file: relFile,
         root_cause: detection.rootCause,
@@ -283,9 +283,8 @@ function autoDetectBugFix(wolfDir, absolutePath, projectRoot, oldStr, newStr) {
         tags: ["auto-detected", detection.category, ext.replace(".", "") || "unknown"],
         related_bugs: [],
         occurrences: 1,
-        last_seen: new Date().toISOString(),
+        last_seen: now,
     });
-    writeJSON(bugLogPath, bugLog);
 }
 function detectFixPattern(oldStr, newStr, ext) {
     const oldLines = oldStr.split("\n");

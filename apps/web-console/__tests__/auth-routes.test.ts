@@ -200,6 +200,27 @@ describe("app/auth/callback/route.ts", () => {
     );
   });
 
+  // Issue #534: the sign-up path for an invitee ends here, and the acceptance
+  // token must still be attached when the callback hands off.
+  it("allows /invitations/accept with its token as a valid next target", async () => {
+    const { NextRequest } = await import("next/server");
+    mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });
+
+    const mod = await import("../app/auth/callback/route");
+    const req: Parameters<typeof mod.GET>[0] = new NextRequest(
+      `http://localhost:3000/auth/callback?code=abc&next=${encodeURIComponent(
+        "/invitations/accept?token=invite-token-9",
+      )}`
+    );
+    await mod.GET(req);
+
+    expect(mockRedirect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        href: expect.stringContaining("/invitations/accept?token=invite-token-9"),
+      })
+    );
+  });
+
   it("rejects arbitrary next targets and falls back to /console", async () => {
     const { NextRequest } = await import("next/server");
     mockExchangeCodeForSession.mockResolvedValueOnce({ error: null });

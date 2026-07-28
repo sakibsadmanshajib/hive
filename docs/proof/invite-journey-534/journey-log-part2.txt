@@ -1,0 +1,10 @@
+shot 07-acceptance-landed-after-signin-joined-confirmation: http://web-invite534:3000/console/members?joined=1
+member memberships: [{"account_id":"cae556b3-a1dd-435a-85d9-8eca933860db","display_name":"owner534's Workspace","role":"owner","status":"active"}]
+WARNING: no member-role membership found for the member context
+shot 10-owner-sees-members-by-email-with-role-editors: http://web-invite534:3000/console/members
+role editors rendered: 4
+shot 11-role-updated-confirmation: http://web-invite534:3000/console/members?role_updated=1
+shot 12-already-accepted-message: http://web-invite534:3000/invitations/accept?token=REDACTED_INVITE_TOKEN
+shot 13-expired-message: http://web-invite534:3000/invitations/accept?token=REDACTED_INVITE_TOKEN
+shot 14-wrong-account-message: http://web-invite534:3000/invitations/accept?token=REDACTED_INVITE_TOKEN
+shot 15-already-a-member-message: http://web-invite534:3000/invitations/accept?token=REDACTED_INVITE_TOKEN

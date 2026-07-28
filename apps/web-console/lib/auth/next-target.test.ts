@@ -31,6 +31,28 @@ describe("resolveNextTarget", () => {
     );
   });
 
+  // Issue #534: an invitee who is not signed in gets bounced to sign-in, and
+  // the acceptance token travels in the `next` value. Dropping the query string
+  // made acceptance impossible for anyone without an existing account.
+  it("allows /invitations/accept with its token query preserved", () => {
+    expect(resolveNextTarget("/invitations/accept?token=abc-123")).toBe(
+      "/invitations/accept?token=abc-123",
+    );
+  });
+
+  it("rejects a path that only starts with /invitations/accept as a substring", () => {
+    expect(resolveNextTarget("/invitations/accept-evil")).toBe("/console");
+  });
+
+  it("rejects an off-site redirect dressed up as an invitation path", () => {
+    expect(
+      resolveNextTarget("https://evil.example.com/invitations/accept?token=x"),
+    ).toBe("/console");
+    expect(resolveNextTarget("//evil.example.com/invitations/accept")).toBe(
+      "/console",
+    );
+  });
+
   it("allows /oauth/consent with a query string", () => {
     expect(
       resolveNextTarget("/oauth/consent?authorization_id=abc-123"),

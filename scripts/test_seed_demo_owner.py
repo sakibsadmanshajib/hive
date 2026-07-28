@@ -8,6 +8,7 @@ tenant collision). No framework, no network: exercises the two pure guard
 functions directly. Run: python3 scripts/test_seed_demo_owner.py
 """
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,17 @@ spec = importlib.util.spec_from_file_location(
     "seed_demo_owner", Path(__file__).parent / "seed-demo-owner.py"
 )
 seed_demo_owner = importlib.util.module_from_spec(spec)
+# The identity constants resolve at import time, so drop any override the
+# caller's shell happens to export -- this file asserts the defaults, and an
+# operator provisioning a second owner exports exactly these variables.
+for _override in (
+    "HIVE_DEMO_EMAIL",
+    "HIVE_DEMO_TENANT_SLUG",
+    "HIVE_DEMO_TENANT_NAME",
+    "HIVE_DEMO_ACCOUNT_SLUG",
+    "HIVE_DEMO_ACCOUNT_NAME",
+):
+    os.environ.pop(_override, None)
 spec.loader.exec_module(seed_demo_owner)
 
 
@@ -107,7 +119,63 @@ def main() -> None:
     assert len(generated) == 28 and generated.startswith("Aa1!")
     assert generated != seed_demo_owner.random_password()
 
-    print("ok: seed-demo-owner.py slug-collision guards + password_to_set")
+    # env_or: identity overrides. An unset, empty, or whitespace-only variable
+    # keeps the default, so an existing caller that sets nothing provisions the
+    # same demo identity it always did.
+    assert seed_demo_owner.env_or("HIVE_DEMO_TEST_UNSET_VAR", "fallback") == "fallback"
+    for value in ("", "   "):
+        os.environ["HIVE_DEMO_TEST_VAR"] = value
+        assert seed_demo_owner.env_or("HIVE_DEMO_TEST_VAR", "fallback") == "fallback"
+    os.environ["HIVE_DEMO_TEST_VAR"] = "  owner@example.test  "
+    assert seed_demo_owner.env_or("HIVE_DEMO_TEST_VAR", "fallback") == "owner@example.test"
+    del os.environ["HIVE_DEMO_TEST_VAR"]
+
+    # And the constants themselves resolve through it, so a second owner is
+    # provisionable without editing this script.
+    assert seed_demo_owner.USER_EMAIL == "demo@hive-demo.invalid"
+    assert seed_demo_owner.TENANT_SLUG == "hive-demo"
+    assert seed_demo_owner.ACCOUNT_SLUG == "hive-demo-owner"
+
+    # validate_identity_overrides: the three identity variables must be set
+    # together or not at all. A partial override (e.g. slugs set, email left
+    # to its default) would otherwise silently attach the new tenant/account
+    # to the SHARED default demo user instead of a separate owner.
+    EMAIL, TSLUG, ASLUG = (
+        "HIVE_DEMO_EMAIL",
+        "HIVE_DEMO_TENANT_SLUG",
+        "HIVE_DEMO_ACCOUNT_SLUG",
+    )
+
+    # None set: proceeds, the existing single-identity default is unchanged.
+    assert not exits(seed_demo_owner.validate_identity_overrides, {})
+
+    # All three set: proceeds, this is how a second, independent owner is
+    # provisioned.
+    assert not exits(
+        seed_demo_owner.validate_identity_overrides,
+        {EMAIL: "owner2@example.test", TSLUG: "second-tenant", ASLUG: "second-account"},
+    )
+
+    # Every partial combination (one or two of the three set) is refused.
+    partial_combos = [
+        {EMAIL: "owner2@example.test"},
+        {TSLUG: "second-tenant"},
+        {ASLUG: "second-account"},
+        {EMAIL: "owner2@example.test", TSLUG: "second-tenant"},
+        {EMAIL: "owner2@example.test", ASLUG: "second-account"},
+        {TSLUG: "second-tenant", ASLUG: "second-account"},
+    ]
+    for combo in partial_combos:
+        assert exits(seed_demo_owner.validate_identity_overrides, combo), combo
+
+    # Whitespace-only counts as unset, matching env_or's own stripping: this
+    # is still a partial override (email effectively missing), must refuse.
+    assert exits(
+        seed_demo_owner.validate_identity_overrides,
+        {EMAIL: "   ", TSLUG: "second-tenant", ASLUG: "second-account"},
+    )
+
+    print("ok: seed-demo-owner.py slug-collision guards + password_to_set + env_or + identity guard")
 
 
 if __name__ == "__main__":

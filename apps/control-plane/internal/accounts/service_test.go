@@ -17,6 +17,7 @@ type stubRepo struct {
 	accountsMap  map[uuid.UUID]*accounts.Account
 	invitations  map[string]*accounts.Invitation // token -> invitation
 	profiles     map[uuid.UUID]*accounts.AccountProfile
+	emails       map[uuid.UUID]string // user id -> auth.users email
 	acceptCalled bool
 }
 
@@ -25,6 +26,7 @@ func newStubRepo() *stubRepo {
 		accountsMap: make(map[uuid.UUID]*accounts.Account),
 		invitations: make(map[string]*accounts.Invitation),
 		profiles:    make(map[uuid.UUID]*accounts.AccountProfile),
+		emails:      make(map[uuid.UUID]string),
 	}
 }
 
@@ -91,12 +93,27 @@ func (s *stubRepo) ListMembersByAccountID(_ context.Context, accountID uuid.UUID
 		if m.AccountID == accountID {
 			members = append(members, accounts.Member{
 				UserID: m.UserID,
+				Email:  s.emails[m.UserID],
 				Role:   m.Role,
 				Status: m.Status,
 			})
 		}
 	}
 	return members, nil
+}
+
+func (s *stubRepo) UpdateMembershipRole(_ context.Context, accountID, userID uuid.UUID, role string) error {
+	for i := range s.memberships {
+		m := s.memberships[i]
+		if m.AccountID == accountID && m.UserID == userID && m.Status == "active" {
+			// Immutable update: replace the row rather than mutating in place.
+			updated := m
+			updated.Role = role
+			s.memberships[i] = updated
+			return nil
+		}
+	}
+	return accounts.ErrNotFound
 }
 
 // --- TestEnsureDefaultAccount ---
@@ -247,7 +264,7 @@ func TestInvitationRequiresVerifiedEmail(t *testing.T) {
 		EmailVerified: false,
 	}
 
-	_, err := svc.CreateInvitation(context.Background(), accountID, viewer, "member@example.com")
+	_, err := svc.CreateInvitation(context.Background(), accountID, viewer, "member@example.com", "member")
 	if err == nil {
 		t.Fatal("expected error for unverified owner, got nil")
 	}
@@ -292,7 +309,7 @@ func TestInvitationVerifiedOwnerSuccess(t *testing.T) {
 		EmailVerified: true,
 	}
 
-	inv, err := svc.CreateInvitation(context.Background(), accountID, viewer, "member@example.com")
+	inv, err := svc.CreateInvitation(context.Background(), accountID, viewer, "member@example.com", "member")
 	if err != nil {
 		t.Fatalf("CreateInvitation error: %v", err)
 	}
