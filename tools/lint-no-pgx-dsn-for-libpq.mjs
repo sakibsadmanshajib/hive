@@ -35,7 +35,7 @@
 // scanner with a MUST_CATCH / MUST_ALLOW self-test that runs as a preflight on
 // every invocation.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { dirname, resolve, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
@@ -43,8 +43,19 @@ import YAML from "yaml";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..");
-const COMPOSE_FILE = join(REPO_ROOT, "deploy", "docker", "docker-compose.yml");
+const COMPOSE_DIR = join(REPO_ROOT, "deploy", "docker");
 const DERIVE_SCRIPT = join(REPO_ROOT, "scripts", "derive-pooler-dsn.py");
+
+// Every compose file, not just the base one. An overlay (enterprise, staging,
+// relay, override) can set the same env key on the same service, and the last
+// file on the command line wins, so a pgx-flavoured DSN reintroduced in an
+// overlay would be just as fatal and twice as easy to miss.
+function composeFiles() {
+  return readdirSync(COMPOSE_DIR)
+    .filter((f) => /^docker-compose.*\.ya?ml$/.test(f))
+    .sort()
+    .map((f) => join(COMPOSE_DIR, f));
+}
 
 // Services whose database driver is pgx, and which may therefore be handed a
 // DSN carrying pgx's own parameters. Both are Go services on pgxpool. Every
@@ -194,7 +205,6 @@ function main() {
   const deriveSource = readFileSync(DERIVE_SCRIPT, "utf8");
   const pgxOnlyParams = parsePgxOnlyParams(deriveSource);
   const emittedVars = new Set(parseEmittedVars(deriveSource));
-  const compose = YAML.parse(readFileSync(COMPOSE_FILE, "utf8"));
 
   let failed = false;
   const fail = (msg) => {
@@ -214,37 +224,42 @@ function main() {
   }
 
   let checked = 0;
-  for (const [service, spec] of Object.entries(compose.services ?? {})) {
-    const env = spec?.environment;
-    if (!env || Array.isArray(env)) continue;
-    for (const [key, raw] of Object.entries(env)) {
-      if (typeof raw !== "string") continue;
-      const referenced = referencedVars(raw);
-      const isPoolerDsn = referenced.some((n) => n.startsWith("SUPABASE_DB_"));
-      if (!isPoolerDsn && !pgxOnlyParams.some((p) => raw.includes(`${p}=`))) continue;
-      checked += 1;
+  const files = composeFiles();
+  for (const file of files) {
+    const where = file.slice(REPO_ROOT.length + 1);
+    const compose = YAML.parse(readFileSync(file, "utf8"));
+    for (const [service, spec] of Object.entries(compose?.services ?? {})) {
+      const env = spec?.environment;
+      if (!env || Array.isArray(env)) continue;
+      for (const [key, raw] of Object.entries(env)) {
+        if (typeof raw !== "string") continue;
+        const referenced = referencedVars(raw);
+        const isPoolerDsn = referenced.some((n) => n.startsWith("SUPABASE_DB_"));
+        if (!isPoolerDsn && !pgxOnlyParams.some((p) => raw.includes(`${p}=`))) continue;
+        checked += 1;
 
-      // A. Only a declared pgx service may read a pgx-flavoured DSN.
-      if (!PGX_SERVICES.has(service)) {
-        for (const offence of findOffenders(raw, pgxOnlyParams)) {
-          fail(
-            `deploy/docker/docker-compose.yml: service \`${service}\` env \`${key}\` ${offence}. ` +
-              `\`${service}\` is not declared as a pgx consumer, so its DSN is parsed by libpq, ` +
-              "which fails the whole connection on an unknown option. Use " +
-              "$SUPABASE_DB_POOL_URL_LIBPQ, or add the service to PGX_SERVICES in this lint if it " +
-              "really does speak pgx.",
-          );
+        // A. Only a declared pgx service may read a pgx-flavoured DSN.
+        if (!PGX_SERVICES.has(service)) {
+          for (const offence of findOffenders(raw, pgxOnlyParams)) {
+            fail(
+              `${where}: service \`${service}\` env \`${key}\` ${offence}. ` +
+                `\`${service}\` is not declared as a pgx consumer, so its DSN is parsed by libpq, ` +
+                "which fails the whole connection on an unknown option. Use " +
+                "$SUPABASE_DB_POOL_URL_LIBPQ, or add the service to PGX_SERVICES in this lint if " +
+                "it really does speak pgx.",
+            );
+          }
         }
-      }
 
-      // B. No reference to a pooler variable the derivation script never emits.
-      for (const name of referenced) {
-        if (name.startsWith("SUPABASE_DB_") && !emittedVars.has(name)) {
-          fail(
-            `deploy/docker/docker-compose.yml: service \`${service}\` env \`${key}\` reads ` +
-              `$${name}, which scripts/derive-pooler-dsn.py does not emit. The interpolation ` +
-              "would silently fall through to its default instead of failing.",
-          );
+        // B. No reference to a pooler variable the derivation script never emits.
+        for (const name of referenced) {
+          if (name.startsWith("SUPABASE_DB_") && !emittedVars.has(name)) {
+            fail(
+              `${where}: service \`${service}\` env \`${key}\` reads $${name}, which ` +
+                "scripts/derive-pooler-dsn.py does not emit. The interpolation would silently " +
+                "fall through to its default instead of failing.",
+            );
+          }
         }
       }
     }
@@ -260,8 +275,8 @@ function main() {
   }
 
   console.log(
-    `lint-no-pgx-dsn-for-libpq: ok (${checked} DSN-bearing compose env values checked, ` +
-      `pgx-only params: ${pgxOnlyParams.join(", ")})`,
+    `lint-no-pgx-dsn-for-libpq: ok (${checked} DSN-bearing env values across ${files.length} ` +
+      `compose files, pgx-only params: ${pgxOnlyParams.join(", ")})`,
   );
   process.exit(0);
 }

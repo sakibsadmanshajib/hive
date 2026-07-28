@@ -94,6 +94,18 @@ def is_pooler_host(host: str) -> bool:
     return host.lower().endswith(".pooler.supabase.com")
 
 
+def encode_query(pairs: list[tuple[str, str]] | dict[str, str]) -> str:
+    """Re-encode query pairs the way a Postgres connection URI expects.
+
+    `parse_qsl` decodes `%20` to a space, and `urlencode` defaults to form
+    encoding, which would emit that space as `+`. A Postgres URI is percent
+    encoded, not form encoded: libpq passes `+` through as a literal plus, so
+    `options=-c%20statement_timeout%3D3000` would round-trip into an options
+    string the server cannot parse. `quote` keeps it as `%20`.
+    """
+    return urlencode(pairs, quote_via=quote)
+
+
 def with_params(dsn: str, **params: str) -> str:
     """Return dsn with params set, preserving any the caller already supplied."""
     parts = urlsplit(dsn)
@@ -102,14 +114,14 @@ def with_params(dsn: str, **params: str) -> str:
         # An explicit value already in the DSN wins: the deployment knows
         # something this script does not.
         query.setdefault(key, value)
-    return urlunsplit(parts._replace(query=urlencode(query)))
+    return urlunsplit(parts._replace(query=encode_query(query)))
 
 
 def without_params(dsn: str, *keys: str) -> str:
     """Return dsn with keys removed, including any the input already carried."""
     parts = urlsplit(dsn)
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k not in keys]
-    return urlunsplit(parts._replace(query=urlencode(query)))
+    return urlunsplit(parts._replace(query=encode_query(query)))
 
 
 def with_port(dsn: str, port: int) -> str:
@@ -220,7 +232,17 @@ def self_test() -> int:
     assert "p%40ss%2Fw%3Ard%3F" in built_txn, built_txn
     assert "p%40ss%2Fw%3Ard%3F" in built_libpq, built_libpq
 
-    print("derive-pooler-dsn: self-test ok (18 assertions)")
+    # A percent-encoded parameter the deployment set must survive both the add
+    # and the strip as percent encoding. Form encoding would emit the space in
+    # `options` as `+`, which libpq passes through literally and the server then
+    # cannot parse.
+    encoded = pooler + "?options=-c%20statement_timeout%3D3000"
+    enc_session, enc_transaction, enc_libpq = derive(encoded)
+    for flavour in (enc_session, enc_transaction, enc_libpq):
+        assert "options=-c%20statement_timeout%3D3000" in flavour, flavour
+        assert "+" not in urlsplit(flavour).query, flavour
+
+    print("derive-pooler-dsn: self-test ok (27 assertions)")
     return 0
 
 
