@@ -64,6 +64,15 @@ assert.equal(syncBugAggregate(wolfDir), 4);
 assert.equal(fs.readFileSync(jsonl, "utf-8"), jsonlBefore);
 assert.ok(!readAllBugs(wolfDir).some((b) => b.id === "bug-guess"));
 
+// A volatile guess must survive a later durable append. Only syncBugAggregate
+// clears it, which the block above already asserts.
+appendVolatileBug(wolfDir, { id: "bug-guess-2", error_message: "added error handling", tags: ["auto-detected", "error-handling"] });
+appendBugs(wolfDir, [{ id: "bug-d", error_message: "durable append after a guess" }]);
+assert.ok(readAllBugs(wolfDir).some((b) => b.id === "bug-guess-2"), "durable append dropped a volatile guess");
+assert.ok(readAllBugs(wolfDir).some((b) => b.id === "bug-d"));
+assert.ok(!readBugs(wolfDir).some((b) => b.id === "bug-guess-2"), "a guess leaked into the tracked JSONL");
+assert.equal(readBugs(wolfDir).length, 5);
+
 // Ids must not collide the way the old count-derived scheme did.
 const ids = new Set(Array.from({ length: 500 }, () => newBugId()));
 assert.equal(ids.size, 500);

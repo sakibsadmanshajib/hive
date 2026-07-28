@@ -714,9 +714,14 @@ export function appendBugs(wolfDir, bugs) {
     }
     catch { }
     const needsNewline = existing.length > 0 && !existing.endsWith("\n");
+    // Read the volatile guesses before the append so they survive the rebuild.
+    // Rebuilding from the JSONL alone here would drop this session's guesses the
+    // first time anything else appended a durable entry. Only syncBugAggregate
+    // clears them.
+    const carried = readAllBugs(wolfDir).filter(isAutoDetected);
     fs.appendFileSync(jsonl, (needsNewline ? "\n" : "") + payload, "utf-8");
     const all = readBugs(wolfDir);
-    writeBugAggregate(wolfDir, all);
+    writeBugAggregate(wolfDir, [...all, ...carried]);
     return all.length;
 }
 /**
@@ -737,8 +742,14 @@ export function syncBugAggregate(wolfDir) {
     const knownJson = new Set(bugs.map((b) => JSON.stringify(b)));
     const absorbed = readAllBugs(wolfDir).filter((b) => !isAutoDetected(b) &&
         (b.id ? !knownIds.has(b.id) : !knownJson.has(JSON.stringify(b))));
-    if (absorbed.length > 0)
-        return appendBugs(wolfDir, absorbed);
+    if (absorbed.length > 0) {
+        appendBugs(wolfDir, absorbed);
+        // appendBugs deliberately carries volatile guesses over. This is the one
+        // path that must drop them, so rewrite from the JSONL alone.
+        const all = readBugs(wolfDir);
+        writeBugAggregate(wolfDir, all);
+        return all.length;
+    }
     writeBugAggregate(wolfDir, bugs);
     return bugs.length;
 }

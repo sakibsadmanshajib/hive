@@ -254,7 +254,10 @@ function autoDetectBugFix(wolfDir, absolutePath, projectRoot, oldStr, newStr) {
     // existing entry; rewriting a line would put back the merge conflict the
     // JSONL format exists to avoid.
     const recentDupe = readAllBugs(wolfDir).some(b => {
-        if (typeof b.file !== "string" || path.basename(b.file) !== basename)
+        // Compare the full relative path, not the basename: a/index.ts and
+        // b/index.ts are different files, and collapsing them suppresses a valid
+        // detection.
+        if (typeof b.file !== "string" || normalizePath(b.file) !== relFile)
             return false;
         if (!Array.isArray(b.tags))
             return false;

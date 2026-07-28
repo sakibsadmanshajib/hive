@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, readJSON, writeJSON, appendMarkdown, timeShort } from "./shared.js";
+import { getWolfDir, ensureWolfDir, readJSON, writeJSON, appendMarkdown, timeShort, readBugs } from "./shared.js";
 async function main() {
     ensureWolfDir();
     const wolfDir = getWolfDir();
@@ -119,9 +119,13 @@ function checkForMissingBugLogs(wolfDir, session) {
         .map(([file]) => path.basename(file));
     if (multiEditFiles.length === 0)
         return;
-    // Check if buglog was written to this session. Matches both the tracked
-    // buglog.jsonl and the generated buglog.json aggregate.
-    const buglogWritten = session.files_written.some(w => w.file.includes("buglog"));
+    // Require the durable log to have actually grown. session.files_written cannot
+    // answer this: post-write.js exits early for any path under .wolf/, so no
+    // buglog path is ever recorded there and a filename match would be dead code
+    // that fires the warning on every session. Comparing the tracked entry count
+    // against the session-start baseline also ignores the untracked aggregate, so
+    // a hook guess cannot satisfy a check that is about the durable log.
+    const buglogWritten = readBugs(wolfDir).length > (session.buglog_entries_at_start ?? 0);
     if (!buglogWritten) {
         process.stderr.write(`⚠️ OpenWolf: Files edited 3+ times this session (${multiEditFiles.join(", ")}) but buglog.jsonl was not updated. If you fixed bugs, please log them.\n`);
     }
