@@ -39,7 +39,13 @@ async function signIn(page: Page, email: string, password: string) {
 
 test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async () => {
+// Full reset moved to beforeAll: repeating it in every test's beforeEach burned
+// multi-second, variable-latency round trips (edge function cold start, GoTrue
+// password rehash) out of that same test's Playwright timeout budget, which
+// hooks share with the test body. One reset per file is enough; mode: 'serial'
+// keeps test order fixed and nothing in this file depends on the others'
+// left-over mutations.
+test.beforeAll(async () => {
   if (!HAS_CREDS) return;
   try {
     execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {

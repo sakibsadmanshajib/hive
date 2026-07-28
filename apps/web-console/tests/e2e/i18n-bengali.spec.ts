@@ -43,8 +43,13 @@ test.describe("Bengali console chrome", () => {
 
   // Fixture reset mutates global Supabase state — run serially.
   test.describe.configure({ mode: "serial" });
+  // Full reset moved to beforeAll: repeating it in every test's beforeEach burned
+  // multi-second, variable-latency round trips (edge function cold start, GoTrue
+  // password rehash) out of that same test's Playwright timeout budget, which
+  // hooks share with the test body. One reset per describe block is enough; mode:
+  // 'serial' keeps test order fixed.
 
-  test.beforeEach(async () => {
+  test.beforeAll(async () => {
     try {
       execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
         cwd: process.cwd(),
