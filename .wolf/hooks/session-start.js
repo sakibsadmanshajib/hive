@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, writeJSON, appendMarkdown, readJSON, timestamp, timeShort } from "./shared.js";
+import { getWolfDir, ensureWolfDir, writeJSON, appendMarkdown, readJSON, timestamp, timeShort, syncBugAggregate } from "./shared.js";
 async function main() {
     ensureWolfDir();
     const wolfDir = getWolfDir();
@@ -21,6 +21,16 @@ async function main() {
     const sessionFile = path.join(hooksDir, "_session.json");
     const now = new Date();
     const sessionId = `session-${now.toISOString().slice(0, 10)}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+    // Rebuild the generated buglog.json aggregate from the tracked buglog.jsonl,
+    // absorbing anything `openwolf bug add` wrote straight into the aggregate, so
+    // `openwolf bug search` reads current data in a fresh clone or worktree.
+    // The resulting count is the baseline the stop hook compares against to tell
+    // whether this session recorded a durable bug entry.
+    let bugCountAtStart = 0;
+    try {
+        bugCountAtStart = syncBugAggregate(wolfDir);
+    }
+    catch { }
     // Create fresh session state
     writeJSON(sessionFile, {
         session_id: sessionId,
@@ -33,6 +43,7 @@ async function main() {
         repeated_reads_warned: 0,
         cerebrum_warnings: 0,
         stop_count: 0,
+        buglog_entries_at_start: bugCountAtStart,
     });
     // Append session header to memory.md
     const memoryPath = path.join(wolfDir, "memory.md");
@@ -57,15 +68,9 @@ async function main() {
         }
     }
     catch { }
-    // Check buglog — remind if empty
-    try {
-        const buglogPath = path.join(wolfDir, "buglog.json");
-        const buglog = readJSON(buglogPath, { bugs: [] });
-        if (buglog.bugs.length === 0) {
-            process.stderr.write(`📋 OpenWolf: buglog.json is empty. If you encounter or fix any bugs, errors, or failed tests this session, log them to .wolf/buglog.json.\n`);
-        }
+    if (bugCountAtStart === 0) {
+        process.stderr.write(`📋 OpenWolf: buglog.jsonl is empty. If you encounter or fix any bugs, errors, or failed tests this session, log them to .wolf/buglog.jsonl.\n`);
     }
-    catch { }
     // Increment total_sessions in token-ledger
     const ledgerPath = path.join(wolfDir, "token-ledger.json");
     const ledger = readJSON(ledgerPath, { version: 1, lifetime: { total_sessions: 0 } });

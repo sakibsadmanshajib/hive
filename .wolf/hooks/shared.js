@@ -611,4 +611,154 @@ export function readStdin() {
 export function normalizePath(p) {
     return p.replace(/\\/g, "/");
 }
+// ─── Bug memory store ────────────────────────────────────────────
+// Two files, one source of truth.
+//
+//   .wolf/buglog.jsonl  Tracked. One JSON object per line, append only. Declared
+//                       `merge=union` in .gitattributes, so concurrent appends
+//                       from parallel branches merge without a conflict. This is
+//                       the file to read, review, and commit.
+//   .wolf/buglog.json   Generated and gitignored. A straight projection of the
+//                       JSONL into the `{ version, bugs }` shape the openwolf CLI
+//                       and dashboard expect, so `openwolf bug search` keeps
+//                       working unchanged.
+//
+// A single shared JSON array cannot survive parallel branches: every append
+// touches the array's closing bracket and the comma before it, so two branches
+// appending at once always conflict, and a union merge of that shape produces
+// invalid JSON. One object per line has no shared terminator, which is what
+// makes automatic merging possible.
+//
+// The JSONL is append only. Entries are never rewritten in place, because
+// rewriting a line reintroduces the conflict the format exists to avoid. Any
+// occurrence counter carried on an aggregate entry is therefore informational,
+// not authoritative.
+//
+// Only deliberate entries reach the JSONL. The post-write hook's `auto-detected`
+// guesses are written to the generated aggregate alone, so `openwolf bug search`
+// still surfaces them for the rest of the session while no hook ever dirties a
+// tracked file. They are session telemetry, not memory worth reviewing: 107 of
+// the 135 entries in the log at migration time were auto-detected, and their
+// content is diff-shaped guesswork ("inline fix", "added error handling") rather
+// than a root cause anyone can act on.
+export function bugLogPaths(wolfDir) {
+    return {
+        jsonl: path.join(wolfDir, "buglog.jsonl"),
+        aggregate: path.join(wolfDir, "buglog.json"),
+    };
+}
+/** Read every bug from the JSONL source of truth, in file order. */
+export function readBugs(wolfDir) {
+    const { jsonl } = bugLogPaths(wolfDir);
+    let raw;
+    try {
+        raw = fs.readFileSync(jsonl, "utf-8");
+    }
+    catch {
+        return [];
+    }
+    const bugs = [];
+    for (const line of raw.split("\n")) {
+        const trimmed = line.trim();
+        if (!trimmed)
+            continue;
+        try {
+            bugs.push(JSON.parse(trimmed));
+        }
+        catch {
+            // A single corrupt line must not blind the whole store.
+        }
+    }
+    return bugs;
+}
+/** Read everything the aggregate currently holds: the JSONL plus this session's guesses. */
+export function readAllBugs(wolfDir) {
+    const { aggregate } = bugLogPaths(wolfDir);
+    const bugs = readJSON(aggregate, { bugs: [] }).bugs;
+    return Array.isArray(bugs) ? bugs : [];
+}
+/**
+ * Rewrite the generated aggregate so `openwolf bug search` and the dashboard see
+ * the current JSONL contents.
+ */
+export function writeBugAggregate(wolfDir, bugs) {
+    const { aggregate } = bugLogPaths(wolfDir);
+    writeJSON(aggregate, { version: 1, bugs });
+}
+/**
+ * Append to the generated aggregate only, never to the tracked JSONL. This is the
+ * path for hook-generated `auto-detected` guesses: they stay searchable for the
+ * rest of the session and are dropped the next time the aggregate is rebuilt.
+ */
+export function appendVolatileBug(wolfDir, bug) {
+    writeBugAggregate(wolfDir, [...readAllBugs(wolfDir), bug]);
+}
+/** A hook guess, as opposed to something a person or an agent chose to record. */
+function isAutoDetected(bug) {
+    return Array.isArray(bug.tags) && bug.tags.includes("auto-detected");
+}
+/** Append bugs to the JSONL, then refresh the aggregate. Returns the new total. */
+export function appendBugs(wolfDir, bugs) {
+    if (bugs.length === 0)
+        return readBugs(wolfDir).length;
+    const { jsonl } = bugLogPaths(wolfDir);
+    const dir = path.dirname(jsonl);
+    if (!fs.existsSync(dir))
+        fs.mkdirSync(dir, { recursive: true });
+    // JSON.stringify never emits a raw newline inside a string, so one entry is
+    // always exactly one line.
+    const payload = bugs.map((b) => JSON.stringify(b)).join("\n") + "\n";
+    let existing = "";
+    try {
+        existing = fs.readFileSync(jsonl, "utf-8");
+    }
+    catch { }
+    const needsNewline = existing.length > 0 && !existing.endsWith("\n");
+    // Read the volatile guesses before the append so they survive the rebuild.
+    // Rebuilding from the JSONL alone here would drop this session's guesses the
+    // first time anything else appended a durable entry. Only syncBugAggregate
+    // clears them.
+    const carried = readAllBugs(wolfDir).filter(isAutoDetected);
+    fs.appendFileSync(jsonl, (needsNewline ? "\n" : "") + payload, "utf-8");
+    const all = readBugs(wolfDir);
+    writeBugAggregate(wolfDir, [...all, ...carried]);
+    return all.length;
+}
+/**
+ * Reconcile the generated aggregate with the JSONL source of truth.
+ *
+ * `openwolf bug add` writes straight into the aggregate because the CLI ships
+ * its own copy of the store. Absorbing those entries here means a CLI-added bug
+ * survives the next rebuild instead of being silently dropped. Absorption is
+ * keyed on id, falling back to the serialized entry for the historical entries
+ * that carry no id at all.
+ *
+ * Hook-generated `auto-detected` guesses are deliberately not absorbed. They are
+ * session telemetry, so the rebuild drops them.
+ */
+export function syncBugAggregate(wolfDir) {
+    const bugs = readBugs(wolfDir);
+    const knownIds = new Set(bugs.filter((b) => b.id).map((b) => b.id));
+    const knownJson = new Set(bugs.map((b) => JSON.stringify(b)));
+    const absorbed = readAllBugs(wolfDir).filter((b) => !isAutoDetected(b) &&
+        (b.id ? !knownIds.has(b.id) : !knownJson.has(JSON.stringify(b))));
+    if (absorbed.length > 0) {
+        appendBugs(wolfDir, absorbed);
+        // appendBugs deliberately carries volatile guesses over. This is the one
+        // path that must drop them, so rewrite from the JSONL alone.
+        const all = readBugs(wolfDir);
+        writeBugAggregate(wolfDir, all);
+        return all.length;
+    }
+    writeBugAggregate(wolfDir, bugs);
+    return bugs.length;
+}
+/**
+ * Collision-free bug id. The old `bug-${count + 1}` scheme derived the id from a
+ * count of the store, so two agents working in parallel branches minted the same
+ * id; the migrated log already carries three such collisions.
+ */
+export function newBugId() {
+    return `bug-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
+}
 //# sourceMappingURL=shared.js.map
