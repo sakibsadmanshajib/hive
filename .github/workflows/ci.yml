@@ -160,12 +160,16 @@ jobs:
             run_everything "changed-file list has $count entries and may be truncated at the API cap of $cap"
           fi
 
-          # Deny by extension first. Everything below this arm is a
-          # directory grant, and a directory cannot stay inert as it
-          # grows: .wolf/ and .claude/ already hold hook scripts, and a
-          # future .js, .mjs, .cjs, .ts, .sh or .py under any allow-listed
-          # prefix is executable code that could change how a build, test
-          # or lint behaves. Extension-deny needs no maintenance as those
+          # Deny by executable extension first, and keep that arm FIRST.
+          # Every arm below it is a directory grant that ends in
+          # `continue`, so an extension listed after them would be
+          # silently swallowed instead of denied. A directory cannot stay
+          # inert as it grows: .wolf/ and .claude/ already hold hook
+          # scripts, and any script or compiled source under an
+          # allow-listed prefix is executable code that could change how a
+          # build, test or lint behaves. The arm is not enumerated again in
+          # this comment, because a second copy of the list is a second
+          # thing to forget. Extension-deny needs no maintenance as those
           # directories grow, and still lets the genuinely inert paths
           # through (.wolf/*.md, .wolf/buglog.jsonl, docs/ screenshots).
           #
@@ -175,7 +179,10 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              *.js | *.mjs | *.cjs | *.ts | *.sh | *.py) run_everything "'$f' is executable code" ;;
+              *.js | *.mjs | *.cjs | *.jsx | *.ts | *.mts | *.cts | *.tsx \
+              | *.sh | *.py)
+                run_everything "'$f' is executable code"
+                ;;
               *.md | LICENSE | NOTICE) continue ;;
               docs/* | .wolf/* | .claude/* | .vscode/* | .cursor/*) continue ;;
             esac
