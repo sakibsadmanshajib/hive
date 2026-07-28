@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -21,8 +23,9 @@ import (
 // PaymentService is the interface the Handler uses to interact with payments.
 type PaymentService interface {
 	GetCheckoutOptions(ctx context.Context, accountID uuid.UUID) (*CheckoutOptions, error)
-	InitiateCheckout(ctx context.Context, accountID uuid.UUID, rail Rail, credits int64, callbackBaseURL, idempotencyKey string) (*PaymentIntent, error)
+	InitiateCheckout(ctx context.Context, accountID uuid.UUID, rail Rail, credits int64, callbackBaseURL, returnBaseURL, idempotencyKey string) (*PaymentIntent, error)
 	HandleProviderEvent(ctx context.Context, rail Rail, rawBody []byte, headers map[string]string) error
+	GetCheckoutIntent(ctx context.Context, accountID, intentID uuid.UUID) (*CheckoutIntentView, error)
 }
 
 // AccountResolver resolves the current account ID from the request context.
@@ -55,14 +58,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetRails(w, r)
 	case "/api/v1/accounts/current/checkout/initiate":
 		h.handleInitiateCheckout(w, r)
+	case "/api/v1/accounts/current/checkout/intent":
+		h.handleGetCheckoutIntent(w, r)
 	case "/webhooks/stripe":
 		h.handleWebhook(w, r, RailStripe)
 	case "/webhooks/bkash/callback":
 		h.handleWebhook(w, r, RailBkash)
-	case "/webhooks/sslcommerz/ipn",
-		"/webhooks/sslcommerz/success",
-		"/webhooks/sslcommerz/fail",
-		"/webhooks/sslcommerz/cancel":
+	// Only the IPN endpoint remains. The former /success, /fail and /cancel
+	// endpoints were browser return URLs pointed at this webhook handler, so a
+	// paying customer's browser landed on `{"status":"ok"}` and, worse, a
+	// browser request could drive settlement. Browser returns now go to the
+	// console (see checkout_return.go); settlement is IPN only (issue #538).
+	case "/webhooks/sslcommerz/ipn":
 		h.handleWebhook(w, r, RailSSLCommerz)
 	default:
 		writePaymentJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
@@ -181,8 +188,9 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 	}
 
 	callbackBaseURL := resolveCallbackBaseURL(r)
+	returnBaseURL := ResolveConsoleBaseURL()
 
-	intent, err := h.svc.InitiateCheckout(r.Context(), accountID, req.Rail, req.Credits, callbackBaseURL, req.IdempotencyKey)
+	intent, err := h.svc.InitiateCheckout(r.Context(), accountID, req.Rail, req.Credits, callbackBaseURL, returnBaseURL, req.IdempotencyKey)
 	if err != nil {
 		if errors.Is(err, ErrBillingProfileRequired) {
 			writePaymentJSON(w, http.StatusBadRequest, map[string]any{
@@ -224,6 +232,56 @@ func (h *Handler) handleInitiateCheckout(w http.ResponseWriter, r *http.Request)
 }
 
 // ---------------------------------------------------------------------------
+// handleGetCheckoutIntent — GET /api/v1/accounts/current/checkout/intent
+// ---------------------------------------------------------------------------
+//
+// The read the browser return page relies on. Deliberately GET-only and
+// side-effect free: the return surface reports what settlement already decided,
+// it never decides anything itself (issue #538).
+func (h *Handler) handleGetCheckoutIntent(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writePaymentJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+		return
+	}
+
+	accountID, err := h.accountsSvc.EnsureViewerContext(r.Context())
+	if err != nil {
+		if errors.Is(err, ErrVerificationRequired) {
+			writePaymentJSON(w, http.StatusForbidden, map[string]string{
+				"error": "email must be verified before accessing billing",
+				"code":  "email_verification_required",
+			})
+			return
+		}
+		writePaymentJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	// The id arrives in a query string the customer controls, so it is parsed
+	// strictly and then matched against the viewer's own account in the service.
+	intentID, err := uuid.Parse(strings.TrimSpace(r.URL.Query().Get("payment_intent_id")))
+	if err != nil {
+		writePaymentJSON(w, http.StatusBadRequest, map[string]string{"error": "payment_intent_id must be a UUID"})
+		return
+	}
+
+	view, err := h.svc.GetCheckoutIntent(r.Context(), accountID, intentID)
+	if err != nil {
+		if errors.Is(err, ErrIntentNotFound) {
+			writePaymentJSON(w, http.StatusNotFound, map[string]string{"error": "payment not found"})
+			return
+		}
+		log.Printf("payments: GetCheckoutIntent error (account=%s, intent=%s): %v", accountID, intentID, err)
+		writePaymentJSON(w, http.StatusInternalServerError, map[string]string{
+			"error": "payment status temporarily unavailable",
+		})
+		return
+	}
+
+	writePaymentJSON(w, http.StatusOK, view)
+}
+
+// ---------------------------------------------------------------------------
 // handleWebhook — POST /webhooks/{provider} (unauthenticated, signature-verified)
 // ---------------------------------------------------------------------------
 
@@ -262,17 +320,67 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request, rail Rai
 // Helpers
 // ---------------------------------------------------------------------------
 
-// resolveCallbackBaseURL derives the callback base URL from the configured env var
-// or falls back to the request Host.
+// resolveCallbackBaseURL derives the control-plane origin that providers post
+// their server-to-server webhooks to. This is the *webhook* leg only; the
+// customer's browser return is resolved independently from the console origin
+// (see ResolveConsoleBaseURL) and never touches this value.
+//
+// A loopback CONTROL_PLANE_PUBLIC_URL is deliberately demoted below the request
+// host. Compose injects `CONTROL_PLANE_PUBLIC_URL=http://localhost:8081` as a
+// default, so a deployment reached over a tunnel handed every provider a
+// callback URL that no provider on the internet can resolve, while the correct
+// host-derived fallback below never got a chance to run. Preferring the real
+// request host in that specific case makes the deployment work whatever the
+// default says, and logs the mismatch instead of failing silently.
+//
+// This mirrors the same policy the console already applies to a loopback
+// NEXT_PUBLIC_APP_URL in apps/web-console/lib/http/origin.ts.
 func resolveCallbackBaseURL(r *http.Request) string {
-	if u := os.Getenv("CONTROL_PLANE_PUBLIC_URL"); u != "" {
-		return u
+	hostOrigin := requestOriginOf(r)
+
+	if u := strings.TrimRight(strings.TrimSpace(os.Getenv("CONTROL_PLANE_PUBLIC_URL")), "/"); u != "" {
+		if !isLoopbackBaseURL(u) || isLoopbackHost(r.Host) {
+			return u
+		}
+		log.Printf(
+			"payments: CONTROL_PLANE_PUBLIC_URL=%q is loopback but this request arrived on host %q; "+
+				"using %q for provider callbacks. A provider cannot reach a loopback address — "+
+				"set CONTROL_PLANE_PUBLIC_URL to the publicly reachable control-plane origin.",
+			u, r.Host, hostOrigin,
+		)
 	}
+
+	return hostOrigin
+}
+
+// requestOriginOf reconstructs the origin this request arrived on.
+func requestOriginOf(r *http.Request) string {
 	scheme := "https"
-	if r.TLS == nil && (r.Host == "localhost" || strings.HasPrefix(r.Host, "localhost:") || strings.HasPrefix(r.Host, "127.")) {
+	if r.TLS == nil && isLoopbackHost(r.Host) {
 		scheme = "http"
 	}
 	return scheme + "://" + r.Host
+}
+
+// isLoopbackHost reports whether a Host header names this machine.
+func isLoopbackHost(host string) bool {
+	name := host
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		name = h
+	}
+	name = strings.ToLower(strings.Trim(name, "[]"))
+	return name == "localhost" || name == "::1" || strings.HasPrefix(name, "127.")
+}
+
+// isLoopbackBaseURL reports whether a configured base URL points at loopback.
+func isLoopbackBaseURL(base string) bool {
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Host == "" {
+		// Unparseable is treated as unusable, which routes the caller to the
+		// request-derived origin rather than to a value nothing can resolve.
+		return true
+	}
+	return isLoopbackHost(parsed.Host)
 }
 
 func writePaymentJSON(w http.ResponseWriter, status int, body any) {
@@ -298,6 +406,12 @@ func classifyInitiateError(err error) (int, string) {
 	}
 	if errors.Is(err, ErrFXUnavailable) {
 		// Never name "FX" on a BD customer surface.
+		return http.StatusServiceUnavailable, "payment service temporarily unavailable"
+	}
+	if errors.Is(err, ErrReturnURLNotConfigured) {
+		// Deployment fault, not a customer fault: no console origin is configured,
+		// so a payer would be stranded after paying. Refuse before taking money and
+		// keep the variable names in the log, not on the customer wire.
 		return http.StatusServiceUnavailable, "payment service temporarily unavailable"
 	}
 	// Validation errors carry the customer-provided value only (credit

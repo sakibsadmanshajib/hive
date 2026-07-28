@@ -74,9 +74,19 @@ func NewService(repo Repository, ledgerSvc LedgerGranter, profilesSvc ProfileRea
 //  8. Call rail.Initiate
 //  9. Update provider details
 //  10. Transition created -> pending_redirect
-func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rail Rail, credits int64, callbackBaseURL, idempotencyKey string) (*PaymentIntent, error) {
+//
+// callbackBaseURL is the control-plane origin providers post webhooks to.
+// returnBaseURL is the console origin the customer's browser is returned to.
+// The two are never the same thing (issue #538).
+func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rail Rail, credits int64, callbackBaseURL, returnBaseURL, idempotencyKey string) (*PaymentIntent, error) {
 	// 1. Validate credits.
 	if err := ValidatePurchaseAmount(credits); err != nil {
+		return nil, err
+	}
+
+	// A checkout with no usable browser return origin would strand the payer
+	// after the money moved, so refuse it before anything is created.
+	if err := ValidateReturnBaseURL(returnBaseURL); err != nil {
 		return nil, err
 	}
 
@@ -165,6 +175,7 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 		AmountLocal:     amountLocal,
 		Currency:        localCurrencyFor(rail),
 		CallbackBaseURL: callbackBaseURL,
+		ReturnBaseURL:   returnBaseURL,
 		CustomerName:    billingProfile.BillingContactName,
 		CustomerEmail:   billingProfile.BillingContactEmail,
 	}
@@ -195,6 +206,38 @@ func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rai
 	intent.ExpiresAt = &expiresAt
 	intent.Status = IntentStatusPendingRedirect
 	return &intent, nil
+}
+
+// ---------------------------------------------------------------------------
+// GetCheckoutIntent
+// ---------------------------------------------------------------------------
+
+// GetCheckoutIntent returns the customer-safe view of one payment intent owned
+// by the given account. It backs the browser return page (issue #538).
+//
+// This is strictly a read. It performs no state transition and posts no ledger
+// entry, which is the whole point: a customer who replays or hand-crafts a
+// return URL can look at an outcome they already own and cannot cause one.
+// Settlement stays with HandleProviderEvent (provider webhook) and
+// ConfirmPendingBDPayments (server-side confirmation loop).
+//
+// An intent belonging to another account is reported as ErrIntentNotFound
+// rather than a permission error, so the endpoint cannot be used to probe which
+// intent ids exist.
+func (s *Service) GetCheckoutIntent(ctx context.Context, accountID, intentID uuid.UUID) (*CheckoutIntentView, error) {
+	intent, err := s.repo.GetPaymentIntent(ctx, intentID)
+	if err != nil {
+		if errors.Is(err, ErrIntentNotFound) {
+			return nil, ErrIntentNotFound
+		}
+		return nil, fmt.Errorf("payments: get intent: %w", err)
+	}
+	if intent.AccountID != accountID {
+		return nil, ErrIntentNotFound
+	}
+
+	view := NewCheckoutIntentView(intent)
+	return &view, nil
 }
 
 // ---------------------------------------------------------------------------

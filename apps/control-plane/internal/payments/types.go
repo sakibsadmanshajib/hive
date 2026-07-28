@@ -147,9 +147,17 @@ type InitiateInput struct {
 	AmountUSD       int64     `json:"-"`
 	AmountLocal     int64     `json:"amount_local"`
 	Currency        string    `json:"currency"`
-	CallbackBaseURL string    `json:"callback_base_url"`
-	CustomerName    string    `json:"customer_name"`
-	CustomerEmail   string    `json:"customer_email"`
+	// CallbackBaseURL is the control-plane origin a provider posts its
+	// server-to-server webhook or IPN to. Settlement is driven from there and
+	// nowhere else.
+	CallbackBaseURL string `json:"callback_base_url"`
+	// ReturnBaseURL is the console origin the customer's *browser* is sent back
+	// to when the hosted payment page finishes. It is deliberately a separate
+	// field from CallbackBaseURL: conflating the two is what landed paying
+	// customers on a raw JSON webhook response (issue #538).
+	ReturnBaseURL string `json:"return_base_url"`
+	CustomerName  string `json:"customer_name"`
+	CustomerEmail string `json:"customer_email"`
 }
 
 // InitiateResult is returned by a PaymentRail after initiating a payment.
