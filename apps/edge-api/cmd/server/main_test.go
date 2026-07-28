@@ -649,11 +649,22 @@ func TestVoiceGateForAPIKeysBypassesGateForAPIKeyCallers(t *testing.T) {
 }
 
 // stubShimKeyResolver is a canned authz resolver for the OWUI shim-key probe.
+// The canned answer is guarded because the recovery test swaps it while the
+// watcher goroutine is already probing.
 type stubShimKeyResolver struct {
+	mu       sync.RWMutex
 	snapshot authz.AuthSnapshot
 	err      error
 	calls    atomic.Int64
 	seen     chan struct{}
+}
+
+// set replaces the canned answer. Callers that only build the stub before any
+// probe starts can keep using a struct literal.
+func (s *stubShimKeyResolver) set(snapshot authz.AuthSnapshot, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshot, s.err = snapshot, err
 }
 
 func (s *stubShimKeyResolver) Resolve(_ context.Context, _ string) (authz.AuthSnapshot, error) {
@@ -664,6 +675,8 @@ func (s *stubShimKeyResolver) Resolve(_ context.Context, _ string) (authz.AuthSn
 		default:
 		}
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.snapshot, s.err
 }
 
@@ -762,8 +775,7 @@ func TestWatchOWUIShimKeyLogsRecovery(t *testing.T) {
 		close(done)
 	}()
 	waitFor(t, func() bool { return strings.Contains(logged.String(), "ERROR") })
-	resolver.snapshot = authz.AuthSnapshot{Status: "active", AllowAllModels: true}
-	resolver.err = nil
+	resolver.set(authz.AuthSnapshot{Status: "active", AllowAllModels: true}, nil)
 	waitFor(t, func() bool { return strings.Contains(logged.String(), "resolves to an active Hive API key") })
 	cancel()
 	<-done
