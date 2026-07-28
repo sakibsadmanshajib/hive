@@ -16,6 +16,26 @@ import (
 // "unset, fall through to the resolved default" case -- mirroring
 // public.tenant_settings' own current-value-only shape (no separate
 // ok=false/err distinction needed beyond a plain query miss).
+//
+// No concrete production implementation ships in this PR. edge-api cannot
+// query public.tenant_settings directly: tools/lint-no-direct-tenant-setting.mjs
+// blocks any direct SQL against that table outside
+// apps/control-plane/internal/tenant/settings/, and Go's own internal-package
+// visibility rules block importing settings.Resolver from edge-api anyway
+// (control-plane and edge-api are separate modules under go.work; a package
+// under .../internal/... is only importable from the module tree rooted one
+// level above internal). The sanctioned pattern this repo already uses for
+// "edge-api needs a control-plane-owned setting" is an HTTP fetch with a
+// short-TTL cache -- see apps/edge-api/internal/featuregate/gate.go's
+// Gate.Fetch against control-plane's GET /internal/featuregate/{tenant_id}.
+// ENABLE_USAGE_METERING is not registered in public.feature_gate_keys and
+// that endpoint's ClientVisibleEnabled deliberately excludes billing-adjacent
+// keys from its category allowlist, so reusing it as-is is not an option
+// either. Wiring a real settings source (a new control-plane internal
+// endpoint, or a billing-category addition to featuregate) is a follow-up a
+// later PR must do; until then Wave 3 either passes a nil
+// TenantSettingsCache (Gate falls through to the resolved-default rule) or
+// supplies its own adapter.
 type TenantSettingsCache interface {
 	EnableUsageMetering(ctx context.Context, tenantID uuid.UUID) (enabled bool, ok bool, err error)
 }
@@ -28,41 +48,17 @@ type BillingAccountResolver interface {
 	Resolve(ctx context.Context, tenantID uuid.UUID) (accountID uuid.UUID, found bool, err error)
 }
 
-// PGTenantSettingsCache reads tenant_settings directly off the pool edge-api
-// already holds open (e.g. chat.Deps.Pool) -- no new network hop to
-// control-plane, matching design brief section 3.1's "at most one indexed
-// Postgres lookup per request" contract.
-//
-// ponytail: a direct query, no in-process cache and no
-// tenant_settings_changed LISTEN loop yet. Add one if this shows up as a
-// real p95 cost once Wave 3 wires it in; nothing in the test plan for this
-// step requires it, and an untested LISTEN goroutine is worse than a plain
-// indexed SELECT.
-type PGTenantSettingsCache struct {
-	Pool *pgxpool.Pool
-}
-
-// EnableUsageMetering implements TenantSettingsCache.
-func (c *PGTenantSettingsCache) EnableUsageMetering(ctx context.Context, tenantID uuid.UUID) (bool, bool, error) {
-	if c == nil || c.Pool == nil {
-		return false, false, nil
-	}
-	var enabled bool
-	err := c.Pool.QueryRow(ctx, `
-		SELECT enabled FROM public.tenant_settings
-		WHERE tenant_id = $1 AND key = 'ENABLE_USAGE_METERING'`, tenantID).Scan(&enabled)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, false, nil
-	}
-	if err != nil {
-		return false, false, fmt.Errorf("metering: read tenant setting: %w", err)
-	}
-	return enabled, true, nil
-}
-
 // PGBillingAccountResolver reads tenant_billing_accounts directly off the
-// same pool, same "one indexed lookup, no new hop" shape as
-// PGTenantSettingsCache above.
+// pool edge-api already holds open (e.g. chat.Deps.Pool) -- no new network
+// hop to control-plane, matching design brief section 3.1's "at most one
+// indexed Postgres lookup per request" contract. Unlike TenantSettingsCache
+// above, no repo-wide lint blocks a direct read of
+// public.tenant_billing_accounts from edge-api, so this concrete
+// implementation ships in this PR.
+//
+// ponytail: a direct query, no in-process cache. Add one if this shows up as
+// a real p95 cost once Wave 3 wires it in; nothing in the test plan for this
+// step requires it.
 type PGBillingAccountResolver struct {
 	Pool *pgxpool.Pool
 }

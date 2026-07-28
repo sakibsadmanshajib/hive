@@ -38,7 +38,10 @@ type Gate struct {
 // a nil settings/billing resolver degrades to the resolved-default rule and
 // billing_unavailable respectively (see precedence.go); a nil log simply
 // skips the verdict write. Tests supply fakes; production wiring (a later
-// Wave 3 PR) supplies the PG-backed implementations in this package.
+// Wave 3 PR) supplies PGBillingAccountResolver and PGVerdictLogger from this
+// package. TenantSettingsCache has no concrete production implementation
+// yet -- see its doc comment in precedence.go for why and what a follow-up
+// PR needs to build.
 type Deps struct {
 	Settings TenantSettingsCache
 	Billing  BillingAccountResolver
