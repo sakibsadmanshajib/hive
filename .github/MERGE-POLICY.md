@@ -41,9 +41,21 @@ else, including an unrecognized path or an API error, runs the full suite.
 
 This shape matters for the gate. A workflow skipped by a trigger path filter
 never creates its check runs, so its required checks stay Pending and block the
-merge; a job skipped by a conditional reports Success. Filtering inside the
-workflow therefore keeps a docs-only pull request mergeable without a second
-workflow standing in for the real one.
+merge. A job skipped by a conditional does create a check run, but it reports
+the conclusion `skipped`, and whether branch protection accepts that for a
+required context is the one thing that cannot be tested on a pull request into a
+protected branch until after the change is merged. The jobs publishing required
+contexts therefore do not rely on it: each carries `if: always()` and gates its
+individual steps, so it always concludes on its own merits. Filtering inside the
+workflow keeps a docs-only pull request mergeable without a second workflow
+standing in for the real one.
+
+One consequence to expect: on a docs-only or hooks-only pull request all six
+required checks legitimately go green in a few seconds, because each required
+job runs to completion with every step skipped. That is the same *shape* as the
+issue #553 defect below, so do not read duration as evidence either way. The
+property that matters is one producer per required context, which the guard
+below enforces on every pull request.
 
 The previous arrangement did use a second workflow (`ci-noop.yml`) that fired on
 the inverse path set and published the same job names as trivial `echo` steps.
@@ -54,9 +66,19 @@ issue #553 and it is why the rule below is now enforced automatically.
 
 > Exactly one job, in exactly one pull-request workflow, may publish a given
 > required check name. `.github/ci/lint-workflow-check-names.mjs` runs inside
-> the `Repo policy lints (tenant + audit)` required check and fails the build on
-> a duplicate name, or on a required context in the config below that no job
-> publishes.
+> the `Repo policy lints (tenant + audit)` required check and fails the build
+> when any of these holds:
+>
+> - two pull-request jobs publish the same check name;
+> - a required context in the config below has no producer, or more than one;
+> - a job publishing a required context can be skipped (no `if: always()`);
+> - a workflow publishing a required context path-filters its triggers.
+>
+> Matrix job names are expanded against the real `strategy.matrix` values, so
+> `Go tests (${{ matrix.module }})` is compared as the four concrete names it
+> publishes. A job name built from anything else the guard cannot resolve
+> (`github.*`, `env.*`) is itself an error, because a name the guard cannot
+> compute is a name it cannot verify.
 
 > Note: `required_pull_request_reviews` is not set — this repo currently has no
 > mandatory human approver (solo/small team). Add it later by setting

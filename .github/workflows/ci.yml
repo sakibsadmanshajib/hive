@@ -115,19 +115,26 @@ jobs:
           # The API is asked for the same file list GitHub itself would
           # have path-filtered on, so there is no dependency on clone
           # depth or on merge-base resolution.
+          # Both endpoints cap the file list they will return: 3000 for
+          # a pull request, 300 for a comparison. A truncated list would
+          # hide a code path behind a docs-only prefix, so the count is
+          # compared against the cap below and a list at the cap runs
+          # everything.
           case "$EVENT" in
             pull_request)
-              files=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+              cap=3000
+              files=$(gh api "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" --paginate \
                         --jq '.[].filename') \
                 || run_everything "could not list pull request files"
               ;;
             push)
+              cap=300
               case "$BEFORE_SHA" in
                 '' | 0000000000000000000000000000000000000000)
                   run_everything "push event has no usable base commit"
                   ;;
               esac
-              files=$(gh api "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA" --paginate \
+              files=$(gh api "repos/$REPO/compare/$BEFORE_SHA...$AFTER_SHA?per_page=100" --paginate \
                         --jq '.files[]?.filename') \
                 || run_everything "could not compare $BEFORE_SHA...$AFTER_SHA"
               ;;
@@ -144,12 +151,27 @@ jobs:
           echo "changed files:"
           sed 's/^/  /' /tmp/changed-files.txt
 
+          count=$(grep -c . /tmp/changed-files.txt || true)
+          if [ "${count:-0}" -ge "$cap" ]; then
+            run_everything "changed-file list has $count entries and may be truncated at the API cap of $cap"
+          fi
+
+          # Deny by extension first. Everything below this arm is a
+          # directory grant, and a directory cannot stay inert as it
+          # grows: .wolf/ and .claude/ already hold hook scripts, and a
+          # future .js, .mjs, .cjs, .ts, .sh or .py under any allow-listed
+          # prefix is executable code that could change how a build, test
+          # or lint behaves. Extension-deny needs no maintenance as those
+          # directories grow, and still lets the genuinely inert paths
+          # through (.wolf/*.md, .wolf/buglog.jsonl, docs/ screenshots).
+          #
           # Allow-list: paths that cannot affect any build, test or lint
           # in this workflow. Keep it narrow. Adding an entry here weakens
           # the merge gate for every future pull request.
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
+              *.js | *.mjs | *.cjs | *.ts | *.sh | *.py) run_everything "'$f' is executable code" ;;
               *.md | LICENSE | NOTICE) continue ;;
               docs/* | .wolf/* | .claude/* | .vscode/* | .cursor/*) continue ;;
             esac
