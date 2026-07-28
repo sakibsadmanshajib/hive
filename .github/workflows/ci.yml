@@ -918,11 +918,11 @@ jobs:
       # Activate the in-stack docker redis profile for every compose call
       # in this job (see live-integration job for the rationale).
       COMPOSE_PROFILES: local
-      # SUPABASE_SERVICE_ROLE_KEY intentionally omitted from job-level env
-      # so the Playwright runner never inherits it. Only the steps that
-      # actually need admin auth — `Start core stack` (docker compose
-      # interpolation for control-plane) and `Build + start Next.js`
-      # (/auth/callback route) — scope it in their own `env:` blocks.
+      # SUPABASE_SERVICE_ROLE_KEY intentionally omitted from job-level env.
+      # Only the steps that actually need admin auth scope it in their own
+      # `env:` blocks: `Start core stack` (docker compose interpolation for
+      # control-plane), `Build + start Next.js` (/auth/callback route), and
+      # the Playwright step (fixture seeding, see its own comment).
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
       REDIS_URL: redis://redis:6379/0
@@ -1103,22 +1103,39 @@ jobs:
         working-directory: apps/web-console
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
-          # Preferred path: the `e2e-fixtures` Supabase Edge Function does
-          # all seeding server-side. When both secrets are present, the
-          # fixture helper POSTs once per spec and the runner never sees
-          # the Supabase service-role key.
-          E2E_FIXTURE_URL: ${{ secrets.E2E_FIXTURE_URL }}
-          E2E_FIXTURE_SECRET: ${{ secrets.E2E_FIXTURE_SECRET }}
-          # Fallback path: if the edge function isn't deployed yet, the
-          # helper talks directly to the Supabase admin REST API using
-          # `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (already exposed
-          # as job-level env for the Next.js server). Keeps local dev and
-          # staged rollouts working without coupling the two changes.
-          E2E_VERIFIED_EMAIL: ${{ secrets.E2E_VERIFIED_EMAIL }}
+          # Fixture seeding runs in this step's own Node child process
+          # (tests/e2e/support/e2e-auth-fixtures.mjs), so it needs admin
+          # auth here. Step-scoped rather than job-level, matching every
+          # other consumer of this secret in this job.
+          #
+          # This used to POST to a deployed `e2e-fixtures` Supabase Edge
+          # Function instead, which kept the key out of this step but put
+          # the caller and the seeder on separate release cycles: a change
+          # to what the caller asked for shipped with its pull request
+          # while the deployed seeder only moved when somebody ran
+          # `supabase functions deploy`. Seeding in-process removes that
+          # skew, and removes the deploy step from the critical path of
+          # any pull request that touches the fixtures.
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # E2E_RUN_KEY, and the three identity values below it, namespace
+          # every fixture row this job's specs touch (see
+          # apps/web-console/tests/e2e/support/e2e-fixture-seed.mjs,
+          # buildIds). Without this, every concurrent Web E2E job (another
+          # PR, a push to main) shared one hardcoded set of accounts and
+          # users against the same live Supabase project and could delete or
+          # reassign rows out from under this job's own reads mid-test.
+          # github.run_attempt makes a manual re-run of a flake get a fresh
+          # identity too, not the one the previous attempt already consumed.
+          # Passwords stay the shared default (from secrets, or the fixture
+          # defaults in e2e-auth-defaults.json when those secrets are
+          # unset): nothing looks a user up by password, so they never need
+          # to be unique per run.
+          E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+          E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
-          E2E_UNVERIFIED_EMAIL: ${{ secrets.E2E_UNVERIFIED_EMAIL }}
+          E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
-          E2E_INVITATION_TOKEN: ${{ secrets.E2E_INVITATION_TOKEN }}
+          E2E_INVITATION_TOKEN: e2e-invitation-token-2026-fixture-${{ github.run_id }}-${{ github.run_attempt }}
           # Platform-admin fixture for console-platform-admin.spec.ts.
           # Unset leaves that spec skipped, which is why the required
           # coverage for a mispointed control-plane is the unit-level

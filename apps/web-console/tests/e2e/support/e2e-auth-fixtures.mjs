@@ -1,9 +1,33 @@
+// Fixture CLI for the Playwright E2E suite.
+//
+// Resolves the credentials the specs will sign in with, then seeds exactly
+// that identity through `e2e-fixture-seed.mjs`. Specs invoke this as a child
+// process from `beforeEach` (see tests/e2e/auth-shell.spec.ts), so the
+// service-role key stays in this process and never enters page context.
+//
+// Usage:
+//   node tests/e2e/support/e2e-auth-fixtures.mjs
+//   node tests/e2e/support/e2e-auth-fixtures.mjs reset-profile <email>
+//
+// Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Neither has a
+// fallback: seeding used to POST to a deployed `e2e-fixtures` Supabase Edge
+// Function and quietly no-op when its URL and secret were absent, which is
+// what let a caller change while the deployed seeder stayed behind, with
+// nothing failing until a spec timed out signing in as a user nobody had
+// created.
+
 import { readFileSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import {
+  createAdminClient,
+  redactSecrets,
+  resetProfileComplete,
+  seedFixtures,
+} from "./e2e-fixture-seed.mjs";
 
 // Shared defaults with `e2e-auth-creds.ts`. Both modules read the same JSON
-// so the spec-side env lookup and the fixture CLI cannot drift apart.
+// so the spec-side env lookup and this CLI cannot drift apart.
 const DEFAULTS = JSON.parse(
   readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "e2e-auth-defaults.json"),
@@ -47,6 +71,26 @@ export const E2E_UNVERIFIED_EMAIL = envOrDefault(
   DEFAULTS.unverifiedEmail,
   { validator: isValidEmail }
 );
+export const E2E_VERIFIED_PASSWORD = envOrDefault(
+  "E2E_VERIFIED_PASSWORD",
+  DEFAULTS.verifiedPassword,
+  { minLength: DEFAULTS.minPasswordLength }
+);
+export const E2E_UNVERIFIED_PASSWORD = envOrDefault(
+  "E2E_UNVERIFIED_PASSWORD",
+  DEFAULTS.unverifiedPassword,
+  { minLength: DEFAULTS.minPasswordLength }
+);
+export const E2E_INVITATION_TOKEN = envOrDefault(
+  "E2E_INVITATION_TOKEN",
+  DEFAULTS.invitationToken,
+  { minLength: DEFAULTS.minTokenLength }
+);
+// Set by CI to one value per job attempt (see .github/workflows/ci.yml),
+// e.g. `${{ github.run_id }}-${{ github.run_attempt }}`. Empty for local and
+// manual runs, which means "no run key": the seeder then uses the single
+// shared fixture identity instead of a namespaced one.
+export const E2E_RUN_KEY = process.env.E2E_RUN_KEY || undefined;
 
 function maskEmail(value) {
   const [local = "", domain = ""] = value.split("@");
@@ -54,169 +98,57 @@ function maskEmail(value) {
   return `${head}***@${domain}`;
 }
 
-function hasEdgeFunctionEnv() {
-  return (
-    Boolean(process.env.E2E_FIXTURE_URL) &&
-    Boolean(process.env.E2E_FIXTURE_SECRET)
-  );
-}
-
 export async function prepareE2EAuthFixtures() {
-  const edgeEnv = hasEdgeFunctionEnv();
   if (process.env.E2E_FIXTURE_VERBOSE === "1") {
     console.log(
-      `[e2e-auth-fixtures] mode=${edgeEnv ? "edge-function" : "skipped"} verifiedEmail=${maskEmail(
+      `[e2e-auth-fixtures] seeding verifiedEmail=${maskEmail(
         E2E_VERIFIED_EMAIL
       )} unverifiedEmail=${maskEmail(E2E_UNVERIFIED_EMAIL)}`
     );
   }
 
-  // The `e2e-fixtures` Supabase Edge Function owns all admin-API work
-  // server-side. See `supabase/functions/e2e-fixtures/` for the deploy
-  // contract. Without it, the fixture is a no-op — seeding must be run
-  // out-of-band (e.g. `supabase functions invoke e2e-fixtures`).
-  if (!edgeEnv) {
-    return;
-  }
-
-  const url = process.env.E2E_FIXTURE_URL;
-  const secret = process.env.E2E_FIXTURE_SECRET;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-E2E-Secret": secret,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ action: "reset" }),
+  // The credentials this process resolved are passed straight through, so the
+  // seeder writes precisely the identity the specs will sign in as. One
+  // derivation, one place.
+  return seedFixtures(createAdminClient(), {
+    runKey: E2E_RUN_KEY,
+    verifiedEmail: E2E_VERIFIED_EMAIL,
+    unverifiedEmail: E2E_UNVERIFIED_EMAIL,
+    verifiedPassword: E2E_VERIFIED_PASSWORD,
+    unverifiedPassword: E2E_UNVERIFIED_PASSWORD,
+    invitationToken: E2E_INVITATION_TOKEN,
   });
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { raw: text };
-  }
-  if (!response.ok) {
-    const message = data?.error ?? `${response.status} ${response.statusText}`;
-    throw new Error(`e2e-fixtures edge function failed: ${message}`);
-  }
-  return data;
 }
 
-// =============================================================================
-// Phase 14 — HANDOFF-13-01 closure: seedSecondaryWorkspace
-// =============================================================================
-//
-// `auth-shell.spec.ts:88` ("workspace switcher persists selected account")
-// currently `test.skip()`-s itself when the verified tester only has one
-// workspace, masking a coverage gap (CONSOLE-13-01). The Phase 14 fix is this
-// fixture extension: the spec calls `seedSecondaryWorkspace(ownerEmail)`,
-// which uses the e2e-fixtures Supabase Edge Function's `seed-workspace`
-// action to provision a second account + membership for the verified tester
-// and returns the new account UUID. The spec then re-runs green.
-//
-// When `E2E_FIXTURE_URL`/`E2E_FIXTURE_SECRET` are absent, the function is a
-// no-op (returns null) — matches the rest of this file's contract where
-// fixture mutations only happen when the edge-function env is wired.
-
-export async function seedSecondaryWorkspace(ownerEmail) {
-  if (!hasEdgeFunctionEnv()) {
-    return null;
-  }
-  const url = process.env.E2E_FIXTURE_URL;
-  const secret = process.env.E2E_FIXTURE_SECRET;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-E2E-Secret": secret,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      action: "seed-workspace",
-      owner_email: ownerEmail,
-      display_name: "Phase 14 secondary",
-    }),
-  });
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { raw: text };
-  }
-  if (!response.ok) {
-    const message = data?.error ?? `${response.status} ${response.statusText}`;
-    throw new Error(`seedSecondaryWorkspace failed: ${message}`);
-  }
-  // Edge function may legitimately return { workspaceID, jwt } OR a no-op
-  // payload when the secondary workspace already exists. Normalise to the
-  // documented return shape.
-  if (data && typeof data === "object" && data.workspaceID) {
-    return { workspaceID: String(data.workspaceID), jwt: String(data.jwt ?? "") };
-  }
-  return null;
+export async function resetProfileBetweenSpecs(email) {
+  return resetProfileComplete(createAdminClient(), email || E2E_VERIFIED_EMAIL);
 }
 
-// =============================================================================
-// Phase 14 — HANDOFF-13-02 closure: resetProfileBetweenSpecs
-// =============================================================================
-//
-// `profile-completion.spec.ts:71` ("dashboard shows setup reminder ...")
-// expects the verified tester's `profile_setup_complete` to be `false` so
-// that the dashboard renders the "Complete setup" CTA. The previous test in
-// the file (`setup saves profile`) sets it to `true`, polluting the second
-// test's preconditions when the file's `beforeEach` reset doesn't include
-// the profile flag.
-//
-// `resetProfileBetweenSpecs(testInfo)` explicitly resets the profile flag
-// for the verified tester via the e2e-fixtures Edge Function's
-// `reset-profile` action. Specs call it from `test.beforeEach` to guarantee
-// independence regardless of file order or worker count.
-
-export async function resetProfileBetweenSpecs(testInfo) {
-  if (!hasEdgeFunctionEnv()) {
-    return null;
+function runCli(argv) {
+  const [action, ...rest] = argv;
+  if (!action || action === "reset") {
+    return prepareE2EAuthFixtures();
   }
-  const url = process.env.E2E_FIXTURE_URL;
-  const secret = process.env.E2E_FIXTURE_SECRET;
-  const targetEmail =
-    testInfo && typeof testInfo === "object" && testInfo.email
-      ? testInfo.email
-      : E2E_VERIFIED_EMAIL;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "X-E2E-Secret": secret,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      action: "reset-profile",
-      email: targetEmail,
-    }),
-  });
-  const text = await response.text();
-  let data = null;
-  try {
-    data = text ? JSON.parse(text) : null;
-  } catch {
-    data = { raw: text };
+  if (action === "reset-profile") {
+    return resetProfileBetweenSpecs(rest[0]);
   }
-  if (!response.ok) {
-    const message = data?.error ?? `${response.status} ${response.statusText}`;
-    throw new Error(`resetProfileBetweenSpecs failed: ${message}`);
-  }
-  return data;
+  return Promise.reject(new Error(`unknown action: ${action}`));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  prepareE2EAuthFixtures()
+  runCli(process.argv.slice(2))
     .then((summary) => {
       if (summary && process.env.E2E_FIXTURE_VERBOSE === "1") {
         console.log(JSON.stringify(summary, null, 2));
       }
     })
     .catch((error) => {
-      console.error(error instanceof Error ? error.message : error);
+      // Callers relay this child process's stderr into the CI log on failure,
+      // so scrub the service-role key out of anything a client library may
+      // have embedded in the message before it is printed.
+      console.error(
+        redactSecrets(error instanceof Error ? error.message : error)
+      );
       process.exitCode = 1;
     });
 }
