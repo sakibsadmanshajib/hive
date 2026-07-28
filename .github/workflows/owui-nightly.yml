@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           for v in SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY SUPABASE_DB_URL \
-                   SUPABASE_DB_POOL_URL \
+                   SUPABASE_DB_POOL_URL SUPABASE_DB_POOL_URL_LIBPQ \
                    S3_ENDPOINT S3_ACCESS_KEY S3_SECRET_KEY S3_REGION \
                    OPENROUTER_API_KEY GROQ_API_KEY OWUI_SHIM_KEY; do
             val="${!v:-}"
@@ -157,6 +157,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
           SUPABASE_DB_URL=${SUPABASE_DB_URL}
           SUPABASE_DB_POOL_URL=${SUPABASE_DB_POOL_URL}
+          SUPABASE_DB_POOL_URL_LIBPQ=${SUPABASE_DB_POOL_URL_LIBPQ}
           SUPABASE_JWT_ISSUER=${SUPABASE_URL}/auth/v1
           SUPABASE_JWT_AUDIENCE=authenticated
           SUPABASE_JWKS_URL=${SUPABASE_URL}/auth/v1/.well-known/jwks.json
