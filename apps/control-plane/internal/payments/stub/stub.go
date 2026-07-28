@@ -172,6 +172,7 @@ func (s *StubService) InitiateCheckout(
 	rail payments.Rail,
 	credits int64,
 	_ string, // callbackBaseURL unused in stub
+	_ string, // returnBaseURL unused in stub: no browser ever leaves the console
 	idempotencyKey string,
 ) (*payments.PaymentIntent, error) {
 	// Mirror production validation exactly.
@@ -248,6 +249,18 @@ func (s *StubService) HandleProviderEvent(
 	_ map[string]string,
 ) error {
 	return errors.New("payments stub: provider webhooks are not accepted in demo mode")
+}
+
+// GetCheckoutIntent has nothing to return in stub mode. The stub grants credits
+// inline and persists no payment intent, so no browser is ever redirected to a
+// provider and the return page is not part of this flow. Reporting
+// ErrIntentNotFound keeps the endpoint honest instead of inventing a state.
+func (s *StubService) GetCheckoutIntent(
+	_ context.Context,
+	_ uuid.UUID,
+	_ uuid.UUID,
+) (*payments.CheckoutIntentView, error) {
+	return nil, payments.ErrIntentNotFound
 }
 
 // GetCheckoutOptions returns stub checkout options, filtered to the rails the

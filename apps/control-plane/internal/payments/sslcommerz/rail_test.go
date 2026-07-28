@@ -87,7 +87,8 @@ func defaultSSLInput() payments.InitiateInput {
 		AmountUSD:       100,
 		AmountLocal:     150000, // 1500.00 BDT in paisa
 		Currency:        "BDT",
-		CallbackBaseURL: "https://example.com",
+		CallbackBaseURL: "https://cp.example.com",
+		ReturnBaseURL:   "https://console.example.com",
 		CustomerName:    "Test User",
 		CustomerEmail:   "test@example.com",
 	}
