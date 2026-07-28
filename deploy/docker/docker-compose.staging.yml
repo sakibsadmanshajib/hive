@@ -1,4 +1,15 @@
 # Staging override — overlays docker-compose.yml
+#
+# UNREFERENCED AND SUPERSEDED (noted 2026-07-27). Nothing in this repository
+# invokes this overlay: .github/workflows/deploy-demo-box.yml runs the base
+# compose file with `--profile local --profile chat`, so the values that reach
+# the running demo box come from docker-compose.yml and never from here. The
+# environment it describes is also gone: the 1 GB VM was retired, Redis is now
+# self-hosted in the stack instead of external Upstash, and the web-console runs
+# on Cloudflare Workers rather than Cloudflare Pages. Fixes applied here do not
+# affect any live deployment. Whether the file should be deleted outright is the
+# owner's call, so it is kept and labelled rather than removed.
+#
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.staging.yml \
 #       up -d edge-api control-plane litellm
@@ -59,7 +70,18 @@ services:
     environment:
       REDIS_URL: ${REDIS_URL:?REDIS_URL required (seed /opt/hive/.env)}
       CONTROL_PLANE_INTERNAL_TOKEN: ${CONTROL_PLANE_INTERNAL_TOKEN:?CONTROL_PLANE_INTERNAL_TOKEN required (seed /opt/hive/.env) — must match edge-api}
-      CONTROL_PLANE_PUBLIC_URL: https://cp-hive.scubed.co
+      # Payment-rail callback base URL (resolveCallbackBaseURL in
+      # apps/control-plane/internal/payments/http.go). It must name a hostname
+      # that actually reaches THIS deployment's control-plane, so it cannot be
+      # hardcoded in an overlay that is reused across environments.
+      #
+      # This previously hardcoded the control-plane hostname of a retired VM
+      # (named in the "Retired" section of deploy/cloudflare/README.md). That
+      # host returned 522, so any deployment using this overlay would have
+      # built payment callbacks against a dead origin. The single source of
+      # truth for which hostnames exist and where they point is
+      # deploy/cloudflare/tunnel-ingress.json.
+      CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL:?CONTROL_PLANE_PUBLIC_URL required (seed /opt/hive/.env) — public https base URL for this control-plane}
       LOG_LEVEL: info
 
   litellm:
