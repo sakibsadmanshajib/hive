@@ -60,23 +60,12 @@ jobs:
         # surface: core services (edge-api, control-plane, litellm) plus the
         # chat front-end (open-webui, agent-console) plus in-stack redis.
         #
-        # COMPOSE_PARALLEL_LIMIT=1 serializes the builds. Root cause of the
-        # chronic failure here (16+ red runs since 2026-07-26): Dockerfile.
-        # web-console and Dockerfile.web-console.prod share byte-identical
-        # early layers (FROM node:22-slim, WORKDIR, COPY package.json+lock,
-        # RUN npm install), so BuildKit's content-addressable cache treats
-        # both `RUN npm install` steps as one cached layer and hands both
-        # builds the same underlying cache-mount snapshot. Compose builds
-        # services concurrently by default, so the two builds' final `COPY
-        # apps/web-console/ ./` steps raced on that shared snapshot and
-        # clobbered each other (run 30342233017: "cannot replace to
-        # directory .../node_modules/@opennextjs/cloudflare with file").
-        # Serializing removes the race for this pair and any future pair
-        # that ends up sharing a cache key the same way, instead of patching
-        # just these two Dockerfiles.
+        # The chronic failure here (16+ red runs since 2026-07-26, "cannot
+        # replace to directory .../node_modules/@opennextjs/cloudflare with
+        # file") is fixed by the root .dockerignore added in this PR, not by
+        # anything in this step -- see that file's comment for the actual
+        # mechanism, reproduced and confirmed directly on the demo box.
         working-directory: /home/sakib/hive/deploy/docker
-        env:
-          COMPOSE_PARALLEL_LIMIT: "1"
         run: |
           set -euo pipefail
           docker compose --env-file ../../.env --profile local --profile chat \
