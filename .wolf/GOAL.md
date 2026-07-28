@@ -7,7 +7,7 @@ Be the AI platform of Bangladesh: chat workstation plus OpenAI-compatible develo
 
 Definition of done, every box checkable by a command or URL:
 
-- [x] Staging live: api-hive.scubed.co and cp-hive.scubed.co return 200 behind Cloudflare
+- [x] Staging live: api-hive.scubed.co and control-hive.scubed.co return 200 on /health behind Cloudflare (cp-hive.scubed.co was retired and no longer resolves, see D-026)
 - [x] Full deploy pipeline green end to end (Go images, VM, Workers console, SDK replay)
 - [x] One-line installer on main (curl raw install.sh, hardware advisor included)
 - [x] Tool-call routing merged (#206): SDK tools requests succeed on capable aliases
