@@ -78,6 +78,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 120s
+    restart: unless-stopped
 
   agent-engine:
     image: hive-agent-engine:ci
@@ -196,6 +197,7 @@ services:
         fi
         exec litellm --config=/etc/litellm/config.yaml
     command: []
+    restart: unless-stopped
 
   sdk-tests-js:
     image: hive-sdk-tests-js:ci
@@ -384,6 +386,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 120s
+    restart: unless-stopped
 
   # ──────────────────────────────────────────────────────────────────────────
   # EnterpriseEdge: Self-hosted Supabase data plane (issue #231)
@@ -430,6 +433,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
 
   web-console:
     image: hive-web-console:ci
@@ -445,6 +449,10 @@ services:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
+    # No profiles gate on this service: it always starts regardless of which
+    # --profile flags are active, so it is part of the running set on any box
+    # (including the demo box) exactly like the profiled services below.
+    restart: unless-stopped
 
   # Blueprint Step 3.1 (#311, #305) — standalone agent console sidecar.
   # Ratified 2026-07-16: extends nothing in Open WebUI; OWUI stays a pinned
@@ -477,6 +485,7 @@ services:
         condition: service_healthy
     environment:
       EDGE_API_INTERNAL_BASE_URL: http://edge-api:8080
+    restart: unless-stopped
 
   # Self-hosted production web-console (migration off Cloudflare Workers --
   # Workers was chosen originally only because Cloudflare Pages Functions
@@ -883,6 +892,7 @@ services:
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=30d'
+    restart: unless-stopped
   grafana:
     image: grafana/grafana:latest
     profiles:
@@ -906,6 +916,7 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     depends_on:
       - prometheus
+    restart: unless-stopped
 
   alertmanager:
     image: prom/alertmanager:latest
@@ -917,6 +928,7 @@ services:
       - ../../deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
+    restart: unless-stopped
 
 volumes:
   gomodcache:
