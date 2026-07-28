@@ -376,21 +376,33 @@ setup_env() {
     _default_litellm="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 24 || printf 'litellm-change-me')"
     prompt_value LITELLM_MASTER_KEY "LiteLLM master key" required "$_default_litellm" secret
 
-    # OWUI_SHIM_KEY: Open WebUI sends this as upstream API key; edge disables
-    # the shim-unwrap middleware when it is empty, so a missing key causes chat
-    # requests to fail at edge on the enterprise profile.
-    # The random default below covers chat completions, because the unwrap
-    # middleware rewrites any request carrying a body. It does NOT cover Open
-    # WebUI's bodyless GET /v1/models probe: auth.Selector routes any bearer
-    # token without the "hk_" prefix to the JWT handler, which 401s, so the
-    # model dropdown stays empty. Minting a real "hk_" key needs a running
-    # control-plane, which does not exist yet at install time, hence the note
-    # below rather than a hard requirement here.
-    _default_owui_shim="$(command -v openssl >/dev/null 2>&1 && openssl rand -base64 32 || printf 'owui-shim-change-me')"
-    printf '  Chat works with the generated default, but the model list stays\n'
-    printf '  empty until this is a real registered Hive API key. After the\n'
-    printf '  stack is up, mint one with scripts/seed-owui-e2e-user.py on its\n'
-    printf '  own dedicated billing account, then edit .env with that value.\n'
+    # OWUI_SHIM_KEY: Open WebUI sends this as its upstream API key; edge
+    # disables the shim-unwrap middleware when it is empty, so a missing key
+    # causes chat requests to fail at edge on the enterprise profile.
+    #
+    # This value is NOT a generated secret. It has to be a real registered Hive
+    # API key ("hk_" prefix, row in api_keys), because Open WebUI's own upstream
+    # calls that carry no signed-in user authenticate as this key and nothing
+    # else: the bodyless GET /v1/models behind the model picker, document-RAG
+    # embeddings, and text-to-speech. An `openssl rand` value authenticates none
+    # of them. Minting a real key needs a running control-plane, which does not
+    # exist yet at install time, so the default below is a self-describing
+    # placeholder rather than a random string that looks like a working secret.
+    # edge-api probes the configured value at startup and logs
+    # `owui: ERROR OWUI_SHIM_KEY is unusable: ...` with the remedy until it is
+    # replaced, so the placeholder cannot pass silently.
+    _default_owui_shim='hk_REPLACE_ME_MINT_WITH_seed-owui-e2e-user.py'
+    printf '  Leave the placeholder unless you already have a minted Hive API key.\n'
+    printf '  Chat completions work with the placeholder, because those carry the\n'
+    printf '  signed-in user token. The model picker, Open WebUI document RAG, and\n'
+    printf '  text-to-speech stay broken until this is a real registered key.\n'
+    printf '  Once the stack is up, mint one on its own dedicated billing account\n'
+    printf '  and write it to .env and Open WebUI in one step:\n'
+    printf '    python3 scripts/seed-owui-e2e-user.py \\\n'
+    printf '      --account-slug owui-shim-$(hostname -s 2>/dev/null || echo local) \\\n'
+    printf '      --env-file .env\n'
+    printf '  (set OWUI_BASE_URL and OWUI_ADMIN_TOKEN first so it also updates\n'
+    printf '  Open WebUI persisted config, then restart open-webui)\n'
     prompt_value OWUI_SHIM_KEY "Open WebUI shim key" required "$_default_owui_shim" secret
 
     # ── Optional: Headscale relay ──

@@ -312,6 +312,18 @@ services:
       # Set it explicitly only where the public base URL is not the request
       # Host, for example behind a proxy that rewrites Host.
       CONTROL_PLANE_PUBLIC_URL: ${CONTROL_PLANE_PUBLIC_URL:-}
+      # Console origin the payment rails return the customer's BROWSER to
+      # (issue #538). This is a different concern from CONTROL_PLANE_PUBLIC_URL
+      # above: that one is where a provider posts its server-to-server webhook,
+      # this one is where the paying customer's browser is sent afterwards.
+      # Same no-default rule for the same reason. A loopback value here is
+      # demoted below any real origin and refused outright for a non-loopback
+      # request, so a box cannot silently return a payer to localhost.
+      # CONSOLE_APP_URL is the deployed console origin and is consulted next,
+      # then NEXT_PUBLIC_APP_URL, which ships as a localhost placeholder.
+      WEB_CONSOLE_PUBLIC_URL: ${WEB_CONSOLE_PUBLIC_URL:-}
+      CONSOLE_APP_URL: ${CONSOLE_APP_URL:-}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-}
       OWUI_BASE_URL: ${OWUI_BASE_URL:-http://open-webui:8080}
       OWUI_ADMIN_TOKEN: ${OWUI_ADMIN_TOKEN:-}
       SUPABASE_WEBHOOK_SECRET: ${SUPABASE_WEBHOOK_SECRET:-}
@@ -605,11 +617,15 @@ services:
       # exactly; an empty/unset value disables the middleware and OWUI
       # traffic will 401. It must also be a real registered Hive API key
       # ("hk_" prefix, row in api_keys) on its own dedicated billing account,
-      # not an arbitrary `openssl rand` string. The unwrap middleware only
-      # rewrites requests carrying a body, so OWUI's bodyless GET /v1/models
-      # probe reaches auth.Selector, which routes any non-"hk_" bearer to the
-      # JWT handler and 401s there. The model dropdown stays empty while chat
-      # completions still work. Mint one with scripts/seed-owui-e2e-user.py.
+      # never an arbitrary `openssl rand` string, because OWUI's own upstream
+      # calls that carry no per-user token authenticate as this key and nothing
+      # else: the bodyless GET /v1/models behind the model picker, document-RAG
+      # embeddings (RAG_OPENAI_API_KEY below), and text-to-speech. An
+      # unregistered or revoked value breaks all three, and the only report is
+      # an empty picker plus a generic invalid-key error. edge-api logs
+      # `owui: ERROR OWUI_SHIM_KEY is unusable: ...` at startup and every five
+      # minutes when that happens. Mint one with scripts/seed-owui-e2e-user.py,
+      # passing a deployment-specific --account-slug.
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"

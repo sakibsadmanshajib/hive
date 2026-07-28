@@ -126,10 +126,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientModel := parsed.Model
-	parsed.Model = route.LiteLLMModelName
 	requestID := uuid.New()
-	parsed.Stream = true
-	body, err := json.Marshal(parsed)
+	// Rewrite only the two fields this path owns (the resolved route name, and
+	// streaming, which it always uses) and keep every other field the caller
+	// sent. Re-marshalling the narrow chatRequest struct instead silently dropped
+	// everything outside it: max_tokens, temperature, tools, stream_options. The
+	// Anthropic Messages surface delegates here and depends on those surviving.
+	body, err := rewriteDispatchBody(raw, route.LiteLLMModelName)
 	if err != nil {
 		apierr.Write(w, http.StatusBadRequest, apierr.CodeInvalidRequest, "bad request")
 		return
@@ -267,6 +270,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}); auditErr != nil {
 		slog.Warn("audit_log write failed", "err", auditErr, "request_id", requestID)
 	}
+}
+
+// rewriteDispatchBody returns the caller's body with the model replaced by the
+// resolved LiteLLM route name and streaming forced on, leaving all other fields
+// untouched.
+func rewriteDispatchBody(raw []byte, litellmModel string) ([]byte, error) {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	model, err := json.Marshal(litellmModel)
+	if err != nil {
+		return nil, err
+	}
+	fields["model"] = model
+	fields["stream"] = json.RawMessage("true")
+	return json.Marshal(fields)
 }
 
 func flush(flusher http.Flusher) {

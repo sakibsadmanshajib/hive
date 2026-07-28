@@ -35,6 +35,16 @@ func newCaptureHandler() (http.Handler, *capturedRequest) {
 
 func wrap(t *testing.T, body any, header string) *http.Request {
 	t.Helper()
+	return wrapPath(t, "/v1/chat/completions", body, header)
+}
+
+// wrapPath builds the same JSON request as wrap for an arbitrary path.
+// Path matters since the unwrap middleware fails closed on the chat
+// completions path (the only path the hive_jwt_forward pipeline owns) and
+// passes through on the paths where the shim key is itself the intended
+// credential.
+func wrapPath(t *testing.T, path string, body any, header string) *http.Request {
+	t.Helper()
 	var b []byte
 	switch v := body.(type) {
 	case nil:
@@ -50,7 +60,7 @@ func wrap(t *testing.T, body any, header string) *http.Request {
 			t.Fatalf("marshal: %v", err)
 		}
 	}
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewReader(b))
+	req := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(b))
 	if header != "" {
 		req.Header.Set("Authorization", header)
 	}
@@ -111,11 +121,14 @@ func TestOWUIUnwrap_NoShimKey_DoesNotMarkUnwrapped(t *testing.T) {
 
 // TestOWUIUnwrap_ShimKeyWithoutMetadata_DoesNotMarkUnwrapped covers the
 // no-token fall-through path: the shim key was presented but no
-// upstream_auth was injected, so nothing was actually rewritten.
+// upstream_auth was injected, so nothing was actually rewritten. Asserted
+// on the embeddings path because that is where the fall-through is
+// legitimate; the chat completions path now fails closed instead (see
+// TestOWUIUnwrap_ChatCompletionsWithoutMetadata_RejectsWithRealReason).
 func TestOWUIUnwrap_ShimKeyWithoutMetadata_DoesNotMarkUnwrapped(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCaptureHandler()
-	req := wrap(t, map[string]any{"model": "gpt-4o"}, "Bearer "+testShimKey)
+	req := wrapPath(t, "/v1/embeddings", map[string]any{"model": "hive-embedding-default"}, "Bearer "+testShimKey)
 	mw(next).ServeHTTP(httptest.NewRecorder(), req)
 	if captured.unwrapped {
 		t.Fatalf("no-metadata fall-through must not be marked unwrapped")
@@ -172,25 +185,112 @@ func TestOWUIUnwrap_DisabledWhenShimKeyEmpty(t *testing.T) {
 	}
 }
 
+// TestOWUIUnwrap_ShimKeyWithoutMetadata_FallsThrough documents that on the
+// paths where the shim key is itself the intended credential (OWUI's own
+// document-RAG embedding calls and its text-to-speech calls, neither of
+// which the hive_jwt_forward pipeline decorates) a missing __metadata is
+// expected and the shim key must survive to the API-key path.
 func TestOWUIUnwrap_ShimKeyWithoutMetadata_FallsThrough(t *testing.T) {
-	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
-	next, captured := newCaptureHandler()
-	body := map[string]any{"model": "gpt-4o"}
-	req := wrap(t, body, "Bearer "+testShimKey)
-	mw(next).ServeHTTP(httptest.NewRecorder(), req)
+	for _, path := range []string{"/v1/embeddings", "/v1/audio/speech"} {
+		t.Run(path, func(t *testing.T) {
+			mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+			next, captured := newCaptureHandler()
+			req := wrapPath(t, path, map[string]any{"model": "hive-embedding-default"}, "Bearer "+testShimKey)
+			rr := httptest.NewRecorder()
+			mw(next).ServeHTTP(rr, req)
 
-	if captured.authorization != "Bearer "+testShimKey {
-		t.Fatalf("no metadata → shim key must remain (selector will reject), got %q", captured.authorization)
+			if rr.Code != http.StatusOK {
+				t.Fatalf("shim-authenticated %s must not be rejected, got %d %s", path, rr.Code, rr.Body.String())
+			}
+			if captured.authorization != "Bearer "+testShimKey {
+				t.Fatalf("no metadata → shim key must remain on %s, got %q", path, captured.authorization)
+			}
+		})
 	}
 }
 
 func TestOWUIUnwrap_InvalidJSON_FallsThrough(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCaptureHandler()
-	req := wrap(t, []byte("not json"), "Bearer "+testShimKey)
+	req := wrapPath(t, "/v1/embeddings", []byte("not json"), "Bearer "+testShimKey)
 	mw(next).ServeHTTP(httptest.NewRecorder(), req)
 	if captured.authorization != "Bearer "+testShimKey {
 		t.Fatalf("non-json must fall through, got %q", captured.authorization)
+	}
+}
+
+// TestOWUIUnwrap_ChatCompletionsWithoutMetadata_RejectsWithRealReason pins
+// the honest-failure behaviour. A shim-key chat completion with no
+// __metadata means the hive_jwt_forward Function is missing or broken.
+// Forwarding it either mis-attributes the completion to the shim account
+// (when the shim key resolves) or produces a misleading "Incorrect API key
+// provided" (when it does not). Both are wrong, so reject here and name
+// the real cause.
+func TestOWUIUnwrap_ChatCompletionsWithoutMetadata_RejectsWithRealReason(t *testing.T) {
+	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+	next, captured := newCaptureHandler()
+	req := wrap(t, map[string]any{"model": "hive-default"}, "Bearer "+testShimKey)
+	rr := httptest.NewRecorder()
+	mw(next).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if captured.authorization != "" {
+		t.Fatalf("request must not reach the handler, got authorization %q", captured.authorization)
+	}
+	body := rr.Body.String()
+	if strings.Contains(strings.ToLower(body), "incorrect api key") {
+		t.Fatalf("must not report the generic invalid-key reason, got %s", body)
+	}
+	// The operator-facing reason must name the actual missing piece.
+	for _, want := range []string{"session", "sign in"} {
+		if !strings.Contains(strings.ToLower(body), want) {
+			t.Fatalf("expected reason mentioning %q, got %s", want, body)
+		}
+	}
+}
+
+// TestOWUIUnwrap_ChatCompletionsWithNonJSONBody_StillRejects closes the way
+// around the rejection above. The non-JSON pass-through exists for multipart
+// audio and image uploads, but on the chat completions path it used to run
+// first, so a shim-key POST that simply omitted Content-Type skipped the
+// fail-closed check entirely and reached the API-key path untenanted. A
+// per-user token can only arrive in a JSON __metadata block, so neither of
+// these requests can ever be legitimate here.
+func TestOWUIUnwrap_ChatCompletionsWithNonJSONBody_StillRejects(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		contentType string
+	}{
+		{"absent content type", ""},
+		{"multipart content type", "multipart/form-data; boundary=abc"},
+		{"text content type", "text/plain"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
+			next, captured := newCaptureHandler()
+			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+				bytes.NewReader([]byte(`{"model":"hive-default"}`)))
+			req.Header.Set("Authorization", "Bearer "+testShimKey)
+			if tc.contentType != "" {
+				req.Header.Set("Content-Type", tc.contentType)
+			} else {
+				req.Header.Del("Content-Type")
+			}
+			rr := httptest.NewRecorder()
+			mw(next).ServeHTTP(rr, req)
+
+			if rr.Code != http.StatusUnauthorized {
+				t.Fatalf("expected 401, got %d: %s", rr.Code, rr.Body.String())
+			}
+			if captured.authorization != "" {
+				t.Fatalf("request must not reach the handler, got authorization %q", captured.authorization)
+			}
+			if strings.Contains(strings.ToLower(rr.Body.String()), "incorrect api key") {
+				t.Fatalf("must not report the generic invalid-key reason, got %s", rr.Body.String())
+			}
+		})
 	}
 }
 
@@ -232,6 +332,10 @@ func TestOWUIUnwrap_CaseInsensitiveScheme(t *testing.T) {
 	}
 }
 
+// TestOWUIUnwrap_GETRequestPassesThrough documents that a bodyless GET has no
+// __metadata to lift, so this middleware cannot rewrite it and leaves the shim
+// key on the header. Downstream authorization then resolves that key like any
+// other API key, which is why OWUI_SHIM_KEY has to be a real minted key.
 func TestOWUIUnwrap_GETRequestPassesThrough(t *testing.T) {
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCaptureHandler()
@@ -296,7 +400,7 @@ func TestOWUIUnwrap_StripsMalformedMetadata(t *testing.T) {
 	// never forward an opaque field to downstream handlers.
 	mw := auth.OWUIUnwrap(auth.OWUIUnwrapConfig{ShimKey: testShimKey})
 	next, captured := newCaptureHandler()
-	req := wrap(t, []byte(`{"model":"x","__metadata":"not-an-object"}`), "Bearer "+testShimKey)
+	req := wrapPath(t, "/v1/embeddings", []byte(`{"model":"x","__metadata":"not-an-object"}`), "Bearer "+testShimKey)
 	mw(next).ServeHTTP(httptest.NewRecorder(), req)
 	if bytes.Contains(captured.body, []byte("__metadata")) {
 		t.Fatalf("malformed __metadata must still be stripped: %s", captured.body)

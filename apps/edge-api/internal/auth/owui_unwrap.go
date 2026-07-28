@@ -80,17 +80,22 @@ type OWUIUnwrapConfig struct {
 //   - Authorization != shim key                                → pass through unchanged.
 //   - ShimKey == "" (disabled)                                 → pass through unchanged.
 //   - Content-Type not application/json (multipart, audio,
-//     image, etc.) → pass through unchanged; the body is opaque
-//     to this layer so we cannot rewrite it. Such requests
-//     legitimately reach the API-key path with the shim key,
-//     where the per-user JWT must travel by some other means
-//     (e.g. a future header convention).
+//     image, etc.) on a path that does not require a per-user
+//     token → pass through unchanged; the body is opaque to this
+//     layer so we cannot rewrite it. Such requests legitimately
+//     reach the API-key path with the shim key.
+//   - Content-Type not application/json on a path that DOES
+//     require a per-user token (see requiresPerUserAuth) → 401.
+//     The token can only arrive in a JSON __metadata block, so
+//     such a request can never be legitimate, and passing it
+//     through would be a way around the fail-closed check below.
 //   - Body unreadable                                          → 400 (fail closed).
 //   - Body > maxOWUIUnwrapBody                                 → 413.
-//   - Body is JSON but missing __metadata.upstream_auth        → pass through
-//     with shim Authorization intact; emit a structured warn
-//     log so a regression in the OWUI pipeline is visible
-//     instead of degrading silently to a 401 cascade.
+//   - Body is JSON but missing __metadata.upstream_auth        → 401 on a
+//     path requiring a per-user token, otherwise pass through
+//     with shim Authorization intact. Either way emit a
+//     structured warn log so a regression in the OWUI pipeline
+//     is visible instead of degrading silently to a 401 cascade.
 //   - upstream_auth present but token longer than
 //     maxOWUIBearerToken                                       → 401.
 //
@@ -109,7 +114,19 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if r.Body == nil || !isJSONContent(r.Header.Get("Content-Type")) {
+			// This check has to come before the pass-through below, not
+			// after it. A per-user path can only receive its user token in a
+			// JSON __metadata block, so a shim-key request there with a
+			// missing or non-JSON Content-Type can never be legitimate.
+			// Passing it through first would let any caller skip the
+			// rejection further down simply by omitting Content-Type.
+			jsonBody := r.Body != nil && isJSONContent(r.Header.Get("Content-Type"))
+			if !jsonBody {
+				if requiresPerUserAuth(r.URL.Path) {
+					warnMissingUpstreamAuth(r, 0, true)
+					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", missingUserTokenMessage)
+					return
+				}
 				// Non-JSON shim requests (multipart uploads for audio
 				// or images) cannot carry __metadata; pass through.
 				next.ServeHTTP(w, r)
@@ -138,13 +155,25 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 				writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", "invalid token")
 				return
 			case unwrapNoMetadata:
+				warnMissingUpstreamAuth(r, len(raw), requiresPerUserAuth(r.URL.Path))
+				if requiresPerUserAuth(r.URL.Path) {
+					// Fail closed and name the real cause. Forwarding is
+					// wrong in both possible states of the shim key: if it
+					// resolves, the completion is billed and audited
+					// against the shim's own account instead of the
+					// signed-in user, defeating the entire reason this
+					// middleware exists; if it does not resolve, the
+					// caller gets "Incorrect API key provided", which
+					// blames the customer for a missing server-side
+					// Function. The customer-facing message stays free of
+					// internal detail; the operator-facing detail is in
+					// the warn log above.
+					writeAuthError(w, http.StatusUnauthorized, "UNAUTHENTICATED", missingUserTokenMessage)
+					return
+				}
 				// Body restored from raw bytes; shim key remains on
-				// Authorization. Surface this so an OWUI pipeline
-				// regression that stops injecting the JWT is loud,
-				// not silently 401-cascading.
-				slog.Warn("owui shim request missing upstream_auth metadata",
-					"path", r.URL.Path,
-					"content_length", len(raw))
+				// Authorization, which is the intended credential for
+				// this path (see requiresPerUserAuth).
 			}
 			// Forward a clone rather than mutating the inbound request
 			// in place — keeps this middleware side-effect free for any
@@ -163,10 +192,34 @@ func OWUIUnwrap(cfg OWUIUnwrapConfig) func(http.Handler) http.Handler {
 	}
 }
 
+// missingUserTokenMessage is the customer-facing reason for a shim-key
+// request on a per-user path that carries no user token. Deliberately free of
+// internal detail and of any provider identity; the operator-facing detail
+// goes to warnMissingUpstreamAuth. Shared by both rejection sites so the two
+// cannot drift apart.
+const missingUserTokenMessage = "This chat session is not carrying a signed-in user token. Sign in again and retry; if it persists, contact your administrator."
+
+// warnMissingUpstreamAuth records a shim-key request that arrived without
+// __metadata.upstream_auth. Logged whether or not the request is rejected, so
+// that an OWUI pipeline regression which stops injecting the JWT is loud
+// rather than silently 401-cascading. contentLength is 0 when the body was
+// never read, which is the non-JSON case.
+func warnMissingUpstreamAuth(r *http.Request, contentLength int, rejected bool) {
+	slog.Warn("owui shim request missing upstream_auth metadata",
+		"path", r.URL.Path,
+		"content_length", contentLength,
+		"rejected", rejected)
+}
+
 // hasShimAuthorization reports whether the Authorization header value
 // is exactly "Bearer <shimKey>". The scheme word is matched case-
 // insensitively per RFC 7235 §2.1; the token body is compared
 // case-sensitively because the shim key is opaque to this layer.
+//
+// Deliberately unexported: no route outside this middleware should branch
+// on "is this the shim key". Every /v1 route resolves its credential
+// through the normal API-key or JWT path, and the shim key is a real
+// minted API key there like any other.
 func hasShimAuthorization(header, shimKey string) bool {
 	scheme, rest, ok := strings.Cut(header, " ")
 	if !ok {
@@ -176,6 +229,24 @@ func hasShimAuthorization(header, shimKey string) bool {
 		return false
 	}
 	return rest == shimKey
+}
+
+// requiresPerUserAuth reports whether a shim-key request on this path must
+// carry a per-user token, i.e. whether a missing `__metadata.upstream_auth`
+// is a failure rather than the expected shape.
+//
+// Chat completions are the only path the `hive_jwt_forward` Function
+// decorates, and the only path where running under the shim principal
+// silently mis-attributes billing and audit. Open WebUI's other upstream
+// calls (document-RAG embeddings via RAG_OPENAI_API_KEY, and text-to-speech)
+// are never decorated and authenticate as the shim account by design, so
+// they must keep passing through.
+//
+// ponytail: exact-path list rather than a prefix rule, because /v1/chat is
+// the only prefix at stake today. If a second per-user OWUI path appears
+// (for example a future OWUI RAG chat route), add it here.
+func requiresPerUserAuth(path string) bool {
+	return path == "/v1/chat/completions"
 }
 
 // isJSONContent reports whether the Content-Type media type is

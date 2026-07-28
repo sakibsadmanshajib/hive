@@ -1,8 +1,6 @@
 # OpenWolf
 
-@.wolf/OPENWOLF.md
-
-Project use OpenWolf for context mgmt. Read + follow .wolf/OPENWOLF.md every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files. Check .wolf/decisions.md before any design, spec, plan, or implementation, and inject the relevant decisions into every subagent brief (detail lives in the vault, this is the terse index).
+Project use OpenWolf for context mgmt. Read + follow `.claude/rules/openwolf.md` every session. Check .wolf/cerebrum.md before gen code. Check .wolf/anatomy.md before read files. Check .wolf/decisions.md before any design, spec, plan, or implementation, and inject the relevant decisions into every subagent brief (detail lives in the vault, this is the terse index).
 
 **.wolf/ state files.** Tracked and curated: `cerebrum.md`, `decisions.md`, `buglog.jsonl`, `GOAL.md`, `fleet.json`, `cost-ledger.md`, `hooks/*.js`. Untracked telemetry, hook-owned and gitignored: `anatomy.md`, `memory.md`, `token-ledger.json`, `hooks/_session.json`, `buglog.json`. Never hand-edit or commit telemetry and never `git add -f` it: the hooks rewrite it on every tool call, which blocks `git pull --ff-only` on the shared checkout and produces competing versions across parallel worktrees. Bug memory is appended to `.wolf/buglog.jsonl`, one JSON object per line, `merge=union` per `.gitattributes`. Full protocol: `.claude/rules/openwolf.md`.
 
@@ -18,47 +16,6 @@ OpenAI-compatible API gateway. v1.0 shipped as a full **Go rewrite** of a prior 
 One product, two modes: **Hive** (hosted SaaS, Bangladesh market first, prepaid credit billing on BDT payment rails via Stripe, bKash, and SSLCommerz) and **Hive Enterprise** (customer-hosted, data-sovereign posture for regulated buyers in finance, legal, healthcare, and government). Single org equals single tenant; departments via RBAC. Provider-agnostic routing to OpenRouter, Groq, and future providers, plus self-hosted inference for the Enterprise posture.
 
 Surfaces: chat (Open WebUI), coding and browsing agents (agent-console sidecar plus agent-engine sandbox), RAG (`/v1/rag/chat`), voice (Groq STT/TTS), artifacts hosting, desktop app (Tauri, Windows/Linux), and the developer console for key and billing management.
-
-## Tech Stack
-
-| Component | Tech | Version |
-|-----------|------|---------|
-| **control-plane** | Go | 1.24 |
-| **edge-api** | Go | 1.24 |
-| **web-console** | Next.js / React / TypeScript | 15 / 19 / 5.8 |
-| **web-console hosting** | Cloudflare Workers via `@opennextjs/cloudflare` | latest stable |
-| **Database** | Postgres (Supabase-hosted) | — |
-| **Cache** | Redis | 8.4 |
-| **Model routing** | LiteLLM | latest-stable |
-| **Monitoring** | Prometheus + Grafana + Alertmanager | — |
-| **Payments** | Stripe, bKash, SSLCommerz | — |
-| **Storage** | Supabase Storage (S3-compatible) | — |
-
-## Architecture
-
-```
-apps/control-plane     Go: accounts, billing, credits, API keys, payments, catalog, routing
-apps/edge-api          Go: auth, rate limiting, inference dispatch, SSE streaming, file/media
-apps/agent-console     Next.js: agent chat sidecar, served under Caddy alongside the rest of the chat surface
-apps/agent-engine      Go: agent sandbox service, launches each agent session inside an Apptainer sandbox
-apps/desktop           Tauri (Rust + TypeScript): desktop shell, Windows and Linux
-apps/desktop-sandbox   Rust: desktop-side sandbox process (bwrap/process hardening, vendored from Codex)
-apps/web-console       Next.js: developer console (billing, keys, analytics, catalog)
-packages/openai-contract   OpenAI spec + support matrix (single source of truth)
-packages/sdk-tests     JS/Python/Java SDK integration tests (real OpenAI SDKs)
-packages/storage       Shared Supabase Storage (S3) client helpers
-packages/audit-canonical   Canonical audit-event schema and writer shared across services
-packages/embedmodel    Dimension-agnostic RAG embedding model registry and admin config
-vendor/openhands       Patched vendored OpenHands SDK consumed by apps/agent-engine
-supabase/migrations    Postgres schema
-deploy/docker          Docker Compose + Dockerfiles
-deploy/litellm         LiteLLM config (OpenRouter/Groq routing)
-deploy/prometheus      Prometheus + alert rules
-deploy/grafana         Dashboards + provisioning
-deploy/alertmanager    Alert routing
-website/               Marketing sites (sovereign + BD, geo-split, Astro)
-tools/                 Repo policy lints (tenancy/audit guards) plus SOC2 coverage scripts
-```
 
 ## Getting Started
 
@@ -112,27 +69,14 @@ docker compose \
 docker compose --env-file ../../.env --profile local --profile monitoring up --build
 ```
 
-### 3. Verify
-
-| Service | URL | Healthcheck |
-|---------|-----|-------------|
-| Edge API | http://localhost:8080 | `GET /health` |
-| Control Plane | http://localhost:8081 | `GET /health` |
-| Web Console | http://localhost:3000 | — |
-| LiteLLM | http://localhost:4000 | — |
-| Open WebUI | http://localhost:3003 | `--profile chat` |
-| Caddy (OWUI proxy) | http://localhost:8090 | `--profile chat` |
-| Prometheus | http://localhost:9090 | monitoring profile |
-| Grafana | http://localhost:3001 | monitoring profile, admin/admin |
-
-### 4. Migrations
+### 3. Migrations
 
 ```bash
 supabase db push                    # If Supabase CLI is linked
 # Or apply supabase/migrations/ files in order via SQL editor
 ```
 
-### 5. Agent-engine runtime image (Apptainer)
+### 4. Agent-engine runtime image (Apptainer)
 
 The agent-engine service launches each agent session inside an Apptainer
 sandbox built from `deploy/apptainer/agent-engine.def`. It needs a prebuilt
@@ -215,79 +159,3 @@ Full runtime UAT results, phase closure notes, and v1.1 deferred scope live in t
 - **Roadmap board**: https://github.com/users/sakibsadmanshajib/projects/3
 
 Planning ground truth (milestone state, roadmap, requirements traceability, UAT results, deferred scope) lives in the project vault (Obsidian), not in-repo.
-
----
-
-## Claude Code Tooling
-
-Project use multi-layer Claude Code setup. Each plugin owns domain — don't mix.
-
-### GSD (Project Lifecycle)
-
-GSD manages phases, planning, execution. Planning ground truth lives in the project vault (Obsidian), not in-repo.
-
-| Action | Command |
-|--------|---------|
-| Check progress | `/gsd:progress` |
-| Plan a phase | `/gsd:plan-phase` |
-| Execute a phase | `/gsd:execute-phase` |
-| Verify work | `/gsd:verify-work` |
-| Ship (PR) | `/gsd:ship` |
-| Debug | `/gsd:debug` |
-| Quick task | `/gsd:quick` |
-| All commands | `/gsd:help` |
-
-### Superpowers (Engineering Discipline)
-
-Enforces TDD, structured debugging, code review, planning workflows.
-
-- **Before coding**: `superpowers:brainstorming` (creative work), `superpowers:writing-plans` (multi-step tasks)
-- **Writing code**: `superpowers:test-driven-development` (always write tests first), `superpowers:executing-plans`
-- **After coding**: `superpowers:requesting-code-review`, `superpowers:verification-before-completion`
-- **Debugging**: `superpowers:systematic-debugging`
-- **Shipping**: `superpowers:finishing-a-development-branch`
-
-### Everything Claude Code (Language Agents)
-
-ECC provides language-specific review + build agents. Use right agent for language:
-
-- **Go code**: `go-reviewer` agent, `go-build` skill for build errors
-- **TypeScript/JS**: `typescript-reviewer` agent, `build-error-resolver` agent
-- **Database/SQL**: `database-reviewer` agent
-- **Security**: `security-reviewer` agent
-
-### context-mode (Context Window Protection)
-
-Hooks enforce context-mode automatically. Rules:
-
-- **Bash** only for git/mkdir/rm/mv/navigation commands
-- **Large output** (>20 lines): Use `ctx_batch_execute` instead of Bash
-- **File analysis**: Use `ctx_execute_file` instead of Read (Read correct only when editing)
-- **Web fetches**: Use `ctx_fetch_and_index` instead of WebFetch
-- Check savings: `/ctx-stats`
-
-### Auto-memory (Persistent Memory)
-
-Native Claude Code auto-memory replaced claude-mem (retired 2026-06-12). MEMORY.md and topic files load at session start; record durable learnings there. Historical claude-mem archive: `~/.claude-mem/claude-mem.db` (read-only sqlite).
-
-### Supabase MCP
-
-Direct DB interaction via Supabase MCP server:
-
-- **Run SQL**: `execute_sql` — query or mutate DB directly
-- **Apply migrations**: `apply_migration` — apply new schema changes
-- **List tables**: `list_tables` — inspect current schema
-- **Generate types**: `generate_typescript_types` — TypeScript type gen from schema
-- **Get logs**: `get_logs` — check Supabase service logs
-
-### Context7 (Documentation Lookup)
-
-Before recall any SDK/API/framework signature from memory, verify with Context7:
-
-```
-resolve-library-id → query-docs
-```
-
-### Playwright (Browser Testing)
-
-Browser automation for E2E + UAT testing via Playwright MCP. Use for testing web-console flows.

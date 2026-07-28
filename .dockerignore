@@ -1,0 +1,25 @@
+# Every Dockerfile in deploy/docker/ uses repo root as build context (`../../`)
+# and no .dockerignore existed at all, so the ENTIRE working tree -- including
+# whatever a developer happens to have lying around, like a locally run `npm
+# install`/`pnpm install` -- was sent to BuildKit and available to COPY.
+#
+# This is the actual, confirmed root cause of deploy-demo-box's chronic build
+# failure (16+ red runs since 2026-07-26, "cannot replace to directory
+# .../node_modules/@opennextjs/cloudflare with file"): the demo box's checkout
+# has a stray, root-owned apps/web-console/node_modules from a pnpm install
+# run directly on the host (evidenced by pnpm-lock.yaml/.pnpm-store next to
+# it), where node_modules/@opennextjs/cloudflare is a pnpm-style SYMLINK. Each
+# Dockerfile's own `RUN npm install` step creates that same path as a REAL
+# DIRECTORY inside the image first; the later `COPY apps/web-console/ ./`
+# step then tried to overlay the host's symlink on top of it, and BuildKit's
+# layer-diff-apply refuses to replace a directory with a file/symlink at the
+# same path. Reproduced directly on the demo box, in isolation (a lone
+# `web-console` build fails identically with zero concurrency), which rules
+# out a build-concurrency race as the cause. Confirmed fixed by this file:
+# excluding node_modules from the context means each image only ever sees the
+# node_modules it installs for itself.
+**/node_modules
+**/.next
+.git
+.pnpm-store
+**/.pnpm-store

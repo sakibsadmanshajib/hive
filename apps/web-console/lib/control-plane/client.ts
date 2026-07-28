@@ -1,5 +1,9 @@
 import { cookies } from "next/headers";
 import { createClient } from "@/lib/supabase/server";
+import {
+  isCheckoutReturnState,
+  type CheckoutReturnState,
+} from "@/lib/payments/checkout-return";
 
 export interface ViewerAccount {
   id: string;
@@ -1110,6 +1114,20 @@ export interface CheckoutOptions {
   currency: string;
 }
 
+// CheckoutIntent is the customer-safe projection of one payment intent, used by
+// the browser return page (issue #538).
+//
+// BD regulatory rule: this is a customer-visible surface, so the control-plane
+// DTO carries no USD amount, no FX rate, and no currency-exchange language.
+// Credits are the only quantity, and credits are currency free.
+export interface CheckoutIntent {
+  payment_intent_id: string;
+  rail: string;
+  status: string;
+  state: CheckoutReturnState;
+  credits: number;
+}
+
 export interface CheckoutInitiateResponse {
   payment_intent_id: string;
   redirect_url: string;
@@ -1607,6 +1625,58 @@ export async function initiateCheckout(
     credits: responseCredits,
     amount_local: amountLocal,
     local_currency: localCurrency,
+  };
+}
+
+// getCheckoutIntent reads the authoritative state of one of the caller's own
+// payment intents. The control-plane scopes the lookup to the viewer's account
+// and reports another account's intent as not found, so a customer who edits the
+// intent id in a return URL learns nothing and changes nothing.
+//
+// This is the only source of truth the return page uses. Query parameters on the
+// return URL are attacker-controlled and are never treated as state.
+export async function getCheckoutIntent(paymentIntentId: string): Promise<CheckoutIntent> {
+  const { baseUrl, headers } = await getRequestContext();
+  const query = new URLSearchParams({ payment_intent_id: paymentIntentId });
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/checkout/intent?${query.toString()}`,
+    { headers, cache: "no-store" }
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to fetch payment status");
+  }
+
+  const payload = parseJsonValue(await readResponseText(response));
+  if (!isJsonObject(payload)) {
+    throw new Error("Failed to parse payment status response");
+  }
+
+  const paymentIntent = readStringField(payload, "payment_intent_id");
+  const rail = readStringField(payload, "rail");
+  const status = readStringField(payload, "status");
+  const state = readStringField(payload, "state");
+  const credits = readNumberField(payload, "credits");
+
+  // A missing or unrecognised state is a decode failure, never a default. A
+  // wrong default here would show a payer the wrong outcome.
+  if (
+    !paymentIntent ||
+    !rail ||
+    !status ||
+    !isCheckoutReturnState(state) ||
+    credits === null ||
+    !Number.isFinite(credits)
+  ) {
+    throw new Error("Failed to parse payment status response");
+  }
+
+  return {
+    payment_intent_id: paymentIntent,
+    rail,
+    status,
+    state,
+    credits,
   };
 }
 

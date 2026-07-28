@@ -38,9 +38,10 @@ jobs:
   deploy:
     name: Pull + recreate stack on the demo box
     runs-on: [self-hosted, hive-demo]
-    # No GITHUB_TOKEN use at all: this job never checks out the repo (the box
-    # already has its own clone) and never calls the GitHub API.
-    permissions: {}
+    # This job never checks out the repo (the box already has its own clone),
+    # so the only GitHub API use is the failure-tracking issue below.
+    permissions:
+      issues: write
     timeout-minutes: 15
     steps:
       - name: Pull latest main
@@ -58,6 +59,12 @@ jobs:
         # CLAUDE.md "Getting Started" section for the chat-enabled local/demo
         # surface: core services (edge-api, control-plane, litellm) plus the
         # chat front-end (open-webui, agent-console) plus in-stack redis.
+        #
+        # The chronic failure here (16+ red runs since 2026-07-26, "cannot
+        # replace to directory .../node_modules/@opennextjs/cloudflare with
+        # file") is fixed by the root .dockerignore added in this PR, not by
+        # anything in this step -- see that file's comment for the actual
+        # mechanism, reproduced and confirmed directly on the demo box.
         working-directory: /home/sakib/hive/deploy/docker
         run: |
           set -euo pipefail
@@ -111,6 +118,43 @@ jobs:
           done
           echo "SMOKE FAIL"
           exit 1
+
+      - name: File or update tracking issue on failure
+        # This workflow only triggers on push-to-main or manual dispatch, so
+        # every failure here means main is either undeployed or unverified on
+        # the demo box, and nothing else was surfacing that (issue #553's
+        # blind spot, same pattern). Dedupe on an open issue with the label
+        # below instead of filing one per red run.
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'ci-failure:deploy-demo-box';
+            const title = 'deploy-demo-box is failing on main';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+            if (open.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Still failing: ${runUrl}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                labels: [label],
+                body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n` +
+                  'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
+              });
+            }
 
   sdk-replay:
     name: SDK replay against the demo box

@@ -21,14 +21,29 @@ function capabilityTone(badge: string): ToneName {
   return "neutral";
 }
 
-function statusBadge(lifecycle: string): { label: string; tone: ToneName } {
-  if (lifecycle === "active") {
-    return { label: "Available", tone: "success" };
-  }
-  if (lifecycle === "preview") {
-    return { label: "Preview", tone: "warning" };
-  }
-  return { label: "Unavailable", tone: "neutral" };
+// Lifecycle values come from the database, which constrains the column to
+// `('stable', 'preview', 'hidden')`
+// (supabase/migrations/20260331_01_model_catalog.sql). "active" was never one
+// of them, so every seeded alias (all of which are 'stable') fell through to
+// "Unavailable" and the catalog read as an outage.
+//
+// "active" is still mapped because lib/control-plane/client.ts substitutes it
+// when the lifecycle field is absent from a payload; dropping it here would
+// reintroduce the same false "Unavailable" for that case.
+const LIFECYCLE_BADGES: Record<string, { label: string; tone: ToneName }> = {
+  stable: { label: "Available", tone: "success" },
+  active: { label: "Available", tone: "success" },
+  preview: { label: "Preview", tone: "warning" },
+  hidden: { label: "Hidden", tone: "neutral" },
+};
+
+export function statusBadge(lifecycle: string): {
+  label: string;
+  tone: ToneName;
+} {
+  return (
+    LIFECYCLE_BADGES[lifecycle] ?? { label: "Unavailable", tone: "neutral" }
+  );
 }
 
 export function ModelCatalogTable({ models }: ModelCatalogTableProps) {

@@ -33,11 +33,21 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 	return &pgxRepository{pool: pool}
 }
 
+// ListMembershipsByUserID returns userID's memberships ordered by created_at
+// then id. Without an explicit ORDER BY, Postgres may return rows for the
+// same user in a different order across calls (heap/index layout shifts on
+// UPDATE, e.g. every account_memberships upsert), which made
+// EnsureViewerContext's "first membership is the default workspace" pick
+// nondeterministic for any user who belongs to more than one account. id is
+// a tiebreaker only for the pathological case of two memberships sharing one
+// created_at (a single bulk upsert statement stamps every row it inserts
+// with the same transaction timestamp).
 func (r *pgxRepository) ListMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]Membership, error) {
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, account_id, user_id, role, status, created_at
 		FROM public.account_memberships
 		WHERE user_id = $1
+		ORDER BY created_at ASC, id ASC
 	`, userID)
 	if err != nil {
 		return nil, err

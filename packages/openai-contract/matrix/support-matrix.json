@@ -1135,6 +1135,20 @@
       "status": "supported_now",
       "phase": null,
       "notes": "Hive proprietary (agent subsystem): toggle artifact public sharing."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/messages",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (Anthropic Messages compatibility): create a message. Translated to the internal chat-completions path, which owns alias resolution, per-tenant entitlement and credit metering. Never registered until now, so the unsupported-endpoint middleware 404'd the route before it reached its handler."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/messages/count_tokens",
+      "status": "supported_now",
+      "phase": null,
+      "notes": "Hive proprietary (Anthropic Messages compatibility): local token-count estimate for a Messages request. No dispatch, no billing."
     }
   ]
 }

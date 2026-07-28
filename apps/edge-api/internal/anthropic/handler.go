@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -18,11 +17,24 @@ import (
 
 const maxBodyBytes = 4 << 20 // 4 MiB
 
+// chatCompletionsPath is the internal endpoint this surface delegates to.
+const chatCompletionsPath = "/v1/chat/completions"
+
 // Deps holds the runtime dependencies for the Anthropic handler.
 type Deps struct {
-	LiteLLMURL string
-	LiteLLMKey string
-	HTTP       *http.Client
+	// OpenAIChat is the wired POST /v1/chat/completions handler chain: the chat
+	// dispatcher for a session principal, the inference orchestrator for an
+	// API-key principal. Every control this surface needs already lives behind
+	// it -- alias resolution through routing.SelectRoute (which enforces
+	// per-tenant model entitlement, the API-key alias allowlist, capability
+	// matching and provider selection), credit reservation and settlement,
+	// bounded upstream retry, tracing and audit.
+	//
+	// /v1/messages therefore translates and delegates, and must never build its
+	// own upstream dispatch. It used to: because a LiteLLM model name IS a route
+	// id, that direct POST let a caller name a route instead of an alias and
+	// skip entitlement and metering in one move.
+	OpenAIChat http.Handler
 }
 
 // Handler accepts Anthropic Messages requests, translates them to the internal
@@ -33,9 +45,6 @@ type Handler struct {
 
 // NewHandler constructs a Handler with the given dependencies.
 func NewHandler(deps Deps) *Handler {
-	if deps.HTTP == nil {
-		deps.HTTP = &http.Client{Timeout: 5 * time.Minute}
-	}
 	return &Handler{deps: deps}
 }
 
@@ -55,17 +64,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
-	user, ok := auth.UserFrom(r.Context())
-	if !ok || user == nil {
-		apierr.Write(w, http.StatusUnauthorized, apierr.CodeUnauthenticated, "missing user")
-		return
+	// Fail fast for a session principal that cannot invoke chat at all, so such
+	// a request never costs a routing round trip. This is a guard clause, not the
+	// enforcement: the delegated chain re-checks it, and is the only authority
+	// for an API-key principal, which carries no session user.
+	if user, ok := auth.UserFrom(r.Context()); ok && user != nil {
+		if user.TenantID == uuid.Nil {
+			apierr.Write(w, http.StatusForbidden, apierr.CodeNoTenant, "no tenant for user")
+			return
+		}
+		if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
+			apierr.Write(w, http.StatusForbidden, apierr.CodeForbidden, "chat not allowed")
+			return
+		}
 	}
-	if user.TenantID == uuid.Nil {
-		apierr.Write(w, http.StatusForbidden, apierr.CodeNoTenant, "no tenant for user")
-		return
-	}
-	if !authz.RoleHas(authz.Role(user.Role), authz.PermChatInvoke) {
-		apierr.Write(w, http.StatusForbidden, apierr.CodeForbidden, "chat not allowed")
+	if h.deps.OpenAIChat == nil {
+		// Fail closed. Without the delegated chain there is no route resolution
+		// and no metering, and this surface must never dispatch without both.
+		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "internal error", nil)
 		return
 	}
 
@@ -104,67 +120,37 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Dispatch downstream as a stream whatever the caller asked for. The chat
+	// dispatcher streams unconditionally, and streaming is the only mode that
+	// reports usage per chunk, which is what settles a credit reservation at
+	// real token counts instead of the flat pre-dispatch estimate. A caller that
+	// did not ask to stream is served by folding the stream back into a single
+	// message (see translatingWriter).
+	oaiReq.Stream = true
+	oaiReq.StreamOptions = &OAIStreamOptions{IncludeUsage: true}
+
 	body, err := json.Marshal(oaiReq)
 	if err != nil {
 		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "internal error", nil)
 		return
 	}
 
-	requestID := uuid.New()
-	upstream, err := http.NewRequestWithContext(
-		r.Context(),
-		http.MethodPost,
-		strings.TrimRight(h.deps.LiteLLMURL, "/")+"/v1/chat/completions",
-		bytes.NewReader(body),
-	)
-	if err != nil {
-		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "internal error", nil)
-		return
-	}
-	upstream.Header.Set("Content-Type", "application/json")
-	upstream.Header.Set("X-Request-Id", requestID.String())
-	if h.deps.LiteLLMKey != "" {
-		upstream.Header.Set("Authorization", "Bearer "+h.deps.LiteLLMKey)
-	}
+	// Hand the lowered request to the OpenAI chat-completions chain. The alias
+	// travels unresolved on purpose: resolving it is the routing layer's job, and
+	// this surface must never name a route itself.
+	sub := r.Clone(r.Context())
+	sub.URL.Path = chatCompletionsPath
+	sub.URL.RawPath = ""
+	sub.RequestURI = chatCompletionsPath
+	sub.Body = io.NopCloser(bytes.NewReader(body))
+	sub.ContentLength = int64(len(body))
+	sub.Header.Set("Content-Type", "application/json")
+	sub.Header.Del("Content-Length")
 
-	resp, err := h.deps.HTTP.Do(upstream)
-	if err != nil {
-		apierr.WriteError(w, http.StatusServiceUnavailable, "api_error", "upstream unavailable", nil)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= http.StatusBadRequest {
-		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		apierr.WriteProviderBlindUpstreamError(w, clientAlias, resp.StatusCode, string(rawBody))
-		return
-	}
-
-	if oaiReq.Stream {
-		tr := NewSSETranslator(w, clientAlias)
-		if err := tr.Translate(resp.Body); err != nil {
-			slog.Warn("anthropic SSE translate error", "err", err, "request_id", requestID)
-		}
-		return
-	}
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
-	if err != nil {
-		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "response read error", nil)
-		return
-	}
-
-	var oaiResp OAIResponse
-	if err := json.Unmarshal(respBody, &oaiResp); err != nil {
-		apierr.WriteError(w, http.StatusInternalServerError, "api_error", "response parse error", nil)
-		return
-	}
-
-	anthResp := FromOAIResponse(oaiResp, clientAlias)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if encErr := json.NewEncoder(w).Encode(anthResp); encErr != nil {
-		slog.Warn("anthropic response encode error", "err", encErr, "request_id", requestID)
+	translator := newTranslatingWriter(w, clientAlias, req.Stream)
+	h.deps.OpenAIChat.ServeHTTP(translator, sub)
+	if err := translator.finish(); err != nil {
+		slog.Warn("anthropic response translation error", "err", err, "model", clientAlias)
 	}
 }
 

@@ -244,17 +244,23 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		protectedPayments := cfg.AuthMiddleware.Require(cfg.PaymentsHandler)
 		mux.Handle("/api/v1/accounts/current/checkout/rails", protectedPayments)
 		mux.Handle("/api/v1/accounts/current/checkout/initiate", protectedPayments)
+		// Read-only status of one of the caller's own payment intents. Backs the
+		// browser return page (issue #538).
+		mux.Handle("/api/v1/accounts/current/checkout/intent", protectedPayments)
 	}
 
 	// Unauthenticated webhook routes — payment providers send server-to-server callbacks
 	// without Hive auth tokens. Signature verification happens inside each rail's ProcessEvent.
+	//
+	// SSLCommerz previously also had /webhooks/sslcommerz/success, /fail and
+	// /cancel registered here. Those are browser return URLs, not webhooks: a
+	// paying customer was redirected to them and got raw JSON back, and a
+	// browser request could reach settlement. They are gone; browser returns now
+	// land on the console and the IPN endpoint is the only settlement trigger.
 	if cfg.PaymentsHandler != nil {
 		mux.Handle("/webhooks/stripe", cfg.PaymentsHandler)
 		mux.Handle("/webhooks/bkash/callback", cfg.PaymentsHandler)
 		mux.Handle("/webhooks/sslcommerz/ipn", cfg.PaymentsHandler)
-		mux.Handle("/webhooks/sslcommerz/success", cfg.PaymentsHandler)
-		mux.Handle("/webhooks/sslcommerz/fail", cfg.PaymentsHandler)
-		mux.Handle("/webhooks/sslcommerz/cancel", cfg.PaymentsHandler)
 	}
 
 	// Phase 20 Plan 03 — LiteLLM config sync endpoint.

@@ -42,6 +42,12 @@ func (r *Rail) RailName() payments.Rail {
 // Initiate POSTs form-encoded params to the SSLCommerz v4 initiation API and
 // returns the GatewayPageURL for redirect. ProviderIntentID is the sessionkey.
 func (r *Rail) Initiate(ctx context.Context, input payments.InitiateInput) (payments.InitiateResult, error) {
+	// Refuse before contacting SSLCommerz: a checkout with no usable console
+	// origin would take the customer's money and then strand their browser.
+	if err := payments.ValidateReturnBaseURL(input.ReturnBaseURL); err != nil {
+		return payments.InitiateResult{}, fmt.Errorf("sslcommerz: %w", err)
+	}
+
 	// Format amount: AmountLocal is in paisa (1/100 BDT), present as decimal BDT string.
 	// float64 is used here only for display formatting of an integer value, not for arithmetic.
 	amountStr := fmt.Sprintf("%.2f", float64(input.AmountLocal)/100.0)
@@ -52,9 +58,20 @@ func (r *Rail) Initiate(ctx context.Context, input payments.InitiateInput) (paym
 	form.Set("total_amount", amountStr)
 	form.Set("currency", "BDT")
 	form.Set("tran_id", input.PaymentIntentID.String())
-	form.Set("success_url", input.CallbackBaseURL+"/webhooks/sslcommerz/success")
-	form.Set("fail_url", input.CallbackBaseURL+"/webhooks/sslcommerz/fail")
-	form.Set("cancel_url", input.CallbackBaseURL+"/webhooks/sslcommerz/cancel")
+	// success_url, fail_url and cancel_url are where SSLCommerz sends the
+	// customer's own browser, so they must land on the console. SSLCommerz
+	// returns the browser with a form POST, which is why they target the small
+	// console route handler at SSLCommerzReturnPath rather than the page
+	// directly; that handler redirects the browser onward to the return page.
+	//
+	// No outcome is encoded in success_url or fail_url. The return page reads the
+	// authoritative state from the payment intent record, so a customer editing
+	// these URLs changes nothing. cancel_url carries a copy hint only.
+	returnURL := payments.BrowserReturnURL(input.ReturnBaseURL, payments.SSLCommerzReturnPath, input.PaymentIntentID, payments.RailSSLCommerz, "")
+	form.Set("success_url", returnURL)
+	form.Set("fail_url", returnURL)
+	form.Set("cancel_url", payments.BrowserReturnURL(input.ReturnBaseURL, payments.SSLCommerzReturnPath, input.PaymentIntentID, payments.RailSSLCommerz, payments.ReturnHintCancelled))
+	// ipn_url is the server-to-server channel and the only settlement trigger.
 	form.Set("ipn_url", input.CallbackBaseURL+"/webhooks/sslcommerz/ipn")
 	form.Set("cus_name", input.CustomerName)
 	form.Set("cus_email", input.CustomerEmail)
