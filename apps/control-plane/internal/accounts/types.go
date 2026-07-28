@@ -2,6 +2,7 @@ package accounts
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,7 @@ type Invitation struct {
 type InvitationResult struct {
 	ID        uuid.UUID
 	Email     string
+	Role      string
 	Token     string
 	ExpiresAt time.Time
 }
@@ -58,9 +60,12 @@ type AccountProfile struct {
 	ProfileSetupComplete bool
 }
 
-// Member is a projection of a membership used in list responses.
+// Member is a projection of a membership used in list responses. Email is the
+// member's auth.users email, carried so member listings can show a human
+// identity instead of a bare UUID. It is empty when the auth row is missing.
 type Member struct {
 	UserID uuid.UUID
+	Email  string
 	Role   string
 	Status string
 }
@@ -119,3 +124,42 @@ var ErrExpired = errors.New("accounts: invitation expired")
 
 // ErrEmailMismatch is returned when the accepting user email does not match the invitation.
 var ErrEmailMismatch = errors.New("accounts: email mismatch")
+
+// ErrAlreadyAccepted is returned when an invitation token was already redeemed.
+// A fresh link is required; retrying the same one can never succeed.
+var ErrAlreadyAccepted = errors.New("accounts: invitation already accepted")
+
+// ErrInvalidRole is returned when a caller supplies a membership role outside
+// the supported set (see RoleOwner, RoleMember).
+var ErrInvalidRole = errors.New("accounts: invalid role")
+
+// ErrSelfRoleChange is returned when an actor tries to change their own
+// membership role. Nobody may grant or revoke their own privileges.
+var ErrSelfRoleChange = errors.New("accounts: cannot change your own role")
+
+// ErrLastOwner is returned when a role change would leave a workspace with no
+// active owner.
+var ErrLastOwner = errors.New("accounts: workspace must keep at least one owner")
+
+// Supported membership roles. The database enforces the same set via a CHECK
+// constraint on public.account_memberships.role.
+const (
+	RoleOwner  = "owner"
+	RoleMember = "member"
+)
+
+// NormalizeRole lower-cases and trims a caller-supplied role, defaulting an
+// empty value to RoleMember. Anything outside the supported set is rejected
+// with ErrInvalidRole rather than silently coerced.
+func NormalizeRole(role string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "":
+		return RoleMember, nil
+	case RoleMember:
+		return RoleMember, nil
+	case RoleOwner:
+		return RoleOwner, nil
+	default:
+		return "", ErrInvalidRole
+	}
+}

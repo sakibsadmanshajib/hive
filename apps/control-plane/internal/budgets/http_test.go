@@ -166,6 +166,18 @@ func (s *accountsRepoStub) ListMembersByAccountID(_ context.Context, _ uuid.UUID
 	return nil, nil
 }
 
+func (s *accountsRepoStub) UpdateMembershipRole(_ context.Context, accountID, userID uuid.UUID, role string) error {
+	for i := range s.memberships {
+		if s.memberships[i].AccountID == accountID && s.memberships[i].UserID == userID {
+			updated := s.memberships[i]
+			updated.Role = role
+			s.memberships[i] = updated
+			return nil
+		}
+	}
+	return accounts.ErrNotFound
+}
+
 func viewerCtx(viewer auth.Viewer) context.Context {
 	return auth.WithViewer(context.Background(), viewer)
 }

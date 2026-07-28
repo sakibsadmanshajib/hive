@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { createClient } from "@/lib/supabase/server";
 import { ControlPlaneError, createInvitation } from "@/lib/control-plane/client";
+import { parseMemberRole } from "@/lib/members/roles";
 import { resolveCanonicalOrigin } from "@/lib/http/origin";
 
 // Server-side proxy for sending a workspace invite (issue #111).
@@ -28,15 +29,24 @@ export async function POST(request: Request): Promise<Response> {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const email = await readEmail(request);
+  const fields = await readFields(request);
+  const email = readEmail(fields.email);
   if (!email) {
     return NextResponse.json({ error: "A valid email is required" }, { status: 400 });
+  }
+
+  // The invite form carries a role selector (issue #536). An unsupported value
+  // is rejected here rather than forwarded; an absent value keeps the
+  // least-privileged default.
+  const role = fields.role === undefined ? "member" : parseMemberRole(fields.role);
+  if (role === null) {
+    return NextResponse.json({ error: "A valid role is required" }, { status: 400 });
   }
 
   try {
     // The 201 body carries the bearer-equivalent acceptance token; we keep it
     // server-side only and never place it in the redirect URL.
-    await createInvitation(email);
+    await createInvitation(email, role);
   } catch (err) {
     return redirectToMembers(request, { error: inviteErrorMessage(err) });
   }
@@ -44,16 +54,29 @@ export async function POST(request: Request): Promise<Response> {
   return redirectToMembers(request, { invited: "1" });
 }
 
-async function readEmail(request: Request): Promise<string | null> {
+// readFields accepts either a plain HTML form post (the console) or JSON.
+async function readFields(
+  request: Request,
+): Promise<{ email?: unknown; role?: unknown }> {
   const contentType = request.headers.get("content-type") ?? "";
-  let raw: unknown;
   if (contentType.includes("application/json")) {
     const body: unknown = await request.json().catch(() => null);
-    raw = body && typeof body === "object" ? (body as Record<string, unknown>).email : null;
-  } else {
-    const form = await request.formData().catch(() => null);
-    raw = form?.get("email");
+    if (body === null || typeof body !== "object") return {};
+    const record = body as Record<string, unknown>;
+    return {
+      email: record.email,
+      role: "role" in record ? record.role : undefined,
+    };
   }
+  const form = await request.formData().catch(() => null);
+  if (!form) return {};
+  return {
+    email: form.get("email"),
+    role: form.has("role") ? form.get("role") : undefined,
+  };
+}
+
+function readEmail(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const email = raw.trim();
   // Minimal shape check; the control-plane is the authority on validity.

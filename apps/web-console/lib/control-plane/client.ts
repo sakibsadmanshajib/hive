@@ -78,6 +78,9 @@ export interface UpdateBillingProfileInput {
 
 export interface AccountMember {
   user_id: string;
+  // The member's login email, so the members table can show a human identity
+  // instead of a raw UUID (issue #536). Empty when the upstream row has none.
+  email: string;
   role: string;
   status: string;
 }
@@ -369,6 +372,9 @@ function decodeMembers(payload: JsonObject): AccountMember[] {
 
     members.push({
       user_id: userId,
+      // A member with no email upstream still lists; the table renders plain
+      // language for the missing identity rather than dropping the row.
+      email: readStringField(memberValue, "email") ?? "",
       role,
       status,
     });
@@ -406,15 +412,25 @@ async function readResponseError(response: Response, fallback: string): Promise<
 // (permission denied, validation error, not found).
 export class ControlPlaneError extends Error {
   public readonly status: number;
-  constructor(status: number, message: string) {
+  // Stable machine code from the upstream body (e.g. "last_owner_required"),
+  // when one is present. Status alone is ambiguous: several distinct refusals
+  // share a status, and a proxy route needs the exact one to state the true
+  // reason back to the customer.
+  public readonly code: string | null;
+  constructor(status: number, message: string, code: string | null = null) {
     super(message);
     this.name = "ControlPlaneError";
     this.status = status;
+    this.code = code;
   }
 }
 
 async function throwControlPlaneError(response: Response, fallback: string): Promise<never> {
-  throw new ControlPlaneError(response.status, await readResponseError(response, fallback));
+  const bodyText = await readResponseText(response);
+  const payload = parseJsonValue(bodyText);
+  const message = readErrorMessage(payload) ?? `${fallback}: ${response.status}`;
+  const code = isJsonObject(payload) ? readStringField(payload, "code") : null;
+  throw new ControlPlaneError(response.status, message, code);
 }
 
 export async function getViewer(): Promise<Viewer> {
@@ -906,13 +922,16 @@ export async function updateAccountProfile(
 // it here so a server-side caller (e.g. an invite mailer) can use it, but it is
 // deliberately NOT surfaced in any client-facing redirect/URL — the token is
 // bearer-equivalent and must not leak into browser history or logs.
-export async function createInvitation(email: string): Promise<{ token: string | null }> {
+export async function createInvitation(
+  email: string,
+  role: string,
+): Promise<{ token: string | null }> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/accounts/current/invitations`, {
     method: "POST",
     headers,
     cache: "no-store",
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ email, role }),
   });
 
   if (!response.ok) {
@@ -922,6 +941,29 @@ export async function createInvitation(email: string): Promise<{ token: string |
   const payload = parseJsonValue(await readResponseText(response));
   const token = isJsonObject(payload) ? readStringField(payload, "token") : null;
   return { token };
+}
+
+// updateMemberRole changes an existing member's workspace role. Server-side only
+// (Route Handler) so CONTROL_PLANE_BASE_URL stays off the client, and the user's
+// session bearer travels with the request. The control-plane makes the whole
+// authorization decision, including the no-self-change and last-owner
+// invariants; this helper only forwards the request and surfaces the refusal
+// (status plus machine code) through ControlPlaneError.
+export async function updateMemberRole(userId: string, role: string): Promise<void> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(
+    `${baseUrl}/api/v1/accounts/current/members/${encodeURIComponent(userId)}`,
+    {
+      method: "PATCH",
+      headers,
+      cache: "no-store",
+      body: JSON.stringify({ role }),
+    },
+  );
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update the member role");
+  }
 }
 
 export async function getBillingProfile(): Promise<BillingProfile> {
