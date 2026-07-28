@@ -1,4 +1,4 @@
-.PHONY: gen-permissions agent-sif
+.PHONY: gen-permissions agent-sif test-scripts
 
 # Codegen for the permissions registry → TypeScript mirror.
 # Runs inside the `toolchain` profile container (Go + tools). The toolchain
@@ -15,3 +15,10 @@ gen-permissions:
 # .github/workflows/agent-engine-sif.yml. See deploy/apptainer/README.md.
 agent-sif:
 	deploy/apptainer/build.sh
+
+# Self-checks for the repo's operational Python scripts (no framework, no
+# network). These guard credential-rotation ordering and .env rewriting, where
+# a regression strands a deployment on a revoked key.
+test-scripts:
+	python3 scripts/test_seed_owui_e2e_user.py
+	python3 scripts/test_seed_demo_owner.py
