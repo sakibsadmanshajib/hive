@@ -12,7 +12,9 @@
     "lint:model-visibility": "node tools/lint-tenant-model-visibility-single-source.mjs",
     "lint:litellm-routing": "node tools/lint-litellm-dispatch-requires-routing.mjs",
     "soc2:report": "node tools/soc2-coverage-report.mjs",
-    "soc2:check": "node tools/soc2-coverage-report.mjs --check"
+    "soc2:check": "node tools/soc2-coverage-report.mjs --check",
+    "cloudflare:check": "node deploy/cloudflare/reconcile-tunnel-dns.mjs",
+    "cloudflare:apply": "node deploy/cloudflare/reconcile-tunnel-dns.mjs --apply"
   },
   "devDependencies": {
     "pg": "^8.11.0",

@@ -30,6 +30,14 @@ surface demo.
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 Optional env: HIVE_DEMO_PASSWORD -- set the account's password to this value.
+Optional env (identity, see env_or): HIVE_DEMO_EMAIL, HIVE_DEMO_TENANT_SLUG,
+HIVE_DEMO_TENANT_NAME, HIVE_DEMO_ACCOUNT_SLUG, HIVE_DEMO_ACCOUNT_NAME. Set
+all three of email/tenant-slug/account-slug together to provision a second,
+independent owner alongside the default demo one. Setting only some of the
+three is refused by validate_identity_overrides below: env_or falls back to
+the default per variable independently, so a partial override would silently
+attach the new tenant/account slugs to the shared default demo user instead
+of the separate identity the operator meant to create.
 
 Prints to stdout (and nothing else):
   EMAIL=<email>
@@ -54,15 +62,64 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-TENANT_SLUG = "hive-demo"
-TENANT_NAME = "Hive Demo"
+def env_or(name: str, default: str) -> str:
+    """An optional env override for one of the identity constants below.
+
+    The identity was hardcoded while this script provisioned exactly one
+    account. A deployment needs more than one: the shared demo login that
+    several agents hold sessions against, and a separate named owner login for
+    a real person. Those cannot be the same row -- the guards below (correctly)
+    refuse to merge a second human onto the demo tenant, and rotating the
+    demo password to hand it over revokes every live session on it.
+
+    So slug and email are parameters, not constants. Defaults are the original
+    values, so a call with no overrides set provisions exactly what it always
+    did. Whitespace-only is treated as unset, matching env() below.
+    """
+    return os.environ.get(name, "").strip() or default
+
+
+IDENTITY_OVERRIDE_VARS = ("HIVE_DEMO_EMAIL", "HIVE_DEMO_TENANT_SLUG", "HIVE_DEMO_ACCOUNT_SLUG")
+
+
+def validate_identity_overrides(environ) -> None:
+    """Fail fast unless the three identity variables are set together or not
+    at all.
+
+    env_or defaults each variable independently, so setting only the slugs
+    (or only the email) does not raise a second identity -- it silently
+    attaches the new tenant/account slugs to the SHARED default demo user,
+    because HIVE_DEMO_EMAIL fell back to its default. That defeats the only
+    reason to override the slugs in the first place, with no error and no
+    warning. Whitespace-only counts as unset, matching env_or's own
+    stripping.
+    """
+    set_vars = [name for name in IDENTITY_OVERRIDE_VARS if environ.get(name, "").strip()]
+    if set_vars and len(set_vars) != len(IDENTITY_OVERRIDE_VARS):
+        missing_vars = [name for name in IDENTITY_OVERRIDE_VARS if name not in set_vars]
+        print(
+            "error: HIVE_DEMO_EMAIL, HIVE_DEMO_TENANT_SLUG, and HIVE_DEMO_ACCOUNT_SLUG "
+            "must be set together (to provision a second, independent owner) or left "
+            f"unset together (for the shared default demo identity) -- set: {', '.join(set_vars)}; "
+            f"missing: {', '.join(missing_vars)}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+validate_identity_overrides(os.environ)
+
+TENANT_SLUG = env_or("HIVE_DEMO_TENANT_SLUG", "hive-demo")
+TENANT_NAME = env_or("HIVE_DEMO_TENANT_NAME", "Hive Demo")
 TENANT_DEPLOYMENT = "HIVE_CLOUD"
-USER_EMAIL = "demo@hive-demo.invalid"  # .invalid: IANA-reserved TLD (RFC 2606)
+# .invalid: IANA-reserved TLD (RFC 2606). A real deliverable address is fine
+# too -- the account is created with email_confirm=true, so no mail is sent.
+USER_EMAIL = env_or("HIVE_DEMO_EMAIL", "demo@hive-demo.invalid")
 TENANT_ROLE = "OWNER"
 TENANT_STATUS = "ACTIVE"
 
-ACCOUNT_SLUG = "hive-demo-owner"
-ACCOUNT_NAME = "Hive Demo"
+ACCOUNT_SLUG = env_or("HIVE_DEMO_ACCOUNT_SLUG", "hive-demo-owner")
+ACCOUNT_NAME = env_or("HIVE_DEMO_ACCOUNT_NAME", "Hive Demo")
 
 # Demo-relevant tenant_settings feature gates. Excludes payment-rail toggles
 # (bkash/sslcommerz/stripe), audit sinks, and SSO -- none of those are on the
@@ -87,6 +144,9 @@ def env(name: str) -> str:
     return value
 
 
+REQUEST_TIMEOUT_SECONDS = 15
+
+
 def request(base, headers, method, path, body=None, params=None, prefer=None):
     url = base + path
     if params:
@@ -97,7 +157,7 @@ def request(base, headers, method, path, body=None, params=None, prefer=None):
         req_headers["Prefer"] = prefer
     req = urllib.request.Request(url, data=data, method=method, headers=req_headers)
     try:
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as resp:
             raw = resp.read()
             return resp.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as e:
@@ -107,6 +167,20 @@ def request(base, headers, method, path, body=None, params=None, prefer=None):
         except json.JSONDecodeError:
             print(f"error: {method} {path} -> {e.code}: {raw[:300]!r}", file=sys.stderr)
             sys.exit(1)
+    except urllib.error.URLError as e:
+        # Without a timeout, a hung Supabase endpoint blocked the operator
+        # indefinitely -- urlopen wraps a connect/read timeout as a URLError
+        # whose reason is a TimeoutError, so surface that case with a clearer
+        # message than the generic reason repr.
+        if isinstance(e.reason, TimeoutError):
+            print(
+                f"error: {method} {path} -> timed out after {REQUEST_TIMEOUT_SECONDS}s; "
+                "check SUPABASE_URL and network reachability",
+                file=sys.stderr,
+            )
+        else:
+            print(f"error: {method} {path} -> {e.reason}", file=sys.stderr)
+        sys.exit(1)
 
 
 def random_password() -> str:
@@ -172,8 +246,8 @@ def guard_tenant_slug(existing_tenant, foreign_members, own_member):
             f"{existing_tenant['id']} that this script cannot confirm it created -- "
             f"{len(foreign_members)} member(s) that are not the demo user and/or no "
             "membership row proving the demo user already belongs to it. Refusing to "
-            "merge onto a tenant this script did not create. Pick a different "
-            "TENANT_SLUG for the demo.",
+            "merge onto a tenant this script did not create. Pick a different slug "
+            "via HIVE_DEMO_TENANT_SLUG.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -204,7 +278,7 @@ def guard_account_slug(existing_account, foreign_owners, user_id):
             f"and/or owner_user_id={existing_account.get('owner_user_id')!r} does not "
             "match the demo user. Refusing to merge (would silently grant unrelated "
             "user(s) is_platform_admin too, or adopt an account we do not own). Pick a "
-            "different ACCOUNT_SLUG for the demo.",
+            "different slug via HIVE_DEMO_ACCOUNT_SLUG.",
             file=sys.stderr,
         )
         sys.exit(1)
