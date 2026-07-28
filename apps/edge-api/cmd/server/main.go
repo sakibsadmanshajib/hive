@@ -150,7 +150,8 @@ func main() {
 		Env:        os.Getenv("HIVE_ENV"),
 	})
 
-	mux.Handle("/v1/chat/completions", jwtAwareChatHandler(chatDispatchHandler, inferenceHandler))
+	openAIChatHandler := jwtAwareChatHandler(chatDispatchHandler, inferenceHandler)
+	mux.Handle("/v1/chat/completions", openAIChatHandler)
 	mux.Handle("/v1/completions", inferenceHandler)
 	mux.Handle("/v1/responses", inferenceHandler)
 	mux.Handle("/v1/embeddings", inferenceHandler)
@@ -159,12 +160,16 @@ func main() {
 	// The APIKeyNormalizer rewrites x-api-key to Authorization: Bearer so the
 	// standard auth.Selector routes hk_ keys to the API-key path and JWTs to
 	// the JWT path, reusing the same auth wrappers as /v1/chat/completions.
-	anthropicHandler := anthropic.NewHandler(anthropic.Deps{
-		LiteLLMURL: resolveLiteLLMBaseURL(),
-		LiteLLMKey: resolveLiteLLMMasterKey(),
-	})
-	mux.Handle("/v1/messages", anthropic.APIKeyNormalizer(jwtAwareChatHandler(anthropicHandler, anthropicHandler)))
-	mux.Handle("/v1/messages/", anthropic.APIKeyNormalizer(jwtAwareChatHandler(anthropicHandler, anthropicHandler)))
+	//
+	// The handler translates and then delegates to the very handler registered
+	// for /v1/chat/completions above, so alias resolution (per-tenant model
+	// entitlement, the API-key alias allowlist, capability matching), credit
+	// reservation and settlement, upstream retry, tracing and audit are shared
+	// with that surface rather than reimplemented. It previously POSTed straight
+	// to LiteLLM, which let a caller address a raw route id and skip all of it.
+	anthropicHandler := anthropic.NewHandler(anthropic.Deps{OpenAIChat: openAIChatHandler})
+	mux.Handle("/v1/messages", anthropic.APIKeyNormalizer(anthropicHandler))
+	mux.Handle("/v1/messages/", anthropic.APIKeyNormalizer(anthropicHandler))
 
 	storageCfg, err := loadStorageConfigFromEnv()
 	if err != nil {

@@ -478,6 +478,8 @@ jobs:
         run: npm run lint:model-visibility
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:proof-tokens
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:litellm-routing
 
   agent-console-unit:
     name: Agent console (type + unit + build)
