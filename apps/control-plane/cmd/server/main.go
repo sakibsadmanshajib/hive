@@ -1528,9 +1528,12 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 
 // buildAgentEngine wires the real host<->agent-server control channel
 // (issue #305) when its deployment-specific paths are all configured via
-// env, falling back to agenttask.NotConfiguredEngine{} (today's safe
-// default: task creation still succeeds and persists, it just stays queued)
-// otherwise. The real SandboxEngine (apps/agent-engine/engineapi) execs
+// env, falling back to agenttask.NotConfiguredEngine{} otherwise — which
+// now fails every submitted task visibly (see agenttask.Service.CreateTask)
+// rather than leaving it queued forever with no signal. When falling back,
+// this logs a WARN naming every missing HIVE_AGENT_ENGINE_* var so an
+// operator can act on it instead of discovering the gap from a support
+// ticket. The real SandboxEngine (apps/agent-engine/engineapi) execs
 // Apptainer directly, which requires an Apptainer install and a built SIF
 // on whatever host runs this process — not true of every control-plane
 // deployment yet (tracked separately: "Live Apptainer validation of
@@ -1548,6 +1551,26 @@ func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.St
 	runDir := os.Getenv("HIVE_AGENT_ENGINE_RUN_DIR")
 	profileIDRaw := os.Getenv("HIVE_AGENT_ENGINE_PROFILE_ID")
 	if egressSvc == nil || sifPath == "" || packsDir == "" || workspaceRoot == "" || runDir == "" || profileIDRaw == "" {
+		var missing []string
+		if egressSvc == nil {
+			missing = append(missing, "egress service (requires a live DB pool)")
+		}
+		if sifPath == "" {
+			missing = append(missing, "HIVE_AGENT_ENGINE_SIF_PATH")
+		}
+		if packsDir == "" {
+			missing = append(missing, "HIVE_AGENT_ENGINE_PACKS_DIR")
+		}
+		if workspaceRoot == "" {
+			missing = append(missing, "HIVE_AGENT_ENGINE_WORKSPACE_ROOT")
+		}
+		if runDir == "" {
+			missing = append(missing, "HIVE_AGENT_ENGINE_RUN_DIR")
+		}
+		if profileIDRaw == "" {
+			missing = append(missing, "HIVE_AGENT_ENGINE_PROFILE_ID")
+		}
+		log.Printf("control-plane: WARN agent engine not configured, every agent task submitted will fail immediately (never runs) — missing: %s", strings.Join(missing, ", "))
 		return agenttask.NotConfiguredEngine{}, nil
 	}
 	profileID, err := uuid.Parse(profileIDRaw)

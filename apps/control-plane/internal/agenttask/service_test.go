@@ -3,6 +3,7 @@ package agenttask_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,14 +102,27 @@ func TestService_CreateTask_InvalidPack(t *testing.T) {
 	}
 }
 
-func TestService_CreateTask_EngineNotConfigured_StaysQueued(t *testing.T) {
+// TestService_CreateTask_EngineNotConfigured_FailsVisibly guards the bug
+// this fix closes: a task submitted while the agent engine is unconfigured
+// must never come back looking like a healthy queued task that will
+// eventually run. It has to land in StatusFailed, with a non-empty
+// error_message, so a caller can tell "queued and progressing" apart from
+// "will never run" — see .wolf/buglog for the original report ("stuck
+// forever in queue, no error surfaced").
+func TestService_CreateTask_EngineNotConfigured_FailsVisibly(t *testing.T) {
 	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
 	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
 	}
-	if task.Status != agenttask.StatusQueued {
-		t.Errorf("expected StatusQueued when engine not configured, got %v", task.Status)
+	if task.Status != agenttask.StatusFailed {
+		t.Errorf("expected StatusFailed when engine not configured (must not stay queued forever), got %v", task.Status)
+	}
+	if task.ErrorMessage == "" {
+		t.Error("expected a non-empty error_message explaining the task will never run")
+	}
+	if strings.Contains(task.ErrorMessage, "HIVE_AGENT_ENGINE") {
+		t.Errorf("error_message must stay customer-safe, not leak env var / deployment detail: %q", task.ErrorMessage)
 	}
 }
 
@@ -118,8 +132,8 @@ func TestService_CreateTask_NilEngineDefaultsToNotConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
 	}
-	if task.Status != agenttask.StatusQueued {
-		t.Errorf("expected StatusQueued with nil engine, got %v", task.Status)
+	if task.Status != agenttask.StatusFailed {
+		t.Errorf("expected StatusFailed with nil engine (defaults to NotConfiguredEngine), got %v", task.Status)
 	}
 }
 
@@ -191,8 +205,11 @@ func TestService_List_ScopedToTenantAndUser(t *testing.T) {
 	}
 }
 
-func TestService_Cancel_FromQueued(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
+func TestService_Cancel_FromRunning(t *testing.T) {
+	// A NotConfiguredEngine seed would now land the task in StatusFailed
+	// (terminal) rather than StatusQueued, so this uses a launching
+	// fakeEngine to reach the other cancellable state, StatusRunning.
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-cancel"})
 	tenantID, userID := uuid.New(), uuid.New()
 	created, err := svc.CreateTask(context.Background(), tenantID, userID, agenttask.PackCoding, "")
 	if err != nil {
