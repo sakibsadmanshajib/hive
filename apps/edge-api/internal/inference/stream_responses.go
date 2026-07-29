@@ -128,18 +128,21 @@ func (o *Orchestrator) executeResponsesStreaming(
 		log.Printf("inference: create reservation failed (non-fatal): %v", err)
 	}
 
-	// Cleanup defer for client disconnects.
+	// Set up defer for reservation settlement. This is the single settlement
+	// site for a streaming request: it always runs, whether the stream ends
+	// normally or the client disconnects mid-stream, and it always dispatches
+	// on its own background context (see settleStream) rather than the ctx
+	// this function was called with. translator is declared here (before its
+	// fields are filled in at step 9) so the defer can read its accumulated
+	// content regardless of which exit path fires.
 	finalized := false
 	acc := &UsageAccumulator{}
+	translator := &responsesEventTranslator{aliasID: model}
 	defer func() {
-		if !finalized && reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(context.Background(), ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "client_disconnect",
-			})
-			o.recordInterruptedEvent(context.Background(), snapshot, attempt, requestID, EndpointResponses, model, acc)
+		if finalized || reservation.ID == "" {
+			return
 		}
+		finalized = o.settleStream(snapshot, attempt, reservation, requestID, EndpointResponses, model, acc, translator.currentContent.String())
 	}()
 
 	// 6. Dispatch to LiteLLM (always with stream_options for usage) with
@@ -199,15 +202,11 @@ func (o *Orchestrator) executeResponsesStreaming(
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
-	// 9. Build state machine
-	responseID := "resp_" + uuid.New().String()
-	msgID := "msg_" + uuid.New().String()
-	translator := &responsesEventTranslator{
-		responseID: responseID,
-		aliasID:    model,
-		created:    time.Now().Unix(),
-		msgID:      msgID,
-	}
+	// 9. Build state machine (translator was declared earlier, before the
+	// settlement defer, so fill in the remaining fields here).
+	translator.responseID = "resp_" + uuid.New().String()
+	translator.created = time.Now().Unix()
+	translator.msgID = "msg_" + uuid.New().String()
 
 	writeSSEEvent := func(eventType string, data any) {
 		dataJSON, err := json.Marshal(data)
@@ -341,25 +340,6 @@ func (o *Orchestrator) executeResponsesStreaming(
 			}
 		}
 	}
-
-	// 11. Finalize reservation
-	if reservation.ID != "" {
-		usage := acc.ToUsageResponse()
-		actualCredits := estimatedCredits
-		if acc.HasUsage {
-			actualCredits = usage.TotalTokens
-		}
-		_ = o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
-			AccountID:              snapshot.AccountID,
-			ReservationID:          reservation.ID,
-			ActualCredits:          actualCredits,
-			TerminalUsageConfirmed: acc.HasUsage,
-			Status:                 "completed",
-		})
-		finalized = true
-	}
-
-	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, EndpointResponses, model, acc.ToUsageResponse())
 }
 
 // emitCompleted emits the response.completed event with the full response object.

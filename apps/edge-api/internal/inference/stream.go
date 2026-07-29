@@ -190,20 +190,20 @@ func (o *Orchestrator) executeStreaming(
 		log.Printf("inference: create reservation failed (non-fatal): %v", err)
 	}
 
-	// Set up defer for reservation cleanup on unexpected exit.
+	// Set up defer for reservation settlement. This is the single settlement
+	// site for a streaming request: it always runs, whether the stream ends
+	// normally or the client disconnects mid-stream, and it always dispatches
+	// on its own background context (see settleStream) rather than the ctx
+	// this function was called with. A client disconnect is exactly what
+	// cancels that ctx, so settling on it (the old behavior) let a dead
+	// context silently swallow both the charge and the release.
 	finalized := false
 	accumulator := &UsageAccumulator{}
 	defer func() {
-		if !finalized && reservation.ID != "" {
-			// Customer-favoring: release with whatever tokens we accumulated.
-			_ = o.accounting.ReleaseReservation(context.Background(), ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "client_disconnect",
-			})
-			// Record interrupted usage event.
-			o.recordInterruptedEvent(context.Background(), snapshot, attempt, requestID, endpoint, model, accumulator)
+		if finalized || reservation.ID == "" {
+			return
 		}
+		finalized = o.settleStream(snapshot, attempt, reservation, requestID, endpoint, model, accumulator, accumulator.Content.String())
 	}()
 
 	// 6. Dispatch to LiteLLM with bounded retry on 429/5xx (safe: no bytes
@@ -336,26 +336,63 @@ func (o *Orchestrator) executeStreaming(
 		flusher.Flush()
 	}
 
-	// 11. Finalize reservation
-	if reservation.ID != "" {
-		usage := accumulator.ToUsageResponse()
-		actualCredits := estimatedCredits
-		if accumulator.HasUsage {
-			actualCredits = usage.TotalTokens
+	return nil
+}
+
+// settlementCredits derives what a stream settlement should charge: real
+// usage tokens when the upstream confirmed them, otherwise a content-based
+// estimate. There is no estimatedCredits fallback here on purpose -- an
+// unconfirmed usage block must never turn into a flat, hardcoded overcharge.
+// delivered is false only when nothing was produced at all; the caller must
+// release the reservation in full rather than charge in that case.
+func settlementCredits(hasUsage bool, totalTokens int64, content string) (credits int64, delivered bool) {
+	if hasUsage {
+		return totalTokens, totalTokens > 0
+	}
+	credits = estimateCompletionTokens(content)
+	return credits, credits > 0
+}
+
+// settleStream is the single settlement point for an ended streaming
+// request (chat completions or the Responses API): it finalizes a charge
+// for delivered tokens, or releases the reservation hold in full when
+// nothing reached the accumulator. It always dispatches on its own bounded
+// background context, independent of the caller's request context, because
+// the caller's context is exactly what a client disconnect cancels.
+// TerminalUsageConfirmed mirrors hasUsage: it is only ever true when the
+// upstream itself sent a genuine usage block, so anything settled from a
+// content estimate is flagged for reconciliation rather than treated as a
+// confirmed final charge.
+func (o *Orchestrator) settleStream(snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, content string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, content)
+	if !delivered {
+		if err := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
+			AccountID:     snapshot.AccountID,
+			ReservationID: reservation.ID,
+			Reason:        "client_disconnect",
+		}); err != nil {
+			log.Printf("inference: settle release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
+			return false
 		}
-		_ = o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
-			AccountID:              snapshot.AccountID,
-			ReservationID:          reservation.ID,
-			ActualCredits:          actualCredits,
-			TerminalUsageConfirmed: accumulator.HasUsage,
-			Status:                 "completed",
-		})
-		finalized = true
+		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc)
+		return true
 	}
 
-	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, accumulator.ToUsageResponse())
-
-	return nil
+	if err := o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
+		AccountID:              snapshot.AccountID,
+		ReservationID:          reservation.ID,
+		ActualCredits:          credits,
+		TerminalUsageConfirmed: acc.HasUsage,
+		Status:                 "completed",
+	}); err != nil {
+		log.Printf("inference: settle finalize failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
+		return false
+	}
+	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
+	return true
 }
 
 func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, acc *UsageAccumulator) {
