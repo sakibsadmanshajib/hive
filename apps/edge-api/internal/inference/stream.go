@@ -359,14 +359,15 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // (e.g. after a long prompt finishes prefill) must not settle for ~1 credit
 // just because only one token of *output* existed to estimate from. The
 // confirmed-usage branch above already bills prompt+completion via
-// totalTokens; promptBody (the raw request body) is a conservative proxy for
-// prompt cost when no real usage block ever arrived, using the same
-// cl100k-by-length heuristic already used for completion text. ponytail:
-// counting raw JSON bytes (including field names and punctuation) instead of
-// tokenizing just the message content overestimates slightly, but that
-// biases toward the safe side, not the abuse-enabling one; a real prompt
-// tokenizer can replace this if the overcount ever matters.
-func settlementCredits(hasUsage bool, totalTokens int64, promptBody, content string) (credits int64, delivered bool) {
+// totalTokens; prompt is the parsed message/input text (see promptText in
+// usage_clamp.go), not the raw request body -- the raw body also carries
+// field names, sampling params, tool schemas, and base64 image data, and
+// counting those as tokens is issue #602's over-charge root cause (a request
+// body under the 10MiB limit could estimate ~2.6M credits against a 10000
+// credit hold). The control-plane hard clamp in finalizeLocked is the
+// backstop that keeps any residual overcount here from ever exceeding the
+// reserved hold, but this function should still return a realistic number.
+func settlementCredits(hasUsage bool, totalTokens int64, prompt, content string) (credits int64, delivered bool) {
 	if hasUsage {
 		return totalTokens, totalTokens > 0
 	}
@@ -374,7 +375,7 @@ func settlementCredits(hasUsage bool, totalTokens int64, promptBody, content str
 	if completion == 0 {
 		return 0, false
 	}
-	return estimateCompletionTokens(promptBody) + completion, true
+	return estimateCompletionTokens(prompt) + completion, true
 }
 
 // settleStream is the single settlement point for an ended streaming
@@ -401,7 +402,10 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 	ctx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
 	defer cancel()
 
-	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, promptBody, content)
+	// Parse promptBody (the raw request bytes) down to just the message/input
+	// text before estimating -- see promptText in usage_clamp.go for why the
+	// raw bytes themselves must never be counted directly (issue #602).
+	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, promptText(endpoint, []byte(promptBody)), content)
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
 		if reqCtx.Err() != nil {

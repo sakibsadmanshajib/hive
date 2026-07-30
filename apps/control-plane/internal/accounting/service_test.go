@@ -406,6 +406,58 @@ func TestFinalizeReservationCreatesChargeAndRelease(t *testing.T) {
 	}
 }
 
+// TestFinalizeReservationClampsChargeToReservedHold is the regression guard
+// for issue #602: an edge-api token estimate that runs far ahead of the
+// reserved hold (a huge request body disconnected after one output token)
+// must never charge more than what was reserved. finalizeLocked is the
+// single chokepoint every settlement path (sync + streaming, all endpoints)
+// routes through, so this test asserts the clamp there rather than at any
+// one caller.
+func TestFinalizeReservationClampsChargeToReservedHold(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{}
+	usageSvc := &usageStub{}
+	svc := NewService(repo, ledgerSvc, usageSvc)
+
+	accountID := uuid.New()
+	attemptID := uuid.New()
+	reservationID := uuid.New()
+	repo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: attemptID,
+		ReservationKey:   "req_overcharge:1",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  10000,
+	}
+
+	// A deliberately enormous estimate, far beyond the 10000-credit hold.
+	reservation, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          2_600_000,
+		TerminalUsageConfirmed: false,
+		Status:                 string(usage.AttemptStatusInterrupted),
+	})
+	if err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	if reservation.ConsumedCredits != 10000 {
+		t.Fatalf("expected consumed credits clamped to the 10000 hold, got %d", reservation.ConsumedCredits)
+	}
+	if reservation.ReleasedCredits != 0 {
+		t.Fatalf("expected zero released credits when the estimate exhausts the hold, got %d", reservation.ReleasedCredits)
+	}
+	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 10000 {
+		t.Fatalf("expected the ledger charge clamped to 10000, got %#v", ledgerSvc.chargeCalls)
+	}
+	if len(ledgerSvc.releaseCalls) != 0 {
+		t.Fatalf("expected no release call when the clamped charge consumes the full hold, got %#v", ledgerSvc.releaseCalls)
+	}
+}
+
 func TestFinalizeReservationMarksAmbiguousStreamForReconciliation(t *testing.T) {
 	repo := newRepoStub()
 	ledgerSvc := &ledgerStub{}

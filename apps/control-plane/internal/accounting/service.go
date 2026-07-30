@@ -264,11 +264,24 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		return Reservation{}, &PolicyError{Message: "released reservations cannot be finalized"}
 	}
 
-	releaseCredits := releasableCredits(reservation, input.ActualCredits)
 	heldCredits := remainingHeldCredits(reservation)
 
-	if input.ActualCredits > 0 {
-		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", input.ActualCredits)), input.ActualCredits, map[string]any{
+	// Hard invariant: a settlement must never charge more than it reserved.
+	// input.ActualCredits is caller-supplied (edge-api's token estimate,
+	// which can run far ahead of the hold -- e.g. a huge request body
+	// disconnected after one output token, see issue #602). finalizeLocked
+	// is the single chokepoint every settlement path routes through (sync
+	// and streaming, all endpoints), so clamping here protects the ledger
+	// even if a future estimator change reintroduces an overcount.
+	actualCredits := input.ActualCredits
+	if actualCredits > heldCredits {
+		actualCredits = heldCredits
+	}
+
+	releaseCredits := releasableCredits(reservation, actualCredits)
+
+	if actualCredits > 0 {
+		if _, err := s.ledgerSvc.ChargeUsage(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("charge-%d", actualCredits)), actualCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
 			"terminal_confirmed": input.TerminalUsageConfirmed,
@@ -296,7 +309,7 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		eventType = usage.UsageEventReconciled
 	}
 
-	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, input.ActualCredits, releaseCredits, input.TerminalUsageConfirmed, nextStatus, reason)
+	reservation, err = s.repo.FinalizeReservation(ctx, input.AccountID, input.ReservationID, actualCredits, releaseCredits, input.TerminalUsageConfirmed, nextStatus, reason)
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: finalize reservation: %w", err)
 	}
@@ -329,7 +342,7 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		Endpoint:         reservation.Endpoint,
 		ModelAlias:       reservation.ModelAlias,
 		Status:           string(status),
-		HiveCreditDelta:  -input.ActualCredits,
+		HiveCreditDelta:  -actualCredits,
 		CustomerTags:     reservation.CustomerTags,
 		InternalMetadata: map[string]any{
 			"reservation_id":           reservation.ID.String(),
@@ -342,10 +355,10 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 
 	if attempt != nil && attempt.APIKeyID != nil && s.apiKeySvc != nil {
 		at := time.Now().UTC()
-		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, -heldCredits, input.ActualCredits, at); err != nil {
+		if err := s.apiKeySvc.ApplyReservationDelta(ctx, *attempt.APIKeyID, -heldCredits, actualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: apply reservation delta: %w", err)
 		}
-		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, 0, 0, 0, 0, input.ActualCredits, at); err != nil {
+		if err := s.apiKeySvc.RecordUsageFinalization(ctx, *attempt.APIKeyID, attempt.ModelAlias, 0, 0, 0, 0, actualCredits, at); err != nil {
 			return Reservation{}, fmt.Errorf("accounting: record usage finalization: %w", err)
 		}
 		if err := s.apiKeySvc.MarkLastUsed(ctx, *attempt.APIKeyID, at); err != nil {

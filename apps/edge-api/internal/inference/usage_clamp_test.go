@@ -1,6 +1,9 @@
 package inference
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func ptrStr(s string) *string { return &s }
 
@@ -225,6 +228,79 @@ func TestUsageAccumulator_ClampPreservesNonZero(t *testing.T) {
 	acc.ClampUsage(usage, "id", "alias", EndpointChatCompletions)
 	if usage.CompletionTokens != 4 || usage.TotalTokens != 7 {
 		t.Fatalf("clamp wrongly mutated nonzero usage: %+v", usage)
+	}
+}
+
+// TestPromptText_ChatCompletionsExcludesImageData is the regression guard
+// for issue #602's over-charge root cause: a multimodal chat request's
+// base64 image data URI must never be counted as prompt text. Counting raw
+// request bytes let an ordinary image-attached request estimate millions of
+// "tokens" from a few hundred KB of base64 (base64 tokenizes far below
+// byte_len/4), producing a settlement charge many multiples of the
+// reservation hold.
+func TestPromptText_ChatCompletionsExcludesImageData(t *testing.T) {
+	hugeBase64 := strings.Repeat("A", 200_000) // stand-in for a real image payload
+	body := []byte(`{"model":"hive-default","messages":[` +
+		`{"role":"user","content":[` +
+		`{"type":"text","text":"describe this image"},` +
+		`{"type":"image_url","image_url":{"url":"data:image/png;base64,` + hugeBase64 + `"}}` +
+		`]}]}`)
+
+	got := promptText(EndpointChatCompletions, body)
+	if got != "describe this image" {
+		t.Fatalf("expected only the text part, got %d bytes: %q...", len(got), got[:min(40, len(got))])
+	}
+	if estimateCompletionTokens(got) > 100 {
+		t.Fatalf("estimate exploded despite excluding image data: %d tokens from %q", estimateCompletionTokens(got), got)
+	}
+}
+
+func TestPromptText_ChatCompletionsStringContent(t *testing.T) {
+	body := []byte(`{"model":"m","messages":[{"role":"system","content":"be helpful"},{"role":"user","content":"hi there"}]}`)
+	got := promptText(EndpointChatCompletions, body)
+	if got != "be helpfulhi there" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPromptText_ChatCompletionsMalformedBodyReturnsEmpty(t *testing.T) {
+	if got := promptText(EndpointChatCompletions, []byte(`not json`)); got != "" {
+		t.Fatalf("expected empty text for malformed body, got %q", got)
+	}
+}
+
+func TestPromptText_CompletionsStringAndArrayPrompt(t *testing.T) {
+	if got := promptText(EndpointCompletions, []byte(`{"model":"m","prompt":"once upon a time"}`)); got != "once upon a time" {
+		t.Fatalf("string prompt: got %q", got)
+	}
+	if got := promptText(EndpointCompletions, []byte(`{"model":"m","prompt":["a","b","c"]}`)); got != "abc" {
+		t.Fatalf("array prompt: got %q", got)
+	}
+}
+
+func TestPromptText_ResponsesStringInputAndInstructions(t *testing.T) {
+	body := []byte(`{"model":"m","instructions":"be terse","input":"summarize this"}`)
+	got := promptText(EndpointResponses, body)
+	if got != "be tersesummarize this" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestPromptText_ResponsesArrayInputExcludesImageParts(t *testing.T) {
+	hugeBase64 := strings.Repeat("B", 200_000)
+	body := []byte(`{"model":"m","input":[{"role":"user","content":[` +
+		`{"type":"input_text","text":"what is this"},` +
+		`{"type":"input_image","image_url":"data:image/png;base64,` + hugeBase64 + `"}` +
+		`]}]}`)
+	got := promptText(EndpointResponses, body)
+	if got != "what is this" {
+		t.Fatalf("expected only input_text, got %d bytes", len(got))
+	}
+}
+
+func TestPromptText_UnknownEndpointReturnsEmpty(t *testing.T) {
+	if got := promptText("embeddings", []byte(`{"input":"x"}`)); got != "" {
+		t.Fatalf("expected empty text for unhandled endpoint, got %q", got)
 	}
 }
 
