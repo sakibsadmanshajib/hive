@@ -232,6 +232,23 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::Once;
+
+    /// Installs rustls's process-wide default crypto provider exactly once.
+    /// `build_client()` (via reqwest's `rustls-no-provider` feature, see
+    /// Cargo.toml) panics on its first call unless a provider was already
+    /// installed -- `main.rs` does this at real startup, but `cargo test`
+    /// never runs `main()`, and it runs every test below in one process, in
+    /// parallel, in an unspecified order. Guarded by `Once` so concurrent
+    /// tests race on the flag, not on rustls's own (fallible-if-repeated)
+    /// install call.
+    static CRYPTO_PROVIDER_INIT: Once = Once::new();
+
+    fn ensure_crypto_provider() {
+        CRYPTO_PROVIDER_INIT.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+    }
 
     /// Spawns a one-shot HTTP server on an ephemeral port that writes a
     /// response with the given status line and body (Content-Length
@@ -241,7 +258,15 @@ mod tests {
     /// formatted before spawning so the thread only ever owns a `String`,
     /// letting callers (e.g. the oversized-body test) pass a borrowed,
     /// dynamically built body instead of a `&'static str` literal.
+    ///
+    /// Accepts in a loop rather than taking only the first `Result`: under
+    /// CI load a transient accept error (e.g. `ECONNABORTED`) previously
+    /// left the listener thread give up silently, so the client's request
+    /// ran out the clock against `FETCH_TIMEOUT` instead of getting a
+    /// response. Looping retries past a transient error instead of treating
+    /// it as "no client is coming".
     fn mock_server(status_line: &str, body: &str) -> String {
+        ensure_crypto_provider();
         let response = format!(
             "{status_line}\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{body}",
             body.len()
@@ -249,10 +274,15 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         std::thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
+            for conn in listener.incoming() {
+                let mut stream = match conn {
+                    Ok(stream) => stream,
+                    Err(_) => continue,
+                };
                 let mut buf = [0u8; 1024];
                 let _ = stream.read(&mut buf);
                 let _ = stream.write_all(response.as_bytes());
+                break;
             }
         });
         format!("http://{addr}")
@@ -261,6 +291,7 @@ mod tests {
     /// Binds an ephemeral port, then immediately drops the listener so the
     /// port is guaranteed to refuse the next connection.
     fn unreachable_origin() -> String {
+        ensure_crypto_provider();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         drop(listener);
