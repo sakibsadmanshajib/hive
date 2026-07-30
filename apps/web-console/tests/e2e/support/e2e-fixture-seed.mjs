@@ -446,6 +446,21 @@ async function resetProfilesAndInvitation(
   );
   if (profErr) throw new Error(`profiles upsert failed: ${profErr.message}`);
 
+  // Audited for issue #592 (a plain delete with no paired upsert, unlike the
+  // account_memberships and account_invitations fixes above and below): left
+  // as a bare delete on purpose, not a bug needing a guard.
+  //
+  // control-plane's GetBillingProfile LEFT JOINs account_billing_profiles and
+  // COALESCEs every column, so a missing row after this delete reads back as
+  // blank fields, never ErrNotFound — there is nothing here for a concurrent
+  // read to observe as broken. And there is no concurrent read to begin with:
+  // the fixture CLI runs via execFileSync (fully synchronous — it blocks the
+  // calling test's beforeEach until the child process exits) from a single
+  // Playwright worker (playwright.config.ts pins workers: 1 for exactly this
+  // reason). No spec's page load can ever land inside this function's
+  // execution window, in this run or a concurrent one (account ids are
+  // namespaced per E2E_RUN_KEY, so two jobs never touch the same row). Revisit
+  // if workers ever goes above 1 or this CLI is invoked without blocking.
   const accountIds = [
     ids.verifiedPrimaryAccountId,
     ids.verifiedSecondaryAccountId,
