@@ -16,14 +16,20 @@
 -- Depends on 20260729_01 (plain btree on created_at) already existing;
 -- without it this job sequential-scans the table on every run.
 --
--- pg_cron: this repo has no prior pg_cron usage, so this migration enables
--- the extension itself (idempotent, CREATE EXTENSION IF NOT EXISTS) rather
--- than assuming it. pg_cron is a Supabase-supported Postgres Module
--- (preloaded on every hosted project, confirmed via Supabase docs), so
--- this is expected to succeed on Hive Cloud. If an Enterprise self-hosted
--- Postgres was not built with pg_cron in shared_preload_libraries, this
--- statement fails and the whole migration does not apply -- fail fast
--- rather than schedule a job that silently never runs.
+-- pg_cron: this repo has no prior pg_cron usage. pg_cron is a
+-- Supabase-supported Postgres Module (preloaded on every hosted project,
+-- confirmed via Supabase docs), so on Hive Cloud the extension and the
+-- schedule both come up automatically. Enterprise self-hosted Postgres is
+-- not guaranteed to have pg_cron built in (CI's stock postgres:17 image
+-- does not, which is how this guard was found), and CREATE EXTENSION does
+-- not degrade gracefully -- it raises and aborts the whole script. So the
+-- extension creation and the cron.schedule call are each wrapped in a
+-- pg_available_extensions / pg_extension check: when pg_cron is present
+-- they run as before, when it is absent they RAISE NOTICE and skip. The
+-- table, the config row, and the purge PROCEDURE have no pg_cron
+-- dependency and are always created; an operator without pg_cron invokes
+-- CALL public.purge_metering_shadow_verdicts() from an external scheduler
+-- instead of the built-in cron job.
 --
 -- Schedule: 21:00 UTC daily = 03:00 Bangladesh time (UTC+6), the lowest
 -- traffic point for a BD-first chat product, chosen to keep the deletes off
@@ -51,7 +57,21 @@
 
 BEGIN;
 
-CREATE EXTENSION IF NOT EXISTS pg_cron;
+DO $pg_cron_setup$
+DECLARE
+  pg_cron_available boolean;
+BEGIN
+  SELECT EXISTS (
+    SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron'
+  ) INTO pg_cron_available;
+
+  IF pg_cron_available THEN
+    EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
+  ELSE
+    RAISE NOTICE 'pg_cron extension is not available on this Postgres install; automatic nightly retention scheduling is disabled. Invoke public.purge_metering_shadow_verdicts() from an external scheduler instead.';
+  END IF;
+END;
+$pg_cron_setup$;
 
 CREATE TABLE IF NOT EXISTS public.metering_shadow_verdicts_retention_config (
   id             smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1), -- singleton row
@@ -113,10 +133,18 @@ COMMENT ON PROCEDURE public.purge_metering_shadow_verdicts(integer) IS
   'transaction, so no single lock is held for the full purge. Window comes '
   'from metering_shadow_verdicts_retention_config, not a literal here.';
 
-SELECT cron.schedule(
-  'metering-shadow-verdicts-purge',
-  '0 21 * * *', -- 21:00 UTC = 03:00 Asia/Dhaka
-  $$CALL public.purge_metering_shadow_verdicts();$$
-);
+DO $pg_cron_schedule$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron') THEN
+    PERFORM cron.schedule(
+      'metering-shadow-verdicts-purge',
+      '0 21 * * *', -- 21:00 UTC = 03:00 Asia/Dhaka
+      $sched$CALL public.purge_metering_shadow_verdicts();$sched$
+    );
+  ELSE
+    RAISE NOTICE 'pg_cron is not installed; skipping cron.schedule for metering-shadow-verdicts-purge. Automatic retention is disabled -- CALL public.purge_metering_shadow_verdicts() from an external scheduler instead.';
+  END IF;
+END;
+$pg_cron_schedule$;
 
 COMMIT;
