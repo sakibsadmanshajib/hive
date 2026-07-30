@@ -142,7 +142,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 		if finalized || reservation.ID == "" {
 			return
 		}
-		finalized = o.settleStream(snapshot, attempt, reservation, requestID, EndpointResponses, model, acc, translator.currentContent.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, EndpointResponses, model, acc, translator.currentContent.String())
 	}()
 
 	// 6. Dispatch to LiteLLM (always with stream_options for usage) with

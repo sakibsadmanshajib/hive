@@ -203,7 +203,7 @@ func (o *Orchestrator) executeStreaming(
 		if finalized || reservation.ID == "" {
 			return
 		}
-		finalized = o.settleStream(snapshot, attempt, reservation, requestID, endpoint, model, accumulator, accumulator.Content.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, endpoint, model, accumulator, accumulator.Content.String())
 	}()
 
 	// 6. Dispatch to LiteLLM with bounded retry on 429/5xx (safe: no bytes
@@ -362,22 +362,30 @@ func settlementCredits(hasUsage bool, totalTokens int64, content string) (credit
 // TerminalUsageConfirmed mirrors hasUsage: it is only ever true when the
 // upstream itself sent a genuine usage block, so anything settled from a
 // content estimate is flagged for reconciliation rather than treated as a
-// confirmed final charge.
-func (o *Orchestrator) settleStream(snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, content string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// confirmed final charge. reqCtx is the caller's original request context,
+// consulted only to tell apart the two ways delivered can end up false: a
+// cancelled reqCtx means the client hung up; a live reqCtx with nothing
+// delivered means the upstream provider ended or errored the stream while
+// the client was still there.
+func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, content string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
 	defer cancel()
 
 	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, content)
 	if !delivered {
+		reason, eventType := "upstream_error", "upstream_error"
+		if reqCtx.Err() != nil {
+			reason, eventType = "client_disconnect", "interrupted"
+		}
 		if err := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
 			AccountID:     snapshot.AccountID,
 			ReservationID: reservation.ID,
-			Reason:        "client_disconnect",
+			Reason:        reason,
 		}); err != nil {
 			log.Printf("inference: settle release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
 			return false
 		}
-		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc)
+		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc, eventType)
 		return true
 	}
 
@@ -389,22 +397,35 @@ func (o *Orchestrator) settleStream(snapshot authz.AuthSnapshot, attempt Attempt
 		Status:                 "completed",
 	}); err != nil {
 		log.Printf("inference: settle finalize failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
-		return false
+		// A failed finalize must not leave the hold stranded: fall back to a
+		// full release so the customer's credits are freed rather than
+		// locked forever behind a charge that never landed.
+		if relErr := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
+			AccountID:     snapshot.AccountID,
+			ReservationID: reservation.ID,
+			Reason:        "finalize_failed",
+		}); relErr != nil {
+			log.Printf("inference: settle finalize-fallback release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, relErr)
+			return false
+		}
+		log.Printf("inference: settle finalize failed, released reservation instead request_id=%s reservation_id=%s", requestID, reservation.ID)
+		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc, "finalize_failed")
+		return true
 	}
 	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
 	return true
 }
 
-func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, acc *UsageAccumulator) {
+func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, acc *UsageAccumulator, eventType string) {
 	input := RecordEventInput{
 		AccountID:        snapshot.AccountID,
 		RequestAttemptID: attempt.ID,
 		APIKeyID:         snapshot.KeyID,
 		RequestID:        requestID,
-		EventType:        "interrupted",
+		EventType:        eventType,
 		Endpoint:         endpoint,
 		ModelAlias:       model,
-		Status:           "interrupted",
+		Status:           eventType,
 	}
 	if acc != nil && acc.HasUsage {
 		input.InputTokens = acc.InputTokens

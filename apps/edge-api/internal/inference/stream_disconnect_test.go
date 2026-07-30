@@ -82,6 +82,34 @@ func newAccountingMock(rec *accountingRecorder) *httptest.Server {
 	}))
 }
 
+// newAccountingMockFinalizeFails behaves like newAccountingMock but answers
+// every finalize call with a 500, so a test can exercise the finalize-error
+// fallback path (settleStream must release the reservation instead of
+// stranding the hold when the finalize call itself fails).
+func newAccountingMockFinalizeFails(rec *accountingRecorder) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		rec.record(r.URL.Path, body)
+		if r.URL.Path == "/internal/accounting/reservations/finalize" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/internal/accounting/reservations":
+			_ = json.NewEncoder(w).Encode(ReservationResult{
+				ID: "res-test-1", AccountID: "acct-test-1", Status: "active", EstimatedCredits: 10000,
+			})
+		case "/internal/usage/attempts":
+			_ = json.NewEncoder(w).Encode(AttemptResult{
+				ID: "attempt-test-1", RequestID: "req-test-1", Status: "streaming",
+			})
+		}
+	}))
+}
+
 // newRoutingMock stands in for the control-plane's route-selection endpoint,
 // always resolving to litellmURL regardless of the request body.
 func newRoutingMock(litellmURL string) *httptest.Server {
@@ -159,6 +187,18 @@ func gatedSSEServer(firstChunk string, ready chan<- struct{}) *httptest.Server {
 		case <-r.Context().Done():
 		case <-time.After(2 * time.Second):
 		}
+	}))
+}
+
+// abruptUpstreamCloseServer commits SSE headers then closes the connection
+// immediately, sending no content, no usage block, and no [DONE] -- an
+// upstream provider dying mid-stream while the client is still connected,
+// as opposed to the client disconnecting itself.
+func abruptUpstreamCloseServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		w.(http.Flusher).Flush()
 	}))
 }
 
@@ -396,5 +436,74 @@ func TestExecuteStreaming_NormalCompletion_ChargesConfirmedUsage_NoRegression(t 
 	}
 	if rec.has("/internal/accounting/reservations/release") {
 		t.Error("normal completion must not release; it must finalize")
+	}
+}
+
+// TestExecuteStreaming_FinalizeError_ReleasesReservationInstead is the
+// regression guard for PR #602 finding 2: a failed FinalizeReservation call
+// must not leave the hold stranded. settleStream must fall back to a full
+// release so the customer's credits are freed rather than locked forever
+// behind a charge that never landed.
+func TestExecuteStreaming_FinalizeError_ReleasesReservationInstead(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMockFinalizeFails(rec)
+	defer acctSrv.Close()
+
+	litellmSrv := completingSSEServer()
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	done, _ := runExecuteStreaming(orch, context.Background())
+	waitDone(t, done)
+
+	if !rec.has("/internal/accounting/reservations/finalize") {
+		t.Fatalf("expected FinalizeReservation to be attempted; calls seen: %+v", rec.calls)
+	}
+
+	body, ok := rec.find("/internal/accounting/reservations/release")
+	if !ok {
+		t.Fatalf("expected fallback ReleaseReservation when finalize fails; calls seen: %+v", rec.calls)
+	}
+	if body["reason"] != "finalize_failed" {
+		t.Errorf("reason = %v, want finalize_failed", body["reason"])
+	}
+	if body["reservation_id"] != "res-test-1" {
+		t.Errorf("reservation_id = %v, want res-test-1", body["reservation_id"])
+	}
+}
+
+// TestExecuteStreaming_UpstreamClosesWithoutDelivery_ReleasesAsUpstreamError
+// is the regression guard for PR #602 finding 3: when nothing is delivered
+// because the upstream provider ended the stream early -- not because the
+// client disconnected -- the release reason must say so instead of always
+// claiming client_disconnect.
+func TestExecuteStreaming_UpstreamClosesWithoutDelivery_ReleasesAsUpstreamError(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	litellmSrv := abruptUpstreamCloseServer()
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	// Never cancelled: the client stays connected for the whole request.
+	// Only the upstream provider ends the stream early.
+	done, _ := runExecuteStreaming(orch, context.Background())
+	waitDone(t, done)
+
+	body, ok := rec.find("/internal/accounting/reservations/release")
+	if !ok {
+		t.Fatalf("expected ReleaseReservation when nothing was delivered; calls seen: %+v", rec.calls)
+	}
+	if body["reason"] != "upstream_error" {
+		t.Errorf("reason = %v, want upstream_error (client never disconnected)", body["reason"])
 	}
 }
