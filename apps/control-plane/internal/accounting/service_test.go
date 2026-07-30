@@ -458,6 +458,60 @@ func TestFinalizeReservationClampsChargeToReservedHold(t *testing.T) {
 	}
 }
 
+// TestFinalizeReservationConfirmedUsageAboveHoldIsNotClamped is the
+// regression guard for the follow-up review finding on the clamp above: the
+// clamp must only ever apply to an unconfirmed estimate. When upstream
+// confirms real usage above the reservation's flat, never-expanded hold
+// (long context, RAG, coding-agent traffic routinely exceed 10000 tokens),
+// the true amount must still be charged in full -- the hold is an
+// authorization floor, not a ceiling on a confirmed fact. Silently capping
+// a confirmed charge would undercharge with no reconciliation job, since
+// TerminalUsageConfirmed=true skips reconciliation entirely.
+func TestFinalizeReservationConfirmedUsageAboveHoldIsNotClamped(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{}
+	usageSvc := &usageStub{}
+	svc := NewService(repo, ledgerSvc, usageSvc)
+
+	accountID := uuid.New()
+	attemptID := uuid.New()
+	reservationID := uuid.New()
+	repo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: attemptID,
+		ReservationKey:   "req_confirmed_overage:1",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  10000,
+	}
+
+	// Upstream confirmed 15000 real tokens against a flat 10000 hold.
+	reservation, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          15000,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+	})
+	if err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	if reservation.ConsumedCredits != 15000 {
+		t.Fatalf("expected confirmed usage billed in full unclamped, got %d", reservation.ConsumedCredits)
+	}
+	if reservation.ReleasedCredits != 0 {
+		t.Fatalf("expected zero released credits on a confirmed overage, got %d", reservation.ReleasedCredits)
+	}
+	if len(ledgerSvc.chargeCalls) != 1 || ledgerSvc.chargeCalls[0].credits != 15000 {
+		t.Fatalf("expected the ledger charge for the true 15000, got %#v", ledgerSvc.chargeCalls)
+	}
+	if len(ledgerSvc.releaseCalls) != 0 {
+		t.Fatalf("expected no release call on a confirmed overage, got %#v", ledgerSvc.releaseCalls)
+	}
+}
+
 func TestFinalizeReservationMarksAmbiguousStreamForReconciliation(t *testing.T) {
 	repo := newRepoStub()
 	ledgerSvc := &ledgerStub{}

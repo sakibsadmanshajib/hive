@@ -266,15 +266,27 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 
 	heldCredits := remainingHeldCredits(reservation)
 
-	// Hard invariant: a settlement must never charge more than it reserved.
-	// input.ActualCredits is caller-supplied (edge-api's token estimate,
-	// which can run far ahead of the hold -- e.g. a huge request body
-	// disconnected after one output token, see issue #602). finalizeLocked
-	// is the single chokepoint every settlement path routes through (sync
-	// and streaming, all endpoints), so clamping here protects the ledger
-	// even if a future estimator change reintroduces an overcount.
+	// Hard invariant, estimates only: an UNCONFIRMED settlement must never
+	// charge more than it reserved. input.ActualCredits there is an edge-api
+	// token estimate that can run far ahead of the hold (e.g. a huge request
+	// body disconnected after one output token, see issue #602).
+	// finalizeLocked is the single chokepoint every settlement path routes
+	// through (sync and streaming, all endpoints), so clamping here protects
+	// the ledger even if a future estimator change reintroduces an overcount.
+	//
+	// The hold is an authorization floor, not a ceiling on truth: when
+	// TerminalUsageConfirmed is true the upstream itself reported the token
+	// count, so it must be billed in full even past the hold -- edge-api's
+	// reservation is a flat, never-expanded estimate (10000 for chat/
+	// completions/responses, 1000 for embeddings; ExpandReservation exists
+	// but no caller ever invokes it), so any request whose real usage
+	// legitimately exceeds that floor (long context, RAG, coding-agent
+	// traffic) would otherwise be silently undercharged with no
+	// reconciliation job, since TerminalUsageConfirmed=true skips
+	// reconciliation entirely. Clamping a confirmed fact was the bug the
+	// PR #602 review caught in the previous version of this fix.
 	actualCredits := input.ActualCredits
-	if actualCredits > heldCredits {
+	if !input.TerminalUsageConfirmed && actualCredits > heldCredits {
 		actualCredits = heldCredits
 	}
 
