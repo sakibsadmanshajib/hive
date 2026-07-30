@@ -326,6 +326,36 @@ async function seedAccountsAndMemberships(admin, ids, users) {
     );
   }
 
+  // Fixes issue #608: account_memberships.created_at defaults to now(), and a
+  // single multi-row upsert statement stamps every inserted row with that one
+  // transaction timestamp: there is no wall-clock gap between them.
+  // ListMembershipsByUserID
+  // (apps/control-plane/internal/accounts/repository.go) orders by
+  // `created_at ASC, id ASC`, with id documented there as a tiebreaker "only
+  // for the pathological case of two memberships sharing one created_at". A
+  // bulk upsert is exactly that pathological case on every seed call, so
+  // verifiedUser's two memberships below (owner of the primary workspace,
+  // plain member of the shared one) tied on created_at and fell back to
+  // comparing each row's freshly random gen_random_uuid() id: a coin flip on
+  // every reseed, not a fixed order within one run. EnsureViewerContext takes
+  // memberships[0] as the signed-in user's default workspace whenever no
+  // `hive_account_id` cookie is set, which is every spec's first navigation
+  // after signIn(), so roughly half of all CI runs landed the verified spec
+  // user in the workspace they only have "member" role in. That is the
+  // confirmed cause of profile-completion.spec.ts's "billing settings save
+  // partial business profile" (an owner-only route) failing intermittently.
+  //
+  // Fixed at the source that produces the tie, not at the consumer that
+  // resolves it: the Go-side id tiebreak is correct general-purpose behavior
+  // (real production data can have two memberships insert in one statement
+  // too) and its own regression test already pins that shape, so it stays as
+  // a last-resort tiebreak rather than becoming the primary sort. Stamping
+  // created_at explicitly here, one millisecond apart in the intended
+  // priority order (verifiedUser's owned workspace before the one they only
+  // joined), means the seeded rows never reach that pathological case at all,
+  // on every seed call including reseeds of the same run key across
+  // Playwright retries.
+  const membershipSeedTime = Date.now();
   const { error: memErr } = await admin.from("account_memberships").upsert(
     [
       {
@@ -358,7 +388,10 @@ async function seedAccountsAndMemberships(admin, ids, users) {
         role: "owner",
         status: "active",
       },
-    ],
+    ].map((membership, index) => ({
+      ...membership,
+      created_at: new Date(membershipSeedTime + index).toISOString(),
+    })),
     { onConflict: "account_id,user_id" }
   );
   if (memErr) throw new Error(`memberships upsert failed: ${memErr.message}`);
