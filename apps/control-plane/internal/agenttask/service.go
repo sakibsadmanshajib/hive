@@ -3,6 +3,7 @@ package agenttask
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
 )
@@ -25,11 +26,30 @@ func NewService(repo Repository, engine Engine) *Service {
 	return &Service{repo: repo, engine: engine}
 }
 
-// CreateTask persists a new task (StatusQueued) and attempts to hand it to
-// the agent-engine. ErrEngineNotConfigured leaves the task queued rather than
-// failed — that is a documented seam gap, not a task failure. Any other
-// Launch error transitions the task straight to StatusFailed so the caller
-// never has to poll a task that can never progress.
+// engineUnavailableMessage is the customer-visible error_message persisted
+// when ErrEngineNotConfigured fires. Deliberately generic: no provider name,
+// internal hostname, or credential ever reaches a customer-facing field (see
+// CLAUDE.md "Provider-blind errors"). The actionable detail (which
+// HIVE_AGENT_ENGINE_* vars are empty) goes to the operator via the startup
+// WARN in cmd/server/main.go's buildAgentEngine, not here.
+const engineUnavailableMessage = "agent engine is not available on this deployment"
+
+// engineLaunchFailedMessage is the customer-visible error_message persisted
+// for every other Launch failure (anything but ErrEngineNotConfigured). Same
+// provider-blind rationale as engineUnavailableMessage above: an arbitrary
+// err.Error() from the Engine implementation can carry a provider name, an
+// internal hostname, or an upstream error body, none of which may reach a
+// customer-visible field. The real error still reaches the operator via the
+// WarnContext log in the default case below, it just never reaches the task
+// record.
+const engineLaunchFailedMessage = "agent engine could not start the task"
+
+// CreateTask persists a new task and attempts to hand it to the agent-engine.
+// Any Launch error, including ErrEngineNotConfigured, transitions the task
+// straight to StatusFailed so a caller never polls a task that can never
+// progress: previously ErrEngineNotConfigured left the task in StatusQueued
+// forever with no signal, which is exactly the silent-stuck-queue behavior
+// this now closes.
 func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pack Pack, instructions string) (Task, error) {
 	if !pack.Valid() {
 		return Task{}, ErrInvalidPack
@@ -45,9 +65,11 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	case err == nil:
 		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusRunning, sessionRef, "", "")
 	case errors.Is(err, ErrEngineNotConfigured):
-		return t, nil
+		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", engineUnavailableMessage)
 	default:
-		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", err.Error())
+		slog.Default().WarnContext(ctx, "agenttask: launch failed, engine detail",
+			"task_id", t.ID, "error", err)
+		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", engineLaunchFailedMessage)
 	}
 }
 

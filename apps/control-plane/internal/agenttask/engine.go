@@ -6,8 +6,9 @@ import (
 )
 
 // ErrEngineNotConfigured is returned by an Engine that has no live control
-// channel to apps/agent-engine yet. Service treats it as "stays queued", not
-// a failure: see NotConfiguredEngine's doc comment for the precise gap.
+// channel to apps/agent-engine yet. Service.CreateTask transitions the task
+// straight to StatusFailed on this error — see NotConfiguredEngine's doc
+// comment for the precise gap this signals.
 var ErrEngineNotConfigured = errors.New("agenttask: engine not configured")
 
 // Engine launches an agent-engine (Wave 2.2) session for a queued task and
@@ -24,8 +25,9 @@ type Engine interface {
 // sandbox's --network none profile currently cuts off entirely (Wave 3 gap
 // tracked in the agent-subsystem blueprint's Wave 3.4 step and Wave 4's
 // desktop control-channel work). Until that channel lands, every task
-// created here is persisted and returned to the caller in StatusQueued
-// rather than failed — the seam is wired, the far end of it is not.
+// created here is persisted and immediately transitioned to StatusFailed —
+// the seam is wired, the far end of it is not, and the caller is told so
+// rather than left polling a queued task that will never move.
 type NotConfiguredEngine struct{}
 
 func (NotConfiguredEngine) Launch(context.Context, Task) (string, error) {

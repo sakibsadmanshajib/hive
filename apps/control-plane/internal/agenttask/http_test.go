@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,13 +13,26 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/agenttask"
 )
 
+// newTestHandler wires the agent engine as NotConfiguredEngine. It is the
+// default for tests that never reach engine.Launch (request-shape
+// validation), and for the dedicated unconfigured-engine coverage below.
+// Tests that need a task to land somewhere non-terminal (running) use
+// newRunningTestHandler instead.
 func newTestHandler() *agenttask.Handler {
 	svc := agenttask.NewService(newFakeRepository(), agenttask.NotConfiguredEngine{})
 	return agenttask.NewHandler(svc)
 }
 
+// newRunningTestHandler wires a fakeEngine that always launches
+// successfully, so created tasks land in StatusRunning rather than
+// immediately StatusFailed.
+func newRunningTestHandler() *agenttask.Handler {
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{sessionRef: "session-http-test"})
+	return agenttask.NewHandler(svc)
+}
+
 func TestHandler_Create_HappyPath(t *testing.T) {
-	h := newTestHandler()
+	h := newRunningTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "coding-pack"})
@@ -33,11 +47,44 @@ func TestHandler_Create_HappyPath(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp["status"] != "queued" {
-		t.Errorf("expected status queued, got %v", resp["status"])
+	if resp["status"] != "running" {
+		t.Errorf("expected status running, got %v", resp["status"])
 	}
 	if _, ok := resp["tenant_id"]; ok {
 		t.Error("response must never echo tenant_id")
+	}
+}
+
+// TestHandler_Create_EngineNotConfigured_FailsVisibly is the HTTP-layer
+// guard for the bug report ("agents don't work, stuck in queue forever, no
+// error surfaced"): a create call against an unconfigured engine must come
+// back as a task the caller can see is dead, not a healthy-looking queued
+// one, and the error text must stay customer-safe.
+func TestHandler_Create_EngineNotConfigured_FailsVisibly(t *testing.T) {
+	h := newTestHandler()
+	tenantID, userID := uuid.New(), uuid.New()
+
+	body, _ := json.Marshal(map[string]string{"pack": "coding-pack"})
+	req := httptest.NewRequest(http.MethodPost, "/internal/agent-tasks/"+tenantID.String()+"/"+userID.String(), bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.InternalMux().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 (task row is still persisted), got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["status"] != "failed" {
+		t.Errorf("expected status failed (never queued forever), got %v", resp["status"])
+	}
+	errMsg, _ := resp["error_message"].(string)
+	if errMsg == "" {
+		t.Error("expected a non-empty error_message")
+	}
+	if strings.Contains(errMsg, "HIVE_AGENT_ENGINE") {
+		t.Errorf("error_message leaked deployment/env detail to a customer-visible field: %q", errMsg)
 	}
 }
 
@@ -67,7 +114,7 @@ func TestHandler_Create_InvalidTenantID_Returns400(t *testing.T) {
 }
 
 func TestHandler_ListThenGet_RoundTrip(t *testing.T) {
-	h := newTestHandler()
+	h := newRunningTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "knowledge-work-pack"})
@@ -115,7 +162,7 @@ func TestHandler_Get_UnknownTask_Returns404(t *testing.T) {
 }
 
 func TestHandler_Cancel_HappyPath(t *testing.T) {
-	h := newTestHandler()
+	h := newRunningTestHandler()
 	tenantID, userID := uuid.New(), uuid.New()
 
 	body, _ := json.Marshal(map[string]string{"pack": "coding-pack"})
