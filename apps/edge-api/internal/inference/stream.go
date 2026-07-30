@@ -200,10 +200,10 @@ func (o *Orchestrator) executeStreaming(
 	finalized := false
 	accumulator := &UsageAccumulator{}
 	defer func() {
-		if finalized || reservation.ID == "" {
+		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, endpoint, model, accumulator, accumulator.Content.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, endpoint, model, accumulator, string(body), accumulator.Content.String())
 	}()
 
 	// 6. Dispatch to LiteLLM with bounded retry on 429/5xx (safe: no bytes
@@ -211,12 +211,7 @@ func (o *Orchestrator) executeStreaming(
 	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, dispatch)
 	if err != nil {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "upstream_error",
-			})
-			finalized = true
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "upstream_error")
 		}
 		apierrors.WriteProviderBlindUpstreamError(w, model, http.StatusBadGateway, err.Error())
 		return nil
@@ -226,12 +221,7 @@ func (o *Orchestrator) executeStreaming(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "upstream_error",
-			})
-			finalized = true
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "upstream_error")
 		}
 		o.recordErrorEvent(ctx, snapshot, attempt, requestID, endpoint, model, resp.StatusCode, string(upstreamBody))
 		apierrors.WriteProviderBlindUpstreamError(w, model, resp.StatusCode, string(upstreamBody))
@@ -242,12 +232,7 @@ func (o *Orchestrator) executeStreaming(
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "internal_error",
-			})
-			finalized = true
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "internal_error")
 		}
 		code := "internal_error"
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error",
@@ -339,18 +324,57 @@ func (o *Orchestrator) executeStreaming(
 	return nil
 }
 
+// releaseReservationBackground releases a reservation on a fresh bounded
+// background context, never the caller's request context: a client
+// disconnect is exactly what cancels that context, so releasing on it (the
+// original bug this PR fixes) lets a dead context silently swallow the
+// release, same as it used to swallow the finalize. Returns true only when
+// the release actually reached the control plane, so callers gate
+// `finalized` on real settlement instead of assuming success -- a failed
+// attempt here still leaves `finalized` false, so the deferred settleStream
+// gets one more shot at it before the request returns.
+func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot, reservationID, requestID, reason string) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
+	defer cancel()
+	if err := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
+		AccountID:     snapshot.AccountID,
+		ReservationID: reservationID,
+		Reason:        reason,
+	}); err != nil {
+		log.Printf("inference: release reservation failed request_id=%s reservation_id=%s reason=%s: %v", requestID, reservationID, reason, err)
+		return false
+	}
+	return true
+}
+
 // settlementCredits derives what a stream settlement should charge: real
 // usage tokens when the upstream confirmed them, otherwise a content-based
 // estimate. There is no estimatedCredits fallback here on purpose -- an
 // unconfirmed usage block must never turn into a flat, hardcoded overcharge.
 // delivered is false only when nothing was produced at all; the caller must
 // release the reservation in full rather than charge in that case.
-func settlementCredits(hasUsage bool, totalTokens int64, content string) (credits int64, delivered bool) {
+//
+// The unconfirmed-usage estimate bills prompt tokens too, not completion
+// bytes alone: a client that aborts right after the first output token
+// (e.g. after a long prompt finishes prefill) must not settle for ~1 credit
+// just because only one token of *output* existed to estimate from. The
+// confirmed-usage branch above already bills prompt+completion via
+// totalTokens; promptBody (the raw request body) is a conservative proxy for
+// prompt cost when no real usage block ever arrived, using the same
+// cl100k-by-length heuristic already used for completion text. ponytail:
+// counting raw JSON bytes (including field names and punctuation) instead of
+// tokenizing just the message content overestimates slightly, but that
+// biases toward the safe side, not the abuse-enabling one; a real prompt
+// tokenizer can replace this if the overcount ever matters.
+func settlementCredits(hasUsage bool, totalTokens int64, promptBody, content string) (credits int64, delivered bool) {
 	if hasUsage {
 		return totalTokens, totalTokens > 0
 	}
-	credits = estimateCompletionTokens(content)
-	return credits, credits > 0
+	completion := estimateCompletionTokens(content)
+	if completion == 0 {
+		return 0, false
+	}
+	return estimateCompletionTokens(promptBody) + completion, true
 }
 
 // settleStream is the single settlement point for an ended streaming
@@ -367,25 +391,41 @@ func settlementCredits(hasUsage bool, totalTokens int64, content string) (credit
 // cancelled reqCtx means the client hung up; a live reqCtx with nothing
 // delivered means the upstream provider ended or errored the stream while
 // the client was still there.
-func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, content string) bool {
+//
+// reservation.ID may be empty: CreateReservation is allowed to fail
+// non-fatally (a transient control-plane error should not abort a request
+// that could otherwise complete), in which case there is nothing to release
+// or finalize. That must not also drop the usage telemetry for the request --
+// see the reservation.ID == "" branches below.
+func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, promptBody, content string) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
 	defer cancel()
 
-	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, content)
+	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, promptBody, content)
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
 		if reqCtx.Err() != nil {
 			reason, eventType = "client_disconnect", "interrupted"
 		}
-		if err := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-			AccountID:     snapshot.AccountID,
-			ReservationID: reservation.ID,
-			Reason:        reason,
-		}); err != nil {
-			log.Printf("inference: settle release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
-			return false
+		if reservation.ID != "" {
+			if err := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
+				AccountID:     snapshot.AccountID,
+				ReservationID: reservation.ID,
+				Reason:        reason,
+			}); err != nil {
+				log.Printf("inference: settle release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
+				return false
+			}
 		}
 		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc, eventType)
+		return true
+	}
+
+	if reservation.ID == "" {
+		// No reservation ever existed to finalize, but the request still
+		// delivered billable content -- record it so the telemetry isn't
+		// silently dropped just because CreateReservation failed earlier.
+		o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
 		return true
 	}
 
@@ -433,5 +473,13 @@ func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot auth
 		input.HiveCreditDelta = acc.TotalTokens
 		input.CacheReadTokens = acc.CachedTokens
 	}
-	_ = o.accounting.RecordUsageEvent(ctx, input)
+	// Do not discard this error: event_type values here (upstream_error,
+	// finalize_failed, interrupted) previously were not in the usage_events
+	// CHECK constraint (see the accompanying migration), so this insert was
+	// failing on every call and vanishing silently. Metering Step 2 shadow
+	// mode is recording exactly this data for Step 4's future enforcement
+	// thresholds, so a silent drop here biases that decision.
+	if err := o.accounting.RecordUsageEvent(ctx, input); err != nil {
+		log.Printf("inference: record interrupted event failed request_id=%s event_type=%s: %v", requestID, eventType, err)
+	}
 }

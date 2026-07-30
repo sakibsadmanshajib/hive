@@ -139,10 +139,10 @@ func (o *Orchestrator) executeResponsesStreaming(
 	acc := &UsageAccumulator{}
 	translator := &responsesEventTranslator{aliasID: model}
 	defer func() {
-		if finalized || reservation.ID == "" {
+		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, EndpointResponses, model, acc, translator.currentContent.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, EndpointResponses, model, acc, string(body), translator.currentContent.String())
 	}()
 
 	// 6. Dispatch to LiteLLM (always with stream_options for usage) with
@@ -151,12 +151,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, o.litellm.ChatCompletion)
 	if err != nil {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "upstream_error",
-			})
-			finalized = true
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "upstream_error")
 		}
 		apierrors.WriteProviderBlindUpstreamError(w, model, http.StatusBadGateway, err.Error())
 		return
@@ -166,12 +161,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "upstream_error",
-			})
-			finalized = true
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "upstream_error")
 		}
 		o.recordErrorEvent(ctx, snapshot, attempt, requestID, EndpointResponses, model, resp.StatusCode, string(upstreamBody))
 		apierrors.WriteProviderBlindUpstreamError(w, model, resp.StatusCode, string(upstreamBody))
@@ -182,12 +172,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "internal_error",
-			})
-			finalized = true
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, "internal_error")
 		}
 		code := "internal_error"
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error",

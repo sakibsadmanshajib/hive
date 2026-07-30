@@ -110,6 +110,30 @@ func newAccountingMockFinalizeFails(rec *accountingRecorder) *httptest.Server {
 	}))
 }
 
+// newAccountingMockReservationFails behaves like newAccountingMock but
+// answers every CreateReservation call with a 500, the transient
+// control-plane failure that stream.go's step 5 explicitly tolerates
+// (reservation.ID stays "" and the request proceeds). A test can use this to
+// exercise the reservation.ID == "" branches of settleStream.
+func newAccountingMockReservationFails(rec *accountingRecorder) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		rec.record(r.URL.Path, body)
+		if r.URL.Path == "/internal/accounting/reservations" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if r.URL.Path == "/internal/usage/attempts" {
+			_ = json.NewEncoder(w).Encode(AttemptResult{
+				ID: "attempt-test-1", RequestID: "req-test-1", Status: "streaming",
+			})
+		}
+	}))
+}
+
 // newRoutingMock stands in for the control-plane's route-selection endpoint,
 // always resolving to litellmURL regardless of the request body.
 func newRoutingMock(litellmURL string) *httptest.Server {
@@ -183,6 +207,21 @@ func gatedSSEServer(firstChunk string, ready chan<- struct{}) *httptest.Server {
 		// never block the handler -- and therefore httptest.Server.Close --
 		// indefinitely if this sandbox's loopback networking doesn't
 		// propagate that promptly.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+}
+
+// neverRespondingServer signals ready as soon as it receives the request (so
+// a test knows dispatch is in flight against it), then blocks without ever
+// writing a response -- the shape of an upstream stuck in prefill. It reacts
+// to the request context closing (the client gave up mid-dispatch, before
+// any bytes came back) or a hard timeout so it can never hang the test.
+func neverRespondingServer(ready chan<- struct{}) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(ready)
 		select {
 		case <-r.Context().Done():
 		case <-time.After(2 * time.Second):
@@ -505,5 +544,86 @@ func TestExecuteStreaming_UpstreamClosesWithoutDelivery_ReleasesAsUpstreamError(
 	}
 	if body["reason"] != "upstream_error" {
 		t.Errorf("reason = %v, want upstream_error (client never disconnected)", body["reason"])
+	}
+}
+
+// TestExecuteStreaming_ClientDisconnect_DuringDispatch_ReleasesReservation is
+// the regression guard for the second-round PR #602 finding: dispatchWithRetry
+// itself failing because the client cancelled the request context mid-prefill
+// (before any bytes ever came back from the upstream). The old code released
+// on that same cancelled context, discarded the error, and still set
+// finalized = true, stranding the hold -- exactly the bug this whole PR
+// exists to fix, just one step earlier in the lifecycle. releaseReservationBackground
+// must release on its own background context so the hold actually clears.
+func TestExecuteStreaming_ClientDisconnect_DuringDispatch_ReleasesReservation(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMock(rec)
+	defer acctSrv.Close()
+
+	ready := make(chan struct{})
+	litellmSrv := neverRespondingServer(ready)
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done, _ := runExecuteStreaming(orch, ctx)
+	waitReady(t, ready) // dispatch is in flight against the upstream mock
+	cancel()            // client disconnects before dispatch ever gets a response
+	waitDone(t, done)
+
+	if rec.has("/internal/accounting/reservations/finalize") {
+		t.Error("dispatch never succeeded: must not finalize a charge")
+	}
+
+	body, ok := rec.find("/internal/accounting/reservations/release")
+	if !ok {
+		t.Fatalf("expected ReleaseReservation despite the cancelled dispatch context; calls seen: %+v", rec.calls)
+	}
+	if body["reservation_id"] != "res-test-1" {
+		t.Errorf("reservation_id = %v, want res-test-1", body["reservation_id"])
+	}
+	if body["reason"] != "upstream_error" {
+		t.Errorf("reason = %v, want upstream_error", body["reason"])
+	}
+}
+
+// TestExecuteStreaming_NoReservation_StillRecordsCompletedUsageEvent is the
+// regression guard for the second-round PR #602 finding that recordCompletedEvent
+// was gated on reservation.ID != "": when CreateReservation fails non-fatally
+// (a transient control-plane error stream.go explicitly tolerates so the
+// request can still complete), a normal completion must still record its
+// usage event instead of silently dropping the telemetry.
+func TestExecuteStreaming_NoReservation_StillRecordsCompletedUsageEvent(t *testing.T) {
+	rec := &accountingRecorder{}
+	acctSrv := newAccountingMockReservationFails(rec)
+	defer acctSrv.Close()
+
+	litellmSrv := completingSSEServer()
+	defer litellmSrv.Close()
+
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+
+	done, _ := runExecuteStreaming(orch, context.Background())
+	waitDone(t, done)
+
+	if rec.has("/internal/accounting/reservations/finalize") {
+		t.Error("no reservation was ever created: nothing to finalize")
+	}
+
+	body, ok := rec.find("/internal/usage/events")
+	if !ok {
+		t.Fatalf("expected the completed usage event to still be recorded even with no reservation; calls seen: %+v", rec.calls)
+	}
+	if body["event_type"] != "completed" {
+		t.Errorf("event_type = %v, want completed", body["event_type"])
 	}
 }
