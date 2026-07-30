@@ -110,9 +110,12 @@ Apptainer, which requires an Apptainer install and a built SIF on whatever
 host runs this process — not true of every `control-plane` deployment today
 (task tracked separately: "Live Apptainer validation of agent-engine on
 x86-64 host"). Without that env var, `NotConfiguredEngine` is still wired,
-preserving today's queued-forever-but-not-failed behavior exactly. `Service`
-and the HTTP surface do not change either way; only the `Engine`
-implementation passed to `NewService` does.
+and `Service.CreateTask` transitions the task immediately to `StatusFailed`
+with a sanitized generic customer message. Callers receive HTTP 201 with the
+failed task body rather than a queued task. Startup logs a WARN naming each
+empty `HIVE_AGENT_ENGINE_*` variable individually. The `Service` and HTTP
+surface do change in this scenario; the alternative is only the `Engine`
+implementation passed to `NewService`.
 
 **Implemented** (issue #311 follow-up): `Poller` (`poller.go`) periodically
 advances every active task past `running`. It lists queued/running tasks
