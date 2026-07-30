@@ -67,13 +67,17 @@ INSERT INTO public.metering_shadow_verdicts_retention_config (id, retention_days
 VALUES (1, 90)
 ON CONFLICT (id) DO NOTHING;
 
--- No SET search_path clause here: Postgres implements a procedure's SET
--- clause by wrapping the CALL in a sub-transaction to restore the setting
+-- search_path is pinned inside the procedure body (below), not as a SET
+-- clause on CREATE PROCEDURE: Postgres implements a procedure's SET clause
+-- by wrapping the CALL in a sub-transaction to restore the setting
 -- afterward, and that wrapper rejects a COMMIT inside the body ("invalid
 -- transaction termination") -- confirmed by hand against a live container,
--- see PR description. Every reference below is already schema-qualified
--- (public.metering_shadow_verdicts, public.metering_shadow_verdicts_
--- retention_config), so search_path pinning buys nothing here anyway.
+-- see PR description. Body-position SET coexists fine with the internal
+-- COMMIT (same trick already used below for lock_timeout), and it closes
+-- the defense-in-depth gap an unpinned path would leave: without it, a
+-- schema earlier on a caller's search_path could shadow an unqualified
+-- reference even though every table reference here is already schema
+-- qualified.
 CREATE OR REPLACE PROCEDURE public.purge_metering_shadow_verdicts(batch_size integer DEFAULT 500)
 LANGUAGE plpgsql
 AS $$
@@ -81,6 +85,7 @@ DECLARE
   window_days   integer;
   deleted_count integer;
 BEGIN
+  SET search_path = pg_catalog, pg_temp;
   SET lock_timeout = '5s';
 
   SELECT retention_days INTO window_days
