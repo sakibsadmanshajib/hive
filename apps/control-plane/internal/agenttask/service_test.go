@@ -151,8 +151,17 @@ func TestService_CreateTask_EngineLaunchSucceeds_TransitionsToRunning(t *testing
 	}
 }
 
-func TestService_CreateTask_EngineLaunchFails_TransitionsToFailed(t *testing.T) {
-	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{err: errors.New("sandbox unavailable")})
+// TestService_CreateTask_EngineLaunchFails_SanitizesErrorMessage guards the
+// PR #606 review finding: a generic Launch failure (anything but
+// ErrEngineNotConfigured) must never persist err.Error() verbatim into the
+// customer-visible error_message. That field is returned by the HTTP handler
+// (see http.go's taskResponse), so an arbitrary engine error carrying a
+// provider name, internal hostname, or upstream error body must never reach
+// it. The raw detail still needs to reach an operator (WarnContext log in
+// service.go's default case), just not this field.
+func TestService_CreateTask_EngineLaunchFails_SanitizesErrorMessage(t *testing.T) {
+	rawErr := "dial tcp acme-inference-provider.internal:443: connection refused"
+	svc := agenttask.NewService(newFakeRepository(), &fakeEngine{err: errors.New(rawErr)})
 	task, err := svc.CreateTask(context.Background(), uuid.New(), uuid.New(), agenttask.PackCoding, "")
 	if err != nil {
 		t.Fatalf("CreateTask() unexpected err: %v", err)
@@ -161,7 +170,14 @@ func TestService_CreateTask_EngineLaunchFails_TransitionsToFailed(t *testing.T) 
 		t.Errorf("expected StatusFailed, got %v", task.Status)
 	}
 	if task.ErrorMessage == "" {
-		t.Error("expected error_message to be recorded")
+		t.Fatal("expected error_message to be recorded")
+	}
+	if task.ErrorMessage == rawErr || strings.Contains(task.ErrorMessage, "acme-inference-provider") {
+		t.Errorf("error_message must stay provider-blind, not persist the raw engine error verbatim: %q", task.ErrorMessage)
+	}
+	const wantSanitized = "agent engine could not start the task"
+	if task.ErrorMessage != wantSanitized {
+		t.Errorf("expected sanitized error_message %q, got %q", wantSanitized, task.ErrorMessage)
 	}
 }
 

@@ -3,6 +3,7 @@ package agenttask
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
 )
@@ -33,6 +34,16 @@ func NewService(repo Repository, engine Engine) *Service {
 // WARN in cmd/server/main.go's buildAgentEngine, not here.
 const engineUnavailableMessage = "agent engine is not available on this deployment"
 
+// engineLaunchFailedMessage is the customer-visible error_message persisted
+// for every other Launch failure (anything but ErrEngineNotConfigured). Same
+// provider-blind rationale as engineUnavailableMessage above: an arbitrary
+// err.Error() from the Engine implementation can carry a provider name, an
+// internal hostname, or an upstream error body, none of which may reach a
+// customer-visible field. The real error still reaches the operator via the
+// WarnContext log in the default case below, it just never reaches the task
+// record.
+const engineLaunchFailedMessage = "agent engine could not start the task"
+
 // CreateTask persists a new task and attempts to hand it to the agent-engine.
 // Any Launch error, including ErrEngineNotConfigured, transitions the task
 // straight to StatusFailed so a caller never polls a task that can never
@@ -56,7 +67,9 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	case errors.Is(err, ErrEngineNotConfigured):
 		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", engineUnavailableMessage)
 	default:
-		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", err.Error())
+		slog.Default().WarnContext(ctx, "agenttask: launch failed, engine detail",
+			"task_id", t.ID, "error", err)
+		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", engineLaunchFailedMessage)
 	}
 }
 
