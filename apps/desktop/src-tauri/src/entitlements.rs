@@ -439,23 +439,25 @@ mod tests {
 
     // -- crypto provider (BLOCKER fix regression) ------------------------------
 
-    /// Mirrors main.rs's startup call. rustls 0.23 panics on the first TLS
-    /// handshake if more than one crypto provider is linked (both ring and
-    /// aws-lc-rs are, via Cargo feature unification -- see Cargo.toml) and
-    /// none was installed as the process default. cargo test runs every
-    /// test in this file in one process, so this may run after another test
-    /// already installed one; install_default's Err in that case is exactly
-    /// as fine as it is in main.rs, hence the same `let _ =`.
+    /// Goes through `ensure_crypto_provider()` -- the same helper
+    /// `mock_server()` and `unreachable_origin()` call -- rather than
+    /// installing the provider itself, so a regression in the helper (guard
+    /// logic removed, wrong provider, no-op closure) fails this test instead
+    /// of hiding behind a redundant direct install. `cargo test` runs every
+    /// test in this file in one process in an unspecified order, so this may
+    /// run after another test already drove the `Once`; that's fine, since
+    /// `ensure_crypto_provider()` only needs to guarantee a default provider
+    /// is installed by the time it returns, not that it was the one to
+    /// install it -- the assertions below hold either way.
     ///
     /// A full HTTPS round-trip against a local TLS test server (the
     /// reviewer's stronger option) is deliberately skipped: it needs a
     /// self-signed cert plus a cert-generation dependency neither this
     /// crate nor its dev-dependencies carry today, disproportionate for a
-    /// gap already closed by the single explicit install_default() call
-    /// this test exercises directly.
+    /// gap already closed by exercising the real installation path here.
     #[test]
     fn crypto_provider_installs_and_client_builds_deterministically() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        ensure_crypto_provider();
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
         assert!(build_client().is_ok());
     }
