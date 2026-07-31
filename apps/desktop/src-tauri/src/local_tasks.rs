@@ -133,7 +133,22 @@ where
     });
 
     match rx.recv_timeout(timeout) {
-        Ok(Ok(_child)) => Ok(()),
+        Ok(Ok(child)) => {
+            // `SandboxChild`'s own doc comment (windows.rs) requires the
+            // caller to "keep it alive for as long as the sandboxed task
+            // should run": its `Drop` closes the sole handle to a
+            // kill-on-close Job Object, which kills the whole process tree.
+            // This launcher has no completion tracking (see the module
+            // doc's "No completion tracking" note) -- there is no later
+            // point to hold `child` until -- so on the success path we
+            // forget it instead of letting it drop, which would otherwise
+            // kill the process this call just successfully launched. On
+            // Linux, `std::process::Child` here is spawned with inherited
+            // (not piped) stdio, so it owns no other resource forgetting
+            // would leak; this is a no-op there.
+            std::mem::forget(child);
+            Ok(())
+        }
         Ok(Err(e)) => Err(e),
         Err(_) => {
             thread::spawn(move || {
@@ -444,6 +459,11 @@ mod tests {
 
     struct FakeChild {
         killed: Arc<std::sync::atomic::AtomicBool>,
+        // Stands in for `SandboxChild`'s kill-on-drop Job Object: a real
+        // `Drop` side effect the success path must never trigger, since on
+        // Windows that side effect is "kill the process this call just
+        // launched" (see `spawn_with_timeout`'s success arm).
+        dropped: Option<Arc<std::sync::atomic::AtomicBool>>,
     }
 
     impl Killable for FakeChild {
@@ -452,14 +472,48 @@ mod tests {
         }
     }
 
+    impl Drop for FakeChild {
+        fn drop(&mut self) {
+            if let Some(dropped) = &self.dropped {
+                dropped.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
     #[test]
     fn spawn_with_timeout_returns_promptly_when_spawn_is_fast() {
         let result: Result<(), String> = spawn_with_timeout(Duration::from_secs(10), || {
             Ok(FakeChild {
                 killed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                dropped: None,
             })
         });
         assert_eq!(result, Ok(()));
+    }
+
+    #[test]
+    fn spawn_with_timeout_does_not_drop_the_child_on_success() {
+        // Regression guard for the P1 finding on PR #412: the success arm
+        // used to bind and immediately drop the child. On Windows that
+        // drop kills the whole process tree the call just launched (see
+        // the `Killable for SandboxChild` doc comment above). A fake
+        // `Drop` side effect stands in for that here since `SandboxChild`
+        // itself only exists under `cfg(windows)`.
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dropped_for_spawn = Arc::clone(&dropped);
+
+        let result: Result<(), String> = spawn_with_timeout(Duration::from_secs(10), move || {
+            Ok(FakeChild {
+                killed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                dropped: Some(dropped_for_spawn),
+            })
+        });
+
+        assert_eq!(result, Ok(()));
+        assert!(
+            !dropped.load(Ordering::SeqCst),
+            "success path must not drop the child"
+        );
     }
 
     #[test]
@@ -481,6 +535,7 @@ mod tests {
             thread::sleep(Duration::from_secs(2));
             Ok(FakeChild {
                 killed: killed_for_spawn,
+                dropped: None,
             })
         });
 
