@@ -204,6 +204,91 @@ func TestEnsureTenantBillingAccount_DoesNotMapWhileAMemberIsUnresolved(t *testin
 	require.False(t, ok)
 }
 
+// TestEnsureTenantBillingAccount_MapsOnceTheUnresolvedMemberAgrees is the
+// other half of the lifecycle review asked for: once the previously
+// unresolved member resolves to the SAME account as their co-member, a
+// second call maps the tenant. The guard blocks a premature decision, it
+// does not block the tenant from ever mapping.
+func TestEnsureTenantBillingAccount_MapsOnceTheUnresolvedMemberAgrees(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	tenantID := mustInsertBillingMapTenant(t, ctx, pool, "HIVE_CLOUD")
+	accountID := mustInsertBillingMapAccount(t, ctx, pool)
+	mustAddBillingMapMember(t, ctx, pool, tenantID, accountID) // resolved
+	secondUserID := mustInsertBillingMapAuthUser(t, ctx, pool) // not yet
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.tenant_users(tenant_id, user_id, role, status) VALUES ($1, $2, 'MEMBER', 'ACTIVE')`,
+		tenantID, secondUserID)
+	require.NoError(t, err)
+
+	mapped, _, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.False(t, mapped, "must not map while the second member is still unresolved")
+
+	// The second member now resolves onto the SAME account as the first.
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.account_memberships(account_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`,
+		accountID, secondUserID)
+	require.NoError(t, err)
+
+	mapped, reason, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.True(t, mapped, "both members now agree on one account, this must map")
+	require.Empty(t, reason)
+
+	mappedAccount, ok := billingMappedAccount(t, ctx, pool, tenantID)
+	require.True(t, ok)
+	require.Equal(t, accountID, mappedAccount)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, tenantID)
+	})
+}
+
+// TestEnsureTenantBillingAccount_StaysUnmappedIfTheUnresolvedMemberDisagrees
+// is the counter-case: if the previously unresolved member resolves to a
+// DIFFERENT account than their co-member, the tenant is genuinely ambiguous
+// and must stay unmapped, not guess. This is exactly the wrong-account
+// mapping the guard exists to prevent — without it, this tenant would have
+// locked onto the first member's account before the second member's account
+// ever existed to disagree.
+func TestEnsureTenantBillingAccount_StaysUnmappedIfTheUnresolvedMemberDisagrees(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	tenantID := mustInsertBillingMapTenant(t, ctx, pool, "HIVE_CLOUD")
+	firstAccount := mustInsertBillingMapAccount(t, ctx, pool)
+	mustAddBillingMapMember(t, ctx, pool, tenantID, firstAccount) // resolved
+	secondUserID := mustInsertBillingMapAuthUser(t, ctx, pool)    // not yet
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.tenant_users(tenant_id, user_id, role, status) VALUES ($1, $2, 'MEMBER', 'ACTIVE')`,
+		tenantID, secondUserID)
+	require.NoError(t, err)
+
+	mapped, _, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.False(t, mapped, "must not map while the second member is still unresolved")
+
+	// The second member resolves onto a DIFFERENT account.
+	secondAccount := mustInsertBillingMapAccount(t, ctx, pool)
+	_, err = pool.Exec(ctx,
+		`INSERT INTO public.account_memberships(account_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`,
+		secondAccount, secondUserID)
+	require.NoError(t, err)
+
+	mapped, reason, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.False(t, mapped, "the two members now disagree, this tenant is ambiguous and must not guess")
+	require.Contains(t, reason, "no_unambiguous_candidate")
+
+	_, ok := billingMappedAccount(t, ctx, pool, tenantID)
+	require.False(t, ok)
+}
+
 // TestEnsureTenantBillingAccount_MapsEnterpriseTenant proves the function is
 // deployment-agnostic, as its doc claims: an ENTERPRISE_EDGE tenant with one
 // unambiguous account maps exactly like a HIVE_CLOUD one. The scoping that
