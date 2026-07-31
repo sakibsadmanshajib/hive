@@ -774,18 +774,34 @@ func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Han
 		}
 
 		// API-key caller: valid API key required to list models, even if not
-		// binding to a specific alias. These principals are account-scoped, not
-		// tenant-scoped, so there is no tenant to filter on and the key policy
-		// allowlist governs what they may actually invoke.
+		// binding to a specific alias. D-030 resolves a tenant for every
+		// API-key account (public.tenant_billing_accounts), so this now
+		// serves the same tenant-filtered list the JWT-session branch above
+		// does, built from the same visibility predicate the admin toggle
+		// writes -- rather than the unfiltered catalog every API key saw
+		// before this. The key policy allowlist still governs what the key
+		// may actually invoke on top of that.
 		//
 		// The OWUI shim key lands here too and is resolved exactly like any
-		// other API key. Tenant-filtering that surface needs the shim to carry
-		// a tenant, which is the shim-auth work tracked separately.
-		if _, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0); !ok {
+		// other API key.
+		authSnap, ok := authorizeAliasRequest(w, r, authorizer, "", 0, 0, 0)
+		if !ok {
 			return
 		}
 
-		snapshot, err := client.FetchSnapshot(r.Context())
+		tenantID, err := uuid.Parse(authSnap.TenantID)
+		if err != nil || tenantID == uuid.Nil {
+			// Fail closed: an API key whose account has no resolvable tenant
+			// cannot be filtered by entitlement at all, so it gets nothing
+			// rather than the pre-D-030 unfiltered catalog (mirrors
+			// inference.Orchestrator.selectRoute's ErrAccountNotProvisioned).
+			code := "account_not_provisioned"
+			apierrors.WriteError(w, http.StatusForbidden, "invalid_request_error",
+				"This API key's account is not yet linked to a workspace. Contact support to complete account setup.", &code)
+			return
+		}
+
+		snapshot, err := client.FetchSnapshotForTenant(r.Context(), tenantID)
 		if err != nil {
 			writeCatalogUnavailable(w)
 			return

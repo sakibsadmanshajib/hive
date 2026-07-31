@@ -17,6 +17,7 @@ type stubRepo struct {
 	accountRatePolicy map[uuid.UUID]RatePolicy
 	keyRatePolicy     map[uuid.UUID]RatePolicy
 	keyLimits         map[uuid.UUID]KeyLimits
+	tenantByAccount   map[uuid.UUID]uuid.UUID
 	events            []KeyEvent
 }
 
@@ -28,6 +29,7 @@ func newStubRepo() *stubRepo {
 		accountRatePolicy: make(map[uuid.UUID]RatePolicy),
 		keyRatePolicy:     make(map[uuid.UUID]RatePolicy),
 		keyLimits:         make(map[uuid.UUID]KeyLimits),
+		tenantByAccount:   make(map[uuid.UUID]uuid.UUID),
 	}
 }
 
@@ -256,6 +258,10 @@ func (r *stubRepo) GetAccountRatePolicy(_ context.Context, accountID uuid.UUID) 
 		return policy, nil
 	}
 	return defaultRatePolicy(), nil
+}
+
+func (r *stubRepo) GetTenantIDByAccountID(_ context.Context, accountID uuid.UUID) (uuid.UUID, error) {
+	return r.tenantByAccount[accountID], nil
 }
 
 func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error {
@@ -910,6 +916,67 @@ func TestResolveSnapshotReturnsSeparateAccountAndKeyRatePolicies(t *testing.T) {
 	}
 	if snapshot.AccountRatePolicy.RateLimitRPM == snapshot.KeyRatePolicy.RateLimitRPM {
 		t.Fatal("expected account and key rate policies to remain distinct")
+	}
+}
+
+// TestResolveSnapshotIncludesMappedTenantID is the D-030 regression guard:
+// ResolveSnapshot must bind the tenant that bills the key's account (via
+// GetTenantIDByAccountID / public.tenant_billing_accounts) onto the
+// snapshot, so edge-api can finally enforce tenant-scoped model
+// entitlement for API-key traffic the same way it already does for JWT
+// sessions.
+func TestResolveSnapshotIncludesMappedTenantID(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+	tenantID := uuid.New()
+	repo.tenantByAccount[accountID] = tenantID
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "tenant-mapped",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.TenantID != tenantID {
+		t.Fatalf("expected tenant_id %s, got %s", tenantID, snapshot.TenantID)
+	}
+}
+
+// TestResolveSnapshotReturnsNilTenantIDWhenAccountUnmapped covers the
+// residual case (an account with no public.tenant_billing_accounts row,
+// e.g. ambiguous multi-account tenants the backfill migration left
+// unmapped): ResolveSnapshot itself still succeeds -- an unmapped tenant is
+// not an error here -- it is edge-api's consumers (handleModels,
+// inference.Orchestrator.selectRoute) that fail the request closed on a
+// uuid.Nil TenantID.
+func TestResolveSnapshotReturnsNilTenantIDWhenAccountUnmapped(t *testing.T) {
+	repo := newStubRepo()
+	svc := NewService(repo)
+
+	accountID := uuid.New()
+	actorID := uuid.New()
+
+	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
+		Nickname: "tenant-unmapped",
+	})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+
+	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
+	if err != nil {
+		t.Fatalf("ResolveSnapshot: %v", err)
+	}
+	if snapshot.TenantID != uuid.Nil {
+		t.Fatalf("expected uuid.Nil tenant_id for an unmapped account, got %s", snapshot.TenantID)
 	}
 }
 

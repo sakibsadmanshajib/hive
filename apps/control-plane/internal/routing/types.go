@@ -9,12 +9,17 @@ import (
 type SelectionInput struct {
 	AliasID string
 	// TenantID scopes the selection to one tenant's model entitlement. It is
-	// filled from the authenticated request context by the caller (edge-api
-	// derives it from auth.TenantID(ctx)), never from client input.
+	// filled from the authenticated request context by the caller: edge-api
+	// derives it from auth.TenantID(ctx) for JWT sessions, or from the
+	// API-key's resolved tenant (authz.AuthSnapshot.TenantID, D-030) via
+	// Orchestrator.selectRoute for API-key requests. Never from client input.
 	//
-	// uuid.Nil means the principal is not tenant-scoped: API keys hang off
-	// accounts, and the batch executor runs per account, so those selections are
-	// governed by the key policy allowlist rather than tenant visibility.
+	// uuid.Nil means no tenant could be bound: the batch executor runs per
+	// account and never resolves one, and an API key whose account has no
+	// tenant_billing_accounts row fails closed before ever reaching here
+	// (edge-api refuses the request itself -- see
+	// inference.ErrAccountNotProvisioned) rather than falling through to
+	// this uuid.Nil skip-entitlement path.
 	TenantID            uuid.UUID
 	NeedResponses       bool
 	NeedChatCompletions bool

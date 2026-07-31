@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -62,14 +63,22 @@ func (o *Orchestrator) executeResponsesStreaming(
 	}
 
 	// 2. Select route
-	route, err := o.routing.SelectRoute(ctx, SelectRouteInput{
+	route, err := o.selectRoute(ctx, snapshot, SelectRouteInput{
 		AliasID:             model,
 		NeedResponses:       needFlags.NeedResponses,
 		NeedChatCompletions: needFlags.NeedChatCompletions,
-		NeedStreaming:        needFlags.NeedStreaming,
-		NeedReasoning:        needFlags.NeedReasoning,
+		NeedStreaming:       needFlags.NeedStreaming,
+		NeedReasoning:       needFlags.NeedReasoning,
 	})
 	if err != nil {
+		if errors.Is(err, ErrAccountNotProvisioned) {
+			writeAccountNotProvisionedError(w)
+			return
+		}
+		if errors.Is(err, ErrModelNotEntitled) {
+			writeModelNotEntitledError(w, model)
+			return
+		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "not found") {
 			writeModelNotFoundError(w, model)

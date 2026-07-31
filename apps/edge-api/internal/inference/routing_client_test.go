@@ -98,6 +98,52 @@ func TestSelectRouteIgnoresCallerSuppliedTenant(t *testing.T) {
 	}
 }
 
+// TestSelectRouteBindsAPIKeyTenantWhenNoJWTPrincipal covers D-030: an
+// API-key request carries no JWT auth.User, so auth.TenantID(ctx) is always
+// uuid.Nil for it. Orchestrator.selectRoute binds the key's resolved tenant
+// via withAPIKeyTenant before ever reaching here; that must land on the wire
+// the same way a JWT-session tenant does, so the control-plane entitlement
+// check (routing.Service.SelectRoute) -- previously unreachable for API-key
+// traffic -- actually runs.
+func TestSelectRouteBindsAPIKeyTenantWhenNoJWTPrincipal(t *testing.T) {
+	var captured map[string]any
+	srv := captureRoutingServer(t, &captured, http.StatusOK)
+	client := NewRoutingClient(srv.URL)
+
+	tenantID := uuid.New()
+	ctx := withAPIKeyTenant(context.Background(), tenantID)
+
+	if _, err := client.SelectRoute(ctx, SelectRouteInput{AliasID: "hive-fast"}); err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+
+	if got := captured["tenant_id"]; got != tenantID.String() {
+		t.Fatalf("expected tenant_id %q on the wire, got %v", tenantID.String(), got)
+	}
+}
+
+// TestSelectRouteJWTTenantWinsOverAPIKeyTenant pins the precedence order if
+// both sources are ever present on ctx (the two auth paths are mutually
+// exclusive in production, so this should never happen, but the precedence
+// itself must stay deterministic rather than accidental).
+func TestSelectRouteJWTTenantWinsOverAPIKeyTenant(t *testing.T) {
+	var captured map[string]any
+	srv := captureRoutingServer(t, &captured, http.StatusOK)
+	client := NewRoutingClient(srv.URL)
+
+	jwtTenant := uuid.New()
+	ctx := auth.WithUser(context.Background(), &auth.User{ID: uuid.New(), TenantID: jwtTenant})
+	ctx = withAPIKeyTenant(ctx, uuid.New())
+
+	if _, err := client.SelectRoute(ctx, SelectRouteInput{AliasID: "hive-fast"}); err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+
+	if got := captured["tenant_id"]; got != jwtTenant.String() {
+		t.Fatalf("expected the JWT-session tenant %q to win, got %v", jwtTenant.String(), got)
+	}
+}
+
 // TestSelectRouteMapsForbiddenToErrModelNotEntitled lets callers distinguish an
 // entitlement refusal from a transport failure, which would otherwise surface as
 // a transient 503.

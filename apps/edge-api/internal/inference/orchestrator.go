@@ -2,6 +2,7 @@ package inference
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -33,6 +34,31 @@ func NewOrchestrator(authorizer *authz.Authorizer, routing *RoutingClient, accou
 
 // dispatchFunc dispatches a request to LiteLLM and returns the raw response.
 type dispatchFunc func(ctx context.Context, litellmModel string, body []byte) (*http.Response, error)
+
+// selectRoute resolves a route for an API-key-authenticated request. It binds
+// snapshot.TenantID (D-030: resolved by control-plane's
+// apikeys.Service.ResolveSnapshot from public.tenant_billing_accounts) onto
+// ctx before delegating to the routing client, so the tenant-scoped
+// entitlement check inside routing.Service.SelectRoute -- previously
+// unreachable for API-key traffic, since RoutingClient.SelectRoute only ever
+// read auth.TenantID(ctx), which JWT middleware populates but the API-key
+// path never touches -- runs the same way it already does for JWT sessions.
+//
+// A key whose account has no resolvable tenant fails closed (returns
+// ErrAccountNotProvisioned before ever calling the routing client) rather
+// than falling back to the pre-D-030 unfiltered behavior: without a tenant
+// the entitlement check cannot run at all, so admitting the request would
+// silently reopen the exact gap this exists to close. All three inference
+// entry points (executeSync, executeStreaming, executeResponsesStreaming)
+// route through here rather than calling o.routing.SelectRoute directly, so
+// tenant binding and the fail-closed check happen exactly once.
+func (o *Orchestrator) selectRoute(ctx context.Context, snapshot authz.AuthSnapshot, input SelectRouteInput) (SelectRouteResult, error) {
+	tenantID, err := uuid.Parse(snapshot.TenantID)
+	if err != nil || tenantID == uuid.Nil {
+		return SelectRouteResult{}, ErrAccountNotProvisioned
+	}
+	return o.routing.SelectRoute(withAPIKeyTenant(ctx, tenantID), input)
+}
 
 // normalizeFunc normalizes a LiteLLM response: strips provider fields, extracts usage.
 type normalizeFunc func(respBody []byte, aliasID string) ([]byte, *UsageResponse, error)
@@ -70,16 +96,24 @@ func (o *Orchestrator) executeSync(
 	}
 
 	// 2. Select route
-	route, err := o.routing.SelectRoute(ctx, SelectRouteInput{
+	route, err := o.selectRoute(ctx, snapshot, SelectRouteInput{
 		AliasID:             model,
 		NeedChatCompletions: needFlags.NeedChatCompletions,
 		NeedResponses:       needFlags.NeedResponses,
 		NeedEmbeddings:      needFlags.NeedEmbeddings,
-		NeedStreaming:        needFlags.NeedStreaming,
-		NeedReasoning:        needFlags.NeedReasoning,
+		NeedStreaming:       needFlags.NeedStreaming,
+		NeedReasoning:       needFlags.NeedReasoning,
 		RequireToolCapable:  needFlags.RequireToolCapable,
 	})
 	if err != nil {
+		if errors.Is(err, ErrAccountNotProvisioned) {
+			writeAccountNotProvisionedError(w)
+			return
+		}
+		if errors.Is(err, ErrModelNotEntitled) {
+			writeModelNotEntitledError(w, model)
+			return
+		}
 		errMsg := err.Error()
 		if strings.Contains(errMsg, "404") || strings.Contains(errMsg, "not found") {
 			writeModelNotFoundError(w, model)

@@ -159,6 +159,7 @@ func newAuthorizedOrchestrator(acctURL, routingURL, litellmURL string) *Orchestr
 			return authz.AuthSnapshot{
 				KeyID:          "key-test-1",
 				AccountID:      "acct-test-1",
+				TenantID:       "11111111-1111-1111-1111-111111111111",
 				Status:         "active",
 				AllowAllModels: true,
 				BudgetKind:     "none",
