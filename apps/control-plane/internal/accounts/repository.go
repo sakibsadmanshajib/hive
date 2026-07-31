@@ -2,9 +2,11 @@ package accounts
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -12,6 +14,7 @@ import (
 // The concrete pgxRepository uses pgx/v5 against Supabase Postgres.
 type Repository interface {
 	ListMembershipsByUserID(ctx context.Context, userID uuid.UUID) ([]Membership, error)
+	ActiveTenantID(ctx context.Context, userID uuid.UUID) (uuid.UUID, bool, error)
 	CreateAccount(ctx context.Context, acct Account) error
 	CreateMembership(ctx context.Context, m Membership) error
 	CreateProfile(ctx context.Context, p AccountProfile) error
@@ -63,6 +66,39 @@ func (r *pgxRepository) ListMembershipsByUserID(ctx context.Context, userID uuid
 		memberships = append(memberships, m)
 	}
 	return memberships, rows.Err()
+}
+
+// ActiveTenantID reports the tenant userID holds an ACTIVE tenant_users row
+// on (joined to a non-archived tenant), if any. Mirrors the predicate
+// signup.Provisioner.activeMembership and public.custom_access_token_hook
+// use, so "has a tenant" means the same thing everywhere. Used opportunistically
+// by provisionDefaultWorkspace to retry the tenant billing account mapping
+// once the account side of that pairing exists — see
+// signup.EnsureTenantBillingAccount's doc for why both sides need to try.
+//
+// A user who belongs to more than one tenant (an edge case, not the common
+// "one org = one tenant" shape) gets an arbitrary one of them here: this is a
+// best-effort retry, not the sole mapping mechanism, so missing a second
+// tenant on that rare path is not a correctness gap — the backfill migrations
+// and signup.Provisioner's own call remain the paths of record.
+func (r *pgxRepository) ActiveTenantID(ctx context.Context, userID uuid.UUID) (uuid.UUID, bool, error) {
+	var tenantID uuid.UUID
+	err := r.pool.QueryRow(ctx, `
+		SELECT tu.tenant_id
+		  FROM public.tenant_users tu
+		  JOIN public.tenants t ON t.id = tu.tenant_id
+		 WHERE tu.user_id = $1
+		   AND tu.status = 'ACTIVE'
+		   AND t.archived_at IS NULL
+		 LIMIT 1
+	`, userID).Scan(&tenantID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, false, nil
+		}
+		return uuid.Nil, false, err
+	}
+	return tenantID, true, nil
 }
 
 func (r *pgxRepository) CreateAccount(ctx context.Context, acct Account) error {

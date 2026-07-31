@@ -318,6 +318,10 @@ func main() {
 
 		accountsRepo := accounts.NewPgxRepository(pool)
 		accountsSvc = accounts.NewService(accountsRepo)
+		// Lets a fresh personal workspace's account_membership retry the
+		// tenant_billing_accounts mapping right after it lands — the other
+		// half of the creation-path race fix in signup.EnsureTenantBillingAccount.
+		accountsSvc = accountsSvc.WithBillingPool(pool)
 		accountsHandler = accounts.NewHandler(accountsSvc)
 
 		catalogRepo := catalog.NewPgxRepository(pool)

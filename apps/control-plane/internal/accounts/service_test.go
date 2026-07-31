@@ -13,20 +13,22 @@ import (
 // --- stub repository ---
 
 type stubRepo struct {
-	memberships  []accounts.Membership
-	accountsMap  map[uuid.UUID]*accounts.Account
-	invitations  map[string]*accounts.Invitation // token -> invitation
-	profiles     map[uuid.UUID]*accounts.AccountProfile
-	emails       map[uuid.UUID]string // user id -> auth.users email
-	acceptCalled bool
+	memberships   []accounts.Membership
+	accountsMap   map[uuid.UUID]*accounts.Account
+	invitations   map[string]*accounts.Invitation // token -> invitation
+	profiles      map[uuid.UUID]*accounts.AccountProfile
+	emails        map[uuid.UUID]string    // user id -> auth.users email
+	activeTenants map[uuid.UUID]uuid.UUID // user id -> tenant id, for ActiveTenantID
+	acceptCalled  bool
 }
 
 func newStubRepo() *stubRepo {
 	return &stubRepo{
-		accountsMap: make(map[uuid.UUID]*accounts.Account),
-		invitations: make(map[string]*accounts.Invitation),
-		profiles:    make(map[uuid.UUID]*accounts.AccountProfile),
-		emails:      make(map[uuid.UUID]string),
+		accountsMap:   make(map[uuid.UUID]*accounts.Account),
+		invitations:   make(map[string]*accounts.Invitation),
+		profiles:      make(map[uuid.UUID]*accounts.AccountProfile),
+		emails:        make(map[uuid.UUID]string),
+		activeTenants: make(map[uuid.UUID]uuid.UUID),
 	}
 }
 
@@ -38,6 +40,11 @@ func (s *stubRepo) ListMembershipsByUserID(_ context.Context, userID uuid.UUID) 
 		}
 	}
 	return result, nil
+}
+
+func (s *stubRepo) ActiveTenantID(_ context.Context, userID uuid.UUID) (uuid.UUID, bool, error) {
+	tenantID, ok := s.activeTenants[userID]
+	return tenantID, ok, nil
 }
 
 func (s *stubRepo) CreateAccount(_ context.Context, acct accounts.Account) error {

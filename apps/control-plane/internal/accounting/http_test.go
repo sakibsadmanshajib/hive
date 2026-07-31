@@ -54,6 +54,10 @@ func (s *accountsRepoStub) ListMembershipsByUserID(_ context.Context, userID uui
 	return memberships, nil
 }
 
+func (s *accountsRepoStub) ActiveTenantID(_ context.Context, _ uuid.UUID) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, nil
+}
+
 func (s *accountsRepoStub) CreateAccount(_ context.Context, acct accounts.Account) error {
 	s.accountsMap[acct.ID] = &acct
 	return nil
