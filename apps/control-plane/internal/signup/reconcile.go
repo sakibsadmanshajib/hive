@@ -352,20 +352,32 @@ func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID u
 // and succeeds. Both callers hit the same idempotent, conservative predicate,
 // so calling it twice for the same tenant is always safe.
 //
-// A mapping is resolvable when tenantID has no mapping yet and every ACTIVE
-// member of the tenant, across all of them, converges on exactly one
-// distinct ACTIVE account membership. Unlike the single-member restriction
-// this function used to enforce, a tenant that already has two or more
-// members is still eligible as long as they agree — that is the same
-// predicate the backfill migrations use, so a tenant this function cannot map
-// today (because the second member hasn't reconciled yet, or the account
-// side of the race hasn't landed) becomes mappable the next time either
-// caller runs for it, rather than being permanently excluded after its first
-// member. Per D-005, this function does NOT fall back to picking an account
-// by owner_user_id, and does NOT create a new account: an unresolvable
-// tenant is left unmapped, exactly like the backfill migrations leave
-// ambiguous tenants unmapped, and surfaces the same way (the metering gate's
-// fail-closed 403, not silently here).
+// A mapping is resolvable when tenantID has no mapping yet, every ACTIVE
+// member of the tenant has an ACTIVE account membership (no stragglers still
+// mid-provisioning — see the unresolvedMembers check below), and all of
+// those memberships converge on exactly one distinct account. Unlike the
+// single-member restriction this function used to enforce, a tenant that
+// already has two or more members is still eligible as long as they agree —
+// that is the same predicate the backfill migrations use, so a tenant this
+// function cannot map today (because a member hasn't reconciled yet, or the
+// account side of the race hasn't landed for one of them) becomes mappable
+// the next time either caller runs for it, rather than being permanently
+// excluded after its first member. Per D-005, this function does NOT fall
+// back to picking an account by owner_user_id, and does NOT create a new
+// account: an unresolvable tenant is left unmapped, exactly like the
+// backfill migrations leave ambiguous tenants unmapped, and surfaces the
+// same way (the metering gate's fail-closed 403, not silently here).
+//
+// Deployment-agnostic by construction: this function has never filtered on
+// tenants.deployment, it only ever operates on the tenantID its caller
+// already resolved. Both call sites (signup.Provisioner and
+// accounts.Service.provisionDefaultWorkspace) already invoke it for every
+// tenant regardless of deployment, so Enterprise (ENTERPRISE_EDGE) tenants
+// were always reachable here — the deployment scoping lived only in the
+// backfill migrations, not in this function. See
+// 20260731_02_tenant_billing_account_all_deployments.sql for why extending
+// the sweep to non-Cloud tenants reuses this same table rather than adding a
+// second one.
 //
 // Never fatal, but a miss is never invisible either: the old version's
 // INSERT could match zero rows and return a nil error with no trace anywhere
@@ -389,19 +401,35 @@ func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantI
 	}
 
 	var candidateAccountID *uuid.UUID
-	var distinctAccounts int
+	var distinctAccounts, unresolvedMembers int
 	if err := pool.QueryRow(ctx, `
 		SELECT
 			(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1],
-			count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL)
+			count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL),
+			count(*) FILTER (WHERE am.account_id IS NULL)
 		FROM public.tenant_users tu
 		LEFT JOIN public.account_memberships am
 		  ON am.user_id = tu.user_id
 		 AND am.status = 'active'
 		WHERE tu.tenant_id = $1
 		  AND tu.status = 'ACTIVE'
-	`, tenantID).Scan(&candidateAccountID, &distinctAccounts); err != nil {
+	`, tenantID).Scan(&candidateAccountID, &distinctAccounts, &unresolvedMembers); err != nil {
 		return false, "", fmt.Errorf("resolve billing mapping candidate: %w", err)
+	}
+	// An ACTIVE tenant_users row with no account_memberships match yet (the
+	// LEFT JOIN produced no am row) is invisible to the two counts above, not
+	// absent from the tenant. Per review (CodeRabbit, verified independently
+	// 2026-07-31): without this check, a multi-member tenant with one
+	// resolved member and one not-yet-resolved member reads as
+	// distinct_accounts=1 and gets mapped to the resolved member's account.
+	// If the unresolved member later provisions a DIFFERENT account, that
+	// mapping is already locked in (alreadyMapped short-circuits every future
+	// call, on both sides of the pairing) with no way back. Treat any
+	// unresolved active member as "not converged yet" regardless of what
+	// distinctAccounts currently reads, exactly like the single-member,
+	// zero-account case already does.
+	if unresolvedMembers > 0 {
+		return false, fmt.Sprintf("unresolved_members_pending count=%d", unresolvedMembers), nil
 	}
 	if distinctAccounts != 1 || candidateAccountID == nil {
 		return false, fmt.Sprintf("no_unambiguous_candidate distinct_accounts=%d", distinctAccounts), nil

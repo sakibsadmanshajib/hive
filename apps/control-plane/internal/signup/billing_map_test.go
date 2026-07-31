@@ -165,3 +165,68 @@ func TestEnsureTenantBillingAccount_LeavesAccountAlreadyClaimedByAnotherTenantUn
 	_, ok = billingMappedAccount(t, ctx, pool, secondTenant)
 	require.False(t, ok, "an account already funding a different tenant must not be claimed twice")
 }
+
+// mustAddUnresolvedBillingMapMember adds an ACTIVE tenant_users row for a
+// brand-new user with NO account_memberships row at all — the "still
+// mid-provisioning" member the CodeRabbit-flagged convergence guard exists
+// for.
+func mustAddUnresolvedBillingMapMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) {
+	t.Helper()
+	userID := mustInsertBillingMapAuthUser(t, ctx, pool)
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.tenant_users(tenant_id, user_id, role, status) VALUES ($1, $2, 'MEMBER', 'ACTIVE')`,
+		tenantID, userID)
+	require.NoError(t, err)
+}
+
+// TestEnsureTenantBillingAccount_DoesNotMapWhileAMemberIsUnresolved is the
+// regression guard for the gap CodeRabbit found in review and this test
+// author independently reproduced: a resolved member must not "win" the
+// tenant's billing account while a co-member is still mid-provisioning,
+// because once mapped neither call site ever revisits the decision.
+func TestEnsureTenantBillingAccount_DoesNotMapWhileAMemberIsUnresolved(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	tenantID := mustInsertBillingMapTenant(t, ctx, pool, "HIVE_CLOUD")
+	accountID := mustInsertBillingMapAccount(t, ctx, pool)
+	mustAddBillingMapMember(t, ctx, pool, tenantID, accountID) // resolved
+	mustAddUnresolvedBillingMapMember(t, ctx, pool, tenantID)  // not yet
+
+	mapped, reason, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.False(t, mapped, "must not lock in the resolved member's account while a co-member is still unresolved")
+	require.Contains(t, reason, "unresolved_members_pending")
+
+	_, ok := billingMappedAccount(t, ctx, pool, tenantID)
+	require.False(t, ok)
+}
+
+// TestEnsureTenantBillingAccount_MapsEnterpriseTenant proves the function is
+// deployment-agnostic, as its doc claims: an ENTERPRISE_EDGE tenant with one
+// unambiguous account maps exactly like a HIVE_CLOUD one. The scoping that
+// excluded Enterprise lived only in the backfill migrations, not here.
+func TestEnsureTenantBillingAccount_MapsEnterpriseTenant(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	tenantID := mustInsertBillingMapTenant(t, ctx, pool, "ENTERPRISE_EDGE")
+	accountID := mustInsertBillingMapAccount(t, ctx, pool)
+	mustAddBillingMapMember(t, ctx, pool, tenantID, accountID)
+
+	mapped, reason, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.True(t, mapped)
+	require.Empty(t, reason)
+
+	mappedAccount, ok := billingMappedAccount(t, ctx, pool, tenantID)
+	require.True(t, ok)
+	require.Equal(t, accountID, mappedAccount)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, tenantID)
+	})
+}
