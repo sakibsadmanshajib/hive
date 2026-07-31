@@ -6,14 +6,18 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 	"unicode"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/authz"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 )
 
 // Service encapsulates all accounts business logic.
@@ -21,6 +25,7 @@ type Service struct {
 	repo    Repository
 	policy  authz.Policy
 	roleSvc *platform.RoleService // optional — see WithRoleService
+	billing *pgxpool.Pool         // optional — see WithBillingPool
 }
 
 // NewService returns a new accounts Service.
@@ -38,6 +43,20 @@ func NewService(repo Repository) *Service {
 func (s *Service) WithRoleService(roleSvc *platform.RoleService) *Service {
 	cloned := *s
 	cloned.roleSvc = roleSvc
+	return &cloned
+}
+
+// WithBillingPool returns a copy of the Service wired with a pool so
+// provisionDefaultWorkspace can opportunistically retry the tenant billing
+// account mapping (signup.EnsureTenantBillingAccount) right after it creates
+// the account_membership row that mapping depends on. Without it, that retry
+// is skipped and only signup.Provisioner's own call site (which can run
+// before this account exists) and the periodic backfill migration attempt the
+// mapping. See EnsureTenantBillingAccount's doc for why both call sites
+// exist.
+func (s *Service) WithBillingPool(pool *pgxpool.Pool) *Service {
+	cloned := *s
+	cloned.billing = pool
 	return &cloned
 }
 
@@ -170,6 +189,27 @@ func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Vie
 	}
 	if err := s.repo.CreateProfile(ctx, profile); err != nil {
 		return fmt.Errorf("accounts: create account profile: %w", err)
+	}
+
+	// Best-effort and non-fatal, mirroring signup.Provisioner's own contract:
+	// a billing-account gap is caught later by the metering gate's fail-closed
+	// check, so it must never block workspace creation. This is the second
+	// half of the tenant_users/account_memberships race described on
+	// signup.EnsureTenantBillingAccount, and the one that logs on a miss:
+	// signup.Provisioner's own call site usually runs first and finds nothing
+	// most of the time (this account_membership row often doesn't exist yet),
+	// so a WARN there would be noise. A miss here means both halves of the
+	// pairing have now had their turn, which is the genuinely informative case.
+	if s.billing != nil {
+		if tenantID, ok, tErr := s.repo.ActiveTenantID(ctx, viewer.UserID); tErr != nil {
+			log.Printf("accounts: tenant lookup for billing mapping failed user=%s: %v", viewer.UserID, tErr)
+		} else if ok {
+			if mapped, reason, mErr := signup.EnsureTenantBillingAccount(ctx, s.billing, tenantID); mErr != nil {
+				log.Printf("accounts: tenant billing account lookup failed tenant=%s: %v", tenantID, mErr)
+			} else if !mapped {
+				log.Printf("accounts: tenant billing account still unmapped after workspace provisioning tenant=%s reason=%s", tenantID, reason)
+			}
+		}
 	}
 
 	return nil

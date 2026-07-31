@@ -38,6 +38,7 @@ import (
 	"log"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
 )
@@ -312,66 +313,141 @@ func (p *Provisioner) provision(ctx context.Context, tenantID uuid.UUID, in Reco
 	return nil
 }
 
-// ensureTenantBillingAccount maps tenantID to a billing account in
+// ensureTenantBillingAccount maps tenantID to a billing account by delegating
+// to the exported EnsureTenantBillingAccount, over this Provisioner's own
+// pool. See that function's doc for the mapping rule.
+//
+// Deliberately does not log on a miss here. This is usually the first of the
+// two racing call sites to run (see EnsureTenantBillingAccount's doc), so a
+// miss here is the expected, common, temporary state, not a failure — the
+// accounts package's call site is where a miss is worth a signal.
+func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID uuid.UUID) error {
+	_, _, err := EnsureTenantBillingAccount(ctx, p.deps.Pool, tenantID)
+	return err
+}
+
+// EnsureTenantBillingAccount maps tenantID to a billing account in
 // public.tenant_billing_accounts, the table introduced by migration
 // 20260728_01_tenant_billing_account.sql (vault
 // spec-2026-07-28-backend-metering.md section 3.2). It is deliberately
-// conservative and mirrors the one-time backfill migration
-// (20260728_03_tenant_billing_account_backfill.sql) rather than inventing a
+// conservative and mirrors the backfill migrations
+// (20260728_03_tenant_billing_account_backfill.sql and
+// 20260731_01_tenant_billing_account_backfill_v2.sql) rather than inventing a
 // second rule: a mapping is only ever created when it is unambiguous, never
 // guessed.
 //
-// A mapping is resolvable here in exactly one case: tenantID has no mapping
-// yet, and the member just reconciled is its only ACTIVE member, and that
-// member holds exactly one ACTIVE account membership. That combination can
-// only occur the first time anyone is reconciled into a brand new tenant, so
-// "their one account becomes the tenant's account" is a fact about the data,
-// not a per-request policy choice, and it never runs again once a tenant has
-// a second member. Per D-005, this function does NOT fall back to picking an
-// account by owner_user_id, and does NOT create a new account: an
-// unresolvable tenant is left unmapped, exactly like the backfill migration
-// leaves ambiguous tenants unmapped, and surfaces the same way (the metering
-// gate's fail-closed 403 once that ships, not silently here).
-func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID uuid.UUID) error {
+// Exported so more than one creation path can attempt it. tenant_users rows
+// and account_memberships rows are written by two different, independently
+// timed processes (Reconcile attaches a user to a tenant; the accounts
+// package lazily provisions a personal workspace on first console visit), and
+// in practice either one can land first. A single call site that only checks
+// "is my own tenant_users insert unambiguous right now" misses every case
+// where the matching account_membership row does not exist yet at that
+// instant — confirmed live on 2026-07-31: freshly created single-member,
+// single-account HIVE_CLOUD tenants stayed unmapped because the membership
+// row was written 28-60s after the tenant_users row that triggered the old
+// check. Calling this again from wherever the account_membership side of the
+// pairing completes (accounts.Service.provisionDefaultWorkspace) closes that
+// race: whichever of the two writes happens second finds the data complete
+// and succeeds. Both callers hit the same idempotent, conservative predicate,
+// so calling it twice for the same tenant is always safe.
+//
+// A mapping is resolvable when tenantID has no mapping yet, every ACTIVE
+// member of the tenant has an ACTIVE account membership (no stragglers still
+// mid-provisioning — see the unresolvedMembers check below), and all of
+// those memberships converge on exactly one distinct account. Unlike the
+// single-member restriction this function used to enforce, a tenant that
+// already has two or more members is still eligible as long as they agree —
+// that is the same predicate the backfill migrations use, so a tenant this
+// function cannot map today (because a member hasn't reconciled yet, or the
+// account side of the race hasn't landed for one of them) becomes mappable
+// the next time either caller runs for it, rather than being permanently
+// excluded after its first member. Per D-005, this function does NOT fall
+// back to picking an account by owner_user_id, and does NOT create a new
+// account: an unresolvable tenant is left unmapped, exactly like the
+// backfill migrations leave ambiguous tenants unmapped, and surfaces the
+// same way (the metering gate's fail-closed 403, not silently here).
+//
+// Deployment-agnostic by construction: this function has never filtered on
+// tenants.deployment, it only ever operates on the tenantID its caller
+// already resolved. Both call sites (signup.Provisioner and
+// accounts.Service.provisionDefaultWorkspace) already invoke it for every
+// tenant regardless of deployment, so Enterprise (ENTERPRISE_EDGE) tenants
+// were always reachable here — the deployment scoping lived only in the
+// backfill migrations, not in this function. See
+// 20260731_02_tenant_billing_account_all_deployments.sql for why extending
+// the sweep to non-Cloud tenants reuses this same table rather than adding a
+// second one.
+//
+// Never fatal, but a miss is never invisible either: the old version's
+// INSERT could match zero rows and return a nil error with no trace anywhere
+// that anything was attempted, which is exactly why this went unnoticed
+// while it was failing live. Returns whether tenantID ended up mapped, and
+// when it did not, a short reason string a caller may log. Logging is left
+// to the caller rather than done in here: with two call sites racing the
+// same tenant (see doc above), the first one to run legitimately matches
+// nothing most of the time, so a WARN on every miss here would be noise, not
+// signal — see (*Provisioner).ensureTenantBillingAccount and
+// accounts.Service's WithBillingPool call site for who logs and why.
+func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (mapped bool, reason string, err error) {
 	var alreadyMapped bool
-	if err := p.deps.Pool.QueryRow(ctx, `
+	if err := pool.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM public.tenant_billing_accounts WHERE tenant_id = $1)
 	`, tenantID).Scan(&alreadyMapped); err != nil {
-		return fmt.Errorf("check existing billing mapping: %w", err)
+		return false, "", fmt.Errorf("check existing billing mapping: %w", err)
 	}
 	if alreadyMapped {
-		return nil
+		return true, "", nil
 	}
 
-	_, err := p.deps.Pool.Exec(ctx, `
-		INSERT INTO public.tenant_billing_accounts (tenant_id, account_id)
-		SELECT candidate.tenant_id, candidate.account_id
-		FROM (
-			SELECT
-				t.id AS tenant_id,
-				(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1] AS account_id,
-				count(DISTINCT tu.user_id) AS distinct_members,
-				count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL) AS distinct_accounts
-			FROM public.tenants t
-			JOIN public.tenant_users tu
-			  ON tu.tenant_id = t.id
-			 AND tu.status = 'ACTIVE'
-			LEFT JOIN public.account_memberships am
-			  ON am.user_id = tu.user_id
-			 AND am.status = 'active'
-			WHERE t.id = $1
-			GROUP BY t.id
-		) candidate
-		WHERE candidate.distinct_members = 1
-		  AND candidate.distinct_accounts = 1
-		  AND NOT EXISTS (
-		      SELECT 1 FROM public.tenant_billing_accounts existing
-		       WHERE existing.account_id = candidate.account_id
-		  )
-		ON CONFLICT (tenant_id) DO NOTHING
-	`, tenantID)
-	if err != nil {
-		return fmt.Errorf("insert billing mapping: %w", err)
+	var candidateAccountID *uuid.UUID
+	var distinctAccounts, unresolvedMembers int
+	if err := pool.QueryRow(ctx, `
+		SELECT
+			(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1],
+			count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL),
+			count(*) FILTER (WHERE am.account_id IS NULL)
+		FROM public.tenant_users tu
+		LEFT JOIN public.account_memberships am
+		  ON am.user_id = tu.user_id
+		 AND am.status = 'active'
+		WHERE tu.tenant_id = $1
+		  AND tu.status = 'ACTIVE'
+	`, tenantID).Scan(&candidateAccountID, &distinctAccounts, &unresolvedMembers); err != nil {
+		return false, "", fmt.Errorf("resolve billing mapping candidate: %w", err)
 	}
-	return nil
+	// An ACTIVE tenant_users row with no account_memberships match yet (the
+	// LEFT JOIN produced no am row) is invisible to the two counts above, not
+	// absent from the tenant. Per review (CodeRabbit, verified independently
+	// 2026-07-31): without this check, a multi-member tenant with one
+	// resolved member and one not-yet-resolved member reads as
+	// distinct_accounts=1 and gets mapped to the resolved member's account.
+	// If the unresolved member later provisions a DIFFERENT account, that
+	// mapping is already locked in (alreadyMapped short-circuits every future
+	// call, on both sides of the pairing) with no way back. Treat any
+	// unresolved active member as "not converged yet" regardless of what
+	// distinctAccounts currently reads, exactly like the single-member,
+	// zero-account case already does.
+	if unresolvedMembers > 0 {
+		return false, fmt.Sprintf("unresolved_members_pending count=%d", unresolvedMembers), nil
+	}
+	if distinctAccounts != 1 || candidateAccountID == nil {
+		return false, fmt.Sprintf("no_unambiguous_candidate distinct_accounts=%d", distinctAccounts), nil
+	}
+
+	tag, err := pool.Exec(ctx, `
+		INSERT INTO public.tenant_billing_accounts (tenant_id, account_id)
+		SELECT $1, $2
+		WHERE NOT EXISTS (
+			SELECT 1 FROM public.tenant_billing_accounts existing WHERE existing.account_id = $2
+		)
+		ON CONFLICT (tenant_id) DO NOTHING
+	`, tenantID, *candidateAccountID)
+	if err != nil {
+		return false, "", fmt.Errorf("insert billing mapping: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return false, fmt.Sprintf("account_already_claimed_by_another_tenant account=%s", *candidateAccountID), nil
+	}
+	return true, "", nil
 }

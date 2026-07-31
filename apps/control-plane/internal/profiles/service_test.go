@@ -87,16 +87,16 @@ func (s *stubRepo) UpsertBillingProfile(_ context.Context, accountID uuid.UUID, 
 	}
 
 	s.billing[accountID] = BillingProfile{
-		BillingContactName:       input.BillingContactName,
-		BillingContactEmail:      input.BillingContactEmail,
-		LegalEntityName:          input.LegalEntityName,
-		LegalEntityType:          input.LegalEntityType,
+		BillingContactName:         input.BillingContactName,
+		BillingContactEmail:        input.BillingContactEmail,
+		LegalEntityName:            input.LegalEntityName,
+		LegalEntityType:            input.LegalEntityType,
 		BusinessRegistrationNumber: input.BusinessRegistrationNumber,
-		VATNumber:                input.VATNumber,
-		TaxIDType:                input.TaxIDType,
-		TaxIDValue:               input.TaxIDValue,
-		CountryCode:              input.CountryCode,
-		StateRegion:              input.StateRegion,
+		VATNumber:                  input.VATNumber,
+		TaxIDType:                  input.TaxIDType,
+		TaxIDValue:                 input.TaxIDValue,
+		CountryCode:                input.CountryCode,
+		StateRegion:                input.StateRegion,
 	}
 
 	return nil
@@ -110,6 +110,10 @@ func (s *stubRepo) ListMembershipsByUserID(_ context.Context, userID uuid.UUID) 
 		}
 	}
 	return result, nil
+}
+
+func (s *stubRepo) ActiveTenantID(_ context.Context, _ uuid.UUID) (uuid.UUID, bool, error) {
+	return uuid.Nil, false, nil
 }
 
 func (s *stubRepo) CreateAccount(_ context.Context, acct accounts.Account) error {
