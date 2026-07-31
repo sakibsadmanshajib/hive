@@ -360,6 +360,14 @@ func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID u
 // tenant is left unmapped, exactly like the backfill migrations leave
 // ambiguous tenants unmapped, and surfaces the same way (the metering gate's
 // fail-closed 403, not silently here).
+//
+// Never fatal, but never silent either: the old version's INSERT could match
+// zero rows and return a nil error with no trace anywhere that anything was
+// attempted, which is exactly why this went unnoticed while it was failing
+// live. Every non-mapping outcome (ambiguous, no account yet, or the
+// candidate account already claimed by a different tenant) logs a WARN
+// naming the tenant and, when resolved, the candidate account, so an
+// operator can grep for it instead of only discovering the gap downstream.
 func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) error {
 	var alreadyMapped bool
 	if err := pool.QueryRow(ctx, `
@@ -371,33 +379,42 @@ func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantI
 		return nil
 	}
 
-	_, err := pool.Exec(ctx, `
+	var candidateAccountID *uuid.UUID
+	var distinctAccounts int
+	err := pool.QueryRow(ctx, `
+		SELECT
+			(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1],
+			count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL)
+		FROM public.tenant_users tu
+		LEFT JOIN public.account_memberships am
+		  ON am.user_id = tu.user_id
+		 AND am.status = 'active'
+		WHERE tu.tenant_id = $1
+		  AND tu.status = 'ACTIVE'
+	`, tenantID).Scan(&candidateAccountID, &distinctAccounts)
+	if err != nil {
+		return fmt.Errorf("resolve billing mapping candidate: %w", err)
+	}
+	if distinctAccounts != 1 || candidateAccountID == nil {
+		log.Printf("signup: tenant billing account not mapped tenant=%s reason=no_unambiguous_candidate distinct_accounts=%d",
+			tenantID, distinctAccounts)
+		return nil
+	}
+
+	tag, err := pool.Exec(ctx, `
 		INSERT INTO public.tenant_billing_accounts (tenant_id, account_id)
-		SELECT candidate.tenant_id, candidate.account_id
-		FROM (
-			SELECT
-				t.id AS tenant_id,
-				(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1] AS account_id,
-				count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL) AS distinct_accounts
-			FROM public.tenants t
-			JOIN public.tenant_users tu
-			  ON tu.tenant_id = t.id
-			 AND tu.status = 'ACTIVE'
-			LEFT JOIN public.account_memberships am
-			  ON am.user_id = tu.user_id
-			 AND am.status = 'active'
-			WHERE t.id = $1
-			GROUP BY t.id
-		) candidate
-		WHERE candidate.distinct_accounts = 1
-		  AND NOT EXISTS (
-		      SELECT 1 FROM public.tenant_billing_accounts existing
-		       WHERE existing.account_id = candidate.account_id
-		  )
+		SELECT $1, $2
+		WHERE NOT EXISTS (
+			SELECT 1 FROM public.tenant_billing_accounts existing WHERE existing.account_id = $2
+		)
 		ON CONFLICT (tenant_id) DO NOTHING
-	`, tenantID)
+	`, tenantID, *candidateAccountID)
 	if err != nil {
 		return fmt.Errorf("insert billing mapping: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		log.Printf("signup: tenant billing account not mapped tenant=%s account=%s reason=account_already_claimed_by_another_tenant",
+			tenantID, *candidateAccountID)
 	}
 	return nil
 }
