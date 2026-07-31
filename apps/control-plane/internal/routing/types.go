@@ -84,10 +84,16 @@ type SelectionResult struct {
 	// separately) is what turns that distinction into a shadow-mode
 	// verdict. Nothing in this package enforces or debits against it.
 	//
-	// The credit unit itself (per-token vs. per-million-tokens) is
-	// unresolved pending the owner's ruling (spec section 12 item 1) and
-	// blocks Step 4, not this addition: these are the same raw
-	// input/output/cache price fields already served today by
+	// The credit unit is per million tokens: charges compute as
+	// (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
+	// with round-half-up via math/big. This is already implemented in
+	// apps/edge-api/internal/metering/precedence.go:207-227 and matches
+	// upstream canonical units (Groq, OpenRouter) and the console display.
+	// Per-token integer pricing misprices 347 of 365 models by 1000x or more;
+	// per-million fits all real rates and avoids repricing existing grants/invoices.
+	// Decision D-031: vault decision-2026-07-31-credit-unit-per-million.md.
+	// Issue #617 tracks catalog price correction (seeded prices are ~6 orders of magnitude too low).
+	// These are the same raw input/output/cache price fields already served today by
 	// catalog.Service for /v1/models, passed through unchanged.
 	Pricing catalog.CatalogPricing `json:"pricing"`
 }
