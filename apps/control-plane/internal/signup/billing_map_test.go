@@ -77,12 +77,17 @@ func TestEnsureTenantBillingAccount_MapsTwoMembersAgreeingOnOneAccount(t *testin
 	mustAddBillingMapMember(t, ctx, pool, tenantID, accountID)
 	mustAddBillingMapMember(t, ctx, pool, tenantID, accountID)
 
-	require.NoError(t, signup.EnsureTenantBillingAccount(ctx, pool, tenantID))
+	mapped, reason, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.True(t, mapped, "expected a mapping after two members agree on one account")
+	require.Empty(t, reason)
 
-	mapped, ok := billingMappedAccount(t, ctx, pool, tenantID)
+	mappedAccount, ok := billingMappedAccount(t, ctx, pool, tenantID)
 	require.True(t, ok, "expected a mapping after two members agree on one account")
-	require.Equal(t, accountID, mapped)
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, tenantID) })
+	require.Equal(t, accountID, mappedAccount)
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, tenantID)
+	})
 }
 
 func TestEnsureTenantBillingAccount_LeavesAmbiguousTenantUnmapped(t *testing.T) {
@@ -97,7 +102,10 @@ func TestEnsureTenantBillingAccount_LeavesAmbiguousTenantUnmapped(t *testing.T) 
 	mustAddBillingMapMember(t, ctx, pool, tenantID, accountA)
 	mustAddBillingMapMember(t, ctx, pool, tenantID, accountB)
 
-	require.NoError(t, signup.EnsureTenantBillingAccount(ctx, pool, tenantID))
+	mapped, reason, err := signup.EnsureTenantBillingAccount(ctx, pool, tenantID)
+	require.NoError(t, err)
+	require.False(t, mapped)
+	require.Contains(t, reason, "no_unambiguous_candidate")
 
 	_, ok := billingMappedAccount(t, ctx, pool, tenantID)
 	require.False(t, ok, "an ambiguous tenant (members on two accounts) must stay unmapped, not error and not guess")
@@ -112,11 +120,16 @@ func TestEnsureTenantBillingAccount_LeavesAccountAlreadyClaimedByAnotherTenantUn
 	claimedAccount := mustInsertBillingMapAccount(t, ctx, pool)
 	firstTenant := mustInsertBillingMapTenant(t, ctx, pool, "HIVE_CLOUD")
 	mustAddBillingMapMember(t, ctx, pool, firstTenant, claimedAccount)
-	require.NoError(t, signup.EnsureTenantBillingAccount(ctx, pool, firstTenant))
+	firstMapped, firstReason, err := signup.EnsureTenantBillingAccount(ctx, pool, firstTenant)
+	require.NoError(t, err)
+	require.True(t, firstMapped)
+	require.Empty(t, firstReason)
 	mapped, ok := billingMappedAccount(t, ctx, pool, firstTenant)
 	require.True(t, ok)
 	require.Equal(t, claimedAccount, mapped)
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, firstTenant) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, firstTenant)
+	})
 
 	// A second, distinct tenant whose only member also happens to share the
 	// same already-claimed account (UNIQUE(account_id) forbids the account
@@ -125,7 +138,11 @@ func TestEnsureTenantBillingAccount_LeavesAccountAlreadyClaimedByAnotherTenantUn
 	secondTenant := mustInsertBillingMapTenant(t, ctx, pool, "HIVE_CLOUD")
 	mustAddBillingMapMember(t, ctx, pool, secondTenant, claimedAccount)
 
-	require.NoError(t, signup.EnsureTenantBillingAccount(ctx, pool, secondTenant))
+	secondMapped, secondReason, err := signup.EnsureTenantBillingAccount(ctx, pool, secondTenant)
+	require.NoError(t, err)
+	require.False(t, secondMapped)
+	require.Contains(t, secondReason, "account_already_claimed_by_another_tenant")
+	require.Contains(t, secondReason, claimedAccount.String())
 
 	_, ok = billingMappedAccount(t, ctx, pool, secondTenant)
 	require.False(t, ok, "an account already funding a different tenant must not be claimed twice")

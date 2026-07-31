@@ -316,8 +316,14 @@ func (p *Provisioner) provision(ctx context.Context, tenantID uuid.UUID, in Reco
 // ensureTenantBillingAccount maps tenantID to a billing account by delegating
 // to the exported EnsureTenantBillingAccount, over this Provisioner's own
 // pool. See that function's doc for the mapping rule.
+//
+// Deliberately does not log on a miss here. This is usually the first of the
+// two racing call sites to run (see EnsureTenantBillingAccount's doc), so a
+// miss here is the expected, common, temporary state, not a failure — the
+// accounts package's call site is where a miss is worth a signal.
 func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID uuid.UUID) error {
-	return EnsureTenantBillingAccount(ctx, p.deps.Pool, tenantID)
+	_, _, err := EnsureTenantBillingAccount(ctx, p.deps.Pool, tenantID)
+	return err
 }
 
 // EnsureTenantBillingAccount maps tenantID to a billing account in
@@ -361,27 +367,30 @@ func (p *Provisioner) ensureTenantBillingAccount(ctx context.Context, tenantID u
 // ambiguous tenants unmapped, and surfaces the same way (the metering gate's
 // fail-closed 403, not silently here).
 //
-// Never fatal, but never silent either: the old version's INSERT could match
-// zero rows and return a nil error with no trace anywhere that anything was
-// attempted, which is exactly why this went unnoticed while it was failing
-// live. Every non-mapping outcome (ambiguous, no account yet, or the
-// candidate account already claimed by a different tenant) logs a WARN
-// naming the tenant and, when resolved, the candidate account, so an
-// operator can grep for it instead of only discovering the gap downstream.
-func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) error {
+// Never fatal, but a miss is never invisible either: the old version's
+// INSERT could match zero rows and return a nil error with no trace anywhere
+// that anything was attempted, which is exactly why this went unnoticed
+// while it was failing live. Returns whether tenantID ended up mapped, and
+// when it did not, a short reason string a caller may log. Logging is left
+// to the caller rather than done in here: with two call sites racing the
+// same tenant (see doc above), the first one to run legitimately matches
+// nothing most of the time, so a WARN on every miss here would be noise, not
+// signal — see (*Provisioner).ensureTenantBillingAccount and
+// accounts.Service's WithBillingPool call site for who logs and why.
+func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) (mapped bool, reason string, err error) {
 	var alreadyMapped bool
 	if err := pool.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM public.tenant_billing_accounts WHERE tenant_id = $1)
 	`, tenantID).Scan(&alreadyMapped); err != nil {
-		return fmt.Errorf("check existing billing mapping: %w", err)
+		return false, "", fmt.Errorf("check existing billing mapping: %w", err)
 	}
 	if alreadyMapped {
-		return nil
+		return true, "", nil
 	}
 
 	var candidateAccountID *uuid.UUID
 	var distinctAccounts int
-	err := pool.QueryRow(ctx, `
+	if err := pool.QueryRow(ctx, `
 		SELECT
 			(array_agg(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL))[1],
 			count(DISTINCT am.account_id) FILTER (WHERE am.account_id IS NOT NULL)
@@ -391,14 +400,11 @@ func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantI
 		 AND am.status = 'active'
 		WHERE tu.tenant_id = $1
 		  AND tu.status = 'ACTIVE'
-	`, tenantID).Scan(&candidateAccountID, &distinctAccounts)
-	if err != nil {
-		return fmt.Errorf("resolve billing mapping candidate: %w", err)
+	`, tenantID).Scan(&candidateAccountID, &distinctAccounts); err != nil {
+		return false, "", fmt.Errorf("resolve billing mapping candidate: %w", err)
 	}
 	if distinctAccounts != 1 || candidateAccountID == nil {
-		log.Printf("signup: tenant billing account not mapped tenant=%s reason=no_unambiguous_candidate distinct_accounts=%d",
-			tenantID, distinctAccounts)
-		return nil
+		return false, fmt.Sprintf("no_unambiguous_candidate distinct_accounts=%d", distinctAccounts), nil
 	}
 
 	tag, err := pool.Exec(ctx, `
@@ -410,11 +416,10 @@ func EnsureTenantBillingAccount(ctx context.Context, pool *pgxpool.Pool, tenantI
 		ON CONFLICT (tenant_id) DO NOTHING
 	`, tenantID, *candidateAccountID)
 	if err != nil {
-		return fmt.Errorf("insert billing mapping: %w", err)
+		return false, "", fmt.Errorf("insert billing mapping: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
-		log.Printf("signup: tenant billing account not mapped tenant=%s account=%s reason=account_already_claimed_by_another_tenant",
-			tenantID, *candidateAccountID)
+		return false, fmt.Sprintf("account_already_claimed_by_another_tenant account=%s", *candidateAccountID), nil
 	}
-	return nil
+	return true, "", nil
 }

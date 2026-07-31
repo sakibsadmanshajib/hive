@@ -193,17 +193,21 @@ func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Vie
 
 	// Best-effort and non-fatal, mirroring signup.Provisioner's own contract:
 	// a billing-account gap is caught later by the metering gate's fail-closed
-	// check, so it must never block workspace creation. This is the other
-	// side of the tenant_users/account_memberships race described on
-	// signup.EnsureTenantBillingAccount: this account_membership row often
-	// does not exist yet when Reconcile's own attempt runs, so retry here now
-	// that it does.
+	// check, so it must never block workspace creation. This is the second
+	// half of the tenant_users/account_memberships race described on
+	// signup.EnsureTenantBillingAccount, and the one that logs on a miss:
+	// signup.Provisioner's own call site usually runs first and finds nothing
+	// most of the time (this account_membership row often doesn't exist yet),
+	// so a WARN there would be noise. A miss here means both halves of the
+	// pairing have now had their turn, which is the genuinely informative case.
 	if s.billing != nil {
 		if tenantID, ok, tErr := s.repo.ActiveTenantID(ctx, viewer.UserID); tErr != nil {
 			log.Printf("accounts: tenant lookup for billing mapping failed user=%s: %v", viewer.UserID, tErr)
 		} else if ok {
-			if mErr := signup.EnsureTenantBillingAccount(ctx, s.billing, tenantID); mErr != nil {
-				log.Printf("accounts: tenant billing account not resolved tenant=%s: %v", tenantID, mErr)
+			if mapped, reason, mErr := signup.EnsureTenantBillingAccount(ctx, s.billing, tenantID); mErr != nil {
+				log.Printf("accounts: tenant billing account lookup failed tenant=%s: %v", tenantID, mErr)
+			} else if !mapped {
+				log.Printf("accounts: tenant billing account still unmapped after workspace provisioning tenant=%s reason=%s", tenantID, reason)
 			}
 		}
 	}
