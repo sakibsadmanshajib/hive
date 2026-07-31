@@ -423,20 +423,6 @@ func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSn
 	if err != nil {
 		return AuthSnapshot{}, fmt.Errorf("apikeys: resolve tenant for account: %w", err)
 	}
-	if tenantID == uuid.Nil {
-		// public.tenant_billing_accounts only ever maps HIVE_CLOUD tenants
-		// (migrations 20260728_01/_03); a Hive Enterprise account is always
-		// unmapped there, by design, not by omission -- see
-		// GetSoleNonCloudTenantID's doc. Enterprise is "single org = single
-		// tenant", so fall back to the deployment's sole non-Cloud tenant:
-		// resolves unambiguously on a real Enterprise install, and stays
-		// uuid.Nil (existing fail-closed behavior, unchanged) on Hive Cloud
-		// or an ambiguous test fixture.
-		tenantID, err = s.repo.GetSoleNonCloudTenantID(ctx)
-		if err != nil {
-			return AuthSnapshot{}, fmt.Errorf("apikeys: resolve enterprise tenant: %w", err)
-		}
-	}
 
 	return AuthSnapshot{
 		KeyID:                 key.ID,

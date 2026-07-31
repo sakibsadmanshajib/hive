@@ -33,17 +33,6 @@ type Repository interface {
 	// public.tenant_billing_accounts. Returns uuid.Nil, nil when the account
 	// has no mapping yet -- an expected state, not an error.
 	GetTenantIDByAccountID(ctx context.Context, accountID uuid.UUID) (uuid.UUID, error)
-	// GetSoleNonCloudTenantID resolves the deployment's sole non-HIVE_CLOUD
-	// (Hive Enterprise) tenant. public.tenant_billing_accounts is a Hive
-	// Cloud billing construct (migrations 20260728_01/_03 scope it to
-	// HIVE_CLOUD tenants only), so an Enterprise account is always unmapped
-	// there, by design. Enterprise is "single org = single tenant", so its
-	// deployment has exactly one non-Cloud tenant row -- that row is the
-	// account's tenant. Returns uuid.Nil, nil when zero or more than one
-	// such tenant exists: both are ambiguous/absent-candidate states a
-	// caller must fail closed on, not a guess (mirrors
-	// GetTenantIDByAccountID's own "unmapped is not an error" contract).
-	GetSoleNonCloudTenantID(ctx context.Context) (uuid.UUID, error)
 	GetByTokenHash(ctx context.Context, tokenHash string) (APIKey, error)
 	GetPolicyByTokenHash(ctx context.Context, tokenHash string) (APIKey, KeyPolicy, error)
 	CreateDefaultPolicy(ctx context.Context, keyID uuid.UUID) error
@@ -531,46 +520,6 @@ func (r *pgxRepository) GetTenantIDByAccountID(ctx context.Context, accountID uu
 		return uuid.Nil, err
 	}
 	return tenantID, nil
-}
-
-// soleCandidate returns candidates[0] when there is exactly one candidate
-// and uuid.Nil otherwise. Zero or more than one candidate are both
-// ambiguous/absent states a caller must fail closed on, never guess between.
-func soleCandidate(candidates []uuid.UUID) uuid.UUID {
-	if len(candidates) != 1 {
-		return uuid.Nil
-	}
-	return candidates[0]
-}
-
-// GetSoleNonCloudTenantID implements Repository.GetSoleNonCloudTenantID. See
-// the interface doc for the Hive Enterprise fallback rationale.
-//
-// ponytail: a plain table scan, no cache. Hive Enterprise ships one tenant
-// total ("single org = single tenant"), so this is at most a handful of
-// rows even including test fixtures. Add a cache if a real deployment ever
-// shows this on a hot-path profile.
-func (r *pgxRepository) GetSoleNonCloudTenantID(ctx context.Context) (uuid.UUID, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id FROM public.tenants WHERE deployment <> 'HIVE_CLOUD'
-	`)
-	if err != nil {
-		return uuid.Nil, err
-	}
-	defer rows.Close()
-
-	var candidates []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return uuid.Nil, err
-		}
-		candidates = append(candidates, id)
-	}
-	if err := rows.Err(); err != nil {
-		return uuid.Nil, err
-	}
-	return soleCandidate(candidates), nil
 }
 
 func (r *pgxRepository) GetByTokenHash(ctx context.Context, tokenHash string) (APIKey, error) {

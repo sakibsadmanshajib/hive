@@ -11,15 +11,14 @@ import (
 
 // stubRepo is a test double that satisfies the Repository interface.
 type stubRepo struct {
-	keys                 map[uuid.UUID]APIKey
-	policies             map[uuid.UUID]KeyPolicy
-	budgetWindows        map[string]BudgetWindow
-	accountRatePolicy    map[uuid.UUID]RatePolicy
-	keyRatePolicy        map[uuid.UUID]RatePolicy
-	keyLimits            map[uuid.UUID]KeyLimits
-	tenantByAccount      map[uuid.UUID]uuid.UUID
-	soleNonCloudTenantID uuid.UUID
-	events               []KeyEvent
+	keys              map[uuid.UUID]APIKey
+	policies          map[uuid.UUID]KeyPolicy
+	budgetWindows     map[string]BudgetWindow
+	accountRatePolicy map[uuid.UUID]RatePolicy
+	keyRatePolicy     map[uuid.UUID]RatePolicy
+	keyLimits         map[uuid.UUID]KeyLimits
+	tenantByAccount   map[uuid.UUID]uuid.UUID
+	events            []KeyEvent
 }
 
 func newStubRepo() *stubRepo {
@@ -263,10 +262,6 @@ func (r *stubRepo) GetAccountRatePolicy(_ context.Context, accountID uuid.UUID) 
 
 func (r *stubRepo) GetTenantIDByAccountID(_ context.Context, accountID uuid.UUID) (uuid.UUID, error) {
 	return r.tenantByAccount[accountID], nil
-}
-
-func (r *stubRepo) GetSoleNonCloudTenantID(_ context.Context) (uuid.UUID, error) {
-	return r.soleNonCloudTenantID, nil
 }
 
 func (r *stubRepo) CreateDefaultPolicy(_ context.Context, keyID uuid.UUID) error {
@@ -961,10 +956,7 @@ func TestResolveSnapshotIncludesMappedTenantID(t *testing.T) {
 // unmapped): ResolveSnapshot itself still succeeds -- an unmapped tenant is
 // not an error here -- it is edge-api's consumers (handleModels,
 // inference.Orchestrator.selectRoute) that fail the request closed on a
-// uuid.Nil TenantID. This also exercises the Hive Enterprise fallback
-// finding no candidate either (repo.soleNonCloudTenantID defaults to
-// uuid.Nil), i.e. the existing Cloud fail-closed behavior is unchanged by
-// that fallback's addition.
+// uuid.Nil TenantID.
 func TestResolveSnapshotReturnsNilTenantIDWhenAccountUnmapped(t *testing.T) {
 	repo := newStubRepo()
 	svc := NewService(repo)
@@ -985,72 +977,6 @@ func TestResolveSnapshotReturnsNilTenantIDWhenAccountUnmapped(t *testing.T) {
 	}
 	if snapshot.TenantID != uuid.Nil {
 		t.Fatalf("expected uuid.Nil tenant_id for an unmapped account, got %s", snapshot.TenantID)
-	}
-}
-
-// TestResolveSnapshotFallsBackToSoleEnterpriseTenantWhenBillingAccountUnmapped
-// is the Hive Enterprise regression guard for the defect found after #620
-// shipped: public.tenant_billing_accounts is populated only for HIVE_CLOUD
-// tenants (migrations 20260728_01/_03), so an Enterprise account is always
-// unmapped there. Without this fallback, every Enterprise API-key request
-// would 403 account_not_provisioned permanently. ResolveSnapshot must
-// resolve the deployment's sole non-Cloud tenant instead, so handleModels
-// and Orchestrator.selectRoute work unchanged downstream.
-func TestResolveSnapshotFallsBackToSoleEnterpriseTenantWhenBillingAccountUnmapped(t *testing.T) {
-	repo := newStubRepo()
-	svc := NewService(repo)
-
-	accountID := uuid.New()
-	actorID := uuid.New()
-	enterpriseTenantID := uuid.New()
-	repo.soleNonCloudTenantID = enterpriseTenantID
-	// Deliberately no repo.tenantByAccount entry: Enterprise accounts never
-	// get one, since that table is Cloud-only by design.
-
-	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
-		Nickname: "enterprise-key",
-	})
-	if err != nil {
-		t.Fatalf("CreateKey: %v", err)
-	}
-
-	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
-	if err != nil {
-		t.Fatalf("ResolveSnapshot: %v", err)
-	}
-	if snapshot.TenantID != enterpriseTenantID {
-		t.Fatalf("expected enterprise tenant_id %s, got %s", enterpriseTenantID, snapshot.TenantID)
-	}
-}
-
-// TestResolveSnapshotPrefersBillingAccountMappingOverEnterpriseFallback
-// documents that the Enterprise fallback only ever fires for an unmapped
-// account: a Cloud account that IS mapped in tenant_billing_accounts must
-// never be overridden by the fallback, even if one happens to resolve (e.g.
-// a mixed test fixture carrying both kinds of tenant rows).
-func TestResolveSnapshotPrefersBillingAccountMappingOverEnterpriseFallback(t *testing.T) {
-	repo := newStubRepo()
-	svc := NewService(repo)
-
-	accountID := uuid.New()
-	actorID := uuid.New()
-	cloudTenantID := uuid.New()
-	repo.tenantByAccount[accountID] = cloudTenantID
-	repo.soleNonCloudTenantID = uuid.New() // must be ignored
-
-	result, err := svc.CreateKey(context.Background(), accountID, actorID, CreateKeyInput{
-		Nickname: "cloud-key",
-	})
-	if err != nil {
-		t.Fatalf("CreateKey: %v", err)
-	}
-
-	snapshot, err := svc.ResolveSnapshot(context.Background(), result.Key.TokenHash)
-	if err != nil {
-		t.Fatalf("ResolveSnapshot: %v", err)
-	}
-	if snapshot.TenantID != cloudTenantID {
-		t.Fatalf("expected cloud tenant_id %s (billing mapping must win), got %s", cloudTenantID, snapshot.TenantID)
 	}
 }
 
