@@ -65,9 +65,13 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	//
 	// The verdict comes from catalog.AliasVisibleToTenant, the same predicate
 	// behind the catalog listing, so the two can never disagree. An untenanted
-	// principal carries uuid.Nil: api_keys hang off accounts, which are not
-	// tenant-scoped, and those requests stay governed by the key policy
-	// allowlist checked in edge-api's authz.CheckAccess.
+	// principal carries uuid.Nil: today that is only the batch executor
+	// (control-plane-internal, runs per account, never resolves a tenant).
+	// An API key IS tenant-scoped as of D-030 (its account's tenant, via
+	// public.tenant_billing_accounts) -- edge-api resolves and binds that
+	// tenant before calling here, and fails the request closed itself when
+	// no tenant is resolvable, so a uuid.Nil TenantID no longer means
+	// "API-key principal, skip this check" the way it used to.
 	if input.TenantID != uuid.Nil {
 		if s.entitlements == nil {
 			// Fail closed. A tenant-scoped request with no entitlement source

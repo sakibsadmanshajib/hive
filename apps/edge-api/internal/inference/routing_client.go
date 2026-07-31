@@ -30,6 +30,40 @@ var ErrRouteNotFound = errors.New("routing: alias not found")
 // would report an admin policy decision as a transient routing outage.
 var ErrModelNotEntitled = errors.New("routing: model not entitled for tenant")
 
+// ErrAccountNotProvisioned signals an API-key principal whose account has no
+// resolvable tenant (authz.AuthSnapshot.TenantID is empty -- see
+// apikeys.Service.ResolveSnapshot / public.tenant_billing_accounts).
+// Orchestrator.selectRoute returns this directly, before ever calling
+// SelectRoute, because without a tenant the entitlement check inside
+// routing.Service.SelectRoute cannot run at all: admitting the request would
+// silently fall back to the pre-D-030 unfiltered behavior this PR exists to
+// close.
+var ErrAccountNotProvisioned = errors.New("routing: account has no tenant")
+
+// apiKeyTenantCtxKey carries the tenant resolved for an authenticated API-key
+// principal (authz.AuthSnapshot.TenantID) across the single in-process call
+// from Orchestrator.selectRoute to SelectRoute below. Only that helper sets
+// it, immediately after a real control-plane snapshot resolves -- never from
+// raw request input -- so it carries the same trust level auth.TenantID(ctx)
+// already has for JWT sessions. Unexported: nothing outside this package
+// needs to read or write it.
+type apiKeyTenantCtxKey struct{}
+
+// withAPIKeyTenant returns ctx carrying tenantID for the fallback SelectRoute
+// checks when no JWT-session tenant is present.
+func withAPIKeyTenant(ctx context.Context, tenantID uuid.UUID) context.Context {
+	return context.WithValue(ctx, apiKeyTenantCtxKey{}, tenantID)
+}
+
+// apiKeyTenantFrom reads back the tenant withAPIKeyTenant stored, or
+// uuid.Nil if none was set.
+func apiKeyTenantFrom(ctx context.Context) uuid.UUID {
+	if id, ok := ctx.Value(apiKeyTenantCtxKey{}).(uuid.UUID); ok {
+		return id
+	}
+	return uuid.Nil
+}
+
 // SelectRouteInput mirrors the control-plane routing.SelectionInput.
 type SelectRouteInput struct {
 	AliasID string `json:"alias_id"`
@@ -83,12 +117,17 @@ func NewRoutingClient(baseURL string) *RoutingClient {
 // route for a model the tenant is not entitled to. Any TenantID the caller set
 // is discarded so a handler cannot widen its own scope.
 //
-// An API-key request has no JWT principal on the context and therefore sends no
-// tenant: api_keys hang off accounts, which are not tenant-scoped, and those
-// requests are governed by the key policy allowlist instead.
+// An API-key request has no JWT principal on the context, so auth.TenantID(ctx)
+// is always uuid.Nil for it; its tenant (D-030) is resolved separately, via
+// authz.AuthSnapshot, and bound onto ctx by Orchestrator.selectRoute using
+// withAPIKeyTenant before it ever reaches here. That is the second, and only
+// other, trusted source this method consults -- still never the caller-set
+// input.TenantID field above, which stays discarded.
 func (c *RoutingClient) SelectRoute(ctx context.Context, input SelectRouteInput) (SelectRouteResult, error) {
 	input.TenantID = ""
 	if tenantID := auth.TenantID(ctx); tenantID != uuid.Nil {
+		input.TenantID = tenantID.String()
+	} else if tenantID := apiKeyTenantFrom(ctx); tenantID != uuid.Nil {
 		input.TenantID = tenantID.String()
 	}
 

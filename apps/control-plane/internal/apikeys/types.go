@@ -201,8 +201,14 @@ type KeyView struct {
 // AuthSnapshot is the control-plane-owned, Redis-projected authorization
 // snapshot consumed by the edge for hot-path enforcement.
 type AuthSnapshot struct {
-	KeyID                 uuid.UUID   `json:"key_id"`
-	AccountID             uuid.UUID   `json:"account_id"`
+	KeyID     uuid.UUID `json:"key_id"`
+	AccountID uuid.UUID `json:"account_id"`
+	// TenantID is resolved server-side from AccountID via
+	// public.tenant_billing_accounts (Service.ResolveSnapshot), never from
+	// client input. uuid.Nil means the account has no billing-account
+	// mapping yet; edge-api's consumers fail closed on that rather than
+	// falling back to unfiltered/unentitled access (D-030).
+	TenantID              uuid.UUID   `json:"tenant_id"`
 	Status                KeyStatus   `json:"status"`
 	ExpiresAt             *time.Time  `json:"expires_at,omitempty"`
 	AllowAllModels        bool        `json:"allow_all_models"`

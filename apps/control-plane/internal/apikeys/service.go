@@ -413,9 +413,21 @@ func (s *Service) ResolveSnapshot(ctx context.Context, tokenHash string) (AuthSn
 		return AuthSnapshot{}, fmt.Errorf("apikeys: get key rate policy: %w", err)
 	}
 
+	// D-030: bind the key to the tenant its account bills, so edge-api can
+	// enforce tenant-scoped model entitlement (routing.Service.SelectRoute)
+	// and tenant-filtered model listing for API-key traffic the same way it
+	// already does for JWT sessions. uuid.Nil (no mapping row yet) is not an
+	// error here -- ResolveSnapshot still returns a usable snapshot; it is
+	// edge-api's consumers that decide to fail closed on an unmapped tenant.
+	tenantID, err := s.repo.GetTenantIDByAccountID(ctx, key.AccountID)
+	if err != nil {
+		return AuthSnapshot{}, fmt.Errorf("apikeys: resolve tenant for account: %w", err)
+	}
+
 	return AuthSnapshot{
 		KeyID:                 key.ID,
 		AccountID:             key.AccountID,
+		TenantID:              tenantID,
 		Status:                key.Status,
 		ExpiresAt:             key.ExpiresAt,
 		AllowAllModels:        policy.AllowAllModels,

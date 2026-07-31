@@ -29,6 +29,10 @@ type Repository interface {
 	GetAccountRatePolicy(ctx context.Context, accountID uuid.UUID) (RatePolicy, error)
 	GetLimits(ctx context.Context, accountID, keyID uuid.UUID) (KeyLimits, error)
 	UpdateLimits(ctx context.Context, accountID, keyID uuid.UUID, input KeyLimitsInput) (KeyLimits, error)
+	// GetTenantIDByAccountID resolves the tenant that bills an account, via
+	// public.tenant_billing_accounts. Returns uuid.Nil, nil when the account
+	// has no mapping yet -- an expected state, not an error.
+	GetTenantIDByAccountID(ctx context.Context, accountID uuid.UUID) (uuid.UUID, error)
 	GetByTokenHash(ctx context.Context, tokenHash string) (APIKey, error)
 	GetPolicyByTokenHash(ctx context.Context, tokenHash string) (APIKey, KeyPolicy, error)
 	CreateDefaultPolicy(ctx context.Context, keyID uuid.UUID) error
@@ -405,10 +409,10 @@ func (r *pgxRepository) GetLimits(ctx context.Context, accountID, keyID uuid.UUI
 	`, keyID)
 
 	var (
-		out          KeyLimits
-		tierBytes    []byte
-		apiKeyIDOut  uuid.UUID
-		rpm, tpm     int
+		out         KeyLimits
+		tierBytes   []byte
+		apiKeyIDOut uuid.UUID
+		rpm, tpm    int
 	)
 	if err := row.Scan(&apiKeyIDOut, &rpm, &tpm, &tierBytes); err != nil {
 		if err == pgx.ErrNoRows {
@@ -495,6 +499,27 @@ func (r *pgxRepository) GetAccountRatePolicy(ctx context.Context, accountID uuid
 		return defaultRatePolicy(), nil
 	}
 	return policy, err
+}
+
+// GetTenantIDByAccountID resolves an account to the tenant it bills, via
+// public.tenant_billing_accounts (UNIQUE(account_id), so this is a function,
+// not a search). Returns uuid.Nil with a nil error when the account has no
+// mapping row yet -- an unmapped account is an expected, non-error state
+// (see the migration's backfill for why some accounts start out unmapped),
+// so callers decide what to do with a nil result rather than this method
+// inventing a policy.
+func (r *pgxRepository) GetTenantIDByAccountID(ctx context.Context, accountID uuid.UUID) (uuid.UUID, error) {
+	var tenantID uuid.UUID
+	err := r.pool.QueryRow(ctx, `
+		SELECT tenant_id FROM public.tenant_billing_accounts WHERE account_id = $1
+	`, accountID).Scan(&tenantID)
+	if err == pgx.ErrNoRows {
+		return uuid.Nil, nil
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return tenantID, nil
 }
 
 func (r *pgxRepository) GetByTokenHash(ctx context.Context, tokenHash string) (APIKey, error) {

@@ -15,8 +15,15 @@ import (
 // AuthSnapshot is the edge-side representation of the control-plane-projected
 // authorization data. Matches the control-plane's AuthSnapshot JSON schema.
 type AuthSnapshot struct {
-	KeyID                 string      `json:"key_id"`
-	AccountID             string      `json:"account_id"`
+	KeyID     string `json:"key_id"`
+	AccountID string `json:"account_id"`
+	// TenantID is resolved control-plane-side from AccountID via
+	// public.tenant_billing_accounts (apikeys.Service.ResolveSnapshot),
+	// never from client input. Empty means the account has no billing-
+	// account mapping yet; consumers of this snapshot (handleModels,
+	// inference.Orchestrator) fail closed on that rather than falling back
+	// to the pre-D-030 unfiltered/unentitled behavior.
+	TenantID              string      `json:"tenant_id"`
 	Status                string      `json:"status"`
 	ExpiresAt             *string     `json:"expires_at,omitempty"`
 	AllowAllModels        bool        `json:"allow_all_models"`
@@ -33,11 +40,11 @@ type AuthSnapshot struct {
 
 // RatePolicy is the edge-side rate-limit projection for one scope.
 type RatePolicy struct {
-	RateLimitRPM          int                       `json:"rate_limit_rpm"`
-	RateLimitTPM          int                       `json:"rate_limit_tpm"`
-	RollingFiveHourLimit  int64                     `json:"rolling_five_hour_limit"`
-	WeeklyLimit           int64                     `json:"weekly_limit"`
-	FreeTokenWeightTenths int                       `json:"free_token_weight_tenths"`
+	RateLimitRPM          int                        `json:"rate_limit_rpm"`
+	RateLimitTPM          int                        `json:"rate_limit_tpm"`
+	RollingFiveHourLimit  int64                      `json:"rolling_five_hour_limit"`
+	WeeklyLimit           int64                      `json:"weekly_limit"`
+	FreeTokenWeightTenths int                        `json:"free_token_weight_tenths"`
 	TierOverrides         map[string]TierOverridePol `json:"tier_overrides,omitempty"`
 }
 

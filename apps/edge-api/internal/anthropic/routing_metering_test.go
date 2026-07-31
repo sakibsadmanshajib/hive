@@ -230,6 +230,7 @@ func activeSnapshot() authz.AuthSnapshot {
 	return authz.AuthSnapshot{
 		KeyID:          "key_1",
 		AccountID:      "acct_1",
+		TenantID:       "22222222-2222-2222-2222-222222222222",
 		Status:         "active",
 		AllowAllModels: true,
 		BudgetKind:     "none",

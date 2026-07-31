@@ -43,17 +43,20 @@ func TestResolveSpecPathHonorsOverride(t *testing.T) {
 }
 
 func TestHandleModelsReturnsSeededHiveAliases(t *testing.T) {
-	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{
+	var sawPath string
+	seeded := `{
 		"models": [
 			{"id":"hive-default","object":"model","created":1716935002,"owned_by":"hive"},
 			{"id":"hive-fast","object":"model","created":1716935003,"owned_by":"hive"},
 			{"id":"hive-auto","object":"model","created":1716935004,"owned_by":"hive"}
 		],
 		"catalog": []
-	}`))
+	}`
+	client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t, seeded, seeded, &sawPath))
 	authorizer := newTestAuthorizer(t, http.StatusOK, `{
 		"key_id":"key-1",
 		"account_id":"acc-1",
+		"tenant_id":"`+uuid.New().String()+`",
 		"status":"active",
 		"allow_all_models":true,
 		"allowed_aliases":["hive-default","hive-fast","hive-auto"],
@@ -110,7 +113,8 @@ func TestHandleCatalogModelsReturnsPricingMetadata(t *testing.T) {
 }
 
 func TestHandleModelsDoesNotLeakProviderNames(t *testing.T) {
-	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{
+	var sawPath string
+	seeded := `{
 		"models": [
 			{"id":"hive-default","object":"model","created":1716935002,"owned_by":"hive"}
 		],
@@ -124,10 +128,12 @@ func TestHandleModelsDoesNotLeakProviderNames(t *testing.T) {
 				"lifecycle":"stable"
 			}
 		]
-	}`))
+	}`
+	client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t, seeded, seeded, &sawPath))
 	authorizer := newTestAuthorizer(t, http.StatusOK, `{
 		"key_id":"key-1",
 		"account_id":"acc-1",
+		"tenant_id":"`+uuid.New().String()+`",
 		"status":"active",
 		"allow_all_models":true,
 		"allowed_aliases":["hive-default"],
@@ -522,19 +528,26 @@ func TestHandleModelsFiltersByTenantForJWTSession(t *testing.T) {
 	}
 }
 
-// TestHandleModelsKeepsGlobalListForAPIKeyCaller pins the untouched API-key
-// behaviour: api_keys hang off accounts, which carry no tenant, so those callers
-// keep the global list and the key policy governs invocation.
-func TestHandleModelsKeepsGlobalListForAPIKeyCaller(t *testing.T) {
+// TestHandleModelsFiltersByTenantForAPIKeyCaller is the D-030 regression
+// guard: an API key is now tenant-scoped (control-plane resolves its
+// account's tenant via public.tenant_billing_accounts, see
+// apikeys.Service.ResolveSnapshot), so /v1/models must serve the
+// tenant-filtered list for it the same way it already does for a JWT
+// session -- not the unfiltered global catalog every API key saw before
+// this. This replaces the old TestHandleModelsKeepsGlobalListForAPIKeyCaller,
+// which pinned exactly the gap this PR closes.
+func TestHandleModelsFiltersByTenantForAPIKeyCaller(t *testing.T) {
 	var sawPath string
 	client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t,
+		`{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"},{"id":"hive-blocked","object":"model","created":2,"owned_by":"hive"}],"catalog":[]}`,
 		`{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"}],"catalog":[]}`,
-		`{"models":[],"catalog":[]}`,
 		&sawPath,
 	))
+	tenantID := uuid.New()
 	authorizer := newTestAuthorizer(t, http.StatusOK, `{
 		"key_id":"key-1",
 		"account_id":"acc-1",
+		"tenant_id":"`+tenantID.String()+`",
 		"status":"active",
 		"allow_all_models":true,
 		"allowed_aliases":["hive-default"],
@@ -553,8 +566,51 @@ func TestHandleModelsKeepsGlobalListForAPIKeyCaller(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	if sawPath != "/internal/catalog/snapshot" {
-		t.Fatalf("expected the global snapshot path for an API-key caller, got %q", sawPath)
+	if want := "/internal/catalog/snapshot/tenant/" + tenantID.String(); sawPath != want {
+		t.Fatalf("expected tenant snapshot path %q, got %q", want, sawPath)
+	}
+	if strings.Contains(rr.Body.String(), "hive-blocked") {
+		t.Fatalf("tenant-filtered list must not include a hidden alias: %s", rr.Body.String())
+	}
+}
+
+// TestHandleModelsRefusesAPIKeyWithoutTenant is the fail-closed guard: an API
+// key whose account has no public.tenant_billing_accounts row (tenant_id
+// empty on the resolved snapshot) must be refused, not served the unfiltered
+// catalog as a fallback. Without a tenant, entitlement cannot be checked at
+// all, so admitting the request would silently reopen the gap D-030 exists
+// to close.
+func TestHandleModelsRefusesAPIKeyWithoutTenant(t *testing.T) {
+	client := edgecatalog.NewClient(newCatalogSnapshotServer(t, `{
+		"models": [{"id":"hive-default","object":"model","created":1,"owned_by":"hive"}],
+		"catalog": []
+	}`))
+	authorizer := newTestAuthorizer(t, http.StatusOK, `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"policy_version":1
+	}`)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer hk_test")
+	rr := httptest.NewRecorder()
+
+	handleModels(client, authorizer).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for an API key with no resolvable tenant, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "account_not_provisioned") {
+		t.Fatalf("expected account_not_provisioned code, got %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), "hive-default") {
+		t.Fatalf("an unprovisioned API key must not see the catalog: %s", rr.Body.String())
 	}
 }
 
