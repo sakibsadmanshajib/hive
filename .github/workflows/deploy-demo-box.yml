@@ -186,6 +186,20 @@ jobs:
               });
             }
 
+      - name: Prune build cache older than 24h
+        # Measured on the demo box 2026-07-29: `docker system df` showed
+        # Build Cache at 40.87GB (30.04GB reclaimable across 339 layers),
+        # built up from every image rebuild this runner has ever done and
+        # never pruned. Reclaiming it took the box from 27G to 54G free on a
+        # 98G partition shared with everything else (Prometheus, container
+        # logs, the repo's own git checkout). `until=24h` still lets a
+        # concurrent job's fresh layers survive. Lives here rather than a
+        # host systemd timer because the box has no passwordless sudo, and
+        # this way the fix is repo-tracked. `if: always()` matters: a failed
+        # build is exactly when unused cache layers pile up the fastest.
+        if: always()
+        run: docker builder prune -f --filter until=24h
+
   sdk-replay:
     name: SDK replay against the demo box
     needs: deploy

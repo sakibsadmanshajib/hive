@@ -78,6 +78,11 @@ services:
       timeout: 3s
       retries: 5
       start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   agent-engine:
@@ -197,6 +202,11 @@ services:
         fi
         exec litellm --config=/etc/litellm/config.yaml
     command: []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   sdk-tests-js:
@@ -386,6 +396,11 @@ services:
       timeout: 3s
       retries: 5
       start_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # ──────────────────────────────────────────────────────────────────────────
@@ -433,6 +448,11 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   web-console:
@@ -449,9 +469,20 @@ services:
       NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
-    # No profiles gate on this service: it always starts regardless of which
-    # --profile flags are active, so it is part of the running set on any box
-    # (including the demo box) exactly like the profiled services below.
+    # Dev-only `next dev` server: publishes raw 0.0.0.0:3000 with no Caddy and
+    # no TLS in front of it, unlike web-console-prod below which sits behind
+    # caddy-console. Docker's published ports bypass ufw's default-deny, so
+    # this used to be an unauthenticated LAN-reachable surface on any box
+    # running `local`/`chat` (including the demo box) since it carried no
+    # profiles gate. Gated behind `dev` so it only starts when explicitly
+    # requested: `docker compose --profile dev up web-console`.
+    profiles:
+      - dev
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Blueprint Step 3.1 (#311, #305) — standalone agent console sidecar.
@@ -485,6 +516,11 @@ services:
         condition: service_healthy
     environment:
       EDGE_API_INTERNAL_BASE_URL: http://edge-api:8080
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Self-hosted production web-console (migration off Cloudflare Workers --
@@ -517,6 +553,11 @@ services:
         condition: service_healthy
     environment:
       CONTROL_PLANE_BASE_URL: http://control-plane:8081
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Own Caddy origin for web-console-prod, isolated from caddy-owui and
@@ -540,6 +581,11 @@ services:
       - ./Caddyfile.console:/etc/caddy/Caddyfile:ro
       - caddy-console-data:/data
       - caddy-console-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Hive Phase 19 — Open WebUI front-end for EnterpriseEdge and cloud chat users.
@@ -740,6 +786,11 @@ services:
     # peak under a 10-user soak; revisit if Phase 24 packaging shifts.
     mem_limit: 2g
     cpus: 2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   caddy-owui:
@@ -762,6 +813,11 @@ services:
       - ./Caddyfile.owui:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Artifacts hosting (#312) -- separate container, separate origin
@@ -788,6 +844,11 @@ services:
       - ./Caddyfile.artifacts:/etc/caddy/Caddyfile:ro
       - caddy-artifacts-data:/data
       - caddy-artifacts-config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Hive EnterpriseEdge — optional local Ollama inference backend.
@@ -821,6 +882,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Carl.sh Voice STT — Tier 1: Parakeet (English, fast, ONNX/CPU)
@@ -852,6 +918,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   # Carl.sh Voice STT — Tier 2: faster-whisper (Bangla + multilingual)
@@ -876,6 +947,11 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   prometheus:
@@ -889,9 +965,23 @@ services:
       - ../../deploy/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
       - ../../deploy/prometheus/alerts:/etc/prometheus/alerts:ro
       - prometheus-data:/prometheus
+    # Size cap alongside the existing 30d time-based retention. Measured on
+    # the demo box 2026-07-29: Prometheus data was only ~73MB, so this is
+    # prevention, not an emergency, but this partition is shared with
+    # everything else on the box, including the build cache from the
+    # self-hosted deploy runner (see deploy-demo-box.yml's builder-prune
+    # step, added in this same change). 2GB is ~27x current usage and a
+    # small slice of the ~54GB free measured right after that build-cache
+    # reclaim, on a 98GB partition.
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=30d'
+      - '--storage.tsdb.retention.size=2GB'
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
   grafana:
     image: grafana/grafana:latest
@@ -916,6 +1006,11 @@ services:
       GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
     depends_on:
       - prometheus
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
   alertmanager:
@@ -928,6 +1023,11 @@ services:
       - ../../deploy/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     restart: unless-stopped
 
 volumes:
