@@ -30,12 +30,30 @@ func mustInsertBillingMapTenant(t *testing.T, ctx context.Context, pool *pgxpool
 	return id
 }
 
-func mustInsertBillingMapAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
+// mustInsertBillingMapAuthUser seeds an auth.users row. Every one of
+// accounts.owner_user_id, account_memberships.user_id and tenant_users.user_id
+// FKs to auth.users(id) in the real schema (20260328_01_identity_foundation.sql,
+// 20260516_03_phase19_tenant_users.sql) — a throwaway schema without that FK
+// let a uuid.New() with no backing row pass locally while CI's full migration
+// chain correctly rejected it.
+func mustInsertBillingMapAuthUser(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
 	t.Helper()
 	id := uuid.New()
 	_, err := pool.Exec(ctx,
-		`INSERT INTO public.accounts(id, slug, display_name, owner_user_id) VALUES ($1, $2, $2, $3)`,
-		id, "billing-map-acct-"+uuid.NewString()[:8], uuid.New())
+		`INSERT INTO auth.users(id, email, raw_user_meta_data) VALUES ($1, $2, '{}'::jsonb)`,
+		id, "billing-map-"+id.String()+"@example.test")
+	require.NoError(t, err)
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM auth.users WHERE id = $1`, id) })
+	return id
+}
+
+func mustInsertBillingMapAccount(t *testing.T, ctx context.Context, pool *pgxpool.Pool) uuid.UUID {
+	t.Helper()
+	ownerID := mustInsertBillingMapAuthUser(t, ctx, pool)
+	id := uuid.New()
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.accounts(id, slug, display_name, account_type, owner_user_id) VALUES ($1, $2, $2, 'personal', $3)`,
+		id, "billing-map-acct-"+uuid.NewString()[:8], ownerID)
 	require.NoError(t, err)
 	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM public.accounts WHERE id = $1`, id) })
 	return id
@@ -43,7 +61,7 @@ func mustInsertBillingMapAccount(t *testing.T, ctx context.Context, pool *pgxpoo
 
 func mustAddBillingMapMember(t *testing.T, ctx context.Context, pool *pgxpool.Pool, tenantID, accountID uuid.UUID) {
 	t.Helper()
-	userID := uuid.New()
+	userID := mustInsertBillingMapAuthUser(t, ctx, pool)
 	_, err := pool.Exec(ctx,
 		`INSERT INTO public.account_memberships(account_id, user_id, role, status) VALUES ($1, $2, 'member', 'active')`,
 		accountID, userID)

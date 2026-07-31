@@ -48,6 +48,19 @@ func TestProvisionDefaultWorkspace_MapsTenantBillingAccountOnceMembershipExists(
 	tenantID := uuid.New()
 	suffix := uuid.NewString()[:8]
 
+	email := "billing-map-" + suffix + "@example.test"
+	// tenant_users.user_id FKs to auth.users(id) in the real schema (this is
+	// what CI's full-migration-chain run caught and a lighter throwaway
+	// schema did not): seed the auth.users row first, same as mustInsertAuthUser
+	// in webhook_test.go / seedMembershipOrderUser in
+	// repository_membership_order_test.go do elsewhere in this repo.
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO auth.users(id, email, raw_user_meta_data) VALUES ($1, $2, '{}'::jsonb)`,
+		userID, email); err != nil {
+		t.Fatalf("seed auth user: %v", err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(ctx, `DELETE FROM auth.users WHERE id = $1`, userID) })
+
 	// Seed the tenant_users side of the race first, exactly as
 	// signup.Provisioner leaves it: an ACTIVE tenant_users row for a
 	// HIVE_CLOUD tenant, with no account_membership yet and no billing
@@ -80,7 +93,7 @@ func TestProvisionDefaultWorkspace_MapsTenantBillingAccountOnceMembershipExists(
 
 	viewer := auth.Viewer{
 		UserID:        userID,
-		Email:         "billing-map-" + suffix + "@example.test",
+		Email:         email,
 		EmailVerified: true,
 		FullName:      "Billing Map Test",
 	}
@@ -92,6 +105,16 @@ func TestProvisionDefaultWorkspace_MapsTenantBillingAccountOnceMembershipExists(
 	t.Cleanup(func() {
 		_, _ = pool.Exec(ctx, `DELETE FROM public.account_memberships WHERE user_id = $1`, userID)
 		_, _ = pool.Exec(ctx, `DELETE FROM public.accounts WHERE owner_user_id = $1`, userID)
+	})
+	// tenant_billing_accounts.account_id is ON DELETE RESTRICT (deliberately,
+	// see 20260728_01_tenant_billing_account.sql), so the accounts delete
+	// above silently fails (its error is ignored, matching every other
+	// cleanup in this file) unless this mapping row is gone first. Registered
+	// after the accounts cleanup so it runs first under t.Cleanup's LIFO
+	// order. Without this, the account this test creates outlives the test
+	// and its constant-derived slug collides on the next local run.
+	t.Cleanup(func() {
+		_, _ = pool.Exec(ctx, `DELETE FROM public.tenant_billing_accounts WHERE tenant_id = $1`, tenantID)
 	})
 
 	var mappedAccountID uuid.UUID
