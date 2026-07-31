@@ -157,14 +157,8 @@ func (o *Orchestrator) executeSync(
 		EstimatedCredits: estimatedCredits,
 		PolicyMode:       "strict",
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "budget") || strings.Contains(err.Error(), "insufficient") {
-			code := "insufficient_quota"
-			apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota",
-				"You exceeded your current quota, please check your plan and billing details.", &code)
-			return
-		}
-		log.Printf("inference: create reservation failed (non-fatal): %v", err)
+	if err != nil && refuseOnReservationFailure(w, endpoint, model, err) {
+		return
 	}
 
 	// Ensure reservation cleanup if we return without finalizing.
