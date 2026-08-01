@@ -97,6 +97,10 @@ jobs:
       pull-requests: read
     outputs:
       run: ${{ steps.decide.outputs.run }}
+      # Narrower than `run`: true only when a changed path can actually
+      # affect the browser flow web-e2e exercises. See the decide step for
+      # the reasoning per path category (issue #659 follow-up).
+      web_e2e: ${{ steps.decide.outputs.web_e2e }}
     steps:
       - name: Decide whether the real suite must run
         id: decide
@@ -111,7 +115,14 @@ jobs:
           set -uo pipefail
 
           run_everything() {
+            # Also runs web-e2e: every one of these is a case where the
+            # diff itself is unknown (API failure, no base commit, a
+            # non-diff event, a possibly-truncated list), and the whole
+            # point of the narrower web_e2e gate below is to skip only
+            # when the actual changed paths are known and provably
+            # irrelevant to the browser flow.
             echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "web_e2e=true" >> "$GITHUB_OUTPUT"
             echo "verdict: RUN the real suite — $1"
             exit 0
           }
@@ -176,21 +187,86 @@ jobs:
           # Allow-list: paths that cannot affect any build, test or lint
           # in this workflow. Keep it narrow. Adding an entry here weakens
           # the merge gate for every future pull request.
+          #
+          # Below, the loop also computes web_e2e, a second and much
+          # narrower signal used only to gate the non-required web-e2e
+          # job (issue #659 follow-up: four unrelated PRs, a migration
+          # baseline script, a payments webhook cap, a decision ledger
+          # amendment, and a reservation reaper, all ran the full browser
+          # suite the same evening and collided on the shared Supabase
+          # pool, issue #631). Unlike `run` above, this is an opt-in
+          # allow-list: web_e2e starts false and only a path that can
+          # actually reach the booted browser flow turns it true. That
+          # is deliberately the opposite default from `run`, because
+          # `run` gates required checks (a missed skip there would hide
+          # a real regression) while web-e2e is not a required check, so
+          # a missed skip here only costs CI minutes and pool
+          # contention, not correctness. The categories, and why:
+          #   - apps/web-console/*   the app under test, and its own
+          #     Playwright specs (apps/web-console/e2e,
+          #     apps/web-console/tests/e2e).
+          #   - apps/edge-api/*, apps/control-plane/*   the two Go
+          #     services this job builds via docker/bake-action and
+          #     boots (deploy/docker/Dockerfile.edge-api,
+          #     Dockerfile.control-plane) before Playwright runs.
+          #   - packages/storage/*, packages/audit-canonical/*,
+          #     packages/embedmodel/*   go.work members actually
+          #     imported by edge-api and/or control-plane (confirmed by
+          #     grep, not assumed), so a change here changes the built
+          #     images even though the path isn't under apps/.
+          #   - deploy/docker/*   the compose files and Dockerfiles the
+          #     job runs (`docker compose ... up`, docker-bake.hcl).
+          #   - scripts/derive-pooler-dsn.py   executed directly by this
+          #     job's own "Reconstruct SUPABASE_DB_URL" step.
+          #   - .github/workflows/ci.yml   this file, so a change to the
+          #     web-e2e job definition (or to this gate) proves itself
+          #     by actually running, instead of the new wiring going
+          #     untested the way the routing integration tests did
+          #     before issue #655.
+          # Deliberately excluded: supabase/migrations/*. This job never
+          # applies the migration chain itself (unlike go-tests' own
+          # ephemeral Postgres); it runs against the shared Supabase
+          # project's already-live schema, which a new migration file
+          # does not change until separately deployed with
+          # `supabase db push`. A migration-only PR cannot affect what
+          # the browser flow exercises today. This was one of the four
+          # PRs above, and is exactly why it should not have run this
+          # suite.
+          run="false"
+          web_e2e="false"
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
               *.js | *.mjs | *.cjs | *.jsx | *.ts | *.mts | *.cts | *.tsx \
               | *.sh | *.py)
-                run_everything "'$f' is executable code"
+                run="true"
                 ;;
-              *.md | LICENSE | NOTICE) continue ;;
-              docs/* | .wolf/* | .claude/* | .vscode/* | .cursor/*) continue ;;
+              *.md | LICENSE | NOTICE) : ;;
+              docs/* | .wolf/* | .claude/* | .vscode/* | .cursor/*) : ;;
+              *) run="true" ;;
             esac
-            run_everything "'$f' is outside the docs-only allow-list"
+            case "$f" in
+              apps/web-console/* | apps/edge-api/* | apps/control-plane/* \
+              | packages/storage/* | packages/audit-canonical/* \
+              | packages/embedmodel/* | deploy/docker/* \
+              | scripts/derive-pooler-dsn.py | .github/workflows/ci.yml)
+                web_e2e="true"
+                ;;
+            esac
           done < /tmp/changed-files.txt
 
-          echo "run=false" >> "$GITHUB_OUTPUT"
-          echo "verdict: SKIP — every changed path is docs-only"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          echo "web_e2e=$web_e2e" >> "$GITHUB_OUTPUT"
+          if [ "$run" = "true" ]; then
+            echo "verdict: RUN the real suite, a changed path is outside the docs-only allow-list"
+          else
+            echo "verdict: SKIP — every changed path is docs-only"
+          fi
+          if [ "$web_e2e" = "true" ]; then
+            echo "web-e2e verdict: RUN, a changed path can affect the booted browser flow"
+          else
+            echo "web-e2e verdict: SKIP, no changed path can affect the booted browser flow"
+          fi
 
   # ------------------------------------------------------------------
   # Unit-level jobs (run on every PR including forks)
@@ -905,27 +981,37 @@ jobs:
     name: Web E2E (full stack)
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    # Interim mitigation for issue #631, not the fix. This job boots against
-    # the shared Supabase project's session mode pooler (pool_size 15), and
-    # concurrent runs exhaust it: on 2026-08-01, four unrelated PRs (#644,
-    # #646, #647, #648) ran this job at overlapping times and all four
-    # failed with `page.goto: net::ERR_ABORTED` / a 30s context timeout,
-    # which reads as a front end bug rather than the database contention it
-    # actually is. Job-level (not workflow-level) so unrelated jobs above
-    # keep running in parallel. Literal constant group, deliberately NOT
-    # `${{ github.workflow }}-${{ github.ref }}`: that idiom only dedupes
-    # within one branch and still lets different branches' runs collide on
-    # the pool, which is exactly this failure mode. `cancel-in-progress:
-    # false` because pre-empting a run that is mid-flight against the pool
-    # loses a legitimate result instead of just delaying it; this queues
-    # runs one at a time instead. The real fix (local/CI stacks on their own
-    # Postgres, or splitting session/transaction mode pools) stays open on
-    # #631.
-    concurrency:
-      group: web-e2e-shared-supabase-pool
-      cancel-in-progress: false
+    # This job boots against the shared Supabase project's session mode
+    # pooler (pool_size 15), and concurrent runs exhaust it: on 2026-08-01,
+    # four unrelated PRs (#644, #646, #647, #648) ran this job at
+    # overlapping times and all four failed with `page.goto:
+    # net::ERR_ABORTED` / a 30s context timeout, which reads as a front end
+    # bug rather than the database contention it actually is (issue #631).
+    #
+    # An earlier version of this fix serialized every web-e2e run with a
+    # job-level `concurrency:` group. That was reverted: GitHub Actions
+    # only holds one job per concurrency group as pending, so a third
+    # queued run cancels the second outright before it ever executes.
+    # web-e2e is not a required check, so a canceled result would surface
+    # nowhere and a PR could merge with no browser coverage at all, a
+    # silent gap of exactly the kind issue #659 exists to prevent (a
+    # skipped test and a passing test are indistinguishable inside a green
+    # check). Trading a noisy false-red failure for a silent absence is
+    # not a fix.
+    #
+    # What replaced it: gate this job on `needs.changes.outputs.web_e2e`
+    # (see the `changes` job's decide step for the path reasoning),
+    # instead of the blanket `needs.changes.outputs.run` every other job
+    # here uses. Two of the four PRs above, the migration baseline script
+    # and its probe, touched no path that can reach the booted browser
+    # flow and should not have run this job at all; this gate is
+    # deterministic and reviewable in a diff, unlike a queue race. It
+    # reduces how often web-e2e runs, which reduces how often two runs
+    # land on the shared pool at the same time, but does not eliminate the
+    # coupling. That real fix stays open on #631.
     if: >-
       needs.changes.outputs.run == 'true' &&
+      needs.changes.outputs.web_e2e == 'true' &&
       (github.event_name == 'push' ||
        (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository))
