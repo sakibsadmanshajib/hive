@@ -226,40 +226,79 @@ func (o *Orchestrator) executeSync(
 
 	// 8. Finalize reservation and record usage
 	if reservation.ID != "" {
-		actualCredits := estimatedCredits
-		if usage != nil {
-			actualCredits = usage.TotalTokens
-		}
-		// Do not discard this error. A failed finalize used to set finalized
-		// anyway, which skipped the deferred release and so lost the charge and
-		// stranded the hold in the same step (issue #616). Leaving finalized
-		// false hands the reservation to the deferred release instead, so it
-		// still reaches a terminal state exactly once: charged here on success,
-		// released there on failure, never both.
+		// What the provider actually reported, or an estimate from the bytes
+		// actually exchanged when it reported nothing -- never the flat
+		// reservation estimate (issue #636). estimatedCredits is a hold size,
+		// an authorization floor picked before the request ran; billing it as
+		// though it were a measurement charged a three-token reply 10000
+		// credits, and did so under TerminalUsageConfirmed = true, which tells
+		// control-plane the figure is a fact and so skips both the hold clamp
+		// and the reconciliation job that exist to correct estimates. Same
+		// settlementCredits helper the streaming path uses, so the two paths
+		// agree on what an absent usage block means.
 		//
-		// finalizeCtx, not ctx (#637): by this point the client can already
-		// have disconnected, cancelling ctx. Finalizing on ctx then fails not
-		// because the ledger rejected the charge but because the HTTP call
-		// itself aborts on the cancelled context, which fell through to the
-		// releaseReason = "finalize_failed" branch below and released a hold
-		// for work that was genuinely delivered -- converting a chargeable
-		// request into a free one for any client that disconnects at the
-		// right moment. Same fresh background context + accountingTimeout as
-		// releaseReservationBackground and settleStream (PR #602's pattern).
-		finalizeCtx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
-		err := o.accounting.FinalizeReservation(finalizeCtx, FinalizeReservationInput{
-			AccountID:              snapshot.AccountID,
-			ReservationID:          reservation.ID,
-			ActualCredits:          actualCredits,
-			TerminalUsageConfirmed: true,
-			Status:                 "completed",
-		})
-		cancel()
-		if err != nil {
-			log.Printf("inference: finalize reservation failed, releasing hold instead request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
-			releaseReason = "finalize_failed"
+		// The prompt and response text are extracted only when usage is
+		// missing: the normal path pays for neither parse.
+		hasUsage := usage != nil
+		var totalTokens int64
+		var prompt, content string
+		if hasUsage {
+			totalTokens = usage.TotalTokens
 		} else {
-			finalized = true
+			prompt, content = promptText(endpoint, body), responseText(endpoint, normalized)
+		}
+		actualCredits, billable := settlementCredits(hasUsage, totalTokens, prompt, content)
+		if !billable {
+			// Nothing measured and nothing produced: there is no quantity to
+			// charge, so leave finalized false and let the deferred release
+			// hand the hold back in full. That keeps the single-terminal-state
+			// invariant intact -- one release site, its own fresh background
+			// context -- rather than adding a second settlement call here.
+			releaseReason = "unmeasured_usage"
+			log.Printf("inference: settling unconfirmed with nothing billable, releasing hold request_id=%s reservation_id=%s endpoint=%s: upstream returned no usage and no output",
+				requestID, reservation.ID, endpoint)
+		} else {
+			if !hasUsage {
+				log.Printf("inference: settling unconfirmed usage estimate request_id=%s reservation_id=%s endpoint=%s estimated_credits=%d: upstream returned no usage block",
+					requestID, reservation.ID, endpoint, actualCredits)
+			}
+			// Do not discard this error. A failed finalize used to set finalized
+			// anyway, which skipped the deferred release and so lost the charge
+			// and stranded the hold in the same step (issue #616). Leaving
+			// finalized false hands the reservation to the deferred release
+			// instead, so it still reaches a terminal state exactly once:
+			// charged here on success, released there on failure, never both.
+			//
+			// finalizeCtx, not ctx (#637): by this point the client can already
+			// have disconnected, cancelling ctx. Finalizing on ctx then fails
+			// not because the ledger rejected the charge but because the HTTP
+			// call itself aborts on the cancelled context, which fell through
+			// to the releaseReason = "finalize_failed" branch below and
+			// released a hold for work that was genuinely delivered --
+			// converting a chargeable request into a free one for any client
+			// that disconnects at the right moment. Same fresh background
+			// context + accountingTimeout as releaseReservationBackground and
+			// settleStream (PR #602's pattern).
+			finalizeCtx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
+			err := o.accounting.FinalizeReservation(finalizeCtx, FinalizeReservationInput{
+				AccountID:     snapshot.AccountID,
+				ReservationID: reservation.ID,
+				ActualCredits: actualCredits,
+				// hasUsage, never a bare true (issue #636): this flag is
+				// control-plane's instruction to treat the figure as measured
+				// truth, bill it in full even past the hold, and skip
+				// reconciliation entirely. Only the provider's own usage block
+				// earns it.
+				TerminalUsageConfirmed: hasUsage,
+				Status:                 "completed",
+			})
+			cancel()
+			if err != nil {
+				log.Printf("inference: finalize reservation failed, releasing hold instead request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
+				releaseReason = "finalize_failed"
+			} else {
+				finalized = true
+			}
 		}
 	}
 
