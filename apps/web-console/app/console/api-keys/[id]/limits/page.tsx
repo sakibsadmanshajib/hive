@@ -1,11 +1,16 @@
 import type { ReactElement } from "react";
 import { redirect, notFound } from "next/navigation";
-import { getViewer } from "@/lib/control-plane/client";
+import {
+  ControlPlaneError,
+  getApiKeyLimits,
+  getViewer,
+  updateApiKeyLimits,
+} from "@/lib/control-plane/client";
 import { can } from "@/lib/viewer-gates";
 import {
-  getKeyLimits,
-  type ApiKeysClient,
+  parseKeyLimitsInput,
   type KeyLimits,
+  type SaveLimitsResult,
 } from "@/lib/api-keys";
 import { RateLimitForm } from "@/components/api-keys/rate-limit-form";
 
@@ -13,13 +18,17 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
-// serverFetchClient is the server-side fetch wrapper for the control-plane.
-// In the browser, the form uses window.fetch via the same ApiKeysClient
-// interface; we intentionally narrow to that interface so the form is
-// transport-agnostic and easily mocked in tests.
-const serverFetchClient: ApiKeysClient = {
-  fetch: (input, init) => fetch(input, init),
-};
+// Upstream refusals are reported in this app's own words. The upstream text can
+// name internal state, so only the status and the stable machine code are read.
+function saveErrorMessage(err: unknown): string {
+  if (err instanceof ControlPlaneError) {
+    if (err.status === 403) return "You do not have permission to change rate limits.";
+    if (err.status === 404) return "This key no longer exists.";
+    if (err.status === 422) return "One of these rate-limit values is out of range.";
+    if (err.status === 409) return "These limits were changed elsewhere. Reload and try again.";
+  }
+  return "Could not save the rate limits. Please try again.";
+}
 
 export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactElement> {
   const { id: keyID } = await props.params;
@@ -39,13 +48,42 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
 
   let limits: KeyLimits;
   try {
-    limits = await getKeyLimits(serverFetchClient, keyID);
+    limits = await getApiKeyLimits(keyID);
   } catch (err) {
-    // 404 surfaced from control-plane → next/navigation 404.
-    if (err instanceof Error && err.message.includes("404")) {
+    // A key that is not this account's own reads as 404 upstream. Branch on the
+    // status rather than on message text: the previous message match also let a
+    // transport failure through as an uncaught error and crashed the page.
+    if (err instanceof ControlPlaneError && err.status === 404) {
       notFound();
     }
     throw err;
+  }
+
+  // The write runs as a server action, so the browser form never needs the
+  // control-plane origin or a fetch client passed down from here (a function is
+  // not a serialisable prop for a Client Component in the first place).
+  async function saveLimits(input: unknown): Promise<SaveLimitsResult> {
+    "use server";
+
+    // A server action is a public endpoint: the disabled fieldset is
+    // presentation only, so permission is resolved again from the caller's own
+    // session, and the payload is parsed rather than trusted.
+    const actor = await getViewer();
+    if (!can(actor, "api_keys.write")) {
+      return { ok: false, error: "You do not have permission to change rate limits." };
+    }
+
+    const parsed = parseKeyLimitsInput(input);
+    if (parsed === null) {
+      return { ok: false, error: "These rate-limit values are not valid." };
+    }
+
+    try {
+      await updateApiKeyLimits(keyID, parsed);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: saveErrorMessage(err) };
+    }
   }
 
   return (
@@ -55,12 +93,7 @@ export default async function ApiKeyLimitsPage(props: PageProps): Promise<ReactE
         Configure per-key request and token limits. Tier overrides take
         precedence over system defaults for the matching tier.
       </p>
-      <RateLimitForm
-        keyID={keyID}
-        initial={limits}
-        canEdit={canEdit}
-        client={serverFetchClient}
-      />
+      <RateLimitForm initial={limits} canEdit={canEdit} onSave={saveLimits} />
     </main>
   );
 }

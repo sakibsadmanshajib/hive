@@ -1,13 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
-  getKeyLimits,
   parseKeyLimits,
+  parseKeyLimitsInput,
   RATE_LIMIT_RPM_MAX,
   RATE_LIMIT_TPM_MAX,
   TIER_NAMES,
-  updateKeyLimits,
   validateLimits,
-  type ApiKeysClient,
 } from "@/lib/api-keys";
 
 describe("parseKeyLimits", () => {
@@ -57,37 +55,39 @@ describe("validateLimits", () => {
   });
 });
 
-describe("api-keys client", () => {
-  const stubClient = (resp: Response): ApiKeysClient => ({
-    fetch: vi.fn().mockResolvedValue(resp),
+// Transport now lives in lib/control-plane/client.ts and is covered by
+// __tests__/api-key-limits-client.test.ts (issue #552).
+describe("parseKeyLimitsInput", () => {
+  it("rejects payloads that are not a limits input", () => {
+    expect(parseKeyLimitsInput(null)).toBeNull();
+    expect(parseKeyLimitsInput("60")).toBeNull();
+    expect(parseKeyLimitsInput([60, 4000])).toBeNull();
+    expect(parseKeyLimitsInput({ rpm: 60 })).toBeNull();
+    expect(parseKeyLimitsInput({ rpm: "60", tpm: 4000 })).toBeNull();
   });
 
-  it("getKeyLimits parses the response", async () => {
-    const body = {
-      api_key_id: "k1",
-      rpm: 100,
-      tpm: 5000,
-      tier_overrides: { verified: { rpm: 80, tpm: 4000 } },
-    };
-    const c = stubClient(new Response(JSON.stringify(body), { status: 200 }));
-    const out = await getKeyLimits(c, "k1");
-    expect(out.rpm).toBe(100);
-    expect(out.tier_overrides.verified?.rpm).toBe(80);
+  it("accepts a valid input and drops unknown tiers", () => {
+    const parsed = parseKeyLimitsInput({
+      rpm: 60,
+      tpm: 4000,
+      tier_overrides: {
+        verified: { rpm: 30, tpm: 2000 },
+        platinum: { rpm: 1, tpm: 1 },
+      },
+    });
+    expect(parsed).toEqual({
+      rpm: 60,
+      tpm: 4000,
+      tier_overrides: { verified: { rpm: 30, tpm: 2000 } },
+    });
   });
 
-  it("updateKeyLimits validates first and short-circuits", async () => {
-    const c = stubClient(new Response("ignored", { status: 200 }));
-    await expect(
-      updateKeyLimits(c, "k1", { rpm: -1, tpm: 0, tier_overrides: {} }),
-    ).rejects.toThrow(/RPM/);
-    expect(c.fetch).not.toHaveBeenCalled();
-  });
-
-  it("updateKeyLimits surfaces non-OK status", async () => {
-    const c = stubClient(new Response("nope", { status: 422 }));
-    await expect(
-      updateKeyLimits(c, "k1", { rpm: 1, tpm: 1, tier_overrides: {} }),
-    ).rejects.toThrow(/422/);
+  it("treats a missing override map as no overrides", () => {
+    expect(parseKeyLimitsInput({ rpm: 0, tpm: 0 })).toEqual({
+      rpm: 0,
+      tpm: 0,
+      tier_overrides: {},
+    });
   });
 });
 

@@ -4,20 +4,21 @@ import { useState, type FormEvent, type ReactElement } from "react";
 import {
   TIER_NAMES,
   validateLimits,
-  type ApiKeysClient,
   type KeyLimits,
   type KeyLimitsInput,
+  type SaveLimitsResult,
   type TierLimit,
   type TierName,
   type TierOverrides,
 } from "@/lib/api-keys";
-import { updateKeyLimits } from "@/lib/api-keys";
 
 interface RateLimitFormProps {
-  keyID: string;
   initial: KeyLimits;
   canEdit: boolean;
-  client: ApiKeysClient;
+  // Server action supplied by the page. Issue #552: this used to be a fetch
+  // client, which is neither serialisable across the Server/Client boundary
+  // nor able to resolve the control-plane origin from the browser.
+  onSave: (input: KeyLimitsInput) => Promise<SaveLimitsResult>;
 }
 
 interface FormState {
@@ -51,7 +52,7 @@ function clearTier(overrides: TierOverrides, tier: TierName): TierOverrides {
   return next;
 }
 
-export function RateLimitForm({ keyID, initial, canEdit, client }: RateLimitFormProps): ReactElement {
+export function RateLimitForm({ initial, canEdit, onSave }: RateLimitFormProps): ReactElement {
   const [state, setState] = useState<FormState>(() => initialState(initial));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,10 +73,16 @@ export function RateLimitForm({ keyID, initial, canEdit, client }: RateLimitForm
     }
     setSubmitting(true);
     try {
-      await updateKeyLimits(client, keyID, input);
-      setSavedAt(Date.now());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const result = await onSave(input);
+      if (result.ok) {
+        setSavedAt(Date.now());
+      } else {
+        setError(result.error);
+      }
+    } catch {
+      // A thrown action means the request never completed (network drop, or a
+      // redacted server error). Nothing was saved, so say only that.
+      setError("Could not save the rate limits. Please try again.");
     } finally {
       setSubmitting(false);
     }
