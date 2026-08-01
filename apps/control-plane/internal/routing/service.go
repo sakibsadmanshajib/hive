@@ -24,6 +24,11 @@ var (
 	// tenant holds no grant). It is a policy verdict, not a capability
 	// mismatch and not an outage, so callers map it to 403.
 	ErrModelNotEntitled = errors.New("routing: model not entitled for tenant")
+	// ErrAliasNotPriced is returned when an alias resolves to a route but
+	// carries no usable price: either no public.model_aliases row at all, or
+	// a row whose input and output prices are both zero. Selecting it would
+	// price every request at nothing, so routing refuses instead. Issue #617.
+	ErrAliasNotPriced = errors.New("routing: alias has no usable price")
 )
 
 // TenantEntitlements resolves per-tenant model entitlement. *catalog.Service is
@@ -154,6 +159,19 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	pricing, err := s.repo.LoadAliasPricing(ctx, aliasID)
 	if err != nil {
 		return SelectionResult{}, fmt.Errorf("routing: load alias pricing for %s: %w", aliasID, err)
+	}
+
+	// Fail closed on an alias with no usable price (issue #617). Both prices
+	// at zero means either no model_aliases row (LoadAliasPricing returns the
+	// zero value for that case) or a row that was never priced. Returning it
+	// would hand the caller a route that costs nothing, and the floor-at-1
+	// rule in the metering gate would then charge one credit for a request of
+	// any size. This is the same both-zero condition metering's
+	// RouteInfo.HasCostBasis uses, so an alias that legitimately prices only
+	// one side (embeddings are input-only, voice is output-only) stays
+	// selectable.
+	if pricing.InputPriceCredits <= 0 && pricing.OutputPriceCredits <= 0 {
+		return SelectionResult{}, fmt.Errorf("%w: %s", ErrAliasNotPriced, aliasID)
 	}
 
 	return SelectionResult{

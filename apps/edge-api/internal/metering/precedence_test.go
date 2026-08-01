@@ -236,3 +236,98 @@ func TestPriceEstimate_LegacyIsFlatTokenSum(t *testing.T) {
 		t.Errorf("legacy = %d, want 150", legacy)
 	}
 }
+
+// --- Issue #617: catalog price correction -------------------------------
+//
+// The seeded catalog prices were arbitrary placeholders sitting 333x to
+// 7375x below real provider rates. The migration
+// 20260801_01_alias_pricing_correction.sql replaces them with
+// ceil(provider list price per million * 1.4 * CreditsPerUSD).
+//
+// The trap these tests exist to avoid: priceEstimate floors a billable
+// request at 1 credit, so at small token counts a badly under-priced alias
+// and a correctly priced one BOTH return 1. An assertion written with tens
+// of tokens passes with the bug fully intact. Every assertion below
+// therefore uses thousands of tokens, and every expected figure is computed
+// by hand in the comment so a later price change cannot silently invalidate
+// the test -- it has to fail and be re-derived.
+
+// correctedHiveFast mirrors the post-migration public.model_aliases row for
+// hive-fast: Groq openai/gpt-oss-20b at 0.075 in / 0.30 out USD per million,
+// times the 1.4 margin multiplier, times CreditsPerUSD (100_000).
+//
+//	input:  0.075 * 1.4 * 100_000 = 10_500
+//	output: 0.300 * 1.4 * 100_000 = 42_000
+var correctedHiveFast = RouteInfo{InputPriceCredits: 10_500, OutputPriceCredits: 42_000}
+
+// correctedHiveDefault mirrors hive-default: OpenRouter openai/gpt-4o-mini
+// at 0.15 in / 0.60 out USD per million.
+//
+//	input:  0.15 * 1.4 * 100_000 = 21_000
+//	output: 0.60 * 1.4 * 100_000 = 84_000
+var correctedHiveDefault = RouteInfo{InputPriceCredits: 21_000, OutputPriceCredits: 84_000}
+
+// TestPriceEstimate_CorrectedPricesBillHighTokenRequests is requirement (a):
+// a high-token request must bill the corrected amount, not the floored 1
+// credit the placeholder prices produced.
+func TestPriceEstimate_CorrectedPricesBillHighTokenRequests(t *testing.T) {
+	// hive-fast, 40k prompt + 12k completion:
+	//   40_000 * 10_500 =   420_000_000
+	//   12_000 * 42_000 =   504_000_000
+	//   sum             =   924_000_000
+	//   / 1_000_000     =           924 exactly, remainder 0
+	_, fast := priceEstimate(correctedHiveFast, 40_000, 12_000, VerdictBillable)
+	if fast != 924 {
+		t.Errorf("hive-fast perModel = %d, want 924", fast)
+	}
+
+	// hive-default, 50k prompt + 10k completion:
+	//   50_000 * 21_000 = 1_050_000_000
+	//   10_000 * 84_000 =   840_000_000
+	//   sum             = 1_890_000_000
+	//   / 1_000_000     =         1_890 exactly, remainder 0
+	_, def := priceEstimate(correctedHiveDefault, 50_000, 10_000, VerdictBillable)
+	if def != 1_890 {
+		t.Errorf("hive-default perModel = %d, want 1890", def)
+	}
+}
+
+// TestPriceEstimate_PlaceholderPricesUnderchargedAtHighTokenCounts is the
+// regression guard for issue #617 itself. It pins the size of the defect at
+// a realistic request size, so a revert to the placeholder numbers fails
+// here loudly rather than being absorbed by the floor.
+func TestPriceEstimate_PlaceholderPricesUnderchargedAtHighTokenCounts(t *testing.T) {
+	placeholderHiveFast := RouteInfo{InputPriceCredits: 8, OutputPriceCredits: 24}
+
+	// 40_000 * 8 + 12_000 * 24 = 320_000 + 288_000 = 608_000
+	// 608_000 / 1_000_000 = 0 remainder 608_000; 2*608_000 >= 1_000_000 so
+	// round half up gives 1. Billable, so the floor is not even reached.
+	_, placeholder := priceEstimate(placeholderHiveFast, 40_000, 12_000, VerdictBillable)
+	if placeholder != 1 {
+		t.Errorf("placeholder perModel = %d, want 1 (this is the #617 defect)", placeholder)
+	}
+
+	_, corrected := priceEstimate(correctedHiveFast, 40_000, 12_000, VerdictBillable)
+	if corrected <= placeholder {
+		t.Fatalf("corrected (%d) must exceed placeholder (%d)", corrected, placeholder)
+	}
+	if corrected/placeholder != 924 {
+		t.Errorf("corrected/placeholder = %d, want 924x", corrected/placeholder)
+	}
+}
+
+// TestPriceEstimate_LowTokenCountsMaskTheDefect documents why every
+// assertion above uses thousands of tokens. At 20 tokens the placeholder and
+// the corrected price produce the SAME answer, because the floor-at-1 rule
+// swallows the difference. A test written this way would have passed
+// throughout the entire lifetime of issue #617.
+func TestPriceEstimate_LowTokenCountsMaskTheDefect(t *testing.T) {
+	placeholderHiveFast := RouteInfo{InputPriceCredits: 8, OutputPriceCredits: 24}
+
+	_, placeholder := priceEstimate(placeholderHiveFast, 15, 5, VerdictBillable)
+	_, corrected := priceEstimate(correctedHiveFast, 15, 5, VerdictBillable)
+
+	if placeholder != 1 || corrected != 1 {
+		t.Fatalf("expected both to floor to 1 at 20 tokens, got placeholder=%d corrected=%d", placeholder, corrected)
+	}
+}
