@@ -92,6 +92,20 @@ type SelectRouteResult struct {
 	LiteLLMModelName string   `json:"litellm_model_name"`
 	Provider         string   `json:"provider"`
 	FallbackRouteIDs []string `json:"fallback_route_ids"`
+
+	// Pricing and PriceUnit carry the alias's catalog price to the caller so a
+	// charge can be derived from it instead of from a literal (#627). The
+	// price is alias-stable, never route-stable: one alias maps to one price
+	// whichever candidate route serves it (D-032).
+	Pricing   SelectRoutePricing `json:"pricing"`
+	PriceUnit string             `json:"price_unit"`
+}
+
+// SelectRoutePricing is the subset of the control-plane's catalog pricing
+// payload edge-api charges against: credits per MILLION metered units.
+type SelectRoutePricing struct {
+	InputPriceCredits  int64 `json:"input_price_credits"`
+	OutputPriceCredits int64 `json:"output_price_credits"`
 }
 
 // RoutingClient calls the control-plane routing endpoint.

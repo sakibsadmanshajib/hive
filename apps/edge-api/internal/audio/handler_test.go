@@ -62,14 +62,23 @@ func (a *mockAudioAuthorizer) AuthorizeRequest(_ *http.Request) (audio.AuthResul
 // mockAudioRouting is a stub that echoes the alias as the LiteLLM model name
 // and records the last TenantID it was called with, so tests can prove the
 // handler threads AuthResult.TenantID through to RouteInput (#623).
+//
+// unitPriceCredits and priceUnit stand in for the alias's catalog price row
+// (#627). Left unset, the stub answers with the unit the requested capability
+// meters and a plausible price, so a test that is not about pricing does not
+// have to say anything about it.
 type mockAudioRouting struct {
-	litellmModel   string
-	lastTenantID   string
-	selectRouteErr error
+	litellmModel     string
+	lastTenantID     string
+	lastAliasID      string
+	unitPriceCredits int64
+	priceUnit        string
+	selectRouteErr   error
 }
 
 func (r *mockAudioRouting) SelectRoute(_ context.Context, input audio.RouteInput) (audio.RouteResult, error) {
 	r.lastTenantID = input.TenantID
+	r.lastAliasID = input.AliasID
 	if r.selectRouteErr != nil {
 		return audio.RouteResult{}, r.selectRouteErr
 	}
@@ -77,33 +86,63 @@ func (r *mockAudioRouting) SelectRoute(_ context.Context, input audio.RouteInput
 	if litellm == "" {
 		litellm = input.AliasID
 	}
-	return audio.RouteResult{AliasID: input.AliasID, LiteLLMModelName: litellm}, nil
+	unit, price := r.priceUnit, r.unitPriceCredits
+	if unit == "" {
+		unit = audio.PriceUnitSeconds
+		if input.NeedTTS {
+			unit = audio.PriceUnitCharacters
+		}
+	}
+	if price == 0 {
+		price = 1_000_000
+	}
+	return audio.RouteResult{
+		AliasID:          input.AliasID,
+		LiteLLMModelName: litellm,
+		UnitPriceCredits: price,
+		PriceUnit:        unit,
+	}, nil
 }
 
 // mockAudioAccounting is a stub that tracks reservation calls.
 type mockAudioAccounting struct {
-	reservationID  string
-	createErr      error
-	finalizeErr    error
-	finalizeCalled bool
-	releaseCalled  bool
+	reservationID        string
+	createErr            error
+	finalizeErr          error
+	releaseErr           error
+	createCalled         bool
+	finalizeCalled       bool
+	releaseCalled        bool
+	lastEstimatedCredits int64
+	lastActualCredits    int64
+	// releaseCtxErr captures ctx.Err() as observed by ReleaseReservation and
+	// releaseCtxHasDeadline whether that context was bounded, so a test can
+	// prove a release ran on its own live, bounded context rather than on an
+	// already-cancelled request context (#616).
+	releaseCtxErr         error
+	releaseCtxHasDeadline bool
 }
 
-func (a *mockAudioAccounting) CreateReservation(_ context.Context, _ audio.ReservationInput) (string, error) {
+func (a *mockAudioAccounting) CreateReservation(_ context.Context, input audio.ReservationInput) (string, error) {
+	a.createCalled = true
+	a.lastEstimatedCredits = input.EstimatedCredits
 	if a.createErr != nil {
 		return "", a.createErr
 	}
 	return a.reservationID, nil
 }
 
-func (a *mockAudioAccounting) FinalizeReservation(_ context.Context, _ audio.FinalizeInput) error {
+func (a *mockAudioAccounting) FinalizeReservation(_ context.Context, input audio.FinalizeInput) error {
 	a.finalizeCalled = true
+	a.lastActualCredits = input.ActualCredits
 	return a.finalizeErr
 }
 
-func (a *mockAudioAccounting) ReleaseReservation(_ context.Context, _, _, _ string) error {
+func (a *mockAudioAccounting) ReleaseReservation(ctx context.Context, _, _, _ string) error {
 	a.releaseCalled = true
-	return nil
+	a.releaseCtxErr = ctx.Err()
+	_, a.releaseCtxHasDeadline = ctx.Deadline()
+	return a.releaseErr
 }
 
 func buildAudioHandler(litellmBaseURL string) *audio.Handler {
@@ -254,7 +293,7 @@ func TestAudioModelAliasRewrite(t *testing.T) {
 		receivedBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"test transcription"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"test transcription","duration":4.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -287,7 +326,7 @@ func TestAudioNoStorageInTranscription(t *testing.T) {
 	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"no storage please"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"no storage please","duration":6.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -430,13 +469,22 @@ func buildHandlerWithSTT(parakeetURL, fasterWhisperURL string) *audio.Handler {
 	return h
 }
 
+// attachSTT points an existing handler at one fake local STT backend for both
+// language tiers.
+func attachSTT(h *audio.Handler, backendURL string) {
+	h.WithSTT(stt.NewTieredClient(stt.Config{
+		ParakeetBaseURL:      backendURL,
+		FasterWhisperBaseURL: backendURL,
+	}))
+}
+
 // TestTranscriptionRoutesToSTTNotLiteLLM proves that when WithSTT is set,
 // POST /v1/audio/transcriptions hits the STT backend, not LiteLLM.
 func TestTranscriptionRoutesToSTTNotLiteLLM(t *testing.T) {
 	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"routed to stt"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"routed to stt","duration":12.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -480,7 +528,7 @@ func TestTranscriptionForwardedBodyIsNonEmpty(t *testing.T) {
 		receivedBody, _ = io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"ok"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"ok","duration":8.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -572,7 +620,7 @@ func TestTranscriptionReservationCreatedAndFinalizedOnSuccess(t *testing.T) {
 	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"billed ok"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"billed ok","duration":30.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -647,7 +695,7 @@ func TestParakeetAPIKeyForwardedWhenSet(t *testing.T) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"auth ok"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"auth ok","duration":5.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -689,7 +737,7 @@ func TestParakeetAPIKeyAbsentWhenNotConfigured(t *testing.T) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"no auth ok"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"no auth ok","duration":5.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 
@@ -850,7 +898,7 @@ func TestTranscriptionSTTFinalizeFailureReleasesReservation(t *testing.T) {
 	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"text":"ok"}`)) //nolint:errcheck
+		w.Write([]byte(`{"text":"ok","duration":8.0}`)) //nolint:errcheck
 	}))
 	defer sttBackend.Close()
 

@@ -20,7 +20,12 @@ type Repository interface {
 	// mean the same thing: no cost basis. SelectRoute turns that zero value
 	// into ErrAliasNotPriced and refuses the selection (issue #617), so a
 	// missing price fails closed there, not here.
-	LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error)
+	//
+	// The second return is model_aliases.price_unit, the unit the price is
+	// quoted in per million (tokens, characters, seconds). It travels with the
+	// price rather than beside it because a price without its unit cannot be
+	// charged against safely (issue #627).
+	LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, string, error)
 }
 
 type pgxRepository struct {
@@ -124,23 +129,28 @@ func (r *pgxRepository) ListRouteCandidates(ctx context.Context, aliasID string)
 // addition to one query on the pool routing already holds, with no new
 // cross-package call and no new network hop (metering step 2 brief section
 // 2.5).
-func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error) {
+func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, string, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT
 			input_price_credits,
 			output_price_credits,
 			cache_read_price_credits,
-			cache_write_price_credits
+			cache_write_price_credits,
+			price_unit
 		FROM public.model_aliases
 		WHERE alias_id = $1
 	`, aliasID)
 
-	var pricing catalog.CatalogPricing
+	var (
+		pricing   catalog.CatalogPricing
+		priceUnit string
+	)
 	if err := row.Scan(
 		&pricing.InputPriceCredits,
 		&pricing.OutputPriceCredits,
 		&pricing.CacheReadPriceCredits,
 		&pricing.CacheWritePriceCredits,
+		&priceUnit,
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			// No model_aliases row for an alias the routing tables already
@@ -150,12 +160,12 @@ func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (c
 			// see ErrAliasNotPriced. A provider_routes row cannot outlive its
 			// alias anyway (FK with ON DELETE CASCADE), so in practice this
 			// branch is only reachable if the two reads race a deletion.
-			return catalog.CatalogPricing{}, nil
+			return catalog.CatalogPricing{}, "", nil
 		}
-		return catalog.CatalogPricing{}, fmt.Errorf("routing: load alias pricing: %w", err)
+		return catalog.CatalogPricing{}, "", fmt.Errorf("routing: load alias pricing: %w", err)
 	}
 
-	return pricing, nil
+	return pricing, priceUnit, nil
 }
 
 type rowScanner interface {

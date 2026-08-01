@@ -60,5 +60,10 @@ func (a *RoutingAdapter) SelectRoute(ctx context.Context, input RouteInput) (Rou
 	return RouteResult{
 		AliasID:          result.AliasID,
 		LiteLLMModelName: result.LiteLLMModelName,
+		// Non-token modalities meter a single quantity, priced in
+		// output_price_credits with input_price_credits constrained to zero at
+		// the database level, so there is exactly one price to carry (#627).
+		UnitPriceCredits: result.Pricing.OutputPriceCredits,
+		PriceUnit:        result.PriceUnit,
 	}, nil
 }

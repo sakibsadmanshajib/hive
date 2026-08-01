@@ -67,10 +67,26 @@ import (
 // liveRoutingStub pins every SelectRoute call to one real provider model
 // name, standing in for the alias -> route mapping that migration
 // 20260717_02 seeds into provider_routes for the normal (LiteLLM) path.
+//
+// The prices it answers with are the ones migration 20260801_02 writes for
+// hive-tts and hive-stt, in the units those endpoints meter. The handler
+// refuses a request it cannot price (#627), so a stub that returned no price
+// would refuse both legs of this round trip before either provider was
+// reached.
 type liveRoutingStub struct{ providerModel string }
 
 func (r liveRoutingStub) SelectRoute(_ context.Context, input audio.RouteInput) (audio.RouteResult, error) {
-	return audio.RouteResult{AliasID: input.AliasID, LiteLLMModelName: r.providerModel}, nil
+	result := audio.RouteResult{
+		AliasID:          input.AliasID,
+		LiteLLMModelName: r.providerModel,
+		UnitPriceCredits: 4_316_667,
+		PriceUnit:        audio.PriceUnitSeconds,
+	}
+	if input.NeedTTS {
+		result.UnitPriceCredits = 3_080_000
+		result.PriceUnit = audio.PriceUnitCharacters
+	}
+	return result, nil
 }
 
 type liveAuthStub struct{}
