@@ -130,6 +130,27 @@ jobs:
           PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: scripts/apply-migrations.sh
 
+      - name: Report whether nightly metering retention is scheduled
+        # Issue #645. 20260729_02 sets the purge job up behind two guards that
+        # each degrade to a RAISE NOTICE, correctly, since nothing else in that
+        # migration needs pg_cron. The cost is that a host where the extension
+        # cannot be created silently gets no retention at all, evidenced only by
+        # a notice in a log nobody rereads after the run goes green.
+        #
+        # This step reports that state instead of leaving it buried. It is NOT a
+        # gate and never fails the job: on a host without pg_cron the extension
+        # genuinely cannot be created, and blocking every deploy for that is the
+        # mistake the guards already avoid. Absence surfaces as a ::warning::
+        # annotation on the run summary. The migration step above is unchanged
+        # and still fails the deploy on a real migration error.
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ env.PG_POOL_PORT }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: scripts/check-retention-schedule.sh
+
   deploy:
     name: Pull + recreate stack on the demo box
     needs: migrate
