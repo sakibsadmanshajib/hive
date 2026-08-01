@@ -287,6 +287,13 @@ jobs:
             psql "$dsn" -v ON_ERROR_STOP=1 -f "$f"
           done
           echo "HIVE_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # Same ephemeral database, same full migration chain (including
+          # 20260801_01_alias_pricing_correction.sql), read via the routing
+          # package's own env var name (issue #655). Separate name from
+          # HIVE_TEST_DB_URL because the integration test predates this
+          # wiring and was never plumbed into any workflow; no reason to
+          # rename it now that it is.
+          echo "ROUTING_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: go test — RLS suites against live Postgres (control-plane, edge-api only)
         if: >-
@@ -296,7 +303,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ matrix.module }}" = "control-plane" ]; then
-            go test -count=1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/...
+            # -tags integration additionally compiles in
+            # routing/catalog_pricing_integration_test.go (issue #655), which
+            # carries a //go:build integration constraint the other packages
+            # below do not use; passing the tag is a no-op for them.
+            go test -tags integration -count=1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/...
           else
             go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
           fi
