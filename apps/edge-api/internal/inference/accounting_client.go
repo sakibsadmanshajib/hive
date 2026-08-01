@@ -25,7 +25,12 @@ type AccountingClient struct {
 // box against Supabase us-east-1). The former 5s budget cut that call off
 // mid-flight: control-plane still committed the reservation while edge-api
 // saw a timeout, so /v1/audio/* answered 402 and the credit hold leaked.
-const accountingTimeout = 30 * time.Second
+//
+// A var, not a const, so tests can shrink it to exercise the
+// deadline-exhaustion path in milliseconds instead of real seconds. Same
+// reason the audio and images packages made their releaseTimeout a var in
+// PR #650.
+var accountingTimeout = 30 * time.Second
 
 // NewAccountingClient creates a new AccountingClient.
 func NewAccountingClient(baseURL string) *AccountingClient {

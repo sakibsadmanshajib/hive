@@ -402,9 +402,6 @@ func settlementCredits(hasUsage bool, totalTokens int64, prompt, content string)
 // or finalize. That must not also drop the usage telemetry for the request --
 // see the reservation.ID == "" branches below.
 func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, promptBody, content string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
-	defer cancel()
-
 	// Parse promptBody (the raw request bytes) down to just the message/input
 	// text before estimating -- see promptText in usage_clamp.go for why the
 	// raw bytes themselves must never be counted directly (issue #602).
@@ -415,16 +412,21 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 			reason, eventType = "client_disconnect", "interrupted"
 		}
 		if reservation.ID != "" {
-			if err := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
+			releaseCtx, cancelRelease := freshSettlementCtx()
+			err := o.accounting.ReleaseReservation(releaseCtx, ReleaseReservationInput{
 				AccountID:     snapshot.AccountID,
 				ReservationID: reservation.ID,
 				Reason:        reason,
-			}); err != nil {
+			})
+			cancelRelease()
+			if err != nil {
 				log.Printf("inference: settle release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
 				return false
 			}
 		}
-		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc, eventType)
+		eventCtx, cancelEvent := freshSettlementCtx()
+		defer cancelEvent()
+		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, eventType)
 		return true
 	}
 
@@ -432,35 +434,75 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		// No reservation ever existed to finalize, but the request still
 		// delivered billable content -- record it so the telemetry isn't
 		// silently dropped just because CreateReservation failed earlier.
-		o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
+		eventCtx, cancelEvent := freshSettlementCtx()
+		defer cancelEvent()
+		o.recordCompletedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
 		return true
 	}
 
-	if err := o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
+	finalizeCtx, cancelFinalize := freshSettlementCtx()
+	err := o.accounting.FinalizeReservation(finalizeCtx, FinalizeReservationInput{
 		AccountID:              snapshot.AccountID,
 		ReservationID:          reservation.ID,
 		ActualCredits:          credits,
 		TerminalUsageConfirmed: acc.HasUsage,
 		Status:                 "completed",
-	}); err != nil {
+	})
+	// Cancelled the moment finalize returns, never before: the call has
+	// already completed, so this can only release the timer, never abort a
+	// charge in flight. Nothing below reads finalizeCtx.
+	cancelFinalize()
+	if err != nil {
 		log.Printf("inference: settle finalize failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
 		// A failed finalize must not leave the hold stranded: fall back to a
 		// full release so the customer's credits are freed rather than
 		// locked forever behind a charge that never landed.
-		if relErr := o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
+		releaseCtx, cancelRelease := freshSettlementCtx()
+		relErr := o.accounting.ReleaseReservation(releaseCtx, ReleaseReservationInput{
 			AccountID:     snapshot.AccountID,
 			ReservationID: reservation.ID,
 			Reason:        "finalize_failed",
-		}); relErr != nil {
+		})
+		cancelRelease()
+		if relErr != nil {
 			log.Printf("inference: settle finalize-fallback release failed request_id=%s reservation_id=%s: %v", requestID, reservation.ID, relErr)
 			return false
 		}
 		log.Printf("inference: settle finalize failed, released reservation instead request_id=%s reservation_id=%s", requestID, reservation.ID)
-		o.recordInterruptedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc, "finalize_failed")
+		eventCtx, cancelEvent := freshSettlementCtx()
+		defer cancelEvent()
+		o.recordInterruptedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc, "finalize_failed")
 		return true
 	}
-	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
+	eventCtx, cancelEvent := freshSettlementCtx()
+	defer cancelEvent()
+	o.recordCompletedEvent(eventCtx, snapshot, attempt, requestID, endpoint, model, acc.ToUsageResponse())
 	return true
+}
+
+// freshSettlementCtx returns a new background context carrying a full
+// accountingTimeout budget, never the caller's request context: a client
+// disconnect is exactly what cancels that one.
+//
+// Every settlement call takes its own rather than sharing one across the
+// sequence. settleStream used to build a single context and reuse it for
+// finalize and for the fallback release that follows a failed finalize, so a
+// finalize that was merely SLOW rather than instantly failing consumed the
+// whole window and the release then ran on an already-expired context, never
+// left the gateway, and stranded the hold: #616's failure mode reintroduced
+// on the highest-traffic path (#657). The same starvation applied to the
+// usage events recorded after settlement, which would silently vanish.
+//
+// PR #650 established this shape for the audio and images settlement paths;
+// this is the same fix on the streaming path.
+//
+// The cost is that the worst case settlement window is now the sum of each
+// call's budget rather than one shared budget, so it roughly doubles on the
+// finalize-then-release path. That is the correct trade against stranding a
+// customer's credits, and it widens #649 for streaming in the same way #650
+// widened it for media.
+func freshSettlementCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), accountingTimeout)
 }
 
 func (o *Orchestrator) recordInterruptedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, acc *UsageAccumulator, eventType string) {
