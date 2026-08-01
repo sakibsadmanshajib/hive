@@ -122,6 +122,14 @@ jobs:
         # string, because DSN parameters are per-driver and a pgx-only parameter
         # in a libpq value is rejected outright (that mistake has already
         # crash-looped a container and cost ~50 minutes of chat downtime).
+        #
+        # On a database whose ledger is empty, the script probes the schema
+        # before deciding whether scripts/migration-baseline.conf describes that
+        # database (issue #676). A brand new database runs the whole chain; a
+        # database that predates the ledger seeds the baseline as before; a
+        # state that is neither aborts this step and prints what it needs. That
+        # abort is the intended outcome, not a flake: the alternative is a green
+        # deploy over schema that was never created.
         env:
           PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
           PGPORT: ${{ env.PG_POOL_PORT }}
