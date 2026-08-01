@@ -117,20 +117,51 @@ GRANT SELECT ON public.audit_cold_archive_manifest TO auditor_ro;
 ALTER TABLE public.audit_cold_archive_manifest ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.audit_cold_archive_manifest FORCE ROW LEVEL SECURITY;
 
-CREATE POLICY manifest_service_role_all
-  ON public.audit_cold_archive_manifest
-  AS PERMISSIVE
-  FOR ALL
-  TO hive_app
-  USING (true)
-  WITH CHECK (true);
+-- These two policies are guarded, unlike the rest of this file, because they
+-- are the only objects here that already exist on the demo database: an
+-- exhaustive probe on 2026-07-31 found this migration partially applied, with
+-- 2 of its 19 objects present and 17 absent. 20260625_06 drops and recreates
+-- audit_cold_archive_manifest CASCADE along with its policies, which is how
+-- these two came to exist independently of this file.
+--
+-- The guard creates each policy only when it is absent, and never drops or
+-- replaces one that is present, so whatever a later migration established
+-- stays exactly as it is. Without this, re-running the file to close the 17
+-- missing objects aborts on "policy already exists" and takes the deploy gate
+-- with it. Ordering on a fresh database is unaffected: this file still runs
+-- before 20260625_06, which drops the table regardless.
+DO $manifest_policies$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'audit_cold_archive_manifest'
+      AND policyname = 'manifest_service_role_all'
+  ) THEN
+    CREATE POLICY manifest_service_role_all
+      ON public.audit_cold_archive_manifest
+      AS PERMISSIVE
+      FOR ALL
+      TO hive_app
+      USING (true)
+      WITH CHECK (true);
+  END IF;
 
-CREATE POLICY manifest_auditor_select
-  ON public.audit_cold_archive_manifest
-  AS PERMISSIVE
-  FOR SELECT
-  TO auditor_ro
-  USING (true);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'audit_cold_archive_manifest'
+      AND policyname = 'manifest_auditor_select'
+  ) THEN
+    CREATE POLICY manifest_auditor_select
+      ON public.audit_cold_archive_manifest
+      AS PERMISSIVE
+      FOR SELECT
+      TO auditor_ro
+      USING (true);
+  END IF;
+END;
+$manifest_policies$;
 
 -- ─────────────── M5: SELECT-wrap auth.jwt() in tenant RLS ────────────
 -- Postgres invokes `auth.jwt()` once per row scanned when the call

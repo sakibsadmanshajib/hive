@@ -66,7 +66,21 @@ BEGIN
   ) INTO pg_cron_available;
 
   IF pg_cron_available THEN
-    EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
+    -- The pg_available_extensions check above only proves the extension files
+    -- are on disk. CREATE EXTENSION can still raise: pg_cron must also be in
+    -- shared_preload_libraries (issue #615, the installed but not preloaded
+    -- variant), and creating an extension requires privileges the migration
+    -- role may not hold on a managed instance. Neither case is a reason to
+    -- abort the whole migration, because everything below this block, the
+    -- config table and the purge procedure, has no pg_cron dependency at all.
+    -- Without this handler the failure aborts the transaction and takes the
+    -- deploy gate with it, which is precisely the trap this file already
+    -- documents avoiding for the absent-extension case.
+    BEGIN
+      EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_cron';
+    EXCEPTION WHEN OTHERS THEN
+      RAISE NOTICE 'pg_cron is available but CREATE EXTENSION failed (%): automatic nightly retention scheduling is disabled. Invoke public.purge_metering_shadow_verdicts() from an external scheduler instead.', SQLERRM;
+    END;
   ELSE
     RAISE NOTICE 'pg_cron extension is not available on this Postgres install; automatic nightly retention scheduling is disabled. Invoke public.purge_metering_shadow_verdicts() from an external scheduler instead.';
   END IF;
