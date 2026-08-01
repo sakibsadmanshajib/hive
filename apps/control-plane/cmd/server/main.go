@@ -623,12 +623,11 @@ func main() {
 				// that hit Supabase directly and bypass the web-console precheck.
 				DisposableCheck: disposableBlocklist.IsDisposableEmail,
 				// Personal-tenant provisioning for a signup no tenant claims
-				// (issue #625). Hive Cloud only. An empty LicenseFilePath is
-				// already the switch that selects licensing.CloudSource over
-				// licensing.FileSource below, so posture keeps one source of
-				// truth rather than gaining a second flag that can disagree
-				// with the first.
-				SelfServeTenants: cfg.LicenseFilePath == "",
+				// (issue #625). Hive Cloud only. config.IsEnterprisePosture
+				// is the single source of truth for this branch (issue
+				// #653); it also gates cmd/backfill-tenants and the
+				// licensing.FileSource vs licensing.CloudSource switch below.
+				SelfServeTenants: !config.IsEnterprisePosture(cfg.LicenseFilePath),
 				SharedSecret:     signupSecret,
 			}
 			signupWebhook = signup.NewWebhook(signupDeps)
@@ -1181,7 +1180,7 @@ func main() {
 	// placeholder). Both satisfy licensing.Source identically, so the
 	// handler never branches on deployment mode.
 	var licenseSource licensing.Source
-	if cfg.LicenseFilePath != "" {
+	if config.IsEnterprisePosture(cfg.LicenseFilePath) {
 		licenseSource = licensing.FileSource{
 			Path:         cfg.LicenseFilePath,
 			PublicKeyB64: cfg.LicensePublicKeyB64,

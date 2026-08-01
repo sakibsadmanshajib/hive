@@ -4,10 +4,11 @@
 //
 //	SUPABASE_DB_URL=<DB_URL> go run ./apps/control-plane/cmd/backfill-tenants
 //
-// Hive Cloud only. It refuses to run when LICENSE_FILE_PATH is set, mirroring
-// how cmd/server/main.go derives signup.WebhookDeps.SelfServeTenants, because
-// personal tenants are a Cloud concept and Enterprise posture is that
-// membership is administered. See checkPosture.
+// Hive Cloud only. It refuses to run when config.IsEnterprisePosture reports
+// Hive Enterprise (issue #653), the same posture check cmd/server/main.go
+// uses to derive signup.WebhookDeps.SelfServeTenants, because personal
+// tenants are a Cloud concept and Enterprise posture is that membership is
+// administered. See checkPosture.
 //
 // Operator run, deliberately not wired into server startup: it writes tenant
 // rows, and a tenancy write that happens automatically on every deploy is not
@@ -31,6 +32,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform/config"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/signup"
 )
 
@@ -44,12 +46,13 @@ var errEnterprisePosture = errors.New(
 		"administered, so this command refuses to run here rather than minting tenants the\n" +
 		"deployment forbids. Unset LICENSE_FILE_PATH only if this really is a Cloud database.")
 
-// checkPosture mirrors how cmd/server/main.go derives
-// signup.WebhookDeps.SelfServeTenants from platform/config.Config.LicenseFilePath,
-// so posture keeps one source of truth. Split out from main so the refusal is
-// testable without running the command.
+// checkPosture calls config.IsEnterprisePosture, the single source of truth
+// cmd/server/main.go also uses to derive signup.WebhookDeps.SelfServeTenants
+// (issue #653), so the two entry points cannot disagree on deployment
+// posture. Split out from main so the refusal is testable without running
+// the command.
 func checkPosture(licenseFilePath string) error {
-	if licenseFilePath != "" {
+	if config.IsEnterprisePosture(licenseFilePath) {
 		return errEnterprisePosture
 	}
 	return nil

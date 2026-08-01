@@ -42,6 +42,34 @@ func TestLicenseFilePathWithPublicKeyLoads(t *testing.T) {
 	}
 }
 
+// TestIsEnterprisePosture covers every LICENSE_FILE_PATH shape the two
+// consuming entry points (cmd/server and cmd/backfill-tenants) accept today:
+// unset, an absolute path, and a relative path all resolve to a posture. The
+// predicate is total over strings (issue #653): there is no third,
+// unrecognized posture value for this flag, since any non-empty string is
+// Enterprise and only the empty string is Cloud. The "whitespace-only" case
+// is included because it is easy to assume gets trimmed to empty; it does
+// not, matching the pre-#653 behaviour of both call sites (neither trimmed).
+func TestIsEnterprisePosture(t *testing.T) {
+	tests := []struct {
+		name            string
+		licenseFilePath string
+		want            bool
+	}{
+		{"unset is Hive Cloud", "", false},
+		{"absolute path is Hive Enterprise", "/etc/hive/license.json", true},
+		{"relative path is Hive Enterprise", "license.json", true},
+		{"whitespace-only is Hive Enterprise (not trimmed)", "   ", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsEnterprisePosture(tt.licenseFilePath); got != tt.want {
+				t.Errorf("IsEnterprisePosture(%q) = %v, want %v", tt.licenseFilePath, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLicenseRevalidateIntervalOverride(t *testing.T) {
 	t.Setenv("SUPABASE_URL", "https://example.supabase.co")
 	t.Setenv("LICENSE_REVALIDATE_INTERVAL_SECONDS", "60")

@@ -80,6 +80,23 @@ type Config struct {
 	LicenseRevalidateIntervalSeconds int
 }
 
+// IsEnterprisePosture derives Hive's deployment posture (issue #304 D9, issue
+// #625, issue #653) from a LICENSE_FILE_PATH value: non-empty means Hive
+// Enterprise (customer-hosted, membership administered, no self-serve
+// personal tenants); empty means Hive Cloud (hosted SaaS, self-serve personal
+// tenants on signup). This is the single source of truth for that branch:
+// cmd/server derives signup.WebhookDeps.SelfServeTenants from it and
+// cmd/backfill-tenants refuses to run against an Enterprise database because
+// of it. Before issue #653 both entry points wrote out the same `!= ""` check
+// independently, which could only stay in sync by coincidence. The predicate
+// is total over all string inputs (empty or not), so there is no unrecognized
+// value for this particular flag; callers that need a distinct fail-closed
+// error for a malformed license (e.g. LICENSE_FILE_PATH set without
+// LICENSE_PUBLIC_KEY) get that from Load, not from this function.
+func IsEnterprisePosture(licenseFilePath string) bool {
+	return licenseFilePath != ""
+}
+
 // Load reads configuration from environment variables and returns a validated Config.
 func Load() (*Config, error) {
 	portStr := os.Getenv("CONTROL_PLANE_PORT")
