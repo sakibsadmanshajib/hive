@@ -13,12 +13,18 @@ import (
 type Repository interface {
 	LoadAliasPolicy(ctx context.Context, aliasID string) (catalog.AliasPolicySnapshot, error)
 	ListRouteCandidates(ctx context.Context, aliasID string) ([]RouteCandidate, error)
-	// LoadAliasPricing reads the alias's per-model credit price from
-	// public.model_aliases. A missing row is not an error: it returns the
-	// catalog.CatalogPricing zero value so a data-inconsistency on the
-	// pricing side never blocks a route the routing tables already
-	// approved (metering step 2, shadow mode; see SelectionResult.Pricing).
-	LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error)
+	// LoadRoutePricing reads the SELECTED route's per-route credit price
+	// from public.provider_routes (D-032: price lives on the route, not the
+	// alias, because one alias can carry routes to providers at very
+	// different real cost -- see SelectionResult.Pricing). A missing row IS
+	// an error: fail closed, the same posture as the tenant entitlement
+	// check above. provider_routes.input_price_credits/output_price_credits
+	// are NOT NULL for every route seeded today, so this is only reachable
+	// via a genuine data or infrastructure fault, never a silent free ride.
+	// Cache read/write pricing is not carried per-route: precedence.go's
+	// billing formula never reads it, so CacheReadPriceCredits/
+	// CacheWritePriceCredits are always nil on the returned value.
+	LoadRoutePricing(ctx context.Context, routeID string) (catalog.CatalogPricing, error)
 }
 
 type pgxRepository struct {
@@ -116,38 +122,39 @@ func (r *pgxRepository) ListRouteCandidates(ctx context.Context, aliasID string)
 	return candidates, nil
 }
 
-// LoadAliasPricing reads public.model_aliases directly rather than going
+// LoadRoutePricing reads public.provider_routes directly rather than going
 // through catalog.Service: routing already depends on the catalog package
 // for AliasPolicySnapshot, and a same-transactionable direct read keeps this
 // addition to one query on the pool routing already holds, with no new
-// cross-package call and no new network hop (metering step 2 brief section
-// 2.5).
-func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error) {
+// cross-package call and no new network hop (D-032, following the same
+// convention the alias-keyed version used).
+//
+// WHERE pricing_unit = 'tokens' is D-032's pricing-unit contract: this
+// routing package only ever meters tokens (chat completions), so a route
+// whose pricing_unit is anything else must be rejected rather than
+// mispriced. That row simply does not match this query, so it falls through
+// the existing pgx.ErrNoRows fail-closed branch below with no separate
+// mismatch check needed.
+func (r *pgxRepository) LoadRoutePricing(ctx context.Context, routeID string) (catalog.CatalogPricing, error) {
 	row := r.pool.QueryRow(ctx, `
 		SELECT
 			input_price_credits,
-			output_price_credits,
-			cache_read_price_credits,
-			cache_write_price_credits
-		FROM public.model_aliases
-		WHERE alias_id = $1
-	`, aliasID)
+			output_price_credits
+		FROM public.provider_routes
+		WHERE route_id = $1 AND pricing_unit = 'tokens'
+	`, routeID)
 
 	var pricing catalog.CatalogPricing
 	if err := row.Scan(
 		&pricing.InputPriceCredits,
 		&pricing.OutputPriceCredits,
-		&pricing.CacheReadPriceCredits,
-		&pricing.CacheWritePriceCredits,
 	); err != nil {
-		if err == pgx.ErrNoRows {
-			// No model_aliases row for an alias the routing tables already
-			// resolved is a data-inconsistency case, not a request-level
-			// error: return the zero value so SelectRoute keeps working and
-			// the caller reads it as "no cost basis available".
-			return catalog.CatalogPricing{}, nil
-		}
-		return catalog.CatalogPricing{}, fmt.Errorf("routing: load alias pricing: %w", err)
+		// Fail closed (D-032): unlike the old alias-keyed lookup, a missing
+		// or unreadable price row is a real error, not a zero-value success.
+		// A route the routing tables already resolved but that carries no
+		// price is a data-inconsistency serious enough to refuse the whole
+		// selection rather than silently bill it as free.
+		return catalog.CatalogPricing{}, fmt.Errorf("routing: load route pricing for %s: %w", routeID, err)
 	}
 
 	return pricing, nil

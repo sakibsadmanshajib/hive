@@ -73,21 +73,22 @@ type SelectionResult struct {
 	Provider         string   `json:"provider"`
 	FallbackRouteIDs []string `json:"fallback_route_ids"`
 
-	// Pricing is the alias's per-model credit price, read from
-	// public.model_aliases via Repository.LoadAliasPricing. It is
-	// alias-stable, not route-stable: every candidate SelectRoute could
-	// have chosen for this alias (primary or any fallback) carries the same
-	// price, so a fallback to a different route never changes it (metering
-	// step 2 design, spec decision 15).
+	// Pricing is the SELECTED ROUTE's per-route credit price (D-032), read
+	// from public.provider_routes via Repository.LoadRoutePricing. It is
+	// route-stable, not alias-stable: this is keyed by RouteID above, so a
+	// fallback to a different route under the same alias carries that
+	// route's own price, not a shared alias-wide number. This replaced the
+	// original alias-stable design (metering step 2, spec decision 15) once
+	// #617 showed one alias can route to providers whose real cost differs
+	// by an order of magnitude (hive-fast: OpenRouter vs. Groq), so no
+	// single alias-wide price could be correct for both.
 	//
 	// Additive field: an existing caller that only reads AliasID/RouteID/
 	// LiteLLMModelName/Provider/FallbackRouteIDs keeps compiling and behaves
-	// identically. A caller that reads Pricing before an alias has a
-	// model_aliases row sees the catalog.CatalogPricing zero value, which
-	// must be read as "no cost basis available", never as "free"; this
-	// step's own metering gate (edge-api internal/metering, added
-	// separately) is what turns that distinction into a shadow-mode
-	// verdict. Nothing in this package enforces or debits against it.
+	// identically. A route with no price row fails the whole SelectRoute
+	// call closed (see LoadRoutePricing) rather than returning a usable
+	// result with a zero-value Pricing, so a caller that reaches this field
+	// at all can trust it reflects a real, non-null price.
 	//
 	// The credit unit is per million tokens: charges compute as
 	// (prompt_tokens * input_price + completion_tokens * output_price) / 1_000_000
@@ -97,8 +98,12 @@ type SelectionResult struct {
 	// Per-token integer pricing misprices 347 of 365 models by 1000x or more;
 	// per-million fits all real rates and avoids repricing existing grants/invoices.
 	// Decision D-031: vault decision-2026-07-31-credit-unit-per-million.md.
-	// Issue #617 tracks catalog price correction (seeded prices are ~6 orders of magnitude too low).
-	// These are the same raw input/output/cache price fields already served today by
-	// catalog.Service for /v1/models, passed through unchanged.
+	// Issue #617 found the seeded prices themselves ~333x-7,375x too low
+	// (non-uniform, ruling out a scale-factor bug); D-032 is the resulting
+	// decision to reprice per-route. CacheReadPriceCredits/
+	// CacheWritePriceCredits are always nil here: precedence.go's billing
+	// formula never reads them, and provider_routes does not carry them.
+	// catalog.Service's own /v1/models listing is unaffected by this change
+	// and keeps serving model_aliases' cache price fields for display.
 	Pricing catalog.CatalogPricing `json:"pricing"`
 }

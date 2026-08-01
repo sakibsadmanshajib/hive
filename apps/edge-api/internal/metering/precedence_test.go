@@ -236,3 +236,29 @@ func TestPriceEstimate_LegacyIsFlatTokenSum(t *testing.T) {
 		t.Errorf("legacy = %d, want 150", legacy)
 	}
 }
+
+// TestPriceEstimate_HighTokenRequestBillsCorrectedRoutePrice is #617/D-032's
+// sanity check, done right: the ~90-token sample in #617's own writeup
+// rounds to the same 1-credit floor whether priced at the old broken 8/24
+// or a corrected route price, because the floor-at-1 rule swallows the
+// whole error at that volume. A high-token request is what actually proves
+// repricing worked. Uses hive-fast's Groq route (llama-3.3-70b-versatile,
+// $0.59/$0.79 per million tokens, live 2026-07-31) at the ruled 1.4x margin:
+// 82,600 input / 110,600 output credits per million (D-032).
+func TestPriceEstimate_HighTokenRequestBillsCorrectedRoutePrice(t *testing.T) {
+	route := RouteInfo{InputPriceCredits: 82600, OutputPriceCredits: 110600}
+
+	// Hand-computed, not derived from the code under test:
+	//   (50,000*82,600 + 10,000*110,600) / 1,000,000
+	// = (4,130,000,000 + 1,106,000,000) / 1,000,000
+	// = 5,236,000,000 / 1,000,000 = 5236 exactly (no rounding).
+	// The OLD stored price (8/24) on this same request:
+	//   (50,000*8 + 10,000*24) / 1,000,000 = 640,000/1,000,000 -> floors to 1.
+	// So the pre-repricing catalog would have billed 1 credit for a request
+	// that should cost 5,236 -- the under-pricing #617 describes, visible
+	// only because this request is large enough to clear the floor.
+	_, perModel := priceEstimate(route, 50_000, 10_000, VerdictBillable)
+	if perModel != 5236 {
+		t.Fatalf("expected corrected charge 5236 credits, got %d", perModel)
+	}
+}

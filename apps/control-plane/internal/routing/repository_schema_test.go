@@ -72,6 +72,69 @@ func TestListRouteCandidatesSelectsMediaColumns(t *testing.T) {
 	}
 }
 
+// TestProviderRoutePricingMigrationAddsPricingUnitColumn is D-032's amended
+// requirement (per CodeRabbit thread 2 on PR #632, ruled valid): a price row
+// with no unit dimension guarantees a second migration once D-033's
+// non-token modalities need pricing. The column must exist, be NOT NULL, and
+// be constrained to 'tokens' for every route this migration prices, so a
+// future non-'tokens' insert needs its own explicit constraint change rather
+// than sliding in silently.
+func TestProviderRoutePricingMigrationAddsPricingUnitColumn(t *testing.T) {
+	migration := providerRoutePricingMigration(t)
+	lower := strings.ToLower(migration)
+
+	if !strings.Contains(migration, "pricing_unit") {
+		t.Fatal("provider_routes pricing migration must add a pricing_unit column")
+	}
+	if !strings.Contains(lower, "pricing_unit") || !strings.Contains(lower, "not null") {
+		t.Fatal("pricing_unit must be NOT NULL: a route with no unit is unselectable, matching the no-price fail-closed rule")
+	}
+	if !regexp.MustCompile(`(?is)check\s*\(\s*pricing_unit\s*=\s*'tokens'\s*\)`).MatchString(migration) {
+		t.Fatal("pricing_unit must be constrained to 'tokens' for every currently priced route (check (pricing_unit = 'tokens'))")
+	}
+}
+
+// TestLoadRoutePricingRejectsPricingUnitMismatch guards D-032's pricing-unit
+// contract: a route whose pricing_unit does not match what its handler
+// meters must be REJECTED, not silently mispriced. This routing package
+// only ever meters tokens (chat completions), so LoadRoutePricing's query
+// must filter on pricing_unit = 'tokens' -- a route with any other unit then
+// falls through the existing ErrNoRows fail-closed path with no new branch.
+func TestLoadRoutePricingRejectsPricingUnitMismatch(t *testing.T) {
+	source := readRepoFile(t, "apps/control-plane/internal/routing/repository.go")
+
+	if !regexp.MustCompile(`(?is)LoadRoutePricing.*pricing_unit\s*=\s*'tokens'`).MatchString(source) {
+		t.Fatal("LoadRoutePricing must filter WHERE pricing_unit = 'tokens' so a unit mismatch fails closed instead of mispricing")
+	}
+}
+
+func providerRoutePricingMigration(t *testing.T) string {
+	t.Helper()
+
+	root := repoRoot(t)
+	matches, err := filepath.Glob(filepath.Join(root, "supabase/migrations/*.sql"))
+	if err != nil {
+		t.Fatalf("glob supabase migrations: %v", err)
+	}
+
+	for _, path := range matches {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", path, err)
+		}
+
+		text := string(body)
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "alter table public.provider_routes") &&
+			strings.Contains(text, "input_price_credits") {
+			return text
+		}
+	}
+
+	t.Fatal("expected a migration altering public.provider_routes to add input_price_credits/output_price_credits")
+	return ""
+}
+
 func providerCapabilitiesMediaMigration(t *testing.T) string {
 	t.Helper()
 

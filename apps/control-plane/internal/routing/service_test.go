@@ -20,9 +20,10 @@ type stubRepository struct {
 	loadPolicyCalls int
 
 	pricing            catalog.CatalogPricing
+	pricingByRoute     map[string]catalog.CatalogPricing
 	pricingErr         error
 	pricingCalls       int
-	sawPricingAliasIDs []string
+	sawPricingRouteIDs []string
 }
 
 func (s *stubRepository) LoadAliasPolicy(_ context.Context, _ string) (catalog.AliasPolicySnapshot, error) {
@@ -43,11 +44,14 @@ func (s *stubRepository) ListRouteCandidates(_ context.Context, _ string) ([]Rou
 	return append([]RouteCandidate(nil), s.candidates...), nil
 }
 
-func (s *stubRepository) LoadAliasPricing(_ context.Context, aliasID string) (catalog.CatalogPricing, error) {
+func (s *stubRepository) LoadRoutePricing(_ context.Context, routeID string) (catalog.CatalogPricing, error) {
 	s.pricingCalls++
-	s.sawPricingAliasIDs = append(s.sawPricingAliasIDs, aliasID)
+	s.sawPricingRouteIDs = append(s.sawPricingRouteIDs, routeID)
 	if s.pricingErr != nil {
 		return catalog.CatalogPricing{}, s.pricingErr
+	}
+	if p, ok := s.pricingByRoute[routeID]; ok {
+		return p, nil
 	}
 
 	return s.pricing, nil
@@ -728,14 +732,12 @@ func TestRequireToolCapable_MixedProviderOnlyCapableSelected(t *testing.T) {
 	}
 }
 
-// TestSelectRouteCarriesAliasPricing is metering step 2 wave 1a's core
-// assertion: SelectRoute must surface the alias's per-model credit price on
-// the result so a caller (edge-api's metering gate, wired in a later wave)
-// can price a request without a second round trip. Two aliases with
-// different prices must produce different Pricing values for identical
-// token counts (spec 8.2 item 9's regression guard against reverting to a
-// flat total-tokens estimate).
-func TestSelectRouteCarriesAliasPricing(t *testing.T) {
+// TestSelectRouteCarriesRoutePricing is D-032's core assertion: SelectRoute
+// must surface the SELECTED ROUTE's per-route credit price (from
+// public.provider_routes, not public.model_aliases) on the result, keyed by
+// route_id, so a caller (edge-api's metering gate) can price a request
+// without a second round trip.
+func TestSelectRouteCarriesRoutePricing(t *testing.T) {
 	repo := entitlementTestRepo()
 	cacheRead := int64(1)
 	cacheWrite := int64(5)
@@ -771,20 +773,23 @@ func TestSelectRouteCarriesAliasPricing(t *testing.T) {
 	if repo.pricingCalls != 1 {
 		t.Fatalf("expected exactly one pricing lookup, got %d", repo.pricingCalls)
 	}
-	if len(repo.sawPricingAliasIDs) != 1 || repo.sawPricingAliasIDs[0] != "hive-fast" {
-		t.Fatalf("expected pricing lookup for hive-fast, got %v", repo.sawPricingAliasIDs)
+	if len(repo.sawPricingRouteIDs) != 1 || repo.sawPricingRouteIDs[0] != "route-groq-fast" {
+		t.Fatalf("expected pricing lookup keyed by route_id route-groq-fast, got %v", repo.sawPricingRouteIDs)
 	}
 }
 
-// TestSelectRouteHandlesZeroPricingWithoutPanic covers an alias with no
-// model_aliases row (a data-inconsistency case, not a customer-facing
-// error): the repository returns the catalog.CatalogPricing zero value, and
-// SelectRoute must return it as-is rather than panic or fail the selection.
-// A missing price is "no cost basis", a verdict shadow-mode logs, not a
-// reason to break a route the routing tables already approved.
-func TestSelectRouteHandlesZeroPricingWithoutPanic(t *testing.T) {
+// TestSelectRouteFailsClosedForRouteWithNoPrice is D-032's fail-closed
+// requirement: a route with no price row is not selectable. Under the OLD
+// alias-keyed pricing this case (a missing model_aliases row) was swallowed
+// into a successful zero-value price, silently billing zero. provider_routes
+// price columns are NOT NULL for every route seeded today, so this is only
+// reachable via a repository/query failure (a future route inserted without
+// a price, a bad route_id) -- and that failure must refuse the selection,
+// the same posture as the tenant entitlement check above, not fall through
+// to a free route.
+func TestSelectRouteFailsClosedForRouteWithNoPrice(t *testing.T) {
 	repo := entitlementTestRepo()
-	// repo.pricing left at its zero value deliberately.
+	repo.pricingErr = errors.New("no price row for route")
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
 
@@ -792,23 +797,54 @@ func TestSelectRouteHandlesZeroPricingWithoutPanic(t *testing.T) {
 		AliasID:             "hive-fast",
 		NeedChatCompletions: true,
 	})
-	if err != nil {
-		t.Fatalf("SelectRoute returned error for zero pricing: %v", err)
+	if err == nil {
+		t.Fatalf("expected a route with no price to refuse selection, got result %+v", result)
 	}
-	if result.Pricing.InputPriceCredits != 0 || result.Pricing.OutputPriceCredits != 0 {
-		t.Fatalf("expected zero-value pricing, got %+v", result.Pricing)
-	}
-	if result.Pricing.CacheReadPriceCredits != nil || result.Pricing.CacheWritePriceCredits != nil {
-		t.Fatalf("expected nil cache pricing pointers, got %+v", result.Pricing)
+	if !reflect.DeepEqual(result, SelectionResult{}) {
+		t.Fatalf("expected zero-value SelectionResult on failure, got %+v", result)
 	}
 }
 
-// TestSelectRoutePriceIsAliasStableAcrossFallback asserts spec decision 15:
-// price is a property of the alias, not of whichever route within it gets
-// selected as primary vs. fallback. The same alias with multiple eligible
-// routes must report one price, not a per-route price that could silently
-// vary when the fallback order changes.
-func TestSelectRoutePriceIsAliasStableAcrossFallback(t *testing.T) {
+// TestSelectRoutePriceIsRouteStableAcrossFallback is D-032's motivating case:
+// hive-fast routes to both OpenRouter llama-3.1-8b ($0.05/$0.08 per M) and
+// Groq llama-3.3-70b ($0.59/$0.79 per M) under one alias. Pricing must now
+// be a property of whichever ROUTE was actually selected, not a single
+// alias-wide number: whichever route becomes primary must bill its OWN
+// price, and swapping priority (so the other route becomes primary) must
+// change which price comes back. This replaces the old
+// TestSelectRoutePriceIsAliasStableAcrossFallback, which asserted the
+// opposite (one shared alias price regardless of route) -- that was the bug
+// D-032 fixes, not a behavior to preserve.
+func TestSelectRoutePriceIsRouteStableAcrossFallback(t *testing.T) {
+	candidates := []RouteCandidate{
+		{
+			RouteID:                 "route-groq-fast",
+			AliasID:                 "hive-fast",
+			Provider:                "groq",
+			LiteLLMModelName:        "route-groq-fast",
+			PriceClass:              "standard",
+			HealthState:             "healthy",
+			Priority:                10,
+			SupportsChatCompletions: true,
+		},
+		{
+			RouteID:                 "route-openrouter-fast-fallback",
+			AliasID:                 "hive-fast",
+			Provider:                "openrouter",
+			LiteLLMModelName:        "route-openrouter-fast-fallback",
+			PriceClass:              "standard",
+			HealthState:             "healthy",
+			Priority:                20,
+			SupportsChatCompletions: true,
+		},
+	}
+	pricingByRoute := map[string]catalog.CatalogPricing{
+		"route-groq-fast":               {InputPriceCredits: 82600, OutputPriceCredits: 110600},
+		"route-openrouter-fast-fallback": {InputPriceCredits: 7000, OutputPriceCredits: 11200},
+	}
+
+	// Groq primary (lower priority number wins): result must carry Groq's
+	// own price, not OpenRouter's and not a blended/shared number.
 	repo := &stubRepository{
 		policy: catalog.AliasPolicySnapshot{
 			AliasID:                 "hive-fast",
@@ -816,31 +852,9 @@ func TestSelectRoutePriceIsAliasStableAcrossFallback(t *testing.T) {
 			AllowPriceClassWidening: false,
 			FallbackOrder:           []string{"route-groq-fast", "route-openrouter-fast-fallback"},
 		},
-		candidates: []RouteCandidate{
-			{
-				RouteID:                 "route-groq-fast",
-				AliasID:                 "hive-fast",
-				Provider:                "groq",
-				LiteLLMModelName:        "route-groq-fast",
-				PriceClass:              "standard",
-				HealthState:             "healthy",
-				Priority:                10,
-				SupportsChatCompletions: true,
-			},
-			{
-				RouteID:                 "route-openrouter-fast-fallback",
-				AliasID:                 "hive-fast",
-				Provider:                "openrouter",
-				LiteLLMModelName:        "route-openrouter-fast-fallback",
-				PriceClass:              "standard",
-				HealthState:             "healthy",
-				Priority:                20,
-				SupportsChatCompletions: true,
-			},
-		},
-		pricing: catalog.CatalogPricing{InputPriceCredits: 8, OutputPriceCredits: 24},
+		candidates:     candidates,
+		pricingByRoute: pricingByRoute,
 	}
-
 	svc := NewService(repo, &stubEntitlements{visible: true})
 
 	result, err := svc.SelectRoute(context.Background(), SelectionInput{
@@ -853,20 +867,46 @@ func TestSelectRoutePriceIsAliasStableAcrossFallback(t *testing.T) {
 	if result.RouteID != "route-groq-fast" {
 		t.Fatalf("expected primary route-groq-fast, got %q", result.RouteID)
 	}
-	if len(result.FallbackRouteIDs) != 1 || result.FallbackRouteIDs[0] != "route-openrouter-fast-fallback" {
-		t.Fatalf("expected one fallback route-openrouter-fast-fallback, got %v", result.FallbackRouteIDs)
+	if result.Pricing.InputPriceCredits != 82600 || result.Pricing.OutputPriceCredits != 110600 {
+		t.Fatalf("expected Groq's own price 82600/110600, got %+v", result.Pricing)
 	}
-	if result.Pricing.InputPriceCredits != 8 || result.Pricing.OutputPriceCredits != 24 {
-		t.Fatalf("expected alias-level pricing 8/24 regardless of which route was primary, got %+v", result.Pricing)
+
+	// Reverse the policy's fallback order so OpenRouter becomes primary: the
+	// returned price must change to OpenRouter's, proving it is route-keyed,
+	// not cached once per alias.
+	repo2 := &stubRepository{
+		policy: catalog.AliasPolicySnapshot{
+			AliasID:                 "hive-fast",
+			PolicyMode:              "latency",
+			AllowPriceClassWidening: false,
+			FallbackOrder:           []string{"route-openrouter-fast-fallback", "route-groq-fast"},
+		},
+		candidates:     candidates,
+		pricingByRoute: pricingByRoute,
+	}
+	svc2 := NewService(repo2, &stubEntitlements{visible: true})
+
+	result2, err := svc2.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error on swapped priority: %v", err)
+	}
+	if result2.RouteID != "route-openrouter-fast-fallback" {
+		t.Fatalf("expected primary route-openrouter-fast-fallback, got %q", result2.RouteID)
+	}
+	if result2.Pricing.InputPriceCredits != 7000 || result2.Pricing.OutputPriceCredits != 11200 {
+		t.Fatalf("expected OpenRouter's own price 7000/11200 after priority swap, got %+v", result2.Pricing)
 	}
 }
 
 // TestSelectRoutePropagatesPricingLookupFailure matches the repo's existing
 // convention (TestSelectRoutePropagatesAliasLookupErrors): a genuine
-// infrastructure failure resolving pricing (DB unreachable, etc., as
-// distinct from "no row for this alias", which LoadAliasPricing must treat
-// as a zero-value, non-error result) surfaces to the caller rather than
-// being silently swallowed into a wrong zero price.
+// infrastructure failure resolving a route's price (DB unreachable, etc.)
+// surfaces to the caller rather than being silently swallowed into a wrong
+// zero price. Complements TestSelectRouteFailsClosedForRouteWithNoPrice,
+// which covers the missing-price-row case specifically.
 func TestSelectRoutePropagatesPricingLookupFailure(t *testing.T) {
 	repo := entitlementTestRepo()
 	repo.pricingErr = errors.New("pricing db down")

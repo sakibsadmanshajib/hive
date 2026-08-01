@@ -145,15 +145,18 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 		fallbacks = append(fallbacks, candidate.RouteID)
 	}
 
-	// Pricing is a property of the alias, not of whichever candidate ended up
-	// primary vs. fallback, so it is resolved once here, after a route has
-	// actually been selected. Deferring it to this point (rather than up
-	// front, alongside LoadAliasPolicy) also means an alias that gets
-	// refused earlier -- unentitled, disallowed, no eligible routes -- never
-	// pays for a pricing lookup it will not use.
-	pricing, err := s.repo.LoadAliasPricing(ctx, aliasID)
+	// Pricing is a property of the SELECTED ROUTE (D-032), not of the alias:
+	// one alias can carry routes to providers at very different real cost
+	// (hive-fast's OpenRouter vs. Groq routes), so it is resolved once here,
+	// by selected.RouteID, after a route has actually been selected.
+	// Deferring it to this point (rather than up front, alongside
+	// LoadAliasPolicy) also means an alias that gets refused earlier --
+	// unentitled, disallowed, no eligible routes -- never pays for a
+	// pricing lookup it will not use. A route with no price fails the
+	// whole selection closed rather than falling back to a free route.
+	pricing, err := s.repo.LoadRoutePricing(ctx, selected.RouteID)
 	if err != nil {
-		return SelectionResult{}, fmt.Errorf("routing: load alias pricing for %s: %w", aliasID, err)
+		return SelectionResult{}, fmt.Errorf("routing: load route pricing for %s: %w", selected.RouteID, err)
 	}
 
 	return SelectionResult{
