@@ -287,15 +287,42 @@ func (h *Handler) handleGetCheckoutIntent(w http.ResponseWriter, r *http.Request
 // handleWebhook — POST /webhooks/{provider} (unauthenticated, signature-verified)
 // ---------------------------------------------------------------------------
 
+// maxWebhookBodyBytes caps the unauthenticated webhook body (issue #640).
+//
+// 1 MiB matches the limit the other control-plane JSON handlers already use
+// (internal/egress, internal/marketplace). It sits far above what the rails
+// actually send: a real signed Stripe checkout.session.completed event measures
+// about 1.5 KB, which TestWebhook_RealStripeEventIsFarBelowCap asserts, leaving
+// roughly a 670x margin. That margin is deliberate, because a cap that rejected
+// a legitimate provider event would break settlement, which is far worse than
+// the storage abuse being closed here.
+const maxWebhookBodyBytes = 1 << 20
+
 func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request, rail Rail) {
 	if r.Method != http.MethodPost {
 		writePaymentJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
 		return
 	}
 
+	// This route is unauthenticated by design, and since #638 the delivery row
+	// carrying the full raw body is written before signature verification. The
+	// cap belongs here, ahead of that write, so an oversized payload is refused
+	// before it can be persisted. Capping any later would accomplish nothing:
+	// the oversized row would already exist (issue #640).
+	r.Body = http.MaxBytesReader(w, r.Body, maxWebhookBodyBytes)
+
 	// MUST read raw body first, before any JSON parsing.
 	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			// Not transient and not worth a redelivery: the same oversized body
+			// would be refused every time. Nothing is lost by declining, because
+			// no provider legitimately sends anything near this size.
+			log.Printf("payments webhook: rejected oversized body (rail=%s, limit=%d)", rail, maxWebhookBodyBytes)
+			writePaymentJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"status": "error"})
+			return
+		}
 		log.Printf("payments webhook: read body error: %v", err)
 		// A truncated read is transient: ask for a redelivery rather than
 		// claiming a payload we never saw was handled (issue #628).
