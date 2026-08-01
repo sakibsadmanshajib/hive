@@ -236,13 +236,26 @@ func (o *Orchestrator) executeSync(
 		// false hands the reservation to the deferred release instead, so it
 		// still reaches a terminal state exactly once: charged here on success,
 		// released there on failure, never both.
-		if err := o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
+		//
+		// finalizeCtx, not ctx (#637): by this point the client can already
+		// have disconnected, cancelling ctx. Finalizing on ctx then fails not
+		// because the ledger rejected the charge but because the HTTP call
+		// itself aborts on the cancelled context, which fell through to the
+		// releaseReason = "finalize_failed" branch below and released a hold
+		// for work that was genuinely delivered -- converting a chargeable
+		// request into a free one for any client that disconnects at the
+		// right moment. Same fresh background context + accountingTimeout as
+		// releaseReservationBackground and settleStream (PR #602's pattern).
+		finalizeCtx, cancel := context.WithTimeout(context.Background(), accountingTimeout)
+		err := o.accounting.FinalizeReservation(finalizeCtx, FinalizeReservationInput{
 			AccountID:              snapshot.AccountID,
 			ReservationID:          reservation.ID,
 			ActualCredits:          actualCredits,
 			TerminalUsageConfirmed: true,
 			Status:                 "completed",
-		}); err != nil {
+		})
+		cancel()
+		if err != nil {
 			log.Printf("inference: finalize reservation failed, releasing hold instead request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
 			releaseReason = "finalize_failed"
 		} else {

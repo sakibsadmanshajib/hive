@@ -49,6 +49,37 @@ func newAccountingMockSyncFinalizeFails(rec *accountingRecorder, onFinalize func
 	}))
 }
 
+// newAccountingMockSyncFinalizeSucceedsWithHook behaves like newAccountingMock
+// (every path, including finalize, answers 200) but calls onFinalize (if set)
+// right before answering the finalize request, so a test can cancel the
+// request context at exactly the moment finalize is in flight -- the same
+// technique newAccountingMockSyncFinalizeFails uses, but for the success
+// case, so a test can prove finalize itself is unaffected by that
+// cancellation (#637) rather than only proving the fallback release survives
+// it.
+func newAccountingMockSyncFinalizeSucceedsWithHook(rec *accountingRecorder, onFinalize func()) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		rec.record(r.URL.Path, body)
+		if r.URL.Path == "/internal/accounting/reservations/finalize" && onFinalize != nil {
+			onFinalize()
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		switch r.URL.Path {
+		case "/internal/accounting/reservations":
+			_ = json.NewEncoder(w).Encode(ReservationResult{
+				ID: "res-test-1", AccountID: "acct-test-1", Status: "active", EstimatedCredits: 10000,
+			})
+		case "/internal/usage/attempts":
+			_ = json.NewEncoder(w).Encode(AttemptResult{
+				ID: "attempt-test-1", RequestID: "req-test-1", Status: "accepted",
+			})
+		}
+	}))
+}
+
 func callSyncCtx(orch *Orchestrator, ctx context.Context) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{}`))
 	req.Header.Set("Authorization", "Bearer test-token")
@@ -133,6 +164,54 @@ func TestExecuteSync_FinalizeError_CancelledContext_StillReleases(t *testing.T) 
 	}
 	if _, ok := rec.find("/internal/accounting/reservations/release"); !ok {
 		t.Fatalf("expected ReleaseReservation to reach the control plane despite the cancelled request context; calls seen: %+v", rec.calls)
+	}
+}
+
+// TestExecuteSync_ClientDisconnect_ChargesDeliveredWork is issue #637's
+// primary regression guard: unlike the previous test, the control plane's
+// finalize handler here SUCCEEDS (200) if it actually receives the call on a
+// live context. The client disconnects (its context is cancelled) exactly
+// as the finalize request reaches the mock, the same moment
+// TestExecuteSync_FinalizeError_CancelledContext_StillReleases exercises for
+// the failure case. Before #637's fix, finalize ran on that same cancelled
+// request context, so cancelling it here would make the finalize call fail
+// client-side regardless of the mock's 200, falling through to a release
+// and losing the charge for genuinely delivered work. After the fix,
+// finalize runs on its own independent background context, so cancelling
+// the caller's context has no effect on it: the charge must still land.
+func TestExecuteSync_ClientDisconnect_ChargesDeliveredWork(t *testing.T) {
+	var hits int64
+	litellmSrv := countingJSONServer(&hits)
+	defer litellmSrv.Close()
+	routingSrv := newRoutingMock(litellmSrv.URL)
+	defer routingSrv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rec := &accountingRecorder{}
+	// The client hangs up exactly as settlement starts, same as the sibling
+	// failure-path test above, but this mock's finalize handler succeeds.
+	acctSrv := newAccountingMockSyncFinalizeSucceedsWithHook(rec, cancel)
+	defer acctSrv.Close()
+
+	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
+	callSyncCtx(orch, ctx)
+
+	if ctx.Err() == nil {
+		t.Fatal("sanity check failed: context was not actually cancelled")
+	}
+	if rec.has("/internal/accounting/reservations/release") {
+		t.Error("nothing should be released: content was already delivered and finalize succeeded")
+	}
+	body, ok := rec.find("/internal/accounting/reservations/finalize")
+	if !ok {
+		t.Fatalf("expected FinalizeReservation to reach control-plane despite the cancelled request context; calls seen: %+v", rec.calls)
+	}
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 25 {
+		t.Errorf("actual_credits = %v, want 25 (confirmed upstream usage)", body["actual_credits"])
+	}
+	if body["reservation_id"] != "res-test-1" {
+		t.Errorf("reservation_id = %v, want res-test-1", body["reservation_id"])
 	}
 }
 
