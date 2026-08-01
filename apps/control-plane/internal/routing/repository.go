@@ -14,10 +14,12 @@ type Repository interface {
 	LoadAliasPolicy(ctx context.Context, aliasID string) (catalog.AliasPolicySnapshot, error)
 	ListRouteCandidates(ctx context.Context, aliasID string) ([]RouteCandidate, error)
 	// LoadAliasPricing reads the alias's per-model credit price from
-	// public.model_aliases. A missing row is not an error: it returns the
-	// catalog.CatalogPricing zero value so a data-inconsistency on the
-	// pricing side never blocks a route the routing tables already
-	// approved (metering step 2, shadow mode; see SelectionResult.Pricing).
+	// public.model_aliases. A missing row is reported as the
+	// catalog.CatalogPricing zero value rather than an error, because the
+	// caller cannot distinguish "no row" from "row priced at zero" and both
+	// mean the same thing: no cost basis. SelectRoute turns that zero value
+	// into ErrAliasNotPriced and refuses the selection (issue #617), so a
+	// missing price fails closed there, not here.
 	LoadAliasPricing(ctx context.Context, aliasID string) (catalog.CatalogPricing, error)
 }
 
@@ -142,9 +144,12 @@ func (r *pgxRepository) LoadAliasPricing(ctx context.Context, aliasID string) (c
 	); err != nil {
 		if err == pgx.ErrNoRows {
 			// No model_aliases row for an alias the routing tables already
-			// resolved is a data-inconsistency case, not a request-level
-			// error: return the zero value so SelectRoute keeps working and
-			// the caller reads it as "no cost basis available".
+			// resolved is a data-inconsistency case, not an infrastructure
+			// failure, so it is reported as "no cost basis" (the zero value)
+			// rather than a query error. SelectRoute is what refuses on it;
+			// see ErrAliasNotPriced. A provider_routes row cannot outlive its
+			// alias anyway (FK with ON DELETE CASCADE), so in practice this
+			// branch is only reachable if the two reads race a deletion.
 			return catalog.CatalogPricing{}, nil
 		}
 		return catalog.CatalogPricing{}, fmt.Errorf("routing: load alias pricing: %w", err)
