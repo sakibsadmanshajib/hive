@@ -103,6 +103,52 @@ func responsesOutputTexts(items []ResponseOutputItem) []string {
 	return out
 }
 
+// responseText pulls the generated text back out of an already-normalized
+// synchronous response, for the completion-side half of the settlement
+// estimate when the provider returned no usage block at all (issue #636).
+// It is the response-side mirror of promptText below.
+//
+// It re-parses the normalized bytes rather than having every normalizeFunc
+// return its output text, because it is only ever called on the anomaly path:
+// a response that did carry usage never reaches here, so the normal path pays
+// nothing for this.
+//
+// Embeddings return the empty string: an embeddings response carries vectors,
+// not generated text, so there is no completion quantity to estimate from.
+// Settlement therefore releases the hold in full for an embeddings response
+// with no usage block. That under-charges an anomaly whose hold is only 1000
+// credits, which is the customer-favouring direction and the correct one for a
+// quantity nobody measured.
+// ponytail: no embeddings-side input estimate, add one if providers turn out
+// to omit embeddings usage often enough to matter (it is logged when it
+// happens).
+func responseText(endpoint string, normalized []byte) string {
+	var texts []string
+	switch endpoint {
+	case EndpointChatCompletions:
+		var resp ChatCompletionResponse
+		if err := json.Unmarshal(normalized, &resp); err != nil {
+			return ""
+		}
+		texts = chatChoiceTexts(resp.Choices)
+	case EndpointCompletions:
+		var resp CompletionResponse
+		if err := json.Unmarshal(normalized, &resp); err != nil {
+			return ""
+		}
+		texts = completionChoiceTexts(resp.Choices)
+	case EndpointResponses:
+		var resp ResponseObject
+		if err := json.Unmarshal(normalized, &resp); err != nil {
+			return ""
+		}
+		texts = responsesOutputTexts(resp.Output)
+	default:
+		return ""
+	}
+	return strings.Join(texts, "")
+}
+
 // --- Prompt text extraction (issue #602) ---
 //
 // promptText pulls the human-authored text out of a raw OpenAI-compatible
