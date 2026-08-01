@@ -112,7 +112,7 @@ type SelectionResult struct {
 	//
 	// For any non-token unit the price lives in Pricing.OutputPriceCredits and
 	// InputPriceCredits is constrained to zero by a database CHECK
-	// (supabase/migrations/20260801_02_alias_price_unit.sql), so a
+	// (supabase/migrations/20260801_13_alias_price_unit.sql), so a
 	// single-quantity modality has exactly one price.
 	PriceUnit string `json:"price_unit"`
 }

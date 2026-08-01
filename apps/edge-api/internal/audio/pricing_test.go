@@ -25,7 +25,7 @@ import (
 )
 
 // The two catalog prices under test, in credits per million metered units.
-// Both are the values supabase/migrations/20260801_02_alias_price_unit.sql
+// Both are the values supabase/migrations/20260801_13_alias_price_unit.sql
 // writes to public.model_aliases, derived from the provider's published rate
 // (Groq, fetched 2026-08-01) times the 1.4 margin times CreditsPerUSD:
 //

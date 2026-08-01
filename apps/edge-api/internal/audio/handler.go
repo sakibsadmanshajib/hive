@@ -75,7 +75,7 @@ type RouteResult struct {
 	//
 	// For any non-token unit the price lives in output_price_credits and
 	// input_price_credits is constrained to zero at the database level
-	// (supabase/migrations/20260801_02_alias_price_unit.sql), so a
+	// (supabase/migrations/20260801_13_alias_price_unit.sql), so a
 	// single-quantity modality has exactly one price and no ambiguity about
 	// which column applies.
 	UnitPriceCredits int64
