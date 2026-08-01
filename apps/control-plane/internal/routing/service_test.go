@@ -971,7 +971,7 @@ func TestSelectRouteSkipsPricingLookupOnEarlyRefusal(t *testing.T) {
 // 20260801_01_alias_pricing_correction.sql leaves in provider_routes: the
 // OpenRouter fallback is health_state 'disabled', so it is filtered out
 // before ordering. The companion integration test
-// (routing_catalog_integration_test.go) asserts the migration actually
+// (catalog_pricing_integration_test.go) asserts the migration actually
 // produces that shape; this one asserts SelectRoute behaves correctly given
 // it.
 func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
