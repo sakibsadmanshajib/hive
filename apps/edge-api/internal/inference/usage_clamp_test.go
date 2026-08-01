@@ -8,6 +8,10 @@ import (
 func ptrStr(s string) *string { return &s }
 
 func TestEstimateCompletionTokens(t *testing.T) {
+	// These pin the floor and the shape of the formula only. Everything that
+	// matters about the arithmetic is asserted in token_estimate_scripts_test.go
+	// at thousands of tokens, because the 1-credit floor below swallows any
+	// mispricing at this size (issue #673).
 	tests := []struct {
 		name string
 		in   string
@@ -16,10 +20,12 @@ func TestEstimateCompletionTokens(t *testing.T) {
 		{"empty", "", 0},
 		{"single char", "x", 1},
 		{"three chars", "abc", 1},
-		{"four chars", "abcd", 1},
-		{"five chars", "abcde", 2},
-		{"hello world", "hello world", 3},
-		{"long sentence", "The quick brown fox jumps over the lazy dog", 11},
+		{"twelve bytes is one token", "abcdefghijkl", 1},
+		{"thirteen bytes rounds up", "abcdefghijklm", 2},
+		{"hello world", "hello world", 1},
+		{"long sentence", "The quick brown fox jumps over the lazy dog", 4},
+		{"whitespace only floors at one, never zero", "          ", 1},
+		{"a whitespace run counts as one byte", "a" + strings.Repeat(" ", 100) + "b", 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

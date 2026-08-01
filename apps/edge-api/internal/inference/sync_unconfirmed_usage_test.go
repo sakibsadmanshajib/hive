@@ -44,17 +44,18 @@ func callSyncBody(orch *Orchestrator, reqBody string) *httptest.ResponseRecorder
 	return w
 }
 
-// syncRequestBody is an 11-character prompt: estimateCompletionTokens gives
-// ceil(11/4) = 3 tokens for the prompt half of the estimate.
+// syncRequestBody is an 11-byte prompt, which the estimator floors at its
+// minimum of 1 token for the prompt half of the estimate.
 const syncRequestBody = `{"model":"gpt-4o","messages":[{"role":"user","content":"hello world"}]}`
 
-// noUsageResponseBody is a well-formed chat completion with 4000 characters of
-// assistant content and NO usage field at all: ceil(4000/4) = 1000 tokens for
-// the completion half. Thousands of tokens on purpose -- the 1-credit floor
-// makes a small-token assertion pass even when the arithmetic is wrong.
+// noUsageResponseBody is a well-formed chat completion with 12,000 bytes of
+// assistant content and NO usage field at all: 12000/bytesPerToken = 1000
+// tokens for the completion half. Thousands of tokens on purpose -- the
+// 1-credit floor makes a small-token assertion pass even when the arithmetic is
+// wrong.
 func noUsageResponseBody(t *testing.T) string {
 	t.Helper()
-	content := strings.Repeat("x", 4000)
+	content := strings.Repeat("x", 12000)
 	body, err := json.Marshal(map[string]any{
 		"id":      "chatcmpl-test-no-usage",
 		"object":  "chat.completion",
@@ -110,9 +111,9 @@ func TestExecuteSync_NoUsage_NeverConfirmsTheFlatEstimate(t *testing.T) {
 	if confirmed && int64(actual) == 10000 {
 		t.Errorf("the flat reservation estimate was billed as confirmed usage (issue #636)")
 	}
-	// 3 prompt tokens (11 chars) + 1000 completion tokens (4000 chars).
-	if int64(actual) != 1003 {
-		t.Errorf("actual_credits = %v, want 1003 (3 prompt + 1000 completion estimated tokens), never the flat 10000 estimate", body["actual_credits"])
+	// 1 prompt token (11 bytes, floored) + 1000 completion tokens (12,000 bytes).
+	if int64(actual) != 1001 {
+		t.Errorf("actual_credits = %v, want 1001 (1 prompt + 1000 completion estimated tokens), never the flat 10000 estimate", body["actual_credits"])
 	}
 	if rec.has("/internal/accounting/reservations/release") {
 		t.Error("a charged reservation must never also be released: that refunds a legitimate charge")

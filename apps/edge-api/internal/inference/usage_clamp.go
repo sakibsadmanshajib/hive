@@ -4,22 +4,101 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
-// estimateCompletionTokens returns a conservative cl100k-style approximation
-// of the token count for a piece of text. The exact formula does not matter —
-// it only kicks in when the upstream provider returns completion_tokens=0 on
-// a non-empty assistant message, which is a billing-leak case (see git
-// history for the flaky-usage-tokens root-cause debug notes).
+// bytesPerToken is the divisor estimateCompletionTokens uses. It is calibrated
+// to UNDER-count real tokenization for every writing system, because the number
+// it produces is charged to a customer for usage nobody measured (issue #673).
 //
-// Heuristic: ceil(byte_len / 4), with a minimum of 1 when there is any text.
+// Unit: UTF-8 bytes, not characters. Every tokenizer our providers serve is a
+// byte-level BPE, so a token is always at least one byte ("the token sequence
+// is shorter than the bytes corresponding to the original text", tiktoken
+// README, github.com/openai/tiktoken), which makes byte length a structural
+// upper bound on the token count and character count no bound at all: measured
+// emoji cost 1.17 tokens per character, so a rune count can sit below the truth
+// by any margin. Byte length also tracks real tokenization far more evenly
+// across scripts than character count does, because a script the vocabulary
+// covers poorly degrades toward one token per byte. Measured on the eight
+// scripts in token_estimate_scripts_test.go, bytes per token spans 2.6 to 9.4
+// (3.6x) while characters per token spans 0.9 to 7.1 (7.9x). Calibrating a rune
+// divisor the same way this one is calibrated (9, clearing the sparsest script)
+// would charge English 79 percent of its real usage and Japanese 13 percent of
+// theirs, so the customer's writing system would decide their discount.
+//
+// Value: 12, from measurement, not from a rule of thumb. Real bytes per token
+// for representative prose (tiktoken 0.13.0, o200k_base) is 7.1 for English,
+// 7.5 for Bengali, 5.4 for Arabic, 4.1 for Chinese, 3.4 for Japanese, 2.6 for
+// emoji and 9.4 for Devanagari, the sparsest of the eight. 12 clears that
+// sparsest case by about 25 percent, so the estimate lands at 21 to 79 percent
+// of real usage across all eight rather than above it.
+//
+// The 4 this replaced was the average byte-per-token ratio the tiktoken README
+// quotes ("on average, in practice, each token corresponds to about 4 bytes").
+// An average is the wrong statistic for a figure that must never exceed the
+// truth: measured against o200k_base it overcharged six of the eight scripts,
+// English by 1.77x, Bengali by 1.87x and Devanagari by 2.36x.
+//
+// ponytail: one global divisor, recalibrate if we onboard a tokenizer
+// materially more efficient than o200k_base on Devanagari (the thinnest margin
+// here at 0.79 of real). A per-script divisor would tighten the 21-to-79 band
+// but needs a rune classifier and re-measurement per script, and every error it
+// would remove is currently in the customer's favour.
+const bytesPerToken = 12
+
+// estimateCompletionTokens approximates the token count of a piece of text for
+// settlement paths where the provider reported no usable usage: a missing usage
+// block (issue #636) or completion_tokens=0 on a non-empty message.
+//
+// It errs low by construction, and that direction is deliberate: the estimate is
+// billed, so any error has to favour the customer. See bytesPerToken for the
+// measured margins, and the tests in token_estimate_scripts_test.go for the
+// bound this must keep holding.
+//
+// Whitespace runs collapse to one byte each before counting. BPE vocabularies
+// carry multi-whitespace tokens, so 40,000 spaces is 313 real tokens, not
+// 10,000: the old formula billed a whitespace-padded prompt the entire 10,000
+// credit hold. Collapsing is the cheap way to stop a run of anything the
+// tokenizer compresses hard from dominating the estimate.
+//
+// The result is not a lower bound for every conceivable input: BPE can compress
+// a long repeated word into one 17-byte token, so pathological text can still
+// estimate above its true count. The hold clamp in control-plane's
+// finalizeLocked (accounting/service.go) remains the backstop that keeps an
+// unconfirmed charge inside the authorization the customer already granted.
 func estimateCompletionTokens(text string) int64 {
 	if text == "" {
 		return 0
 	}
-	n := int64((len(text) + 3) / 4)
+	n := int64((collapsedByteLen(text) + bytesPerToken - 1) / bytesPerToken)
 	if n < 1 {
 		return 1
+	}
+	return n
+}
+
+// collapsedByteLen is the UTF-8 byte length of text with every run of
+// whitespace counted as a single byte. It allocates nothing, because the text
+// it is handed can be megabytes of prompt.
+func collapsedByteLen(text string) int {
+	n := 0
+	inSpace := true // leading whitespace contributes nothing
+	for i := 0; i < len(text); {
+		// DecodeRuneInString rather than range plus utf8.RuneLen: RuneLen
+		// reports 3 for the replacement rune a malformed byte decodes to, which
+		// would count invalid input as larger than it is.
+		r, size := utf8.DecodeRuneInString(text[i:])
+		i += size
+		if unicode.IsSpace(r) {
+			if !inSpace {
+				n++
+				inSpace = true
+			}
+			continue
+		}
+		inSpace = false
+		n += size
 	}
 	return n
 }
