@@ -3,6 +3,7 @@ package accounting
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,7 +212,10 @@ type reconciliationJob struct {
 	reason           string
 }
 
+// repoStub is guarded by a mutex so the concurrent reaper test can drive two
+// passes at once without racing on the maps.
 type repoStub struct {
+	mu                 sync.Mutex
 	reservations       map[uuid.UUID]Reservation
 	reconciliationJobs []reconciliationJob
 	releaseEventCounts map[uuid.UUID]int
@@ -225,6 +229,8 @@ func newRepoStub() *repoStub {
 }
 
 func (r *repoStub) CreateReservation(_ context.Context, reservation Reservation, reason string) (Reservation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	now := time.Now().UTC()
 	reservation.CreatedAt = now
 	reservation.UpdatedAt = now
@@ -233,6 +239,12 @@ func (r *repoStub) CreateReservation(_ context.Context, reservation Reservation,
 }
 
 func (r *repoStub) GetReservation(_ context.Context, accountID, reservationID uuid.UUID) (Reservation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.getLocked(accountID, reservationID)
+}
+
+func (r *repoStub) getLocked(accountID, reservationID uuid.UUID) (Reservation, error) {
 	reservation, ok := r.reservations[reservationID]
 	if !ok || reservation.AccountID != accountID {
 		return Reservation{}, ErrNotFound
@@ -240,8 +252,31 @@ func (r *repoStub) GetReservation(_ context.Context, accountID, reservationID uu
 	return reservation, nil
 }
 
+// ListStaleReservations mirrors the production predicates: non-terminal status,
+// and untouched since the cutoff on both timestamps.
+func (r *repoStub) ListStaleReservations(_ context.Context, olderThan time.Time, limit int) ([]Reservation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var stale []Reservation
+	for _, reservation := range r.reservations {
+		if reservation.Status != ReservationStatusActive && reservation.Status != ReservationStatusExpanded {
+			continue
+		}
+		if !reservation.CreatedAt.Before(olderThan) || !reservation.UpdatedAt.Before(olderThan) {
+			continue
+		}
+		stale = append(stale, reservation)
+		if limit > 0 && len(stale) == limit {
+			break
+		}
+	}
+	return stale, nil
+}
+
 func (r *repoStub) ExpandReservation(_ context.Context, accountID, reservationID uuid.UUID, additionalCredits int64, reason string) (Reservation, error) {
-	reservation, err := r.GetReservation(context.Background(), accountID, reservationID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reservation, err := r.getLocked(accountID, reservationID)
 	if err != nil {
 		return Reservation{}, err
 	}
@@ -254,7 +289,9 @@ func (r *repoStub) ExpandReservation(_ context.Context, accountID, reservationID
 }
 
 func (r *repoStub) FinalizeReservation(_ context.Context, accountID, reservationID uuid.UUID, consumedCredits, releasedCredits int64, terminalUsageConfirmed bool, status ReservationStatus, reason string) (Reservation, error) {
-	reservation, err := r.GetReservation(context.Background(), accountID, reservationID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reservation, err := r.getLocked(accountID, reservationID)
 	if err != nil {
 		return Reservation{}, err
 	}
@@ -269,7 +306,9 @@ func (r *repoStub) FinalizeReservation(_ context.Context, accountID, reservation
 }
 
 func (r *repoStub) ReleaseReservation(_ context.Context, accountID, reservationID uuid.UUID, releasedCredits int64, reason string) (Reservation, error) {
-	reservation, err := r.GetReservation(context.Background(), accountID, reservationID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reservation, err := r.getLocked(accountID, reservationID)
 	if err != nil {
 		return Reservation{}, err
 	}
@@ -286,6 +325,8 @@ func (r *repoStub) ReleaseReservation(_ context.Context, accountID, reservationI
 }
 
 func (r *repoStub) CreateReconciliationJob(_ context.Context, reservationID, requestAttemptID uuid.UUID, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.reconciliationJobs = append(r.reconciliationJobs, reconciliationJob{
 		reservationID:    reservationID,
 		requestAttemptID: requestAttemptID,

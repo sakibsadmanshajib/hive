@@ -78,6 +78,9 @@ func (r *concurrentRepo) ReleaseReservation(context.Context, uuid.UUID, uuid.UUI
 func (r *concurrentRepo) CreateReconciliationJob(context.Context, uuid.UUID, uuid.UUID, string) error {
 	return nil
 }
+func (r *concurrentRepo) ListStaleReservations(context.Context, time.Time, int) ([]Reservation, error) {
+	return nil, nil
+}
 
 // concurrentUsage is a goroutine-safe usage stub.
 type concurrentUsage struct{}
