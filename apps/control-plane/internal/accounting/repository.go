@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,6 +19,7 @@ type Repository interface {
 	FinalizeReservation(ctx context.Context, accountID, reservationID uuid.UUID, consumedCredits, releasedCredits int64, terminalUsageConfirmed bool, status ReservationStatus, reason string) (Reservation, error)
 	ReleaseReservation(ctx context.Context, accountID, reservationID uuid.UUID, releasedCredits int64, reason string) (Reservation, error)
 	CreateReconciliationJob(ctx context.Context, reservationID, requestAttemptID uuid.UUID, reason string) error
+	ListStaleReservations(ctx context.Context, olderThan time.Time, limit int) ([]Reservation, error)
 }
 
 type pgxRepository struct {
@@ -258,6 +260,55 @@ func (r *pgxRepository) CreateReconciliationJob(ctx context.Context, reservation
 	}
 
 	return nil
+}
+
+// ListStaleReservations returns holds still sitting in a non-terminal state
+// whose reservation has not been touched since olderThan, which is how a
+// request that died before settlement looks from the database (issue #616).
+//
+// Two predicates keep an in-flight request out of the result. Both created_at
+// and updated_at must precede the cutoff, so a long request that expanded its
+// hold recently is not treated as abandoned. And a reservation still attached
+// to a running batch is excluded outright: a batch legitimately holds credits
+// for its whole completion window, 24h by default, which is far longer than
+// any inference request can run, so the batch row is the authoritative
+// in-flight signal on that path rather than elapsed time.
+func (r *pgxRepository) ListStaleReservations(ctx context.Context, olderThan time.Time, limit int) ([]Reservation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	rows, err := r.pool.Query(ctx, reservationSelect+`
+		WHERE cr.status IN ('active', 'expanded')
+		  AND cr.created_at < $1
+		  AND cr.updated_at < $1
+		  AND NOT EXISTS (
+			SELECT 1
+			FROM public.batches b
+			WHERE b.reservation_id = cr.id::text
+			  AND b.status NOT IN ('completed', 'failed', 'cancelled', 'expired')
+		  )
+		ORDER BY cr.created_at
+		LIMIT $2
+	`, olderThan, limit)
+	if err != nil {
+		return nil, fmt.Errorf("accounting: list stale reservations: %w", err)
+	}
+	defer rows.Close()
+
+	var stale []Reservation
+	for rows.Next() {
+		reservation, err := scanReservation(rows)
+		if err != nil {
+			return nil, err
+		}
+		stale = append(stale, reservation)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("accounting: iterate stale reservations: %w", err)
+	}
+
+	return stale, nil
 }
 
 const reservationSelect = `

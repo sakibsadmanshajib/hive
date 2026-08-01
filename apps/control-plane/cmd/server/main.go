@@ -387,6 +387,36 @@ func main() {
 			WithAccountLocker(accounting.NewPgxAccountLocker(pool))
 		accountingHandler = accounting.NewHandler(accountingSvc, accountsSvc)
 
+		// Issue #616 — stranded-hold reaper. A finalize that fails loses its
+		// charge and strands the hold in the same step, and reserved credits
+		// are subtracted from available balance until something releases them,
+		// so an account can end up refused service it has already paid for.
+		//
+		// This runs in process rather than as a pg_cron job for two reasons.
+		// The release has to go through the accounting service to take the
+		// per-account lock, post a real reservation_release entry under an
+		// idempotency key, write the reservation event and unwind the API key
+		// delta; a SQL job would have to reimplement all of that against an
+		// append-only ledger. And a pg_cron schedule that silently fails to
+		// exist looks exactly like a system with no leak, which is the failure
+		// mode that let this sit unnoticed for days. A missing runner here is
+		// visible in the startup log below.
+		reaperEnabled := !strings.EqualFold(strings.TrimSpace(os.Getenv("HIVE_RESERVATION_REAPER_ENABLED")), "false")
+		reaperTTL := parseDurationEnv("HIVE_RESERVATION_REAPER_TTL", accounting.ReaperDefaultTTL)
+		reaperInterval := parseDurationEnv("HIVE_RESERVATION_REAPER_INTERVAL", 15*time.Minute)
+		if reaperEnabled {
+			reservationReaper := accounting.NewReaper(accountingRepo, accountingSvc, accounting.ReaperConfig{
+				TTL:      reaperTTL,
+				Interval: reaperInterval,
+				Logger:   slog.Default(),
+			})
+			reservationReaper.Start(runCtx)
+			defer reservationReaper.Stop()
+			log.Printf("reservation reaper started (ttl=%s, interval=%s)", reaperTTL, reaperInterval)
+		} else {
+			log.Println("reservation reaper DISABLED by HIVE_RESERVATION_REAPER_ENABLED=false; stranded credit holds will not be released")
+		}
+
 		budgetsRepo := budgets.NewPgxRepository(pool)
 		workspaceBudgetsRepo := budgets.NewWorkspacePgxRepository(pool)
 		emailNotifier := budgets.NewLogNotifier(slog.Default())
