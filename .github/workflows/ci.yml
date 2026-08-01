@@ -905,6 +905,25 @@ jobs:
     name: Web E2E (full stack)
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Interim mitigation for issue #631, not the fix. This job boots against
+    # the shared Supabase project's session mode pooler (pool_size 15), and
+    # concurrent runs exhaust it: on 2026-08-01, four unrelated PRs (#644,
+    # #646, #647, #648) ran this job at overlapping times and all four
+    # failed with `page.goto: net::ERR_ABORTED` / a 30s context timeout,
+    # which reads as a front end bug rather than the database contention it
+    # actually is. Job-level (not workflow-level) so unrelated jobs above
+    # keep running in parallel. Literal constant group, deliberately NOT
+    # `${{ github.workflow }}-${{ github.ref }}`: that idiom only dedupes
+    # within one branch and still lets different branches' runs collide on
+    # the pool, which is exactly this failure mode. `cancel-in-progress:
+    # false` because pre-empting a run that is mid-flight against the pool
+    # loses a legitimate result instead of just delaying it; this queues
+    # runs one at a time instead. The real fix (local/CI stacks on their own
+    # Postgres, or splitting session/transaction mode pools) stays open on
+    # #631.
+    concurrency:
+      group: web-e2e-shared-supabase-pool
+      cancel-in-progress: false
     if: >-
       needs.changes.outputs.run == 'true' &&
       (github.event_name == 'push' ||
