@@ -370,7 +370,7 @@ func TestBackfillPersonalTenantsUnblocksLockedOutAPIKeyAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uuid.Nil, before, "precondition: the account is locked out (403 account_not_provisioned)")
 
-	report, err := signup.BackfillPersonalTenants(ctx, pool)
+	report, err := signup.BackfillPersonalTenants(ctx, pool, true)
 	require.NoError(t, err)
 	require.Contains(t, report.Provisioned, accountID)
 
@@ -406,7 +406,7 @@ func TestBackfillPersonalTenantsMapsExistingTenantInsteadOfMintingSecond(t *test
 	accountID := ptAccount(t, ctx, pool, userID)
 	ptAPIKey(t, ctx, pool, accountID, userID)
 
-	report, err := signup.BackfillPersonalTenants(ctx, pool)
+	report, err := signup.BackfillPersonalTenants(ctx, pool, true)
 	require.NoError(t, err)
 	require.Contains(t, report.Provisioned, accountID)
 
@@ -434,7 +434,7 @@ func TestBackfillPersonalTenantsLeavesAmbiguousAccountUnmappedWithReason(t *test
 	ptAPIKey(t, ctx, pool, first, userID)
 	ptAPIKey(t, ctx, pool, second, userID)
 
-	report, err := signup.BackfillPersonalTenants(ctx, pool)
+	report, err := signup.BackfillPersonalTenants(ctx, pool, true)
 	require.NoError(t, err)
 
 	require.NotContains(t, report.Provisioned, first)
@@ -481,7 +481,7 @@ func TestBackfillPersonalTenantsReportsAccountWhoseTenantIsBilledByAnother(t *te
 	secondAccount := ptAccount(t, ctx, pool, userID)
 	ptAPIKey(t, ctx, pool, secondAccount, userID)
 
-	report, err := signup.BackfillPersonalTenants(ctx, pool)
+	report, err := signup.BackfillPersonalTenants(ctx, pool, true)
 	require.NoError(t, err)
 
 	require.NotContains(t, report.Provisioned, secondAccount,
@@ -489,6 +489,65 @@ func TestBackfillPersonalTenantsReportsAccountWhoseTenantIsBilledByAnother(t *te
 	require.Contains(t, report.Skipped, secondAccount)
 	require.Equal(t, 0, ptPersonalTenants(t, ctx, pool, userID),
 		"the owner already has a tenant, so no personal tenant is minted")
+}
+
+// The backfill carries the same deployment posture gate the live path carries.
+// On Hive Enterprise it must not mint a personal tenant, because Enterprise
+// posture is that membership is administered, and a tenant created there would
+// also be mislabelled HIVE_CLOUD. The account is reported instead. Without this
+// the backfill would be a way around the gate Reconcile enforces.
+func TestBackfillPersonalTenantsCreatesNothingWhenSelfServeDisabled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	userID := mustInsertAuthUser(t, ctx, pool, "ent-"+uuid.NewString()[:8]+"@unclaimed.example")
+	ptCleanupUser(t, pool, userID)
+	accountID := ptAccount(t, ctx, pool, userID)
+	ptAPIKey(t, ctx, pool, accountID, userID)
+
+	report, err := signup.BackfillPersonalTenants(ctx, pool, false)
+	require.NoError(t, err)
+
+	require.NotContains(t, report.Provisioned, accountID)
+	require.Contains(t, report.Skipped, accountID)
+	require.Equal(t, "personal_tenant_disabled_for_deployment", report.Skipped[accountID])
+	require.Equal(t, 0, ptPersonalTenants(t, ctx, pool, userID),
+		"Enterprise posture must never gain a personal tenant via the backfill")
+	require.Equal(t, 0, countMemberships(t, ctx, pool, userID))
+}
+
+// With self-serve disabled the sweep is still useful: an owner who ALREADY has
+// a tenant gets their billing mapping retried, which is posture-neutral and
+// works on every deployment.
+func TestBackfillPersonalTenantsStillMapsExistingTenantWhenSelfServeDisabled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	pool := newPool(t, ctx)
+	t.Cleanup(func() { pool.Close() })
+
+	userID := mustInsertAuthUser(t, ctx, pool, "entmap-"+uuid.NewString()[:8]+"@unclaimed.example")
+	ptCleanupUser(t, pool, userID)
+
+	tenantID := mustInsertTenant(t, ctx, pool, "pt-ent-"+uuid.NewString()[:8], "ENTERPRISE_EDGE")
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM public.tenants WHERE id = $1`, tenantID) })
+	_, err := pool.Exec(ctx,
+		`INSERT INTO public.tenant_users(tenant_id, user_id, role, status) VALUES ($1, $2, 'MEMBER', 'ACTIVE')`,
+		tenantID, userID)
+	require.NoError(t, err)
+
+	accountID := ptAccount(t, ctx, pool, userID)
+	ptAPIKey(t, ctx, pool, accountID, userID)
+
+	report, err := signup.BackfillPersonalTenants(ctx, pool, false)
+	require.NoError(t, err)
+
+	require.Contains(t, report.Provisioned, accountID)
+	mapped, ok := ptMappedAccount(t, ctx, pool, tenantID)
+	require.True(t, ok)
+	require.Equal(t, accountID, mapped)
+	require.Equal(t, 0, ptPersonalTenants(t, ctx, pool, userID))
 }
 
 // Re-running the backfill changes nothing: the same partial unique index that
@@ -504,11 +563,11 @@ func TestBackfillPersonalTenantsIsIdempotent(t *testing.T) {
 	accountID := ptAccount(t, ctx, pool, userID)
 	ptAPIKey(t, ctx, pool, accountID, userID)
 
-	first, err := signup.BackfillPersonalTenants(ctx, pool)
+	first, err := signup.BackfillPersonalTenants(ctx, pool, true)
 	require.NoError(t, err)
 	require.Contains(t, first.Provisioned, accountID)
 
-	second, err := signup.BackfillPersonalTenants(ctx, pool)
+	second, err := signup.BackfillPersonalTenants(ctx, pool, true)
 	require.NoError(t, err)
 	require.NotContains(t, second.Provisioned, accountID)
 	require.Equal(t, 1, ptPersonalTenants(t, ctx, pool, userID))

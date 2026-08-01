@@ -97,6 +97,13 @@ func (p *Provisioner) provisionSelfServeTenant(
 // A read that finds nothing after a conflict means the slug collided with a
 // tenant that is not this user's personal tenant. That cannot happen for a
 // uuid-derived slug, so it is reported as an error rather than papered over.
+//
+// deployment is hardcoded HIVE_CLOUD, and that is safe by construction rather
+// than by assumption: both callers are gated on the self-serve posture flag
+// (Reconcile on WebhookDeps.SelfServeTenants, BackfillPersonalTenants on its
+// selfServeTenants argument), which is only ever true on Hive Cloud. A
+// personal tenant is therefore never written to an ENTERPRISE_EDGE deployment,
+// so there is no posture for this column to get wrong.
 func ensurePersonalTenant(ctx context.Context, pool *pgxpool.Pool, userID uuid.UUID) (uuid.UUID, error) {
 	if pool == nil {
 		return uuid.Nil, errors.New("signup: nil pool")
@@ -198,7 +205,16 @@ type BackfillReport struct {
 //
 // Safe to re-run: an account that acquired a mapping is no longer a candidate,
 // and the partial unique index makes a repeat tenant insert a no-op.
-func BackfillPersonalTenants(ctx context.Context, pool *pgxpool.Pool) (BackfillReport, error) {
+// selfServeTenants carries the SAME deployment posture the live path reads
+// from WebhookDeps.SelfServeTenants. It must, or the backfill would become a
+// way to mint personal tenants on a Hive Enterprise database, where posture
+// says membership is administered, and to label them HIVE_CLOUD on top. When
+// it is false the sweep still runs, because retrying the mapping for an owner
+// who ALREADY has a tenant is posture-neutral and useful on every deployment
+// (EnsureTenantBillingAccount has never filtered on tenants.deployment); it
+// simply never creates a tenant, and reports the accounts it therefore cannot
+// help.
+func BackfillPersonalTenants(ctx context.Context, pool *pgxpool.Pool, selfServeTenants bool) (BackfillReport, error) {
 	report := BackfillReport{Skipped: map[uuid.UUID]string{}}
 	if pool == nil {
 		return report, errors.New("signup: nil pool")
@@ -241,9 +257,13 @@ func BackfillPersonalTenants(ctx context.Context, pool *pgxpool.Pool) (BackfillR
 			continue
 		}
 
-		tenantID, err := backfillTenantFor(ctx, pool, c.ownerID)
+		tenantID, err := backfillTenantFor(ctx, pool, c.ownerID, selfServeTenants)
 		if err != nil {
 			return report, fmt.Errorf("signup: resolve tenant for account %s: %w", c.accountID, err)
+		}
+		if tenantID == uuid.Nil {
+			report.Skipped[c.accountID] = "personal_tenant_disabled_for_deployment"
+			continue
 		}
 
 		mapped, reason, err := EnsureTenantBillingAccount(ctx, pool, tenantID)
@@ -290,7 +310,12 @@ func BackfillPersonalTenants(ctx context.Context, pool *pgxpool.Pool) (BackfillR
 // still not the same as choosing the mapping: EnsureTenantBillingAccount
 // applies its own conservative predicate to whatever tenant comes back, and
 // refuses if that tenant's members do not converge on a single account.
-func backfillTenantFor(ctx context.Context, pool *pgxpool.Pool, ownerID uuid.UUID) (uuid.UUID, error) {
+// Returns uuid.Nil with a nil error when the owner has no tenant and
+// selfServeTenants is false: on Hive Enterprise there is no tenant to give
+// them, and inventing one would violate the administered-membership posture.
+func backfillTenantFor(
+	ctx context.Context, pool *pgxpool.Pool, ownerID uuid.UUID, selfServeTenants bool,
+) (uuid.UUID, error) {
 	var tenantID uuid.UUID
 	err := pool.QueryRow(ctx, `
 		SELECT tu.tenant_id
@@ -307,6 +332,9 @@ func backfillTenantFor(ctx context.Context, pool *pgxpool.Pool, ownerID uuid.UUI
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return uuid.Nil, fmt.Errorf("read existing tenant: %w", err)
+	}
+	if !selfServeTenants {
+		return uuid.Nil, nil
 	}
 
 	tenantID, err = ensurePersonalTenant(ctx, pool, ownerID)

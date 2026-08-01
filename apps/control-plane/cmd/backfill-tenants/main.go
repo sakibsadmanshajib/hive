@@ -35,6 +35,19 @@ func main() {
 		os.Exit(2)
 	}
 
+	// Deployment posture, read from the same env var
+	// platform/config.Config.LicenseFilePath reads. An operator pointing this
+	// at a Hive Enterprise database must not mint personal tenants there:
+	// Enterprise posture is that membership is administered. The sweep still
+	// runs, because retrying the billing mapping for an owner who already has
+	// a tenant is posture-neutral, but it creates nothing and reports the
+	// accounts it therefore cannot help.
+	selfServeTenants := os.Getenv("LICENSE_FILE_PATH") == ""
+	if !selfServeTenants {
+		fmt.Println("LICENSE_FILE_PATH is set, so this is a Hive Enterprise deployment:")
+		fmt.Println("no personal tenant will be created, mapping retries only.")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -45,7 +58,7 @@ func main() {
 	}
 	defer pool.Close()
 
-	report, err := signup.BackfillPersonalTenants(ctx, pool)
+	report, err := signup.BackfillPersonalTenants(ctx, pool, selfServeTenants)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "backfill-tenants:", err)
 		os.Exit(1)
