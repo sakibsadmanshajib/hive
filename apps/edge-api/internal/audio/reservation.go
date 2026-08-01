@@ -15,6 +15,31 @@ import (
 // milliseconds instead of real seconds.
 var releaseTimeout = 30 * time.Second
 
+// releaseHold releases a hold that will never be charged, on a fresh bounded
+// background context of its own, and logs a failure instead of discarding it.
+//
+// Every release-on-error site in this package used to pass the request context
+// and drop the returned error. That is the #616 mechanism: a release runs at
+// the point a request has already failed, which is exactly when the client is
+// most likely to have disconnected and cancelled the request context, and a
+// cancelled context makes the accounting call abort before it is ever sent. The
+// hold then strands, silently, because nothing looked at the error. #616
+// stranded 32 holds that way and refused every subsequent request for three
+// days.
+//
+// Deliberately takes no context argument: there is no caller for which
+// inheriting the request context would be correct, so the type does not offer
+// the option. The same reasoning settleReservation documents at length applies
+// here, and this never shares a context or deadline with a finalize.
+func (h *Handler) releaseHold(accountID, reservationID, reason, endpoint string) {
+	ctx, cancel := context.WithTimeout(context.Background(), releaseTimeout)
+	defer cancel()
+
+	if err := h.accounting.ReleaseReservation(ctx, accountID, reservationID, reason); err != nil {
+		log.Printf("audio: release reservation failed endpoint=%s reservation_id=%s reason=%s: %v", endpoint, reservationID, reason, err)
+	}
+}
+
 // settleReservation finalizes a reservation and, only when finalize itself
 // fails, releases it instead, so a reservation always reaches a terminal
 // state exactly once (charged or released), and a failed charge never

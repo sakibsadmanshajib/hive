@@ -188,9 +188,14 @@ func (h *Handler) requirePriceUnit(w http.ResponseWriter, route RouteResult, met
 // upstream answered 2xx but reported nothing to meter (#627, D-034). Charging
 // a guess and serving it free are both excluded, so the only honest answer
 // left is a retryable failure.
-func (h *Handler) refuseUnpriceableResponse(ctx context.Context, w http.ResponseWriter, accountID, reservationID, endpoint, alias string) {
+//
+// The release runs on its own bounded context via releaseHold, never the
+// request context: this site executes after the upstream call has completed,
+// which is the moment a client is most likely to have disconnected, and a
+// release that inherits a cancelled context strands the hold (#616).
+func (h *Handler) refuseUnpriceableResponse(w http.ResponseWriter, accountID, reservationID, endpoint, alias string) {
 	log.Printf("audio: endpoint=%s alias=%s upstream reported no audio duration; refusing rather than charging a guess", endpoint, alias)
-	_ = h.accounting.ReleaseReservation(ctx, accountID, reservationID, "unpriceable_response")
+	h.releaseHold(accountID, reservationID, "unpriceable_response", endpoint)
 	code := "upstream_error"
 	apierrors.WriteError(w, http.StatusBadGateway, "api_error",
 		"The transcription could not be metered and was not charged. Please retry.", &code)
@@ -298,7 +303,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	// Rewrite the model field to the LiteLLM model name.
 	var bodyMap map[string]any
 	if err := json.Unmarshal(body, &bodyMap); err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		h.releaseHold(auth.AccountID, reservationID, "request_error", "/v1/audio/speech")
 		code := "invalid_request"
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON body.", &code)
 		return
@@ -306,7 +311,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	bodyMap["model"] = route.LiteLLMModelName
 	rewrittenBody, err := json.Marshal(bodyMap)
 	if err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		h.releaseHold(auth.AccountID, reservationID, "request_error", "/v1/audio/speech")
 		code := "internal_error"
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to serialize request.", &code)
 		return
@@ -329,7 +334,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	for attempt := 1; attempt <= maxSpeechAttempts; attempt++ {
 		statusCode, ct, respBody, err := h.fetchSpeechOnce(ctx, rewrittenBody)
 		if err != nil {
-			_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+			h.releaseHold(auth.AccountID, reservationID, "upstream_error", "/v1/audio/speech")
 			apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, http.StatusBadGateway, err.Error())
 			return
 		}
@@ -347,13 +352,13 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if lastStatus < 200 || lastStatus >= 300 {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", "/v1/audio/speech")
 		apierrors.WriteProviderBlindUpstreamError(w, speechReq.Model, lastStatus, string(lastBody))
 		return
 	}
 	if !success {
 		// Every attempt came back silent.
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", "/v1/audio/speech")
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Speech synthesis is temporarily unavailable. Please retry.", &code)
 		return
@@ -483,14 +488,14 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	h.stt.Transcribe(rec, r)
 
 	if rec.status < 200 || rec.status >= 300 {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", endpoint)
 		rec.flushTo(w)
 		return
 	}
 
 	seconds, ok := billableSeconds(rec.body.Bytes(), requestedFormat)
 	if !ok {
-		h.refuseUnpriceableResponse(ctx, w, auth.AccountID, reservationID, endpoint, route.AliasID)
+		h.refuseUnpriceableResponse(w, auth.AccountID, reservationID, endpoint, route.AliasID)
 		return
 	}
 
@@ -640,7 +645,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 				writeVal = litellmModel
 			}
 			if err := mw.WriteField(key, writeVal); err != nil {
-				_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+				h.releaseHold(auth.AccountID, reservationID, "request_error", accountingEndpoint)
 				code := "invalid_request"
 				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild request field.", &code)
 				return
@@ -648,7 +653,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		}
 	}
 	if err := mw.WriteField("response_format", upstreamResponseFormat(requestedFormat)); err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		h.releaseHold(auth.AccountID, reservationID, "request_error", accountingEndpoint)
 		code := "invalid_request"
 		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild request field.", &code)
 		return
@@ -658,7 +663,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	for fieldName, fileHeaders := range r.MultipartForm.File {
 		for _, fh := range fileHeaders {
 			if err := copyMultipartFile(mw, fieldName, fh); err != nil {
-				_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+				h.releaseHold(auth.AccountID, reservationID, "request_error", accountingEndpoint)
 				code := "invalid_request"
 				apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to read uploaded audio file.", &code)
 				return
@@ -667,7 +672,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	}
 
 	if err := mw.Close(); err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		h.releaseHold(auth.AccountID, reservationID, "request_error", accountingEndpoint)
 		code := "internal_error"
 		apierrors.WriteError(w, http.StatusInternalServerError, "api_error", "Failed to finalize request body.", &code)
 		return
@@ -677,7 +682,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	upstreamURL := h.litellmBaseURL + litellmPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, &multipartBuf)
 	if err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to build upstream request.", &code)
 		return
@@ -687,7 +692,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 
 	resp, err := h.httpClient.Do(req)
 	if err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
 		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, http.StatusBadGateway, err.Error())
 		return
 	}
@@ -695,7 +700,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
 		apierrors.WriteProviderBlindUpstreamError(w, modelAlias, resp.StatusCode, string(upstreamBody))
 		return
 	}
@@ -703,7 +708,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	// Read response and extract duration for metering (non-fatal if missing).
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
-		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		h.releaseHold(auth.AccountID, reservationID, "upstream_error", accountingEndpoint)
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response.", &code)
 		return
@@ -714,7 +719,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	// than charged at a guess or served free (#627, D-034).
 	seconds, ok := billableSeconds(respBody, requestedFormat)
 	if !ok {
-		h.refuseUnpriceableResponse(ctx, w, auth.AccountID, reservationID, accountingEndpoint, route.AliasID)
+		h.refuseUnpriceableResponse(w, auth.AccountID, reservationID, accountingEndpoint, route.AliasID)
 		return
 	}
 

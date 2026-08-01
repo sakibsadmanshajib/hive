@@ -148,6 +148,20 @@ func TestSpeechRefusesPriceUnitItCannotMeter(t *testing.T) {
 func postAudioMultipart(t *testing.T, h *audio.Handler, path, model, responseFormat string) *httptest.ResponseRecorder {
 	t.Helper()
 
+	body, contentType := multipartAudioBody(t, model, responseFormat)
+	req := httptest.NewRequest(http.MethodPost, path, body)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// multipartAudioBody builds one audio upload form, returning the body and its
+// Content-Type.
+func multipartAudioBody(t *testing.T, model, responseFormat string) (*bytes.Buffer, string) {
+	t.Helper()
+
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	if err := mw.WriteField("model", model); err != nil {
@@ -168,13 +182,7 @@ func postAudioMultipart(t *testing.T, h *audio.Handler, path, model, responseFor
 	if err := mw.Close(); err != nil {
 		t.Fatalf("close multipart writer: %v", err)
 	}
-
-	req := httptest.NewRequest(http.MethodPost, path, &buf)
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("Authorization", "Bearer test-key")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	return w
+	return &buf, mw.FormDataContentType()
 }
 
 func buildPricedAudioHandler(litellmBaseURL string, unitPrice int64, unit string) (*audio.Handler, *mockAudioAccounting, *mockAudioRouting) {

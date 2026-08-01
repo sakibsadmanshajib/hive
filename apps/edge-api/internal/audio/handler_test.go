@@ -109,11 +109,18 @@ type mockAudioAccounting struct {
 	reservationID        string
 	createErr            error
 	finalizeErr          error
+	releaseErr           error
 	createCalled         bool
 	finalizeCalled       bool
 	releaseCalled        bool
 	lastEstimatedCredits int64
 	lastActualCredits    int64
+	// releaseCtxErr captures ctx.Err() as observed by ReleaseReservation and
+	// releaseCtxHasDeadline whether that context was bounded, so a test can
+	// prove a release ran on its own live, bounded context rather than on an
+	// already-cancelled request context (#616).
+	releaseCtxErr         error
+	releaseCtxHasDeadline bool
 }
 
 func (a *mockAudioAccounting) CreateReservation(_ context.Context, input audio.ReservationInput) (string, error) {
@@ -131,9 +138,11 @@ func (a *mockAudioAccounting) FinalizeReservation(_ context.Context, input audio
 	return a.finalizeErr
 }
 
-func (a *mockAudioAccounting) ReleaseReservation(_ context.Context, _, _, _ string) error {
+func (a *mockAudioAccounting) ReleaseReservation(ctx context.Context, _, _, _ string) error {
 	a.releaseCalled = true
-	return nil
+	a.releaseCtxErr = ctx.Err()
+	_, a.releaseCtxHasDeadline = ctx.Deadline()
+	return a.releaseErr
 }
 
 func buildAudioHandler(litellmBaseURL string) *audio.Handler {
