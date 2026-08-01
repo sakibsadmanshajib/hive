@@ -324,6 +324,54 @@ func TestReleaseReservationReturnsPolicyError(t *testing.T) {
 	}
 }
 
+// TestReleaseReservationNeedsReconciliationReturnsConflict pins the wire
+// contract edge-api classifies on (issue #672). A refused second release must
+// answer 409, the same status the edge already reads off
+// StatusError.StatusCode for a credit-policy verdict, never a generic 500 and
+// never a 200 that hides a corrupted row.
+func TestReleaseReservationNeedsReconciliationReturnsConflict(t *testing.T) {
+	_, accountingRepo, handler, viewer, accountID := newReleaseHandler(t)
+
+	reservationID := uuid.New()
+	accountingRepo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: uuid.New(),
+		ReservationKey:   "req_needs_reconciliation:1",
+		RequestID:        "req_needs_reconciliation",
+		AttemptNumber:    1,
+		Endpoint:         "/v1/chat/completions",
+		ModelAlias:       "hive-fast",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusNeedsReconciliation,
+		ReservedCredits:  10000,
+		ConsumedCredits:  1003,
+		ReleasedCredits:  8997,
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"reservation_id": reservationID.String(),
+		"reason":         "finalize_failed",
+	})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts/current/credits/reservations/release", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(viewerCtx(viewer))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if stored := accountingRepo.reservations[reservationID]; stored.Status != ReservationStatusNeedsReconciliation {
+		t.Fatalf("expected the reconciliation marker to survive, got %s", stored.Status)
+	}
+}
+
 func TestExpandReservationRejectsInvalidUUID(t *testing.T) {
 	_, handler, viewer := newFinalizeHandler(t)
 
