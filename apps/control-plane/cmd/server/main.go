@@ -592,7 +592,14 @@ func main() {
 				// Disposable-domain backstop (issue #116) for scripted signups
 				// that hit Supabase directly and bypass the web-console precheck.
 				DisposableCheck: disposableBlocklist.IsDisposableEmail,
-				SharedSecret:    signupSecret,
+				// Personal-tenant provisioning for a signup no tenant claims
+				// (issue #625). Hive Cloud only. An empty LicenseFilePath is
+				// already the switch that selects licensing.CloudSource over
+				// licensing.FileSource below, so posture keeps one source of
+				// truth rather than gaining a second flag that can disagree
+				// with the first.
+				SelfServeTenants: cfg.LicenseFilePath == "",
+				SharedSecret:     signupSecret,
 			}
 			signupWebhook = signup.NewWebhook(signupDeps)
 			// Second entry point into the same provisioning implementation, for
