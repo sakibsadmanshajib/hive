@@ -49,21 +49,26 @@ func newAccountingMockSyncFinalizeFails(rec *accountingRecorder, onFinalize func
 	}))
 }
 
-// newAccountingMockSyncFinalizeSucceedsWithHook behaves like newAccountingMock
-// (every path, including finalize, answers 200) but calls onFinalize (if set)
-// right before answering the finalize request, so a test can cancel the
-// request context at exactly the moment finalize is in flight -- the same
-// technique newAccountingMockSyncFinalizeFails uses, but for the success
-// case, so a test can prove finalize itself is unaffected by that
-// cancellation (#637) rather than only proving the fallback release survives
-// it.
-func newAccountingMockSyncFinalizeSucceedsWithHook(rec *accountingRecorder, onFinalize func()) *httptest.Server {
+// newAccountingMockSyncFinalizeSucceedsGated behaves like newAccountingMock
+// (every path, including finalize, answers 200) but for the finalize path
+// specifically, signals ready then blocks on proceed before answering. That
+// gives a test a deterministic happens-before order: cancel the caller's
+// context, THEN close proceed, so the mock only writes its response once
+// the cancellation is already in effect. Review on #650 found the earlier
+// version of this test (cancel() called from inside the handler,
+// concurrently with the handler returning) detected the #637 regression
+// only 29 times out of 30 -- a genuine race, not a guarantee -- because
+// whether the client observed the cancellation before or after it finished
+// reading the response depended on goroutine scheduling. The ready/proceed
+// gate removes that race entirely.
+func newAccountingMockSyncFinalizeSucceedsGated(rec *accountingRecorder, ready chan<- struct{}, proceed <-chan struct{}) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		rec.record(r.URL.Path, body)
-		if r.URL.Path == "/internal/accounting/reservations/finalize" && onFinalize != nil {
-			onFinalize()
+		if r.URL.Path == "/internal/accounting/reservations/finalize" {
+			close(ready)
+			<-proceed
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -171,14 +176,16 @@ func TestExecuteSync_FinalizeError_CancelledContext_StillReleases(t *testing.T) 
 // primary regression guard: unlike the previous test, the control plane's
 // finalize handler here SUCCEEDS (200) if it actually receives the call on a
 // live context. The client disconnects (its context is cancelled) exactly
-// as the finalize request reaches the mock, the same moment
-// TestExecuteSync_FinalizeError_CancelledContext_StillReleases exercises for
-// the failure case. Before #637's fix, finalize ran on that same cancelled
-// request context, so cancelling it here would make the finalize call fail
-// client-side regardless of the mock's 200, falling through to a release
-// and losing the charge for genuinely delivered work. After the fix,
-// finalize runs on its own independent background context, so cancelling
-// the caller's context has no effect on it: the charge must still land.
+// as the finalize request reaches the mock, deterministically: the mock
+// signals ready and blocks, the test cancels ctx (synchronous, guaranteed
+// complete once it returns), THEN closes proceed so the mock's response is
+// only ever written after the cancellation is already in effect. Before
+// #637's fix, finalize ran on that same cancelled request context, so
+// cancelling it here would make the finalize call fail client-side
+// regardless of the mock's 200, falling through to a release and losing
+// the charge for genuinely delivered work. After the fix, finalize runs on
+// its own independent background context, so cancelling the caller's
+// context has no effect on it: the charge must still land.
 func TestExecuteSync_ClientDisconnect_ChargesDeliveredWork(t *testing.T) {
 	var hits int64
 	litellmSrv := countingJSONServer(&hits)
@@ -189,13 +196,23 @@ func TestExecuteSync_ClientDisconnect_ChargesDeliveredWork(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rec := &accountingRecorder{}
-	// The client hangs up exactly as settlement starts, same as the sibling
-	// failure-path test above, but this mock's finalize handler succeeds.
-	acctSrv := newAccountingMockSyncFinalizeSucceedsWithHook(rec, cancel)
+	ready := make(chan struct{})
+	proceed := make(chan struct{})
+	acctSrv := newAccountingMockSyncFinalizeSucceedsGated(rec, ready, proceed)
 	defer acctSrv.Close()
 
 	orch := newAuthorizedOrchestrator(acctSrv.URL, routingSrv.URL, litellmSrv.URL)
-	callSyncCtx(orch, ctx)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		callSyncCtx(orch, ctx)
+	}()
+
+	<-ready
+	cancel()
+	close(proceed)
+	<-done
 
 	if ctx.Err() == nil {
 		t.Fatal("sanity check failed: context was not actually cancelled")
