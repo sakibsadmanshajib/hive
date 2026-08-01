@@ -9,10 +9,16 @@
 -- lookupExistingEntry searches credit_ledger_entries for the flat key, misses,
 -- and returns ErrNotFound. That is a hard error where the design intends a
 -- clean no-op. It does not double credit anyone, because it fails instead of
--- inserting, but it is a failure. It is unreachable on today's data (every
--- old-shape row belongs to a reservation that is finalized or has zero
--- remaining held credits, and neither can attempt another release) and becomes
--- reachable the moment a non-terminal reservation carries an old-shape entry.
+-- inserting, but it is a failure. It is unreachable on today's data, and the
+-- thing that makes it unreachable is the remaining hold rather than the
+-- reservation status: releaseLocked refuses only 'released' and 'finalized',
+-- so the 6 'needs_reconciliation' reservations among the old-shape rows are
+-- permitted past that check, and what actually stops them is
+-- remainingHeldCredits returning zero, which gates the ledger call itself.
+-- All 331 old-shape rows sit on reservations with zero remaining held credits
+-- (reserved - consumed - released), so none can attempt another release. It
+-- becomes reachable the moment a reservation with a non-zero remaining hold
+-- carries an old-shape entry.
 --
 -- This migration changes the TEXT SHAPE OF A KEY ONLY. credits_delta,
 -- created_at, entry_type, reservation_id and metadata are untouched, no row is
@@ -44,6 +50,16 @@
 -- A skipped row keeps its old key: nothing is overwritten and nothing is
 -- deleted. The assertion at the bottom then fails the migration loudly rather
 -- than leaving the asymmetry in place unannounced.
+--
+-- That abort is not all or nothing, deliberately. scripts/apply-migrations.sh
+-- passes each file to psql without --single-transaction and this file carries
+-- no BEGIN or COMMIT, so the UPDATE has already committed by the time the DO
+-- block runs. A raise therefore keeps every safely normalized row normalized
+-- and leaves only the skipped rows on the old key, which is what an operator
+-- wants: reconcile the handful of colliding reservations by hand, re-run the
+-- file, and the run completes. The file stays pending in
+-- public.hive_schema_migrations either way, because the runner records a row
+-- only after psql exits zero.
 --
 -- Re-runnable: the second run finds no old-shape rows, updates nothing, and
 -- passes the assertion.
