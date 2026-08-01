@@ -20,6 +20,8 @@ type Repository interface {
 	SetConfirmingAt(ctx context.Context, id uuid.UUID, at time.Time) error
 	ListConfirmingIntents(ctx context.Context, olderThan time.Time) ([]PaymentIntent, error)
 	InsertPaymentEvent(ctx context.Context, event PaymentEvent) error
+	InsertWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error
+	UpdateWebhookDelivery(ctx context.Context, id uuid.UUID, status DeliveryStatus, intentID *uuid.UUID, eventType, errorDetail string) error
 	InsertFXSnapshot(ctx context.Context, snapshot FXSnapshot) error
 	GetFXSnapshot(ctx context.Context, id uuid.UUID) (FXSnapshot, error)
 }
@@ -157,6 +159,40 @@ func (r *pgxRepository) InsertPaymentEvent(ctx context.Context, event PaymentEve
 	)
 	if err != nil {
 		return fmt.Errorf("payments: insert payment event: %w", err)
+	}
+	return nil
+}
+
+func (r *pgxRepository) InsertWebhookDelivery(ctx context.Context, delivery WebhookDelivery) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO public.payment_webhook_deliveries (
+			id, rail, payment_intent_id, status, event_type, error_detail, raw_body, received_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)`,
+		delivery.ID, delivery.Rail, delivery.PaymentIntentID, delivery.Status,
+		delivery.EventType, delivery.ErrorDetail, delivery.RawBody, delivery.ReceivedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("payments: insert webhook delivery: %w", err)
+	}
+	return nil
+}
+
+// UpdateWebhookDelivery advances a delivery record. The intent link is only
+// overwritten once it is known, so marking a delivery failed before the intent
+// was resolved does not erase a link a later step already wrote.
+func (r *pgxRepository) UpdateWebhookDelivery(ctx context.Context, id uuid.UUID, status DeliveryStatus, intentID *uuid.UUID, eventType, errorDetail string) error {
+	_, err := r.db.Exec(ctx, `
+		UPDATE public.payment_webhook_deliveries
+		   SET status = $1,
+		       payment_intent_id = coalesce($2, payment_intent_id),
+		       event_type = case when $3 = '' then event_type else $3 end,
+		       error_detail = $4,
+		       updated_at = now()
+		 WHERE id = $5`,
+		status, intentID, eventType, errorDetail, id,
+	)
+	if err != nil {
+		return fmt.Errorf("payments: update webhook delivery: %w", err)
 	}
 	return nil
 }

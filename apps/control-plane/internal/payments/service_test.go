@@ -19,19 +19,21 @@ import (
 
 // stubRepository implements Repository with in-memory maps.
 type stubRepository struct {
-	mu      sync.Mutex
-	intents map[uuid.UUID]PaymentIntent
-	byProv  map[string]uuid.UUID // providerIntentID -> intentID
-	events  []PaymentEvent
-	snaps   map[uuid.UUID]FXSnapshot
+	mu         sync.Mutex
+	intents    map[uuid.UUID]PaymentIntent
+	byProv     map[string]uuid.UUID // providerIntentID -> intentID
+	events     []PaymentEvent
+	deliveries map[uuid.UUID]WebhookDelivery
+	snaps      map[uuid.UUID]FXSnapshot
 }
 
 func newStubRepository() *stubRepository {
 	return &stubRepository{
-		intents: make(map[uuid.UUID]PaymentIntent),
-		byProv:  make(map[string]uuid.UUID),
-		events:  nil,
-		snaps:   make(map[uuid.UUID]FXSnapshot),
+		intents:    make(map[uuid.UUID]PaymentIntent),
+		byProv:     make(map[string]uuid.UUID),
+		events:     nil,
+		deliveries: make(map[uuid.UUID]WebhookDelivery),
+		snaps:      make(map[uuid.UUID]FXSnapshot),
 	}
 }
 
@@ -121,6 +123,43 @@ func (r *stubRepository) InsertPaymentEvent(_ context.Context, event PaymentEven
 	defer r.mu.Unlock()
 	r.events = append(r.events, event)
 	return nil
+}
+
+func (r *stubRepository) InsertWebhookDelivery(_ context.Context, delivery WebhookDelivery) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deliveries[delivery.ID] = delivery
+	return nil
+}
+
+func (r *stubRepository) UpdateWebhookDelivery(_ context.Context, id uuid.UUID, status DeliveryStatus, intentID *uuid.UUID, eventType, errorDetail string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delivery, ok := r.deliveries[id]
+	if !ok {
+		return fmt.Errorf("stub: webhook delivery %s not found", id)
+	}
+	delivery.Status = status
+	if intentID != nil {
+		delivery.PaymentIntentID = intentID
+	}
+	if eventType != "" {
+		delivery.EventType = eventType
+	}
+	delivery.ErrorDetail = errorDetail
+	r.deliveries[id] = delivery
+	return nil
+}
+
+// deliveryList returns the recorded webhook deliveries for assertions.
+func (r *stubRepository) deliveryList() []WebhookDelivery {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]WebhookDelivery, 0, len(r.deliveries))
+	for _, d := range r.deliveries {
+		out = append(out, d)
+	}
+	return out
 }
 
 func (r *stubRepository) InsertFXSnapshot(_ context.Context, snap FXSnapshot) error {

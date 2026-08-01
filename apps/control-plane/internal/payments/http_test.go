@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -394,7 +395,13 @@ func TestWebhook_ReadsRawBodyFirst(t *testing.T) {
 	}
 }
 
-func TestWebhook_AlwaysReturns200(t *testing.T) {
+// Issue #628: settlement failure must not be reported to the provider as
+// successful delivery. A 2xx tells the provider to stop retrying, which disables
+// the only mechanism that would have recovered the credit grant, so a customer
+// pays and receives nothing with no retry and no alert. The webhook now answers
+// 500 on a settlement failure so the provider redelivers; the grant is
+// idempotent, so redelivery cannot double-credit.
+func TestWebhook_ProcessingFailureReturns500SoProviderRetries(t *testing.T) {
 	svc := &stubPaymentService{
 		handleEventErr: errors.New("provider processing error"),
 	}
@@ -405,9 +412,29 @@ func TestWebhook_AlwaysReturns200(t *testing.T) {
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 
-	// Must return 200 even when service returns error
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200 even on error, got %d", rr.Code)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 so the provider retries, got %d", rr.Code)
+	}
+	if strings.Contains(strings.ToLower(rr.Body.String()), "stripe") {
+		t.Fatalf("provider name leaked in webhook error body: %s", rr.Body.String())
+	}
+}
+
+// A payload that will fail identically on every retry (bad signature, event type
+// this rail does not settle on) gets a client error instead of a retry request.
+func TestWebhook_RejectedEventReturns400(t *testing.T) {
+	svc := &stubPaymentService{
+		handleEventErr: fmt.Errorf("process event: %w: bad signature", payments.ErrEventRejected),
+	}
+	resolver := &stubAccountResolver{accountID: uuid.New()}
+	h := newHandler(svc, resolver)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/stripe", strings.NewReader(`{"event":"test"}`))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for a rejected payload, got %d", rr.Code)
 	}
 }
 

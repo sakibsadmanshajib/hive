@@ -247,30 +247,55 @@ func (s *Service) GetCheckoutIntent(ctx context.Context, accountID, intentID uui
 // HandleProviderEvent processes an incoming provider webhook.
 //
 // Flow:
-//  1. Parse the raw event via the rail
-//  2. Look up the intent by provider ID
-//  3. Record the payment event
-//  4. Transition intent status based on event type
-//  5. Post ledger grant on success (Stripe: immediate; BD rails: to confirming)
+//  1. Record the inbound delivery (before anything can fail)
+//  2. Parse the raw event via the rail
+//  3. Look up the intent by provider ID
+//  4. Record the payment event
+//  5. Transition intent status based on event type
+//  6. Post ledger grant on success (Stripe: immediate; BD rails: to confirming)
+//  7. Mark the delivery settled
+//
+// Every error returned from here means the delivery was NOT settled, and the
+// caller must tell the provider so (issue #628): a 2xx stops provider retries,
+// which was the only mechanism that could recover a failed grant. Retries are
+// safe because the grant is idempotent, and every failure leaves the step-1
+// record behind as a dead letter.
 func (s *Service) HandleProviderEvent(ctx context.Context, rail Rail, rawBody []byte, headers map[string]string) error {
 	railImpl, ok := s.rails[rail]
 	if !ok {
 		return fmt.Errorf("payments: no rail implementation for %s", rail)
 	}
 
-	// 1. Parse the event.
+	// 1. Persist the delivery first. Until this row exists, a failure anywhere
+	// below is invisible rather than merely unrecovered.
+	delivery := WebhookDelivery{
+		ID:         uuid.New(),
+		Rail:       rail,
+		Status:     DeliveryStatusReceived,
+		RawBody:    string(rawBody),
+		ReceivedAt: time.Now().UTC(),
+	}
+	if err := s.repo.InsertWebhookDelivery(ctx, delivery); err != nil {
+		return fmt.Errorf("payments: record webhook delivery: %w", err)
+	}
+
+	// 2. Parse the event. A rejected payload (bad signature, unsupported type)
+	// is permanent: replaying the same bytes cannot succeed.
 	railEvent, err := railImpl.ProcessEvent(ctx, rawBody, headers)
 	if err != nil {
-		return fmt.Errorf("payments: process event: %w", err)
+		return s.failDelivery(ctx, delivery.ID, nil, "",
+			fmt.Errorf("payments: process event: %w: %w", ErrEventRejected, err))
 	}
 
-	// 2. Look up the intent.
+	// 3. Look up the intent. A miss can be a webhook that overtook the intent's
+	// own provider-id write, so this is retryable, not rejected.
 	intent, err := s.repo.GetPaymentIntentByProviderID(ctx, railEvent.ProviderIntentID)
 	if err != nil {
-		return fmt.Errorf("payments: get intent by provider ID: %w", err)
+		return s.failDelivery(ctx, delivery.ID, nil, railEvent.EventType,
+			fmt.Errorf("payments: get intent by provider ID: %w", err))
 	}
 
-	// 3. Record the payment event.
+	// 4. Record the payment event.
 	paymentEvent := PaymentEvent{
 		ID:              uuid.New(),
 		PaymentIntentID: intent.ID,
@@ -280,47 +305,91 @@ func (s *Service) HandleProviderEvent(ctx context.Context, rail Rail, rawBody []
 		CreatedAt:       time.Now().UTC(),
 	}
 	if err := s.repo.InsertPaymentEvent(ctx, paymentEvent); err != nil {
-		return fmt.Errorf("payments: insert payment event: %w", err)
+		return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType,
+			fmt.Errorf("payments: insert payment event: %w", err))
 	}
 
-	// 4 & 5. Transition based on event type.
+	// 5 & 6. Transition based on event type.
 	switch railEvent.EventType {
 	case "payment.succeeded":
 		if rail == RailStripe {
-			// Stripe: immediate complete + grant.
-			if _, err := s.repo.CompareAndSetStatus(ctx, intent.ID, intent.Status, IntentStatusCompleted); err != nil {
-				return fmt.Errorf("payments: transition to completed: %w", err)
-			}
-			if err := s.PostPurchaseGrant(ctx, intent); err != nil {
-				return fmt.Errorf("payments: post grant: %w", err)
+			// Stripe: grant first, then complete (see grantThenComplete).
+			if _, err := s.grantThenComplete(ctx, intent, intent.Status); err != nil {
+				return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType, err)
 			}
 		} else {
-			// BD rails: move to confirming with timestamp.
+			// BD rails: move to confirming with timestamp. The grant happens in
+			// ConfirmPendingBDPayments once the confirmation window elapses.
 			if _, err := s.repo.CompareAndSetStatus(ctx, intent.ID, intent.Status, IntentStatusConfirming); err != nil {
-				return fmt.Errorf("payments: transition to confirming: %w", err)
+				return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType,
+					fmt.Errorf("payments: transition to confirming: %w", err))
 			}
 			if err := s.repo.SetConfirmingAt(ctx, intent.ID, time.Now().UTC()); err != nil {
-				return fmt.Errorf("payments: set confirming_at: %w", err)
+				return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType,
+					fmt.Errorf("payments: set confirming_at: %w", err))
 			}
 		}
 
 	case "payment.failed":
 		if _, err := s.repo.CompareAndSetStatus(ctx, intent.ID, intent.Status, IntentStatusFailed); err != nil {
-			return fmt.Errorf("payments: transition to failed: %w", err)
+			return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType,
+				fmt.Errorf("payments: transition to failed: %w", err))
 		}
 
 	case "payment.expired":
 		if _, err := s.repo.CompareAndSetStatus(ctx, intent.ID, intent.Status, IntentStatusExpired); err != nil {
-			return fmt.Errorf("payments: transition to expired: %w", err)
+			return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType,
+				fmt.Errorf("payments: transition to expired: %w", err))
 		}
 
 	case "payment.cancelled":
 		if _, err := s.repo.CompareAndSetStatus(ctx, intent.ID, intent.Status, IntentStatusCancelled); err != nil {
-			return fmt.Errorf("payments: transition to cancelled: %w", err)
+			return s.failDelivery(ctx, delivery.ID, &intent.ID, railEvent.EventType,
+				fmt.Errorf("payments: transition to cancelled: %w", err))
 		}
 	}
 
+	// 7. Settled. The row stays for audit; it leaves the dead-letter view.
+	if err := s.repo.UpdateWebhookDelivery(ctx, delivery.ID, DeliveryStatusProcessed, &intent.ID, railEvent.EventType, ""); err != nil {
+		return fmt.Errorf("payments: mark webhook delivery processed: %w", err)
+	}
+
 	return nil
+}
+
+// failDelivery records why a delivery could not be settled and returns the cause
+// so the caller can answer the provider with a retryable status. A failure to
+// write the dead-letter detail is joined onto the cause rather than swallowed.
+func (s *Service) failDelivery(ctx context.Context, deliveryID uuid.UUID, intentID *uuid.UUID, eventType string, cause error) error {
+	if err := s.repo.UpdateWebhookDelivery(ctx, deliveryID, DeliveryStatusFailed, intentID, eventType, cause.Error()); err != nil {
+		return errors.Join(cause, fmt.Errorf("payments: mark webhook delivery failed: %w", err))
+	}
+	return cause
+}
+
+// grantThenComplete posts the credit grant and only then marks the intent
+// completed, reporting whether this call performed the transition.
+//
+// The order is the fix for issue #628. `completed` is the claim that the
+// customer received what they paid for, so it must never be written before the
+// grant that makes it true: with the transition first, a grant failure left an
+// intent asserting delivery of credits nobody ever received.
+//
+// Grant-then-transition is safe to repeat. PostPurchaseGrant keys the grant on
+// `payment:purchase:<intent id>`, and the ledger enforces that key with the
+// credit_idempotency_keys primary key inside the posting transaction, so a
+// redelivery re-runs the grant as a no-op and then converges the status. The
+// window this leaves (credits granted, status not yet completed) errs toward the
+// customer being served and is closed by the next delivery or confirmation pass.
+func (s *Service) grantThenComplete(ctx context.Context, intent PaymentIntent, from IntentStatus) (bool, error) {
+	if err := s.PostPurchaseGrant(ctx, intent); err != nil {
+		return false, fmt.Errorf("payments: post grant: %w", err)
+	}
+	transitioned, err := s.repo.CompareAndSetStatus(ctx, intent.ID, from, IntentStatusCompleted)
+	if err != nil {
+		return false, fmt.Errorf("payments: transition to completed: %w", err)
+	}
+	return transitioned, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -339,19 +408,17 @@ func (s *Service) ConfirmPendingBDPayments(ctx context.Context) (int, error) {
 
 	confirmed := 0
 	for _, intent := range intents {
-		transitioned, err := s.repo.CompareAndSetStatus(ctx, intent.ID, IntentStatusConfirming, IntentStatusCompleted)
+		// Grant first, then complete — same ordering invariant as the webhook
+		// path (issue #628). A concurrent worker that already completed this
+		// intent makes the grant a no-op and the transition a false, so nothing
+		// is double-granted and nothing is double-counted.
+		transitioned, err := s.grantThenComplete(ctx, intent, IntentStatusConfirming)
 		if err != nil {
 			return confirmed, fmt.Errorf("payments: confirm intent %s: %w", intent.ID, err)
 		}
-		if !transitioned {
-			// Already transitioned by a concurrent worker — skip grant.
-			continue
+		if transitioned {
+			confirmed++
 		}
-
-		if err := s.PostPurchaseGrant(ctx, intent); err != nil {
-			return confirmed, fmt.Errorf("payments: post grant for intent %s: %w", intent.ID, err)
-		}
-		confirmed++
 	}
 
 	return confirmed, nil

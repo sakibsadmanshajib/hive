@@ -297,8 +297,9 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request, rail Rai
 	rawBody, err := io.ReadAll(r.Body)
 	if err != nil {
 		log.Printf("payments webhook: read body error: %v", err)
-		// Still return 200 — log and continue.
-		writePaymentJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		// A truncated read is transient: ask for a redelivery rather than
+		// claiming a payload we never saw was handled (issue #628).
+		writePaymentJSON(w, http.StatusInternalServerError, map[string]string{"status": "error"})
 		return
 	}
 
@@ -312,7 +313,25 @@ func (h *Handler) handleWebhook(w http.ResponseWriter, r *http.Request, rail Rai
 
 	if err := h.svc.HandleProviderEvent(r.Context(), rail, rawBody, headers); err != nil {
 		log.Printf("payments webhook: handle event error (rail=%s): %v", rail, err)
-		// Always return 200 — payment providers retry on non-200, causing duplicate processing.
+
+		// Issue #628: this used to answer 200 on every failure. Providers treat
+		// 2xx as successful delivery and stop retrying, so the one mechanism
+		// that could still deliver the customer's credits was disabled by our
+		// own response: money collected, entitlement never granted, no retry
+		// and no alert. A settlement failure now asks for a redelivery. That is
+		// safe because the grant is idempotent on the intent id (enforced by the
+		// credit_idempotency_keys primary key), so a retry cannot double-credit.
+		//
+		// A rejected payload is the exception: a bad signature or an event type
+		// this rail does not settle on will fail identically on every retry, so
+		// it gets a client error and no redelivery. Either way the inbound
+		// delivery is already recorded as a dead letter.
+		status := http.StatusInternalServerError
+		if errors.Is(err, ErrEventRejected) {
+			status = http.StatusBadRequest
+		}
+		writePaymentJSON(w, status, map[string]string{"status": "error"})
+		return
 	}
 
 	writePaymentJSON(w, http.StatusOK, map[string]string{"status": "ok"})

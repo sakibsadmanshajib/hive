@@ -62,6 +62,13 @@ var (
 	ErrIntentNotFound        = errors.New("payments: payment intent not found")
 	ErrBillingProfileRequired = errors.New("payments: billing profile required to initiate checkout")
 	ErrFXUnavailable         = errors.New("payments: FX rate unavailable")
+
+	// ErrEventRejected marks a webhook delivery the provider must NOT retry:
+	// the payload failed signature verification, or is not a payload this rail
+	// settles on. Redelivering the same bytes cannot change the outcome, so the
+	// handler answers with a client error instead of asking for a retry. Every
+	// other failure is treated as retryable (issue #628).
+	ErrEventRejected = errors.New("payments: webhook event rejected")
 )
 
 // PaymentIntent is the core payment state machine record.
@@ -106,6 +113,40 @@ type PaymentEvent struct {
 	ProviderEventID  string          `json:"provider_event_id"`
 	RawPayload       json.RawMessage `json:"raw_payload"`
 	CreatedAt        time.Time       `json:"created_at"`
+}
+
+// DeliveryStatus is the lifecycle status of one inbound webhook delivery.
+type DeliveryStatus string
+
+const (
+	// DeliveryStatusReceived is written before the payload is parsed, so a
+	// failure at any later point is still recoverable and visible.
+	DeliveryStatusReceived DeliveryStatus = "received"
+	// DeliveryStatusProcessed marks a delivery whose settlement completed.
+	DeliveryStatusProcessed DeliveryStatus = "processed"
+	// DeliveryStatusFailed marks a delivery that could not be settled. These
+	// rows are the settlement dead letter.
+	DeliveryStatusFailed DeliveryStatus = "failed"
+)
+
+// WebhookDelivery is the durable record of one inbound provider webhook.
+//
+// It is written before anything is parsed or looked up, which is the whole
+// point: settlement previously persisted nothing until the intent had been
+// resolved, so a failure before that left no evidence the delivery ever arrived
+// (issue #628). RawBody is stored verbatim as text because a dead letter must be
+// able to hold a payload that is not valid JSON.
+//
+// Internal record only. It is never serialised onto a customer surface.
+type WebhookDelivery struct {
+	ID              uuid.UUID
+	Rail            Rail
+	PaymentIntentID *uuid.UUID
+	Status          DeliveryStatus
+	EventType       string
+	ErrorDetail     string
+	RawBody         string
+	ReceivedAt      time.Time
 }
 
 // FXSnapshot records the FX rate used for a BDT transaction.
