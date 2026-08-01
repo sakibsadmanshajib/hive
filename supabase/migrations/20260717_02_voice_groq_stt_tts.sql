@@ -47,7 +47,16 @@ insert into public.model_aliases (
         '["voice","tts"]'::jsonb,
         0,
         1000
-    );
+    )
+-- Guarded so this file is safe to re-run against a database where these rows
+-- already exist. They do on the demo box: this migration was applied by hand
+-- and never recorded, so an automated applier sees it as pending and runs it
+-- again. Verified against a schema-and-catalog clone of the live database,
+-- where the unguarded form aborted here on model_aliases_pkey. DO NOTHING
+-- rather than DO UPDATE is deliberate: a row already present may have been
+-- retuned since (price, visibility, lifecycle), and this migration has no
+-- business reverting that.
+on conflict (alias_id) do nothing;
 
 insert into public.provider_routes (
     route_id,
@@ -78,13 +87,16 @@ insert into public.provider_routes (
         'budget',
         'healthy',
         10
-    );
+    )
+on conflict (route_id) do nothing;
 
 insert into public.provider_capabilities (route_id, supports_stt)
-values ('route-groq-stt', true);
+values ('route-groq-stt', true)
+on conflict (route_id) do nothing;
 
 insert into public.provider_capabilities (route_id, supports_tts)
-values ('route-groq-tts', true);
+values ('route-groq-tts', true)
+on conflict (route_id) do nothing;
 
 insert into public.alias_route_policies (
     alias_id,
@@ -93,7 +105,8 @@ insert into public.alias_route_policies (
     fallback_order
 ) values
     ('hive-stt', 'pinned', false, '["route-groq-stt"]'::jsonb),
-    ('hive-tts', 'pinned', false, '["route-groq-tts"]'::jsonb);
+    ('hive-tts', 'pinned', false, '["route-groq-tts"]'::jsonb)
+on conflict (alias_id) do nothing;
 
 -- Same gap as 20260717_01_default_group_hive_auto.sql: allowed_group_names
 -- defaults to ["default"], so a default-tier key never sees an alias unless

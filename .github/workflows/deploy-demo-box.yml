@@ -27,6 +27,15 @@ on:
       - 'packages/**'
       - 'deploy/docker/**'
       - 'deploy/litellm/**'
+      # A schema-only merge used to match nothing here, so it deployed nothing
+      # and applied nothing. That is literally how PR #624's
+      # 20260731_01_tenant_billing_account_backfill_v2.sql and PR #602's
+      # 20260730_01_usage_events_event_type_extend.sql reached main and never
+      # ran: the paths filter below had no entry for supabase/migrations, so
+      # this workflow was never even triggered by them.
+      - 'supabase/migrations/**'
+      - 'scripts/apply-migrations.sh'
+      - 'scripts/migration-baseline.conf'
       - '.github/workflows/deploy-demo-box.yml'
   workflow_dispatch:
 
@@ -35,13 +44,101 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ------------------------------------------------------------------
+  # Schema before code. Migrations run here, and the deploy job below
+  # `needs:` this one, so a migration failure stops the deploy instead of
+  # shipping code against a stale schema.
+  #
+  # Why this order and not the reverse:
+  #
+  #   * Code-then-schema is exactly today's outage. PR #620 landed a
+  #     fail-closed tenant check, deploy-demo-box shipped it, the backfill it
+  #     depends on had never run, and every API-key call on the demo box
+  #     answered HTTP 403.
+  #   * Schema-then-code leaves a window where the still-running old code sees
+  #     the new schema. Every pending migration in this repo is additive or
+  #     widening (new tables, new columns, a CHECK constraint extended to a
+  #     strictly broader value list, backfill INSERTs), and old code tolerates
+  #     all of those: it simply does not read the new objects, and its existing
+  #     writes still satisfy a widened constraint. Checked across the tree: the
+  #     only destructive statement in supabase/migrations is a
+  #     DROP TABLE IF EXISTS at the top of 20260625_06, which is long applied
+  #     and self-contained. Nothing pending narrows a constraint or drops a
+  #     column, so this window is safe.
+  #
+  # Runs on a GitHub-hosted runner rather than the box: it needs psql, and the
+  # demo box has no passwordless sudo to install it (same limitation as the
+  # runner-as-a-service note below). It reaches Postgres over the same pooler
+  # secrets the PR cleanup job already uses, so no new secret is introduced and
+  # the box is not touched at all.
+  # ------------------------------------------------------------------
+  migrate:
+    name: Apply pending database migrations
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Validate the migration baseline file
+        # Cheap, no database: catches a typo'd or stale baseline entry before
+        # anything connects.
+        run: scripts/apply-migrations.sh --check
+
+      - name: Pick the transaction-mode pooler port
+        # A migration run needs no session state, so it has no business holding
+        # one of the project's 15 session-mode client slots -- those are shared
+        # with the live demo stack, and exhausting them has taken chat down.
+        # Only a Supavisor pooler host gets the 6543 override; a direct
+        # Postgres serves every mode on its single port.
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ secrets.SUPABASE_DB_PORT }}
+        run: |
+          set -euo pipefail
+          port="$PGPORT"
+          case "$PGHOST" in
+            *.pooler.supabase.com) port=6543 ;;
+          esac
+          echo "PG_POOL_PORT=$port" >> "$GITHUB_ENV"
+          echo "migrations will connect to $PGHOST:$port"
+
+      - name: Apply pending migrations
+        # No `|| true`, no continue-on-error, no swallowed exit code: the script
+        # runs psql with ON_ERROR_STOP=1 under `set -euo pipefail`, so the first
+        # failing statement fails this step, fails this job, and the `needs:`
+        # edge below stops the deploy. Silent failure is the entire defect class
+        # this job exists to remove.
+        #
+        # Only libpq variables are exported. This path never builds a DSN
+        # string, because DSN parameters are per-driver and a pgx-only parameter
+        # in a libpq value is rejected outright (that mistake has already
+        # crash-looped a container and cost ~50 minutes of chat downtime).
+        env:
+          PGHOST: ${{ secrets.SUPABASE_DB_HOST }}
+          PGPORT: ${{ env.PG_POOL_PORT }}
+          PGUSER: ${{ secrets.SUPABASE_DB_USER }}
+          PGDATABASE: ${{ secrets.SUPABASE_DB_NAME }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: scripts/apply-migrations.sh
+
   deploy:
     name: Pull + recreate stack on the demo box
+    needs: migrate
     runs-on: [self-hosted, hive-demo]
     # This job never checks out the repo (the box already has its own clone),
-    # so the only GitHub API use is the failure-tracking issue below.
-    permissions:
-      issues: write
+    # and makes no GitHub API calls of its own: failure reporting lives in the
+    # report-failure job at the end of this file, so that a failed migrate is
+    # reported too rather than vanishing when this job is skipped.
+    permissions: {}
     timeout-minutes: 15
     steps:
       - name: Pull latest main
@@ -149,43 +246,6 @@ jobs:
           echo "SMOKE FAIL"
           exit 1
 
-      - name: File or update tracking issue on failure
-        # This workflow only triggers on push-to-main or manual dispatch, so
-        # every failure here means main is either undeployed or unverified on
-        # the demo box, and nothing else was surfacing that (issue #553's
-        # blind spot, same pattern). Dedupe on an open issue with the label
-        # below instead of filing one per red run.
-        if: failure()
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const label = 'ci-failure:deploy-demo-box';
-            const title = 'deploy-demo-box is failing on main';
-            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-            const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              labels: label,
-            });
-            if (open.length > 0) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: open[0].number,
-                body: `Still failing: ${runUrl}`,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                labels: [label],
-                body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n` +
-                  'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
-              });
-            }
-
       - name: Prune build cache older than 24h
         # Measured on the demo box 2026-07-29: `docker system df` showed
         # Build Cache at 40.87GB (30.04GB reclaimable across 339 layers),
@@ -251,3 +311,65 @@ jobs:
       - name: Run Python health/models/embeddings replay
         working-directory: packages/sdk-tests/python
         run: pytest tests/test_health.py tests/test_models.py tests/test_embeddings.py -q
+
+  report-failure:
+    # This workflow only triggers on push-to-main or manual dispatch, so every
+    # failure in it means main is unmigrated, undeployed or unverified on the
+    # demo box, and nothing else was surfacing that (issue #553's blind spot,
+    # same pattern). Dedupe on an open issue with the label below instead of
+    # filing one per red run.
+    #
+    # This lives in its own job rather than as a final step of `deploy` so that
+    # a failed `migrate` is reported as well. As a step inside `deploy` it could
+    # never fire for a migration failure, because `needs: migrate` skips the
+    # whole deploy job and every step in it -- which would have made the exact
+    # class of silent schema failure this change exists to eliminate invisible
+    # all over again.
+    name: Report failure
+    needs: [migrate, deploy, sdk-replay]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          MIGRATE_RESULT: ${{ needs.migrate.result }}
+          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          # Bracket notation, not needs.sdk-replay.result: a hyphen in a
+          # context property is parsed as subtraction in a GitHub expression.
+          REPLAY_RESULT: ${{ needs['sdk-replay'].result }}
+        with:
+          script: |
+            const label = 'ci-failure:deploy-demo-box';
+            const title = 'deploy-demo-box is failing on main';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const results = `migrate=${process.env.MIGRATE_RESULT}, `
+              + `deploy=${process.env.DEPLOY_RESULT}, `
+              + `sdk-replay=${process.env.REPLAY_RESULT}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: label,
+            });
+            if (open.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: `Still failing: ${runUrl}\n\n${results}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                labels: [label],
+                body: `deploy-demo-box failed on main.\n\nFirst detected: ${runUrl}\n\n${results}\n\n` +
+                  'A migrate failure means main is running against a stale schema and the deploy was ' +
+                  'deliberately stopped. Fix the migration, then re-run this workflow.\n\n' +
+                  'Filed automatically. Close it once a run goes green; it will be refiled if it fails again.',
+              });
+            }
