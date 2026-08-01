@@ -26,5 +26,6 @@ func (a *AuthorizerAdapter) AuthorizeRequest(r *http.Request) (AuthResult, error
 	return AuthResult{
 		AccountID: snapshot.AccountID,
 		APIKeyID:  snapshot.KeyID,
+		TenantID:  snapshot.TenantID,
 	}, nil
 }

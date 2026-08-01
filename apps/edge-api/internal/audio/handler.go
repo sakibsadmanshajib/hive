@@ -38,6 +38,11 @@ type Authorizer interface {
 type AuthResult struct {
 	AccountID string
 	APIKeyID  string
+	// TenantID is resolved control-plane-side from AccountID (D-030, via
+	// public.tenant_billing_accounts). Empty means the account has no
+	// resolvable tenant; RoutingAdapter fails the request closed on that
+	// rather than skipping the tenant-scoped entitlement check (#623).
+	TenantID string
 }
 
 // RoutingInterface selects a provider route for a given model alias.
@@ -48,8 +53,12 @@ type RoutingInterface interface {
 // RouteInput specifies the alias and capability requirements for route selection.
 type RouteInput struct {
 	AliasID string
-	NeedTTS bool
-	NeedSTT bool
+	// TenantID is the requesting API key's resolved tenant (AuthResult.TenantID).
+	// RoutingAdapter binds it onto ctx before calling the routing client and
+	// fails closed if it is missing or unparseable (#623).
+	TenantID string
+	NeedTTS  bool
+	NeedSTT  bool
 }
 
 // RouteResult contains the selected route details.
@@ -202,8 +211,9 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 
 	// Select route based on model alias and TTS capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
-		AliasID: speechReq.Model,
-		NeedTTS: true,
+		AliasID:  speechReq.Model,
+		TenantID: auth.TenantID,
+		NeedTTS:  true,
 	})
 	if err != nil {
 		code := "model_not_found"
@@ -290,12 +300,9 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Finalize reservation on success.
-	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
-		AccountID:     auth.AccountID,
-		ReservationID: reservationID,
-		ActualCredits: 1000,
-	})
+	// Finalize reservation on success; falls back to releasing the hold if
+	// finalize itself fails, so it never strands (#616).
+	h.settleReservation(ctx, auth.AccountID, reservationID, 1000, "/v1/audio/speech")
 
 	// Binary relay: copy Content-Type exactly from upstream.
 	if lastCT != "" {
@@ -379,11 +386,7 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 	h.stt.Transcribe(rec, r)
 
 	if rec.status >= 200 && rec.status < 300 {
-		_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
-			AccountID:     auth.AccountID,
-			ReservationID: reservationID,
-			ActualCredits: 500,
-		})
+		h.settleReservation(ctx, auth.AccountID, reservationID, 500, "/v1/audio/transcriptions")
 	} else {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
 	}
@@ -439,8 +442,9 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 
 	// Select route based on model alias and STT capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
-		AliasID: modelAlias,
-		NeedSTT: true,
+		AliasID:  modelAlias,
+		TenantID: auth.TenantID,
+		NeedSTT:  true,
 	})
 	if err != nil {
 		code := "model_not_found"
@@ -548,12 +552,9 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 
-	// Finalize reservation on success.
-	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
-		AccountID:     auth.AccountID,
-		ReservationID: reservationID,
-		ActualCredits: 500,
-	})
+	// Finalize reservation on success; falls back to releasing the hold if
+	// finalize itself fails, so it never strands (#616).
+	h.settleReservation(ctx, auth.AccountID, reservationID, 500, accountingEndpoint)
 
 	// Extract duration for metering (best-effort).
 	var durResp struct {
