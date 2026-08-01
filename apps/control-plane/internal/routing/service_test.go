@@ -20,6 +20,7 @@ type stubRepository struct {
 	loadPolicyCalls int
 
 	pricing            catalog.CatalogPricing
+	priceUnit          string
 	pricingErr         error
 	pricingCalls       int
 	sawPricingAliasIDs []string
@@ -55,22 +56,26 @@ func (s *stubRepository) ListRouteCandidates(_ context.Context, _ string) ([]Rou
 	return append([]RouteCandidate(nil), s.candidates...), nil
 }
 
-func (s *stubRepository) LoadAliasPricing(_ context.Context, aliasID string) (catalog.CatalogPricing, error) {
+func (s *stubRepository) LoadAliasPricing(_ context.Context, aliasID string) (catalog.CatalogPricing, string, error) {
 	s.pricingCalls++
 	s.sawPricingAliasIDs = append(s.sawPricingAliasIDs, aliasID)
+	priceUnit := s.priceUnit
+	if priceUnit == "" {
+		priceUnit = "tokens"
+	}
 	if s.pricingErr != nil {
-		return catalog.CatalogPricing{}, s.pricingErr
+		return catalog.CatalogPricing{}, "", s.pricingErr
 	}
 	if s.unpriced {
-		return catalog.CatalogPricing{}, nil
+		return catalog.CatalogPricing{}, "", nil
 	}
 	// A fixture that set neither pricing nor unpriced does not care about
 	// price; give it a priced alias rather than the refusal path.
 	if s.pricing.InputPriceCredits == 0 && s.pricing.OutputPriceCredits == 0 {
-		return defaultStubPricing, nil
+		return defaultStubPricing, priceUnit, nil
 	}
 
-	return s.pricing, nil
+	return s.pricing, priceUnit, nil
 }
 
 // stubEntitlements stands in for catalog.Service, the production
@@ -793,6 +798,34 @@ func TestSelectRouteCarriesAliasPricing(t *testing.T) {
 	}
 	if len(repo.sawPricingAliasIDs) != 1 || repo.sawPricingAliasIDs[0] != "hive-fast" {
 		t.Fatalf("expected pricing lookup for hive-fast, got %v", repo.sawPricingAliasIDs)
+	}
+}
+
+// TestSelectRouteCarriesPriceUnit proves the alias's price UNIT travels with
+// the price. A caller handed a price with no unit cannot charge against it
+// safely: the same integer means credits per million tokens, per million
+// characters, or per million seconds depending on the modality, and guessing
+// wrong misprices by orders of magnitude (issue #627).
+func TestSelectRouteCarriesPriceUnit(t *testing.T) {
+	repo := entitlementTestRepo()
+	repo.pricing = catalog.CatalogPricing{InputPriceCredits: 0, OutputPriceCredits: 4_316_667}
+	repo.priceUnit = "seconds"
+
+	svc := NewService(repo, &stubEntitlements{visible: true})
+
+	result, err := svc.SelectRoute(context.Background(), SelectionInput{
+		AliasID:             "hive-fast",
+		TenantID:            uuid.New(),
+		NeedChatCompletions: true,
+	})
+	if err != nil {
+		t.Fatalf("SelectRoute returned error: %v", err)
+	}
+	if result.PriceUnit != "seconds" {
+		t.Fatalf("expected price unit %q, got %q", "seconds", result.PriceUnit)
+	}
+	if result.Pricing.OutputPriceCredits != 4_316_667 {
+		t.Fatalf("expected the unit price carried through, got %d", result.Pricing.OutputPriceCredits)
 	}
 }
 

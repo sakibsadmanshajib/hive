@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
@@ -65,6 +66,20 @@ type RouteInput struct {
 type RouteResult struct {
 	AliasID          string
 	LiteLLMModelName string
+
+	// UnitPriceCredits is the alias's catalog price in credits per MILLION
+	// metered units, and PriceUnit names the unit it is quoted in
+	// (model_aliases.price_unit: characters for speech, seconds for
+	// transcription). Both come from the routing result rather than from a
+	// literal in this package (#627).
+	//
+	// For any non-token unit the price lives in output_price_credits and
+	// input_price_credits is constrained to zero at the database level
+	// (supabase/migrations/20260801_02_alias_price_unit.sql), so a
+	// single-quantity modality has exactly one price and no ambiguity about
+	// which column applies.
+	UnitPriceCredits int64
+	PriceUnit        string
 }
 
 // ErrInsufficientCredits reports that the accounting layer refused the
@@ -148,6 +163,39 @@ func writeReservationFailure(w http.ResponseWriter, endpoint, alias string, err 
 	apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error", "Credit reservation is temporarily unavailable. Please retry.", &code)
 }
 
+// requirePriceUnit refuses a request whose resolved alias is not priced in the
+// unit this endpoint meters, before any hold is taken (#627). A speech request
+// against a token-priced alias, or a transcription against a character-priced
+// one, cannot be converted into a charge without inventing a rate, and serving
+// it anyway would mean serving it free. Both are worse than a refusal, so this
+// fails closed.
+//
+// The message names neither the provider nor any amount: it is the same shape
+// every other unavailable-model answer on this handler uses.
+func (h *Handler) requirePriceUnit(w http.ResponseWriter, route RouteResult, meteredUnit, endpoint string) bool {
+	if canPrice(route, meteredUnit) {
+		return true
+	}
+	log.Printf("audio: refusing endpoint=%s alias=%s: catalog price is %d credits per million %q but this endpoint meters %q",
+		endpoint, route.AliasID, route.UnitPriceCredits, route.PriceUnit, meteredUnit)
+	code := "model_not_supported"
+	apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error",
+		"The requested model is not available for this audio endpoint. Please retry with a supported model.", &code)
+	return false
+}
+
+// refuseUnpriceableResponse releases the hold and refuses a request whose
+// upstream answered 2xx but reported nothing to meter (#627, D-034). Charging
+// a guess and serving it free are both excluded, so the only honest answer
+// left is a retryable failure.
+func (h *Handler) refuseUnpriceableResponse(ctx context.Context, w http.ResponseWriter, accountID, reservationID, endpoint, alias string) {
+	log.Printf("audio: endpoint=%s alias=%s upstream reported no audio duration; refusing rather than charging a guess", endpoint, alias)
+	_ = h.accounting.ReleaseReservation(ctx, accountID, reservationID, "unpriceable_response")
+	code := "upstream_error"
+	apierrors.WriteError(w, http.StatusBadGateway, "api_error",
+		"The transcription could not be metered and was not charged. Please retry.", &code)
+}
+
 // authorize validates the request API key and writes a 401 on failure.
 // Returns (result, true) on success or (zero, false) on failure (response already written).
 func (h *Handler) authorize(w http.ResponseWriter, r *http.Request) (AuthResult, bool) {
@@ -221,6 +269,17 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !h.requirePriceUnit(w, route, PriceUnitCharacters, "/v1/audio/speech") {
+		return
+	}
+
+	// Speech is priced per character of synthesized text, and the character
+	// count is known before dispatch, so the hold and the final charge are the
+	// same figure and no settlement drift is possible. Runes, not bytes: a
+	// character is a character whatever alphabet it is written in.
+	characters := int64(utf8.RuneCountInString(speechReq.Input))
+	credits := creditsForQuantity(characters, route)
+
 	// Reserve credits before dispatch.
 	requestID := uuid.New().String()
 	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
@@ -229,7 +288,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 		RequestID:        requestID,
 		Endpoint:         "/v1/audio/speech",
 		ModelAlias:       route.AliasID,
-		EstimatedCredits: 1000,
+		EstimatedCredits: credits,
 	})
 	if err != nil {
 		writeReservationFailure(w, "/v1/audio/speech", route.AliasID, err)
@@ -302,7 +361,7 @@ func (h *Handler) handleSpeech(w http.ResponseWriter, r *http.Request) {
 
 	// Finalize reservation on success; falls back to releasing the hold if
 	// finalize itself fails, so it never strands (#616).
-	h.settleReservation(ctx, auth.AccountID, reservationID, 1000, "/v1/audio/speech")
+	h.settleReservation(ctx, auth.AccountID, reservationID, credits, "/v1/audio/speech")
 
 	// Binary relay: copy Content-Type exactly from upstream.
 	if lastCT != "" {
@@ -360,6 +419,7 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		h.handleMultipartAudio(w, r, "/audio/transcriptions", "/v1/audio/transcriptions")
 		return
 	}
+	const endpoint = "/v1/audio/transcriptions"
 	ctx := r.Context()
 
 	auth, ok := h.authorize(w, r)
@@ -367,48 +427,127 @@ func (h *Handler) handleTranscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reserve credits before dispatch — same pattern as handleMultipartAudio.
+	// The form is parsed here, before stt.TieredClient's own (idempotent) call,
+	// so the requested model can be read for pricing and the requested
+	// response_format can be rewritten to one that reports a duration.
+	if err := r.ParseMultipartForm(25 << 20); err != nil {
+		code := "invalid_request"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to parse multipart form.", &code)
+		return
+	}
+
+	// Dispatch stays local -- the audio never leaves the box -- but the price
+	// and the tenant entitlement still come from the catalog, exactly as they
+	// do on the serverless path. This path used to consult routing for
+	// neither, which is what let it charge a flat literal (#627) and, as a
+	// side effect, skip the tenant-scoped entitlement check every other audio
+	// endpoint performs (#623).
+	modelAlias := r.FormValue("model")
+	route, err := h.routing.SelectRoute(ctx, RouteInput{
+		AliasID:  modelAlias,
+		TenantID: auth.TenantID,
+		NeedSTT:  true,
+	})
+	if err != nil {
+		code := "model_not_found"
+		apierrors.WriteError(w, http.StatusNotFound, "invalid_request_error", "The requested model is not available for audio transcription.", &code)
+		return
+	}
+	if !h.requirePriceUnit(w, route, PriceUnitSeconds, endpoint) {
+		return
+	}
+
+	requestedFormat := requestedResponseFormat(r.FormValue("response_format"))
+	// stt.TieredClient rebuilds its outgoing body from r.MultipartForm.Value,
+	// so rewriting the field here is what reaches the sidecar.
+	r.MultipartForm.Value["response_format"] = []string{upstreamResponseFormat(requestedFormat)}
+
 	requestID := uuid.New().String()
 	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
 		AccountID:        auth.AccountID,
 		APIKeyID:         auth.APIKeyID,
 		RequestID:        requestID,
-		Endpoint:         "/v1/audio/transcriptions",
-		ModelAlias:       "stt",
-		EstimatedCredits: 500,
+		Endpoint:         endpoint,
+		ModelAlias:       route.AliasID,
+		EstimatedCredits: creditsForQuantity(sttEstimatedSeconds, route),
 	})
 	if err != nil {
-		writeReservationFailure(w, "/v1/audio/transcriptions", "stt", err)
+		writeReservationFailure(w, endpoint, route.AliasID, err)
 		return
 	}
 
-	rec := &reservationRecorder{ResponseWriter: w}
+	// Buffered, not streamed through: the response has to be read for its
+	// duration before the request can be priced, and a request that turns out
+	// to be unpriceable must still be refusable at that point.
+	rec := &bufferedResponse{}
 	h.stt.Transcribe(rec, r)
 
-	if rec.status >= 200 && rec.status < 300 {
-		h.settleReservation(ctx, auth.AccountID, reservationID, 500, "/v1/audio/transcriptions")
-	} else {
+	if rec.status < 200 || rec.status >= 300 {
 		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "upstream_error")
+		rec.flushTo(w)
+		return
 	}
+
+	seconds, ok := billableSeconds(rec.body.Bytes(), requestedFormat)
+	if !ok {
+		h.refuseUnpriceableResponse(ctx, w, auth.AccountID, reservationID, endpoint, route.AliasID)
+		return
+	}
+
+	// Finalize reservation on success; falls back to releasing the hold if
+	// finalize itself fails, so it never strands (#616).
+	h.settleReservation(ctx, auth.AccountID, reservationID, creditsForQuantity(billedSeconds(seconds), route), endpoint)
+
+	contentType, out := reshapeTranscription(rec.body.Bytes(), requestedFormat)
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	w.Write(out) //nolint:errcheck
 }
 
-// reservationRecorder wraps ResponseWriter to capture the status code written
-// by stt.TieredClient so the caller can decide whether to finalize or release.
-type reservationRecorder struct {
-	http.ResponseWriter
+// bufferedResponse captures everything an http.Handler writes so the caller can
+// price the response before committing it to the client, and relay it verbatim
+// when it is a failure. It replaces a passthrough recorder that captured the
+// status only, which was enough to decide finalize-or-release but not enough to
+// read the metered quantity out of the body.
+type bufferedResponse struct {
+	header http.Header
 	status int
+	body   bytes.Buffer
 }
 
-func (r *reservationRecorder) WriteHeader(code int) {
-	r.status = code
-	r.ResponseWriter.WriteHeader(code)
-}
-
-func (r *reservationRecorder) Write(b []byte) (int, error) {
-	if r.status == 0 {
-		r.status = http.StatusOK
+func (b *bufferedResponse) Header() http.Header {
+	if b.header == nil {
+		b.header = http.Header{}
 	}
-	return r.ResponseWriter.Write(b)
+	return b.header
+}
+
+func (b *bufferedResponse) WriteHeader(code int) {
+	if b.status == 0 {
+		b.status = code
+	}
+}
+
+func (b *bufferedResponse) Write(p []byte) (int, error) {
+	if b.status == 0 {
+		b.status = http.StatusOK
+	}
+	return b.body.Write(p)
+}
+
+// flushTo copies the buffered headers, status, and body onto the real writer.
+func (b *bufferedResponse) flushTo(w http.ResponseWriter) {
+	for key, values := range b.header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+	status := b.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	w.WriteHeader(status)
+	w.Write(b.body.Bytes()) //nolint:errcheck
 }
 
 // handleTranslation processes POST /v1/audio/translations.
@@ -452,7 +591,13 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 
-	// Reserve credits before dispatch.
+	if !h.requirePriceUnit(w, route, PriceUnitSeconds, accountingEndpoint) {
+		return
+	}
+
+	// Reserve credits before dispatch. The real charge is the transcribed
+	// duration, which only the upstream can report, so this hold is an
+	// estimate that settlement replaces with the metered figure.
 	requestID := uuid.New().String()
 	reservationID, err := h.accounting.CreateReservation(ctx, ReservationInput{
 		AccountID:        auth.AccountID,
@@ -460,7 +605,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		RequestID:        requestID,
 		Endpoint:         accountingEndpoint,
 		ModelAlias:       route.AliasID,
-		EstimatedCredits: 500,
+		EstimatedCredits: creditsForQuantity(sttEstimatedSeconds, route),
 	})
 	if err != nil {
 		writeReservationFailure(w, accountingEndpoint, route.AliasID, err)
@@ -468,6 +613,7 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	}
 
 	litellmModel := route.LiteLLMModelName
+	requestedFormat := requestedResponseFormat(r.FormValue("response_format"))
 
 	// Rebuild multipart body into an in-memory buffer — bounded by the 25MB
 	// ParseMultipartForm cap above, so buffering the whole thing is safe.
@@ -481,8 +627,13 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 	var multipartBuf bytes.Buffer
 	mw := multipart.NewWriter(&multipartBuf)
 
-	// Copy all text form fields, rewriting the model field.
+	// Copy all text form fields, rewriting the model field. response_format is
+	// dropped here and re-added below: the caller's choice governs what they
+	// receive, not what this handler asks the upstream for.
 	for key, values := range r.MultipartForm.Value {
+		if key == "response_format" {
+			continue
+		}
 		for _, val := range values {
 			writeVal := val
 			if key == "model" {
@@ -495,6 +646,12 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 				return
 			}
 		}
+	}
+	if err := mw.WriteField("response_format", upstreamResponseFormat(requestedFormat)); err != nil {
+		_ = h.accounting.ReleaseReservation(ctx, auth.AccountID, reservationID, "request_error")
+		code := "invalid_request"
+		apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error", "Failed to rebuild request field.", &code)
+		return
 	}
 
 	// Copy all file parts (audio data).
@@ -552,21 +709,24 @@ func (h *Handler) handleMultipartAudio(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 
+	// Meter the transcribed duration before settling. A 2xx that reports no
+	// duration cannot be priced, so it is refused and the hold released rather
+	// than charged at a guess or served free (#627, D-034).
+	seconds, ok := billableSeconds(respBody, requestedFormat)
+	if !ok {
+		h.refuseUnpriceableResponse(ctx, w, auth.AccountID, reservationID, accountingEndpoint, route.AliasID)
+		return
+	}
+
 	// Finalize reservation on success; falls back to releasing the hold if
 	// finalize itself fails, so it never strands (#616).
-	h.settleReservation(ctx, auth.AccountID, reservationID, 500, accountingEndpoint)
+	h.settleReservation(ctx, auth.AccountID, reservationID, creditsForQuantity(billedSeconds(seconds), route), accountingEndpoint)
 
-	// Extract duration for metering (best-effort).
-	var durResp struct {
-		Duration *float64 `json:"duration"`
-	}
-	_ = json.Unmarshal(respBody, &durResp)
-	// durResp.Duration can be used for metering in the future.
-
-	// Pass through JSON response to client.
-	w.Header().Set("Content-Type", "application/json")
+	// Reduce the upstream body to the shape the caller asked for.
+	contentType, out := reshapeTranscription(respBody, requestedFormat)
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	w.Write(respBody)
+	w.Write(out) //nolint:errcheck
 }
 
 // copyMultipartFile opens one uploaded file part and copies its bytes into a

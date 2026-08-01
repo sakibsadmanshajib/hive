@@ -101,4 +101,18 @@ type SelectionResult struct {
 	// These are the same raw input/output/cache price fields already served today by
 	// catalog.Service for /v1/models, passed through unchanged.
 	Pricing catalog.CatalogPricing `json:"pricing"`
+
+	// PriceUnit is model_aliases.price_unit: the unit Pricing is quoted in,
+	// per million. 'tokens' for text, 'characters' for speech synthesis,
+	// 'seconds' for transcription. Text-to-speech is billed per character
+	// upstream and transcription per unit of audio duration, so forcing either
+	// into a per-token shape would mean inventing a rate; edge-api refuses a
+	// request whose alias unit does not match what the endpoint meters rather
+	// than converting between units (issue #627).
+	//
+	// For any non-token unit the price lives in Pricing.OutputPriceCredits and
+	// InputPriceCredits is constrained to zero by a database CHECK
+	// (supabase/migrations/20260801_02_alias_price_unit.sql), so a
+	// single-quantity modality has exactly one price.
+	PriceUnit string `json:"price_unit"`
 }

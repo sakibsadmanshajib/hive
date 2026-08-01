@@ -188,6 +188,43 @@ func (g *Gate) resolveBillingAccount(ctx context.Context, tenantID uuid.UUID) (u
 // output_price_credits are stored in.
 var creditsPerMillion = big.NewInt(1_000_000)
 
+// UnitCharge is one priced quantity: Quantity metered units at
+// CreditsPerMillion credits per million of them. The metered unit is whatever
+// model_aliases.price_unit names for the alias (tokens for text, characters
+// for speech synthesis, seconds for transcription).
+type UnitCharge struct {
+	Quantity          int64
+	CreditsPerMillion int64
+}
+
+// ChargeCredits converts priced quantities into whole credits: every
+// component's quantity times its credits-per-million figure is summed FIRST,
+// then divided once by a million and rounded half up. One division, not one
+// per component, so two halves can never round independently and drift.
+//
+// This is the only implementation of that arithmetic in the tree (D-031,
+// credits are per million units). math/big throughout, per repo convention:
+// no float64 anywhere near a charge. Exported so the non-token modalities
+// (edge-api internal/audio, which meters characters and seconds) reuse it
+// rather than growing a second copy that could round differently.
+func ChargeCredits(charges ...UnitCharge) int64 {
+	numerator := new(big.Int)
+	for _, charge := range charges {
+		numerator.Add(numerator, new(big.Int).Mul(
+			big.NewInt(charge.Quantity),
+			big.NewInt(charge.CreditsPerMillion),
+		))
+	}
+
+	quotient, remainder := new(big.Int).QuoRem(numerator, creditsPerMillion, new(big.Int))
+	// Round half up: a remainder at least half of creditsPerMillion bumps
+	// the quotient by one.
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(creditsPerMillion) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return quotient.Int64()
+}
+
 // priceEstimate computes both credit figures the design brief (section 3.5)
 // asks be logged side by side:
 //
@@ -207,18 +244,10 @@ var creditsPerMillion = big.NewInt(1_000_000)
 func priceEstimate(route RouteInfo, promptTokens, completionTokens int64, verdictStr string) (legacy int64, perModel int64) {
 	legacy = promptTokens + completionTokens
 
-	numerator := new(big.Int).Add(
-		new(big.Int).Mul(big.NewInt(promptTokens), big.NewInt(route.InputPriceCredits)),
-		new(big.Int).Mul(big.NewInt(completionTokens), big.NewInt(route.OutputPriceCredits)),
+	perModel = ChargeCredits(
+		UnitCharge{Quantity: promptTokens, CreditsPerMillion: route.InputPriceCredits},
+		UnitCharge{Quantity: completionTokens, CreditsPerMillion: route.OutputPriceCredits},
 	)
-	quotient, remainder := new(big.Int).QuoRem(numerator, creditsPerMillion, new(big.Int))
-	// Round half up: a remainder at least half of creditsPerMillion bumps
-	// the quotient by one.
-	doubledRemainder := new(big.Int).Mul(remainder, big.NewInt(2))
-	if doubledRemainder.Cmp(creditsPerMillion) >= 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	perModel = quotient.Int64()
 
 	if verdictStr == VerdictBillable && legacy > 0 && perModel < 1 {
 		perModel = 1

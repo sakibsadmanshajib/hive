@@ -156,7 +156,7 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 	// front, alongside LoadAliasPolicy) also means an alias that gets
 	// refused earlier -- unentitled, disallowed, no eligible routes -- never
 	// pays for a pricing lookup it will not use.
-	pricing, err := s.repo.LoadAliasPricing(ctx, aliasID)
+	pricing, priceUnit, err := s.repo.LoadAliasPricing(ctx, aliasID)
 	if err != nil {
 		return SelectionResult{}, fmt.Errorf("routing: load alias pricing for %s: %w", aliasID, err)
 	}
@@ -181,6 +181,7 @@ func (s *Service) SelectRoute(ctx context.Context, input SelectionInput) (Select
 		Provider:         selected.Provider,
 		FallbackRouteIDs: fallbacks,
 		Pricing:          pricing,
+		PriceUnit:        priceUnit,
 	}, nil
 }
 
