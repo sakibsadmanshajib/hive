@@ -157,25 +157,23 @@ func (o *Orchestrator) executeSync(
 		EstimatedCredits: estimatedCredits,
 		PolicyMode:       "strict",
 	})
-	if err != nil {
-		if strings.Contains(err.Error(), "429") || strings.Contains(err.Error(), "budget") || strings.Contains(err.Error(), "insufficient") {
-			code := "insufficient_quota"
-			apierrors.WriteError(w, http.StatusTooManyRequests, "insufficient_quota",
-				"You exceeded your current quota, please check your plan and billing details.", &code)
-			return
-		}
-		log.Printf("inference: create reservation failed (non-fatal): %v", err)
+	if err != nil && refuseOnReservationFailure(w, endpoint, model, err) {
+		return
 	}
 
-	// Ensure reservation cleanup if we return without finalizing.
+	// Ensure reservation cleanup if we return without finalizing. Every exit
+	// path below settles through releaseReservationBackground, the same helper
+	// the streaming path uses: a fresh bounded background context, never the
+	// request context (a client disconnect is exactly what cancels that), and
+	// `finalized` gated on the release actually reaching the control plane
+	// rather than assumed. A failed attempt leaves `finalized` false so this
+	// defer gets one more shot before the request returns, which is what keeps
+	// a hold from being stranded (issue #616).
 	finalized := false
+	releaseReason := "interrupted"
 	defer func() {
 		if !finalized && reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(context.Background(), ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "interrupted",
-			})
+			o.releaseReservationBackground(snapshot, reservation.ID, requestID, releaseReason)
 		}
 	}()
 
@@ -183,12 +181,8 @@ func (o *Orchestrator) executeSync(
 	resp, err := dispatchWithRetry(ctx, route.LiteLLMModelName, body, dispatch)
 	if err != nil {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "upstream_error",
-			})
-			finalized = true
+			releaseReason = "upstream_error"
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, releaseReason)
 		}
 		apierrors.WriteProviderBlindUpstreamError(w, model, http.StatusBadGateway, err.Error())
 		return
@@ -198,12 +192,8 @@ func (o *Orchestrator) executeSync(
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		upstreamBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "upstream_error",
-			})
-			finalized = true
+			releaseReason = "upstream_error"
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, releaseReason)
 		}
 		o.recordErrorEvent(ctx, snapshot, attempt, requestID, endpoint, model, resp.StatusCode, string(upstreamBody))
 		apierrors.WriteProviderBlindUpstreamError(w, model, resp.StatusCode, string(upstreamBody))
@@ -214,12 +204,8 @@ func (o *Orchestrator) executeSync(
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 	if err != nil {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "read_error",
-			})
-			finalized = true
+			releaseReason = "read_error"
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, releaseReason)
 		}
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to read upstream response.", &code)
@@ -230,12 +216,8 @@ func (o *Orchestrator) executeSync(
 	normalized, usage, err := normalize(respBody, model)
 	if err != nil {
 		if reservation.ID != "" {
-			_ = o.accounting.ReleaseReservation(ctx, ReleaseReservationInput{
-				AccountID:     snapshot.AccountID,
-				ReservationID: reservation.ID,
-				Reason:        "normalize_error",
-			})
-			finalized = true
+			releaseReason = "normalize_error"
+			finalized = o.releaseReservationBackground(snapshot, reservation.ID, requestID, releaseReason)
 		}
 		code := "upstream_error"
 		apierrors.WriteError(w, http.StatusBadGateway, "api_error", "Failed to process upstream response.", &code)
@@ -248,14 +230,24 @@ func (o *Orchestrator) executeSync(
 		if usage != nil {
 			actualCredits = usage.TotalTokens
 		}
-		_ = o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
+		// Do not discard this error. A failed finalize used to set finalized
+		// anyway, which skipped the deferred release and so lost the charge and
+		// stranded the hold in the same step (issue #616). Leaving finalized
+		// false hands the reservation to the deferred release instead, so it
+		// still reaches a terminal state exactly once: charged here on success,
+		// released there on failure, never both.
+		if err := o.accounting.FinalizeReservation(ctx, FinalizeReservationInput{
 			AccountID:              snapshot.AccountID,
 			ReservationID:          reservation.ID,
 			ActualCredits:          actualCredits,
 			TerminalUsageConfirmed: true,
 			Status:                 "completed",
-		})
-		finalized = true
+		}); err != nil {
+			log.Printf("inference: finalize reservation failed, releasing hold instead request_id=%s reservation_id=%s: %v", requestID, reservation.ID, err)
+			releaseReason = "finalize_failed"
+		} else {
+			finalized = true
+		}
 	}
 
 	o.recordCompletedEvent(ctx, snapshot, attempt, requestID, endpoint, model, usage)
@@ -267,7 +259,11 @@ func (o *Orchestrator) executeSync(
 }
 
 func (o *Orchestrator) recordErrorEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, statusCode int, errBody string) {
-	_ = o.accounting.RecordUsageEvent(ctx, RecordEventInput{
+	// Logged, not discarded: usage recording is best effort for the request
+	// itself, but a silent drop is how the streaming usage_events rows vanished
+	// unnoticed against an outdated CHECK constraint. Metering Step 2 shadow
+	// mode reads exactly this data.
+	if err := o.accounting.RecordUsageEvent(ctx, RecordEventInput{
 		AccountID:        snapshot.AccountID,
 		RequestAttemptID: attempt.ID,
 		APIKeyID:         snapshot.KeyID,
@@ -278,7 +274,9 @@ func (o *Orchestrator) recordErrorEvent(ctx context.Context, snapshot authz.Auth
 		Status:           fmt.Sprintf("upstream_%d", statusCode),
 		ErrorCode:        fmt.Sprintf("%d", statusCode),
 		ErrorType:        "upstream_error",
-	})
+	}); err != nil {
+		log.Printf("inference: record error event failed request_id=%s status=%d: %v", requestID, statusCode, err)
+	}
 }
 
 func (o *Orchestrator) recordCompletedEvent(ctx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, requestID, endpoint, model string, usage *UsageResponse) {
@@ -300,5 +298,8 @@ func (o *Orchestrator) recordCompletedEvent(ctx context.Context, snapshot authz.
 		}
 		input.HiveCreditDelta = usage.TotalTokens
 	}
-	_ = o.accounting.RecordUsageEvent(ctx, input)
+	// Logged, not discarded, for the same reason as recordErrorEvent above.
+	if err := o.accounting.RecordUsageEvent(ctx, input); err != nil {
+		log.Printf("inference: record completed event failed request_id=%s: %v", requestID, err)
+	}
 }
