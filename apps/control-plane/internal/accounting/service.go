@@ -303,7 +303,13 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	}
 
 	if releaseCredits > 0 {
-		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, fmt.Sprintf("release-%d", releaseCredits)), releaseCredits, map[string]any{
+		// Idempotency key is "release", not "release-<credits>" (issue #652):
+		// releaseLocked below already keys its full release the same way, and a
+		// key that varies with the amount cannot deduplicate two release
+		// attempts of DIFFERING amounts for the same reservation, which is
+		// exactly the case worth catching. One reservation, one release key,
+		// regardless of which path or how much it releases.
+		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), releaseCredits, map[string]any{
 			"endpoint":           reservation.Endpoint,
 			"model_alias":        reservation.ModelAlias,
 			"terminal_confirmed": input.TerminalUsageConfirmed,
@@ -417,6 +423,9 @@ func (s *Service) releaseLocked(ctx context.Context, input ReleaseReservationInp
 
 	releaseCredits := remainingHeldCredits(reservation)
 	if releaseCredits > 0 {
+		// Same "release" key finalizeLocked's own partial release uses above
+		// (issue #652): one reservation, one release key, whichever caller
+		// (edge-api settlement fallback or the reaper) reaches it first.
 		if _, err := s.ledgerSvc.ReleaseReservedCredits(ctx, reservation.AccountID, reservation.RequestID, &reservation.RequestAttemptID, &reservation.ID, s.idempotencyKey(reservation.ID, "release"), releaseCredits, map[string]any{
 			"endpoint":    reservation.Endpoint,
 			"model_alias": reservation.ModelAlias,
