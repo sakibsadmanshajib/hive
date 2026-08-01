@@ -40,6 +40,10 @@ func (r *stubFXRepo) ListConfirmingIntents(_ context.Context, _ time.Time) ([]Pa
 	return nil, nil
 }
 func (r *stubFXRepo) InsertPaymentEvent(_ context.Context, _ PaymentEvent) error { return nil }
+func (r *stubFXRepo) InsertWebhookDelivery(_ context.Context, _ WebhookDelivery) error { return nil }
+func (r *stubFXRepo) UpdateWebhookDelivery(_ context.Context, _ uuid.UUID, _ DeliveryStatus, _ *uuid.UUID, _, _ string) error {
+	return nil
+}
 func (r *stubFXRepo) InsertFXSnapshot(_ context.Context, snap FXSnapshot) error {
 	r.snapshots[snap.ID] = snap
 	return nil
