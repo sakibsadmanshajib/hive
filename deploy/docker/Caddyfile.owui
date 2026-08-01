@@ -81,7 +81,7 @@
   # origin and calls {origin}/v1/featuregate directly, so this one path needs
   # the same edge-api same-origin treatment as @agentApi above. Scoped to the
   # single path on purpose -- the rest of /v1/* stays off this host.
-  @featureGate path /v1/featuregate
+  @featureGate path /v1/featuregate /v1/featuregate/
   reverse_proxy @featureGate edge-api:8080 {
     header_up X-Forwarded-Proto {$HIVE_CHAT_EXTERNAL_SCHEME:http}
     transport http {
