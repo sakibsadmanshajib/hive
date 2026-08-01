@@ -52,18 +52,27 @@ func (m *mockLiteLLMAudio) Close() { m.server.Close() }
 type mockAudioAuthorizer struct {
 	accountID string
 	apiKeyID  string
+	tenantID  string
 }
 
 func (a *mockAudioAuthorizer) AuthorizeRequest(_ *http.Request) (audio.AuthResult, error) {
-	return audio.AuthResult{AccountID: a.accountID, APIKeyID: a.apiKeyID}, nil
+	return audio.AuthResult{AccountID: a.accountID, APIKeyID: a.apiKeyID, TenantID: a.tenantID}, nil
 }
 
-// mockAudioRouting is a stub that echoes the alias as the LiteLLM model name.
+// mockAudioRouting is a stub that echoes the alias as the LiteLLM model name
+// and records the last TenantID it was called with, so tests can prove the
+// handler threads AuthResult.TenantID through to RouteInput (#623).
 type mockAudioRouting struct {
-	litellmModel string
+	litellmModel   string
+	lastTenantID   string
+	selectRouteErr error
 }
 
 func (r *mockAudioRouting) SelectRoute(_ context.Context, input audio.RouteInput) (audio.RouteResult, error) {
+	r.lastTenantID = input.TenantID
+	if r.selectRouteErr != nil {
+		return audio.RouteResult{}, r.selectRouteErr
+	}
 	litellm := r.litellmModel
 	if litellm == "" {
 		litellm = input.AliasID
@@ -75,6 +84,7 @@ func (r *mockAudioRouting) SelectRoute(_ context.Context, input audio.RouteInput
 type mockAudioAccounting struct {
 	reservationID  string
 	createErr      error
+	finalizeErr    error
 	finalizeCalled bool
 	releaseCalled  bool
 }
@@ -88,7 +98,7 @@ func (a *mockAudioAccounting) CreateReservation(_ context.Context, _ audio.Reser
 
 func (a *mockAudioAccounting) FinalizeReservation(_ context.Context, _ audio.FinalizeInput) error {
 	a.finalizeCalled = true
-	return nil
+	return a.finalizeErr
 }
 
 func (a *mockAudioAccounting) ReleaseReservation(_ context.Context, _, _, _ string) error {
@@ -805,5 +815,156 @@ func TestTranscriptionReservationQuotaRefusalReturns402(t *testing.T) {
 
 	if w.Code != http.StatusPaymentRequired {
 		t.Fatalf("expected 402, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// --- #616: finalize failure must release, never strand, the hold ---
+
+// TestSpeechFinalizeFailureReleasesReservation covers handleSpeech's finalize
+// site (handler.go, the /v1/audio/speech success path). A finalize failure
+// must not leave the reservation stranded: it must be released.
+func TestSpeechFinalizeFailureReleasesReservation(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte{0xFF, 0xFB}, 200, "audio/mpeg")
+	defer mock.Close()
+
+	acc := &mockAudioAccounting{reservationID: "res-speech-finalize-fail", finalizeErr: fmt.Errorf("control-plane unreachable")}
+	w := postSpeech(t, buildAudioHandlerWithAccounting(mock.server.URL, acc))
+
+	// The client already received a correct response; finalize bookkeeping
+	// failing afterward must not turn into a client-visible error.
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (finalize bookkeeping failure must stay invisible to the caller), got %d: %s", w.Code, w.Body.String())
+	}
+	if !acc.finalizeCalled {
+		t.Fatal("expected FinalizeReservation to be attempted")
+	}
+	if !acc.releaseCalled {
+		t.Fatal("expected ReleaseReservation to be called after finalize failure: the hold would otherwise strand (#616)")
+	}
+}
+
+// TestTranscriptionSTTFinalizeFailureReleasesReservation covers
+// handleTranscription's finalize site on the local-STT path
+// (handler.go:382 before the fix).
+func TestTranscriptionSTTFinalizeFailureReleasesReservation(t *testing.T) {
+	sttBackend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"text":"ok"}`)) //nolint:errcheck
+	}))
+	defer sttBackend.Close()
+
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	acc := &mockAudioAccounting{reservationID: "res-stt-finalize-fail", finalizeErr: fmt.Errorf("control-plane unreachable")}
+	h := audio.NewHandler(auth, routing, acc, "http://unused-litellm.example.com", "test-key")
+	h.WithSTT(stt.NewTieredClient(stt.Config{
+		ParakeetBaseURL:      sttBackend.URL,
+		FasterWhisperBaseURL: sttBackend.URL,
+	}))
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	fw, _ := mw.CreateFormFile("file", "audio.wav")
+	fw.Write([]byte("audio")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/transcriptions", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !acc.releaseCalled {
+		t.Fatal("expected ReleaseReservation to be called after finalize failure: the hold would otherwise strand (#616)")
+	}
+}
+
+// TestTranslationFinalizeFailureReleasesReservation covers
+// handleMultipartAudio's shared finalize site (handler.go:552 before the
+// fix), reached via /v1/audio/translations.
+func TestTranslationFinalizeFailureReleasesReservation(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte(`{"text":"bonjour","duration":3.1}`), 200, "application/json")
+	defer mock.Close()
+
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test"}
+	routing := &mockAudioRouting{}
+	acc := &mockAudioAccounting{reservationID: "res-translation-finalize-fail", finalizeErr: fmt.Errorf("control-plane unreachable")}
+	h := audio.NewHandler(auth, routing, acc, mock.server.URL, "test-key")
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	_ = mw.WriteField("model", "whisper-1")
+	fw, _ := mw.CreateFormFile("file", "audio.mp3")
+	fw.Write([]byte("fake-audio-bytes")) //nolint:errcheck
+	mw.Close()
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/translations", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if !acc.releaseCalled {
+		t.Fatal("expected ReleaseReservation to be called after finalize failure: the hold would otherwise strand (#616)")
+	}
+}
+
+// --- #623: tenant must thread from AuthResult to RouteInput ---
+
+// TestSpeechThreadsTenantIDToRouting proves the handler passes the
+// authenticated caller's resolved tenant through to RouteInput, which is
+// what lets RoutingAdapter bind it for the control-plane entitlement check.
+func TestSpeechThreadsTenantIDToRouting(t *testing.T) {
+	mock := newMockLiteLLMAudio([]byte{0xFF, 0xFB}, 200, "audio/mpeg")
+	defer mock.Close()
+
+	tenantID := "22222222-2222-2222-2222-222222222222"
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test", tenantID: tenantID}
+	routing := &mockAudioRouting{}
+	acc := &mockAudioAccounting{reservationID: "res-tenant-thread"}
+	h := audio.NewHandler(auth, routing, acc, mock.server.URL, "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech",
+		strings.NewReader(`{"model":"hive-tts","input":"hello","voice":"alloy"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if routing.lastTenantID != tenantID {
+		t.Fatalf("expected RouteInput.TenantID %q, got %q", tenantID, routing.lastTenantID)
+	}
+}
+
+// TestSpeechTenantRestrictedAliasRefused is the #623 regression guard at the
+// handler level: when route selection refuses an alias (the shape a
+// tenant-restricted alias produces via RoutingAdapter, once bound), the
+// caller must be refused, not served.
+func TestSpeechTenantRestrictedAliasRefused(t *testing.T) {
+	auth := &mockAudioAuthorizer{accountID: "acct-test", apiKeyID: "key-test", tenantID: "33333333-3333-3333-3333-333333333333"}
+	routing := &mockAudioRouting{selectRouteErr: fmt.Errorf("audio: select route: %w", audio.ErrAccountNotProvisioned)}
+	acc := &mockAudioAccounting{reservationID: "res-restricted"}
+	h := audio.NewHandler(auth, routing, acc, "http://unused.example.com", "test-key")
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/audio/speech",
+		strings.NewReader(`{"model":"hive-restricted","input":"hello","voice":"alloy"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer test-key")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code == http.StatusOK {
+		t.Fatal("expected a refusal, not a 200, for a route-selection failure")
 	}
 }

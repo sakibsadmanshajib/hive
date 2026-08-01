@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierrors "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
-	"github.com/google/uuid"
 )
 
 // Capability flags used when this handler calls the routing layer.
@@ -34,6 +34,11 @@ type Authorizer interface {
 type AuthResult struct {
 	AccountID string
 	APIKeyID  string
+	// TenantID is resolved control-plane-side from AccountID (D-030, via
+	// public.tenant_billing_accounts). Empty means the account has no
+	// resolvable tenant; RoutingAdapter fails the request closed on that
+	// rather than skipping the tenant-scoped entitlement check (#623).
+	TenantID string
 }
 
 // RoutingInterface selects a provider route for a given model alias.
@@ -43,7 +48,11 @@ type RoutingInterface interface {
 
 // RouteInput specifies the alias and capability requirements for route selection.
 type RouteInput struct {
-	AliasID             string
+	AliasID string
+	// TenantID is the requesting API key's resolved tenant (AuthResult.TenantID).
+	// RoutingAdapter binds it onto ctx before calling the routing client and
+	// fails closed if it is missing or unparseable (#623).
+	TenantID            string
 	NeedImageGeneration bool
 	NeedImageEdit       bool
 }
@@ -183,6 +192,7 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 	// Select route based on model alias and capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
 		AliasID:             req.Model,
+		TenantID:            auth.TenantID,
 		NeedImageGeneration: true,
 	})
 	if err != nil {
@@ -262,12 +272,9 @@ func (h *Handler) handleGeneration(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Finalize reservation on success.
-	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
-		AccountID:     auth.AccountID,
-		ReservationID: reservationID,
-		ActualCredits: 5000,
-	})
+	// Finalize reservation on success; falls back to releasing the hold if
+	// finalize itself fails, so it never strands (#616).
+	h.settleReservation(ctx, auth.AccountID, reservationID, 5000, "/v1/images/generations")
 
 	// Normalize: for URL mode, upload each image to S3 and replace with presigned URL.
 	if responseFormat == "url" {
@@ -325,6 +332,7 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 	// Select route based on model alias and capability.
 	route, err := h.routing.SelectRoute(ctx, RouteInput{
 		AliasID:       modelAlias,
+		TenantID:      auth.TenantID,
 		NeedImageEdit: true,
 	})
 	if err != nil {
@@ -441,12 +449,9 @@ func (h *Handler) handleEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Finalize reservation on success.
-	_ = h.accounting.FinalizeReservation(ctx, FinalizeInput{
-		AccountID:     auth.AccountID,
-		ReservationID: reservationID,
-		ActualCredits: 5000,
-	})
+	// Finalize reservation on success; falls back to releasing the hold if
+	// finalize itself fails, so it never strands (#616).
+	h.settleReservation(ctx, auth.AccountID, reservationID, 5000, "/v1/images/edits")
 
 	// Normalize: for URL mode, upload each image to S3 and replace with presigned URL.
 	if responseFormat == "url" {
