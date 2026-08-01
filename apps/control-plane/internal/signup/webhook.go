@@ -55,7 +55,16 @@ type WebhookDeps struct {
 	Audit       *audit.Logger
 	// DisposableCheck is an optional disposable-domain backstop (issue #116).
 	DisposableCheck DisposableCheckFunc
-	SharedSecret    string
+	// SelfServeTenants enables personal-tenant provisioning for a signup that
+	// no existing tenant claims (issue #625). True on Hive Cloud, where an
+	// account signing itself up is an org of one and must end up usable. False
+	// on Hive Enterprise, whose posture is that membership is administered, so
+	// an unclaimed signup stays at OutcomeNoTenant exactly as before. Wired in
+	// cmd/server/main.go from the same switch that already picks
+	// licensing.CloudSource over licensing.FileSource, so there is no second
+	// source of truth for deployment posture.
+	SelfServeTenants bool
+	SharedSecret     string
 }
 
 // Webhook implements http.Handler for POST /internal/auth/user-created.

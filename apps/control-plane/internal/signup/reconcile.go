@@ -26,10 +26,13 @@ package signup
 //   - ViewerHandler (POST /api/v1/viewer/tenant-provision), which the console
 //     calls on the first authenticated request from a tenant-less user.
 //
-// Reconcile never creates a tenant. It only attaches a user to a tenant that
-// already claims them, by unconsumed invite token or by verified email domain,
-// which is the behaviour Resolver has always implemented. See the Reconcile
-// doc comment for why that is the right posture in both deployment modes.
+// Reconcile attaches a user to a tenant that already claims them, by
+// unconsumed invite token or by verified email domain, which is the behaviour
+// Resolver has always implemented. When neither matches AND the deployment is
+// Hive Cloud, it now also provisions a personal tenant for that user rather
+// than leaving them tenant-less forever (issue #625); see personal_tenant.go
+// for why that relaxation is narrow and where the concurrency guarantee comes
+// from. On Hive Enterprise nothing is created and the outcome is unchanged.
 
 import (
 	"context"
@@ -97,26 +100,26 @@ func NewProvisioner(deps WebhookDeps) *Provisioner { return &Provisioner{deps: d
 //  2. The disposable-domain backstop runs before any resolution or write.
 //  3. Resolver attaches to an existing tenant, or reports ErrNoMatch.
 //
-// Deployment posture. Reconcile does not auto-create a tenant in either mode,
-// so it needs no posture branch. That is not a simplification, it is the
-// existing behaviour of this package: Resolver has only ever performed
-// read-only lookups against tenant_invites and tenant_email_domains, and the
-// sole production writer of public.tenants is the operator-run
-// scripts/seed-demo-owner.py. Attaching only to a tenant that already claims
-// the user is the safe default in the customer-hosted posture, where
-// membership is administered, and it is unchanged from what Hive Cloud does
-// today. Should self-serve tenant creation ever be wanted in the hosted
-// posture only, the existing switch to branch on is
-// platform/config.Config.LicenseFilePath, which already selects
-// licensing.FileSource (Hive Enterprise) over licensing.CloudSource (Hive
-// Cloud); no new flag is needed for that either.
+// Deployment posture. WebhookDeps.SelfServeTenants branches step 3's
+// no-match case. On Hive Cloud a signup that no tenant claims is an org of
+// one and gets a personal tenant, because leaving it tenant-less is now a
+// permanent 403 rather than merely an absent entitlement (issue #625, and PR
+// #620 for the fail-closed gate that made it fatal). On Hive Enterprise,
+// whose posture is that membership is administered, nothing is created and
+// the outcome stays OutcomeNoTenant exactly as before. The flag is derived in
+// cmd/server/main.go from platform/config.Config.LicenseFilePath, the same
+// switch that already selects licensing.FileSource (Hive Enterprise) over
+// licensing.CloudSource (Hive Cloud), so posture has one source of truth.
 //
 // Concurrency. Two callers racing for the same user both fall through the
 // short-circuit, both resolve to the same tenant because resolution is a pure
 // function of the invite token and the email domain, and both insert. The
 // tenant_users primary key (tenant_id, user_id) plus ON CONFLICT DO NOTHING
 // makes the second insert a no-op, so the outcome is exactly one membership.
-// No tenant is created on either path, so no race can produce two tenants.
+// On the personal-tenant path the tenant itself is created too, and the race
+// there is settled by the database rather than by any check in Go: see
+// ensurePersonalTenant, which relies on the partial unique index
+// tenants_personal_owner_user_id_key.
 //
 // A nil error with OutcomeNoTenant is a successful determination, not a
 // failure. Only transient or unexpected faults return a non-nil error.
@@ -174,6 +177,13 @@ func (p *Provisioner) Reconcile(ctx context.Context, in ReconcileInput) (Outcome
 	tenantID, err := p.deps.Resolver.Resolve(ctx, Input{Email: in.Email, InviteToken: in.InviteToken})
 	if err != nil {
 		if errors.Is(err, ErrNoMatch) {
+			// No existing tenant claims this user. On Hive Cloud that is a
+			// self-serve signup and gets a personal tenant (issue #625);
+			// resolution above ran first, so an invite or a registered email
+			// domain still wins and this only ever fires when neither matched.
+			if p.deps.SelfServeTenants {
+				return p.provisionSelfServeTenant(ctx, in, emailToken, emailDomain)
+			}
 			_ = p.deps.Audit.Log(ctx, audit.Event{
 				Actor:    audit.Actor{ID: in.UserID, Type: audit.ActorUser},
 				Action:   "AUTH_SIGNIN_FAILURE_NO_TENANT",
