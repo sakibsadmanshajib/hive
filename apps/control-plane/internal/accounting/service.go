@@ -180,7 +180,7 @@ func (s *Service) ExpandReservation(ctx context.Context, input ExpandReservation
 		if err != nil {
 			return fmt.Errorf("accounting: get reservation: %w", err)
 		}
-		if reservation.Status == ReservationStatusFinalized || reservation.Status == ReservationStatusReleased {
+		if !reservationOpen(reservation.Status) {
 			return &PolicyError{Message: "reservation cannot be expanded after settlement"}
 		}
 
@@ -257,11 +257,14 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: get reservation: %w", err)
 	}
+	// Already settled by a charge: replay the stored row rather than charging
+	// twice. needs_reconciliation counts as settled here because the charge did
+	// commit; only the estimate behind it is provisional.
 	if reservation.Status == ReservationStatusFinalized || reservation.Status == ReservationStatusNeedsReconciliation {
 		return reservation, nil
 	}
-	if reservation.Status == ReservationStatusReleased {
-		return Reservation{}, &PolicyError{Message: "released reservations cannot be finalized"}
+	if !reservationOpen(reservation.Status) {
+		return Reservation{}, &PolicyError{Message: string(reservation.Status) + " reservations cannot be finalized"}
 	}
 
 	heldCredits := remainingHeldCredits(reservation)
@@ -414,11 +417,21 @@ func (s *Service) releaseLocked(ctx context.Context, input ReleaseReservationInp
 	if err != nil {
 		return Reservation{}, fmt.Errorf("accounting: get reservation: %w", err)
 	}
+	// Already released: this is a replay of THIS operation, not a second
+	// settlement, so hand back the stored row.
 	if reservation.Status == ReservationStatusReleased {
 		return reservation, nil
 	}
-	if reservation.Status == ReservationStatusFinalized {
-		return Reservation{}, &PolicyError{Message: "finalized reservations cannot be released"}
+	// Anything else that is not an open hold has already reached a terminal
+	// state, so releasing it again would be the second settlement of one
+	// reservation (issue #672). needs_reconciliation is the case that used to
+	// slip through: it is terminal in practice, since nothing consumes
+	// credit_reconciliation_jobs (issue #600), so every such row was a standing
+	// second-release target. Releasing one recomputed the release amount from a
+	// hold that is already zero, which overwrote released_credits back to 0 and
+	// destroyed the reconciliation marker, leaving a row that does not balance.
+	if !reservationOpen(reservation.Status) {
+		return Reservation{}, &PolicyError{Message: string(reservation.Status) + " reservations cannot be released"}
 	}
 
 	releaseCredits := remainingHeldCredits(reservation)
@@ -559,6 +572,31 @@ func parseAttemptStatus(raw string) (usage.AttemptStatus, *time.Time, error) {
 		return usage.AttemptStatusInterrupted, &now, nil
 	default:
 		return "", nil, &ValidationError{Field: "status", Message: "status must be streaming, completed, failed, cancelled, or interrupted"}
+	}
+}
+
+// reservationOpen reports whether a reservation is still an open hold, meaning
+// it has not yet reached a terminal state and may therefore be expanded,
+// finalized, or released.
+//
+// This is an ALLOWLIST, not a blocklist, and deliberately so. Every guard here
+// used to enumerate the settled statuses it refused, which is why
+// needs_reconciliation slipped past the release guard the day it was added
+// (issue #672) and past the expand guard as well: a status nobody remembered to
+// add to the refusal list fell straight through into the permitted path. Listing
+// the two open states instead means a newly added status fails CLOSED, refused
+// by every settlement path until someone deliberately teaches this function
+// about it. On the money path that is the correct default (D-034).
+//
+// Kept in sync with the CHECK constraint on public.credit_reservations.status
+// (supabase/migrations/20260330_03_credit_reservations.sql) and with
+// ListStaleReservations, whose reaper predicate selects the same two states.
+func reservationOpen(status ReservationStatus) bool {
+	switch status {
+	case ReservationStatusActive, ReservationStatusExpanded:
+		return true
+	default:
+		return false
 	}
 }
 
