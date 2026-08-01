@@ -239,8 +239,9 @@ func TestPriceEstimate_LegacyIsFlatTokenSum(t *testing.T) {
 
 // --- Issue #617: catalog price correction -------------------------------
 //
-// The seeded catalog prices were arbitrary placeholders sitting 333x to
-// 7375x below real provider rates. The migration
+// The seeded catalog prices were arbitrary placeholders sitting roughly
+// 1300x to 7500x below real provider rates (actual ratios 1312x, 1750x,
+// 1750x, 2333x, 5600x, 7467x). The migration
 // 20260801_01_alias_pricing_correction.sql replaces them with
 // ceil(provider list price per million * 1.4 * CreditsPerUSD).
 //
