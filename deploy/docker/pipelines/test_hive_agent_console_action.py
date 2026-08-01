@@ -128,49 +128,170 @@ class CoworkEnabledTests(unittest.TestCase):
         self.assertFalse(_run(self.action._cowork_enabled("tok")))
 
 
-class ActionMessageTests(unittest.TestCase):
-    def test_no_session_shows_error_and_never_calls_gate(self) -> None:
-        action = hcca.Action()
-        emitted: list[dict] = []
+class _Recorder:
+    """Collects emitted events and answers __event_call__ with a set result."""
 
-        async def emit(event: dict) -> None:
-            emitted.append(event)
+    def __init__(self, call_result: object = "new-tab") -> None:
+        self.emitted: list[dict] = []
+        self.calls: list[dict] = []
+        self.call_result = call_result
 
-        _run(action.action({}, __oauth_token__=None, __event_emitter__=emit))
-        self.assertEqual(len(emitted), 1)
-        self.assertIn("no active Hive session", emitted[0]["data"]["content"])
+    async def emit(self, event: dict) -> None:
+        self.emitted.append(event)
 
-    def test_gate_disabled_shows_error_not_link(self) -> None:
-        action = hcca.Action()
-        ClientSession.next_response = _FakeResponse(200, {"gates": {"ENABLE_COWORK": False}})
-        emitted: list[dict] = []
+    async def call(self, event: dict) -> object:
+        self.calls.append(event)
+        return self.call_result
 
-        async def emit(event: dict) -> None:
-            emitted.append(event)
+    @property
+    def types(self) -> list[str]:
+        return [event.get("type") for event in self.emitted]
 
-        _run(
-            action.action(
-                {}, __oauth_token__={"access_token": "tok"}, __event_emitter__=emit
-            )
-        )
-        self.assertEqual(len(emitted), 1)
-        self.assertIn("not enabled", emitted[0]["data"]["content"])
 
-    def test_gate_enabled_emits_console_link(self) -> None:
+class TranscriptCleanlinessTests(unittest.TestCase):
+    """#541: nothing this Action does may become permanent chat content.
+
+    The regression these guard is the previous implementation, which emitted
+    `type: "message"` events on all three paths. Those render as assistant
+    content and are saved with the conversation, so both failure messages and
+    the launcher link permanently polluted the user's history.
+    """
+
+    def test_no_path_emits_a_message_event(self) -> None:
+        for label, gate, token, call_result in (
+            ("no session", None, None, "new-tab"),
+            ("gate off", {"gates": {"ENABLE_COWORK": False}}, "tok", "new-tab"),
+            ("gate on", {"gates": {"ENABLE_COWORK": True}}, "tok", "new-tab"),
+            ("navigation failed", {"gates": {"ENABLE_COWORK": True}}, "tok", None),
+        ):
+            with self.subTest(label):
+                action = hcca.Action()
+                if gate is not None:
+                    ClientSession.next_response = _FakeResponse(200, gate)
+                rec = _Recorder(call_result)
+                oauth = {"access_token": token} if token else None
+
+                result = _run(
+                    action.action(
+                        {},
+                        __oauth_token__=oauth,
+                        __event_emitter__=rec.emit,
+                        __event_call__=rec.call,
+                    )
+                )
+
+                # A returned {"messages": [...]} is the other way to write to
+                # the transcript, so the return value is asserted too.
+                self.assertIsNone(result)
+                self.assertNotIn("message", rec.types)
+                self.assertNotIn("replace", rec.types)
+
+    def test_failures_are_notifications(self) -> None:
+        for label, gate, token, expected in (
+            ("no session", None, None, "no active Hive session"),
+            ("gate off", {"gates": {"ENABLE_COWORK": False}}, "tok", "not enabled"),
+        ):
+            with self.subTest(label):
+                action = hcca.Action()
+                if gate is not None:
+                    ClientSession.next_response = _FakeResponse(200, gate)
+                rec = _Recorder()
+                oauth = {"access_token": token} if token else None
+
+                _run(
+                    action.action(
+                        {},
+                        __oauth_token__=oauth,
+                        __event_emitter__=rec.emit,
+                        __event_call__=rec.call,
+                    )
+                )
+
+                self.assertEqual(rec.types, ["notification"])
+                self.assertEqual(rec.emitted[0]["data"]["type"], "error")
+                self.assertIn(expected, rec.emitted[0]["data"]["content"])
+                # A failed gate must never reach the navigation step.
+                self.assertEqual(rec.calls, [])
+
+
+class NavigationTests(unittest.TestCase):
+    def _open(self, call_result: object = "new-tab") -> _Recorder:
         action = hcca.Action()
         ClientSession.next_response = _FakeResponse(200, {"gates": {"ENABLE_COWORK": True}})
-        emitted: list[dict] = []
-
-        async def emit(event: dict) -> None:
-            emitted.append(event)
-
+        rec = _Recorder(call_result)
         _run(
             action.action(
-                {}, __oauth_token__={"access_token": "tok"}, __event_emitter__=emit
+                {},
+                __oauth_token__={"access_token": "tok"},
+                __event_emitter__=rec.emit,
+                __event_call__=rec.call,
             )
         )
-        self.assertEqual(len(emitted), 1)
-        self.assertIn(action.valves.console_path, emitted[0]["data"]["content"])
+        return rec
+
+    def test_navigates_via_execute_event(self) -> None:
+        rec = self._open()
+        self.assertEqual(len(rec.calls), 1)
+        self.assertEqual(rec.calls[0]["type"], "execute")
+        code = rec.calls[0]["data"]["code"]
+        self.assertIn("window.open", code)
+        self.assertIn(hcca.Action().valves.console_path, code)
+        # Success is silent: no toast on a click that worked.
+        self.assertEqual(rec.emitted, [])
+
+    def test_same_tab_fallback_counts_as_success(self) -> None:
+        # A blocked popup navigates in place; the user arrived, so no error.
+        self.assertEqual(self._open("same-tab").emitted, [])
+
+    def test_unexpected_result_surfaces_a_toast(self) -> None:
+        rec = self._open(None)
+        self.assertEqual(rec.types, ["notification"])
+        self.assertEqual(rec.emitted[0]["data"]["type"], "error")
+
+    def test_url_is_json_encoded_into_the_snippet(self) -> None:
+        # The snippet is evaluated as JavaScript source by Open WebUI, so a
+        # valve value carrying a quote must not be able to close the string
+        # literal and run as code.
+        action = hcca.Action()
+        action.valves.console_path = '/x";alert(1);//'
+        ClientSession.next_response = _FakeResponse(200, {"gates": {"ENABLE_COWORK": True}})
+        rec = _Recorder()
+        _run(
+            action.action(
+                {},
+                __oauth_token__={"access_token": "tok"},
+                __event_emitter__=rec.emit,
+                __event_call__=rec.call,
+            )
+        )
+        code = rec.calls[0]["data"]["code"]
+        self.assertIn(r"\"", code)
+        self.assertNotIn('const url = "/x";alert(1);//"', code)
+
+    def test_missing_event_call_degrades_to_a_toast(self) -> None:
+        action = hcca.Action()
+        ClientSession.next_response = _FakeResponse(200, {"gates": {"ENABLE_COWORK": True}})
+        rec = _Recorder()
+        _run(
+            action.action(
+                {},
+                __oauth_token__={"access_token": "tok"},
+                __event_emitter__=rec.emit,
+                __event_call__=None,
+            )
+        )
+        self.assertEqual(rec.types, ["notification"])
+        self.assertIn(action.valves.console_path, rec.emitted[0]["data"]["content"])
+
+    def test_declares_event_call_so_open_webui_injects_it(self) -> None:
+        # Open WebUI copies __event_call__ into the kwargs only when the
+        # parameter is declared in the signature. Drop it and the button
+        # silently stops navigating.
+        import inspect
+
+        params = inspect.signature(hcca.Action.action).parameters
+        self.assertIn("__event_call__", params)
+        self.assertIn("__event_emitter__", params)
 
 
 if __name__ == "__main__":
