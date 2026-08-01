@@ -30,7 +30,15 @@ func connectCatalogDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("ROUTING_TEST_DB_URL")
 	if dsn == "" {
-		t.Skip("ROUTING_TEST_DB_URL not set; skipping integration test")
+		// A skipped test and a passing test are indistinguishable inside a
+		// green check (issue #655). This suite guards the corrected catalog
+		// prices from #617/#651, so in CI a missing DSN is a wiring defect,
+		// not a reason to quietly pass. Gated on CI rather than the
+		// variable itself so a local developer run can still skip.
+		if os.Getenv("CI") != "" {
+			t.Fatal("ROUTING_TEST_DB_URL not set in CI: this suite guards the corrected catalog prices (#617) and must not silently pass as skipped")
+		}
+		t.Skip("ROUTING_TEST_DB_URL not set; skipping integration test (set CI=true to make this fail instead of skip)")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
