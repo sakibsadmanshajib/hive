@@ -10,7 +10,8 @@ package routing
 //
 // Prerequisites:
 //   - A Postgres database with the FULL supabase/migrations chain applied,
-//     including 20260801_01_alias_pricing_correction.sql.
+//     including 20260801_01_alias_pricing_correction.sql and
+//     20260801_14_route_groq_fast_cheapest_model.sql.
 //   - ROUTING_TEST_DB_URL pointing at it.
 //
 // Run with:
@@ -124,11 +125,12 @@ func TestSeededAliasHasExactlyOneEnabledRoute(t *testing.T) {
 
 // TestHiveFastIsPinnedToGroqAtCorrectedPrice is requirement (c) at the data
 // level. The expected credit figures are derived by hand from Groq's
-// published rate for openai/gpt-oss-20b so a later price change has to fail
-// this test and be re-derived rather than drift silently:
+// published rate for llama-3.1-8b-instant (20260801_14_route_groq_fast_cheapest_model.sql,
+// the cheapest available Groq model as of 2026-08-03) so a later price change
+// has to fail this test and be re-derived rather than drift silently:
 //
-//	input:  0.075 USD/M * 1.4 = 0.105 USD/M * 100_000 credits/USD = 10_500
-//	output: 0.300 USD/M * 1.4 = 0.420 USD/M * 100_000 credits/USD = 42_000
+//	input:  0.05 USD/M * 1.4 = 0.070 USD/M * 100_000 credits/USD =  7_000
+//	output: 0.08 USD/M * 1.4 = 0.112 USD/M * 100_000 credits/USD = 11_200
 func TestHiveFastIsPinnedToGroqAtCorrectedPrice(t *testing.T) {
 	pool := connectCatalogDB(t)
 
@@ -144,8 +146,8 @@ func TestHiveFastIsPinnedToGroqAtCorrectedPrice(t *testing.T) {
 	if provider != "groq" {
 		t.Errorf("hive-fast provider = %q, want groq", provider)
 	}
-	if providerModel != "groq/openai/gpt-oss-20b" {
-		t.Errorf("hive-fast provider_model = %q, want groq/openai/gpt-oss-20b", providerModel)
+	if providerModel != "groq/llama-3.1-8b-instant" {
+		t.Errorf("hive-fast provider_model = %q, want groq/llama-3.1-8b-instant", providerModel)
 	}
 
 	var input, output int64
@@ -155,11 +157,11 @@ func TestHiveFastIsPinnedToGroqAtCorrectedPrice(t *testing.T) {
 	`).Scan(&input, &output); err != nil {
 		t.Fatalf("read hive-fast pricing: %v", err)
 	}
-	if input != 10_500 {
-		t.Errorf("hive-fast input_price_credits = %d, want 10500", input)
+	if input != 7_000 {
+		t.Errorf("hive-fast input_price_credits = %d, want 7000", input)
 	}
-	if output != 42_000 {
-		t.Errorf("hive-fast output_price_credits = %d, want 42000", output)
+	if output != 11_200 {
+		t.Errorf("hive-fast output_price_credits = %d, want 11200", output)
 	}
 }
 

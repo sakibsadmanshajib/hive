@@ -36,7 +36,7 @@ type stubRepository struct {
 // a stub left at its zero value would make every fixture that does not care
 // about price fail closed for the wrong reason. Tests that do care set
 // pricing explicitly, or set unpriced.
-var defaultStubPricing = catalog.CatalogPricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000}
+var defaultStubPricing = catalog.CatalogPricing{InputPriceCredits: 7_000, OutputPriceCredits: 11_200}
 
 func (s *stubRepository) LoadAliasPolicy(_ context.Context, _ string) (catalog.AliasPolicySnapshot, error) {
 	s.loadPolicyCalls++
@@ -997,7 +997,9 @@ func TestSelectRouteSkipsPricingLookupOnEarlyRefusal(t *testing.T) {
 
 // TestSelectRouteHiveFastResolvesToGroqAtGroqPrice is requirement (c) of the
 // issue #617 correction, at the code level: with hive-fast reduced to its
-// single enabled route (Groq openai/gpt-oss-20b), SelectRoute must resolve
+// single enabled route (Groq llama-3.1-8b-instant, the cheapest available
+// Groq model as of 2026-08-03 per
+// 20260801_14_route_groq_fast_cheapest_model.sql), SelectRoute must resolve
 // that route, offer no fallback, and carry the Groq-derived price.
 //
 // The route shape here mirrors what
@@ -1020,7 +1022,7 @@ func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
 				RouteID:                 "route-groq-fast",
 				AliasID:                 "hive-fast",
 				Provider:                "groq",
-				ProviderModel:           "groq/openai/gpt-oss-20b",
+				ProviderModel:           "groq/llama-3.1-8b-instant",
 				LiteLLMModelName:        "route-groq-fast",
 				PriceClass:              "standard",
 				HealthState:             "healthy",
@@ -1039,8 +1041,8 @@ func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
 				SupportsChatCompletions: true,
 			},
 		},
-		// 0.075 in / 0.30 out USD per million * 1.4 * CreditsPerUSD (100_000).
-		pricing: catalog.CatalogPricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+		// 0.05 in / 0.08 out USD per million * 1.4 * CreditsPerUSD (100_000).
+		pricing: catalog.CatalogPricing{InputPriceCredits: 7_000, OutputPriceCredits: 11_200},
 	}
 
 	svc := NewService(repo, &stubEntitlements{visible: true})
@@ -1063,10 +1065,10 @@ func TestSelectRouteHiveFastResolvesToGroqAtGroqPrice(t *testing.T) {
 	if len(result.FallbackRouteIDs) != 0 {
 		t.Fatalf("expected no fallback routes, got %v", result.FallbackRouteIDs)
 	}
-	if result.Pricing.InputPriceCredits != 10_500 {
-		t.Fatalf("expected input price 10500, got %d", result.Pricing.InputPriceCredits)
+	if result.Pricing.InputPriceCredits != 7_000 {
+		t.Fatalf("expected input price 7000, got %d", result.Pricing.InputPriceCredits)
 	}
-	if result.Pricing.OutputPriceCredits != 42_000 {
-		t.Fatalf("expected output price 42000, got %d", result.Pricing.OutputPriceCredits)
+	if result.Pricing.OutputPriceCredits != 11_200 {
+		t.Fatalf("expected output price 11200, got %d", result.Pricing.OutputPriceCredits)
 	}
 }
