@@ -141,7 +141,7 @@ func runCollapsible(r rune) bool {
 // One byte per bytesPerToken bytes is the calibration, not a round number: it
 // makes a pure run cost bytesPerToken squared, 144 bytes per estimated token,
 // which clears the sparsest measured run (128 real bytes per token, for spaces)
-// with about 12 percent of headroom. Dividing by less would over-charge a
+// with about 12 percent of headroom. Any divisor under 11 would over-charge a
 // space-padded prompt; collapsing a run to a single byte the way this used to
 // makes the charge independent of the run's length, which is the shape that
 // hands out unbilled inference.
