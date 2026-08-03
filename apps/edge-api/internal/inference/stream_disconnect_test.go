@@ -137,7 +137,7 @@ func newAccountingMockReservationFails(rec *accountingRecorder) *httptest.Server
 // newRoutingMock stands in for the control-plane's route-selection endpoint,
 // always resolving to litellmURL regardless of the request body.
 //
-// It carries hive-fast's catalog price and an explicit token unit because the
+// It carries a pinned historical hive-fast price and an explicit token unit because the
 // real endpoint always does: routing.Service refuses an alias with no usable
 // price (#617) and every selection has carried price_unit since #627. A
 // settlement is derived from those fields (#688), so a mock without them would
@@ -476,7 +476,7 @@ func TestExecuteStreaming_NormalCompletion_ChargesConfirmedUsage_NoRegression(t 
 		t.Fatalf("expected FinalizeReservation on normal completion; calls seen: %+v", rec.calls)
 	}
 	actual, _ := body["actual_credits"].(float64)
-	// 20 input + 5 output tokens at hive-fast's catalog price is 0.42 credits,
+	// 20 input + 5 output tokens at the fixture's pinned hive-fast price is 0.42 credits,
 	// which the never-free floor lifts to 1. The catalog-price bound itself is
 	// asserted at thousands of tokens in settle_from_catalog_test.go, where the
 	// floor cannot mask a wrong conversion.

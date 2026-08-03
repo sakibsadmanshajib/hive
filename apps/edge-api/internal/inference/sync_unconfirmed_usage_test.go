@@ -112,10 +112,13 @@ func TestExecuteSync_NoUsage_NeverConfirmsTheFlatEstimate(t *testing.T) {
 		t.Errorf("the flat reservation estimate was billed as confirmed usage (issue #636)")
 	}
 	// The estimate is catalog-priced exactly like a measurement (#688): 1 prompt
-	// token (11 bytes, floored at the estimator's minimum) at 10500 credits per
-	// million plus 1000 completion tokens (12,000 bytes at bytesPerToken) at
-	// 42000 is 42_010_500 / 1e6 = 42.01, rounded half up to 42. Only the
-	// confidence differs, which is what terminal_usage_confirmed carries.
+	// token (11 bytes, floored at the estimator's minimum) at the fixture's
+	// pinned 10500 credits per million plus 1000 completion tokens (12,000 bytes
+	// at bytesPerToken) at 42000 is 42_010_500 / 1e6 = 42.01, rounded half up to
+	// 42. Only the confidence differs, which is what terminal_usage_confirmed
+	// carries. The pinned price is historical on purpose and is not a claim
+	// about what hive-fast costs today; see the note at the top of
+	// settle_from_catalog_test.go.
 	if int64(actual) != 42 {
 		t.Errorf("actual_credits = %v, want 42 (hive-fast catalog price for 1 prompt + 1000 completion estimated tokens), never the flat 10000 estimate", body["actual_credits"])
 	}

@@ -375,6 +375,14 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // absent rather than as a measured zero, which would otherwise settle a
 // delivered response for nothing.
 //
+// That makes the prompt and completion SPLIT load-bearing where this branch
+// previously keyed on total_tokens: a provider reporting only a total, with no
+// split, now falls through to the content estimate and stays flagged
+// unconfirmed permanently, since the reconciliation job that would resolve it
+// has a writer and no reader (#600). Neither OpenRouter nor Groq produces that
+// shape and the estimate errs in the customer's favour, so it is recorded here
+// rather than guarded against.
+//
 // The unconfirmed estimate bills prompt tokens too, not completion bytes
 // alone: a client that aborts right after the first output token (e.g. after a
 // long prompt finishes prefill) must not settle for ~1 credit just because only

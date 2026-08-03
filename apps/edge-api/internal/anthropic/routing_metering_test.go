@@ -72,8 +72,11 @@ func (c *controlPlane) handler() http.Handler {
 			Provider:         "test-provider",
 			// The real endpoint always carries the alias's catalog price and an
 			// explicit unit, and the settlement charge is derived from them
-			// (#688). These are hive-fast's corrected rows, in credits per
-			// million tokens.
+			// (#688). These are hive-fast's rows as of migration
+			// 20260801_01_alias_pricing_correction.sql, in credits per million
+			// tokens, pinned on purpose rather than tracked against later
+			// repricings (see the note at the top of
+			// apps/edge-api/internal/inference/settle_from_catalog_test.go).
 			Pricing:   inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
 			PriceUnit: inference.PriceUnitTokens,
 		})

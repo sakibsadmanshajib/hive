@@ -5,9 +5,12 @@ import (
 	"testing"
 )
 
-// hiveFastRoute is a resolved route carrying hive-fast's catalog row
-// (supabase/migrations/20260801_01_alias_pricing_correction.sql): 10500 credits
-// per million input tokens, 42000 per million output, priced in tokens.
+// hiveFastRoute is a resolved route carrying hive-fast's row as of migration
+// 20260801_01_alias_pricing_correction.sql: 10500 credits per million input
+// tokens, 42000 per million output, priced in tokens. The row is a deliberately
+// pinned historical one, superseded in the live catalog by
+// 20260801_14_route_groq_fast_cheapest_model.sql; see the note at the top of
+// settle_from_catalog_test.go for why it is not refreshed.
 var hiveFastRoute = SelectRouteResult{
 	AliasID:   "hive-fast",
 	Pricing:   SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},

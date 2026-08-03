@@ -224,7 +224,7 @@ func TestExecuteSync_ClientDisconnect_ChargesDeliveredWork(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected FinalizeReservation to reach control-plane despite the cancelled request context; calls seen: %+v", rec.calls)
 	}
-	// 20 input + 5 output tokens at hive-fast's catalog price, floored at 1
+	// 20 input + 5 output tokens at the fixture's pinned hive-fast price, floored at 1
 	// credit (see settle_from_catalog_test.go for the same bound at thousands of
 	// tokens, where the floor cannot mask a wrong conversion).
 	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1 {

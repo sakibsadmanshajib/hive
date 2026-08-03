@@ -17,21 +17,28 @@ import (
 // one credit per token: settlementCredits returned the provider's total_tokens
 // and executeSync/settleStream passed that straight through as ActualCredits.
 // At 100000 credits per USD that is 10.00 USD per million tokens on every
-// alias, roughly 95 times hive-fast's published input price, and it ignored
-// model_aliases entirely.
+// alias, two orders of magnitude above hive-fast's published input price, and
+// it ignored model_aliases entirely.
 //
-// The catalog figures below are the rows shipped by
-// supabase/migrations/20260801_01_alias_pricing_correction.sql, in credits per
-// MILLION tokens. Every expectation in this file is derived from them with the
-// same arithmetic metering.ChargeCredits implements, so a test passes only when
-// the price quoted by the catalog is the price actually paid.
+// The catalog figures below are HISTORICAL ON PURPOSE: they are the rows
+// 20260801_01_alias_pricing_correction.sql shipped, in credits per MILLION
+// tokens, and hive-fast has since been repriced to 7000 / 11200 by
+// 20260801_14_route_groq_fast_cheapest_model.sql. They are deliberately not
+// refreshed. Prices arrive from the database at runtime, so what these tests
+// prove is that whatever price the resolved route carries is the price actually
+// paid; pinning one fixed row keeps that proof from having to be re-derived
+// every time the catalog is repriced. Every expectation in this file is derived
+// longhand from these numbers with the same arithmetic metering.ChargeCredits
+// implements, so a test fails if the conversion stops honouring the route's
+// price, and no expectation here is a claim about what hive-fast costs today.
 //
 // Every pricing assertion uses THOUSANDS of tokens on purpose: the 1-credit
 // floor (a request that consumed real work is never free) makes a small-token
 // assertion pass even when the conversion is wrong by orders of magnitude.
 
-// catalogHiveFast is model_aliases' hive-fast row: 0.075 / 0.300 USD per
-// million upstream, times a 1.4 margin, times 100000 credits per USD.
+// catalogHiveFast is the hive-fast row as of migration _01: 0.075 / 0.300 USD
+// per million upstream, times a 1.4 margin, times 100000 credits per USD. See
+// the note above on why this pinned historical row is not refreshed.
 var catalogHiveFast = SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000}
 
 // catalogHiveAuto is the hive-auto row: 0.400 / 1.600 USD per million upstream.
@@ -185,8 +192,8 @@ func TestExecuteStreaming_SettlesFromCatalogPrice(t *testing.T) {
 
 // TestExecuteStreaming_DoesNotSettleAtTokenCount pins the exact figure the bug
 // report carried: a 72-input, 31-output request settled at 103 credits, the sum
-// of its tokens. At hive-fast's catalog price that same request is worth 2
-// credits.
+// of its tokens. At the pinned hive-fast price above that same request is worth
+// 2 credits.
 func TestExecuteStreaming_DoesNotSettleAtTokenCount(t *testing.T) {
 	rec := &accountingRecorder{}
 	acctSrv := newAccountingMock(rec)

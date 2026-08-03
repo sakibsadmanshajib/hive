@@ -6,8 +6,8 @@ package inference
 // used to settle at one credit per token: settlementCredits returned the
 // provider's total_tokens and the settlement calls passed that figure straight
 // through as ActualCredits. At 100000 credits per USD that is 10.00 USD per
-// million tokens on every alias, about 95 times hive-fast's published input
-// price, and it consulted model_aliases nowhere. Every charge now comes from
+// million tokens on every alias, more than two orders of magnitude above
+// hive-fast's published input price, and it consulted model_aliases nowhere. Every charge now comes from
 // the resolved alias's catalog row instead, the same way the audio path has
 // derived its charge since PR #671.
 //

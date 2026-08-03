@@ -34,9 +34,11 @@ func newPassthroughRoutingClient(t *testing.T) *inference.RoutingClient {
 			AliasID:          in.AliasID,
 			LiteLLMModelName: in.AliasID,
 			Provider:         "test-provider",
-			// hive-fast's catalog row: the real endpoint always sends a price
-			// and an explicit unit, and the recorded cost is derived from them
-			// (#688).
+			// hive-fast's catalog row as of migration
+			// 20260801_01_alias_pricing_correction.sql, pinned on purpose
+			// rather than tracked against later repricings: the real endpoint
+			// always sends a price and an explicit unit, and the recorded cost
+			// is derived from them (#688).
 			Pricing:   inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
 			PriceUnit: inference.PriceUnitTokens,
 		})
