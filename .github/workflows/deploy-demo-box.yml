@@ -322,6 +322,13 @@ jobs:
               caddy validate --config - --adapter caddyfile < "$file"
             # `< /dev/null` on purpose: `exec -T` attaches the caller's stdin to
             # the container, and this command has no use for it.
+            #
+            # `set -e` is suspended for a command tested in an `if` condition,
+            # so a transient failure of the `docker compose exec ... | cmp`
+            # pipeline lands in the `else` branch rather than aborting the
+            # script. That is the deliberate fail-safe: it forces the recreate
+            # path, which still applies the config, rather than risking a
+            # false "reloaded" claim.
             if "${COMPOSE[@]}" exec -T "$svc" cat /etc/caddy/Caddyfile </dev/null \
                  | cmp -s - "$file"; then
               "${COMPOSE[@]}" exec -T "$svc" \
@@ -363,8 +370,19 @@ jobs:
           code=000
           ctype=none
           for i in $(seq 1 12); do
-            probe=$(curl -s -o "$body" -w '%{http_code} %{content_type}' \
-              http://localhost:3003/v1/featuregate || echo "000 none")
+            # A transport failure still lets curl print its own `-w` output
+            # (typically "000 " with an empty content-type) before the command
+            # substitution reports the nonzero exit. Chaining `|| echo "000
+            # none"` onto that same substitution appends rather than replaces,
+            # so a failed probe used to leave `ctype` as the literal string
+            # "000 none". Assigning inside the `if` and only overwriting probe
+            # in the `else` branch keeps the fields separable either way.
+            if probe=$(curl -s -o "$body" -w '%{http_code} %{content_type}' \
+              http://localhost:3003/v1/featuregate); then
+              :
+            else
+              probe="000 none"
+            fi
             code=${probe%% *}
             ctype=${probe#* }
             case "$ctype" in
