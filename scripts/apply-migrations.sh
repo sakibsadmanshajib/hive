@@ -168,6 +168,22 @@ if [ "${#baseline_applied[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# THE ONE CONVENTION for reading this file, shared by all three of its parsers
+# (this script, scripts/probe-applied-migrations.py and
+# scripts/test-apply-migrations.sh): everything from a # onwards is a comment,
+# surrounding whitespace is insignificant, and an applied entry appears exactly
+# ONCE. A raw count and a de-duplicated count are therefore the same number, so
+# the parsers cannot produce three different totals for one file.
+#
+# A duplicate is named here, on its own terms. Silently de-duplicating in one
+# parser and not another is what turns a typo into the "parsers disagree" abort
+# further down, which is safe but says nothing about what is actually wrong.
+duplicates="$(printf '%s\n' "${baseline_applied[@]}" | sort | uniq -d | tr '\n' ' ')"
+if [ -n "${duplicates// /}" ]; then
+  echo "::error::$baseline_file lists the same migration more than once, so its applied entries are not a set: ${duplicates% }. Remove the duplicate line."
+  exit 1
+fi
+
 contains() {
   local needle="$1"; shift
   local item

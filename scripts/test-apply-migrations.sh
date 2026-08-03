@@ -67,7 +67,23 @@ init_sql="$repo_root/deploy/supabase/init/00-extensions.sql"
 maintenance_db="${PGDATABASE:-postgres}"
 
 file_count="$(find "$migrations_dir" -maxdepth 1 -name '*.sql' | wc -l | tr -d ' ')"
-baseline_count="$(grep -c '^applied = ' "$repo_root/scripts/migration-baseline.conf")"
+# The baseline count comes from the applier's own parser (--check reads the file
+# and touches no database), not from a grep of the conf file here. One convention
+# across all three readers of that file: an applied entry appears exactly ONCE and
+# surrounding whitespace is insignificant, so a raw count and a de-duplicated count
+# are the same number, and a duplicated or differently spaced entry is one named
+# error instead of three disagreeing totals. See scripts/apply-migrations.sh.
+#
+# Its output is echoed on failure rather than piped straight into an extractor,
+# because the applier reports on stdout: piping would swallow the very message
+# that says what is wrong with the file.
+if ! baseline_check="$("$applier" --check 2>&1)"; then
+  echo "$baseline_check"
+  echo "FAILED: the baseline file does not parse, so no scenario below would mean anything"
+  exit 1
+fi
+baseline_count="${baseline_check##*applied=}"
+baseline_count="${baseline_count%% *}"
 remainder=$((file_count - baseline_count))
 
 failures=0
@@ -127,11 +143,24 @@ SQL
 
 log=""
 status=0
-run_applier() { # run_applier <db> [args...]; combined output in $log, exit in $status
+# run_applier [VAR=value ...] <db> [args...]; combined output in $log, exit in $status
+#
+# Leading VAR=value words are the environment for THIS run only, and they are
+# handed to env(1) rather than written as a prefix assignment on the call. A
+# prefix assignment before a shell FUNCTION is not scoped the way one before an
+# external command is: it is an assignment in the calling shell. Measured, in
+# posix mode (which is how bash behaves when invoked as sh), bash 4.4 and 5.0
+# leave the variable set after the function returns and bash 5.1 and later do
+# not. A leak there would carry HIVE_MIGRATION_BASELINE or a PATH shim from one
+# scenario into every later one, and these scenarios are the whole evidence for
+# the fix, so they must not be able to influence each other on any shell.
+run_applier() {
+  local envs=()
+  while [ "$#" -gt 0 ] && [ "${1#*=}" != "$1" ]; do envs+=("$1"); shift; done
   local db="$1"; shift
   log="$(mktemp)"
   status=0
-  PGDATABASE="$db" "$applier" "$@" >"$log" 2>&1 || status=$?
+  env ${envs[@]+"${envs[@]}"} PGDATABASE="$db" "$applier" "$@" >"$log" 2>&1 || status=$?
 }
 
 echo "migration files: $file_count, baseline entries: $baseline_count, remainder: $remainder"
@@ -141,7 +170,7 @@ db_fresh=hive_migtest_fresh
 new_db "$db_fresh"
 
 scenario "an override that contradicts a fresh schema is rejected"
-HIVE_MIGRATION_BASELINE=seed run_applier "$db_fresh"
+run_applier HIVE_MIGRATION_BASELINE=seed "$db_fresh"
 nonzero
 contains "contradicts the schema"
 check "ledger rows" 0 "$(ledger_rows "$db_fresh")"
@@ -218,7 +247,7 @@ check "ledger rows" 0 "$(ledger_rows "$db_partial")"
 check "nothing further executed" t "$(q "$db_partial" "SELECT to_regclass('public.tenants') IS NULL")"
 
 scenario "an operator override resolves the ambiguous state"
-HIVE_MIGRATION_BASELINE=seed run_applier "$db_partial" --dry-run
+run_applier HIVE_MIGRATION_BASELINE=seed "$db_partial" --dry-run
 check "exit status" 0 "$status"
 contains "on the operator's instruction"
 check "pending count" "$remainder" "$(grep -c '^  [0-9]' "$log")"
@@ -230,7 +259,7 @@ scenario "a run that cannot probe the schema refuses to guess"
 shim="$(mktemp -d)"
 printf '#!/bin/sh\nexit 1\n' >"$shim/python3"
 chmod +x "$shim/python3"
-PATH="$shim:$PATH" run_applier "$db_partial"
+run_applier "PATH=$shim:$PATH" "$db_partial"
 nonzero
 contains "the schema probe failed"
 contains "cannot tell whether"
@@ -238,7 +267,7 @@ check "still nothing recorded" 0 "$(ledger_rows "$db_partial")"
 rm -rf "$shim"
 
 scenario "a bad override value is rejected"
-HIVE_MIGRATION_BASELINE=maybe run_applier "$db_partial"
+run_applier HIVE_MIGRATION_BASELINE=maybe "$db_partial"
 nonzero
 contains "must be seed or ignore"
 check "still nothing recorded" 0 "$(ledger_rows "$db_partial")"

@@ -244,13 +244,18 @@ def classify(catalog: dict[str, set[str]]) -> list[tuple[str, str, str, tuple[in
 def load_baseline() -> list[str]:
     """The applied= entries of scripts/migration-baseline.conf.
 
-    Parsed the same way scripts/apply-migrations.sh parses it: everything from a
-    # onwards is a comment, surrounding whitespace is insignificant, and any key
-    other than applied is a hard error rather than something ignored. The count
-    is echoed by --baseline-state so the caller can assert the two parsers read
-    the same file the same way instead of diverging silently.
+    Parsed on the one convention shared by all three parsers of that file (this
+    script, scripts/apply-migrations.sh and scripts/test-apply-migrations.sh):
+    everything from a # onwards is a comment, surrounding whitespace is
+    insignificant, any key other than applied is a hard error rather than
+    something ignored, and an applied entry appears exactly ONCE. Because
+    duplicates are rejected instead of collapsed, a raw count and a
+    de-duplicated count are the same number and the parsers cannot report three
+    different totals for one file. The count is echoed by --baseline-state so the
+    caller can assert the two parsers read the same file the same way instead of
+    diverging silently.
     """
-    names = []
+    names: list[str] = []
     with open(BASELINE_FILE, encoding="utf-8") as handle:
         for line in handle:
             line = line.split("#", 1)[0].strip()
@@ -259,7 +264,12 @@ def load_baseline() -> list[str]:
             key, _, value = line.partition("=")
             if key.strip() != "applied":
                 sys.exit(f"unknown key in {BASELINE_FILE}: {key.strip()}")
-            names.append(value.strip())
+            name = value.strip()
+            if name in names:
+                sys.exit(f"{BASELINE_FILE} lists the same migration more than "
+                         f"once, so its applied entries are not a set: {name}. "
+                         "Remove the duplicate line.")
+            names.append(name)
     if not names:
         sys.exit(f"{BASELINE_FILE} lists no applied migrations")
     return names
@@ -296,7 +306,8 @@ def print_baseline_state(results: list[tuple[str, str, str, tuple[int, int]]]) -
                  + ", ".join(absent_from_disk))
 
     full, partial, absent, unprobeable = [], [], [], []
-    for name in sorted(set(baseline)):
+    # load_baseline rejects duplicates, so the raw list is already a set.
+    for name in sorted(baseline):
         present, total = by_name[name]
         if total == 0:
             unprobeable.append(name)
@@ -315,7 +326,7 @@ def print_baseline_state(results: list[tuple[str, str, str, tuple[int, int]]]) -
         state = "ambiguous"
 
     print(f"baseline_state={state}")
-    print(f"baseline_entries={len(set(baseline))}")
+    print(f"baseline_entries={len(baseline)}")
     print(f"# {len(full)} fully present, {len(partial)} partly present, "
           f"{len(absent)} absent, {len(unprobeable)} with nothing probeable")
     for name, present, total in partial[:10]:
