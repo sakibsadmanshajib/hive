@@ -93,6 +93,7 @@ func TestEstimateCompletionTokens_NeverOverchargesAnyScript(t *testing.T) {
 	for _, c := range scriptCases {
 		t.Run(c.name, func(t *testing.T) {
 			got := estimateCompletionTokens(repeated(c))
+			t.Logf("estimate %d, real %d, %.3f of real usage", got, c.minRealTokens, float64(got)/float64(c.minRealTokens))
 			if got > c.minRealTokens {
 				t.Errorf("estimate %d exceeds real usage %d tokens (%.2fx): an unmeasured charge must favour the customer",
 					got, c.minRealTokens, float64(got)/float64(c.minRealTokens))
@@ -305,6 +306,7 @@ func TestEstimateCompletionTokens_SeparatorRunsDoNotOvercharge(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.check(t)
+			t.Logf("%d bytes, estimate %d, real %d, %.3f of real usage", tt.wantBytes, got, tt.minRealTokens, float64(got)/float64(tt.minRealTokens))
 			if got > tt.minRealTokens {
 				t.Errorf("estimate %d exceeds real usage %d tokens (%.2fx): a separator run is not one token per twelve bytes",
 					got, tt.minRealTokens, float64(got)/float64(tt.minRealTokens))
@@ -352,21 +354,21 @@ func TestEstimateCompletionTokens_WhitespaceIsNeverFree(t *testing.T) {
 	tests := []textCase{
 		{
 			name:      "ogham space mark",
-			in:        strings.Repeat(" ", 40000),
+			in:        strings.Repeat("\u1680", 40000),
 			wantBytes: 120000,
 			// 3 bytes each; o200k_base 120000, cl100k_base 120000, o200k_harmony 120000
 			minRealTokens: 120000,
 		},
 		{
 			name:      "next line",
-			in:        strings.Repeat("", 40000),
+			in:        strings.Repeat("\u0085", 40000),
 			wantBytes: 80000,
 			// 2 bytes each; all three encodings 80000 (one token per byte)
 			minRealTokens: 80000,
 		},
 		{
 			name:      "en quad",
-			in:        strings.Repeat(" ", 20000),
+			in:        strings.Repeat("\u2000", 20000),
 			wantBytes: 60000,
 			// 3 bytes each; all three encodings 40000
 			minRealTokens: 40000,
@@ -394,21 +396,21 @@ func TestEstimateCompletionTokens_WhitespaceIsNeverFree(t *testing.T) {
 		},
 		{
 			name:      "ideographic space",
-			in:        strings.Repeat("　", 20000),
+			in:        strings.Repeat("\u3000", 20000),
 			wantBytes: 60000,
 			// 3 bytes each; o200k_base 1250, cl100k_base 10000, o200k_harmony 1250
 			minRealTokens: 1250,
 		},
 		{
 			name:      "no break space",
-			in:        strings.Repeat(" ", 20000),
+			in:        strings.Repeat("\u00a0", 20000),
 			wantBytes: 40000,
 			// 2 bytes each; all three encodings 2500
 			minRealTokens: 2500,
 		},
 		{
 			name:      "zero width space",
-			in:        strings.Repeat("​", 20000),
+			in:        strings.Repeat("\u200b", 20000),
 			wantBytes: 60000,
 			// 3 bytes each; o200k_base 5000, cl100k_base 10000, o200k_harmony 5000
 			minRealTokens: 5000,
@@ -417,6 +419,7 @@ func TestEstimateCompletionTokens_WhitespaceIsNeverFree(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.check(t)
+			t.Logf("%d bytes, estimate %d, real %d, %.3f of real usage", tt.wantBytes, got, tt.minRealTokens, float64(got)/float64(tt.minRealTokens))
 			if got*20 < tt.minRealTokens {
 				t.Errorf("estimate %d is under 5%% of real usage %d tokens (1 credit per %d real tokens): caller-controlled whitespace must not buy unbilled inference",
 					got, tt.minRealTokens, tt.minRealTokens/max64(got, 1))

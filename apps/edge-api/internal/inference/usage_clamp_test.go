@@ -25,7 +25,9 @@ func TestEstimateCompletionTokens(t *testing.T) {
 		{"hello world", "hello world", 1},
 		{"long sentence", "The quick brown fox jumps over the lazy dog", 4},
 		{"whitespace only floors at one, never zero", "          ", 1},
-		{"a whitespace run counts as one byte", "a" + strings.Repeat(" ", 100) + "b", 1},
+		{"a whitespace run costs one byte per twelve", "a" + strings.Repeat(" ", 100) + "b", 1},
+		{"a separator run costs one byte per twelve", "a" + strings.Repeat("-", 100) + "b", 1},
+		{"a control byte run is counted in full", strings.Repeat("\v", 100), 9},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -15,23 +14,33 @@ import (
 // Unit: UTF-8 bytes, not characters. Every tokenizer our providers serve is a
 // byte-level BPE, so a token is always at least one byte ("the token sequence
 // is shorter than the bytes corresponding to the original text", tiktoken
-// README, github.com/openai/tiktoken), which makes byte length a structural
-// upper bound on the token count and character count no bound at all: measured
-// emoji cost 1.17 tokens per character, so a rune count can sit below the truth
-// by any margin. Byte length also tracks real tokenization far more evenly
-// across scripts than character count does, because a script the vocabulary
-// covers poorly degrades toward one token per byte. Measured on the eight
-// scripts in token_estimate_scripts_test.go, bytes per token spans 2.6 to 9.4
-// (3.6x) while characters per token spans 0.9 to 7.1 (7.9x). Calibrating a rune
-// divisor the same way this one is calibrated (9, clearing the sparsest script)
-// would charge English 79 percent of its real usage and Japanese 13 percent of
-// theirs, so the customer's writing system would decide their discount.
+// README, github.com/openai/tiktoken), while character count is no bound in
+// either direction: measured emoji cost 1.17 tokens per character, so a rune
+// count can sit below the truth by any margin. Byte length also tracks real
+// tokenization far more evenly across scripts than character count does,
+// because a script the vocabulary covers poorly degrades toward one token per
+// byte. Measured on the eight scripts in token_estimate_scripts_test.go, bytes
+// per token spans 2.6 to 9.0 (3.5x) while characters per token spans 0.9 to 7.1
+// (7.9x). Calibrating a rune divisor the same way this one is calibrated (9,
+// clearing the sparsest script) would charge English 79 percent of its real
+// usage and Japanese 13 percent of theirs, so the customer's writing system
+// would decide their discount.
+//
+// What byte length does NOT give is a free pass for the divisor. The structural
+// bound is only one token per byte; nothing makes real text cost a token per 12
+// bytes. Repeated punctuation blows straight through it, because the vocabulary
+// carries long single tokens for it: measured worst case across o200k_base,
+// cl100k_base and o200k_harmony, a run of spaces reaches 128 real bytes per
+// token and a run of dashes 64, so counting those runs byte for byte
+// over-charged a plain horizontal rule by 6.58x. That is what runCollapsible
+// below is for, and the calibration of 12 holds only for text once those runs
+// are collapsed.
 //
 // Value: 12, from measurement, not from a rule of thumb. Real bytes per token
 // for representative prose (tiktoken 0.13.0, o200k_base) is 7.1 for English,
 // 7.5 for Bengali, 5.4 for Arabic, 4.1 for Chinese, 3.4 for Japanese, 2.6 for
-// emoji and 9.4 for Devanagari, the sparsest of the eight. 12 clears that
-// sparsest case by about 25 percent, so the estimate lands at 21 to 79 percent
+// emoji and 9.0 for Devanagari, the sparsest of the eight. 12 clears that
+// sparsest case by about 33 percent, so the estimate lands at 21 to 79 percent
 // of real usage across all eight rather than above it.
 //
 // The 4 this replaced was the average byte-per-token ratio the tiktoken README
@@ -56,17 +65,20 @@ const bytesPerToken = 12
 // measured margins, and the tests in token_estimate_scripts_test.go for the
 // bound this must keep holding.
 //
-// Whitespace runs collapse to one byte each before counting. BPE vocabularies
-// carry multi-whitespace tokens, so 40,000 spaces is 313 real tokens, not
-// 10,000: the old formula billed a whitespace-padded prompt the entire 10,000
-// credit hold. Collapsing is the cheap way to stop a run of anything the
-// tokenizer compresses hard from dominating the estimate.
+// Runs of a character the vocabulary compresses hard are counted at one byte
+// per bytesPerToken bytes rather than byte for byte, so a run stays
+// proportional to its real cost instead of either dominating the estimate or
+// vanishing from it. See runCollapsible for the measured membership and both
+// failure modes it is pinned between.
 //
 // The result is not a lower bound for every conceivable input: BPE can compress
-// a long repeated word into one 17-byte token, so pathological text can still
-// estimate above its true count. The hold clamp in control-plane's
-// finalizeLocked (accounting/service.go) remains the backstop that keeps an
-// unconfirmed charge inside the authorization the customer already granted.
+// a long repeated word into one 17-byte token, and an alternating pair of
+// separators the vocabulary pairs up (measured: 20,000 repetitions of "-=" cost
+// 16 real bytes per token, estimated at 1.33x) is not a run, so pathological
+// text can still estimate above its true count. The hold clamp in
+// control-plane's finalizeLocked (accounting/service.go) remains the backstop
+// that keeps an unconfirmed charge inside the authorization the customer
+// already granted.
 func estimateCompletionTokens(text string) int64 {
 	if text == "" {
 		return 0
@@ -78,27 +90,88 @@ func estimateCompletionTokens(text string) int64 {
 	return n
 }
 
-// collapsedByteLen is the UTF-8 byte length of text with every run of
-// whitespace counted as a single byte. It allocates nothing, because the text
-// it is handed can be megabytes of prompt.
+// runCollapsible reports whether a run of r repeated is compressed hard enough
+// by real tokenizers that counting the run at full byte length would
+// over-charge. Membership is measured, never intuited: it is exactly the runes
+// whose worst-case real bytes per token for a long run reaches bytesPerToken or
+// more (tiktoken 0.13.0, worst of o200k_base, cl100k_base and o200k_harmony,
+// runs from 1e3 to 2e5 bytes, where the ratio saturates):
+//
+//	' ' 128 | '-' '=' '_' '/' '.' '*' '#' 64 | U+3000 48 | '\n' 32
+//	'%' '+' '~' 32 | '\t' ';' U+00A0 16 | U+200B 12
+//
+// Everything else is counted at full byte length, because it already costs a
+// token per 12 bytes or fewer and the plain estimate therefore under-counts it:
+// ':' '!' '<' '>' at 8, '|' ',' '(' ')' '$' '\\' '?' '@' '^' at 4, '{' '}' '['
+// ']' '&' and both quotes at 2, U+2000 U+205F U+2029 at 1.5, and every ASCII
+// control byte plus U+0085 next line and U+1680 ogham space mark at one real
+// token per byte.
+//
+// That last group is why this is not the simpler test it looks like it should
+// be. Collapsing whitespace by the Unicode White_Space property gives away real
+// inference: U+1680 and U+0085 cost a provider token per byte while collapsing
+// to nothing, and restricting the collapse to ASCII whitespace does not fix it,
+// because U+000B vertical tab and U+000C form feed are ASCII whitespace and also
+// cost a token per byte. Testing for non-alphanumeric instead over-collapses in
+// the same way. Membership has to follow the measured compression ratio, and
+// nothing else: the two directions are a vice, and a rule that is not measured
+// escapes it on one side or the other. Letters and digits are absent because
+// they are measured too: the longest same-byte run of one costs 8 real bytes per
+// token or fewer, so they need no collapse.
+//
+// ponytail: a fixed measured set, re-measure it (not just the divisor) if we
+// onboard a tokenizer outside the o200k and cl100k families. Deriving the set at
+// runtime would mean shipping a tokenizer into the settlement path, which is
+// several orders more machinery than a fallback estimate deserves.
+func runCollapsible(r rune) bool {
+	switch r {
+	case ' ', '\t', '\n',
+		'-', '=', '_', '/', '.', '*', '#', '%', '+', '~', ';',
+		'\u00a0', '\u200b', '\u3000': // NBSP, zero width space, ideographic space
+		return true
+	}
+	return false
+}
+
+// collapsedByteLen is the UTF-8 byte length of text, except that every run of a
+// repeated runCollapsible rune contributes one byte per bytesPerToken bytes of
+// the run instead of its full length. It allocates nothing, because the text it
+// is handed can be megabytes of prompt.
+//
+// One byte per bytesPerToken bytes is the calibration, not a round number: it
+// makes a pure run cost bytesPerToken squared, 144 bytes per estimated token,
+// which clears the sparsest measured run (128 real bytes per token, for spaces)
+// with about 12 percent of headroom. Dividing by less would over-charge a
+// space-padded prompt; collapsing a run to a single byte the way this used to
+// makes the charge independent of the run's length, which is the shape that
+// hands out unbilled inference.
+//
+// A run is one repeated rune, not any stretch of collapsible ones. A mixed
+// stretch can be an adversarial alternation the vocabulary does not compress at
+// all ("~;" repeated costs one real token per byte), so collapsing mixed
+// stretches would reopen the give-up this closes.
 func collapsedByteLen(text string) int {
 	n := 0
-	inSpace := true // leading whitespace contributes nothing
 	for i := 0; i < len(text); {
 		// DecodeRuneInString rather than range plus utf8.RuneLen: RuneLen
 		// reports 3 for the replacement rune a malformed byte decodes to, which
 		// would count invalid input as larger than it is.
 		r, size := utf8.DecodeRuneInString(text[i:])
 		i += size
-		if unicode.IsSpace(r) {
-			if !inSpace {
-				n++
-				inSpace = true
-			}
+		if !runCollapsible(r) {
+			n += size
 			continue
 		}
-		inSpace = false
-		n += size
+		runBytes := size
+		for i < len(text) {
+			next, nextSize := utf8.DecodeRuneInString(text[i:])
+			if next != r {
+				break
+			}
+			runBytes += nextSize
+			i += nextSize
+		}
+		n += (runBytes + bytesPerToken - 1) / bytesPerToken
 	}
 	return n
 }
