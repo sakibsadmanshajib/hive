@@ -36,6 +36,7 @@ on:
       - 'supabase/migrations/**'
       - 'scripts/apply-migrations.sh'
       - 'scripts/migration-baseline.conf'
+      - 'scripts/probe-applied-migrations.py'
       - '.github/workflows/deploy-demo-box.yml'
   workflow_dispatch:
 
