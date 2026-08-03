@@ -241,6 +241,168 @@ jobs:
           docker compose --env-file ../../.env --profile local --profile chat \
             --profile monitoring up -d --build --remove-orphans
 
+      - name: Apply the bind-mounted Caddy configs
+        # Every Caddyfile in this stack is bind-mounted into its container, so
+        # editing the file's CONTENTS changes nothing about the container
+        # specification and the `up -d` above finds no reason to recreate the
+        # service. Caddy carries on serving whatever it parsed when it last
+        # started, and the deploy reports success either way. That is exactly
+        # how issue #619's fix (PR #664) merged, deployed green, and changed
+        # nothing: on the box afterwards `hive-caddy-owui-1` was 32 hours old
+        # while edge-api and open-webui were 15 minutes old, and
+        # chat-hive.scubed.co kept answering /v1/featuregate out of Open WebUI.
+        # No Caddyfile edit has ever reached the running proxy through a normal
+        # deploy.
+        #
+        # There is a second layer to it, measured on the box rather than
+        # assumed, and it is the one that makes a naive fix look like it worked.
+        # A single-FILE bind mount resolves to an inode at container start. `git
+        # pull` does not edit the file in place, it writes a replacement and
+        # renames over it, which allocates a new inode. The running container
+        # therefore keeps showing the OLD file forever:
+        #
+        #   host  /home/sakib/hive/deploy/docker/Caddyfile.owui  inode 133458, 5216 bytes
+        #   guest /etc/caddy/Caddyfile                           inode 174599, 4665 bytes (Jul 27)
+        #
+        # So `caddy reload --config /etc/caddy/Caddyfile` inside that container
+        # re-reads the stale copy, succeeds, exits 0 and changes nothing. That
+        # is the same silent success in a new costume, which is why the config
+        # this step applies is always piped in from the host checkout and why
+        # the following step asserts the outcome instead of trusting an exit
+        # code.
+        #
+        # Verified on the box before this was written, none of it guessed: Caddy
+        # is v2.11.3, `caddy` is on PATH in the pinned caddy:2-alpine image, the
+        # container runs `caddy run --config /etc/caddy/Caddyfile --adapter
+        # caddyfile`, the admin API answers 200 on 127.0.0.1:2019 inside the
+        # container (no Caddyfile here sets `admin off`), and `caddy validate`
+        # and `caddy reload` both accept `--config -` on stdin.
+        #
+        # Validation always runs first, against the host file, so a malformed
+        # Caddyfile is rejected before any running proxy is asked to load it.
+        # `caddy reload` would also refuse it, but a separate validate reports
+        # the parse error with its line number and keeps a broken config away
+        # from a listener that is currently serving the demo.
+        #
+        # Reload versus recreate is decided by whether the container's mounted
+        # copy still matches the host file, not by preference:
+        #
+        #   * copies match -> `caddy reload` in place. Zero downtime, no dropped
+        #     connections. This is the normal path, since most deploys change no
+        #     Caddyfile at all.
+        #   * copies differ -> the mount is inode-stale and no in-container
+        #     reload can ever see the new file, so the service is recreated.
+        #     Recreation re-binds the mount to the current inode, which also
+        #     means the container cannot silently revert to the old config the
+        #     next time it restarts. `--no-deps` keeps open-webui and the other
+        #     upstreams untouched, so the interruption is this proxy's own
+        #     sub-second restart.
+        #
+        # Nothing here is allowed to fail quietly: `set -euo pipefail`, no
+        # `|| true`, no continue-on-error. A green deploy over an unapplied
+        # config is the defect being removed.
+        #
+        # All three Caddy services are handled because all three share the
+        # defect. Each is in the local/chat profile set this job brings up, so a
+        # container missing here means the deploy is already broken and failing
+        # is correct.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat)
+          for pair in caddy-owui:Caddyfile.owui \
+                      caddy-artifacts:Caddyfile.artifacts \
+                      caddy-console:Caddyfile.console; do
+            svc=${pair%%:*}
+            file=./${pair#*:}
+            echo "::group::$svc ($file)"
+            # Validate what is about to go live: the host file, piped in, never
+            # the container's possibly-stale copy of it.
+            "${COMPOSE[@]}" exec -T "$svc" \
+              caddy validate --config - --adapter caddyfile < "$file"
+            # `< /dev/null` on purpose: `exec -T` attaches the caller's stdin to
+            # the container, and this command has no use for it.
+            #
+            # `set -e` is suspended for a command tested in an `if` condition,
+            # so a transient failure of the `docker compose exec ... | cmp`
+            # pipeline lands in the `else` branch rather than aborting the
+            # script. That is the deliberate fail-safe: it forces the recreate
+            # path, which still applies the config, rather than risking a
+            # false "reloaded" claim.
+            if "${COMPOSE[@]}" exec -T "$svc" cat /etc/caddy/Caddyfile </dev/null \
+                 | cmp -s - "$file"; then
+              "${COMPOSE[@]}" exec -T "$svc" \
+                caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+              echo "$svc: reloaded in place, no downtime"
+            else
+              echo "$svc: mounted copy differs from $file, so the bind mount is" \
+                   "pinned to a replaced inode; recreating to re-bind it"
+              "${COMPOSE[@]}" up -d --force-recreate --no-deps "$svc"
+            fi
+            echo "::endgroup::"
+          done
+
+      - name: Verify the chat-origin Caddy config is actually live
+        # A zero exit from validate and reload is not proof that the intended
+        # routing is live: a reload of a stale mounted copy exits 0 having
+        # changed nothing, which is how this defect hid in the first place. So
+        # assert the outcome on a route only the current Caddyfile serves.
+        # /v1/featuregate is proxied to edge-api by Caddyfile.owui; under a stale
+        # config the request falls through to Open WebUI's catch-all and comes
+        # back as text/html, which is precisely the live symptom in #619.
+        #
+        # The assertion is on content type and body shape, never on the status
+        # code: this caller carries no credential and edge-api answers an
+        # unauthenticated /v1/featuregate with 401 or 403 by design. Open WebUI
+        # cannot satisfy it, because its catch-all serves the SPA document.
+        #
+        # localhost:3003 is caddy-owui's published port, so this tests the
+        # config Caddy has loaded rather than the Cloudflare Tunnel, DNS, or
+        # anything else in front of it. The retry loop covers edge-api still
+        # coming up after the recreate above; a 502 from Caddy means the route
+        # matched but the upstream is not ready yet, so it is retried and then
+        # fails the deploy if it never resolves.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -uo pipefail
+          body=$(mktemp)
+          trap 'rm -f "$body"' EXIT
+          code=000
+          ctype=none
+          for i in $(seq 1 12); do
+            # A transport failure still lets curl print its own `-w` output
+            # (typically "000 " with an empty content-type) before the command
+            # substitution reports the nonzero exit. Chaining `|| echo "000
+            # none"` onto that same substitution appends rather than replaces,
+            # so a failed probe used to leave `ctype` as the literal string
+            # "000 none". Assigning inside the `if` and only overwriting probe
+            # in the `else` branch keeps the fields separable either way.
+            if probe=$(curl -s -o "$body" -w '%{http_code} %{content_type}' \
+              http://localhost:3003/v1/featuregate); then
+              :
+            else
+              probe="000 none"
+            fi
+            code=${probe%% *}
+            ctype=${probe#* }
+            case "$ctype" in
+              application/json*)
+                if jq -e 'has("gates") or (.error | has("code"))' "$body" >/dev/null 2>&1; then
+                  echo "/v1/featuregate is served by edge-api (status $code, $ctype)"
+                  exit 0
+                fi
+                echo "attempt $i: JSON but not a gateway body, retry in 5s"
+                ;;
+              *)
+                echo "attempt $i: status=$code content-type=${ctype:-none}, want application/json, retry in 5s"
+                ;;
+            esac
+            sleep 5
+          done
+          echo "::error::/v1/featuregate on caddy-owui is not answering as edge-api JSON. The running Caddy config does not match deploy/docker/Caddyfile.owui (issue #619). Last status $code, content-type ${ctype:-none}."
+          head -c 400 "$body" || true
+          exit 1
+
       - name: Dump container status + logs on failure
         if: failure()
         working-directory: /home/sakib/hive/deploy/docker
