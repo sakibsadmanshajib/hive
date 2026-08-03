@@ -18,6 +18,16 @@ Usage
 -----
     scripts/probe-applied-migrations.py                  print the verdict table
     scripts/probe-applied-migrations.py --emit-baseline  print baseline conf body
+    scripts/probe-applied-migrations.py --baseline-state fresh / preexisting / ambiguous
+
+--baseline-state answers the one question scripts/apply-migrations.sh cannot
+answer from the ledger. When public.hive_schema_migrations is EMPTY, that state
+has two opposite meanings and looks identical in both: a database that predates
+the ledger and already ran the baseline migrations by hand, or a brand new
+database that has run nothing. Seeding the baseline into the second case marks
+every listed migration applied without executing it, so the schema is never
+created and the deploy reports success anyway. The schema itself is therefore
+asked instead of the ledger. See print_baseline_state for the decision rule.
 
 Connection settings come from libpq environment variables (PGHOST, PGPORT,
 PGUSER, PGDATABASE, PGPASSWORD), the same as scripts/apply-migrations.sh. Point
@@ -64,6 +74,7 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MIGRATIONS_DIR = os.path.join(REPO_ROOT, "supabase", "migrations")
+BASELINE_FILE = os.path.join(REPO_ROOT, "scripts", "migration-baseline.conf")
 
 
 def psql(sql: str) -> list[str]:
@@ -164,7 +175,20 @@ def unprovable_reason(sql: str, raw: str) -> str:
     return "; ".join(bits) if bits else "no checkable statements found"
 
 
-def classify(catalog: dict[str, set[str]]) -> list[tuple[str, str, str]]:
+def classify(catalog: dict[str, set[str]]) -> list[tuple[str, str, str, tuple[int, int]]]:
+    """Verdict per file, plus (present, total) counted over its OWNED objects.
+
+    Owned means every strong object kind except extensions. An extension is
+    ambient rather than owned: supabase/postgres ships pgcrypto and uuid-ossp
+    pre-created and deploy/supabase/init/00-extensions.sql adds vector before
+    any migration runs, so finding pgcrypto is no evidence that 20260516_01,
+    which creates it if absent alongside tables of its own, has ever run.
+
+    The verdicts are unchanged by this distinction. Only --baseline-state uses
+    the owned counts, because there a single ambient extension would otherwise
+    make a brand new database look partly migrated and abort the very fresh
+    install the mode exists to protect.
+    """
     files = sorted(f for f in os.listdir(MIGRATIONS_DIR) if f.endswith(".sql"))
     sources = {
         f: strip_sql(open(os.path.join(MIGRATIONS_DIR, f), encoding="utf-8").read())
@@ -196,44 +220,152 @@ def classify(catalog: dict[str, set[str]]) -> list[tuple[str, str, str]]:
                 lookup = catalog["table"] if kind == "view" else catalog[kind]
                 objects.append((kind, key, key in lookup))
 
+        owned = [o for o in objects if o[0] != "extension"]
+        evidence = (sum(1 for o in owned if o[2]), len(owned))
+
         if not objects:
-            results.append((name, "UNPROVABLE", unprovable_reason(sql, raw)))
+            results.append((name, "UNPROVABLE", unprovable_reason(sql, raw), evidence))
             continue
         missing = [o for o in objects if not o[2]]
         if not missing:
-            results.append((name, "APPLIED", f"all {len(objects)} strong objects present"))
+            results.append((name, "APPLIED", f"all {len(objects)} strong objects present", evidence))
         elif len(missing) == len(objects):
             results.append((name, "UNAPPLIED",
-                            f"0 of {len(objects)} present, first missing {missing[0][0]}:{missing[0][1]}"))
+                            f"0 of {len(objects)} present, first missing {missing[0][0]}:{missing[0][1]}",
+                            evidence))
         else:
             detail = ", ".join(f"{k}:{n}" for k, n, _ in missing[:6])
             results.append((name, "PARTIAL",
-                            f"{len(objects) - len(missing)} of {len(objects)} present, missing {detail}"))
+                            f"{len(objects) - len(missing)} of {len(objects)} present, missing {detail}",
+                            evidence))
     return results
+
+
+def load_baseline() -> list[str]:
+    """The applied= entries of scripts/migration-baseline.conf.
+
+    Parsed on the one convention shared by all three parsers of that file (this
+    script, scripts/apply-migrations.sh and scripts/test-apply-migrations.sh):
+    everything from a # onwards is a comment, surrounding whitespace is
+    insignificant, any key other than applied is a hard error rather than
+    something ignored, and an applied entry appears exactly ONCE. Because
+    duplicates are rejected instead of collapsed, a raw count and a
+    de-duplicated count are the same number and the parsers cannot report three
+    different totals for one file. The count is echoed by --baseline-state so the
+    caller can assert the two parsers read the same file the same way instead of
+    diverging silently.
+    """
+    names: list[str] = []
+    with open(BASELINE_FILE, encoding="utf-8") as handle:
+        for line in handle:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            key, _, value = line.partition("=")
+            if key.strip() != "applied":
+                sys.exit(f"unknown key in {BASELINE_FILE}: {key.strip()}")
+            name = value.strip()
+            if name in names:
+                sys.exit(f"{BASELINE_FILE} lists the same migration more than "
+                         f"once, so its applied entries are not a set: {name}. "
+                         "Remove the duplicate line.")
+            names.append(name)
+    if not names:
+        sys.exit(f"{BASELINE_FILE} lists no applied migrations")
+    return names
+
+
+def print_baseline_state(results: list[tuple[str, str, str, tuple[int, int]]]) -> None:
+    """Decide whether the baseline describes the database in front of us.
+
+    Stated as its two safe extremes, with everything between them refused:
+
+      fresh        Not one owned object of any baseline migration exists. A
+                   database that predates the ledger cannot look like this,
+                   because the baseline is precisely the list of migrations it
+                   ran. So the baseline must not be seeded and the whole chain
+                   is pending.
+      preexisting  Every baseline migration's owned objects are all present.
+                   This is the state the baseline was written for: history
+                   applied by hand and recorded nowhere.
+      ambiguous    Anything else, including a half applied chain and a baseline
+                   that has gone stale against this database. The caller must
+                   refuse to proceed, because both answers are guesses and one
+                   of them silently skips migrations forever.
+
+    Unknown resolves to ambiguous, never to applied. A wrong preexisting
+    permanently skips real migrations and still reports success; a wrong fresh
+    re-runs a migration and aborts on the first non-idempotent statement, which
+    is visible in one job log and recoverable.
+    """
+    baseline = load_baseline()
+    by_name = {name: evidence for name, _, _, evidence in results}
+    absent_from_disk = sorted(set(baseline) - set(by_name))
+    if absent_from_disk:
+        sys.exit("baseline lists files that are not in supabase/migrations: "
+                 + ", ".join(absent_from_disk))
+
+    full, partial, absent, unprobeable = [], [], [], []
+    # load_baseline rejects duplicates, so the raw list is already a set.
+    for name in sorted(baseline):
+        present, total = by_name[name]
+        if total == 0:
+            unprobeable.append(name)
+        elif present == 0:
+            absent.append(name)
+        elif present == total:
+            full.append(name)
+        else:
+            partial.append((name, present, total))
+
+    if not partial and not full and absent:
+        state = "fresh"
+    elif not partial and not absent and full:
+        state = "preexisting"
+    else:
+        state = "ambiguous"
+
+    print(f"baseline_state={state}")
+    print(f"baseline_entries={len(baseline)}")
+    print(f"# {len(full)} fully present, {len(partial)} partly present, "
+          f"{len(absent)} absent, {len(unprobeable)} with nothing probeable")
+    for name, present, total in partial[:10]:
+        print(f"#   PARTLY PRESENT  {name}  ({present} of {total} owned objects)")
+    if state == "ambiguous":
+        for name in absent[:10]:
+            print(f"#   ABSENT          {name}")
+        print("# ambiguous: this database matches neither a fresh install nor the "
+              "history the baseline describes")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--emit-baseline", action="store_true",
                         help="print the applied= lines and the pending record block")
+    parser.add_argument("--baseline-state", action="store_true",
+                        help="print baseline_state=fresh|preexisting|ambiguous for this database")
     args = parser.parse_args()
 
     results = classify(load_catalog())
 
+    if args.baseline_state:
+        print_baseline_state(results)
+        return
+
     if args.emit_baseline:
-        for name, verdict, _ in results:
+        for name, verdict, _, _ in results:
             if verdict == "APPLIED":
                 print(f"applied = {name}")
         print("\n# NOT listed above, therefore pending. Kept here as a record of why.")
-        for name, verdict, reason in results:
+        for name, verdict, reason, _ in results:
             if verdict != "APPLIED":
                 print(f"#   {verdict:<11} {name}")
                 print(f"#     reason: {reason}")
         return
 
-    for name, verdict, reason in results:
+    for name, verdict, reason, _ in results:
         print(f"{verdict:<11} {name}  [{reason}]")
-    counts = {v: sum(1 for _, x, _ in results if x == v)
+    counts = {v: sum(1 for _, x, _, _ in results if x == v)
               for v in ("APPLIED", "UNAPPLIED", "PARTIAL", "UNPROVABLE")}
     print("\n" + ", ".join(f"{k}={v}" for k, v in counts.items()) + f", TOTAL={len(results)}")
 

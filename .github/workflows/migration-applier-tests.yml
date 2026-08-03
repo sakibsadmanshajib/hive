@@ -1,0 +1,88 @@
+name: Migration applier tests
+
+# Regression guard for issue #676. scripts/apply-migrations.sh used to seed its
+# baseline into public.hive_schema_migrations whenever that ledger was empty,
+# and an empty ledger is exactly what a brand new database has, so a fresh
+# install marked 61 migrations applied without executing one of them and still
+# reported success. The suite below runs the applier against a real throwaway
+# Postgres and counts the migrations actually EXECUTED, because an exit code
+# cannot tell those two outcomes apart.
+#
+# Path gated at the workflow level rather than inside a job, so an unrelated
+# pull request never pays for the Postgres image. Not a required check: it is
+# new, and a check earns that status by having a track record on main first.
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/apply-migrations.sh'
+      - 'scripts/probe-applied-migrations.py'
+      - 'scripts/migration-baseline.conf'
+      - 'scripts/test-apply-migrations.sh'
+      - 'supabase/migrations/**'
+      - 'deploy/supabase/init/**'
+      - '.github/workflows/migration-applier-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/apply-migrations.sh'
+      - 'scripts/probe-applied-migrations.py'
+      - 'scripts/migration-baseline.conf'
+      - 'scripts/test-apply-migrations.sh'
+      - 'supabase/migrations/**'
+      - 'deploy/supabase/init/**'
+      - '.github/workflows/migration-applier-tests.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  applier:
+    name: apply-migrations.sh against a throwaway Postgres
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install psql
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      # Started with docker run rather than as a `services:` container so the
+      # image is pulled only after the path gate above has already decided this
+      # workflow should run at all, and so the exact command matches what was
+      # validated by hand before this file was written.
+      #
+      # supabase/postgres, not plain postgres or pgvector: a plain image has no
+      # supabase_auth_admin role, whose absence makes
+      # 20260516_07_phase19_custom_access_token_hook.sql fail outright, and its
+      # ambient extension set is what the fresh-versus-preexisting decision has
+      # to ignore. This is also the image the demo box cutover uses.
+      - name: Start Postgres
+        run: |
+          set -euo pipefail
+          docker run -d --name migdb -p 5432:5432 \
+            -e POSTGRES_PASSWORD=postgres \
+            supabase/postgres:17.6.1.136
+          for _ in $(seq 1 60); do
+            if docker exec migdb pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then
+              echo "postgres is accepting connections"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Postgres never became ready"
+          docker logs migdb | tail -40
+          exit 1
+
+      - name: Run the applier scenarios
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: postgres
+        run: scripts/test-apply-migrations.sh
