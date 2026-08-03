@@ -215,7 +215,20 @@ jobs:
         # This is the exact profile combo documented in the repo's own
         # CLAUDE.md "Getting Started" section for the chat-enabled local/demo
         # surface: core services (edge-api, control-plane, litellm) plus the
-        # chat front-end (open-webui, agent-console) plus in-stack redis.
+        # chat front-end (open-webui, agent-console) plus in-stack redis --
+        # plus `monitoring` (prometheus, grafana, alertmanager).
+        #
+        # `monitoring` was missing here until 2026-08-03. That gap is why a
+        # box reboot left those three containers dead for 22 hours with no
+        # alert (Alertmanager itself was one of the dead containers): PR #596
+        # added `restart: unless-stopped` to their compose definitions, but
+        # this job never recreates them, so the live containers kept the
+        # stale `no` restart policy they were created with on 2026-07-26,
+        # from before that fix. Any future change to the monitoring service
+        # definitions had the same blind spot. Including the profile here
+        # keeps the running containers in sync with docker-compose.yml on
+        # every deploy, the same way it already works for the other
+        # services, so this class of drift cannot recur.
         #
         # The chronic failure here (16+ red runs since 2026-07-26, "cannot
         # replace to directory .../node_modules/@opennextjs/cloudflare with
@@ -226,17 +239,17 @@ jobs:
         run: |
           set -euo pipefail
           docker compose --env-file ../../.env --profile local --profile chat \
-            up -d --build --remove-orphans
+            --profile monitoring up -d --build --remove-orphans
 
       - name: Dump container status + logs on failure
         if: failure()
         working-directory: /home/sakib/hive/deploy/docker
         run: |
-          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat)
+          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat --profile monitoring)
           echo "::group::docker compose ps"
           "${COMPOSE[@]}" ps || true
           echo "::endgroup::"
-          for svc in edge-api control-plane agent-console open-webui litellm redis; do
+          for svc in edge-api control-plane agent-console open-webui litellm redis prometheus grafana alertmanager; do
             echo "::group::logs ($svc)"
             "${COMPOSE[@]}" logs --tail=200 --no-color "$svc" 2>&1 || true
             echo "::endgroup::"
