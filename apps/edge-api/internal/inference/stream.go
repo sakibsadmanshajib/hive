@@ -370,6 +370,12 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 // credit hold). The control-plane hard clamp in finalizeLocked is the
 // backstop that keeps any residual overcount here from ever exceeding the
 // reserved hold, but this function should still return a realistic number.
+//
+// The estimator itself is calibrated to land BELOW real tokenization for every
+// writing system rather than near its average, so the direction of its error
+// favours the customer instead of depending on the script they write in (issue
+// #673). See bytesPerToken in usage_clamp.go for the measurements; the clamp is
+// the backstop, not the reason the figure is defensible.
 func settlementCredits(hasUsage bool, totalTokens int64, prompt, content string) (credits int64, delivered bool) {
 	if hasUsage {
 		return totalTokens, totalTokens > 0
