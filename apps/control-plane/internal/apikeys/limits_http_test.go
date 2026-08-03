@@ -97,6 +97,31 @@ func TestLimitsForbiddenForNonOwner(t *testing.T) {
 	}
 }
 
+// TestUnverifiedOwnerReadsLimitsButCannotWrite pins the fix for #683: an
+// unverified owner holds api_keys.read (RequiresVerified=false) but not
+// api_keys.write (RequiresVerified=true). Before the fix, resolveViewerContext
+// gated every api-keys route on PermAPIKeysWrite, so this principal got a 403
+// on the read-only limits GET and landed in the console's error boundary.
+func TestUnverifiedOwnerReadsLimitsButCannotWrite(t *testing.T) {
+	owner := ownerVC()
+	h, repo := newTestHandler(owner)
+	keyID := seedKey(t, h, repo, owner.CurrentAccount.ID)
+
+	unverified := unverifiedOwnerVC()
+	unverified.CurrentAccount.ID = owner.CurrentAccount.ID
+	h.testVC = ptrViewerContext(unverified)
+
+	rr := doRequest(t, h, http.MethodGet, "/api/v1/accounts/current/api-keys/"+keyID.String()+"/limits", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("get limits as unverified owner: expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doRequest(t, h, http.MethodPut, "/api/v1/accounts/current/api-keys/"+keyID.String()+"/limits", map[string]int{"rpm": 1, "tpm": 1})
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("put limits as unverified owner: expected 403, got %d: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestLimitsForeignAccountReturns404(t *testing.T) {
 	owner := ownerVC()
 	h, repo := newTestHandler(owner)
