@@ -224,8 +224,11 @@ func TestExecuteSync_ClientDisconnect_ChargesDeliveredWork(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected FinalizeReservation to reach control-plane despite the cancelled request context; calls seen: %+v", rec.calls)
 	}
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 25 {
-		t.Errorf("actual_credits = %v, want 25 (confirmed upstream usage)", body["actual_credits"])
+	// 20 input + 5 output tokens at the fixture's pinned hive-fast price, floored at 1
+	// credit (see settle_from_catalog_test.go for the same bound at thousands of
+	// tokens, where the floor cannot mask a wrong conversion).
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1 {
+		t.Errorf("actual_credits = %v, want 1 (catalog price for the confirmed usage)", body["actual_credits"])
 	}
 	if body["reservation_id"] != "res-test-1" {
 		t.Errorf("reservation_id = %v, want res-test-1", body["reservation_id"])
@@ -255,8 +258,8 @@ func TestExecuteSync_NormalCompletion_TerminatesExactlyOnce(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected FinalizeReservation on a normal completion; calls seen: %+v", rec.calls)
 	}
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 25 {
-		t.Errorf("actual_credits = %v, want 25 (confirmed upstream usage)", body["actual_credits"])
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1 {
+		t.Errorf("actual_credits = %v, want 1 (catalog price for the confirmed usage)", body["actual_credits"])
 	}
 	if rec.has("/internal/accounting/reservations/release") {
 		t.Error("a charged reservation must never also be released: that refunds a legitimate charge")

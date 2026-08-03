@@ -173,7 +173,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
-	var totalTokens, inTokens, outTokens int
+	var inTokens, outTokens int
 	var finishReason string
 	var completion strings.Builder
 
@@ -212,7 +212,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if envelope.Usage != nil {
 			inTokens = envelope.Usage.PromptTokens
 			outTokens = envelope.Usage.CompletionTokens
-			totalTokens = envelope.Usage.TotalTokens
 		}
 	}
 
@@ -231,7 +230,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	latency := int(time.Since(started).Milliseconds())
-	costCredits := int64(totalTokens)
+	// The cost recorded for this JWT-session request comes from the alias's
+	// catalog row, the same conversion the API-key path settles with (#688), so
+	// the two surfaces cannot report different costs for identical usage. This
+	// path takes no hold and issues no charge (JWT traffic is pre-billing by
+	// design, see cmd/server/main.go), so an alias that cannot be priced in
+	// tokens is recorded as an unpriced trace rather than refused: there is no
+	// charge here to fail closed on, and totalTokens is deliberately not used
+	// as a stand-in figure, since that is exactly the one-credit-per-token
+	// fiction #688 removed.
+	var costCredits int64
+	if inference.CanPriceTokens(route) {
+		costCredits = inference.CreditsForTokens(route, int64(inTokens), int64(outTokens))
+	} else {
+		slog.Warn("dispatch trace cost not priceable",
+			"request_id", requestID, "model", clientModel, "price_unit", route.PriceUnit)
+	}
 	if traceErr := InsertTrace(r.Context(), h.deps.Pool, TraceRow{
 		TenantID:       user.TenantID,
 		UserID:         user.ID,

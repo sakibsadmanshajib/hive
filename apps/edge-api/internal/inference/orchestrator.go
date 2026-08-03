@@ -131,6 +131,12 @@ func (o *Orchestrator) executeSync(
 		return
 	}
 
+	// 2b. Refuse an alias this endpoint cannot price, before any hold is taken
+	// and before a provider is ever reached (#688, D-034).
+	if !requireTokenPricing(w, route, endpoint, model) {
+		return
+	}
+
 	// 3. Start attempt
 	requestID := uuid.New().String()
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
@@ -235,19 +241,21 @@ func (o *Orchestrator) executeSync(
 		// control-plane the figure is a fact and so skips both the hold clamp
 		// and the reconciliation job that exist to correct estimates. Same
 		// settlementCredits helper the streaming path uses, so the two paths
-		// agree on what an absent usage block means.
+		// agree on what an absent usage block means and price the result the
+		// same way: the alias's catalog row, never the raw token count (#688).
 		//
-		// The prompt and response text are extracted only when usage is
-		// missing: the normal path pays for neither parse.
+		// The prompt and response text are extracted only when there is no
+		// usable token count to price: the normal path pays for neither parse.
 		hasUsage := usage != nil
-		var totalTokens int64
-		var prompt, content string
+		var inputTokens, outputTokens int64
 		if hasUsage {
-			totalTokens = usage.TotalTokens
-		} else {
+			inputTokens, outputTokens = usage.PromptTokens, usage.CompletionTokens
+		}
+		var prompt, content string
+		if inputTokens+outputTokens <= 0 {
 			prompt, content = promptText(endpoint, body), responseText(endpoint, normalized)
 		}
-		actualCredits, billable := settlementCredits(hasUsage, totalTokens, prompt, content)
+		actualCredits, confirmed, billable := settlementCredits(route, hasUsage, inputTokens, outputTokens, prompt, content)
 		if !billable {
 			// Nothing measured and nothing produced: there is no quantity to
 			// charge, so leave finalized false and let the deferred release
@@ -258,8 +266,8 @@ func (o *Orchestrator) executeSync(
 			log.Printf("inference: settling unconfirmed with nothing billable, releasing hold request_id=%s reservation_id=%s endpoint=%s: upstream returned no usage and no output",
 				requestID, reservation.ID, endpoint)
 		} else {
-			if !hasUsage {
-				log.Printf("inference: settling unconfirmed usage estimate request_id=%s reservation_id=%s endpoint=%s estimated_credits=%d: upstream returned no usage block",
+			if !confirmed {
+				log.Printf("inference: settling unconfirmed usage estimate request_id=%s reservation_id=%s endpoint=%s estimated_credits=%d: upstream returned no usable usage block",
 					requestID, reservation.ID, endpoint, actualCredits)
 			}
 			// Do not discard this error. A failed finalize used to set finalized
@@ -284,12 +292,12 @@ func (o *Orchestrator) executeSync(
 				AccountID:     snapshot.AccountID,
 				ReservationID: reservation.ID,
 				ActualCredits: actualCredits,
-				// hasUsage, never a bare true (issue #636): this flag is
-				// control-plane's instruction to treat the figure as measured
-				// truth, bill it in full even past the hold, and skip
-				// reconciliation entirely. Only the provider's own usage block
-				// earns it.
-				TerminalUsageConfirmed: hasUsage,
+				// settlementCredits' own verdict, never a bare true (issue
+				// #636): this flag is control-plane's instruction to treat the
+				// figure as measured truth, bill it in full even past the hold,
+				// and skip reconciliation entirely. Only a provider usage block
+				// carrying real token counts earns it.
+				TerminalUsageConfirmed: confirmed,
 				Status:                 "completed",
 			})
 			cancel()

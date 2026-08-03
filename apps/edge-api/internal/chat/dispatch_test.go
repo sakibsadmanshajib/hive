@@ -34,6 +34,13 @@ func newPassthroughRoutingClient(t *testing.T) *inference.RoutingClient {
 			AliasID:          in.AliasID,
 			LiteLLMModelName: in.AliasID,
 			Provider:         "test-provider",
+			// hive-fast's catalog row as of migration
+			// 20260801_01_alias_pricing_correction.sql, pinned on purpose
+			// rather than tracked against later repricings: the real endpoint
+			// always sends a price and an explicit unit, and the recorded cost
+			// is derived from them (#688).
+			Pricing:   inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+			PriceUnit: inference.PriceUnitTokens,
 		})
 	}))
 	t.Cleanup(srv.Close)
@@ -90,12 +97,17 @@ func TestDispatchHappyPathWritesLLMTraceAndAuditsChatRequest(t *testing.T) {
 	require.Contains(t, rec.Body.String(), "[DONE]")
 
 	var traceCount int
+	var costCredits int64
 	require.NoError(t, pool.QueryRow(ctx,
-		`SELECT count(*) FROM public.llm_traces WHERE tenant_id=$1 AND user_id=$2`,
+		`SELECT count(*), coalesce(max(cost_credits), 0) FROM public.llm_traces WHERE tenant_id=$1 AND user_id=$2`,
 		tenantID,
 		userID,
-	).Scan(&traceCount))
+	).Scan(&traceCount, &costCredits))
 	require.Equal(t, 1, traceCount)
+	// 3 input + 1 output tokens at the alias's catalog price rounds below one
+	// credit, so the never-free floor makes it 1. It is not 4, the token total
+	// this used to record (#688).
+	require.Equal(t, int64(1), costCredits)
 
 	var actions []string
 	rows, err := pool.Query(ctx, `SELECT action FROM public.audit_log WHERE tenant_id=$1`, tenantID)
@@ -199,6 +211,8 @@ func TestDispatchResolvesAliasToLiteLLMModelName(t *testing.T) {
 			AliasID:          "hive-fast",
 			LiteLLMModelName: "route-groq-fast",
 			Provider:         "groq",
+			Pricing:          inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+			PriceUnit:        inference.PriceUnitTokens,
 		})
 	}))
 	defer routing.Close()

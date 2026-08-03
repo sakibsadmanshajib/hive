@@ -136,6 +136,12 @@ func newAccountingMockReservationFails(rec *accountingRecorder) *httptest.Server
 
 // newRoutingMock stands in for the control-plane's route-selection endpoint,
 // always resolving to litellmURL regardless of the request body.
+//
+// It carries a pinned historical hive-fast price and an explicit token unit because the
+// real endpoint always does: routing.Service refuses an alias with no usable
+// price (#617) and every selection has carried price_unit since #627. A
+// settlement is derived from those fields (#688), so a mock without them would
+// exercise a payload production cannot produce.
 func newRoutingMock(litellmURL string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -145,6 +151,8 @@ func newRoutingMock(litellmURL string) *httptest.Server {
 			RouteID:          "route-test-1",
 			LiteLLMModelName: "openrouter/openai/gpt-4o",
 			Provider:         "openrouter",
+			Pricing:          catalogHiveFast,
+			PriceUnit:        PriceUnitTokens,
 		})
 	}))
 }
@@ -468,8 +476,15 @@ func TestExecuteStreaming_NormalCompletion_ChargesConfirmedUsage_NoRegression(t 
 		t.Fatalf("expected FinalizeReservation on normal completion; calls seen: %+v", rec.calls)
 	}
 	actual, _ := body["actual_credits"].(float64)
-	if int64(actual) != 25 {
-		t.Errorf("actual_credits = %v, want 25 (confirmed upstream usage)", body["actual_credits"])
+	// 20 input + 5 output tokens at the fixture's pinned hive-fast price is 0.42 credits,
+	// which the never-free floor lifts to 1. The catalog-price bound itself is
+	// asserted at thousands of tokens in settle_from_catalog_test.go, where the
+	// floor cannot mask a wrong conversion.
+	if int64(actual) != 1 {
+		t.Errorf("actual_credits = %v, want 1 (catalog price for 25 confirmed tokens, floored)", body["actual_credits"])
+	}
+	if int64(actual) == 25 {
+		t.Error("actual_credits = 25: the raw token count, not a catalog-derived charge (#688)")
 	}
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
 		t.Error("terminal_usage_confirmed must be true: upstream sent a real usage block")

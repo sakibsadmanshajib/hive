@@ -111,9 +111,21 @@ func TestExecuteSync_NoUsage_NeverConfirmsTheFlatEstimate(t *testing.T) {
 	if confirmed && int64(actual) == 10000 {
 		t.Errorf("the flat reservation estimate was billed as confirmed usage (issue #636)")
 	}
-	// 1 prompt token (11 bytes, floored) + 1000 completion tokens (12,000 bytes).
-	if int64(actual) != 1001 {
-		t.Errorf("actual_credits = %v, want 1001 (1 prompt + 1000 completion estimated tokens), never the flat 10000 estimate", body["actual_credits"])
+	// The estimate is catalog-priced exactly like a measurement (#688): 1 prompt
+	// token (11 bytes, floored at the estimator's minimum) at the fixture's
+	// pinned 10500 credits per million plus 1000 completion tokens (12,000 bytes
+	// at bytesPerToken) at 42000 is 42_010_500 / 1e6 = 42.01, rounded half up to
+	// 42. Only the confidence differs, which is what terminal_usage_confirmed
+	// carries. The pinned price is historical on purpose and is not a claim
+	// about what hive-fast costs today; see the note at the top of
+	// settle_from_catalog_test.go.
+	if int64(actual) != 42 {
+		t.Errorf("actual_credits = %v, want 42 (hive-fast catalog price for 1 prompt + 1000 completion estimated tokens), never the flat 10000 estimate", body["actual_credits"])
+	}
+	// The estimated token count charged as credits would be 1001 here (issue
+	// #673's estimator times issue #688's missing catalog lookup).
+	if int64(actual) == 1001 {
+		t.Error("actual_credits = 1001: the estimated token count charged as credits, bypassing the catalog (#688)")
 	}
 	if rec.has("/internal/accounting/reservations/release") {
 		t.Error("a charged reservation must never also be released: that refunds a legitimate charge")
@@ -225,7 +237,7 @@ func TestExecuteSync_ConfirmedUsage_StaysConfirmed(t *testing.T) {
 	if confirmed, _ := body["terminal_usage_confirmed"].(bool); !confirmed {
 		t.Errorf("terminal_usage_confirmed = %v, want true: the upstream did report usage", body["terminal_usage_confirmed"])
 	}
-	if actual, _ := body["actual_credits"].(float64); int64(actual) != 25 {
-		t.Errorf("actual_credits = %v, want 25 (the upstream's own total_tokens)", body["actual_credits"])
+	if actual, _ := body["actual_credits"].(float64); int64(actual) != 1 {
+		t.Errorf("actual_credits = %v, want 1 (the catalog price for the upstream's own reported tokens, floored)", body["actual_credits"])
 	}
 }
