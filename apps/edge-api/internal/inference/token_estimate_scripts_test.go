@@ -302,6 +302,34 @@ func TestEstimateCompletionTokens_SeparatorRunsDoNotOvercharge(t *testing.T) {
 			// o200k_base 1800, cl100k_base 1800, o200k_harmony 1800
 			minRealTokens: 1800,
 		},
+		{
+			// The most common non-markdown table a model emits, and the case that
+			// made the membership set's first draft wrong: U+2500 is the rune the
+			// separator row is drawn with, and it measures 48 real bytes per token.
+			name:      "unicode box drawing table",
+			in:        unicodeBoxTable(120, 40),
+			wantBytes: 40800,
+			// o200k_base 2400, cl100k_base 3000, o200k_harmony 2400. 1.13x of real
+			// usage before U+2500 joined the set.
+			minRealTokens: 2400,
+		},
+		{
+			name:      "horizontal rule of box drawing light horizontal",
+			in:        strings.Repeat(strings.Repeat("─", 60)+"\n", 200),
+			wantBytes: 36200,
+			// o200k_base 1200, cl100k_base 1800, o200k_harmony 1200. 2.51x before.
+			minRealTokens: 1200,
+		},
+		{
+			// Our own masking convention, and the reason a capital X is a member:
+			// a run of X measures 16 real bytes per token, so it over-charged 1.33x
+			// on its own even though this line-broken form stayed under.
+			name:      "masked identifiers",
+			in:        strings.Repeat("Account: "+strings.Repeat("X", 12)+"3456\n", 800),
+			wantBytes: 20800,
+			// o200k_base 6400, cl100k_base 6400, o200k_harmony 6400
+			minRealTokens: 6400,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -317,6 +345,16 @@ func TestEstimateCompletionTokens_SeparatorRunsDoNotOvercharge(t *testing.T) {
 			}
 		})
 	}
+}
+
+// unicodeBoxTable builds rows of a two-column table drawn the way a model draws
+// one when it is not writing markdown: a U+2500 separator row, then a data row
+// whose cells are padded with spaces.
+func unicodeBoxTable(rows, width int) string {
+	sep := "├" + strings.Repeat("─", width) + "┼" + strings.Repeat("─", width) + "┤\n"
+	pad := strings.Repeat(" ", width-2)
+	row := "│ x" + pad + "│ y" + pad + "│\n"
+	return strings.Repeat(sep+row, rows)
 }
 
 // asciiBoxTable builds rows of a two-column ASCII box-drawing table: a border
@@ -437,4 +475,128 @@ func max64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// collapsibleRunes is the measured membership of runCollapsible, one row per
+// member, and it exists because the set was wrong twice: first by being derived
+// from a property (whitespace) instead of a measurement, then by being measured
+// against the wrong statistic. Editing the switch without adding a measured row
+// here now fails the completeness check below.
+//
+// The criterion, restated exactly: a rune is a member when the worst-case real
+// bytes per token for a long run of it reaches bytesPerToken or more, where
+// worst-case means the LARGEST bytes per token of the three encodings, which is
+// the same thing as the SMALLEST token count. The smallest count is the number
+// the estimate has to stay under, so deciding membership on it is the direction
+// that cannot over-charge on any of the three. Deciding it on the largest count
+// instead is what left U+2500 and eight others out: they compress hard on
+// o200k_base and o200k_harmony while cl100k_base splits the run, so the run
+// over-charged by up to 2.51x against the binding reference.
+//
+// Every minRealTokens is measured with tiktoken 0.13.0 for runLen copies of the
+// rune, smallest of the three encodings.
+var collapsibleRunes = []struct {
+	name          string
+	rune          rune
+	runLen        int
+	wantBytes     int
+	minRealTokens int64
+}{
+	{name: "space", rune: ' ', runLen: 12000, wantBytes: 12000, minRealTokens: 95},                                 // 126.3 real bytes/token; o200k 95, cl100k 95, harmony 95
+	{name: "tab", rune: '\t', runLen: 12000, wantBytes: 12000, minRealTokens: 750},                                 // 16.0; o200k 750, cl100k 750, harmony 750
+	{name: "newline", rune: '\n', runLen: 12000, wantBytes: 12000, minRealTokens: 375},                             // 32.0; o200k 750, cl100k 375, harmony 750
+	{name: "hyphen minus", rune: '-', runLen: 12000, wantBytes: 12000, minRealTokens: 187},                         // 64.2; o200k 187, cl100k 187, harmony 187
+	{name: "equals", rune: '=', runLen: 12000, wantBytes: 12000, minRealTokens: 187},                               // 64.2; o200k 187, cl100k 188, harmony 187
+	{name: "underscore", rune: '_', runLen: 12000, wantBytes: 12000, minRealTokens: 188},                           // 63.8; o200k 188, cl100k 188, harmony 188
+	{name: "solidus", rune: '/', runLen: 12000, wantBytes: 12000, minRealTokens: 187},                              // 64.2; o200k 188, cl100k 187, harmony 188
+	{name: "full stop", rune: '.', runLen: 12000, wantBytes: 12000, minRealTokens: 188},                            // 63.8; o200k 188, cl100k 188, harmony 188
+	{name: "asterisk", rune: '*', runLen: 12000, wantBytes: 12000, minRealTokens: 187},                             // 64.2; o200k 187, cl100k 188, harmony 187
+	{name: "number sign", rune: '#', runLen: 12000, wantBytes: 12000, minRealTokens: 188},                          // 63.8; o200k 188, cl100k 188, harmony 188
+	{name: "percent", rune: '%', runLen: 12000, wantBytes: 12000, minRealTokens: 188},                              // 63.8; o200k 375, cl100k 188, harmony 375
+	{name: "plus", rune: '+', runLen: 12000, wantBytes: 12000, minRealTokens: 375},                                 // 32.0; o200k 375, cl100k 375, harmony 375
+	{name: "tilde", rune: '~', runLen: 12000, wantBytes: 12000, minRealTokens: 375},                                // 32.0; o200k 375, cl100k 375, harmony 375
+	{name: "semicolon", rune: ';', runLen: 12000, wantBytes: 12000, minRealTokens: 750},                            // 16.0; o200k 750, cl100k 750, harmony 750
+	{name: "exclamation mark", rune: '!', runLen: 12000, wantBytes: 12000, minRealTokens: 750},                     // 16.0; o200k 750, cl100k 1500, harmony 750
+	{name: "colon", rune: ':', runLen: 12000, wantBytes: 12000, minRealTokens: 750},                                // 16.0; o200k 750, cl100k 1500, harmony 750
+	{name: "capital X", rune: 'X', runLen: 12000, wantBytes: 12000, minRealTokens: 750},                            // 16.0; o200k 750, cl100k 1500, harmony 750
+	{name: "no break space", rune: '\u00a0', runLen: 12000, wantBytes: 24000, minRealTokens: 1500},                 // 16.0; o200k 1500, cl100k 1500, harmony 1500
+	{name: "en dash", rune: '\u2013', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},                        // 12.0; o200k 3000, cl100k 6000, harmony 3000
+	{name: "em dash", rune: '\u2014', runLen: 12000, wantBytes: 36000, minRealTokens: 750},                         // 48.0; o200k 750, cl100k 750, harmony 750
+	{name: "horizontal ellipsis", rune: '\u2026', runLen: 12000, wantBytes: 36000, minRealTokens: 750},             // 48.0; o200k 750, cl100k 1500, harmony 750
+	{name: "zero width space", rune: '\u200b', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},               // 12.0; o200k 3000, cl100k 6000, harmony 3000
+	{name: "box drawings light horizontal", rune: '\u2500', runLen: 12000, wantBytes: 36000, minRealTokens: 750},   // 48.0; o200k 750, cl100k 1500, harmony 750
+	{name: "box drawings heavy horizontal", rune: '\u2501', runLen: 12000, wantBytes: 36000, minRealTokens: 1500},  // 24.0; o200k 1500, cl100k 6000, harmony 1500
+	{name: "box drawings double horizontal", rune: '\u2550', runLen: 12000, wantBytes: 36000, minRealTokens: 1500}, // 24.0; o200k 1500, cl100k 6000, harmony 1500
+	{name: "full block", rune: '\u2588', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},                     // 12.0; o200k 3000, cl100k 3000, harmony 3000
+	{name: "white square", rune: '\u25a1', runLen: 12000, wantBytes: 36000, minRealTokens: 750},                    // 48.0; o200k 750, cl100k 24000, harmony 750
+	{name: "black star", rune: '\u2605', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},                     // 12.0; o200k 3000, cl100k 6000, harmony 3000
+	{name: "female sign", rune: '\u2640', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},                    // 12.0; o200k 3000, cl100k 3000, harmony 3000
+	{name: "ideographic space", rune: '\u3000', runLen: 12000, wantBytes: 36000, minRealTokens: 750},               // 48.0; o200k 750, cl100k 6000, harmony 750
+	{name: "katakana middle dot", rune: '\u30fb', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},            // 12.0; o200k 3000, cl100k 6000, harmony 3000
+	{name: "katakana prolonged sound mark", rune: '\u30fc', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},  // 12.0; o200k 3000, cl100k 12000, harmony 3000
+	{name: "fullwidth exclamation mark", rune: '\uff01', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},     // 12.0; o200k 3000, cl100k 6000, harmony 3000
+	{name: "fullwidth asterisk", rune: '\uff0a', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},             // 12.0; o200k 3000, cl100k 24000, harmony 3000
+	{name: "fullwidth equals sign", rune: '\uff1d', runLen: 12000, wantBytes: 36000, minRealTokens: 3000},          // 12.0; o200k 3000, cl100k 24000, harmony 3000
+}
+
+// TestRunCollapsible_MembershipIsMeasured pins the whole set rather than the few
+// runes a bug report happens to name. It asserts three things: every measured
+// member is in the switch, a pure run of each stays inside both bounds, and the
+// switch contains nothing that has not been measured here.
+//
+// The families swept to build this list, at 6,000 and 24,000 rune runs, worst of
+// the three encodings: ASCII printable including letters and digits, Latin-1
+// punctuation and symbols, general punctuation U+2000 to U+206F, arrows, math
+// operators, box drawing, block elements, geometric shapes, miscellaneous
+// symbols, dingbats, CJK symbols and punctuation, katakana, halfwidth and
+// fullwidth forms, the invisible format characters, and a sample of the emoji a
+// model repeats to draw a bar. Nothing else in those families reaches 12: the
+// closest misses measure 8, which are '<' '>' '?' '@' '^' ',' the macron U+00AF
+// and the letters a f l o x A F, and everything else is at 4 or below.
+func TestRunCollapsible_MembershipIsMeasured(t *testing.T) {
+	for _, m := range collapsibleRunes {
+		t.Run(m.name, func(t *testing.T) {
+			if !runCollapsible(m.rune) {
+				t.Fatalf("U+%04X measures %.1f real bytes per token, at or above bytesPerToken, but is not in the switch: its runs over-charge",
+					m.rune, float64(m.wantBytes)/float64(m.minRealTokens))
+			}
+			in := strings.Repeat(string(m.rune), m.runLen)
+			if len(in) != m.wantBytes {
+				t.Fatalf("fixture is %d bytes, measured against %d", len(in), m.wantBytes)
+			}
+			got := estimateCompletionTokens(in)
+			t.Logf("%d bytes, estimate %d, real %d, %.3f of real usage", m.wantBytes, got, m.minRealTokens, float64(got)/float64(m.minRealTokens))
+			if got > m.minRealTokens {
+				t.Errorf("estimate %d exceeds real usage %d tokens (%.2fx)", got, m.minRealTokens, float64(got)/float64(m.minRealTokens))
+			}
+			if got*20 < m.minRealTokens {
+				t.Errorf("estimate %d is under 5%% of real usage %d tokens: a member must still pay in proportion to its run",
+					got, m.minRealTokens)
+			}
+		})
+	}
+
+	t.Run("nothing unmeasured is in the switch", func(t *testing.T) {
+		measured := make(map[rune]bool, len(collapsibleRunes))
+		for _, m := range collapsibleRunes {
+			measured[m.rune] = true
+		}
+		for r := rune(0); r <= 0x10FFFF; r++ {
+			if runCollapsible(r) && !measured[r] {
+				t.Errorf("U+%04X is collapsed by the switch but has no measured row: a collapse without a measurement is how the estimator gives inference away", r)
+			}
+		}
+	})
+
+	t.Run("runes the vocabulary does not compress are never collapsed", func(t *testing.T) {
+		// The undercharge side of the vice. Measured real bytes per token: U+1680
+		// 1.0, U+0085 1.0, vertical tab 1.0, form feed 1.0, carriage return 2.0,
+		// U+2000 1.5, U+2028 3.0, U+202F 3.0. All far below bytesPerToken, so
+		// collapsing any of them hands out inference we pay for.
+		for _, r := range []rune{'\u1680', '\u0085', '\v', '\f', '\r', '\u2000', '\u2028', '\u202f'} {
+			if runCollapsible(r) {
+				t.Errorf("U+%04X costs about one real token per byte and must never be collapsed", r)
+			}
+		}
+	})
 }
