@@ -72,9 +72,11 @@ func TestSettlementCredits(t *testing.T) {
 			name:     "no usage block: the estimate is catalog-priced too, and flagged unconfirmed",
 			route:    hiveFastRoute,
 			hasUsage: false,
-			// 1000 estimated prompt tokens (4000 chars) + 1000 completion.
-			promptBody: strings.Repeat("x", 4000),
-			content:    strings.Repeat("y", 4000),
+			// 1000 estimated prompt tokens (12,000 bytes at bytesPerToken, #673)
+			// + 1000 completion. Neither 'x' nor 'y' is runCollapsible, so the
+			// byte length is counted in full.
+			promptBody: strings.Repeat("x", 12_000),
+			content:    strings.Repeat("y", 12_000),
 			// 1000 * 10500 + 1000 * 42000 = 52_500_000, / 1e6 = 52.5, round half up = 53.
 			wantCredits:   53,
 			wantConfirmed: false,
@@ -100,8 +102,9 @@ func TestSettlementCredits(t *testing.T) {
 			name:     "usage block reporting no tokens but content delivered: estimated, never free and never confirmed",
 			route:    hiveFastRoute,
 			hasUsage: true,
-			content:  strings.Repeat("y", 4000),
-			// 0 prompt tokens (no body) + 1000 completion = 42_000_000, / 1e6 = 42.
+			content:  strings.Repeat("y", 12_000),
+			// 0 prompt tokens (no body) + 1000 completion (12,000 bytes at
+			// bytesPerToken, #673) = 42_000_000, / 1e6 = 42.
 			wantCredits:   42,
 			wantConfirmed: false,
 			wantDelivered: true,
