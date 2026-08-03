@@ -254,12 +254,14 @@ func TestPriceEstimate_LegacyIsFlatTokenSum(t *testing.T) {
 // the test -- it has to fail and be re-derived.
 
 // correctedHiveFast mirrors the post-migration public.model_aliases row for
-// hive-fast: Groq openai/gpt-oss-20b at 0.075 in / 0.30 out USD per million,
-// times the 1.4 margin multiplier, times CreditsPerUSD (100_000).
+// hive-fast: Groq llama-3.1-8b-instant at 0.05 in / 0.08 out USD per million
+// (20260801_14_route_groq_fast_cheapest_model.sql, the cheapest available
+// Groq model as of 2026-08-03), times the 1.4 margin multiplier, times
+// CreditsPerUSD (100_000).
 //
-//	input:  0.075 * 1.4 * 100_000 = 10_500
-//	output: 0.300 * 1.4 * 100_000 = 42_000
-var correctedHiveFast = RouteInfo{InputPriceCredits: 10_500, OutputPriceCredits: 42_000}
+//	input:  0.05 * 1.4 * 100_000 =  7_000
+//	output: 0.08 * 1.4 * 100_000 = 11_200
+var correctedHiveFast = RouteInfo{InputPriceCredits: 7_000, OutputPriceCredits: 11_200}
 
 // correctedHiveDefault mirrors hive-default: OpenRouter openai/gpt-4o-mini
 // at 0.15 in / 0.60 out USD per million.
@@ -273,13 +275,14 @@ var correctedHiveDefault = RouteInfo{InputPriceCredits: 21_000, OutputPriceCredi
 // credit the placeholder prices produced.
 func TestPriceEstimate_CorrectedPricesBillHighTokenRequests(t *testing.T) {
 	// hive-fast, 40k prompt + 12k completion:
-	//   40_000 * 10_500 =   420_000_000
-	//   12_000 * 42_000 =   504_000_000
-	//   sum             =   924_000_000
-	//   / 1_000_000     =           924 exactly, remainder 0
+	//   40_000 *  7_000 =   280_000_000
+	//   12_000 * 11_200 =   134_400_000
+	//   sum             =   414_400_000
+	//   / 1_000_000     =           414, remainder 400_000 -- 2*400_000 <
+	//   1_000_000, so round-half-up leaves it at 414 rather than bumping to 415
 	_, fast := priceEstimate(correctedHiveFast, 40_000, 12_000, VerdictBillable)
-	if fast != 924 {
-		t.Errorf("hive-fast perModel = %d, want 924", fast)
+	if fast != 414 {
+		t.Errorf("hive-fast perModel = %d, want 414", fast)
 	}
 
 	// hive-default, 50k prompt + 10k completion:
@@ -312,8 +315,8 @@ func TestPriceEstimate_PlaceholderPricesUnderchargedAtHighTokenCounts(t *testing
 	if corrected <= placeholder {
 		t.Fatalf("corrected (%d) must exceed placeholder (%d)", corrected, placeholder)
 	}
-	if corrected/placeholder != 924 {
-		t.Errorf("corrected/placeholder = %d, want 924x", corrected/placeholder)
+	if corrected/placeholder != 414 {
+		t.Errorf("corrected/placeholder = %d, want 414x", corrected/placeholder)
 	}
 }
 
