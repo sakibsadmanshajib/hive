@@ -70,6 +70,12 @@ func (c *controlPlane) handler() http.Handler {
 			RouteID:          "route-test-primary",
 			LiteLLMModelName: route,
 			Provider:         "test-provider",
+			// The real endpoint always carries the alias's catalog price and an
+			// explicit unit, and the settlement charge is derived from them
+			// (#688). These are hive-fast's corrected rows, in credits per
+			// million tokens.
+			Pricing:   inference.SelectRoutePricing{InputPriceCredits: 10_500, OutputPriceCredits: 42_000},
+			PriceUnit: inference.PriceUnitTokens,
 		})
 	})
 	mux.HandleFunc("/internal/accounting/reservations", func(w http.ResponseWriter, r *http.Request) {
@@ -440,8 +446,16 @@ func TestMessages_APIKeyPathReservesAndSettlesCredits(t *testing.T) {
 	if len(finalized) != 1 {
 		t.Fatalf("finalized reservations: want 1 got %d", len(finalized))
 	}
-	if finalized[0].ActualCredits != 18 {
-		t.Errorf("settled credits: want the upstream total of 18 got %d", finalized[0].ActualCredits)
+	// 11 input + 7 output tokens at hive-fast's catalog price is 0.41 credits,
+	// which the never-free floor lifts to 1. It is deliberately NOT 18, the
+	// token total this used to settle at (#688); the catalog-price bound at
+	// thousands of tokens lives in
+	// apps/edge-api/internal/inference/settle_from_catalog_test.go.
+	if finalized[0].ActualCredits != 1 {
+		t.Errorf("settled credits: want the catalog price for 11 input + 7 output tokens got %d", finalized[0].ActualCredits)
+	}
+	if finalized[0].ActualCredits == 18 {
+		t.Error("settled credits: 18 is the raw token count, not a catalog-derived charge (#688)")
 	}
 	if !finalized[0].TerminalUsageConfirmed {
 		t.Error("settlement must be marked terminal-usage-confirmed when upstream reported usage")
@@ -476,8 +490,8 @@ func TestMessages_APIKeyStreamingPathReservesAndSettlesCredits(t *testing.T) {
 	if len(reservations) != 1 || len(finalized) != 1 {
 		t.Fatalf("reservations/settlements: want 1/1 got %d/%d", len(reservations), len(finalized))
 	}
-	if finalized[0].ActualCredits != 18 {
-		t.Errorf("settled credits: want 18 got %d", finalized[0].ActualCredits)
+	if finalized[0].ActualCredits != 1 {
+		t.Errorf("settled credits: want the catalog price for 11 input + 7 output tokens got %d", finalized[0].ActualCredits)
 	}
 }
 

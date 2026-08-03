@@ -65,7 +65,7 @@ func TestSettleStream_ReleaseGetsFreshDeadlineAfterSlowFinalize(t *testing.T) {
 	defer acctSrv.Close()
 
 	orch := &Orchestrator{accounting: NewAccountingClient(acctSrv.URL)}
-	acc := &UsageAccumulator{TotalTokens: 25, HasUsage: true}
+	acc := &UsageAccumulator{InputTokens: 20, OutputTokens: 5, TotalTokens: 25, HasUsage: true}
 
 	var settled bool
 	logs := captureLogs(t, func() {
@@ -74,6 +74,7 @@ func TestSettleStream_ReleaseGetsFreshDeadlineAfterSlowFinalize(t *testing.T) {
 			authz.AuthSnapshot{AccountID: "acct-test-1", KeyID: "key-test-1"},
 			AttemptResult{ID: "attempt-test-1"},
 			ReservationResult{ID: "res-test-1"},
+			hiveFastRoute,
 			"req-test-1", EndpointChatCompletions, "gpt-4o", acc, `{}`, "hello",
 		)
 	})
@@ -117,13 +118,14 @@ func TestSettleStream_SlowButSuccessfulFinalize_NeverReleases(t *testing.T) {
 	defer acctSrv.Close()
 
 	orch := &Orchestrator{accounting: NewAccountingClient(acctSrv.URL)}
-	acc := &UsageAccumulator{TotalTokens: 25, HasUsage: true}
+	acc := &UsageAccumulator{InputTokens: 20, OutputTokens: 5, TotalTokens: 25, HasUsage: true}
 
 	settled := orch.settleStream(
 		context.Background(),
 		authz.AuthSnapshot{AccountID: "acct-test-1", KeyID: "key-test-1"},
 		AttemptResult{ID: "attempt-test-1"},
 		ReservationResult{ID: "res-test-1"},
+		hiveFastRoute,
 		"req-test-1", EndpointChatCompletions, "gpt-4o", acc, `{}`, "hello",
 	)
 

@@ -101,6 +101,12 @@ func (o *Orchestrator) executeResponsesStreaming(
 		return
 	}
 
+	// 3b. Refuse an alias this endpoint cannot price, before any hold is taken
+	// and before a provider is ever reached (#688, D-034).
+	if !requireTokenPricing(w, route, EndpointResponses, model) {
+		return
+	}
+
 	// 4. Start attempt
 	requestID := uuid.New().String()
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
@@ -145,7 +151,7 @@ func (o *Orchestrator) executeResponsesStreaming(
 		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, EndpointResponses, model, acc, string(body), translator.currentContent.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, EndpointResponses, model, acc, string(body), translator.currentContent.String())
 	}()
 
 	// 6. Dispatch to LiteLLM (always with stream_options for usage) with

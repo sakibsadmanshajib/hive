@@ -163,6 +163,12 @@ func (o *Orchestrator) executeStreaming(
 		return nil
 	}
 
+	// 3b. Refuse an alias this endpoint cannot price, before any hold is taken
+	// and before a provider is ever reached (#688, D-034).
+	if !requireTokenPricing(w, route, endpoint, model) {
+		return nil
+	}
+
 	// 4. Start attempt
 	requestID := uuid.New().String()
 	attempt, err := o.accounting.StartAttempt(ctx, StartAttemptInput{
@@ -206,7 +212,7 @@ func (o *Orchestrator) executeStreaming(
 		if finalized {
 			return
 		}
-		finalized = o.settleStream(ctx, snapshot, attempt, reservation, requestID, endpoint, model, accumulator, string(body), accumulator.Content.String())
+		finalized = o.settleStream(ctx, snapshot, attempt, reservation, route, requestID, endpoint, model, accumulator, string(body), accumulator.Content.String())
 	}()
 
 	// 6. Dispatch to LiteLLM with bounded retry on 429/5xx (safe: no bytes
@@ -350,41 +356,55 @@ func (o *Orchestrator) releaseReservationBackground(snapshot authz.AuthSnapshot,
 	return true
 }
 
-// settlementCredits derives what a stream settlement should charge: real
-// usage tokens when the upstream confirmed them, otherwise a content-based
-// estimate. There is no estimatedCredits fallback here on purpose -- an
-// unconfirmed usage block must never turn into a flat, hardcoded overcharge.
-// delivered is false only when nothing was produced at all; the caller must
-// release the reservation in full rather than charge in that case.
+// settlementCredits derives what a settlement should charge: the resolved
+// alias's catalog price applied to real usage tokens when the upstream
+// confirmed them, otherwise to a content-based token estimate. There is no
+// estimatedCredits fallback here on purpose -- an unconfirmed usage block must
+// never turn into a flat, hardcoded overcharge. delivered is false only when
+// nothing was produced at all; the caller must release the reservation in full
+// rather than charge in that case.
 //
-// The unconfirmed-usage estimate bills prompt tokens too, not completion
-// bytes alone: a client that aborts right after the first output token
-// (e.g. after a long prompt finishes prefill) must not settle for ~1 credit
-// just because only one token of *output* existed to estimate from. The
-// confirmed-usage branch above already bills prompt+completion via
-// totalTokens; prompt is the parsed message/input text (see promptText in
-// usage_clamp.go), not the raw request body -- the raw body also carries
-// field names, sampling params, tool schemas, and base64 image data, and
-// counting those as tokens is issue #602's over-charge root cause (a request
-// body under the 10MiB limit could estimate ~2.6M credits against a 10000
-// credit hold). The control-plane hard clamp in finalizeLocked is the
-// backstop that keeps any residual overcount here from ever exceeding the
-// reserved hold, but this function should still return a realistic number.
+// Both branches go through the same catalog conversion (#688), so an
+// unconfirmed estimate is priced exactly like a confirmed measurement and only
+// the CONFIDENCE differs: confirmed is returned false for it, which is what
+// tells control-plane to clamp the charge to the hold and open a reconciliation
+// job instead of treating the figure as measured truth.
 //
-// The estimator itself is calibrated to land BELOW real tokenization for every
-// writing system rather than near its average, so the direction of its error
-// favours the customer instead of depending on the script they write in (issue
-// #673). See bytesPerToken in usage_clamp.go for the measurements; the clamp is
-// the backstop, not the reason the figure is defensible.
-func settlementCredits(hasUsage bool, totalTokens int64, prompt, content string) (credits int64, delivered bool) {
-	if hasUsage {
-		return totalTokens, totalTokens > 0
+// confirmed is not simply hasUsage: a usage block that reports neither prompt
+// nor completion tokens carries no quantity to price, so it is treated as
+// absent rather than as a measured zero, which would otherwise settle a
+// delivered response for nothing.
+//
+// The unconfirmed estimate bills prompt tokens too, not completion bytes
+// alone: a client that aborts right after the first output token (e.g. after a
+// long prompt finishes prefill) must not settle for ~1 credit just because only
+// one token of *output* existed to estimate from. Prompt is the parsed
+// message/input text (see promptText in usage_clamp.go), not the raw request
+// body -- the raw body also carries field names, sampling params, tool schemas,
+// and base64 image data, and counting those as tokens is issue #602's
+// over-charge root cause (a request body under the 10MiB limit could estimate
+// ~2.6M credits against a 10000 credit hold). The control-plane hard clamp in
+// finalizeLocked is the backstop that keeps any residual overcount here from
+// ever exceeding the reserved hold, but this function should still return a
+// realistic number.
+//
+// The token estimate feeding that unconfirmed branch is itself calibrated to
+// land BELOW real tokenization for every writing system rather than near its
+// average, so the direction of its error favours the customer instead of
+// depending on the script they write in (issue #673). See bytesPerToken in
+// usage_clamp.go for the measurements; the clamp is the backstop, not the
+// reason the figure is defensible. The catalog conversion here does not change
+// that: it only turns the estimated token count into the alias's price, so an
+// under-counted estimate stays under-counted in credits too.
+func settlementCredits(route SelectRouteResult, hasUsage bool, inputTokens, outputTokens int64, prompt, content string) (credits int64, confirmed bool, delivered bool) {
+	if hasUsage && inputTokens+outputTokens > 0 {
+		return CreditsForTokens(route, inputTokens, outputTokens), true, true
 	}
 	completion := estimateCompletionTokens(content)
 	if completion == 0 {
-		return 0, false
+		return 0, false, false
 	}
-	return estimateCompletionTokens(prompt) + completion, true
+	return CreditsForTokens(route, estimateCompletionTokens(prompt), completion), false, true
 }
 
 // settleStream is the single settlement point for an ended streaming
@@ -393,10 +413,10 @@ func settlementCredits(hasUsage bool, totalTokens int64, prompt, content string)
 // nothing reached the accumulator. It always dispatches on its own bounded
 // background context, independent of the caller's request context, because
 // the caller's context is exactly what a client disconnect cancels.
-// TerminalUsageConfirmed mirrors hasUsage: it is only ever true when the
-// upstream itself sent a genuine usage block, so anything settled from a
-// content estimate is flagged for reconciliation rather than treated as a
-// confirmed final charge. reqCtx is the caller's original request context,
+// TerminalUsageConfirmed comes from settlementCredits: it is only ever true
+// when the upstream itself sent a usage block carrying real token counts, so
+// anything settled from a content estimate is flagged for reconciliation rather
+// than treated as a confirmed final charge. reqCtx is the caller's original request context,
 // consulted only to tell apart the two ways delivered can end up false: a
 // cancelled reqCtx means the client hung up; a live reqCtx with nothing
 // delivered means the upstream provider ended or errored the stream while
@@ -407,11 +427,14 @@ func settlementCredits(hasUsage bool, totalTokens int64, prompt, content string)
 // that could otherwise complete), in which case there is nothing to release
 // or finalize. That must not also drop the usage telemetry for the request --
 // see the reservation.ID == "" branches below.
-func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, requestID, endpoint, model string, acc *UsageAccumulator, promptBody, content string) bool {
+// route carries the alias's catalog price, which is what the charge is derived
+// from (#688); it is the same route the request was dispatched to, so a charge
+// can never be priced off a different alias than the one that served it.
+func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthSnapshot, attempt AttemptResult, reservation ReservationResult, route SelectRouteResult, requestID, endpoint, model string, acc *UsageAccumulator, promptBody, content string) bool {
 	// Parse promptBody (the raw request bytes) down to just the message/input
 	// text before estimating -- see promptText in usage_clamp.go for why the
 	// raw bytes themselves must never be counted directly (issue #602).
-	credits, delivered := settlementCredits(acc.HasUsage, acc.TotalTokens, promptText(endpoint, []byte(promptBody)), content)
+	credits, confirmed, delivered := settlementCredits(route, acc.HasUsage, acc.InputTokens, acc.OutputTokens, promptText(endpoint, []byte(promptBody)), content)
 	if !delivered {
 		reason, eventType := "upstream_error", "upstream_error"
 		if reqCtx.Err() != nil {
@@ -451,7 +474,7 @@ func (o *Orchestrator) settleStream(reqCtx context.Context, snapshot authz.AuthS
 		AccountID:              snapshot.AccountID,
 		ReservationID:          reservation.ID,
 		ActualCredits:          credits,
-		TerminalUsageConfirmed: acc.HasUsage,
+		TerminalUsageConfirmed: confirmed,
 		Status:                 "completed",
 	})
 	// Cancelled the moment finalize returns, never before: the call has
