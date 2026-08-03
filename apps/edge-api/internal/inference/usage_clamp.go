@@ -73,9 +73,12 @@ const bytesPerToken = 12
 //
 // The result is not a lower bound for every conceivable input: BPE can compress
 // a long repeated word into one 17-byte token, and an alternating pair of
-// separators the vocabulary pairs up (measured: 20,000 repetitions of "-=" cost
-// 16 real bytes per token, estimated at 1.33x) is not a run, so pathological
-// text can still estimate above its true count. The hold clamp in
+// separators the vocabulary pairs up is not a run, so pathological text can
+// still estimate above its true count. That alternation case has a measured
+// ceiling: sweeping every two-rune alternation over the collapsible members plus
+// '|' at 8,000 repetitions, the worst is "=-" and "+-" at 16 real bytes per
+// token, estimated at 1.33x, and completing the member set did not move it
+// because an alternation is never collapsed either way. The hold clamp in
 // control-plane's finalizeLocked (accounting/service.go) remains the backstop
 // that keeps an unconfirmed charge inside the authorization the customer
 // already granted.
@@ -93,19 +96,31 @@ func estimateCompletionTokens(text string) int64 {
 // runCollapsible reports whether a run of r repeated is compressed hard enough
 // by real tokenizers that counting the run at full byte length would
 // over-charge. Membership is measured, never intuited: it is exactly the runes
-// whose worst-case real bytes per token for a long run reaches bytesPerToken or
-// more (tiktoken 0.13.0, worst of o200k_base, cl100k_base and o200k_harmony,
-// runs from 1e3 to 2e5 bytes, where the ratio saturates):
+// whose real bytes per token for a long run reaches bytesPerToken or more
+// (tiktoken 0.13.0, runs from 6e3 to 2.4e4 runes, where the ratio saturates).
 //
-//	' ' 128 | '-' '=' '_' '/' '.' '*' '#' 64 | U+3000 48 | '\n' 32
-//	'%' '+' '~' 32 | '\t' ';' U+00A0 16 | U+200B 12
+// The statistic is the LARGEST bytes per token of o200k_base, cl100k_base and
+// o200k_harmony, which is the same as the SMALLEST token count. That choice is
+// the whole correctness argument: the smallest count is the number the charge is
+// compared against, so a member cannot over-charge on any of the three. Using
+// the smallest bytes per token instead only collapses a run when every encoding
+// compresses it, which is what first left nine over-charging runes out of this
+// switch, U+2500 among them.
+//
+// Measured members, with the ratio that earns each one:
+//
+//	' ' 128 | '-' '=' '_' '/' '.' '*' '#' '%' 64
+//	U+2014 U+2026 U+2500 U+25A1 U+3000 48 | U+2501 U+2550 24
+//	'\n' '+' '~' 32 | '\t' ';' '!' ':' 'X' U+00A0 16
+//	U+2013 U+200B U+2588 U+2605 U+2640 U+30FB U+30FC U+FF01 U+FF0A U+FF1D 12
 //
 // Everything else is counted at full byte length, because it already costs a
-// token per 12 bytes or fewer and the plain estimate therefore under-counts it:
-// ':' '!' '<' '>' at 8, '|' ',' '(' ')' '$' '\\' '?' '@' '^' at 4, '{' '}' '['
-// ']' '&' and both quotes at 2, U+2000 U+205F U+2029 at 1.5, and every ASCII
-// control byte plus U+0085 next line and U+1680 ogham space mark at one real
-// token per byte.
+// token per 12 bytes or fewer and the plain estimate therefore under-counts it.
+// The closest exclusions measure 8: '<' '>' '?' '@' '^' ',' U+00AF and the
+// letters a f l o x A F. Then '|' '(' ')' '$' '\\' at 4, '{' '}' '[' ']' '&' and
+// both quotes at 2, U+2000 U+205F U+2029 at 1.5, U+2028 U+202F at 3, and every
+// ASCII control byte plus U+0085 next line and U+1680 ogham space mark at one
+// real token per byte.
 //
 // That last group is why this is not the simpler test it looks like it should
 // be. Collapsing whitespace by the Unicode White_Space property gives away real
@@ -113,11 +128,27 @@ func estimateCompletionTokens(text string) int64 {
 // to nothing, and restricting the collapse to ASCII whitespace does not fix it,
 // because U+000B vertical tab and U+000C form feed are ASCII whitespace and also
 // cost a token per byte. Testing for non-alphanumeric instead over-collapses in
-// the same way. Membership has to follow the measured compression ratio, and
-// nothing else: the two directions are a vice, and a rule that is not measured
-// escapes it on one side or the other. Letters and digits are absent because
-// they are measured too: the longest same-byte run of one costs 8 real bytes per
-// token or fewer, so they need no collapse.
+// the same way, and would also miss 'X', which is a member because a run of it
+// measures 16. Membership has to follow the measured ratio and nothing else: the
+// two directions are a vice, and a rule that is not measured escapes it on one
+// side or the other.
+//
+// Cost of the conservative statistic, stated rather than hidden: for a rune
+// whose ratio splits across encodings, the collapse gives up more against the
+// encoding that splits the run. U+25A1 is the widest, 48 bytes per token on
+// o200k_base and o200k_harmony but 1.5 on cl100k_base, so a pure run of it pays
+// about 1 percent of what a cl100k-family model would count. That is the
+// customer-favouring direction, it is bounded by the route's context window, and
+// it buys the removal of a 2.5x over-charge on output models emit routinely.
+//
+// Families swept to build this list, each rune measured, not assumed: ASCII
+// printable including letters and digits, Latin-1 punctuation and symbols,
+// general punctuation U+2000 to U+206F, arrows, math operators, box drawing,
+// block elements, geometric shapes, miscellaneous symbols, dingbats, CJK symbols
+// and punctuation, katakana, halfwidth and fullwidth forms, the invisible format
+// characters, and a sample of the emoji a model repeats to draw a bar. The
+// measured rows live in token_estimate_scripts_test.go, which also fails if this
+// switch ever collapses a rune with no row.
 //
 // ponytail: a fixed measured set, re-measure it (not just the divisor) if we
 // onboard a tokenizer outside the o200k and cl100k families. Deriving the set at
@@ -127,7 +158,13 @@ func runCollapsible(r rune) bool {
 	switch r {
 	case ' ', '\t', '\n',
 		'-', '=', '_', '/', '.', '*', '#', '%', '+', '~', ';',
-		'\u00a0', '\u200b', '\u3000': // NBSP, zero width space, ideographic space
+		'!', ':', 'X',
+		'\u00a0', '\u200b', '\u3000', // NBSP, zero width space, ideographic space
+		'\u2013', '\u2014', '\u2026', // en dash, em dash, horizontal ellipsis
+		'\u2500', '\u2501', '\u2550', // box drawings light, heavy, double horizontal
+		'\u2588', '\u25a1', '\u2605', '\u2640', // full block, white square, black star, female sign
+		'\u30fb', '\u30fc', // katakana middle dot, prolonged sound mark
+		'\uff01', '\uff0a', '\uff1d': // fullwidth exclamation, asterisk, equals
 		return true
 	}
 	return false
