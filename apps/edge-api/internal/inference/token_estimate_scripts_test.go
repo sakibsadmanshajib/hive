@@ -204,3 +204,234 @@ func TestEstimateCompletionTokens_WhitespaceRunsDoNotInflate(t *testing.T) {
 		})
 	}
 }
+
+// textCase is a measured fixture for the two run-collapse bounds below. Every
+// minRealTokens is again the SMALLEST count across tiktoken 0.13.0 o200k_base,
+// cl100k_base and o200k_harmony, and wantBytes guards the fixture itself: these
+// figures were measured on the exact byte string, so a transcription slip in
+// the builder below has to fail loudly rather than quietly re-baseline a money
+// bound.
+type textCase struct {
+	name          string
+	in            string
+	wantBytes     int
+	minRealTokens int64
+}
+
+func (tc textCase) check(t *testing.T) int64 {
+	t.Helper()
+	if len(tc.in) != tc.wantBytes {
+		t.Fatalf("fixture is %d bytes, measured against %d: the measured token counts no longer describe this input", len(tc.in), tc.wantBytes)
+	}
+	return estimateCompletionTokens(tc.in)
+}
+
+// TestEstimateCompletionTokens_SeparatorRunsDoNotOvercharge is the other half of
+// the bound the script test states. Byte length is NOT a structural upper bound
+// on token count: byte-pair vocabularies carry long single tokens for repeated
+// punctuation, so real bytes per token reaches 64 for a run of dashes and 128
+// for a run of spaces, far above the divisor. Measured on this fixture set
+// before the fix, an unmeasured settlement over-charged a horizontal rule by
+// 6.59x, a log banner by 4.21x and a blank form by 0.93 of real, and every one
+// of these shapes is output a model produces routinely.
+//
+// The hard bound is est <= real, same as the script test. The second bound is a
+// margin: for the shapes that show up inside ordinary assistant output the
+// estimate must keep at least 20 percent of headroom, because a fixture sitting
+// at 0.98 of real is one vocabulary change away from over-charging.
+func TestEstimateCompletionTokens_SeparatorRunsDoNotOvercharge(t *testing.T) {
+	tests := []textCase{
+		{
+			name:      "horizontal rules of seventy eight dashes",
+			in:        strings.Repeat(strings.Repeat("-", 78)+"\n", 200),
+			wantBytes: 15800,
+			// o200k_base 200, cl100k_base 400, o200k_harmony 200 (79.0 real bytes/token)
+			minRealTokens: 200,
+		},
+		{
+			name: "twenty thousand bytes of repeated separators",
+			in: strings.Repeat("=", 5000) + strings.Repeat("-", 5000) +
+				strings.Repeat("*", 5000) + strings.Repeat("/", 5000),
+			wantBytes: 20000,
+			// o200k_base 312, cl100k_base 314, o200k_harmony 312 (64.1 real bytes/token)
+			minRealTokens: 312,
+		},
+		{
+			name:      "log banner of a hundred equals signs per line",
+			in:        strings.Repeat(strings.Repeat("=", 100)+"\n", 300),
+			wantBytes: 30300,
+			// o200k_base 600, cl100k_base 900, o200k_harmony 600
+			minRealTokens: 600,
+		},
+		{
+			name:      "blank form lines of underscore runs",
+			in:        strings.Repeat("Name: "+strings.Repeat("_", 60)+"\n", 400),
+			wantBytes: 26800,
+			// o200k_base 2400, cl100k_base 2400, o200k_harmony 2400
+			minRealTokens: 2400,
+		},
+		{
+			name:      "table of contents leader dots",
+			in:        strings.Repeat("Chapter heading "+strings.Repeat(".", 40)+" 12\n", 500),
+			wantBytes: 30000,
+			// o200k_base 3500, cl100k_base 3500, o200k_harmony 3500
+			minRealTokens: 3500,
+		},
+		{
+			name:      "markdown table separator rows",
+			in:        strings.Repeat("|---|---|---|---|\n", 1400),
+			wantBytes: 25200,
+			// o200k_base 12600, cl100k_base 12600, o200k_harmony 12600
+			minRealTokens: 12600,
+		},
+		{
+			name:      "ascii box drawing table",
+			in:        asciiBoxTable(120, 60),
+			wantBytes: 29760,
+			// o200k_base 1680, cl100k_base 1680, o200k_harmony 1680. The densest
+			// realistic formatting measured: 0.83 of real usage before this fix,
+			// and an independent measurement of a narrower variant reached 0.976.
+			minRealTokens: 1680,
+		},
+		{
+			name: "report with a horizontal rule per section",
+			in: strings.Repeat(strings.Repeat("=", 78)+"\nSection: findings\n"+
+				strings.Repeat("The gateway settled every reservation exactly once.\n", 3), 60),
+			wantBytes: 15180,
+			// o200k_base 1800, cl100k_base 1800, o200k_harmony 1800
+			minRealTokens: 1800,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.check(t)
+			if got > tt.minRealTokens {
+				t.Errorf("estimate %d exceeds real usage %d tokens (%.2fx): a separator run is not one token per twelve bytes",
+					got, tt.minRealTokens, float64(got)/float64(tt.minRealTokens))
+			}
+			if got*100 > tt.minRealTokens*80 {
+				t.Errorf("estimate %d is %d%% of real usage %d: formatted output must keep at least 20%% of headroom",
+					got, got*100/tt.minRealTokens, tt.minRealTokens)
+			}
+		})
+	}
+}
+
+// asciiBoxTable builds rows of a two-column ASCII box-drawing table: a border
+// line of dashes, then a data line whose cells are padded with spaces.
+func asciiBoxTable(rows, width int) string {
+	border := "+" + strings.Repeat("-", width) + "+" + strings.Repeat("-", width) + "+\n"
+	pad := strings.Repeat(" ", width-6)
+	row := "| Item" + pad + " | " + pad + "Item |\n"
+	return strings.Repeat(border+row, rows)
+}
+
+// TestEstimateCompletionTokens_WhitespaceIsNeverFree is the undercharge bound,
+// and it is the one that decides how the run-collapse must be written.
+//
+// Collapsing every Unicode whitespace run is not safe: `unicode.IsSpace` covers
+// the whole White_Space property, and several of those code points tokenize at
+// ONE REAL TOKEN PER BYTE. Measured, all three encodings agree: U+1680 ogham
+// space mark and U+0085 next line cost a token per byte, as do the ASCII control
+// bytes U+000B vertical tab and U+000C form feed, which are ASCII whitespace and
+// so are not excluded by an ASCII-only rule either. A caller who finds a route
+// that omits its usage block (issue #636) can therefore send a full context
+// window of these, have us pay the provider for every token of it, and be
+// charged the 1-credit floor. Issue #600 makes that settlement permanent.
+//
+// So the estimate for caller-controlled whitespace must stay PROPORTIONAL to
+// real usage: at least 5 percent of it, the same order as the 12 percent floor
+// the sparsest real script lands at, rather than collapsing to nothing.
+//
+// The last three cases are the other side of the same choice. U+3000, U+00A0 and
+// U+200B really are compressed hard by the vocabulary (48, 16 and 12 real bytes
+// per token), so counting them at full byte length over-charges: U+3000 by 4.00x
+// and U+00A0 by 1.33x. They rule out "collapse ASCII whitespace only" just as
+// firmly as U+1680 rules out "collapse all of it".
+func TestEstimateCompletionTokens_WhitespaceIsNeverFree(t *testing.T) {
+	tests := []textCase{
+		{
+			name:      "ogham space mark",
+			in:        strings.Repeat(" ", 40000),
+			wantBytes: 120000,
+			// 3 bytes each; o200k_base 120000, cl100k_base 120000, o200k_harmony 120000
+			minRealTokens: 120000,
+		},
+		{
+			name:      "next line",
+			in:        strings.Repeat("", 40000),
+			wantBytes: 80000,
+			// 2 bytes each; all three encodings 80000 (one token per byte)
+			minRealTokens: 80000,
+		},
+		{
+			name:      "en quad",
+			in:        strings.Repeat(" ", 20000),
+			wantBytes: 60000,
+			// 3 bytes each; all three encodings 40000
+			minRealTokens: 40000,
+		},
+		{
+			name:      "vertical tab",
+			in:        strings.Repeat("\v", 40000),
+			wantBytes: 40000,
+			// all three encodings 40000 (one token per byte)
+			minRealTokens: 40000,
+		},
+		{
+			name:      "form feed",
+			in:        strings.Repeat("\f", 40000),
+			wantBytes: 40000,
+			// all three encodings 40000 (one token per byte)
+			minRealTokens: 40000,
+		},
+		{
+			name:      "carriage return",
+			in:        strings.Repeat("\r", 40000),
+			wantBytes: 40000,
+			// o200k_base 20000, cl100k_base 40000, o200k_harmony 20000
+			minRealTokens: 20000,
+		},
+		{
+			name:      "ideographic space",
+			in:        strings.Repeat("　", 20000),
+			wantBytes: 60000,
+			// 3 bytes each; o200k_base 1250, cl100k_base 10000, o200k_harmony 1250
+			minRealTokens: 1250,
+		},
+		{
+			name:      "no break space",
+			in:        strings.Repeat(" ", 20000),
+			wantBytes: 40000,
+			// 2 bytes each; all three encodings 2500
+			minRealTokens: 2500,
+		},
+		{
+			name:      "zero width space",
+			in:        strings.Repeat("​", 20000),
+			wantBytes: 60000,
+			// 3 bytes each; o200k_base 5000, cl100k_base 10000, o200k_harmony 5000
+			minRealTokens: 5000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.check(t)
+			if got*20 < tt.minRealTokens {
+				t.Errorf("estimate %d is under 5%% of real usage %d tokens (1 credit per %d real tokens): caller-controlled whitespace must not buy unbilled inference",
+					got, tt.minRealTokens, tt.minRealTokens/max64(got, 1))
+			}
+			if got > tt.minRealTokens {
+				t.Errorf("estimate %d exceeds real usage %d tokens (%.2fx): whitespace the vocabulary compresses must not be counted byte for byte",
+					got, tt.minRealTokens, float64(got)/float64(tt.minRealTokens))
+			}
+		})
+	}
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
