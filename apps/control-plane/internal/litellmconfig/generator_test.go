@@ -128,13 +128,23 @@ func TestGenerateUsesOpenAIAdapterForEmbeddingRoutes(t *testing.T) {
 		"a non-embeddings route keeps its native provider prefix")
 }
 
-// TestGenerateRefusesEmbeddingRouteWithoutAPIBase guards the credential half of
-// the adapter rewrite: openai/<model> with no api_base resolves to
-// api.openai.com, which would send this provider's key to the wrong upstream.
-func TestGenerateRefusesEmbeddingRouteWithoutAPIBase(t *testing.T) {
-	_, err := litellmconfig.Generate(litellmconfig.Config{
-		Models: []litellmconfig.ModelEntry{
-			{
+// TestGenerateRefusesOpenAIAdapterWithoutAPIBase guards the credential half of
+// the adapter rewrite: a model string of openai/<model> with no api_base
+// resolves to api.openai.com, which would send this provider's key to the wrong
+// upstream. The guard keys on the emitted model string, not on
+// SupportsEmbeddings, because the openai/ prefix has two sources: this
+// generator rewriting an embeddings route, and provider_model already carrying
+// it (the shape bge-m3 has). The second one reaches the same exfiltration with
+// SupportsEmbeddings false, e.g. when the route has no provider_capabilities
+// row and an admin PUT blanked custom_providers.base_url.
+func TestGenerateRefusesOpenAIAdapterWithoutAPIBase(t *testing.T) {
+	cases := []struct {
+		name  string
+		entry litellmconfig.ModelEntry
+	}{
+		{
+			name: "embeddings rewrite with no api_base",
+			entry: litellmconfig.ModelEntry{
 				ModelName:          "route-broken-embedding",
 				LiteLLMName:        "someprovider/some-embed-model",
 				APIBase:            "",
@@ -142,10 +152,38 @@ func TestGenerateRefusesEmbeddingRouteWithoutAPIBase(t *testing.T) {
 				SupportsEmbeddings: true,
 			},
 		},
-		GeneralSettings: litellmconfig.GeneralSettings{MasterKey: "k"},
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "route-broken-embedding")
+		{
+			name: "provider_model already generic, no capabilities row, no api_base",
+			entry: litellmconfig.ModelEntry{
+				ModelName:          "route-broken-generic",
+				LiteLLMName:        "openai/some-embed-model",
+				APIBase:            "",
+				APIKeyEnv:          "SOMEPROVIDER_API_KEY",
+				SupportsEmbeddings: false,
+			},
+		},
+		{
+			name: "whitespace-only api_base is no api_base",
+			entry: litellmconfig.ModelEntry{
+				ModelName:          "route-broken-blank",
+				LiteLLMName:        "openai/some-embed-model",
+				APIBase:            "   ",
+				APIKeyEnv:          "SOMEPROVIDER_API_KEY",
+				SupportsEmbeddings: false,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := litellmconfig.Generate(litellmconfig.Config{
+				Models:          []litellmconfig.ModelEntry{tc.entry},
+				GeneralSettings: litellmconfig.GeneralSettings{MasterKey: "k"},
+			})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.entry.ModelName)
+		})
+	}
 }
 
 func TestGenerateEmptyModelsProducesEmptyModelList(t *testing.T) {

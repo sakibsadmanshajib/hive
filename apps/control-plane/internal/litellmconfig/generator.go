@@ -49,7 +49,7 @@ type Restarter interface {
 
 // litellmModel returns the model string LiteLLM must be given for a route.
 //
-// For every non-embedding route that is provider_routes.provider_model
+// For every non-embedding route that string is provider_routes.provider_model
 // verbatim, which already carries its native provider prefix (e.g.
 // "openrouter/openai/gpt-4o-mini"). Embeddings are the exception: LiteLLM's
 // native provider integrations do not map the /embeddings endpoint (the
@@ -77,20 +77,26 @@ func litellmModel(m ModelEntry) string {
 // Generate builds a LiteLLM config.yaml byte slice from the provided model
 // entries. It does NOT read from DB itself; the caller supplies the entries.
 func Generate(cfg Config) ([]byte, error) {
-	// Build model_list as a sequence of maps to preserve key order.
+	// model_list is a sequence of maps; yaml.v3 sorts the keys of each map on
+	// encode, so entry key order in the output is alphabetical, not source
+	// order.
 	modelList := make([]map[string]interface{}, 0, len(cfg.Models))
 	for _, m := range cfg.Models {
+		model := litellmModel(m)
 		// api_base is what makes the generic openai/ adapter mean "this
 		// provider". Without one, LiteLLM would send the route's request, and
-		// the provider's API key, to api.openai.com instead. Refuse rather
-		// than emit that.
-		if m.SupportsEmbeddings && m.APIBase == "" {
-			return nil, fmt.Errorf("litellmconfig: embeddings route %q has no api_base; the generic openai/ adapter would send it upstream to OpenAI", m.ModelName)
+		// the provider's API key, to api.openai.com instead. Keyed on the
+		// emitted model string rather than on SupportsEmbeddings, because the
+		// openai/ prefix has two sources: the rewrite above, and a
+		// provider_model that already carries it (the shape bge-m3 has, which
+		// reaches this line with SupportsEmbeddings false). Refuse either way.
+		if strings.HasPrefix(model, "openai/") && strings.TrimSpace(m.APIBase) == "" {
+			return nil, fmt.Errorf("litellmconfig: route %q resolves to the generic openai/ adapter with no api_base; it would send this provider's key upstream to OpenAI", m.ModelName)
 		}
 		entry := map[string]interface{}{
 			"model_name": m.ModelName,
 			"litellm_params": map[string]interface{}{
-				"model":    litellmModel(m),
+				"model":    model,
 				"api_base": m.APIBase,
 				"api_key":  "os.environ/" + m.APIKeyEnv,
 			},
