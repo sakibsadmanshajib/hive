@@ -370,6 +370,13 @@ jobs:
           # wiring and was never plumbed into any workflow; no reason to
           # rename it now that it is.
           echo "ROUTING_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # Same ephemeral database again, read via litellmconfig's own env
+          # var name (issue #701). That suite predates this wiring too and
+          # had never run anywhere: it was gated behind LITELLM_TEST_DB_URL,
+          # which appeared nowhere under .github/, so a query against a
+          # column that does not exist on provider_routes shipped and never
+          # failed a single CI run.
+          echo "LITELLM_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: go test — RLS suites against live Postgres (control-plane, edge-api only)
         if: >-
@@ -380,10 +387,11 @@ jobs:
           set -euo pipefail
           if [ "${{ matrix.module }}" = "control-plane" ]; then
             # -tags integration additionally compiles in
-            # routing/catalog_pricing_integration_test.go (issue #655), which
-            # carries a //go:build integration constraint the other packages
+            # routing/catalog_pricing_integration_test.go (issue #655) and
+            # litellmconfig/sync_integration_test.go (issue #701), which
+            # carry a //go:build integration constraint the other packages
             # below do not use; passing the tag is a no-op for them.
-            go test -tags integration -count=1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/...
+            go test -tags integration -count=1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/...
           else
             go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
           fi

@@ -128,7 +128,7 @@ func TestGenerateSetsGeneralSettingsMasterKey(t *testing.T) {
 
 // mockRestarter records calls to Restart and can be configured to return an error.
 type mockRestarter struct {
-	calls    int
+	calls     int
 	returnErr error
 }
 
@@ -202,8 +202,11 @@ model_list:
 	assert.Contains(t, content, "preserve-me")
 	// master_key must be updated.
 	assert.Contains(t, content, "new-key")
-	// old-model must be replaced by new models.
-	assert.NotContains(t, content, "old-model")
+	// old-model has no corresponding entry in twoModels(), so it is
+	// operator-managed from this sync's point of view and must survive
+	// rather than be dropped (issue #701 review, Required 3). The new
+	// DB-managed models must be present alongside it, not instead of it.
+	assert.Contains(t, content, "old-model")
 	assert.Contains(t, content, "gpt-4o")
 }
 
@@ -296,4 +299,87 @@ general_settings:
 	// model_info with mode: embedding must survive the merge.
 	assert.Contains(t, content, "model_info", "model_info must be preserved across sync")
 	assert.Contains(t, content, "embedding", "mode: embedding must be preserved across sync")
+}
+
+// TestWriteAndRestartPreservesOperatorManagedRoutes proves the issue #701
+// review's Required 3: a model_list entry whose model_name has no
+// corresponding row in the DB-generated set (e.g. route-doc-vlm, bge-m3 —
+// operator-managed entries hand-written into deploy/litellm/config.yaml with
+// no provider_routes row at all) must survive a sync rather than be dropped,
+// while an entry the DB DOES manage is still replaced with the new value in
+// the same pass.
+func TestWriteAndRestartPreservesOperatorManagedRoutes(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	// Pre-existing config: one DB-managed route (gpt-4o, about to be updated)
+	// and one purely operator-managed route with no provider_routes row
+	// (route-doc-vlm), carrying hand-tuned litellm_params the generator does
+	// not reproduce.
+	existing := `
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openrouter/old/stale-model
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: route-doc-vlm
+    litellm_params:
+      model: openrouter/meta-llama/llama-4-scout:free
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+general_settings:
+  master_key: old-key
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o600))
+
+	// New sync's DB query only returns gpt-4o; route-doc-vlm has no DB row.
+	cfg := litellmconfig.Config{
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:   "gpt-4o",
+				LiteLLMName: "openrouter/openai/gpt-4o",
+				APIBase:     "https://openrouter.ai/api/v1",
+				APIKeyEnv:   "OPENROUTER_API_KEY",
+			},
+		},
+		GeneralSettings: litellmconfig.GeneralSettings{
+			MasterKey: "new-key",
+		},
+		ExistingConfigPath: configPath,
+	}
+
+	r := &mockRestarter{}
+	err := litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, r)
+	require.NoError(t, err)
+
+	data, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+	modelList, ok := parsed["model_list"].([]interface{})
+	require.True(t, ok, "model_list must be a sequence")
+	require.Len(t, modelList, 2, "operator-managed route must be kept alongside the DB-managed one, not dropped")
+
+	byName := map[string]map[string]interface{}{}
+	for _, item := range modelList {
+		entry := item.(map[string]interface{})
+		byName[entry["model_name"].(string)] = entry
+	}
+
+	// DB-managed entry: replaced with the new value, in the same pass.
+	gpt4o, ok := byName["gpt-4o"]
+	require.True(t, ok, "gpt-4o (DB-managed) must still be present")
+	params := gpt4o["litellm_params"].(map[string]interface{})
+	assert.Equal(t, "openrouter/openai/gpt-4o", params["model"], "DB-managed entry must be updated to the new DB value")
+
+	// Operator-managed entry: preserved verbatim, including hand-tuned keys
+	// Generate never produces (extra_body).
+	docVLM, ok := byName["route-doc-vlm"]
+	require.True(t, ok, "route-doc-vlm (no provider_routes row) must be preserved, not dropped")
+	docParams := docVLM["litellm_params"].(map[string]interface{})
+	assert.Equal(t, "openrouter/meta-llama/llama-4-scout:free", docParams["model"], "operator-managed entry's model must survive unchanged")
+	assert.Contains(t, docParams, "extra_body", "operator-managed entry's extra_body must survive unchanged")
 }

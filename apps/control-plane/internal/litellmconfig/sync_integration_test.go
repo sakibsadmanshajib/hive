@@ -30,6 +30,15 @@ func connectLiteLLMTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("LITELLM_TEST_DB_URL")
 	if dsn == "" {
+		// A skip is green, which is exactly how this suite went unnoticed
+		// for issue #701: gated behind this same variable, never wired into
+		// any workflow, always skipped, never once failing CI. In CI, an
+		// absent variable must fail loudly instead of vanishing quietly.
+		// GitHub Actions sets CI=true on every runner; a local dev run
+		// (CI unset) still skips.
+		if os.Getenv("CI") != "" {
+			t.Fatal("LITELLM_TEST_DB_URL not set in CI; this suite must not silently skip (issue #701)")
+		}
 		t.Skip("LITELLM_TEST_DB_URL not set; skipping litellmconfig integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -44,6 +53,15 @@ func connectLiteLLMTestDB(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// mapKeys returns the keys of m, for use in test failure messages only.
+func mapKeys(m map[string]map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // integMockRestarter records calls to Restart for integration tests.
@@ -89,10 +107,15 @@ func seedSyncRoute(t *testing.T, pool *pgxpool.Pool, routeID, aliasID, providerS
 		VALUES ($1, 'test', $1, 'test', 'public', 'stable', '[]'::jsonb, 10, 30, now(), now())
 		ON CONFLICT (alias_id) DO NOTHING
 	`, aliasID)
+	// provider_model is seeded pre-prefixed (provider + "/" + modelID), matching
+	// every real migration row (e.g. "openrouter/openai/gpt-4o-mini"). A bare,
+	// unprefixed provider_model here would certify the exact shape the
+	// deleted litellm_prefix concatenation existed to repair (issue #701
+	// review) instead of the real invariant SyncService now depends on.
 	_, err := pool.Exec(ctx, `
 		INSERT INTO public.provider_routes
 			(route_id, alias_id, provider, provider_model, litellm_model_name, price_class, health_state, priority)
-		VALUES ($1, $2, $3, $4, $3 || '/' || $4, 'standard', 'healthy', 1)
+		VALUES ($1, $2, $3, $3 || '/' || $4, $3 || '/' || $4, 'standard', 'healthy', 1)
 		ON CONFLICT (route_id) DO NOTHING
 	`, routeID, aliasID, providerSlug, modelID)
 	if err != nil {
@@ -154,6 +177,48 @@ func TestSyncServiceIntegration(t *testing.T) {
 	}
 	if len(modelList) < 2 {
 		t.Errorf("expected at least 2 model_list entries (seeded 2 routes), got %d", len(modelList))
+	}
+
+	// -------------------------------------------------------------------------
+	// Step 3b: Assert every seeded active route actually made it into the
+	// generated config, keyed on model_name (route_id) with the exact
+	// litellm_params.model the route was seeded with (provider_model). A
+	// future rename of either source column (the defect this test guards
+	// against, issue #701) makes this fail loudly — either the query errors
+	// before reaching this point, or the seeded route_id/provider_model pair
+	// goes missing/wrong here — instead of silently shipping an empty or
+	// mismatched model_list.
+	// -------------------------------------------------------------------------
+	byModelName := map[string]map[string]interface{}{}
+	for _, item := range modelList {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			t.Fatalf("model_list entry has unexpected type: %T", item)
+		}
+		name, ok := entry["model_name"].(string)
+		if !ok {
+			t.Fatalf("model_list entry missing model_name: %#v", entry)
+		}
+		byModelName[name] = entry
+	}
+
+	wantRoutes := map[string]string{
+		routeID1: providerSlug + "/model-alpha",
+		routeID2: providerSlug + "/model-beta",
+	}
+	for routeID, wantProviderModel := range wantRoutes {
+		entry, ok := byModelName[routeID]
+		if !ok {
+			t.Fatalf("seeded route %q missing from generated model_list; got model_names: %v", routeID, mapKeys(byModelName))
+		}
+		params, ok := entry["litellm_params"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("route %q: litellm_params missing or wrong type: %#v", routeID, entry["litellm_params"])
+		}
+		gotModel, _ := params["model"].(string)
+		if gotModel != wantProviderModel {
+			t.Errorf("route %q: litellm_params.model = %q, want %q (provider_model)", routeID, gotModel, wantProviderModel)
+		}
 	}
 
 	// -------------------------------------------------------------------------

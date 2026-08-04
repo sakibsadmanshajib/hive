@@ -15,11 +15,10 @@ type SyncRunner interface {
 
 // routeRow is a join of provider_routes and custom_providers for active routes.
 type routeRow struct {
-	ModelName     string
-	LiteLLMPrefix string
-	LiteLLMName   string // provider_routes.model_id — the upstream model identifier
-	BaseURL       string
-	APIKeyEnv     string
+	ModelName   string
+	LiteLLMName string // provider_routes.provider_model — already carries its provider prefix, e.g. "openrouter/openai/gpt-4o-mini"
+	BaseURL     string
+	APIKeyEnv   string
 }
 
 // SyncService queries the DB for active provider routes, generates LiteLLM
@@ -48,11 +47,10 @@ func NewSyncService(pool *pgxpool.Pool, configPath, masterKey string, restarter 
 func (s *SyncService) Sync(ctx context.Context) error {
 	rows, err := s.pool.Query(ctx, `
 		SELECT
-			pr.route_id        AS model_name,
-			cp.litellm_prefix  AS litellm_prefix,
-			pr.model_id        AS litellm_name,
-			cp.base_url        AS base_url,
-			cp.api_key_env     AS api_key_env
+			pr.route_id       AS model_name,
+			pr.provider_model AS litellm_name,
+			cp.base_url       AS base_url,
+			cp.api_key_env    AS api_key_env
 		FROM public.provider_routes pr
 		JOIN public.custom_providers cp ON cp.slug = pr.provider
 		WHERE pr.health_state NOT IN ('disabled', 'eol')
@@ -67,18 +65,20 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	var entries []ModelEntry
 	for rows.Next() {
 		var r routeRow
-		if err := rows.Scan(&r.ModelName, &r.LiteLLMPrefix, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv); err != nil {
+		if err := rows.Scan(&r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv); err != nil {
 			return fmt.Errorf("litellmconfig: sync: scan route: %w", err)
 		}
 
-		litellmModel := r.LiteLLMName
-		if r.LiteLLMPrefix != "" {
-			litellmModel = r.LiteLLMPrefix + r.LiteLLMName
-		}
-
+		// provider_routes.provider_model is stored pre-prefixed for every
+		// route seeded so far (e.g. "openrouter/openai/gpt-4o-mini",
+		// "groq/llama-3.3-70b-versatile" — see supabase/migrations/
+		// 20260331_02_routing_policy.sql and siblings). custom_providers.
+		// litellm_prefix is NOT concatenated here: doing so would double the
+		// prefix ("openrouter/openrouter/..."), since every provider_model
+		// value already carries it.
 		entries = append(entries, ModelEntry{
 			ModelName:   r.ModelName,
-			LiteLLMName: litellmModel,
+			LiteLLMName: r.LiteLLMName,
 			APIBase:     r.BaseURL,
 			APIKeyEnv:   r.APIKeyEnv,
 		})
@@ -88,6 +88,14 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	}
 
 	slog.Info("litellmconfig: sync: active routes loaded", "count", len(entries))
+
+	// ponytail: a zero-row result almost always means a query/schema defect
+	// (issue #701) or every provider disabled at once, not an intentional
+	// empty gateway. Refuse rather than write model_list: [] and restart
+	// LiteLLM into serving nothing.
+	if len(entries) == 0 {
+		return fmt.Errorf("litellmconfig: sync: zero active routes; refusing to write an empty model_list")
+	}
 
 	cfg := Config{
 		Models: entries,
