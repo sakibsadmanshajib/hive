@@ -36,6 +36,14 @@ type GeneralSettings struct {
 type Config struct {
 	Models          []ModelEntry
 	GeneralSettings GeneralSettings
+	// KnownRouteIDs is every provider_routes.route_id, including the routes
+	// Models deliberately omits (health_state 'disabled'/'eol', disabled
+	// provider). The merge preserves an existing model_list entry only when its
+	// model_name is absent from this set, so a retired DB-managed route can
+	// finally be removed while a truly operator-managed entry with no
+	// provider_routes row at all still survives. Empty means "unknown", which
+	// preserves every unmatched entry exactly as before.
+	KnownRouteIDs []string
 	// ExistingConfigPath is the path of the on-disk config to merge from.
 	// WriteAndRestart reads this file to preserve non-generated keys.
 	// If the file does not exist, the config is written from scratch.
@@ -126,7 +134,8 @@ func Generate(cfg Config) ([]byte, error) {
 //  2. Update model_list entries whose model_name the DB query returned, field
 //     by field: the DB owns litellm_params model/api_base/api_key, everything
 //     else the entry already carried survives. Keep any existing model_list
-//     entry whose model_name the DB query did NOT return (see mergeConfig).
+//     entry whose model_name is not a provider_routes route_id at all, and drop
+//     one that is a route_id but is no longer active (see mergeConfig).
 //  3. Merge general_settings: update master_key, preserve all other keys.
 //  4. Marshal the merged map to YAML and write atomically via temp file + rename.
 //
@@ -157,7 +166,7 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 			return fmt.Errorf("litellmconfig: parse existing config: %w", parseErr)
 		}
 		if existingMap != nil {
-			merged = mergeConfig(existingMap, newMap)
+			merged = mergeConfig(existingMap, newMap, cfg.KnownRouteIDs)
 		}
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return fmt.Errorf("litellmconfig: read existing config: %w", readErr)
@@ -241,16 +250,26 @@ func mergeParams(existing, generated interface{}) interface{} {
 //     model_info (e.g. mode: embedding set by the seed config) and any
 //     hand-tuned litellm_params key the generator does not produce (see
 //     mergeParams).
-//   - model_list entries whose model_name has NO corresponding DB row are
-//     preserved verbatim. provider_routes is not the only source of routes
-//     LiteLLM serves: deploy/litellm/config.yaml also carries operator-managed
-//     entries with no provider_routes row at all (e.g. route-doc-vlm, bge-m3).
-//     Silently dropping either those or the hand-tuned keys above on the first
-//     successful sync would be a destructive regression disguised as a bug fix
-//     (issue #701 review, issue #707).
+//   - model_list entries whose model_name is NOT a provider_routes route_id at
+//     all (absent from knownRouteIDs) are preserved verbatim. provider_routes
+//     is not the only source of routes LiteLLM serves: deploy/litellm/config.yaml
+//     also carries operator-managed entries with no provider_routes row at all
+//     (e.g. route-doc-vlm, bge-m3). Silently dropping either those or the
+//     hand-tuned keys above on the first successful sync would be a destructive
+//     regression disguised as a bug fix (issue #701 review, issue #707).
+//   - model_list entries whose model_name IS a route_id but is missing from the
+//     generated list are dropped: the route exists in provider_routes and is no
+//     longer active (health_state 'disabled'/'eol', or its provider disabled),
+//     e.g. route-openrouter-fast-fallback, retired that way by
+//     20260801_01_alias_pricing_correction.sql. Without knownRouteIDs this case
+//     is indistinguishable from an operator-managed entry, so a retired route's
+//     entry would stay in the live config with no path that could remove it.
 //   - general_settings is merged: master_key updated, all other keys preserved.
 //   - All other top-level keys from existing are preserved unchanged.
-func mergeConfig(existing, generated map[string]interface{}) map[string]interface{} {
+//
+// An empty knownRouteIDs means the caller does not know the route set, and every
+// unmatched entry is preserved (the pre-knownRouteIDs behaviour).
+func mergeConfig(existing, generated map[string]interface{}, knownRouteIDs []string) map[string]interface{} {
 	result := make(map[string]interface{}, len(existing))
 	for k, v := range existing {
 		result[k] = v
@@ -259,16 +278,22 @@ func mergeConfig(existing, generated map[string]interface{}) map[string]interfac
 	newList, _ := generated["model_list"].([]interface{})
 	oldList, _ := existing["model_list"].([]interface{})
 
-	// dbManaged records which model_name values the DB query returned this
-	// sync; anything in oldList NOT in this set is operator-managed and must
-	// survive the merge rather than be dropped.
-	dbManaged := map[string]bool{}
+	// generatedNames records which model_name values this sync generated (active
+	// routes only); knownRoutes records every provider_routes route_id, active
+	// or not. An old entry in neither set is operator-managed and survives; one
+	// in knownRoutes but not generatedNames is a retired DB-managed route and is
+	// dropped.
+	generatedNames := map[string]bool{}
 	for _, item := range newList {
 		if entry, ok := item.(map[string]interface{}); ok {
 			if name, ok := entry["model_name"].(string); ok {
-				dbManaged[name] = true
+				generatedNames[name] = true
 			}
 		}
+	}
+	knownRoutes := make(map[string]bool, len(knownRouteIDs))
+	for _, id := range knownRouteIDs {
+		knownRoutes[id] = true
 	}
 
 	// Build a lookup of the existing entries keyed by model_name, so a
@@ -303,8 +328,8 @@ func mergeConfig(existing, generated map[string]interface{}) map[string]interfac
 		newList[i] = updated
 	}
 
-	// Append operator-managed entries (no corresponding DB row) unchanged,
-	// after the DB-managed ones, and log each so drift between file-managed
+	// Append operator-managed entries (no provider_routes row) unchanged, after
+	// the DB-managed ones, and log both outcomes so drift between file-managed
 	// and DB-managed routes is visible rather than silent.
 	mergedList := append([]interface{}{}, newList...)
 	for _, item := range oldList {
@@ -313,7 +338,11 @@ func mergeConfig(existing, generated map[string]interface{}) map[string]interfac
 			continue
 		}
 		name, _ := entry["model_name"].(string)
-		if name == "" || dbManaged[name] {
+		if name == "" || generatedNames[name] {
+			continue
+		}
+		if knownRoutes[name] {
+			slog.Info("litellmconfig: sync: dropping model_list entry for a provider_routes route that is no longer active", "model_name", name)
 			continue
 		}
 		slog.Info("litellmconfig: sync: preserving operator-managed model_list entry with no provider_routes row", "model_name", name)

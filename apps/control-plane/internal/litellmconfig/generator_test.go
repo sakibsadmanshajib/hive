@@ -456,7 +456,8 @@ general_settings:
 `
 	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o600))
 
-	// New sync's DB query only returns gpt-4o; route-doc-vlm has no DB row.
+	// New sync's DB query only returns gpt-4o; route-doc-vlm has no DB row, so
+	// it is absent from KnownRouteIDs too and must be preserved.
 	cfg := litellmconfig.Config{
 		Models: []litellmconfig.ModelEntry{
 			{
@@ -466,6 +467,7 @@ general_settings:
 				APIKeyEnv:   "OPENROUTER_API_KEY",
 			},
 		},
+		KnownRouteIDs: []string{"gpt-4o"},
 		GeneralSettings: litellmconfig.GeneralSettings{
 			MasterKey: "new-key",
 		},
@@ -504,6 +506,89 @@ general_settings:
 	docParams := docVLM["litellm_params"].(map[string]interface{})
 	assert.Equal(t, "openrouter/meta-llama/llama-4-scout:free", docParams["model"], "operator-managed entry's model must survive unchanged")
 	assert.Contains(t, docParams, "extra_body", "operator-managed entry's extra_body must survive unchanged")
+}
+
+// TestWriteAndRestartRemovesRetiredDBManagedRoute proves the accretion half of
+// the merge rule, which pulls against the test above on purpose. Generation is
+// active-only (health_state not in disabled/eol, provider enabled), so a route
+// that was DB-managed and is later retired disappears from the generated list
+// and would otherwise be mistaken for an operator-managed entry and preserved
+// forever, with no path that could ever remove it. KnownRouteIDs carries every
+// provider_routes.route_id including the inactive ones, so "absent from the
+// database" and "present but inactive" stop being the same signal.
+//
+// 20260801_01_alias_pricing_correction.sql retired
+// route-openrouter-fast-fallback by exactly this mechanism (health_state set to
+// 'disabled', row kept), which is the shape used here.
+func TestWriteAndRestartRemovesRetiredDBManagedRoute(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	existing := `
+model_list:
+  - model_name: route-groq-fast
+    litellm_params:
+      model: groq/llama-3.1-8b-instant
+      api_key: os.environ/GROQ_API_KEY
+  - model_name: route-openrouter-fast-fallback
+    litellm_params:
+      model: openrouter/openai/gpt-4o-mini
+      api_key: os.environ/OPENROUTER_API_KEY
+  - model_name: route-doc-vlm
+    litellm_params:
+      model: os.environ/OPENROUTER_AUTO_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+      extra_body:
+        provider:
+          allow_fallbacks: false
+general_settings:
+  master_key: old-key
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o600))
+
+	cfg := litellmconfig.Config{
+		// Active routes only, exactly what SyncService generates.
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:   "route-groq-fast",
+				LiteLLMName: "groq/llama-3.1-8b-instant",
+				APIBase:     "https://api.groq.com/openai/v1",
+				APIKeyEnv:   "GROQ_API_KEY",
+			},
+		},
+		// Every provider_routes row, active or not. The retired route is here;
+		// route-doc-vlm is not, because it has no row at all.
+		KnownRouteIDs: []string{"route-groq-fast", "route-openrouter-fast-fallback"},
+		GeneralSettings: litellmconfig.GeneralSettings{
+			MasterKey: "new-key",
+		},
+		ExistingConfigPath: configPath,
+	}
+
+	r := &mockRestarter{}
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, r))
+
+	data, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+	modelList, ok := parsed["model_list"].([]interface{})
+	require.True(t, ok, "model_list must be a sequence")
+
+	byName := map[string]map[string]interface{}{}
+	for _, item := range modelList {
+		entry, ok := item.(map[string]interface{})
+		require.True(t, ok)
+		byName[entry["model_name"].(string)] = entry
+	}
+
+	assert.NotContains(t, byName, "route-openrouter-fast-fallback",
+		"a retired DB-managed route must be removed from the live config, not preserved forever")
+	require.Contains(t, byName, "route-groq-fast", "the active DB-managed route must stay")
+	require.Contains(t, byName, "route-doc-vlm", "an entry with no provider_routes row is operator-managed and must stay (issue #705)")
+	docParams := byName["route-doc-vlm"]["litellm_params"].(map[string]interface{})
+	assert.Contains(t, docParams, "extra_body", "the operator-managed entry must survive verbatim")
+	assert.Len(t, modelList, 2, "exactly the active DB route plus the operator-managed one")
 }
 
 // TestWriteAndRestartPreservesHandTunedLiteLLMParams proves issue #707 gap 2:

@@ -44,11 +44,18 @@ func NewSyncService(pool *pgxpool.Pool, configPath, masterKey string, restarter 
 	}
 }
 
-// Sync queries active provider routes, builds model entries, and calls
-// WriteAndRestart. Active routes are those with health_state in ('healthy',
-// 'degraded'). Rows with health_state 'disabled' or 'eol' are excluded so
-// retired routes never receive live LiteLLM traffic.
+// Sync queries provider routes, builds model entries for the active ones, and
+// calls WriteAndRestart. Active routes are those with health_state in
+// ('healthy', 'degraded') on an enabled provider. Rows with health_state
+// 'disabled' or 'eol' produce no model_list entry so retired routes never
+// receive live LiteLLM traffic, but their route_id is still reported to the
+// merge via Config.KnownRouteIDs so an entry left over from when they were
+// active can be removed.
 func (s *SyncService) Sync(ctx context.Context) error {
+	// Every provider_routes row, with activity computed rather than filtered in
+	// the WHERE clause. One query, not two, so the active set and the full
+	// route_id set cannot disagree about a row written between them.
+	//
 	// LEFT JOIN on provider_capabilities: a route with no capabilities row is
 	// treated as non-embedding, which is the same adapter choice the generator
 	// made before supports_embeddings was read at all.
@@ -58,12 +65,11 @@ func (s *SyncService) Sync(ctx context.Context) error {
 			pr.provider_model AS litellm_name,
 			cp.base_url       AS base_url,
 			cp.api_key_env    AS api_key_env,
-			COALESCE(pc.supports_embeddings, false) AS supports_embeddings
+			COALESCE(pc.supports_embeddings, false) AS supports_embeddings,
+			(pr.health_state NOT IN ('disabled', 'eol') AND cp.enabled) AS active
 		FROM public.provider_routes pr
 		JOIN public.custom_providers cp ON cp.slug = pr.provider
 		LEFT JOIN public.provider_capabilities pc ON pc.route_id = pr.route_id
-		WHERE pr.health_state NOT IN ('disabled', 'eol')
-		  AND cp.enabled = true
 		ORDER BY pr.route_id ASC
 	`)
 	if err != nil {
@@ -72,10 +78,17 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	defer rows.Close()
 
 	var entries []ModelEntry
+	var knownRouteIDs []string
 	for rows.Next() {
 		var r routeRow
-		if err := rows.Scan(&r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv, &r.SupportsEmbeddings); err != nil {
+		var active bool
+		if err := rows.Scan(&r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv, &r.SupportsEmbeddings, &active); err != nil {
 			return fmt.Errorf("litellmconfig: sync: scan route: %w", err)
+		}
+
+		knownRouteIDs = append(knownRouteIDs, r.ModelName)
+		if !active {
+			continue
 		}
 
 		// provider_routes.provider_model is stored pre-prefixed for every
@@ -97,7 +110,7 @@ func (s *SyncService) Sync(ctx context.Context) error {
 		return fmt.Errorf("litellmconfig: sync: rows error: %w", err)
 	}
 
-	slog.Info("litellmconfig: sync: active routes loaded", "count", len(entries))
+	slog.Info("litellmconfig: sync: routes loaded", "active", len(entries), "total", len(knownRouteIDs))
 
 	// ponytail: a zero-row result almost always means a query/schema defect
 	// (issue #701) or every provider disabled at once, not an intentional
@@ -108,7 +121,8 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	}
 
 	cfg := Config{
-		Models: entries,
+		Models:        entries,
+		KnownRouteIDs: knownRouteIDs,
 		GeneralSettings: GeneralSettings{
 			MasterKey: s.masterKey,
 		},

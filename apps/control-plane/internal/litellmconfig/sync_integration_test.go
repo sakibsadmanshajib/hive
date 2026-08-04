@@ -244,6 +244,78 @@ func TestSyncServiceIntegration(t *testing.T) {
 		configPath, len(modelList), restarter.calls)
 }
 
+// TestSyncRemovesRetiredRouteFromExistingConfig is the live-DB half of the
+// accretion rule. The unit test with the same shape can only prove mergeConfig
+// honours KnownRouteIDs; it passes even if SyncService never populates them.
+// This one reads a really retired route out of the migration chain
+// (20260801_01_alias_pricing_correction.sql set route-openrouter-fast-fallback
+// to health_state 'disabled' and kept the row), plants an entry for it in the
+// existing config, and requires the sync to drop it while keeping an entry that
+// has no provider_routes row at all.
+func TestSyncRemovesRetiredRouteFromExistingConfig(t *testing.T) {
+	pool := connectLiteLLMTestDB(t)
+	ctx := context.Background()
+
+	const retiredRoute = "route-openrouter-fast-fallback"
+	var healthState string
+	if err := pool.QueryRow(ctx,
+		`SELECT health_state FROM public.provider_routes WHERE route_id = $1`,
+		retiredRoute).Scan(&healthState); err != nil {
+		t.Fatalf("read retired %s row: %v", retiredRoute, err)
+	}
+	if healthState != "disabled" && healthState != "eol" {
+		t.Fatalf("%s is %q; this test needs a route that is retired but still present in provider_routes", retiredRoute, healthState)
+	}
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	existing := "model_list:\n" +
+		"  - model_name: " + retiredRoute + "\n" +
+		"    litellm_params:\n" +
+		"      model: openrouter/openai/gpt-4o-mini\n" +
+		"      api_key: os.environ/OPENROUTER_API_KEY\n" +
+		"  - model_name: integ-operator-managed-entry\n" +
+		"    litellm_params:\n" +
+		"      model: openai/some-local-model\n" +
+		"      api_base: http://localhost:11434/v1\n" +
+		"      api_key: \"none\"\n" +
+		"general_settings:\n" +
+		"  master_key: old-key\n"
+	if err := os.WriteFile(configPath, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	svc := litellmconfig.NewSyncService(pool, configPath, "test-master-key", &integMockRestarter{})
+	if err := svc.Sync(ctx); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("YAML parse error: %v", err)
+	}
+	modelList, _ := parsed["model_list"].([]interface{})
+	names := map[string]bool{}
+	for _, item := range modelList {
+		if entry, ok := item.(map[string]interface{}); ok {
+			if name, _ := entry["model_name"].(string); name != "" {
+				names[name] = true
+			}
+		}
+	}
+
+	if names[retiredRoute] {
+		t.Errorf("%s is retired in provider_routes but its model_list entry survived the sync; nothing can ever remove it", retiredRoute)
+	}
+	if !names["integ-operator-managed-entry"] {
+		t.Errorf("an entry with no provider_routes row must be preserved (issue #705); got model_names: %v", names)
+	}
+}
+
 // TestSyncKeepsEmbeddingAdapterForSeededRoute proves issue #707 gap 1 against
 // the real seeded route, no synthetic fixture: LiteLLM's native `openrouter/`
 // provider does not map the /embeddings endpoint, so
