@@ -659,7 +659,30 @@ services:
       ENABLE_ADMIN_PANEL: "false"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
-      ENABLE_MODEL_FILTER: "true"
+      # Model visibility belongs to the gateway, not to Open WebUI. edge-api
+      # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
+      # so a second independent filter here adds nothing and actively hides
+      # upstream state: Open WebUI's own access control shows a session whose
+      # role is "user" only models present in Open WebUI's Models registry,
+      # and this deployment never populates that registry (ENABLE_ADMIN_PANEL
+      # is "false", so nothing can curate it). An empty picker therefore looks
+      # identical whether edge-api served six models or refused the shim key
+      # outright, which is exactly how a gateway 403 stayed hidden for four
+      # nights (#717).
+      #
+      # BYPASS_MODEL_ACCESS_CONTROL makes the gateway the single source of
+      # truth. In the pinned v0.10.2 image it skips get_filtered_models on
+      # /openai/models (routers/openai.py:705), skips check_model_access on
+      # the completion path (main.py:1032), and forces bypass_filter for the
+      # chat and embedding helper paths (routers/openai.py:1120), so picker,
+      # chat and document RAG all reflect exactly what edge-api serves.
+      #
+      # This replaces ENABLE_MODEL_FILTER: "true", which was dead. That name
+      # arrived with the rest of this service block in #143 and does not exist
+      # anywhere in v0.10.2 (upstream removed it long before that tag), so it
+      # never filtered anything; the filtering was Open WebUI's default access
+      # control the whole time.
+      BYPASS_MODEL_ACCESS_CONTROL: "true"
       ENABLE_EVALUATION_ARENA_MODELS: "false"
       # Web search. Opt-in via .env, default off (same pattern as
       # OWUI_E2E_MODE below) -- this service block is shared with the
