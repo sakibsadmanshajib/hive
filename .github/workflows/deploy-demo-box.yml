@@ -547,10 +547,16 @@ jobs:
           fi
 
           # LiteLLM has been up since the recreate several steps back, but
-          # retry with backoff anyway rather than assume.
+          # retry with backoff anyway rather than assume. --connect-timeout
+          # and --max-time bound each attempt: without them a curl that
+          # connects but never answers hangs forever, and the loop below
+          # never advances, so the failure is an opaque 15-minute job
+          # timeout instead of a loud one. Worst case with the caps: 12
+          # attempts x (10s max-time + 5s sleep) = 180s (3 minutes).
           resolved=""
           for i in $(seq 1 12); do
-            if resolved=$(curl -fsS -H "Authorization: Bearer $master_key" \
+            if resolved=$(curl -fsS --connect-timeout 2 --max-time 10 \
+              -H "Authorization: Bearer $master_key" \
               http://localhost:4000/model/info); then
               break
             fi

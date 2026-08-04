@@ -21,11 +21,15 @@
 # gpt-4.1-mini price the catalog names. The env vars now default to the same
 # paid slugs the catalog is priced against (see .env.example and
 # supabase/migrations/20260331_02_routing_policy.sql's provider_model column),
-# so the honest count is THREE hard-priced paid routes out of the six below:
-# route-openrouter-default (gpt-4o-mini), route-openrouter-auto and
-# route-doc-vlm (both gpt-4.1-mini, sharing OPENROUTER_AUTO_MODEL), and
+# so the honest count is FOUR dispatchable paid routes out of the six below,
+# resolving to THREE distinct paid models: route-openrouter-default
+# (gpt-4o-mini), route-openrouter-auto and route-doc-vlm (both gpt-4.1-mini,
+# sharing OPENROUTER_AUTO_MODEL -- one model, two routes), and
 # route-openrouter-embedding-fallback (qwen3-embedding-8b, embedding cascade
-# last resort). The Groq fast route and the embedding primary stay free-tier.
+# last resort). Use the route count for a dispatch audit (which routes can
+# ever bill a paid provider) and the model count for a spend estimate (how
+# many distinct upstream rates are in play). The Groq fast route and the
+# embedding primary stay free-tier.
 # Whether a 3-paid-route demo still fits inside whatever budget cap motivated
 # this comment is a cost-policy question for the owner, not something this fix
 # decides; deploy-demo-box.yml's "Assert model catalog prices agree..." step
