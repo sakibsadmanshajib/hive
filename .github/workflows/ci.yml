@@ -641,6 +641,10 @@ jobs:
         if: needs.changes.outputs.run != 'false'
         run: npx tsc --noEmit
 
+      - name: Phase-19 collection guard
+        if: needs.changes.outputs.run != 'false'
+        run: npm run e2e:phase-19:verify-collection
+
       - name: Unit tests (vitest)
         if: needs.changes.outputs.run != 'false'
         run: npm run test:unit

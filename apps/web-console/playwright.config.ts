@@ -31,7 +31,7 @@ export default defineConfig({
     {
       name: "phase-19",
       testDir: "./e2e/phase-19",
-      testMatch: /^[^/]+\.spec\.ts$/,
+      testMatch: /\/phase-19\/[^/]+\.spec\.ts$/, // full path match, direct children only; owui runs separately
       use: { ...devices["Desktop Chrome"] },
       dependencies: ["phase-19-setup"],
     },
