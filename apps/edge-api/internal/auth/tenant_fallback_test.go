@@ -14,13 +14,22 @@ import (
 )
 
 // newPool mirrors internal/chat/dispatch_test.go's helper of the same
-// name: it skips the test rather than failing when no test DB is wired
-// up, so these DB-backed branches only run where HIVE_TEST_DB_URL is set
-// (CI integration job / local docker-compose test profile).
+// name: locally it skips the test when no test DB is wired up, but in CI
+// (CI=true) a missing HIVE_TEST_DB_URL fails loudly instead, so these
+// DB-backed branches only run where HIVE_TEST_DB_URL is set (CI integration
+// job / local docker-compose test profile).
 func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires HIVE_TEST_DB_URL at the job level (issue #708); a missing
+		// value there means this DB-backed test silently skipped rather than
+		// ran, the same failure shape #701/#705 fixed for litellmconfig. Fail
+		// loud in CI instead of shipping an invisible skip; local dev runs
+		// (CI unset) still skip.
+		if os.Getenv("CI") != "" {
+			t.Fatal("HIVE_TEST_DB_URL not set in CI; this suite must not silently skip (issue #708)")
+		}
 		t.Skip("HIVE_TEST_DB_URL not set")
 	}
 	pool, err := pgxpool.New(ctx, dsn)
