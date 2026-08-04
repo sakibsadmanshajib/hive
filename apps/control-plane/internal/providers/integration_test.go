@@ -34,6 +34,14 @@ func connectTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("PROVIDERS_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires PROVIDERS_TEST_DB_URL at the job level (issue #708); a
+		// missing value there means this suite silently skipped rather than
+		// ran, the same failure shape #701/#705 fixed for litellmconfig.
+		// Fail loud in CI instead of shipping an invisible skip; local dev
+		// runs (CI unset) still skip.
+		if os.Getenv("CI") != "" {
+			t.Fatal("PROVIDERS_TEST_DB_URL not set in CI; this suite must not silently skip (issue #708)")
+		}
 		t.Skip("PROVIDERS_TEST_DB_URL not set; skipping integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -225,15 +233,22 @@ func TestProviderCRUDIntegration(t *testing.T) {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM public.model_aliases WHERE alias_id = $1", testAliasID)
 	})
 
+	// route_id is a text primary key with no default; the fixture must supply
+	// one explicitly. It is derived from slug, which is already unique per
+	// test run via randomSuffix().
+	wantRouteID := "route-" + slug
 	var routeID string
 	err = pool.QueryRow(ctx, `
 		INSERT INTO public.provider_routes
-			(alias_id, provider, provider_model, litellm_model_name, price_class, health_state, priority)
-		VALUES ($2, $1, 'test-model', 'test/test-model', 'standard', 'healthy', 1)
+			(route_id, alias_id, provider, provider_model, litellm_model_name, price_class, health_state, priority)
+		VALUES ($3, $2, $1, 'test-model', 'test/test-model', 'standard', 'healthy', 1)
 		RETURNING route_id
-	`, slug, testAliasID).Scan(&routeID)
+	`, slug, testAliasID, wantRouteID).Scan(&routeID)
 	if err != nil {
 		t.Fatalf("step 6: INSERT provider_routes with custom slug: %v", err)
+	}
+	if routeID != wantRouteID {
+		t.Fatalf("step 6: expected route_id %q, got %q", wantRouteID, routeID)
 	}
 	// Cleanup route row before alias row (FK order).
 	t.Cleanup(func() {

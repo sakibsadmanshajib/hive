@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -27,6 +28,14 @@ func connectCatalogTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("CATALOG_TEST_DB_URL")
 	if dsn == "" {
+		// CI wires CATALOG_TEST_DB_URL at the job level (issue #708); a
+		// missing value there means this suite silently skipped rather than
+		// ran, the same failure shape #701/#705 fixed for litellmconfig.
+		// Fail loud in CI instead of shipping an invisible skip; local dev
+		// runs (CI unset) still skip.
+		if os.Getenv("CI") != "" {
+			t.Fatal("CATALOG_TEST_DB_URL not set in CI; this suite must not silently skip (issue #708)")
+		}
 		t.Skip("CATALOG_TEST_DB_URL not set; skipping integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -41,6 +50,31 @@ func connectCatalogTestDB(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 	return pool
+}
+
+// seedTenant inserts a test public.tenants row so that tenant_id foreign
+// keys on tenant_model_visibility resolve. tenant_model_visibility.tenant_id
+// references tenants(id); the test's fixed tenantA/tenantB UUIDs must exist
+// as real rows before any visibility row referencing them can be inserted.
+// Returns true only if this call created the row (RETURNING with an
+// ON CONFLICT DO NOTHING reports no row when one already existed), so the
+// caller's cleanup deletes only tenant rows it actually owns.
+func seedTenant(t *testing.T, pool *pgxpool.Pool, tenantID uuid.UUID) bool {
+	t.Helper()
+	var inserted uuid.UUID
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO public.tenants (id, slug, name, deployment)
+		VALUES ($1, $2, $2, 'HIVE_CLOUD')
+		ON CONFLICT (id) DO NOTHING
+		RETURNING id
+	`, tenantID, "test-tenant-"+tenantID.String()).Scan(&inserted)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return false
+		}
+		t.Fatalf("seedTenant %v: %v", tenantID, err)
+	}
+	return true
 }
 
 // seedAlias inserts a test model_alias row. It is cleaned up via t.Cleanup.
@@ -114,6 +148,8 @@ func TestTenantVisibilityIntegration(t *testing.T) {
 	// Use UUIDs that are very unlikely to collide with real tenant data.
 	tenantA := uuid.MustParse("a0000000-0000-0000-0000-000000000001")
 	tenantB := uuid.MustParse("b0000000-0000-0000-0000-000000000001")
+	ownsTenantA := seedTenant(t, pool, tenantA)
+	ownsTenantB := seedTenant(t, pool, tenantB)
 
 	// Seed two aliases unique to this test run.
 	suffix := fmt.Sprintf("integ-%d", time.Now().UnixNano())
@@ -122,12 +158,25 @@ func TestTenantVisibilityIntegration(t *testing.T) {
 	seedAlias(t, pool, pubAlias, "public")
 	seedAlias(t, pool, restAlias, "restricted")
 
-	// Cleanup visibility rows for both tenants on exit.
+	// Cleanup visibility rows for both tenants on exit, then the tenant rows
+	// themselves, but only the ones this test actually created: a tenant row
+	// already present before this run (ownsTenant* false) is not this test's
+	// to delete, and might still be in use elsewhere.
 	t.Cleanup(func() {
 		deleteVisibilityRow(t, pool, tenantA, pubAlias)
 		deleteVisibilityRow(t, pool, tenantA, restAlias)
 		deleteVisibilityRow(t, pool, tenantB, pubAlias)
 		deleteVisibilityRow(t, pool, tenantB, restAlias)
+		if ownsTenantA {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM public.tenants WHERE id = $1", tenantA); err != nil {
+				t.Errorf("cleanup: delete tenant A: %v", err)
+			}
+		}
+		if ownsTenantB {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM public.tenants WHERE id = $1", tenantB); err != nil {
+				t.Errorf("cleanup: delete tenant B: %v", err)
+			}
+		}
 	})
 
 	// -------------------------------------------------------------------------

@@ -377,6 +377,22 @@ jobs:
           # column that does not exist on provider_routes shipped and never
           # failed a single CI run.
           echo "LITELLM_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # Same ephemeral database again, read via catalog's own env var
+          # name (issue #708). TestTenantVisibilityIntegration was gated
+          # behind CATALOG_TEST_DB_URL, which appeared nowhere under
+          # .github/, so it never ran; its fixture also hardcoded two
+          # tenant UUIDs it never inserted into public.tenants, so it would
+          # have failed its first real run on the FK from
+          # tenant_model_visibility.tenant_id. Both are fixed by this PR.
+          echo "CATALOG_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
+          # Same ephemeral database again, read via providers' own env var
+          # name (issue #708). TestProviderCRUDIntegration was gated behind
+          # PROVIDERS_TEST_DB_URL, which appeared nowhere under .github/, so
+          # it never ran; its fixture also omitted route_id (a text primary
+          # key with no default) on its provider_routes insert, so it would
+          # have failed its first real run on the not-null constraint. Both
+          # are fixed by this PR.
+          echo "PROVIDERS_TEST_DB_URL=$dsn" >> "$GITHUB_ENV"
 
       - name: go test — RLS suites against live Postgres (control-plane, edge-api only)
         if: >-
@@ -387,13 +403,29 @@ jobs:
           set -euo pipefail
           if [ "${{ matrix.module }}" = "control-plane" ]; then
             # -tags integration additionally compiles in
-            # routing/catalog_pricing_integration_test.go (issue #655) and
-            # litellmconfig/sync_integration_test.go (issue #701), which
-            # carry a //go:build integration constraint the other packages
-            # below do not use; passing the tag is a no-op for them.
-            go test -tags integration -count=1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/...
+            # routing/catalog_pricing_integration_test.go (issue #655),
+            # litellmconfig/sync_integration_test.go (issue #701), and
+            # catalog/catalog_integration_test.go +
+            # providers/integration_test.go (issue #708), which carry a
+            # //go:build integration constraint the other packages below do
+            # not use; passing the tag is a no-op for them.
+            # -p 1 forces packages to run sequentially rather than in
+            # parallel across GOMAXPROCS (issue #708 review): several of
+            # these suites (routing, catalog, providers) share one live
+            # database and can observe each other's transient rows when run
+            # concurrently, which is a flaky-collision risk, not a real bug.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/...
           else
-            go test -count=1 -v ./internal/artifacts/... ./internal/rag/...
+            # -tags integration additionally compiles in
+            # inference/chat_completions_integration_test.go (issue #708),
+            # which needs no DB (it mocks LiteLLM and control-plane with
+            # httptest) and never ran purely because this step never passed
+            # the tag. ./internal/chat/... and ./internal/auth/... carry
+            # HIVE_TEST_DB_URL-gated tests that ran neither here nor in the
+            # plain `go test ./...` step above (that step excludes them via
+            # -short/skip, this step simply never included the packages);
+            # both are now wired for real.
+            go test -tags integration -count=1 -p 1 -v ./internal/artifacts/... ./internal/rag/... ./internal/chat/... ./internal/auth/... ./internal/inference/...
           fi
 
   # ------------------------------------------------------------------
