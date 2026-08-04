@@ -204,12 +204,19 @@ jobs:
             exit 1
           fi
       - name: Diagnose model catalog layers
-        # Non-fatal (set +e / || true throughout): attributes an empty OWUI
-        # model list to one of three layers in a single glance --
+        # Attributes an empty OWUI model list to one of three layers in a single
+        # glance --
         # 1) LiteLLM has no model_list (env/config problem upstream of Hive)
         # 2) edge-api /v1/models rejects the OWUI shim credential (auth problem)
         # 3) both return models but OWUI still shows none (OWUI-side problem)
         # Prints only counts/status codes, never secrets or response bodies.
+        #
+        # Both curls stay non-fatal (set +e) so the full three-layer picture is
+        # always printed, but layer 2 is then ASSERTED: a shim key edge-api
+        # refuses means no model is selectable, and every model-dependent spec
+        # below can only fail. Issue #717 spent four Playwright timeouts (2.7
+        # minutes each) reporting that indirectly while this step printed
+        # status=403 and exited 0. Failing here names the cause instead.
         env:
           LITELLM_MASTER_KEY: ${{ secrets.LITELLM_MASTER_KEY }}
         run: |
@@ -224,6 +231,11 @@ jobs:
           edge_count=$(jq -r 'if (.data | type) == "array" then (.data | length) else "parse-error" end' /tmp/edge-models.json 2>/dev/null)
           echo "layer 1 (litellm /v1/models):  status=${litellm_status} count=${litellm_count:-parse-error}"
           echo "layer 2 (edge-api /v1/models): status=${edge_status} count=${edge_count:-parse-error}"
+          if [ "$edge_status" != "200" ]; then
+            code=$(jq -r '.error.code // "unknown"' /tmp/edge-models.json 2>/dev/null)
+            echo "::error::edge-api /v1/models answered ${edge_status} (error code: ${code}) to the seeded OWUI_SHIM_KEY, so Open WebUI has no models to select and every model-dependent spec below would fail on a timeout. account_not_provisioned means the shim key's account has no public.tenant_billing_accounts row: see scripts/seed-owui-e2e-user.py's provision_billing_mapping and issue #717."
+            exit 1
+          fi
           exit 0
       - name: Probe Supabase token endpoint from OWUI container
         # Diagnostic only, non-fatal (|| true). Leading hypothesis for the

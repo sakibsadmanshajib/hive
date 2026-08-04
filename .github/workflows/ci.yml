@@ -612,6 +612,16 @@ jobs:
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:litellm-config
 
+      # Self-checks for the provisioning scripts (pure python, no network, no
+      # framework). Wired into CI here because nothing ran them before: the
+      # `make test-scripts` target existed but no workflow invoked it, so every
+      # guard in scripts/test_seed_*.py was coverage on paper only. That is what
+      # let the OWUI shim seed ship without a tenant_billing_accounts mapping
+      # (issue #717). This job is a required check and already runs on every
+      # non-docs change, and python3 is preinstalled on ubuntu-latest.
+      - if: needs.changes.outputs.run != 'false'
+        run: make test-scripts
+
   agent-console-unit:
     name: Agent console (type + unit + build)
     runs-on: ubuntu-latest

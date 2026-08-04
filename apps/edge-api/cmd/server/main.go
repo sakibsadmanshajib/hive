@@ -789,12 +789,15 @@ func handleModels(client *catalog.Client, authorizer *authz.Authorizer) http.Han
 			return
 		}
 
-		tenantID, err := uuid.Parse(authSnap.TenantID)
-		if err != nil || tenantID == uuid.Nil {
+		tenantID, err := authSnap.TenantUUID()
+		if err != nil {
 			// Fail closed: an API key whose account has no resolvable tenant
 			// cannot be filtered by entitlement at all, so it gets nothing
 			// rather than the pre-D-030 unfiltered catalog (mirrors
 			// inference.Orchestrator.selectRoute's ErrAccountNotProvisioned).
+			// The predicate lives on the snapshot (authz.AuthSnapshot.TenantUUID)
+			// so the OWUI shim-key probe checks this same requirement instead of
+			// a weaker one, which is what made issue #717 invisible.
 			code := "account_not_provisioned"
 			apierrors.WriteError(w, http.StatusForbidden, "invalid_request_error",
 				"This API key's account is not yet linked to a workspace. Contact support to complete account setup.", &code)
@@ -1049,6 +1052,15 @@ type shimKeyResolver interface {
 // empty picker issues no request at all) or reported to the customer as a
 // generic invalid-key error that names no cause. This probe is the signal
 // that names it.
+//
+// Its predicate must stay at least as strict as the request path's, or the
+// probe becomes a false green. It was exactly that in issue #717: it read
+// Status and the model allowlist but never TenantID, so a shim key whose
+// account had no public.tenant_billing_accounts row was logged as able to
+// authenticate all three features, and then 403'd all three for every demo
+// user. The tenant requirement is therefore not restated here; it is the same
+// authz.AuthSnapshot.TenantUUID call handleModels and
+// inference.Orchestrator.selectRoute make, so the two cannot drift again.
 func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string) error {
 	snapshot, err := resolver.Resolve(ctx, shimKey)
 	if err != nil {
@@ -1056,6 +1068,15 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 	}
 	if snapshot.Status != "active" {
 		return fmt.Errorf("the key it names has status %q, not active", snapshot.Status)
+	}
+	// A key that resolves no tenant is refused by the request path with 403
+	// account_not_provisioned, so minting a replacement key cannot help: the
+	// account itself has to be mapped to a tenant.
+	if _, err := snapshot.TenantUUID(); err != nil {
+		return fmt.Errorf("%w, so /v1/models, document RAG embeddings and text-to-speech all answer "+
+			"403 account_not_provisioned for it. A new key will NOT help: map the account by running "+
+			"apps/control-plane/cmd/backfill-tenants against the same database, or re-run "+
+			"scripts/seed-owui-e2e-user.py, which provisions the mapping for the account it mints on", err)
 	}
 	// A key with neither allow_all_models nor any allowlisted alias resolves
 	// fine and then denies every model, which reaches the operator as the same
@@ -1072,11 +1093,17 @@ func checkOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 // broken one loud, and makes a mid-life revocation visible within one
 // interval rather than never.
 //
-// Deliberately not fatal: edge-api serves API-key and JWT traffic that has
+// Deliberately not fatal, and that stayed the decision when the tenant check
+// was added for issue #717: edge-api serves API-key and JWT traffic that has
 // nothing to do with Open WebUI, and refusing to boot over a chat-surface
-// credential would turn a degraded chat surface into a total outage. A no-op
-// when OWUI_SHIM_KEY is unset, which is the normal state for a deployment
-// with no Open WebUI front-end.
+// credential would turn a degraded chat surface into a total outage for every
+// other customer. The new failure mode makes that worse, not better, to be
+// fatal on: an unprovisioned account is a missing database row that an operator
+// fixes without redeploying, and a container that will not start is a strictly
+// harder thing to diagnose from than one that logs the row it needs. What
+// actually failed in #717 was the verdict, not its severity, so the fix is that
+// the verdict is now true. A no-op when OWUI_SHIM_KEY is unset, which is the
+// normal state for a deployment with no Open WebUI front-end.
 func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey string, interval time.Duration) {
 	shimKey = strings.TrimSpace(shimKey)
 	if shimKey == "" {
@@ -1091,7 +1118,7 @@ func watchOWUIShimKey(ctx context.Context, resolver shimKeyResolver, shimKey str
 		healthy := err == nil
 		if !reported || healthy != lastHealthy {
 			if healthy {
-				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key; Open WebUI model listing, document RAG embeddings, and text-to-speech can authenticate")
+				log.Printf("owui: OWUI_SHIM_KEY resolves to an active Hive API key on a tenant-provisioned account; Open WebUI model listing, document RAG embeddings, and text-to-speech can authenticate")
 			} else {
 				log.Printf("owui: ERROR OWUI_SHIM_KEY is unusable: %v. Open WebUI's model picker will be empty and its document RAG embeddings and text-to-speech will fail with a generic invalid-key error. Mint a replacement with scripts/seed-owui-e2e-user.py, which updates .env and Open WebUI's persisted config together, then restart open-webui", err)
 			}

@@ -614,6 +614,119 @@ func TestHandleModelsRefusesAPIKeyWithoutTenant(t *testing.T) {
 	}
 }
 
+// resolveBodyForTenant is the control-plane resolve payload a minted, active,
+// allow-all-models API key produces, parameterised only by the tenant its
+// account maps to. Shared by the two issue #717 guards below so the probe and
+// the request path are provably fed the same key state.
+func resolveBodyForTenant(tenantID string) string {
+	return `{
+		"key_id":"key-1",
+		"account_id":"acc-1",
+		"tenant_id":"` + tenantID + `",
+		"status":"active",
+		"allow_all_models":true,
+		"allowed_aliases":["hive-default"],
+		"budget_kind":"none",
+		"budget_consumed_credits":0,
+		"budget_reserved_credits":0,
+		"policy_version":1
+	}`
+}
+
+// TestShimKeyProbeAgreesWithTheModelsRequestPath is the issue #717 drift guard.
+//
+// The startup probe used to assert a weaker predicate than the request path:
+// it read Status and the model allowlist but never TenantID, which is the one
+// field handleModels requires. So edge-api logged "OWUI_SHIM_KEY resolves to an
+// active Hive API key; Open WebUI model listing, document RAG embeddings, and
+// text-to-speech can authenticate" and then answered 403
+// account_not_provisioned to all three, for every demo user, because the shim
+// key's account had no public.tenant_billing_accounts row. The false green is
+// why the outage survived: it actively asserted the opposite of the truth.
+//
+// This test pins the invariant rather than that one field: for the same
+// resolved key state, the probe's verdict and the request path's verdict must
+// agree. Add a requirement to one side without the other and this fails.
+func TestShimKeyProbeAgreesWithTheModelsRequestPath(t *testing.T) {
+	cases := []struct {
+		name       string
+		tenantID   string
+		wantStatus int
+	}{
+		{"account with no billing mapping", "", http.StatusForbidden},
+		{"tenant id that does not parse", "not-a-uuid", http.StatusForbidden},
+		{"explicitly nil tenant id", uuid.Nil.String(), http.StatusForbidden},
+		{"provisioned account", uuid.New().String(), http.StatusOK},
+	}
+	const models = `{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"}],"catalog":[]}`
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var sawPath string
+			client := edgecatalog.NewClient(newTenantCatalogSnapshotServer(t, models, models, &sawPath))
+			authorizer := newTestAuthorizer(t, http.StatusOK, resolveBodyForTenant(tc.tenantID))
+
+			req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			req.Header.Set("Authorization", "Bearer "+testOWUIShimKey)
+			rr := httptest.NewRecorder()
+			handleModels(client, authorizer).ServeHTTP(rr, req)
+			served := rr.Code == http.StatusOK
+
+			resolver := &stubShimKeyResolver{snapshot: authz.AuthSnapshot{
+				TenantID:       tc.tenantID,
+				Status:         "active",
+				AllowAllModels: true,
+			}}
+			probeErr := checkOWUIShimKey(context.Background(), resolver, testOWUIShimKey)
+
+			// Pin the exact refusal, not merely "not 200": a 401 or a 503 would
+			// satisfy the agreement check below while meaning something else
+			// entirely, and an assertion that cannot tell those apart is the
+			// same shape of non-evidence as the probe this test exists for.
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("request path status=%d, want %d: %s", rr.Code, tc.wantStatus, rr.Body.String())
+			}
+			if tc.wantStatus == http.StatusForbidden &&
+				!strings.Contains(rr.Body.String(), "account_not_provisioned") {
+				t.Fatalf("expected account_not_provisioned, got %s", rr.Body.String())
+			}
+			if healthy := probeErr == nil; healthy != served {
+				t.Fatalf("probe reports healthy=%v but the request path served=%v; the probe must never "+
+					"claim a key can authenticate that /v1/models then refuses (probe verdict: %v)",
+					healthy, served, probeErr)
+			}
+		})
+	}
+}
+
+// TestCheckOWUIShimKeyRejectsAnUnprovisionedAccount is the narrow half of the
+// guard above: a key that is active and allowed every model, but whose account
+// resolves no tenant, is unusable and the probe must say so in the words an
+// operator can act on. The old predicate accepted exactly this state.
+func TestCheckOWUIShimKeyRejectsAnUnprovisionedAccount(t *testing.T) {
+	for _, tenantID := range []string{"", "   ", "not-a-uuid", uuid.Nil.String()} {
+		t.Run("tenant_id="+tenantID, func(t *testing.T) {
+			resolver := &stubShimKeyResolver{snapshot: authz.AuthSnapshot{
+				TenantID:       tenantID,
+				Status:         "active",
+				AllowAllModels: true,
+				AllowedAliases: []string{"hive-embedding-default"},
+			}}
+
+			err := checkOWUIShimKey(context.Background(), resolver, testOWUIShimKey)
+
+			if err == nil {
+				t.Fatalf("expected an unusable verdict for tenant_id %q, got nil", tenantID)
+			}
+			for _, want := range []string{"not provisioned", "tenant_billing_accounts"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("expected the verdict to name %q, got %q", want, err.Error())
+				}
+			}
+		})
+	}
+}
+
 func newTestAuthorizer(t *testing.T, status int, body string) *authz.Authorizer {
 	return newTestAuthorizerWithLimiter(t, status, body, func(_ context.Context, snapshot authz.AuthSnapshot, aliasID string, estimatedCredits, billableTokens, freeTokens int64) (authz.LimitResult, error) {
 		return authz.LimitResult{Allowed: true}, nil
@@ -753,9 +866,18 @@ func TestCheckOWUIShimKeyClassifiesEveryUnusableState(t *testing.T) {
 			wantErr:  `status "revoked"`,
 		},
 		{
-			name:     "resolved key permits no models",
-			resolver: &stubShimKeyResolver{snapshot: authz.AuthSnapshot{Status: "active"}},
-			wantErr:  "allowed no models",
+			name: "resolved key permits no models",
+			resolver: &stubShimKeyResolver{snapshot: authz.AuthSnapshot{
+				Status: "active", TenantID: uuid.New().String(),
+			}},
+			wantErr: "allowed no models",
+		},
+		{
+			name: "resolved key's account resolves no tenant",
+			resolver: &stubShimKeyResolver{snapshot: authz.AuthSnapshot{
+				Status: "active", AllowAllModels: true,
+			}},
+			wantErr: "not provisioned",
 		},
 	}
 	for _, tc := range cases {
@@ -776,8 +898,12 @@ func TestCheckOWUIShimKeyAcceptsAResolvableKey(t *testing.T) {
 		name     string
 		snapshot authz.AuthSnapshot
 	}{
-		{"allow all models", authz.AuthSnapshot{Status: "active", AllowAllModels: true}},
-		{"explicit allowlist", authz.AuthSnapshot{Status: "active", AllowedAliases: []string{"hive-embedding-default"}}},
+		{"allow all models", authz.AuthSnapshot{
+			Status: "active", AllowAllModels: true, TenantID: uuid.New().String(),
+		}},
+		{"explicit allowlist", authz.AuthSnapshot{
+			Status: "active", AllowedAliases: []string{"hive-embedding-default"}, TenantID: uuid.New().String(),
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolver := &stubShimKeyResolver{snapshot: tc.snapshot}
@@ -831,7 +957,7 @@ func TestWatchOWUIShimKeyLogsRecovery(t *testing.T) {
 		close(done)
 	}()
 	waitFor(t, func() bool { return strings.Contains(logged.String(), "ERROR") })
-	resolver.set(authz.AuthSnapshot{Status: "active", AllowAllModels: true}, nil)
+	resolver.set(authz.AuthSnapshot{Status: "active", AllowAllModels: true, TenantID: uuid.New().String()}, nil)
 	waitFor(t, func() bool { return strings.Contains(logged.String(), "resolves to an active Hive API key") })
 	cancel()
 	<-done
