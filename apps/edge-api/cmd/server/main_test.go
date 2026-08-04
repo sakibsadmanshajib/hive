@@ -651,12 +651,12 @@ func TestShimKeyProbeAgreesWithTheModelsRequestPath(t *testing.T) {
 	cases := []struct {
 		name       string
 		tenantID   string
-		wantServed bool
+		wantStatus int
 	}{
-		{"account with no billing mapping", "", false},
-		{"tenant id that does not parse", "not-a-uuid", false},
-		{"explicitly nil tenant id", uuid.Nil.String(), false},
-		{"provisioned account", uuid.New().String(), true},
+		{"account with no billing mapping", "", http.StatusForbidden},
+		{"tenant id that does not parse", "not-a-uuid", http.StatusForbidden},
+		{"explicitly nil tenant id", uuid.Nil.String(), http.StatusForbidden},
+		{"provisioned account", uuid.New().String(), http.StatusOK},
 	}
 	const models = `{"models":[{"id":"hive-default","object":"model","created":1,"owned_by":"hive"}],"catalog":[]}`
 
@@ -679,9 +679,16 @@ func TestShimKeyProbeAgreesWithTheModelsRequestPath(t *testing.T) {
 			}}
 			probeErr := checkOWUIShimKey(context.Background(), resolver, testOWUIShimKey)
 
-			if served != tc.wantServed {
-				t.Fatalf("request path served=%v, want %v (status %d: %s)",
-					served, tc.wantServed, rr.Code, rr.Body.String())
+			// Pin the exact refusal, not merely "not 200": a 401 or a 503 would
+			// satisfy the agreement check below while meaning something else
+			// entirely, and an assertion that cannot tell those apart is the
+			// same shape of non-evidence as the probe this test exists for.
+			if rr.Code != tc.wantStatus {
+				t.Fatalf("request path status=%d, want %d: %s", rr.Code, tc.wantStatus, rr.Body.String())
+			}
+			if tc.wantStatus == http.StatusForbidden &&
+				!strings.Contains(rr.Body.String(), "account_not_provisioned") {
+				t.Fatalf("expected account_not_provisioned, got %s", rr.Body.String())
 			}
 			if healthy := probeErr == nil; healthy != served {
 				t.Fatalf("probe reports healthy=%v but the request path served=%v; the probe must never "+

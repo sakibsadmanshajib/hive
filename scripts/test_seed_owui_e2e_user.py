@@ -433,6 +433,52 @@ def test_billing_mapping_never_repoints_an_account() -> None:
     print("ok: provision_billing_mapping refuses to move an account to another tenant")
 
 
+def run_billing_mapping_with_racing_insert(winner_account):
+    """Both lookups read empty, then the POST loses a uniqueness race to a
+    concurrent run. `winner_account` is what the row says afterwards."""
+    calls = []
+    posted = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req)
+        if req.get_method() == "POST":
+            posted.append(req)
+            raise urllib.error.HTTPError(
+                req.full_url, 409, "Conflict", {},
+                io.BytesIO(json.dumps({"code": "23505"}).encode()),
+            )
+        if "tenant_id=eq." in req.full_url:
+            # Empty until this run tries to insert, then the winner's row.
+            return FakeResponse(200, [{"account_id": winner_account}] if posted else [])
+        return FakeResponse(200, [])
+
+    original = patch_urlopen(fake_urlopen)
+    try:
+        seed_owui_e2e_user.provision_billing_mapping(REST, HEADERS, TENANT, ACCOUNT)
+    finally:
+        restore_urlopen(original)
+    return calls
+
+
+def test_billing_mapping_accepts_a_lost_race_on_the_same_pairing() -> None:
+    """Two overlapping runs both pass the lookups and both insert. The loser's
+    409 names a row that already says what it wanted, so failing on it would be
+    a failure with nothing for anybody to act on."""
+    calls = run_billing_mapping_with_racing_insert(winner_account=ACCOUNT)
+    assert [c.get_method() for c in calls] == ["GET", "GET", "POST", "GET"], [c.full_url for c in calls]
+    print("ok: provision_billing_mapping accepts a lost insert race on the same pairing")
+
+
+def test_billing_mapping_still_fails_when_the_race_winner_is_another_account() -> None:
+    try:
+        run_billing_mapping_with_racing_insert(winner_account=OTHER)
+    except SystemExit as e:
+        assert e.code == 1
+    else:
+        raise AssertionError("expected a non-zero exit when the winning row names another account")
+    print("ok: provision_billing_mapping still fails when the race winner is another account")
+
+
 def test_tenant_slug_defaults_to_ci_and_is_overridable() -> None:
     """Two shim accounts cannot share one tenant (1:1 in both directions), so a
     deployment with its own --account-slug needs its own tenant too."""
@@ -507,6 +553,8 @@ def main() -> None:
     test_billing_mapping_is_idempotent()
     test_billing_mapping_never_repoints_a_tenant()
     test_billing_mapping_never_repoints_an_account()
+    test_billing_mapping_accepts_a_lost_race_on_the_same_pairing()
+    test_billing_mapping_still_fails_when_the_race_winner_is_another_account()
     test_tenant_slug_defaults_to_ci_and_is_overridable()
 
     del os.environ["OWUI_ADMIN_EMAIL"]

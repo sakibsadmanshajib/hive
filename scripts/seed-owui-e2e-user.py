@@ -424,10 +424,25 @@ def provision_billing_mapping(rest, headers, tenant_id: str, account_id: str) ->
         rest, headers, "POST", "/tenant_billing_accounts",
         body={"tenant_id": tenant_id, "account_id": account_id},
     )
-    if status not in (200, 201, 204):
-        print(f"error: billing mapping insert failed: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-    print("billing mapping: ok (created)", file=sys.stderr)
+    if status in (200, 201, 204):
+        print("billing mapping: ok (created)", file=sys.stderr)
+        return
+
+    # A concurrent run can pass both lookups above and insert first, so this
+    # insert can lose on either uniqueness constraint to a row that already
+    # says exactly what this run wanted. Re-read before failing: the same pair
+    # is a success, any other pair is the collision the messages above
+    # describe. Without this, two overlapping runs make one of them fail for no
+    # reason anybody has to act on.
+    reread_status, rows = request(
+        rest, headers, "GET", "/tenant_billing_accounts",
+        params={"tenant_id": f"eq.{tenant_id}", "select": "account_id"},
+    )
+    if reread_status == 200 and rows and rows[0]["account_id"] == account_id:
+        print("billing mapping: ok (a concurrent run created the same pairing first)", file=sys.stderr)
+        return
+    print(f"error: billing mapping insert failed: {status} {body}", file=sys.stderr)
+    sys.exit(1)
 
 
 def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, role: str) -> tuple[str, str]:
