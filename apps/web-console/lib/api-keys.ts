@@ -77,6 +77,28 @@ export function parseKeyLimits(payload: unknown): KeyLimits | null {
   };
 }
 
+// parseKeyLimitsInput narrows a payload that arrived over the wire (a server
+// action argument is attacker-controlled exactly like a request body) into the
+// input shape. Range checking stays in validateLimits.
+export function parseKeyLimitsInput(payload: unknown): KeyLimitsInput | null {
+  if (!isRecord(payload)) return null;
+  const rpm = payload.rpm;
+  const tpm = payload.tpm;
+  if (typeof rpm !== "number" || typeof tpm !== "number") return null;
+  return {
+    rpm,
+    tpm,
+    tier_overrides: parseTierOverrides(payload.tier_overrides),
+  };
+}
+
+// SaveLimitsResult is the serialisable outcome a server action hands back to
+// the browser form. Errors travel as data rather than as a thrown error, since
+// Next redacts thrown server-action messages in production builds.
+export type SaveLimitsResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
 export function validateLimits(input: KeyLimitsInput): string | null {
   if (!Number.isFinite(input.rpm) || input.rpm < 0 || input.rpm > RATE_LIMIT_RPM_MAX) {
     return `RPM must be between 0 and ${RATE_LIMIT_RPM_MAX}`;
@@ -100,48 +122,8 @@ export function validateLimits(input: KeyLimitsInput): string | null {
   return null;
 }
 
-export interface ApiKeysClient {
-  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
-}
-
-export async function getKeyLimits(
-  client: ApiKeysClient,
-  keyID: string,
-): Promise<KeyLimits> {
-  const resp = await client.fetch(
-    `/api/v1/accounts/current/api-keys/${encodeURIComponent(keyID)}/limits`,
-    { method: "GET", headers: { Accept: "application/json" } },
-  );
-  if (!resp.ok) {
-    throw new Error(`getKeyLimits: HTTP ${resp.status}`);
-  }
-  const body: unknown = await resp.json();
-  const parsed = parseKeyLimits(body);
-  if (parsed === null) throw new Error("getKeyLimits: invalid response shape");
-  return parsed;
-}
-
-export async function updateKeyLimits(
-  client: ApiKeysClient,
-  keyID: string,
-  input: KeyLimitsInput,
-): Promise<KeyLimits> {
-  const validationErr = validateLimits(input);
-  if (validationErr !== null) throw new Error(validationErr);
-
-  const resp = await client.fetch(
-    `/api/v1/accounts/current/api-keys/${encodeURIComponent(keyID)}/limits`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-  if (!resp.ok) {
-    throw new Error(`updateKeyLimits: HTTP ${resp.status}`);
-  }
-  const body: unknown = await resp.json();
-  const parsed = parseKeyLimits(body);
-  if (parsed === null) throw new Error("updateKeyLimits: invalid response shape");
-  return parsed;
-}
+// Transport lives in lib/control-plane/client.ts (getApiKeyLimits and
+// updateApiKeyLimits). This module stays pure parsing and validation so the
+// browser form and the server can share it without either one carrying a
+// fetch client. Issue #552: the helpers that used to sit here fetched a bare
+// relative path, which is unresolvable from a Server Component.

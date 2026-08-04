@@ -4,6 +4,12 @@ import {
   isCheckoutReturnState,
   type CheckoutReturnState,
 } from "@/lib/payments/checkout-return";
+import {
+  parseKeyLimits,
+  validateLimits,
+  type KeyLimits,
+  type KeyLimitsInput,
+} from "@/lib/api-keys";
 
 export interface ViewerAccount {
   id: string;
@@ -1797,6 +1803,72 @@ export async function rotateApiKey(
   }
 
   return key;
+}
+
+// getApiKeyLimits and updateApiKeyLimits are the only entry points for the
+// per-key rate-limit surface. Issue #552: the limits read used to live in
+// lib/api-keys.ts behind an injected fetch client and a bare relative path,
+// which a Server Component cannot resolve (no origin, so Node's fetch rejects
+// the URL) and which carried no session bearer either. Both now use the same
+// absolute-URL plus session-header context as every other call in this file,
+// and the page calls them directly instead of round-tripping through the
+// console's own origin.
+function keyLimitsUrl(baseUrl: string, keyId: string): string {
+  return `${baseUrl}/api/v1/accounts/current/api-keys/${encodeURIComponent(keyId)}/limits`;
+}
+
+async function decodeKeyLimits(response: Response): Promise<KeyLimits> {
+  const payload = parseJsonValue(await readResponseText(response));
+  const limits = parseKeyLimits(payload);
+  if (limits === null) {
+    throw new Error("Failed to parse key limits response");
+  }
+  return limits;
+}
+
+export async function getApiKeyLimits(keyId: string): Promise<KeyLimits> {
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(keyLimitsUrl(baseUrl, keyId), {
+    headers,
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to fetch key limits");
+  }
+
+  return decodeKeyLimits(response);
+}
+
+export async function updateApiKeyLimits(
+  keyId: string,
+  input: KeyLimitsInput,
+): Promise<KeyLimits> {
+  // Range validation runs before the round-trip so an obviously bad value
+  // never reaches the control-plane, and it runs here rather than only in the
+  // browser form so a hand-rolled action call is bounded too.
+  const validationError = validateLimits(input);
+  if (validationError !== null) {
+    throw new Error(validationError);
+  }
+
+  const { baseUrl, headers } = await getRequestContext();
+  const response = await fetch(keyLimitsUrl(baseUrl, keyId), {
+    method: "PUT",
+    headers,
+    cache: "no-store",
+    body: JSON.stringify({
+      rpm: input.rpm,
+      tpm: input.tpm,
+      tier_overrides: input.tier_overrides,
+    }),
+  });
+
+  if (!response.ok) {
+    await throwControlPlaneError(response, "Failed to update key limits");
+  }
+
+  return decodeKeyLimits(response);
 }
 
 export async function getCatalogModels(): Promise<CatalogModel[]> {

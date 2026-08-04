@@ -94,7 +94,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysRead)
 	if !ok {
 		return
 	}
@@ -114,8 +114,12 @@ func (h *Handler) handleGetKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolveViewerContext extracts the authenticated viewer and resolves the
-// current account, enforcing the api_keys.write permission gate via policy.Can.
-func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (accounts.ViewerContext, bool) {
+// current account, enforcing perm via policy.Can. Read-only routes pass
+// authz.PermAPIKeysRead (owner-only, no verification required); mutating
+// routes pass authz.PermAPIKeysWrite (owner-only, verified). Gating every
+// route on the write permission was the root cause of #683: an unverified
+// owner holds api_keys.read and was refused even a 200 on GET.
+func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request, perm authz.Permission) (accounts.ViewerContext, bool) {
 	// Test override — bypasses real accounts service in unit tests.
 	if h.testVC != nil {
 		// Build an Actor from the test ViewerContext and check the policy.
@@ -135,7 +139,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 			)
 			actor = &a
 		}
-		if !h.policy.Can(*actor, authz.PermAPIKeysWrite) {
+		if !h.policy.Can(*actor, perm) {
 			writeJSON(w, http.StatusForbidden, map[string]string{
 				"error": "verified account owner required",
 				"code":  "api_key_management_forbidden",
@@ -158,7 +162,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 		return accounts.ViewerContext{}, false
 	}
 
-	// Phase 18: authz via policy.Can(actor, PermAPIKeysWrite).
+	// Phase 18: authz via policy.Can(actor, perm).
 	// Admin overlay must be reflected in Actor.IsAdmin so platform admins
 	// can manage keys regardless of workspace role; hardcoding false would
 	// silently deny admin flows.
@@ -180,7 +184,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request) (
 		Role:      vc.CurrentAccount.Role,
 		Status:    "active",
 	}, isAdmin)
-	if !h.policy.Can(actor, authz.PermAPIKeysWrite) {
+	if !h.policy.Can(actor, perm) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
 			"error": "verified account owner required",
 			"code":  "api_key_management_forbidden",
@@ -203,7 +207,7 @@ func authFromVC(vc *accounts.ViewerContext) auth.Viewer {
 
 
 func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysRead)
 	if !ok {
 		return
 	}
@@ -222,7 +226,7 @@ func (h *Handler) handleListKeys(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}
@@ -268,7 +272,7 @@ func (h *Handler) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRotateKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}
@@ -322,7 +326,7 @@ func (h *Handler) handleRotateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDisableKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}
@@ -348,7 +352,7 @@ func (h *Handler) handleDisableKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleEnableKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}
@@ -374,7 +378,7 @@ func (h *Handler) handleEnableKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}
@@ -400,7 +404,7 @@ func (h *Handler) handleRevokeKey(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}
@@ -466,7 +470,7 @@ func (h *Handler) handleUpdatePolicy(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGetLimits(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysRead)
 	if !ok {
 		return
 	}
@@ -483,7 +487,7 @@ func (h *Handler) handleGetLimits(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdateLimits(w http.ResponseWriter, r *http.Request) {
-	vc, ok := h.resolveViewerContext(w, r)
+	vc, ok := h.resolveViewerContext(w, r, authz.PermAPIKeysWrite)
 	if !ok {
 		return
 	}

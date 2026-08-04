@@ -1,0 +1,7 @@
+ ⨯ [TypeError: Failed to parse URL from /api/v1/accounts/current/api-keys/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/limits] {
+  digest: '1403530225',
+  [cause]: [TypeError: Invalid URL] {
+    code: 'ERR_INVALID_URL',
+    input: '/api/v1/accounts/current/api-keys/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/limits'
+  }
+}

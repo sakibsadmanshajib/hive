@@ -1,0 +1,12 @@
+signed in, landed on http://localhost:3010/console
+GET /console/api-keys/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/limits -> HTTP 500
+rate-limit-form present: false
+--- rendered body text (truncated) ---
+Workspace
+Proof Workspace (current)
+
+Something went wrong on this page
+
+The rest of the console is unaffected. Try again, and if it keeps failing, contact support and quote reference 1403530225.
+
+Try again

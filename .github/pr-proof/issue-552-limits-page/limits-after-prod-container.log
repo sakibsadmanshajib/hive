@@ -1,0 +1,28 @@
+signed in, landed on http://caddy-console/console
+GET /console/api-keys/a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d/limits -> HTTP 200
+rate-limit-form present: true
+rpm input value: 60
+tpm input value: 4000
+save result: saved=true error=false
+--- rendered body text (truncated) ---
+Workspace
+Proof Workspace (prod container) (current)
+Rate limits
+
+Configure per-key request and token limits. Tier overrides take precedence over system defaults for the matching tier.
+
+Per-key limits
+Requests per minute
+Tokens per minute
+Tier overrides
+
+Leave a tier blank to use the system default.
+
+Override guest
+Override unverified
+Override verified
+Override credited
+
+Saved.
+
+Save
