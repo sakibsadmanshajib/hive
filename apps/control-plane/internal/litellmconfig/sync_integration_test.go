@@ -30,6 +30,15 @@ func connectLiteLLMTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("LITELLM_TEST_DB_URL")
 	if dsn == "" {
+		// A skip is green, which is exactly how this suite went unnoticed
+		// for issue #701: gated behind this same variable, never wired into
+		// any workflow, always skipped, never once failing CI. In CI, an
+		// absent variable must fail loudly instead of vanishing quietly.
+		// GitHub Actions sets CI=true on every runner; a local dev run
+		// (CI unset) still skips.
+		if os.Getenv("CI") != "" {
+			t.Fatal("LITELLM_TEST_DB_URL not set in CI; this suite must not silently skip (issue #701)")
+		}
 		t.Skip("LITELLM_TEST_DB_URL not set; skipping litellmconfig integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -98,10 +107,15 @@ func seedSyncRoute(t *testing.T, pool *pgxpool.Pool, routeID, aliasID, providerS
 		VALUES ($1, 'test', $1, 'test', 'public', 'stable', '[]'::jsonb, 10, 30, now(), now())
 		ON CONFLICT (alias_id) DO NOTHING
 	`, aliasID)
+	// provider_model is seeded pre-prefixed (provider + "/" + modelID), matching
+	// every real migration row (e.g. "openrouter/openai/gpt-4o-mini"). A bare,
+	// unprefixed provider_model here would certify the exact shape the
+	// deleted litellm_prefix concatenation existed to repair (issue #701
+	// review) instead of the real invariant SyncService now depends on.
 	_, err := pool.Exec(ctx, `
 		INSERT INTO public.provider_routes
 			(route_id, alias_id, provider, provider_model, litellm_model_name, price_class, health_state, priority)
-		VALUES ($1, $2, $3, $4, $3 || '/' || $4, 'standard', 'healthy', 1)
+		VALUES ($1, $2, $3, $3 || '/' || $4, $3 || '/' || $4, 'standard', 'healthy', 1)
 		ON CONFLICT (route_id) DO NOTHING
 	`, routeID, aliasID, providerSlug, modelID)
 	if err != nil {
@@ -189,8 +203,8 @@ func TestSyncServiceIntegration(t *testing.T) {
 	}
 
 	wantRoutes := map[string]string{
-		routeID1: "model-alpha",
-		routeID2: "model-beta",
+		routeID1: providerSlug + "/model-alpha",
+		routeID2: providerSlug + "/model-beta",
 	}
 	for routeID, wantProviderModel := range wantRoutes {
 		entry, ok := byModelName[routeID]

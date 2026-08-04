@@ -89,6 +89,14 @@ func (s *SyncService) Sync(ctx context.Context) error {
 
 	slog.Info("litellmconfig: sync: active routes loaded", "count", len(entries))
 
+	// ponytail: a zero-row result almost always means a query/schema defect
+	// (issue #701) or every provider disabled at once, not an intentional
+	// empty gateway. Refuse rather than write model_list: [] and restart
+	// LiteLLM into serving nothing.
+	if len(entries) == 0 {
+		return fmt.Errorf("litellmconfig: sync: zero active routes; refusing to write an empty model_list")
+	}
+
 	cfg := Config{
 		Models: entries,
 		GeneralSettings: GeneralSettings{

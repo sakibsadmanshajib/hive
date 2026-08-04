@@ -20,11 +20,20 @@ var ErrSlugConflict = errors.New("provider slug already exists")
 
 // Provider represents a row in public.custom_providers.
 type Provider struct {
-	ID            uuid.UUID `json:"id"             db:"id"`
-	Slug          string    `json:"slug"           db:"slug"`
-	DisplayName   string    `json:"display_name"   db:"display_name"`
-	BaseURL       string    `json:"base_url"       db:"base_url"`
-	APIKeyEnv     string    `json:"api_key_env"    db:"api_key_env"`
+	ID          uuid.UUID `json:"id"             db:"id"`
+	Slug        string    `json:"slug"           db:"slug"`
+	DisplayName string    `json:"display_name"   db:"display_name"`
+	BaseURL     string    `json:"base_url"       db:"base_url"`
+	APIKeyEnv   string    `json:"api_key_env"    db:"api_key_env"`
+	// LiteLLMPrefix is validated on write (see service.go) but nothing reads
+	// it back out at sync time: apps/control-plane/internal/litellmconfig
+	// selects provider_routes.provider_model directly, which every existing
+	// migration already stores pre-prefixed with this value (e.g.
+	// "openrouter/" + "openai/gpt-4o-mini"). There is currently no write path
+	// that inserts into provider_routes at all (routes are migration-only),
+	// so this field is write-only until an admin route-creation flow exists;
+	// that future flow must apply this prefix itself when it builds
+	// provider_model, since litellmconfig will not apply it a second time.
 	LiteLLMPrefix string    `json:"litellm_prefix" db:"litellm_prefix"`
 	Enabled       bool      `json:"enabled"        db:"enabled"`
 	CreatedAt     time.Time `json:"created_at"     db:"created_at"`
