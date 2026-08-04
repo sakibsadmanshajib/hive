@@ -1,0 +1,16 @@
+[2026-08-04T21:44:45.499Z] signed in
+[2026-08-04T21:44:45.677Z] session role=user
+[2026-08-04T21:44:47.992Z] GET /api/models -> 200 count=6
+[2026-08-04T21:44:48.034Z] GET /openai/models -> 200 count=6
+[2026-08-04T21:44:55.326Z] screenshot 01-signed-in-landing.png url=https://chat-hive.scubed.co/
+[2026-08-04T21:44:58.035Z] picker options=6 :: hive-auto | hive-default | hive-embedding-default | hive-fast | hive-stt | hive-tts
+[2026-08-04T21:44:58.160Z] screenshot 02-model-picker-populated.png url=https://chat-hive.scubed.co/
+[2026-08-04T21:44:58.160Z] selecting model: hive-default
+[2026-08-04T21:45:00.575Z] chat message sent
+[2026-08-04T21:48:02.459Z] chat end to end: no assistant_reply=""
+[2026-08-04T21:48:02.602Z] screenshot 03-chat-completion.png url=https://chat-hive.scubed.co/c/387a2a27-5d04-4c6b-aaca-2c31a617fd30
+[2026-08-04T21:48:02.672Z] POST /api/v1/files/ -> 200
+[2026-08-04T21:48:08.809Z] document RAG embedding: no detail="error":"404, message='Not Found', url='http://edge-api:8080/v1/embeddings'"
+[2026-08-04T21:48:14.042Z] screenshot 04-rag-upload.png url=https://chat-hive.scubed.co/
+[2026-08-04T21:48:15.092Z] cleanup delete file ae072d7b-bb8e-4c6d-b786-e7b4e031a6df -> 200
+[2026-08-04T21:48:15.093Z] SUMMARY picker=6 chat=no rag=no
