@@ -451,6 +451,171 @@ jobs:
           echo "SMOKE FAIL"
           exit 1
 
+      - name: Assert model catalog prices agree with the model LiteLLM will call
+        # Issue #689. provider_routes.provider_model is metadata nobody reads at
+        # dispatch time: the model LiteLLM actually sends upstream resolves at
+        # container start from an env var (deploy/litellm/config.yaml, e.g.
+        # `model: os.environ/OPENROUTER_DEFAULT_MODEL`). A price row and a
+        # deployment env var can drift apart with nothing to notice, and #689
+        # is exactly that: hive-default/hive-auto priced against gpt-4o-mini/
+        # gpt-4.1-mini while OPENROUTER_DEFAULT_MODEL/OPENROUTER_AUTO_MODEL
+        # defaulted to `openrouter/free`, OpenRouter's arbitrary free-model
+        # router, priced at zero and undisclosed which model actually answers.
+        #
+        # Deliberately placed LAST, after the Caddy config and the public
+        # smoke test, not right after the recreate. By the time this step can
+        # run at all, the containers are already recreated and LiteLLM is
+        # already serving whatever it resolved -- failing early buys nothing,
+        # since aborting here cannot prevent a single mispriced request that
+        # already went out. Every step between the recreate and here lacks
+        # `if: always()`, so putting this assertion before them would have let
+        # one red run here skip the Caddy config apply and the public smoke
+        # test too, leaving the box half-deployed over a pricing question that
+        # was never about whether the deploy could proceed.
+        #
+        # Source of truth for "what LiteLLM will really call" is LiteLLM's own
+        # `GET /model/info` (verified against litellm/router.py's
+        # `Router.set_model_list`: every `os.environ/VAR` litellm_param is
+        # resolved there when the router's model list is built, so
+        # `data[].litellm_params.model` in the response is already the
+        # substituted value, not the raw `os.environ/...` template). Reading
+        # the container's own environment would only prove the .env file was
+        # applied, not that LiteLLM parsed it the way this assertion assumes;
+        # /model/info proves the latter directly. Requires the same
+        # LITELLM_MASTER_KEY the box's .env already sets, via `Authorization:
+        # Bearer`.
+        #
+        # Restricted to routes whose alias actually prices tokens
+        # (model_aliases.price_unit = 'tokens', a nonzero input or output
+        # price): a mismatch anywhere else is not a mispricing, since D-033
+        # keeps non-token modalities off an invented per-token price and
+        # apps/edge-api/internal/audio charges hive-stt/hive-tts from flat
+        # literals, never this catalog (issue #627). Routes that are
+        # `disabled`/`eol` are excluded because they are never dispatched
+        # (20260801_01_alias_pricing_correction.sql retired
+        # route-openrouter-fast-fallback exactly this way).
+        #
+        # Looked up by litellm_model_name, not route_id: today every seeded
+        # row sets them equal, but litellm_model_name is the column that
+        # actually names the LiteLLM gateway alias (`model_name:` in
+        # config.yaml), and route_id is only this table's own primary key.
+        # The moment a route needs the two to diverge (the way route-doc-vlm
+        # already does outside this table, sharing OPENROUTER_AUTO_MODEL under
+        # its own route_id), matching on route_id would return nothing from
+        # /model/info and falsely report a correctly wired route as missing.
+        #
+        # The comparison canonicalizes rather than discards the leading
+        # provider/adapter segment. hive-embedding-default's two routes use
+        # LiteLLM's generic `openai/` adapter with an explicit `api_base`
+        # pointed at OpenRouter, because LiteLLM's native `openrouter/`
+        # provider does not map `/embeddings` (see deploy/litellm/config.yaml
+        # section 5); that api_base is what makes `openai/` here mean
+        # "openrouter", not the model string alone. So when live_model starts
+        # with `openai/` AND live_base names openrouter.ai, it is rewritten to
+        # `openrouter/<rest>` before comparing; every other route is compared
+        # as a full, unmodified string. Discarding the provider segment
+        # instead (an earlier version of this step did) would keep passing
+        # even if api_base were repointed at a different endpoint serving the
+        # same model name under a different real cost -- the same
+        # two-mechanisms-one-checked shape as #689 itself, just moved one
+        # field over.
+        #
+        # Known circularity, not solved here: apps/control-plane/internal/
+        # litellmconfig's config sync (issue #701, fixed by #705; #707 tracks
+        # the remaining gaps in what it preserves) writes a DB-managed route's
+        # `litellm_params.model` straight from provider_routes.provider_model,
+        # the same column this step's DB side reads. After that sync runs
+        # against a DB-managed route, this comparison cannot fail even if the
+        # env-var mechanism the sync bypasses is wrong, because both sides
+        # would trace back to the identical database value. Today the check
+        # is real: the live config on a freshly recreated box is still the
+        # first-boot seed with `os.environ/...` templates, genuinely
+        # independent of the DB. The api_base comparison above only partially
+        # covers the gap (it still catches an api_base drift after a sync);
+        # it does not restore independence to the model-string comparison.
+        # See issue #713 for the actual fix; not attempted here.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+
+          master_key=$(grep -E '^LITELLM_MASTER_KEY=' ../../.env | head -1 | cut -d= -f2-)
+          master_key="${master_key%\"}"; master_key="${master_key#\"}"
+          master_key="${master_key%\'}"; master_key="${master_key#\'}"
+          if [ -z "$master_key" ]; then
+            echo "::error::LITELLM_MASTER_KEY is missing or empty in the box's .env"
+            exit 1
+          fi
+
+          # LiteLLM has been up since the recreate several steps back, but
+          # retry with backoff anyway rather than assume. --connect-timeout
+          # and --max-time bound each attempt: without them a curl that
+          # connects but never answers hangs forever, and the loop below
+          # never advances, so the failure is an opaque 15-minute job
+          # timeout instead of a loud one. Worst case with the caps: 12
+          # attempts x (10s max-time + 5s sleep) = 180s (3 minutes).
+          resolved=""
+          for i in $(seq 1 12); do
+            if resolved=$(curl -fsS --connect-timeout 2 --max-time 10 \
+              -H "Authorization: Bearer $master_key" \
+              http://localhost:4000/model/info); then
+              break
+            fi
+            echo "attempt $i: /model/info not answering yet, retry in 5s"
+            resolved=""
+            sleep 5
+          done
+          if [ -z "$resolved" ]; then
+            echo "::error::LiteLLM's /model/info never answered"
+            exit 1
+          fi
+
+          rows=$(docker run --rm "postgres:16-alpine" \
+            psql "$SUPABASE_DB_POOL_URL_LIBPQ" -At -F'|' -v ON_ERROR_STOP=1 -c "
+              SELECT pr.route_id, pr.litellm_model_name, pr.provider_model
+                FROM public.provider_routes pr
+                JOIN public.model_aliases ma ON ma.alias_id = pr.alias_id
+               WHERE pr.health_state NOT IN ('disabled', 'eol')
+                 AND ma.price_unit = 'tokens'
+                 AND (ma.input_price_credits > 0 OR ma.output_price_credits > 0)
+               ORDER BY pr.route_id;")
+
+          if [ -z "$rows" ]; then
+            echo "::error::no priced token routes came back from provider_routes -- the query itself is broken, not just empty"
+            exit 1
+          fi
+
+          fail=0
+          while IFS='|' read -r route_id litellm_name db_model; do
+            [ -z "$route_id" ] && continue
+            live_model=$(echo "$resolved" | jq -r --arg id "$litellm_name" \
+              '.data[] | select(.model_name == $id) | .litellm_params.model' | head -1)
+            live_base=$(echo "$resolved" | jq -r --arg id "$litellm_name" \
+              '.data[] | select(.model_name == $id) | (.litellm_params.api_base // "")' | head -1)
+            if [ -z "$live_model" ] || [ "$live_model" = "null" ]; then
+              echo "::error::$route_id ($litellm_name): priced route is not in LiteLLM's live /model/info at all"
+              fail=1
+              continue
+            fi
+            # LiteLLM's generic openai/ adapter pointed at OpenRouter IS the
+            # openrouter provider, and only then. Canonicalize rather than
+            # discard, so the provider segment stays part of the comparison.
+            case "$live_model|$live_base" in
+              openai/*"openrouter.ai"*) live_model="openrouter/${live_model#openai/}" ;;
+            esac
+            if [ "$db_model" != "$live_model" ]; then
+              echo "::error::$route_id: catalog prices $db_model but LiteLLM will call $live_model"
+              fail=1
+            else
+              echo "$route_id: OK ($db_model <-> $live_model)"
+            fi
+          done <<< "$rows"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::model catalog / live LiteLLM model mismatch -- refusing the deploy (issue #689)"
+            exit 1
+          fi
+          echo "model catalog matches every priced route LiteLLM will actually call"
+
       - name: Prune build cache older than 24h
         # Measured on the demo box 2026-07-29: `docker system df` showed
         # Build Cache at 40.87GB (30.04GB reclaimable across 339 layers),

@@ -12,25 +12,39 @@
 
 # Demo budget posture — paid-route count
 # ──────────────────────────────────────
-# The demo caps paid-provider usage. Of the six routes below, only ONE is a
-# hard-coded paid model: route-openrouter-embedding-fallback (qwen3-embedding-8b),
-# the last resort in the embedding cascade after the free Nemotron-Embed primary.
-# The flagship (route-openrouter-default) and the two vision routes
-# (route-openrouter-auto, route-doc-vlm) resolve their slug from env vars that
-# default to `openrouter/free` in .env.example, so out of the box they cost
-# nothing; an operator opts into a paid flagship only by setting
-# OPENROUTER_DEFAULT_MODEL to a paid slug. The Groq fast route is free-tier.
-# Net: 1 hard-coded paid route, within the demo cap of 2.
+# CORRECTED by issue #689 (2026-08). This block used to claim only ONE route
+# was paid, on the theory that OPENROUTER_DEFAULT_MODEL / OPENROUTER_AUTO_MODEL
+# default to `openrouter/free` in .env.example, so the flagship and vision
+# routes cost nothing "out of the box". That was the bug: those two env vars
+# resolve OpenRouter's arbitrary free-model router, an undisclosed model priced
+# at zero, while model_aliases still charged customers the gpt-4o-mini /
+# gpt-4.1-mini price the catalog names. The env vars now default to the same
+# paid slugs the catalog is priced against (see .env.example and
+# supabase/migrations/20260331_02_routing_policy.sql's provider_model column),
+# so the honest count is FOUR dispatchable paid routes out of the six below,
+# resolving to THREE distinct paid models: route-openrouter-default
+# (gpt-4o-mini), route-openrouter-auto and route-doc-vlm (both gpt-4.1-mini,
+# sharing OPENROUTER_AUTO_MODEL -- one model, two routes), and
+# route-openrouter-embedding-fallback (qwen3-embedding-8b, embedding cascade
+# last resort). Use the route count for a dispatch audit (which routes can
+# ever bill a paid provider) and the model count for a spend estimate (how
+# many distinct upstream rates are in play). The Groq fast route and the
+# embedding primary stay free-tier.
+# Whether a 3-paid-route demo still fits inside whatever budget cap motivated
+# this comment is a cost-policy question for the owner, not something this fix
+# decides; deploy-demo-box.yml's "Assert model catalog prices agree..." step
+# only guarantees the price and the model stay in agreement, not a spend cap.
 # OpenRouter exposes no embedding models on /api/v1/models (embeddings ride the
 # openai/ generic adapter), so there is no verified free embedding slug to swap
 # the fallback to; it stays paid by necessity and is documented here.
 model_list:
-  # ── 1. Flagship chat (paid-capable; defaults to free via env) ───────────────
-  # OpenRouter: Meta Llama 3.3 70B Instruct — strong instruction-following,
-  # 128k context, best quality/cost ratio for the demo tier.
-  # Pinned to a specific model slug to avoid usage-token variance from the
-  # generic `openrouter/free` pool (see PR #99 and git history for the
-  # flaky-usage-tokens root-cause debug notes for background).
+  # ── 1. Flagship chat (paid; priced against gpt-4o-mini, hive-default) ───────
+  # OPENROUTER_DEFAULT_MODEL defaults to a paid slug (see .env.example), pinned
+  # to the exact model hive-default's catalog price is derived from. It used
+  # to default to the `openrouter/free` pool, an undisclosed free model billed
+  # at the paid price -- that mismatch was issue #689. See PR #99 and git
+  # history for the earlier flaky-usage-tokens root-cause debug notes on why a
+  # pinned slug beats the free pool regardless of price.
   - model_name: route-openrouter-default
     litellm_params:
       model: os.environ/OPENROUTER_DEFAULT_MODEL
@@ -50,10 +64,12 @@ model_list:
       model: os.environ/GROQ_FAST_MODEL
       api_key: os.environ/GROQ_API_KEY
 
-  # ── 3. Vision (OpenRouter free pool) ────────────────────────────────────────
-  # OpenRouter: meta-llama/llama-4-scout:free — vision-capable (image input),
-  # available on the OpenRouter free tier. Used for multimodal / image-analysis
-  # requests routed by the edge-api capability selector.
+  # ── 3. Vision (paid; priced against gpt-4.1-mini, hive-auto) ────────────────
+  # OPENROUTER_AUTO_MODEL defaults to a paid, vision-capable slug pinned to the
+  # exact model hive-auto's catalog price is derived from (same #689 fix as
+  # route-openrouter-default above; this route used to default to the free
+  # pool too). Used for multimodal / image-analysis requests routed by the
+  # edge-api capability selector.
   - model_name: route-openrouter-auto
     litellm_params:
       model: os.environ/OPENROUTER_AUTO_MODEL
@@ -63,14 +79,14 @@ model_list:
           allow_fallbacks: false
           sort: throughput
 
-  # ── 4. Doc-layout vision (OpenRouter free pool, same model as route-openrouter-auto) ─
+  # ── 4. Doc-layout vision (paid, same model + env var as route-openrouter-auto) ─
   # Blueprint Wave 3, Step 3.2 (issue #300): the doc-layout knowledge-work-pack
   # skill (apps/agent-engine/internal/docvlm) sends contract/PDF page images
   # here for structured layout extraction. Named as its own route (rather than
   # reusing route-openrouter-auto directly) so the doc-layout skill's model
   # choice can be tuned or swapped independently of the general vision route
-  # edge-api's capability selector uses; today both point at the same
-  # OpenRouter free-pool vision model.
+  # edge-api's capability selector uses; today both share OPENROUTER_AUTO_MODEL
+  # and so both point at the same paid vision model.
   - model_name: route-doc-vlm
     litellm_params:
       model: os.environ/OPENROUTER_AUTO_MODEL
