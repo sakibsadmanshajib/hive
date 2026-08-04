@@ -241,6 +241,129 @@ jobs:
           docker compose --env-file ../../.env --profile local --profile chat \
             --profile monitoring up -d --build --remove-orphans
 
+      - name: Assert model catalog prices agree with the model LiteLLM will call
+        # Issue #689. provider_routes.provider_model is metadata nobody reads at
+        # dispatch time: the model LiteLLM actually sends upstream resolves at
+        # container start from an env var (deploy/litellm/config.yaml, e.g.
+        # `model: os.environ/OPENROUTER_DEFAULT_MODEL`). A price row and a
+        # deployment env var can drift apart with nothing to notice, and #689
+        # is exactly that: hive-default/hive-auto priced against gpt-4o-mini/
+        # gpt-4.1-mini while OPENROUTER_DEFAULT_MODEL/OPENROUTER_AUTO_MODEL
+        # defaulted to `openrouter/free`, OpenRouter's arbitrary free-model
+        # router, priced at zero and undisclosed which model actually answers.
+        #
+        # This runs right after the recreate above, on the box that was just
+        # brought up, and fails the deploy on any mismatch rather than letting
+        # a priced alias silently serve a model with no known cost.
+        #
+        # Source of truth for "what LiteLLM will really call" is LiteLLM's own
+        # `GET /model/info` (verified against litellm/router.py's
+        # `Router.set_model_list`: every `os.environ/VAR` litellm_param is
+        # resolved there when the router's model list is built, so
+        # `data[].litellm_params.model` in the response is already the
+        # substituted value, not the raw `os.environ/...` template). Reading
+        # the container's own environment would only prove the .env file was
+        # applied, not that LiteLLM parsed it the way this assertion assumes;
+        # /model/info proves the latter directly. Requires the same
+        # LITELLM_MASTER_KEY the box's .env already sets, via `Authorization:
+        # Bearer`.
+        #
+        # Restricted to routes whose alias actually prices tokens
+        # (model_aliases.price_unit = 'tokens', a nonzero input or output
+        # price): a mismatch anywhere else is not a mispricing, since D-033
+        # keeps non-token modalities off an invented per-token price and
+        # apps/edge-api/internal/audio charges hive-stt/hive-tts from flat
+        # literals, never this catalog (issue #627). Routes that are
+        # `disabled`/`eol` are excluded because they are never dispatched
+        # (20260801_01_alias_pricing_correction.sql retired
+        # route-openrouter-fast-fallback exactly this way).
+        #
+        # The comparison strips the leading provider/adapter segment
+        # (`openrouter/`, `openai/`, `groq/`) from both sides before comparing,
+        # because that segment legitimately differs for a reason that is not
+        # mispricing: hive-embedding-default's two routes use LiteLLM's
+        # `openai/` generic adapter with a custom `api_base` to reach
+        # OpenRouter, because LiteLLM's native `openrouter/` provider does not
+        # map `/embeddings` (see deploy/litellm/config.yaml section 5), while
+        # provider_routes.provider_model records the upstream identity with an
+        # `openrouter/` provider prefix. Comparing full strings would fail
+        # both of that alias's routes on every single deploy despite them
+        # being wired correctly, which is exactly the kind of assertion that
+        # cannot be trusted: a check that is always red on a fine route gets
+        # ignored, and a real drift then hides in that same noise.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+
+          master_key=$(grep -E '^LITELLM_MASTER_KEY=' ../../.env | head -1 | cut -d= -f2-)
+          master_key="${master_key%\"}"; master_key="${master_key#\"}"
+          master_key="${master_key%\'}"; master_key="${master_key#\'}"
+          if [ -z "$master_key" ]; then
+            echo "::error::LITELLM_MASTER_KEY is missing or empty in the box's .env"
+            exit 1
+          fi
+
+          # LiteLLM just restarted above; retry with backoff instead of
+          # failing on the first request while it is still coming up.
+          resolved=""
+          for i in $(seq 1 12); do
+            if resolved=$(curl -fsS -H "Authorization: Bearer $master_key" \
+              http://localhost:4000/model/info); then
+              break
+            fi
+            echo "attempt $i: /model/info not answering yet, retry in 5s"
+            resolved=""
+            sleep 5
+          done
+          if [ -z "$resolved" ]; then
+            echo "::error::LiteLLM's /model/info never answered after the recreate"
+            exit 1
+          fi
+
+          rows=$(docker run --rm "postgres:16-alpine" \
+            psql "$SUPABASE_DB_POOL_URL_LIBPQ" -At -F'|' -v ON_ERROR_STOP=1 -c "
+              SELECT pr.route_id, pr.provider_model
+                FROM public.provider_routes pr
+                JOIN public.model_aliases ma ON ma.alias_id = pr.alias_id
+               WHERE pr.health_state NOT IN ('disabled', 'eol')
+                 AND ma.price_unit = 'tokens'
+                 AND (ma.input_price_credits > 0 OR ma.output_price_credits > 0)
+               ORDER BY pr.route_id;")
+
+          if [ -z "$rows" ]; then
+            echo "::error::no priced token routes came back from provider_routes -- the query itself is broken, not just empty"
+            exit 1
+          fi
+
+          fail=0
+          while IFS='|' read -r route_id db_model; do
+            [ -z "$route_id" ] && continue
+            live_model=$(echo "$resolved" | jq -r --arg id "$route_id" \
+              '.data[] | select(.model_name == $id) | .litellm_params.model' | head -1)
+            if [ -z "$live_model" ] || [ "$live_model" = "null" ]; then
+              echo "::error::$route_id: priced route is not in LiteLLM's live /model/info at all"
+              fail=1
+              continue
+            fi
+            # Strip the leading provider/adapter segment from both sides --
+            # see the step comment above for why that segment may legitimately
+            # differ.
+            db_suffix="${db_model#*/}"
+            live_suffix="${live_model#*/}"
+            if [ "$db_suffix" != "$live_suffix" ]; then
+              echo "::error::$route_id: catalog prices $db_model but LiteLLM will call $live_model"
+              fail=1
+            else
+              echo "$route_id: OK ($db_model <-> $live_model)"
+            fi
+          done <<< "$rows"
+
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::model catalog / live LiteLLM model mismatch -- refusing the deploy (issue #689)"
+            exit 1
+          fi
+          echo "model catalog matches every priced route LiteLLM will actually call"
+
       - name: Apply the bind-mounted Caddy configs
         # Every Caddyfile in this stack is bind-mounted into its container, so
         # editing the file's CONTENTS changes nothing about the container
