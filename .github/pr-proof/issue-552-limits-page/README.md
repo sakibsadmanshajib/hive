@@ -5,8 +5,8 @@ before shot, from `origin/main`), with Playwright driving a real Chromium.
 
 | File | What it shows |
 | --- | --- |
-| `limits-before.png` | Unfixed code (`origin/main`): the page renders the error boundary. HTTP 500. |
-| `limits-after.png` | This branch: the page renders, the form is populated from the limits response, and a save round-trip reports "Saved." |
+| `limits-before.png` | Unfixed code (`origin/main`): the page renders the error boundary. HTTP 500. Source commit (the `origin/main` fork point this branch was based on): `99d7787a9c2546678d2a8087a113f10610a4de1a`. |
+| `limits-after.png` | This branch: the page renders, the form is populated from the limits response, and a save round-trip reports "Saved." Source commit: `b470e3ae33b6673072d6beecfad8dcd0b875e026`. |
 | `limits-before.log` | Playwright log for the before run, including the HTTP status and the rendered body text. |
 | `limits-after.log` | Playwright log for the after run, including the read values and the save result. |
 | `server-error-before.log` | The server-side cause on unfixed code: `TypeError: Failed to parse URL from /api/v1/accounts/current/api-keys/{id}/limits`. |
@@ -34,13 +34,16 @@ against the correct pair: `hive-web-console-prod-1` (the real
 `next build && next start` image) behind `hive-caddy-console-1` (the same
 Caddy origin the demo box uses).
 
-`prod-substrate-signin.png` was the first pass at that confirmation: it
+`prod-substrate-signin.png` (source commit `9e8f7abb24eb552611bd8353e5728de580c158fc`) was
+the first pass at that confirmation: it
 reached the real pair but stopped at the sign-in page, short of a signed-in
 limits-page screenshot, because the control-plane container needs the shared
 session-mode Supabase DB pooler to start, which this project's proof captures
 deliberately stay off (see above).
 
-`limits-after-prod-container.png` / `limits-after-prod-container.log` close
+`limits-after-prod-container.png` / `limits-after-prod-container.log`
+(container image build source commit `9e8f7abb24eb552611bd8353e5728de580c158fc`;
+capture artifact committed at `94897fbff6334a0e521e7b2e1bd70a63a61c4251`) close
 that gap by pointing the same *class* of local stand-in used for
 `limits-after.png` (a fake auth server, a fake control-plane) at the real
 container pair instead of `next dev`:
