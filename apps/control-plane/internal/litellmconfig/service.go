@@ -13,12 +13,16 @@ type SyncRunner interface {
 	Sync(ctx context.Context) error
 }
 
-// routeRow is a join of provider_routes and custom_providers for active routes.
+// routeRow is a join of provider_routes, custom_providers and
+// provider_capabilities for active routes.
 type routeRow struct {
 	ModelName   string
 	LiteLLMName string // provider_routes.provider_model — already carries its provider prefix, e.g. "openrouter/openai/gpt-4o-mini"
 	BaseURL     string
 	APIKeyEnv   string
+	// SupportsEmbeddings selects the LiteLLM adapter for this route; see
+	// litellmModel in generator.go.
+	SupportsEmbeddings bool
 }
 
 // SyncService queries the DB for active provider routes, generates LiteLLM
@@ -45,14 +49,19 @@ func NewSyncService(pool *pgxpool.Pool, configPath, masterKey string, restarter 
 // 'degraded'). Rows with health_state 'disabled' or 'eol' are excluded so
 // retired routes never receive live LiteLLM traffic.
 func (s *SyncService) Sync(ctx context.Context) error {
+	// LEFT JOIN on provider_capabilities: a route with no capabilities row is
+	// treated as non-embedding, which is the same adapter choice the generator
+	// made before supports_embeddings was read at all.
 	rows, err := s.pool.Query(ctx, `
 		SELECT
 			pr.route_id       AS model_name,
 			pr.provider_model AS litellm_name,
 			cp.base_url       AS base_url,
-			cp.api_key_env    AS api_key_env
+			cp.api_key_env    AS api_key_env,
+			COALESCE(pc.supports_embeddings, false) AS supports_embeddings
 		FROM public.provider_routes pr
 		JOIN public.custom_providers cp ON cp.slug = pr.provider
+		LEFT JOIN public.provider_capabilities pc ON pc.route_id = pr.route_id
 		WHERE pr.health_state NOT IN ('disabled', 'eol')
 		  AND cp.enabled = true
 		ORDER BY pr.route_id ASC
@@ -65,7 +74,7 @@ func (s *SyncService) Sync(ctx context.Context) error {
 	var entries []ModelEntry
 	for rows.Next() {
 		var r routeRow
-		if err := rows.Scan(&r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv); err != nil {
+		if err := rows.Scan(&r.ModelName, &r.LiteLLMName, &r.BaseURL, &r.APIKeyEnv, &r.SupportsEmbeddings); err != nil {
 			return fmt.Errorf("litellmconfig: sync: scan route: %w", err)
 		}
 
@@ -77,10 +86,11 @@ func (s *SyncService) Sync(ctx context.Context) error {
 		// prefix ("openrouter/openrouter/..."), since every provider_model
 		// value already carries it.
 		entries = append(entries, ModelEntry{
-			ModelName:   r.ModelName,
-			LiteLLMName: r.LiteLLMName,
-			APIBase:     r.BaseURL,
-			APIKeyEnv:   r.APIKeyEnv,
+			ModelName:          r.ModelName,
+			LiteLLMName:        r.LiteLLMName,
+			APIBase:            r.BaseURL,
+			APIKeyEnv:          r.APIKeyEnv,
+			SupportsEmbeddings: r.SupportsEmbeddings,
 		})
 	}
 	if err := rows.Err(); err != nil {

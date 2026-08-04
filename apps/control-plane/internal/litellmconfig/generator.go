@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -21,6 +22,9 @@ type ModelEntry struct {
 	LiteLLMName string // e.g. "openrouter/openai/gpt-4o"
 	APIBase     string
 	APIKeyEnv   string
+	// SupportsEmbeddings mirrors provider_capabilities.supports_embeddings for
+	// this route and selects the LiteLLM adapter, see litellmModel.
+	SupportsEmbeddings bool
 }
 
 // GeneralSettings holds the LiteLLM general_settings block.
@@ -43,16 +47,50 @@ type Restarter interface {
 	Restart(ctx context.Context) error
 }
 
+// litellmModel returns the model string LiteLLM must be given for a route.
+//
+// For every non-embedding route that is provider_routes.provider_model
+// verbatim, which already carries its native provider prefix (e.g.
+// "openrouter/openai/gpt-4o-mini"). Embeddings are the exception: LiteLLM's
+// native provider integrations do not map the /embeddings endpoint (the
+// openrouter/ one certainly does not), so every embedding entry in
+// deploy/litellm/config.yaml reaches the same upstream through the generic
+// openai/ adapter plus an explicit api_base instead (see section 5 there).
+//
+// The adapter is the generator's business, not the database's:
+// provider_routes.provider_model stays routing-canonical because the price
+// catalog and the "Assert model catalog prices agree with the model LiteLLM
+// will call" step in .github/workflows/deploy-demo-box.yml both read that
+// column and expect the native prefix. That step canonicalizes a live
+// openai/X served from an openrouter.ai api_base back to openrouter/X before
+// comparing, so this rewrite keeps it passing untouched (issue #707).
+func litellmModel(m ModelEntry) string {
+	if !m.SupportsEmbeddings || strings.HasPrefix(m.LiteLLMName, "openai/") {
+		return m.LiteLLMName
+	}
+	if i := strings.Index(m.LiteLLMName, "/"); i >= 0 {
+		return "openai/" + m.LiteLLMName[i+1:]
+	}
+	return "openai/" + m.LiteLLMName
+}
+
 // Generate builds a LiteLLM config.yaml byte slice from the provided model
 // entries. It does NOT read from DB itself; the caller supplies the entries.
 func Generate(cfg Config) ([]byte, error) {
 	// Build model_list as a sequence of maps to preserve key order.
 	modelList := make([]map[string]interface{}, 0, len(cfg.Models))
 	for _, m := range cfg.Models {
+		// api_base is what makes the generic openai/ adapter mean "this
+		// provider". Without one, LiteLLM would send the route's request, and
+		// the provider's API key, to api.openai.com instead. Refuse rather
+		// than emit that.
+		if m.SupportsEmbeddings && m.APIBase == "" {
+			return nil, fmt.Errorf("litellmconfig: embeddings route %q has no api_base; the generic openai/ adapter would send it upstream to OpenAI", m.ModelName)
+		}
 		entry := map[string]interface{}{
 			"model_name": m.ModelName,
 			"litellm_params": map[string]interface{}{
-				"model":    m.LiteLLMName,
+				"model":    litellmModel(m),
 				"api_base": m.APIBase,
 				"api_key":  "os.environ/" + m.APIKeyEnv,
 			},
@@ -79,9 +117,10 @@ func Generate(cfg Config) ([]byte, error) {
 //
 // Merge strategy (critical — preserves operator-managed keys and entries):
 //  1. Parse the existing YAML file (if present) into map[string]interface{}.
-//  2. Replace model_list entries whose model_name the DB query returned;
-//     keep any existing model_list entry whose model_name the DB query did
-//     NOT return (see mergeConfig).
+//  2. Update model_list entries whose model_name the DB query returned, field
+//     by field: the DB owns litellm_params model/api_base/api_key, everything
+//     else the entry already carried survives. Keep any existing model_list
+//     entry whose model_name the DB query did NOT return (see mergeConfig).
 //  3. Merge general_settings: update master_key, preserve all other keys.
 //  4. Marshal the merged map to YAML and write atomically via temp file + rename.
 //
@@ -160,19 +199,49 @@ func WriteAndRestart(ctx context.Context, configPath string, cfg Config, restart
 	return nil
 }
 
+// mergeParams overlays the generated litellm_params onto the existing ones for
+// the same model_name. The generator owns exactly the keys it emits (model,
+// api_base, api_key); every other key survives, so hand-tuning a DB-managed
+// entry sticks across syncs (e.g. extra_body.provider.allow_fallbacks: false /
+// sort: throughput on route-openrouter-default and route-openrouter-auto,
+// added for the flaky usage-token root cause; issue #707). Field level, not
+// entry level: the DB still owns where the route points, the file still owns
+// how it is tuned, and no override column or schema change is needed to carry
+// the next hand-tuned key.
+func mergeParams(existing, generated interface{}) interface{} {
+	gen, genOK := generated.(map[string]interface{})
+	if !genOK {
+		return existing
+	}
+	prev, prevOK := existing.(map[string]interface{})
+	if !prevOK {
+		return gen
+	}
+	merged := make(map[string]interface{}, len(prev)+len(gen))
+	for k, v := range prev {
+		merged[k] = v
+	}
+	for k, v := range gen {
+		merged[k] = v
+	}
+	return merged
+}
+
 // mergeConfig merges the newly generated config map into the existing config map.
 // Rules:
 //   - model_list entries whose model_name IS returned by the DB query (the
-//     generated list) are replaced with the DB-generated value, keeping only
-//     their prior model_info (e.g. mode: embedding set by the seed config).
+//     generated list) keep the DB-generated model_name and litellm_params
+//     model/api_base/api_key, and keep every other key they already had:
+//     model_info (e.g. mode: embedding set by the seed config) and any
+//     hand-tuned litellm_params key the generator does not produce (see
+//     mergeParams).
 //   - model_list entries whose model_name has NO corresponding DB row are
 //     preserved verbatim. provider_routes is not the only source of routes
 //     LiteLLM serves: deploy/litellm/config.yaml also carries operator-managed
-//     entries with no provider_routes row at all (e.g. route-doc-vlm,
-//     bge-m3), and hand-tuned litellm_params keys on DB-managed entries
-//     that Generate does not reproduce (e.g. extra_body.provider tuning).
-//     Silently dropping either on the first successful sync would be a
-//     destructive regression disguised as a bug fix (issue #701 review).
+//     entries with no provider_routes row at all (e.g. route-doc-vlm, bge-m3).
+//     Silently dropping either those or the hand-tuned keys above on the first
+//     successful sync would be a destructive regression disguised as a bug fix
+//     (issue #701 review, issue #707).
 //   - general_settings is merged: master_key updated, all other keys preserved.
 //   - All other top-level keys from existing are preserved unchanged.
 func mergeConfig(existing, generated map[string]interface{}) map[string]interface{} {
@@ -196,32 +265,36 @@ func mergeConfig(existing, generated map[string]interface{}) map[string]interfac
 		}
 	}
 
-	// Build a lookup of existing model_info keyed by model_name, so a
-	// DB-managed entry keeps its hand-set model_info (e.g. mode: embedding).
-	existingInfo := map[string]interface{}{}
+	// Build a lookup of the existing entries keyed by model_name, so a
+	// DB-managed entry keeps every part of itself the generator does not own.
+	existingByName := map[string]map[string]interface{}{}
 	for _, item := range oldList {
 		if entry, ok := item.(map[string]interface{}); ok {
 			if name, ok := entry["model_name"].(string); ok {
-				if info, exists := entry["model_info"]; exists {
-					existingInfo[name] = info
-				}
+				existingByName[name] = entry
 			}
 		}
 	}
-	// Restore model_info on each new entry where it existed before.
+	// Overlay each generated entry onto the entry it replaces, field by field.
 	for i, item := range newList {
-		if entry, ok := item.(map[string]interface{}); ok {
-			if name, ok := entry["model_name"].(string); ok {
-				if info, exists := existingInfo[name]; exists {
-					updated := make(map[string]interface{}, len(entry)+1)
-					for k, v := range entry {
-						updated[k] = v
-					}
-					updated["model_info"] = info
-					newList[i] = updated
-				}
-			}
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
 		}
+		name, _ := entry["model_name"].(string)
+		prev, exists := existingByName[name]
+		if !exists {
+			continue
+		}
+		updated := make(map[string]interface{}, len(prev)+len(entry))
+		for k, v := range prev {
+			updated[k] = v
+		}
+		for k, v := range entry {
+			updated[k] = v
+		}
+		updated["litellm_params"] = mergeParams(prev["litellm_params"], entry["litellm_params"])
+		newList[i] = updated
 	}
 
 	// Append operator-managed entries (no corresponding DB row) unchanged,

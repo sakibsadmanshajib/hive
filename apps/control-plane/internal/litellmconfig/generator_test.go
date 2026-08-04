@@ -64,6 +64,90 @@ func TestGenerateTwoModelsProducesCorrectModelList(t *testing.T) {
 	assert.Equal(t, "os.environ/OPENROUTER_API_KEY", params["api_key"])
 }
 
+// TestGenerateUsesOpenAIAdapterForEmbeddingRoutes is the fast unit half of
+// issue #707 gap 1 (TestSyncKeepsEmbeddingAdapterForSeededRoute is the live-DB
+// half). LiteLLM's native openrouter/ provider does not map /embeddings, so an
+// embeddings route is emitted through the generic openai/ adapter with the
+// provider's api_base, while the DB value stays routing-canonical.
+func TestGenerateUsesOpenAIAdapterForEmbeddingRoutes(t *testing.T) {
+	cfg := litellmconfig.Config{
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:          "route-openrouter-embedding",
+				LiteLLMName:        "openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free",
+				APIBase:            "https://openrouter.ai/api/v1",
+				APIKeyEnv:          "OPENROUTER_API_KEY",
+				SupportsEmbeddings: true,
+			},
+			{
+				// Already on the generic adapter (e.g. a self-hosted
+				// OpenAI-compatible embedding server): left alone.
+				ModelName:          "bge-m3",
+				LiteLLMName:        "openai/bge-m3",
+				APIBase:            "http://ollama:11434/v1",
+				APIKeyEnv:          "NONE",
+				SupportsEmbeddings: true,
+			},
+			{
+				// Not an embeddings route: native prefix preserved verbatim.
+				ModelName:   "route-openrouter-default",
+				LiteLLMName: "openrouter/openai/gpt-4o-mini",
+				APIBase:     "https://openrouter.ai/api/v1",
+				APIKeyEnv:   "OPENROUTER_API_KEY",
+			},
+		},
+		GeneralSettings: litellmconfig.GeneralSettings{MasterKey: "k"},
+	}
+
+	out, err := litellmconfig.Generate(cfg)
+	require.NoError(t, err)
+
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+	modelList, ok := parsed["model_list"].([]interface{})
+	require.True(t, ok)
+	require.Len(t, modelList, 3)
+
+	byName := map[string]map[string]interface{}{}
+	for _, item := range modelList {
+		entry := item.(map[string]interface{})
+		byName[entry["model_name"].(string)] = entry
+	}
+
+	embedParams := byName["route-openrouter-embedding"]["litellm_params"].(map[string]interface{})
+	assert.Equal(t, "openai/nvidia/llama-nemotron-embed-vl-1b-v2:free", embedParams["model"],
+		"an embeddings route must use the generic openai/ adapter, not the native openrouter/ one")
+	assert.Equal(t, "https://openrouter.ai/api/v1", embedParams["api_base"],
+		"api_base is what makes the generic adapter reach OpenRouter")
+
+	localParams := byName["bge-m3"]["litellm_params"].(map[string]interface{})
+	assert.Equal(t, "openai/bge-m3", localParams["model"], "an already-generic model string must not be rewritten")
+
+	chatParams := byName["route-openrouter-default"]["litellm_params"].(map[string]interface{})
+	assert.Equal(t, "openrouter/openai/gpt-4o-mini", chatParams["model"],
+		"a non-embeddings route keeps its native provider prefix")
+}
+
+// TestGenerateRefusesEmbeddingRouteWithoutAPIBase guards the credential half of
+// the adapter rewrite: openai/<model> with no api_base resolves to
+// api.openai.com, which would send this provider's key to the wrong upstream.
+func TestGenerateRefusesEmbeddingRouteWithoutAPIBase(t *testing.T) {
+	_, err := litellmconfig.Generate(litellmconfig.Config{
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:          "route-broken-embedding",
+				LiteLLMName:        "someprovider/some-embed-model",
+				APIBase:            "",
+				APIKeyEnv:          "SOMEPROVIDER_API_KEY",
+				SupportsEmbeddings: true,
+			},
+		},
+		GeneralSettings: litellmconfig.GeneralSettings{MasterKey: "k"},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "route-broken-embedding")
+}
+
 func TestGenerateEmptyModelsProducesEmptyModelList(t *testing.T) {
 	cfg := litellmconfig.Config{
 		Models: []litellmconfig.ModelEntry{},
@@ -382,4 +466,86 @@ general_settings:
 	docParams := docVLM["litellm_params"].(map[string]interface{})
 	assert.Equal(t, "openrouter/meta-llama/llama-4-scout:free", docParams["model"], "operator-managed entry's model must survive unchanged")
 	assert.Contains(t, docParams, "extra_body", "operator-managed entry's extra_body must survive unchanged")
+}
+
+// TestWriteAndRestartPreservesHandTunedLiteLLMParams proves issue #707 gap 2:
+// field-level preservation inside litellm_params on a DB-managed entry. The
+// #705 merge only preserved whole entries with NO provider_routes row, so
+// route-openrouter-default and route-openrouter-auto, which DO have rows,
+// lost their hand-tuned extra_body.provider tuning (allow_fallbacks: false,
+// sort: throughput — added for the flaky-usage-token root cause,
+// deploy/litellm/config.yaml section 1) on the first successful sync.
+//
+// The rule: the generator owns model, api_base and api_key; every other key
+// already present in the existing entry's litellm_params survives, the same
+// way model_info already did.
+func TestWriteAndRestartPreservesHandTunedLiteLLMParams(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+
+	// Pre-existing config: a DB-managed route carrying hand-tuned keys the
+	// generator does not reproduce (extra_body, plus a second unrelated key to
+	// prove the rule is field-level and not an extra_body special case).
+	existing := `
+model_list:
+  - model_name: route-openrouter-default
+    litellm_params:
+      model: os.environ/OPENROUTER_DEFAULT_MODEL
+      api_key: os.environ/OPENROUTER_API_KEY
+      timeout: 120
+      extra_body:
+        provider:
+          allow_fallbacks: false
+          sort: throughput
+general_settings:
+  master_key: old-key
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(existing), 0o600))
+
+	cfg := litellmconfig.Config{
+		Models: []litellmconfig.ModelEntry{
+			{
+				ModelName:   "route-openrouter-default",
+				LiteLLMName: "openrouter/openai/gpt-4o-mini",
+				APIBase:     "https://openrouter.ai/api/v1",
+				APIKeyEnv:   "OPENROUTER_API_KEY",
+			},
+		},
+		GeneralSettings: litellmconfig.GeneralSettings{
+			MasterKey: "new-key",
+		},
+		ExistingConfigPath: configPath,
+	}
+
+	r := &mockRestarter{}
+	require.NoError(t, litellmconfig.WriteAndRestart(context.Background(), configPath, cfg, r))
+
+	data, readErr := os.ReadFile(configPath)
+	require.NoError(t, readErr)
+
+	var parsed map[string]interface{}
+	require.NoError(t, yaml.Unmarshal(data, &parsed))
+	modelList, ok := parsed["model_list"].([]interface{})
+	require.True(t, ok, "model_list must be a sequence")
+	require.Len(t, modelList, 1, "the DB-managed entry must be updated in place, not duplicated")
+
+	entry, ok := modelList[0].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "route-openrouter-default", entry["model_name"])
+	params, ok := entry["litellm_params"].(map[string]interface{})
+	require.True(t, ok, "litellm_params must be a mapping")
+
+	// Generator-owned fields: taken from the DB, overwriting what was there.
+	assert.Equal(t, "openrouter/openai/gpt-4o-mini", params["model"], "generator owns litellm_params.model")
+	assert.Equal(t, "https://openrouter.ai/api/v1", params["api_base"], "generator owns litellm_params.api_base")
+	assert.Equal(t, "os.environ/OPENROUTER_API_KEY", params["api_key"], "generator owns litellm_params.api_key")
+
+	// Everything else the operator hand-tuned must survive.
+	assert.Equal(t, 120, params["timeout"], "hand-tuned litellm_params keys must survive a sync")
+	extraBody, ok := params["extra_body"].(map[string]interface{})
+	require.True(t, ok, "extra_body must survive a sync of a DB-managed entry (issue #707)")
+	provider, ok := extraBody["provider"].(map[string]interface{})
+	require.True(t, ok, "extra_body.provider must survive a sync")
+	assert.Equal(t, false, provider["allow_fallbacks"], "extra_body.provider.allow_fallbacks must survive a sync")
+	assert.Equal(t, "throughput", provider["sort"], "extra_body.provider.sort must survive a sync")
 }

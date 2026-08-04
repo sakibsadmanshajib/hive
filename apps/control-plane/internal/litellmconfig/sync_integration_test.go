@@ -243,3 +243,96 @@ func TestSyncServiceIntegration(t *testing.T) {
 	t.Logf("TestSyncServiceIntegration: YAML written to %s, %d model entries, restarter called %d time(s)",
 		configPath, len(modelList), restarter.calls)
 }
+
+// TestSyncKeepsEmbeddingAdapterForSeededRoute proves issue #707 gap 1 against
+// the real seeded route, no synthetic fixture: LiteLLM's native `openrouter/`
+// provider does not map the /embeddings endpoint, so
+// deploy/litellm/config.yaml section 5 calls the same upstream through the
+// generic `openai/` adapter with an explicit api_base pointed at OpenRouter.
+// route-openrouter-embedding HAS a provider_routes row, so it is DB-managed
+// and rewritten on every sync; before this fix the sync emitted the native
+// `openrouter/` prefix straight from provider_routes.provider_model and broke
+// RAG embeddings on the next sync.
+//
+// The DB column stays routing-canonical (`openrouter/...`) on purpose: it is
+// also read by the price catalog and by deploy-demo-box.yml's "Assert model
+// catalog prices agree with the model LiteLLM will call" step, which
+// canonicalizes a live `openai/X` + openrouter.ai api_base back to
+// `openrouter/X` before comparing against this very column. Storing the
+// adapter form in the DB would break that comparison, so the adapter is the
+// generator's business, not the database's. This test asserts both halves.
+func TestSyncKeepsEmbeddingAdapterForSeededRoute(t *testing.T) {
+	pool := connectLiteLLMTestDB(t)
+	ctx := context.Background()
+
+	const embeddingRoute = "route-openrouter-embedding"
+
+	var dbModel, healthState string
+	err := pool.QueryRow(ctx, `
+		SELECT provider_model, health_state
+		  FROM public.provider_routes
+		 WHERE route_id = $1
+	`, embeddingRoute).Scan(&dbModel, &healthState)
+	if err != nil {
+		t.Fatalf("read seeded %s row: %v", embeddingRoute, err)
+	}
+	if healthState == "disabled" || healthState == "eol" {
+		t.Fatalf("%s is %q in the migration chain; the seeded embedding primary must stay dispatchable", embeddingRoute, healthState)
+	}
+	// Pins design decision: the DB keeps the routing-canonical provider prefix.
+	if !strings.HasPrefix(dbModel, "openrouter/") {
+		t.Fatalf("provider_routes.provider_model for %s = %q, want the routing-canonical openrouter/ form; deploy-demo-box.yml's price assertion compares against this column", embeddingRoute, dbModel)
+	}
+	wantModel := "openai/" + strings.TrimPrefix(dbModel, "openrouter/")
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	restarter := &integMockRestarter{}
+	svc := litellmconfig.NewSyncService(pool, configPath, "test-master-key", restarter)
+	if err := svc.Sync(ctx); err != nil {
+		t.Fatalf("Sync returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile config: %v", err)
+	}
+	var parsed map[string]interface{}
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("YAML parse error: %v", err)
+	}
+	modelList, ok := parsed["model_list"].([]interface{})
+	if !ok {
+		t.Fatalf("model_list missing or wrong type: %T", parsed["model_list"])
+	}
+
+	var params map[string]interface{}
+	for _, item := range modelList {
+		entry, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if name, _ := entry["model_name"].(string); name == embeddingRoute {
+			params, _ = entry["litellm_params"].(map[string]interface{})
+			break
+		}
+	}
+	if params == nil {
+		t.Fatalf("%s missing from the synced model_list (or has no litellm_params)", embeddingRoute)
+	}
+
+	gotModel, _ := params["model"].(string)
+	if strings.HasPrefix(gotModel, "openrouter/") {
+		t.Errorf("%s: litellm_params.model = %q; LiteLLM's native openrouter/ provider does not map /embeddings, a sync must not emit it (issue #707)", embeddingRoute, gotModel)
+	}
+	if gotModel != wantModel {
+		t.Errorf("%s: litellm_params.model = %q, want %q (generic openai/ adapter over the canonical DB value %q)", embeddingRoute, gotModel, wantModel, dbModel)
+	}
+	// The api_base is what makes `openai/` mean OpenRouter here, both for
+	// LiteLLM at runtime and for the deploy-time price assertion's
+	// canonicalization.
+	gotBase, _ := params["api_base"].(string)
+	if !strings.Contains(gotBase, "openrouter.ai") {
+		t.Errorf("%s: litellm_params.api_base = %q, want the OpenRouter base URL from custom_providers", embeddingRoute, gotBase)
+	}
+}
