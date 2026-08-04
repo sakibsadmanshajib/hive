@@ -34,22 +34,61 @@ against the correct pair: `hive-web-console-prod-1` (the real
 `next build && next start` image) behind `hive-caddy-console-1` (the same
 Caddy origin the demo box uses).
 
-`prod-substrate-signin.png` is that confirmation: freshly captured against
-`docker compose --profile local --profile chat up --build control-plane
-web-console-prod caddy-console` on this exact commit (containers created
-seconds before the capture, confirmed against `git rev-parse HEAD`). It shows
-the real production Next.js build serving `/auth/sign-in` through Caddy, and
-`next build`'s route manifest for this run includes
-`/console/api-keys/[id]/limits`, so the fixed route is present in the image
-being served.
+`prod-substrate-signin.png` was the first pass at that confirmation: it
+reached the real pair but stopped at the sign-in page, short of a signed-in
+limits-page screenshot, because the control-plane container needs the shared
+session-mode Supabase DB pooler to start, which this project's proof captures
+deliberately stay off (see above).
 
-It stops at the sign-in page rather than a signed-in limits-page screenshot.
-Getting a real session on `web-console-prod` needs either a live Supabase
-Cloud sign-in (this project's stated convention, restated above, is to keep
-proof captures off the shared session-mode pooler) or a full local Supabase
-emulator, which was out of proportion to stand up for this fix. The
-authenticated functional proof above (local stand-ins) is unchanged code, so
-it still accurately shows this branch's behavior; only the container that
-served it during capture differs from what the demo box runs. Flagging this
-gap plainly rather than fabricating a signed-in screenshot against the prod
-container.
+`limits-after-prod-container.png` / `limits-after-prod-container.log` close
+that gap by pointing the same *class* of local stand-in used for
+`limits-after.png` (a fake auth server, a fake control-plane) at the real
+container pair instead of `next dev`:
+
+- `web-console-prod` was rebuilt from this exact commit with
+  `NEXT_PUBLIC_SUPABASE_URL` baked to a local stand-in GoTrue server
+  (`fake-auth-server.js`, stdlib `http` only) instead of live Supabase Cloud,
+  and `CONTROL_PLANE_BASE_URL` pointed at a local stand-in control-plane
+  (`fake-control-plane-server.js`) instead of the real service. Neither
+  stand-in opens a database connection of any kind, so the shared
+  session-mode pooler is never touched, and the real `control-plane` /
+  `redis` services were never started (`--no-deps`, only `web-console-prod`
+  and `caddy-console` were brought up).
+- Both stand-ins ran as plain Node processes on the host, reachable from the
+  container via Docker Desktop's `host.docker.internal`. The image tag was
+  overridden to `hive-web-console-prod:proof552` for the build so it never
+  clobbers the shared `hive-web-console-prod:ci` tag another concurrent
+  worktree on the same box might be using.
+- Confirmed against the real substrate, not the stale `dev`-profile
+  container PR #696 shipped: `docker top` on the running container shows
+  `next-server (v15.5.15)` under a `next start` command line (the `next dev`
+  image never produces a `.next/BUILD_ID`; this container's
+  `.next/BUILD_ID` and its route manifest's
+  `/console/api-keys/[id]/limits/page` entry both exist), the container was
+  created seconds before the capture, and `git rev-parse HEAD` at capture
+  time was this commit.
+- The Playwright browser itself ran inside a short-lived
+  `mcr.microsoft.com/playwright:v1.51.1-jammy` container attached to the
+  same compose network, because a bare-host Chromium process cannot reach
+  `host.docker.internal` the way a container can on this box (proven the
+  hard way: the first attempt hung with the sign-in button stuck on
+  "Signing in..." because the browser-side `fetch` to the auth stand-in
+  never completed). Running the browser as a container gives it the same
+  `host.docker.internal` route the app container uses, so both sides resolve
+  the stand-ins identically.
+- Result: signed in, `GET /console/api-keys/{id}/limits -> HTTP 200`, the
+  rate-limit form renders populated (rpm 60, tpm 4000), and a save round-trip
+  reports "Saved.", the same shape of proof as `limits-after.png`, now
+  against the real prod-container substrate.
+
+The demo box itself (the actual `hive-web-console-prod-1` /
+`hive-caddy-console-1` pair running in production) was never reached by any
+of this and still isn't: there is no SSH access to it from this
+environment. This capture closes the "wrong substrate class" gap (`next dev`
+vs. the real production build), not the separate "not the literal demo box"
+gap, which stays open for the same reason it always has been.
+
+The two stand-in server scripts and the Playwright driver
+(`fake-auth-server.js`, `fake-control-plane-server.js`, `capture-prod.js`)
+are committed here so the next run of this capture does not have to
+reconstruct them from scratch.
