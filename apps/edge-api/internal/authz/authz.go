@@ -3,11 +3,14 @@ package authz
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/cpauth"
 )
@@ -36,6 +39,32 @@ type AuthSnapshot struct {
 	AccountRatePolicy     *RatePolicy `json:"account_rate_policy,omitempty"`
 	KeyRatePolicy         *RatePolicy `json:"key_rate_policy,omitempty"`
 	PolicyVersion         int64       `json:"policy_version"`
+}
+
+// ErrAccountNotProvisioned reports a resolved API key whose account has no
+// public.tenant_billing_accounts row, so no tenant can be derived for it. Every
+// consumer of a snapshot fails closed on this state, because without a tenant
+// the entitlement check cannot run at all.
+var ErrAccountNotProvisioned = errors.New(
+	"the account behind it is not provisioned: no public.tenant_billing_accounts row maps it to a tenant")
+
+// TenantUUID is the single definition of "this API key resolves a tenant",
+// shared by every caller that fails closed on it: /v1/models (handleModels),
+// inference.Orchestrator.selectRoute, and the Open WebUI shim-key probe
+// (checkOWUIShimKey).
+//
+// It is shared rather than duplicated because of issue #717: the shim-key probe
+// checked Status and the model allowlist but never TenantID, so edge-api logged
+// the shim key as able to authenticate model listing, RAG embeddings and
+// text-to-speech, then answered 403 account_not_provisioned to all three. A
+// probe that asserts a weaker predicate than the request path is a false green,
+// and the only structural defence is one predicate with one definition.
+func (s AuthSnapshot) TenantUUID() (uuid.UUID, error) {
+	tenantID, err := uuid.Parse(s.TenantID)
+	if err != nil || tenantID == uuid.Nil {
+		return uuid.Nil, ErrAccountNotProvisioned
+	}
+	return tenantID, nil
 }
 
 // RatePolicy is the edge-side rate-limit projection for one scope.

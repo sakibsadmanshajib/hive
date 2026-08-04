@@ -53,8 +53,10 @@ type dispatchFunc func(ctx context.Context, litellmModel string, body []byte) (*
 // route through here rather than calling o.routing.SelectRoute directly, so
 // tenant binding and the fail-closed check happen exactly once.
 func (o *Orchestrator) selectRoute(ctx context.Context, snapshot authz.AuthSnapshot, input SelectRouteInput) (SelectRouteResult, error) {
-	tenantID, err := uuid.Parse(snapshot.TenantID)
-	if err != nil || tenantID == uuid.Nil {
+	// Same predicate the /v1/models path and the OWUI shim-key probe use, by
+	// construction rather than by convention (issue #717).
+	tenantID, err := snapshot.TenantUUID()
+	if err != nil {
 		return SelectRouteResult{}, ErrAccountNotProvisioned
 	}
 	return o.routing.SelectRoute(withAPIKeyTenant(ctx, tenantID), input)
