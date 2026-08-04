@@ -23,3 +23,33 @@ Substrate notes, stated plainly:
 - No credential appears in any captured URL. The path carries an API key
   identifier, never key material, and the identifier here is a locally invented
   UUID rather than a real key.
+
+## Container-substrate verification (added during #683 review)
+
+`limits-before.png` / `limits-after.png` above were captured against `next
+dev`, not the container image the demo box actually runs. A different PR
+(#696) shipped proof captured against the stale `dev`-profile
+`hive-web-console-1` container, so this PR's review asked for confirmation
+against the correct pair: `hive-web-console-prod-1` (the real
+`next build && next start` image) behind `hive-caddy-console-1` (the same
+Caddy origin the demo box uses).
+
+`prod-substrate-signin.png` is that confirmation: freshly captured against
+`docker compose --profile local --profile chat up --build control-plane
+web-console-prod caddy-console` on this exact commit (containers created
+seconds before the capture, confirmed against `git rev-parse HEAD`). It shows
+the real production Next.js build serving `/auth/sign-in` through Caddy, and
+`next build`'s route manifest for this run includes
+`/console/api-keys/[id]/limits`, so the fixed route is present in the image
+being served.
+
+It stops at the sign-in page rather than a signed-in limits-page screenshot.
+Getting a real session on `web-console-prod` needs either a live Supabase
+Cloud sign-in (this project's stated convention, restated above, is to keep
+proof captures off the shared session-mode pooler) or a full local Supabase
+emulator, which was out of proportion to stand up for this fix. The
+authenticated functional proof above (local stand-ins) is unchanged code, so
+it still accurately shows this branch's behavior; only the container that
+served it during capture differs from what the demo box runs. Flagging this
+gap plainly rather than fabricating a signed-in screenshot against the prod
+container.
