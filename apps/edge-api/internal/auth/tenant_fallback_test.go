@@ -22,12 +22,13 @@ func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
-		// CI wires HIVE_TEST_DB_URL at the job level (issue #708); a missing
-		// value there means this DB-backed test silently skipped rather than
-		// ran, the same failure shape #701/#705 fixed for litellmconfig. Fail
-		// loud in CI instead of shipping an invisible skip; local dev runs
-		// (CI unset) still skip.
-		if os.Getenv("CI") != "" {
+		// CI wires HIVE_TEST_DB_URL at the job level (issue #708), but only
+		// for the RLS step, which does not pass -short. The plain `go test
+		// ./... -short` step compiles this package too and runs first,
+		// before that DSN ever exists, so testing.Short() is required here
+		// to tell "the RLS step forgot the DSN" (real bug) apart from "this
+		// is the earlier -short step, which never has it" (expected).
+		if os.Getenv("CI") != "" && !testing.Short() {
 			t.Fatal("HIVE_TEST_DB_URL not set in CI; this suite must not silently skip (issue #708)")
 		}
 		t.Skip("HIVE_TEST_DB_URL not set")

@@ -247,6 +247,9 @@ func TestProviderCRUDIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("step 6: INSERT provider_routes with custom slug: %v", err)
 	}
+	if routeID != wantRouteID {
+		t.Fatalf("step 6: expected route_id %q, got %q", wantRouteID, routeID)
+	}
 	// Cleanup route row before alias row (FK order).
 	t.Cleanup(func() {
 		_, _ = pool.Exec(context.Background(), "DELETE FROM public.provider_routes WHERE route_id = $1", routeID)
