@@ -782,6 +782,17 @@ services:
       # Workspace empty states. Dockerfile.open-webui asserts the markup
       # contract the second override depends on. Known gap: FONTS_DIR under
       # STATIC_DIR is still unseeded.
+      #
+      # #712: user.png (the same badge mark as the rest) is included here too.
+      # open_webui.routers.users.get_user_profile_image_by_id falls back to
+      # FileResponse(f"{STATIC_DIR}/user.png") for any account whose
+      # profile_image_url is not an http(s) URL or a data: URI -- which is
+      # every OAuth-provisioned user's default ("/user.png", set in
+      # utils/oauth.py). Overriding STATIC_DIR without this file present
+      # made that fallback 500 (RuntimeError: File at path .../user.png does
+      # not exist.) on every single avatar request for those users, since
+      # this is a read-only bind of a repo directory, not the owui-data
+      # volume -- there is no "first boot" that could ever have seeded it.
       - ./owui-static:/data/static:ro
       # NOTE (#269): ENABLE_PIPELINES/PIPELINES_URLS and a mounted
       # ./pipelines volume used to sit here. Those are not real Open WebUI
