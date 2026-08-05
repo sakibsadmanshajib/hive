@@ -92,6 +92,58 @@ def test_unset_and_blank_env_leave_the_persisted_value_alone() -> None:
         assert config.stored["rag.embedding_model"] == "sentence-transformers/all-MiniLM-L6-v2"
 
 
+def test_base_url_without_a_key_is_refused() -> None:
+    """A credential must not outlive the destination it was issued for.
+
+    reconcile only writes the keys the environment supplies, so a base URL
+    supplied on its own would repoint Open WebUI's embedder while it kept
+    sending the API key persisted for the previous destination. Refuse loudly
+    instead, naming both variables. Dropping the base-URL override quietly is
+    not an option: silence is the failure mode this whole change exists to end.
+    """
+    for key_value in (None, "", "   "):
+        environ = {
+            "RAG_EMBEDDING_MODEL": ALIAS,
+            "RAG_OPENAI_API_BASE_URL": "http://somewhere-else:8080/v1",
+        }
+        if key_value is not None:
+            environ["RAG_OPENAI_API_KEY"] = key_value
+
+        config = FakeConfig(
+            {
+                "rag.openai.api_base_url": "http://edge-api:8080/v1",
+                "rag.openai.api_key": "hk_issued_for_edge_api",
+            }
+        )
+        try:
+            reconcile(config, environ)
+        except RuntimeError as exc:
+            message = str(exc)
+        else:
+            raise AssertionError(f"expected a refusal for key_value={key_value!r}")
+
+        assert "RAG_OPENAI_API_BASE_URL" in message, message
+        assert "RAG_OPENAI_API_KEY" in message, message
+        # The refusal must not print the credential it is protecting.
+        assert "hk_issued_for_edge_api" not in message, message
+        # Nothing is written, so the persisted pair stays internally consistent.
+        assert config.upsert_calls == 0
+        assert config.stored["rag.openai.api_base_url"] == "http://edge-api:8080/v1"
+        assert config.stored["rag.openai.api_key"] == "hk_issued_for_edge_api"
+
+
+def test_key_without_a_base_url_is_allowed() -> None:
+    """The reverse pairing is safe and is how shim-key rotation reaches Open
+    WebUI: a new credential for the destination already persisted."""
+    config = FakeConfig(
+        {"rag.openai.api_base_url": "http://edge-api:8080/v1", "rag.openai.api_key": "hk_old"}
+    )
+    applied = reconcile(config, {"RAG_OPENAI_API_KEY": "hk_new"})
+    assert applied == {"rag.openai.api_key": "hk_new"}, applied
+    assert config.stored["rag.openai.api_key"] == "hk_new"
+    assert config.stored["rag.openai.api_base_url"] == "http://edge-api:8080/v1"
+
+
 def test_only_the_gateway_rag_keys_are_touched() -> None:
     """Nothing else an admin configured through Open WebUI is overwritten:
     this reconcile is deliberately not `ENABLE_PERSISTENT_CONFIG=false`."""

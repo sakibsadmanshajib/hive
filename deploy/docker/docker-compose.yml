@@ -731,6 +731,12 @@ services:
       # every container start, so editing them here does reach a deployment that
       # has already booted. Nothing else in Open WebUI's persisted config is
       # touched, so settings an administrator changes in its own UI still stick.
+      # RAG_OPENAI_API_BASE_URL and RAG_OPENAI_API_KEY have to travel together:
+      # a destination supplied without a credential would leave Open WebUI
+      # sending the key persisted for the previous destination, so open-webui
+      # refuses to start and names both variables instead. An empty
+      # OWUI_SHIM_KEY therefore stops this container rather than misdirecting
+      # its key, which is one more reason that variable is not optional here.
       RAG_EMBEDDING_ENGINE: "openai"
       RAG_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       RAG_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}

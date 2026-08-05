@@ -50,12 +50,34 @@ def overrides(environ) -> dict:
 
     A missing or blank variable yields no entry, so an unset variable never
     clobbers a persisted value with an empty string.
+
+    Raises RuntimeError when a destination is supplied without a credential.
+    Only the supplied keys are written, so a base URL on its own would repoint
+    the embedder while Open WebUI kept sending the API key persisted for the
+    previous destination. A credential must not outlive the destination it was
+    issued for, and quietly ignoring the base URL instead would leave the
+    deployment diverged from its own configuration with no signal, which is the
+    failure this module exists to end. So it refuses, which surfaces as a
+    startup failure naming both variables rather than a silent misdirection.
+    The reverse pairing is fine and is how a rotated shim key reaches Open
+    WebUI: a new credential for the destination already persisted.
     """
     applied = {}
     for key, variable in RAG_CONFIG_ENV.items():
         value = (environ.get(variable) or "").strip()
         if value:
             applied[key] = value
+
+    if "rag.openai.api_base_url" in applied and "rag.openai.api_key" not in applied:
+        raise RuntimeError(
+            "RAG_OPENAI_API_BASE_URL is set to "
+            f"{applied['rag.openai.api_base_url']!r} but RAG_OPENAI_API_KEY is "
+            "empty or unset. Refusing to point Open WebUI's embedder at that "
+            "destination while it keeps sending the API key persisted for the "
+            "previous one. Set RAG_OPENAI_API_KEY (the Hive OWUI_SHIM_KEY) "
+            "together with RAG_OPENAI_API_BASE_URL."
+        )
+
     return applied
 
 
