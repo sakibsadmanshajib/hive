@@ -170,24 +170,6 @@ def test_stale_content_is_refreshed_from_source() -> None:
     assert ("POST", "/api/v1/functions/create") not in fake.calls
 
 
-def test_import_rewrite_is_not_reported_as_drift() -> None:
-    """Open WebUI rewrites `from utils` to `from open_webui.utils` before
-    storing, so comparing raw source against stored source would push an
-    update on every single deploy."""
-    source = "from utils.misc import x\n\nclass Filter:\n    pass\n"
-    stored = "from open_webui.utils.misc import x\n\nclass Filter:\n    pass\n"
-    fake = FakeOwui(state=installed(content=stored))
-    original = urllib.request.urlopen
-    urllib.request.urlopen = fake
-    try:
-        installer.ensure_installed(BASE, TOKEN, source)
-        installer.verify(BASE, TOKEN, source)
-    finally:
-        urllib.request.urlopen = original
-    writes = [call for call in fake.calls if call[0] != "GET"]
-    assert writes == [], f"the import rewrite was treated as drift: {writes}"
-
-
 def test_verify_rejects_an_install_that_never_became_active() -> None:
     """A 2xx from the install calls is not proof. A filter only runs when it is
     both active and global, so verification must read the end state back."""
@@ -236,6 +218,41 @@ def test_a_forbidden_read_is_not_mistaken_for_absence() -> None:
             raise AssertionError("a 403 was read as absence")
     finally:
         urllib.request.urlopen = original
+
+
+def test_plaintext_is_allowed_only_to_loopback() -> None:
+    """The admin token may travel in cleartext only when it does not leave the
+    machine. Both callers talk to Open WebUI's port on their own host."""
+    for allowed in (
+        "http://localhost:3003",
+        "http://127.0.0.1:3003",
+        "http://[::1]:3003",
+        "https://chat-hive.scubed.co",
+    ):
+        installer.require_safe_origin(allowed)
+
+
+def test_plaintext_to_a_remote_host_is_refused() -> None:
+    """Substring matching would let http://localhost.evil.example through."""
+    for refused in (
+        "http://chat-hive.scubed.co",
+        "http://localhost.evil.example",
+        "http://10.0.0.5:3003",
+        "http://127.0.0.1.evil.example",
+    ):
+        try:
+            installer.require_safe_origin(refused)
+        except installer.OwuiError as exc:
+            assert "not loopback" in str(exc)
+        else:
+            raise AssertionError(f"cleartext token allowed to {refused}")
+
+
+def test_deploy_workflow_uses_a_loopback_base_url() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "deploy-demo-box.yml"
+    ).read_text(encoding="utf-8")
+    assert "--base-url http://localhost:3003" in workflow
 
 
 def test_deploy_workflow_installs_the_function() -> None:

@@ -45,15 +45,19 @@ Functions endpoint used here is admin-only (Depends(get_admin_user)).
 Base URL: the caddy-owui origin works (deploy/docker/Caddyfile.owui blocks
 mutation verbs only on paths that do not cross a slash, so /api/v1/functions/...
 passes through while /api/v1/auths/signin does not). Open WebUI's own port also
-works when reachable.
+works when reachable. Plaintext http is accepted only for a loopback host,
+where the token never leaves the machine; any remote origin must be https. See
+require_safe_origin.
 
 Run: OWUI_ADMIN_TOKEN=... python3 scripts/install-owui-jwt-forward.py
 """
 import argparse
+import ipaddress
 import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -72,28 +76,45 @@ DEFAULT_SOURCE = (
     / "hive_jwt_forward.py"
 )
 
-# Mirrors open_webui.utils.plugin.replace_imports (v0.10.2), which rewrites a
-# Function's source on both create and update before storing it. Comparing the
-# raw file against the stored body without this would report drift on every run
-# for any source that trips one of these prefixes, and push a pointless update
-# on every deploy forever. hive_jwt_forward.py trips none of them today; this
-# keeps that from silently becoming a per-deploy write if it ever does.
-IMPORT_REPLACEMENTS = {
-    "from utils": "from open_webui.utils",
-    "from apps": "from open_webui.apps",
-    "from main": "from open_webui.main",
-    "from config": "from open_webui.config",
-}
-
-
-def as_stored(content: str) -> str:
-    for old, new in IMPORT_REPLACEMENTS.items():
-        content = content.replace(old, new)
-    return content
-
 
 class OwuiError(RuntimeError):
     pass
+
+
+def require_safe_origin(base_url: str) -> None:
+    """Refuse to put an admin Bearer token on the wire in cleartext.
+
+    Plaintext is fine, and is what both callers use, when the request never
+    leaves the machine: the deploy step and the e2e setup both talk to Open
+    WebUI's published port on their own host, so there is no network hop to
+    intercept. Rejecting http:// outright would reject exactly that case and
+    break the deploy while protecting nothing.
+
+    What is genuinely unsafe is pointing this at a REMOTE host over http,
+    which would ship an Open WebUI admin session across a network in the
+    clear. That is refused here.
+
+    The host is parsed rather than substring-matched, so http://localhost.
+    evil.example -- whose hostname merely starts with "localhost" -- is
+    refused like any other remote origin.
+    """
+    parsed = urllib.parse.urlsplit(base_url)
+    if parsed.scheme == "https":
+        return
+    host = parsed.hostname or ""
+    if host == "localhost":
+        return
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return
+    except ValueError:
+        pass
+    raise OwuiError(
+        f"refusing to send an Open WebUI admin token to {base_url!r} over "
+        f"{parsed.scheme or 'no'}: the host {host or '(none)'} is not loopback, "
+        "so the token would cross a network in cleartext. Use https, or point "
+        "this at Open WebUI's port on the same host."
+    )
 
 
 def api(
@@ -169,8 +190,12 @@ def form(content: str) -> dict:
 def ensure_installed(base_url: str, token: str, content: str) -> None:
     """Create or refresh the function, then activate and globalize it."""
     state = read_function(base_url, token)
-    wanted = as_stored(content)
-
+    # ponytail: byte comparison against the file. Open WebUI's
+    # utils.plugin.replace_imports rewrites `from utils|apps|main|config`
+    # prefixes before storing, and hive_jwt_forward.py has none of them
+    # (checked). If one is ever added, this reads as permanent drift and
+    # pushes a harmless update every deploy; mirror replace_imports here if
+    # that noise ever matters.
     if state is None:
         write(
             base_url,
@@ -180,7 +205,7 @@ def ensure_installed(base_url: str, token: str, content: str) -> None:
             f"creating {FUNCTION_ID}",
         )
         print(f"{FUNCTION_ID}: created")
-    elif state.get("content") != wanted:
+    elif state.get("content") != content:
         write(
             base_url,
             token,
@@ -225,7 +250,7 @@ def verify(base_url: str, token: str, content: str) -> dict:
         problems.append("is_active is false")
     if not state.get("is_global"):
         problems.append("is_global is false")
-    if state.get("content") != as_stored(content):
+    if state.get("content") != content:
         problems.append("stored content does not match the repo source")
     if problems:
         raise OwuiError(
@@ -238,7 +263,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("OWUI_URL", DEFAULT_BASE_URL),
+        default=DEFAULT_BASE_URL,
         help=f"Open WebUI origin (default {DEFAULT_BASE_URL})",
     )
     parser.add_argument(
@@ -262,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     base_url = args.base_url.rstrip("/")
     content = Path(args.source).read_text(encoding="utf-8")
     try:
+        # Before the token is put in a header, not after.
+        require_safe_origin(base_url)
         ensure_installed(base_url, token, content)
         state = verify(base_url, token, content)
     except OwuiError as exc:
