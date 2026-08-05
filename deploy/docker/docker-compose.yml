@@ -724,16 +724,25 @@ services:
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
+      # These four are persistent config in Open WebUI: normally the value here
+      # is only a first-boot seed and Open WebUI's own database wins forever
+      # after. The image patch deploy/docker/owui-patches/hive_rag_env_config.py
+      # (issue #722) reconciles exactly these four keys from this environment on
+      # every container start, so editing them here does reach a deployment that
+      # has already booted. Nothing else in Open WebUI's persisted config is
+      # touched, so settings an administrator changes in its own UI still stick.
       RAG_EMBEDDING_ENGINE: "openai"
       RAG_OPENAI_API_BASE_URL: "http://edge-api:8080/v1"
       RAG_OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       # OWUI's own document RAG embeds through the Hive gateway, so this must
       # name a Hive catalog alias (public.model_aliases), not an OpenAI model
       # id. "text-embedding-3-small" is not in the catalog and every document
-      # upload failed alias resolution. OWUI's own embedding calls carry no
-      # request body metadata, so they cannot be unwrapped to a per-user JWT:
-      # OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for this path to
-      # authenticate at all (see scripts/seed-owui-e2e-user.py).
+      # upload failed alias resolution: the value this line carried between
+      # 2026-05-18 and 2026-07-26 was still persisted on the demo box long after
+      # this default was corrected, which is issue #722. OWUI's own embedding
+      # calls carry no request body metadata, so they cannot be unwrapped to a
+      # per-user JWT: OWUI_SHIM_KEY must be a real minted "hk_" Hive API key for
+      # this path to authenticate at all (see scripts/seed-owui-e2e-user.py).
       RAG_EMBEDDING_MODEL: ${OWUI_RAG_EMBEDDING_ALIAS:-hive-embedding-default}
       VECTOR_DB: "pgvector"
       # TRANSACTION-mode pooler when one is configured. This is the connection
