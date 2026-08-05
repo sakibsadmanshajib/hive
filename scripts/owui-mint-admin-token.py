@@ -79,7 +79,11 @@ def server_environment() -> dict[str, str]:
 def sqlite_path(environment: dict[str, str]) -> Path:
     database_url = environment.get("DATABASE_URL", "").strip()
     if not database_url:
-        data_dir = environment.get("DATA_DIR", "/data")
+        # Mirrors open_webui.env: DATA_DIR defaults to BACKEND_DIR/data, which
+        # is /app/backend/data in the published image. This repo's compose
+        # overrides DATA_DIR to /data, so the env value is what normally wins;
+        # the fallback keeps this correct against a stock container too.
+        data_dir = environment.get("DATA_DIR", "/app/backend/data")
         return Path(data_dir) / "webui.db"
     if not database_url.startswith("sqlite:///"):
         raise SystemExit(
