@@ -26,6 +26,50 @@ interface OwuiFunctionState {
 }
 
 /**
+ * Resets the signed-in `page`'s own Open WebUI account password to
+ * `password`, using its own admin session (see the real-fixture-login
+ * comment below for why that session is already an OWUI admin).
+ *
+ * #712: Open WebUI's OAuth signup path (backend/open_webui/utils/oauth.py,
+ * upstream v0.10.2) creates every OAuth-provisioned local account with
+ * `password=get_password_hash(str(uuid.uuid4()))`, a value the comment
+ * right next to it calls "Random password, not used" -- Open WebUI never
+ * exposes it and no later OAuth login ever changes it. The seeded fixture
+ * user here is OAuth-only (ENABLE_SIGNUP is "false", so the native signup
+ * route is closed), so without this call its Open WebUI account carries a
+ * password nobody knows, and a NATIVE (non-OAuth) sign-in attempt with the
+ * real, freshly rotated OWUI_E2E_PASSWORD -- which 09-agent-workspace-
+ * launcher.spec.ts's last test performs deliberately, to prove the launcher
+ * still appears after a sign-in that never triggers a document reload --
+ * always 400s at POST /api/v1/auths/signin. Not volume persistence and not
+ * a seeding failure: a structural mismatch between two separate credential
+ * stores that this call reconciles every run, using the admin-only
+ * POST /api/v1/users/{id}/update endpoint (no old password required).
+ */
+async function syncOwuiLocalPassword(
+  page: Page,
+  owuiOrigin: string,
+  password: string,
+): Promise<void> {
+  const session = await page.request.get(`${owuiOrigin}/api/v1/auths/`);
+  if (!session.ok()) {
+    throw new Error(
+      `syncOwuiLocalPassword: failed to read own session: ${session.status()} ${await session.text()}`,
+    );
+  }
+  const body: { id: string } = await session.json();
+  const { id } = body;
+  const updated = await page.request.post(`${owuiOrigin}/api/v1/users/${id}/update`, {
+    data: { password },
+  });
+  if (!updated.ok()) {
+    throw new Error(
+      `syncOwuiLocalPassword: failed to reset local password: ${updated.status()} ${await updated.text()}`,
+    );
+  }
+}
+
+/**
  * Installs (idempotently) and fully activates the hive_jwt_forward Open
  * WebUI Filter function using the already-authenticated `page`'s session
  * cookie. A filter only runs when it is both active and global (see
@@ -302,5 +346,10 @@ setup("OWUI OIDC sign-in via Hive consent", async ({ page, browser }) => {
     );
   }
   await installHiveJwtForwardFilter(page, owuiOrigin);
+  // #712: see syncOwuiLocalPassword's docstring -- without this, Open
+  // WebUI's own local password for this OAuth-provisioned account never
+  // matches OWUI_E2E_PASSWORD, and any native (non-OAuth) sign-in with it
+  // 400s at POST /api/v1/auths/signin.
+  await syncOwuiLocalPassword(page, owuiOrigin, password);
   await page.context().storageState({ path: STATE });
 });

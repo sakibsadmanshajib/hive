@@ -268,6 +268,44 @@ jobs:
           )
           print('token-endpoint', r.status_code, round(time.time() - t, 2), 's')
           " || true
+      # #712: this job was the only one in the repo installing JS deps with
+      # pnpm (npm i -g pnpm@9 && pnpm install) instead of npm ci against the
+      # committed package-lock.json. pnpm can't read that lockfile, so it
+      # re-resolved the whole tree from live npm on every run -- exposed to
+      # any upstream publish break (run 30944097241 died here on
+      # @aws-sdk/credential-provider-login@^3.972.74, a version that was
+      # never published) and never actually testing the dependency tree the
+      # app ships. Every other job already does this the same way: see
+      # ci.yml's "Install web-console deps" / "Read Playwright version" /
+      # "Cache Playwright browsers" steps, mirrored below.
+      - name: Install web-console deps
+        working-directory: apps/web-console
+        run: npm ci
+
+      - name: Read Playwright version
+        id: pw
+        working-directory: apps/web-console
+        run: |
+          v=$(node -p "require('@playwright/test/package.json').version")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        working-directory: apps/web-console
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        working-directory: apps/web-console
+        run: npx playwright install-deps chromium
+
       - name: Run OWUI Playwright suite
         # OWUI_E2E_EMAIL/PASSWORD/OWUI_BOOTSTRAP_EMAIL/PASSWORD are always
         # provisioned by the "Seed OWUI e2e test user" step above (schedule,
@@ -279,6 +317,7 @@ jobs:
         # playwright.owui.config.ts's hasCreds gate remain in place as a
         # defensive skip only (mirrors #266's OWUI_E2E_* skip mechanism), for
         # a fork or any environment missing one of these values.
+        working-directory: apps/web-console
         env:
           SUPABASE_OAUTH_CLIENT_ID: ${{ secrets.SUPABASE_OAUTH_CLIENT_ID }}
           SUPABASE_OAUTH_CLIENT_SECRET: ${{ secrets.SUPABASE_OAUTH_CLIENT_SECRET }}
@@ -293,14 +332,8 @@ jobs:
           if [ -z "${SUPABASE_OAUTH_CLIENT_ID:-}" ] || [ -z "${SUPABASE_OAUTH_CLIENT_SECRET:-}" ]; then
             echo "::warning::OWUI OAuth e2e skipped, SUPABASE_OAUTH_CLIENT_ID/SUPABASE_OAUTH_CLIENT_SECRET secrets not provisioned"
           fi
-          npm i -g pnpm@9
-          cd apps/web-console
-          pnpm install
-          # See phase-19.yml for the rationale on the runtime-only pg dep.
-          pnpm add --save-dev --ignore-workspace pg
-          pnpm exec playwright install --with-deps chromium
-          pnpm e2e:owui
-          pnpm e2e:owui:perf
+          npm run e2e:owui
+          npm run e2e:owui:perf
       - name: Dump container logs on failure
         # The OWUI OAuth callback can hang with no visible error on the
         # Playwright side (e.g. run 28676421973's 30s hang after the token
