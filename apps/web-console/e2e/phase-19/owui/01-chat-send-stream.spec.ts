@@ -19,7 +19,23 @@ test("chat message streams a response", async ({ page }) => {
   // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
   // "message" placeholder exists (run 28683831193).
   await page.locator("#chat-input").fill("Reply with only the single word: hello.");
+  // Run 31042840516: this first attempt burned 150s and reported as flake
+  // while the browser never sent anything. Open WebUI dropped the submit
+  // (the trace shows the prompt still sitting in the input at timeout, zero
+  // requests after the Enter, and edge-api saw no /v1/chat/completions until
+  // the retry two and a half minutes later), so the wait below was waiting
+  // for a reply to a message that was never sent. Proving the submit left
+  // the browser separates "we never asked" from "the model was slow" in
+  // seconds instead of minutes -- deliberately NOT a longer timeout or a
+  // resend, both of which would hide it again.
+  const chatRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      request.url().includes("/api/chat/completions"),
+    { timeout: 15_000 },
+  );
   await page.keyboard.press("Enter");
+  await chatRequest;
   // `[data-role="assistant"]` never matches anything: OWUI's Messages.svelte
   // renders the conversation as role="log" > listitem, with no data-role
   // attribute anywhere in its component tree (confirmed against source;

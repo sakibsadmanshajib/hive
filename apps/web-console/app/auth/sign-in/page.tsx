@@ -23,9 +23,22 @@ export default function SignInPage() {
   // sign-up instead of stranding them on the plain console dashboard after
   // signup (issue found in live UI/UX pass, 2026-07-26).
   const [nextParam, setNextParam] = useState<string | null>(null);
+  // This form has no `action` and its inputs carry no `name`, so a submit that
+  // lands before React attaches onSubmit is handled natively: the browser does
+  // a GET to the current path with an empty form data set, which REPLACES the
+  // query string and silently discards `?next=`. Sign-in then succeeds on the
+  // reloaded page and sends the user to /console, abandoning whatever journey
+  // sent them here (OWUI nightly run 31042840516: the OIDC consent round-trip
+  // died exactly this way -- /auth/sign-in?next=%2Foauth%2Fconsent... became
+  // /auth/sign-in? one second later, still visible in the deployed console's
+  // server HTML today). Gating the submit button on mount makes the
+  // pre-hydration submit impossible instead of merely unlikely; a disabled
+  // default button also blocks implicit Enter submission.
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
     setNextParam(new URLSearchParams(window.location.search).get("next"));
+    setHydrated(true);
   }, []);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
@@ -116,7 +129,7 @@ export default function SignInPage() {
           type="submit"
           variant="primary"
           size="lg"
-          disabled={loading}
+          disabled={loading || !hydrated}
           className="w-full"
         >
           {loading ? (

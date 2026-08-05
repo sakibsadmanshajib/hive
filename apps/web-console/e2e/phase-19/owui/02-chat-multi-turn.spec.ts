@@ -35,7 +35,17 @@ test("second turn references first turn context", async ({ page }) => {
   await page.locator("#chat-input").fill(
     "My favourite colour is purple. Reply in one short sentence.",
   );
+  // Run 31042840516: same silent dropped submit as 01 (see the comment
+  // there). Prove the request left the browser so "we never asked" fails in
+  // seconds instead of consuming the 150s reply budget.
+  const firstTurnRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      request.url().includes("/api/chat/completions"),
+    { timeout: 15_000 },
+  );
   await page.keyboard.press("Enter");
+  await firstTurnRequest;
   // A completed assistant turn is the only one that grows a "Copy" action
   // button, so its visibility is a structural proof the pipeline
   // delivered a response -- free-tier model output content is not

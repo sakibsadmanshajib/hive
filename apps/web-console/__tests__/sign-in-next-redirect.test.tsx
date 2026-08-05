@@ -7,6 +7,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const mockSignInWithPassword = vi.fn();
 
@@ -117,6 +118,34 @@ describe("app/auth/sign-in/page.tsx next-target redirect", () => {
         "/oauth/consent?authorization_id=auth-req-123",
       )}`,
     );
+  });
+
+  // OWUI nightly run 31042840516: the OIDC setup click landed before React
+  // hydrated, so the browser submitted the form natively. The form has no
+  // `action` and its inputs have no `name`, so that GET rewrote
+  // /auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3D... to
+  // /auth/sign-in? -- `next` gone. The retry then signed in for real and
+  // landed on /console, abandoning the consent round-trip, which cost the run
+  // 86s and read as flake. The pre-hydration markup must therefore not offer
+  // a submittable button at all (a disabled default button also blocks
+  // implicit Enter submission).
+  it("does not expose a submittable button before hydration", () => {
+    // Parse the markup instead of substring-matching it: the Button's class
+    // list carries Tailwind `disabled:*` variants, so a text search for
+    // "disabled" passes even on an enabled button.
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<SignInPage />);
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[type="submit"]',
+    );
+    expect(submit).not.toBeNull();
+    expect(submit?.disabled).toBe(true);
+  });
+
+  it("enables the submit button once mounted", async () => {
+    render(<SignInPage />);
+    const button = await screen.findByRole("button", { name: /continue/i });
+    expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 
   it("does not redirect when sign-in fails", async () => {

@@ -50,12 +50,19 @@ export default function SignUpPage() {
   // instead of dropping the user onto the plain console dashboard (issue
   // found in live UI/UX pass, 2026-07-26).
   const [nextParam, setNextParam] = useState<string | null>(null);
+  // Same pre-hydration submit hazard as /auth/sign-in (see the comment there):
+  // no form `action` and no input `name` attributes mean a submit fired before
+  // onSubmit is attached does a native GET that wipes the query string, taking
+  // `?next=` with it, so the signup half of the OIDC round-trip lands on
+  // /console instead of consent. Gate the submit button on mount.
+  const [hydrated, setHydrated] = useState(false);
 
   const turnstileContainerRef = useRef<HTMLDivElement | null>(null);
   const widgetIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setNextParam(new URLSearchParams(window.location.search).get("next"));
+    setHydrated(true);
   }, []);
 
   // Load the Turnstile script and render the widget when a site key is
@@ -251,7 +258,7 @@ export default function SignUpPage() {
           type="submit"
           variant="primary"
           size="lg"
-          disabled={loading}
+          disabled={loading || !hydrated}
           className="w-full"
         >
           {loading ? "Creating account…" : "Create account"}
