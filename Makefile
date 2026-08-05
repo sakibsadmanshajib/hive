@@ -22,3 +22,4 @@ agent-sif:
 test-scripts:
 	python3 scripts/test_seed_owui_e2e_user.py
 	python3 scripts/test_seed_demo_owner.py
+	python3 scripts/test_install_owui_jwt_forward.py
