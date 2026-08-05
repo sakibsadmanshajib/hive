@@ -74,3 +74,19 @@ COPY deploy/docker/owui-patches/tenant_role_from_db.py /tmp/tenant_role_from_db.
 COPY deploy/docker/owui-patches/apply_tenant_role_patch.py /tmp/apply_tenant_role_patch.py
 RUN python3 /tmp/apply_tenant_role_patch.py \
     && grep -q 'hive tenant-role lookup failed' /app/backend/open_webui/utils/oauth.py
+
+# #722: Open WebUI persists every rag.* setting on first boot and its
+# seed_defaults only inserts keys that are missing, so a compose change to
+# RAG_EMBEDDING_MODEL never reaches a deployment that has already booted. The
+# demo box kept embedding against "text-embedding-3-small", the value compose
+# shipped between 2026-05-18 and 2026-07-26, which no Hive catalog alias
+# matches, so every document upload came back 404 from /v1/embeddings. Splice a
+# per-key reconcile into that startup path instead of turning Open WebUI's
+# whole persisted config off, which would also revert every setting an
+# administrator changed in its own UI. The module names no model itself; the
+# alias comes from the environment (D-001).
+COPY deploy/docker/owui-patches/hive_rag_env_config.py /app/backend/open_webui/utils/hive_rag_env_config.py
+COPY deploy/docker/owui-patches/apply_rag_env_config_patch.py /tmp/apply_rag_env_config_patch.py
+RUN python3 /tmp/apply_rag_env_config_patch.py \
+    && grep -q 'hive: reconciled Open WebUI RAG config from env' /app/backend/open_webui/config.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/config.py').read_text())"
