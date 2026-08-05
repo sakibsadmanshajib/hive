@@ -463,6 +463,25 @@ jobs:
             echo "::error::could not mint an Open WebUI admin session token"
             exit 1
           fi
+          # Shape checks run BEFORE the mask, not after: ::add-mask:: masks
+          # only the FIRST line of its value, so if anything ever printed a
+          # second line to the container's stdout, the `echo` below would
+          # itself emit that tail as an ordinary, unmasked log line. Checking
+          # afterwards would be too late to prevent the one leak this step
+          # must not have. Neither branch prints the value.
+          case "$token" in
+            *[![:print:]]*)
+              echo "::error::the minted token is not a single printable line, so ::add-mask:: cannot fully mask it"
+              exit 1
+              ;;
+          esac
+          case "$token" in
+            *.*.*) ;;
+            *)
+              echo "::error::the minted value is not a three-part JWT"
+              exit 1
+              ;;
+          esac
           echo "::add-mask::$token"
           OWUI_ADMIN_TOKEN="$token" python3 \
             ../../scripts/install-owui-jwt-forward.py \

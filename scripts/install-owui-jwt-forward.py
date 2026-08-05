@@ -99,6 +99,13 @@ def require_safe_origin(base_url: str) -> None:
     refused like any other remote origin.
     """
     parsed = urllib.parse.urlsplit(base_url)
+    if parsed.scheme not in ("http", "https"):
+        raise OwuiError(
+            f"refusing to send an Open WebUI admin token to {base_url!r}: "
+            f"{parsed.scheme or 'no'} is not an HTTP scheme. Rejected here so "
+            "an unexpected scheme fails at the guard rather than somewhere "
+            "further down urllib."
+        )
     if parsed.scheme == "https":
         return
     host = parsed.hostname or ""
@@ -111,10 +118,31 @@ def require_safe_origin(base_url: str) -> None:
         pass
     raise OwuiError(
         f"refusing to send an Open WebUI admin token to {base_url!r} over "
-        f"{parsed.scheme or 'no'}: the host {host or '(none)'} is not loopback, "
+        f"{parsed.scheme}: the host {host or '(none)'} is not loopback, "
         "so the token would cross a network in cleartext. Use https, or point "
         "this at Open WebUI's port on the same host."
     )
+
+
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect while carrying an admin Bearer token.
+
+    urllib's default redirect handler copies the request headers onto the new
+    URL even when the host changes, unlike requests, which strips auth on a
+    host change. A 30x from the loopback origin to any remote host would
+    therefore re-send the token past require_safe_origin, which only ever sees
+    the URL the caller asked for. Returning None here means urllib raises the
+    30x as an HTTPError instead, which api() surfaces as an unexpected status
+    and the deploy step fails loudly. No endpoint this script calls redirects,
+    so refusing costs nothing.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# Module-level so the self-check can substitute a stand-in for it.
+OPENER = urllib.request.build_opener(NoRedirects)
 
 
 def api(
@@ -138,7 +166,7 @@ def api(
         f"{base_url}{path}", data=data, headers=headers, method=method
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with OPENER.open(request, timeout=30) as response:
             raw = response.read().decode()
             status = response.status
     except urllib.error.HTTPError as exc:
@@ -175,7 +203,16 @@ def read_function(base_url: str, token: str) -> dict | None:
 def write(base_url: str, token: str, path: str, body: dict | None, what: str) -> None:
     status, response = api(base_url, token, "POST", path, body)
     if status < 200 or status >= 300:
-        raise OwuiError(f"{what} failed: {status} {response!r}")
+        hint = ""
+        if status == 401:
+            # The token minted for a deploy is valid for five minutes. A run
+            # slow enough to outlive it lands here, and "401" alone sends the
+            # operator looking for a permissions problem that does not exist.
+            hint = (
+                " (a 401 on a write means the admin session was rejected: "
+                "either the token expired mid-run or it is not an admin)"
+            )
+        raise OwuiError(f"{what} failed: {status} {response!r}{hint}")
 
 
 def form(content: str) -> dict:
@@ -190,12 +227,17 @@ def form(content: str) -> dict:
 def ensure_installed(base_url: str, token: str, content: str) -> None:
     """Create or refresh the function, then activate and globalize it."""
     state = read_function(base_url, token)
-    # ponytail: byte comparison against the file. Open WebUI's
-    # utils.plugin.replace_imports rewrites `from utils|apps|main|config`
-    # prefixes before storing, and hive_jwt_forward.py has none of them
-    # (checked). If one is ever added, this reads as permanent drift and
-    # pushes a harmless update every deploy; mirror replace_imports here if
-    # that noise ever matters.
+    # ponytail: byte comparison against the file, valid only because Open
+    # WebUI stores this particular source unchanged. utils.plugin.
+    # replace_imports rewrites `from utils|apps|main|config` prefixes before
+    # storing, and hive_jwt_forward.py contains none of them, which
+    # test_shipped_source_has_no_rewritten_imports pins.
+    #
+    # Not a cosmetic assumption: if such an import were added, the stored body
+    # would never equal the file again, so the update below would fire on
+    # every deploy AND verify() would then compare the rewritten stored body
+    # against the raw file, fail, and take every demo-box deploy red with no
+    # way to recover in place. Mirror replace_imports here if that day comes.
     if state is None:
         write(
             base_url,
