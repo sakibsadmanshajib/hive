@@ -1,0 +1,42 @@
+Live demo box capture, 2026-08-05
+=================================
+
+Captured against https://chat-hive.scubed.co after PR #742 (dccd4939) was
+merged and deployed. This is the deployed system, not a local rig. Every
+screenshot carries an overlay naming the origin, the path and the capture time.
+Signed in through the real "Continue with Hive" OIDC journey with the QA tester
+account; no credential appears in any capture.
+
+live-box-chat-reply.png
+  Alias hive-auto, prompt "What colour is a banana? Reply with only the single
+  colour word.", reply "Yellow". The tool-schema payload that produced the 404
+  and the 429 before the fix is gone; the turn completes and carries an answer.
+
+live-box-rag-grounded-answer.png
+  A 231 byte note was uploaded through the chat surface and answered from,
+  "Retrieved 1 source" plus the codeword PINEAPPLE-7731 that exists only inside
+  the uploaded file. Document upload returned no HTTP error at all, so the 404
+  on /v1/embeddings that issue #722 was about does not occur. This closes the
+  proof owed by PR #737.
+
+Gateway-side confirmation, read from public.usage_events over the transaction
+pooler on port 6543:
+
+  22:30:34  embeddings  hive-embedding-default  completed  55 input tokens
+  22:31:03  embeddings  hive-embedding-default  completed  20 input tokens
+  22:31:27  embeddings  hive-embedding-default  completed  20 input tokens
+  22:31:50  embeddings  hive-embedding-default  completed  58 input tokens
+
+The alias the box actually sent for those embeddings is hive-embedding-default,
+which is the intended value. The runtime log line
+"hive: reconciled Open WebUI RAG config from env" prints inside the open-webui
+container and the deploy workflow only dumps container logs on failure, so the
+literal persisted value was established from the box's own gateway traffic
+instead of from that line.
+
+Observation recorded, not investigated here: those same minutes contain no
+chat_completions row in public.usage_events and no row in
+public.metering_shadow_verdicts, while the RAG embeddings on the same session
+were metered normally. The QA tester's tenant is HIVE_CLOUD, so the metering
+precedence rules would put a session principal on the billable default path.
+Unattributed on purpose; it needs a code trace, not a guess.
