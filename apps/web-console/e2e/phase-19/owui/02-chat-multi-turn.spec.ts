@@ -47,21 +47,30 @@ test("second turn references first turn context", async ({ page }) => {
   await page.keyboard.press("Enter");
   await firstTurnRequest;
   // A completed assistant turn is the only one that grows a "Copy" action
-  // button, so its visibility is a structural proof the pipeline
-  // delivered a response -- free-tier model output content is not
-  // asserted (#269).
+  // button, so this waits for turn 1 to reach a terminal state. It is only a
+  // gate before turn 2, not evidence turn 1 was answered: an error bubble
+  // grows the same button. Turn 2 carries the content assertion, and a turn 1
+  // that failed cannot satisfy it.
   await expect(
     page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
   ).toBeVisible({ timeout: 150_000 });
 
   await page.locator("#chat-input").fill(
-    "What is my favourite colour? Reply in one short sentence.",
+    "What is my favourite colour? Reply with only the single colour word.",
   );
   await page.keyboard.press("Enter");
-  // Structural proof turn 2 also completed, in the SAME chat thread as
-  // turn 1 (no reload/new-chat happened in between): the new last listitem
-  // grows its own Copy button once turn 2 finishes.
-  await expect(
-    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
-  ).toBeVisible({ timeout: 150_000 });
+  // The Copy button shows turn 2 completed in the SAME chat thread as turn 1
+  // (no reload/new-chat happened in between). On its own that is not proof
+  // anything was delivered: an error bubble grows the same button, which is
+  // how three consecutive nightlies (31042840516, 30989146214, 30953435583)
+  // reported this spec as passing on retry while every chat completion in
+  // the run failed with a 404 or a 429. The content assertion is the proof,
+  // and it doubles as the real multi-turn signal: the colour word appears
+  // nowhere in the turn 2 prompt itself, so the model can only produce it
+  // from turn 1 history. Short timeout, because the turn has already finished.
+  const secondTurn = page.getByRole("listitem").last();
+  await expect(secondTurn.getByRole("button", { name: "Copy" })).toBeVisible({
+    timeout: 150_000,
+  });
+  await expect(secondTurn).toContainText(/purple/i, { timeout: 10_000 });
 });

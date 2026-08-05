@@ -109,7 +109,19 @@ jobs:
         # LiteLLM boots with an empty model_list ("LLM Provider NOT provided.
         # You passed model=") and OWUI's /api/models returns zero models, so
         # no chat request can be sent (run 28684729556). Values mirror the
-        # free/cheap-tier defaults in .env.example and deploy/litellm/config.yaml.
+        # defaults in .env.example and deploy/litellm/config.yaml.
+        #
+        # The two OpenRouter chat vars used to be pinned here at
+        # "openrouter/free" after .env.example had already moved off it (#689,
+        # #711). That kept this job pointed at OpenRouter's arbitrary free pool,
+        # which cannot serve these specs: asked directly, it answers 404 "No
+        # endpoints found that support tool use" for any request carrying tools,
+        # and 502 "Invalid URL" from a stealth provider even for a plain two
+        # message chat. Both were reproduced against the live API while
+        # diagnosing three consecutive nightlies in which zero chat completions
+        # succeeded. They now carry the same priced slugs the catalog derives
+        # hive-default and hive-auto's price from, which is also what
+        # deploy-demo-box.yml asserts on the box.
         #
         # SUPABASE_JWT_ISSUER/AUDIENCE/JWKS_URL were previously omitted here,
         # which silently disabled edge-api's whole phase-19 JWT + OWUI-unwrap
@@ -171,8 +183,8 @@ jobs:
           LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY:-litellm-dev-key}
           OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
           GROQ_API_KEY=${GROQ_API_KEY}
-          OPENROUTER_DEFAULT_MODEL=openrouter/free
-          OPENROUTER_AUTO_MODEL=openrouter/free
+          OPENROUTER_DEFAULT_MODEL=openrouter/openai/gpt-4o-mini
+          OPENROUTER_AUTO_MODEL=openrouter/openai/gpt-4.1-mini
           OPENROUTER_EMBEDDING_MODEL=openrouter/nvidia/llama-nemotron-embed-vl-1b-v2:free
           OPENROUTER_EMBEDDING_FALLBACK_MODEL=openrouter/qwen/qwen3-embedding-8b
           GROQ_FAST_MODEL=groq/llama-3.1-8b-instant

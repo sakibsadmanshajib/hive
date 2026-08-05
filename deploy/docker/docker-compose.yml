@@ -724,6 +724,30 @@ services:
       OPENAI_API_KEY: ${OWUI_SHIM_KEY:-}
       ENABLE_OPENAI_API: "true"
       ENABLE_OLLAMA_API: "false"
+      # Open WebUI attaches its builtin tool schemas (time, knowledge, chats,
+      # tasks, notes, channels) to every UI chat request while native function
+      # calling is on, which is its hardcoded default. Nothing this deployment
+      # routes to can serve them, and the schemas are not small: 21 specs,
+      # 12089 bytes of JSON, 3144 Groq prompt tokens for a one word answer that
+      # costs 52 tokens without them. OpenRouter refused them with 404 "No
+      # endpoints found that support tool use. Try disabling
+      # get_current_timestamp" and the Groq free tier refused them with 429
+      # "Requested 6035 > TPM limit 6000", which between them is why no chat
+      # completion succeeded on three consecutive nightlies. The demo is not
+      # demonstrating tool calling, and buying a tool capable paid route to
+      # satisfy schemas nobody asked for is the wrong trade.
+      #
+      # "legacy" is Open WebUI's own name for its pre native tool path
+      # (utils/middleware.py gates every builtin injection on
+      # params.function_calling != 'legacy'), so this also restores the classic
+      # document RAG injection the RAG_* wiring below expects, instead of
+      # routing uploads through builtin knowledge tools. Set
+      # OWUI_DEFAULT_FUNCTION_CALLING=native to hand tool calling back once a
+      # route that can serve it is enabled. Upstream has no env var for this
+      # and it is not persisted config either, so the name is read by the
+      # Dockerfile.open-webui patch that makes Open WebUI's own default
+      # environment driven.
+      HIVE_DEFAULT_FUNCTION_CALLING: ${OWUI_DEFAULT_FUNCTION_CALLING:-legacy}
       # These four are persistent config in Open WebUI: normally the value here
       # is only a first-boot seed and Open WebUI's own database wins forever
       # after. The image patch deploy/docker/owui-patches/hive_rag_env_config.py

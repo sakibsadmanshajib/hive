@@ -18,7 +18,13 @@ test("chat message streams a response", async ({ page }) => {
   // OWUI 0.9.5 chat input is a contenteditable TipTap/ProseMirror div with
   // id="chat-input" (MessageInput.svelte + RichTextInput.svelte); no
   // "message" placeholder exists (run 28683831193).
-  await page.locator("#chat-input").fill("Reply with only the single word: hello.");
+  // The expected answer word is deliberately absent from the prompt. The
+  // assertion below reads the last listitem, and if the assistant turn never
+  // rendered at all that locator resolves to the user's own message, so a
+  // prompt carrying the answer would pass on its own echo.
+  await page
+    .locator("#chat-input")
+    .fill("What colour is a banana? Reply with only the single colour word.");
   // Run 31042840516: this first attempt burned 150s and reported as flake
   // while the browser never sent anything. Open WebUI dropped the submit
   // (the trace shows the prompt still sitting in the input at timeout, zero
@@ -41,10 +47,21 @@ test("chat message streams a response", async ({ page }) => {
   // attribute anywhere in its component tree (confirmed against source;
   // every run showed "element(s) not found", never a text mismatch, even
   // once LiteLLM was confirmed returning real 200s). A completed assistant
-  // turn is the only one that grows a "Copy" action button, so its
-  // visibility is a structural proof the pipeline delivered a response --
-  // free-tier model output content is not asserted (#269).
-  await expect(
-    page.getByRole("listitem").last().getByRole("button", { name: "Copy" }),
-  ).toBeVisible({ timeout: 150_000 });
+  // turn is the only one that grows a "Copy" action button, so waiting on it
+  // proves the turn reached a terminal state.
+  //
+  // It does NOT prove a response was delivered, and the comment that used to
+  // claim it was "structural proof the pipeline delivered a response" is why
+  // three consecutive nightlies (31042840516, 30989146214, 30953435583)
+  // reported this spec as passing on retry while zero chat completions
+  // succeeded. An error bubble reaches the same terminal state and grows the
+  // same Copy button, so a 404 or a 429 read exactly like a streamed answer.
+  // The content assertion is the proof. It gets a short timeout because the
+  // turn has already finished by then, so "finished carrying no answer" fails
+  // in seconds and the failure snapshot shows what the bubble actually said.
+  const assistantTurn = page.getByRole("listitem").last();
+  await expect(assistantTurn.getByRole("button", { name: "Copy" })).toBeVisible({
+    timeout: 150_000,
+  });
+  await expect(assistantTurn).toContainText(/yellow/i, { timeout: 10_000 });
 });
