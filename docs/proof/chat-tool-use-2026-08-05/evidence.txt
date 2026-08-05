@@ -1,0 +1,70 @@
+Chat tool use routing: evidence log
+===================================
+
+Captured 2026-08-05 on the WSL2 dev box, against live providers. Account
+identifiers are masked. No credential appears in this log or in either
+screenshot.
+
+1. Open WebUI request shape
+---------------------------
+Same image (Dockerfile.open-webui built from this branch), same prompt, same
+upstream. The only difference is HIVE_DEFAULT_FUNCTION_CALLING. The upstream is
+a throwaway local stub that logs the request body it receives.
+
+native, which is upstream Open WebUI's own default:
+UPSTREAM {"path": "/v1/chat/completions", "model": "hive-fast", "tool_count": 26, "tools_key_present": true, "request_bytes": 17251, "message_count": 1}
+
+legacy, which is what this change makes the deployment default:
+UPSTREAM {"path": "/v1/chat/completions", "model": "hive-fast", "tool_count": null, "tools_key_present": false, "request_bytes": 149, "message_count": 1}
+
+2. What the providers do with those two payloads
+-----------------------------------------------
+Asked directly, carrying the exact builtin tool specs the pinned image
+generates (21 always on specs, 12089 bytes of JSON, measured inside the image).
+
+OpenRouter free pool, tools attached:
+HTTP 404
+{"error":{"message":"No endpoints found that support tool use. Try disabling \"get_current_timestamp\". To learn more about provider routing, visit: https://openrouter.ai/docs/guides/routing/provider-selection","code":404}}
+
+OpenRouter free pool, no tools:
+HTTP 502
+{"error":{"message":"Invalid URL: ","code":502,"metadata":{"provider_name":"Stealth"}},"user_id":"user_REDACTED"}
+
+Groq llama-3.1-8b-instant, tools attached:
+HTTP 200, usage.prompt_tokens 3144, for a one word answer.
+
+Groq llama-3.1-8b-instant, no tools:
+HTTP 200, usage.prompt_tokens 52, content "Hello."
+
+3. The same failure and the same fix through the real UI
+-------------------------------------------------------
+Open WebUI built from this branch, pointed straight at Groq
+llama-3.1-8b-instant (the model route-groq-fast serves), driven through the
+browser. Screenshots in this directory.
+
+owui-native-tpm-error.png, HIVE_DEFAULT_FUNCTION_CALLING=native:
+"Request too large for model `llama-3.1-8b-instant` in organization
+`org_REDACTED` service tier `on_demand` on tokens per minute (TPM): Limit 6000,
+Requested 6067, please reduce your message size and try again."
+
+That is the production failure reproduced. Note the action bar under the error
+bubble: the Copy button the chat specs waited on is present on an errored turn,
+which is why three nightlies reported those specs as passing while zero chat
+completions succeeded.
+
+owui-legacy-reply.png, HIVE_DEFAULT_FUNCTION_CALLING=legacy:
+The same prompt, the same model, the same minute: "Yellow." Open WebUI's follow
+up suggestions render too, so the title, tag and follow up task calls fit
+inside the ceiling as well.
+
+The strengthened assertion was validated against both states in a real browser.
+The last listitem reads "Llama 3.1 8B\n\nYellow." in the legacy run, which the
+content assertion matches, and reads the TPM error text in the native run,
+which it does not.
+
+4. The nightly's new OpenRouter slugs
+-------------------------------------
+openai/gpt-4o-mini   HTTP 200 'Yellow'
+openai/gpt-4.1-mini  HTTP 200 'Yellow'
+
+Both serve, which the free pool did not, with or without tools.

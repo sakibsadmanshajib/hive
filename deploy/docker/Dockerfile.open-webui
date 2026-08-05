@@ -90,3 +90,37 @@ COPY deploy/docker/owui-patches/apply_rag_env_config_patch.py /tmp/apply_rag_env
 RUN python3 /tmp/apply_rag_env_config_patch.py \
     && grep -q 'hive: reconciled Open WebUI RAG config from env' /app/backend/open_webui/config.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/config.py').read_text())"
+# Chat was broken on every route because Open WebUI attached tool schemas that
+# no route in this deployment can serve.
+#
+# Open WebUI 0.10 injects its builtin tools (time, knowledge, chats, tasks,
+# notes, channels) into every UI chat request whenever native function calling
+# is on, and native is its hardcoded default: main.py resolves
+# `function_calling` from the request body, then from the model registry row,
+# then from the literal 'native'. This deployment populates no model registry
+# (ENABLE_ADMIN_PANEL is "false"), so that literal always won and every request
+# carried 21 tool specs, 12089 bytes of JSON, measured against this pinned
+# image. On Groq that is 3144 prompt tokens for a one word answer that costs 52
+# tokens without them.
+#
+# Both live chat failures were that payload, reproduced directly against the
+# providers with the exact specs this image generates. OpenRouter answers 404
+# "No endpoints found that support tool use. Try disabling
+# get_current_timestamp", and the Groq free tier answers 429 against its 6000
+# token per minute ceiling, since one turn plus Open WebUI's own title, tag and
+# follow up task calls repeat those schemas several times inside one minute.
+#
+# Unlike the rag.* keys above, this is not persisted config: there is nothing
+# for hive_rag_env_config.py to reconcile and upstream reads no environment
+# variable for it at all. The default is a literal, so make the literal
+# environment driven and let compose choose. docker-compose.yml sets
+# HIVE_DEFAULT_FUNCTION_CALLING from OWUI_DEFAULT_FUNCTION_CALLING, default
+# "legacy", which is Open WebUI's own name for its pre native tool path
+# (utils/middleware.py gates every builtin injection on
+# params.function_calling != 'legacy'). Leaving the variable unset keeps
+# upstream behaviour exactly as it was, and a user who picks native in their
+# own advanced params still wins, because the request body is consulted first.
+RUN sed -i "s/or 'native'/or os.environ.get('HIVE_DEFAULT_FUNCTION_CALLING', 'native')/" /app/backend/open_webui/main.py \
+    && grep -q "HIVE_DEFAULT_FUNCTION_CALLING" /app/backend/open_webui/main.py \
+    && ! grep -q "or 'native'" /app/backend/open_webui/main.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/main.py').read_text())"
