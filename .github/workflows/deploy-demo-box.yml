@@ -37,6 +37,11 @@ on:
       - 'scripts/apply-migrations.sh'
       - 'scripts/migration-baseline.conf'
       - 'scripts/probe-applied-migrations.py'
+      # Both halves of the hive_jwt_forward install (#556). Without these
+      # entries a fix to the installer itself would merge and never deploy,
+      # the same blind spot the supabase/migrations entry above exists for.
+      - 'scripts/install-owui-jwt-forward.py'
+      - 'scripts/owui-mint-admin-token.py'
       - '.github/workflows/deploy-demo-box.yml'
   workflow_dispatch:
 
@@ -402,6 +407,85 @@ jobs:
           echo "::error::/v1/featuregate on caddy-owui is not answering as edge-api JSON. The running Caddy config does not match deploy/docker/Caddyfile.owui (issue #619). Last status $code, content-type ${ctype:-none}."
           head -c 400 "$body" || true
           exit 1
+
+      - name: Install the hive_jwt_forward Open WebUI Function
+        # Issue #556. Per-user chat attribution depends on an Open WebUI
+        # Function that no deployment has ever had. Open WebUI offers no mount
+        # or env var that installs a Function; only its Functions REST API
+        # does, and until now the only caller was CI's own Playwright setup.
+        # So every chat completion from this box was refused by edge-api with
+        # "This chat session is not carrying a signed-in user token", because
+        # the request body carried no __metadata.upstream_auth for the OWUI
+        # unwrap middleware to read. The failure was silent by construction:
+        # nothing checked, nothing warned, and the deploy went green.
+        #
+        # Placed here, immediately after the Caddy config is verified live and
+        # before the public smoke test, because this is the earliest point at
+        # which both preconditions are proven rather than assumed: open-webui
+        # is up (the recreate and the featuregate probe both depend on it) and
+        # localhost:3003 is serving the current Caddyfile. Unlike the pricing
+        # assertion at the end of this job, this step CHANGES deployment state
+        # rather than auditing it, so it belongs before the step that declares
+        # the public surface healthy -- chat should be attributable from the
+        # moment it is reachable, not one step later. Sitting above the
+        # failure dump also means a failure here prints the open-webui logs.
+        #
+        # The admin session is minted, not stored. See
+        # scripts/owui-mint-admin-token.py for why every other route is
+        # closed on this box: the admin panel is disabled, Caddyfile.owui
+        # 404s /api/v1/auths/signin, OAuth-provisioned accounts have a random
+        # password Open WebUI never discloses, and the OAuth journey CI uses
+        # needs a browser. The minted token lives five minutes, creates no
+        # account, and needs no secret in .env, so a fresh Enterprise box
+        # works the same way with nothing provisioned by hand.
+        #
+        # localhost:3003 is caddy-owui's published port. Its @adminMutation
+        # matcher does not block this: a Caddy `path` wildcard does not cross
+        # a slash, so /api/v*/functions* matches /api/v1/functions but not
+        # /api/v1/functions/create (measured against caddy:2-alpine, not
+        # assumed). That is also why CI's installer reaches the same API
+        # through the same port.
+        #
+        # No `|| true`, no continue-on-error. The script exits nonzero unless
+        # it has re-read the function from the API and confirmed it is present,
+        # active AND global -- a 2xx from the install call proves none of that,
+        # and replacing a silent absence with a warning nobody reads would
+        # leave #556 exactly where it was.
+        working-directory: /home/sakib/hive/deploy/docker
+        run: |
+          set -euo pipefail
+          COMPOSE=(docker compose --env-file ../../.env --profile local --profile chat)
+          # `python3 -` reads the program from stdin; `exec -T` forwards it
+          # (the Caddy step above pipes a config in the same way).
+          token=$("${COMPOSE[@]}" exec -T open-webui python3 - \
+            < ../../scripts/owui-mint-admin-token.py)
+          if [ -z "$token" ]; then
+            echo "::error::could not mint an Open WebUI admin session token"
+            exit 1
+          fi
+          # Shape checks run BEFORE the mask, not after: ::add-mask:: masks
+          # only the FIRST line of its value, so if anything ever printed a
+          # second line to the container's stdout, the `echo` below would
+          # itself emit that tail as an ordinary, unmasked log line. Checking
+          # afterwards would be too late to prevent the one leak this step
+          # must not have. Neither branch prints the value.
+          case "$token" in
+            *[![:print:]]*)
+              echo "::error::the minted token is not a single printable line, so ::add-mask:: cannot fully mask it"
+              exit 1
+              ;;
+          esac
+          case "$token" in
+            *.*.*) ;;
+            *)
+              echo "::error::the minted value is not a three-part JWT"
+              exit 1
+              ;;
+          esac
+          echo "::add-mask::$token"
+          OWUI_ADMIN_TOKEN="$token" python3 \
+            ../../scripts/install-owui-jwt-forward.py \
+            --base-url http://localhost:3003
 
       - name: Dump container status + logs on failure
         if: failure()

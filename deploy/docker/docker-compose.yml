@@ -802,13 +802,19 @@ services:
       # was therefore never loaded. It is installed instead as a native Open
       # WebUI Function via the Functions REST API (Admin > Functions),
       # which requires an authenticated admin session and cannot run at
-      # container boot with no user yet signed in. CI installs it from
-      # apps/web-console/e2e/phase-19/owui/owui.setup.ts right after the
-      # e2e user's first OIDC login (which auto-promotes to admin as the
-      # first user). Production/EnterpriseEdge deployments must install it
-      # once via the same API after the first admin signs in; see that
-      # file for the request shape. Tracked as follow-up: automate this for
-      # non-CI deployments too.
+      # container boot with no user yet signed in.
+      #
+      # #556: that install is no longer a manual post-deploy step. Both
+      # callers now run scripts/install-owui-jwt-forward.py, the single
+      # implementation, which is idempotent and verifies the end state:
+      #   * .github/workflows/deploy-demo-box.yml runs it on every deploy,
+      #     with an admin session minted by scripts/owui-mint-admin-token.py
+      #     from inside this container (no stored credential, no admin
+      #     panel, five-minute token).
+      #   * apps/web-console/e2e/phase-19/owui/owui.setup.ts runs it right
+      #     after the e2e user's first OIDC login.
+      # A deployment brought up by hand, outside that workflow, still needs
+      # one run of the same script once an admin account exists.
     healthcheck:
       test: ["CMD", "curl", "-fsSL", "http://localhost:8080/health"]
       interval: 10s

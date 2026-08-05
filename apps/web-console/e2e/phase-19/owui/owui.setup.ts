@@ -1,5 +1,5 @@
 import { test as setup, expect, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 
 const STATE = "e2e/phase-19/owui/.auth/owui-user.json";
@@ -14,16 +14,17 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // admin session on every login -- not the (separate, and now deliberately
 // consumed by the bootstrap login first) unconditional first-user-becomes-
 // admin promotion.
-const HIVE_JWT_FORWARD_ID = "hive_jwt_forward";
-const HIVE_JWT_FORWARD_SOURCE = path.resolve(
+//
+// #556: the create/update/activate/verify sequence itself is no longer
+// written here. It lives in scripts/install-owui-jwt-forward.py, which the
+// demo-box deploy runs on every deploy, so this suite exercises the exact
+// code a deployment depends on instead of a lookalike that could drift from
+// it. This file still owns the part only a browser can do: producing a real
+// Open WebUI admin session through the full OAuth journey.
+const HIVE_JWT_FORWARD_INSTALLER = path.resolve(
   __dirname,
-  "../../../../../deploy/docker/pipelines/hive_jwt_forward.py",
+  "../../../../../scripts/install-owui-jwt-forward.py",
 );
-
-interface OwuiFunctionState {
-  is_active: boolean;
-  is_global: boolean;
-}
 
 /**
  * Resets the signed-in `page`'s own Open WebUI account password to
@@ -70,65 +71,39 @@ async function syncOwuiLocalPassword(
 }
 
 /**
- * Installs (idempotently) and fully activates the hive_jwt_forward Open
- * WebUI Filter function using the already-authenticated `page`'s session
- * cookie. A filter only runs when it is both active and global (see
- * open_webui.utils.filter.get_sorted_filter_ids upstream), so both toggles
- * are required in addition to creation.
+ * Hands the already-authenticated `page`'s Open WebUI admin bearer token to
+ * scripts/install-owui-jwt-forward.py, the single implementation of the
+ * install (see #556 and that script's docstring). The script creates the
+ * Filter if absent, refreshes it if the stored body has drifted from the
+ * repo source, toggles it active and global only when those flags are
+ * false, then re-reads the end state and fails unless it is present, active
+ * AND global -- a filter only runs when it is both (see
+ * open_webui.utils.filter.get_sorted_filter_ids upstream).
  */
 async function installHiveJwtForwardFilter(
   page: Page,
   owuiOrigin: string,
 ): Promise<void> {
-  const content = readFileSync(HIVE_JWT_FORWARD_SOURCE, "utf8");
-  const functionUrl = `${owuiOrigin}/api/v1/functions/id/${HIVE_JWT_FORWARD_ID}`;
-
-  const existing = await page.request.get(functionUrl);
-  let state: OwuiFunctionState | null = null;
-  if (existing.ok()) {
-    state = await existing.json();
-  } else if (existing.status() !== 401 && existing.status() !== 404) {
+  // Open WebUI stores its session JWT in a `token` cookie and mirrors it into
+  // localStorage. The cookie is the one the API itself reads, so it is
+  // preferred; localStorage is the fallback for a build that stops setting it.
+  const cookies = await page.context().cookies();
+  const cookieToken = cookies.find((cookie) => cookie.name === "token")?.value;
+  const token =
+    cookieToken ??
+    (await page.evaluate(() => window.localStorage.getItem("token")));
+  if (!token) {
     throw new Error(
-      `hive_jwt_forward: unexpected status checking existing function: ${existing.status()} ${await existing.text()}`,
+      "hive_jwt_forward: signed in, but no Open WebUI session token is present " +
+        "in either the cookie jar or localStorage, so the Functions API cannot " +
+        "be called",
     );
   }
 
-  if (!state) {
-    const created = await page.request.post(`${owuiOrigin}/api/v1/functions/create`, {
-      data: {
-        id: HIVE_JWT_FORWARD_ID,
-        name: "Hive JWT Forward",
-        content,
-        meta: {
-          description:
-            "Injects the signed-in user's OAuth access token into __metadata.upstream_auth for edge-api's OWUI unwrap middleware (#269).",
-        },
-      },
-    });
-    if (!created.ok()) {
-      throw new Error(
-        `hive_jwt_forward: failed to create function: ${created.status()} ${await created.text()}`,
-      );
-    }
-  }
-
-  if (!state?.is_active) {
-    const toggled = await page.request.post(`${functionUrl}/toggle`);
-    if (!toggled.ok()) {
-      throw new Error(
-        `hive_jwt_forward: failed to activate function: ${toggled.status()} ${await toggled.text()}`,
-      );
-    }
-  }
-
-  if (!state?.is_global) {
-    const toggledGlobal = await page.request.post(`${functionUrl}/toggle/global`);
-    if (!toggledGlobal.ok()) {
-      throw new Error(
-        `hive_jwt_forward: failed to globalize function: ${toggledGlobal.status()} ${await toggledGlobal.text()}`,
-      );
-    }
-  }
+  execFileSync("python3", [HIVE_JWT_FORWARD_INSTALLER, "--base-url", owuiOrigin], {
+    env: { ...process.env, OWUI_ADMIN_TOKEN: token },
+    stdio: "inherit",
+  });
 }
 
 /**
