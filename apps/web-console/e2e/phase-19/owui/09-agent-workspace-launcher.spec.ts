@@ -14,6 +14,29 @@ const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 // otherwise silently regress.
 const LAUNCHER = "#hive-agent-launcher";
 
+// Open WebUI's own model selector, matched by the id upstream's code depends on
+// itself: the pinned bundle's model-selector keyboard shortcut is a literal
+// `document.getElementById("model-selector-0-button").click()`, and the id is
+// assigned unconditionally alongside aria-expanded, so it is present in every
+// state the button has.
+//
+// Its aria-label is NOT. Upstream renders "Select a model" only while nothing is
+// selected and "Selected model: <id>" once something is (i18n keys
+// `Select a model` and `Selected model: {{modelName}}`). Matching the first of
+// those, as this file did originally, was never a correct handle on the
+// selector: it silently stops matching the moment the deployment actually serves
+// a model and Open WebUI auto-selects one. That is why the clearance check below
+// passed for as long as the e2e catalogue came back empty and then failed at the
+// very first width once #735 and #737 made models resolve (nightly run
+// 31042840516, "element(s) not found" at 1440px, before any geometry was read).
+//
+// 03-chat-model-switch.spec.ts and 06-tenant-model-visibility.spec.ts hit the
+// same rot earlier (run 28688154897) and settled on a role query matching both
+// label forms. That is fine where the button is only being clicked; this file
+// goes further because it measures the element, and because the id also survives
+// a locale change, which an English-label match does not.
+const MODEL_SELECTOR = 'button[id^="model-selector-"][id$="-button"]';
+
 test("launcher matches Open WebUI's own header icon buttons", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
@@ -109,29 +132,34 @@ test("launcher is present down to 768px and never overlaps the header", async ({
     // header is still empty. Wait for OWUI's own selector before measuring
     // against it, otherwise the clearance check runs on a half-built header.
     await expect(
-      page.locator('button[aria-label="Select a model"]'),
+      page.locator(MODEL_SELECTOR).first(),
       `OWUI model selector at ${width}px`,
     ).toBeVisible();
 
     // Push OWUI's model selector out to its worst realistic width first. Its
     // computed max-width is `none`, so the left-hand header group grows with
     // this string and is what the launcher has to clear.
-    const selectorGrew = await page.evaluate((label) => {
-      const target = document.querySelector(
-        'button[aria-label="Select a model"]',
-      );
-      if (!target) return null;
-      const before = target.getBoundingClientRect().width;
-      const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
-      const nodes: Text[] = [];
-      while (walk.nextNode()) {
-        const node = walk.currentNode;
-        if (node instanceof Text) nodes.push(node);
-      }
-      if (!nodes.length) return null;
-      nodes[0].nodeValue = label;
-      return { before, after: target.getBoundingClientRect().width };
-    }, longestModelId);
+    const selectorGrew = await page.evaluate(
+      ({ selector, label }) => {
+        const target = document.querySelector(selector);
+        if (!target) return null;
+        const before = target.getBoundingClientRect().width;
+        const walk = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+        const nodes: Text[] = [];
+        while (walk.nextNode()) {
+          const node = walk.currentNode;
+          // Whitespace-only nodes are Svelte formatting artefacts. Writing the
+          // label into one of those would leave the button's real text in place
+          // and the group at its original width, which the widening assertion
+          // below would then report as a defect in the launcher.
+          if (node instanceof Text && node.nodeValue?.trim()) nodes.push(node);
+        }
+        if (!nodes.length) return null;
+        nodes[0].nodeValue = label;
+        return { before, after: target.getBoundingClientRect().width };
+      },
+      { selector: MODEL_SELECTOR, label: longestModelId },
+    );
 
     // If this stops finding the selector, the overlap check below is measuring
     // a header that never widened, which is exactly the false pass to avoid.

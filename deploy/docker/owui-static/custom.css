@@ -58,8 +58,17 @@
  *    480px      218           286               338               326  <- clash
  *    375px      196           233               233               221  <- clash
  *
- * At 768px the control clears even a 44-character model id by 116px. At 640px
- * that shrinks to 7px, and from 600px down the two collide -- and a collision
+ * Two corrections from a 2026-08-05 re-measurement, taken with a model actually
+ * selected rather than against the placeholder. First, the right-edge figures
+ * above are the selector's own, not the whole group's: the add-model button adds
+ * about 22px past them, so at 768px the group ends at 520 rather than 498.
+ * Second, selecting a model makes upstream render a "Set as default" button as
+ * well, and that one sits on its own line below the selector, never in the
+ * launcher's row.
+ *
+ * At 768px the control clears even a 44-character model id by 94px. At 640px
+ * the selector alone leaves 7px, so with the add-model button the two already
+ * collide, and they stay collided all the way down -- and a collision
  * here is not cosmetic: this element paints above OWUI's, so it would swallow
  * clicks meant for the model selector. Hence 768px, which recovers everything
  * from 768px to 1023px that the previous 1024px gate hid for no measured
