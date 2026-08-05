@@ -347,7 +347,12 @@ jobs:
           # (e.g. the hive_jwt_forward JWT-claims probe) out of a 300-line
           # tail before this step runs (run 28688900087). 2000 covers a full
           # 6-spec run with room to spare.
-          docker compose --env-file ../../.env.ci logs --no-color --tail 2000 \
+          # --timestamps: only open-webui and (partly) edge-api stamp their own
+          # lines, so litellm's access log had no clock at all. Attributing a
+          # slow or missing request across layers means lining these logs up
+          # against Playwright's wall-clock trace, which is impossible for a
+          # service whose lines carry no time (run 31042840516).
+          docker compose --env-file ../../.env.ci logs --no-color --timestamps --tail 2000 \
             open-webui litellm edge-api control-plane > $GITHUB_WORKSPACE/compose-logs.txt 2>&1 || true
       - name: SOC2 coverage report
         if: always()
