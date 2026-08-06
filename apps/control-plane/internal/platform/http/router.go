@@ -208,6 +208,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		protectedBudgets := cfg.AuthMiddleware.Require(cfg.BudgetsHandler)
 		mux.Handle("/api/v1/accounts/current/budget", protectedBudgets)
 		mux.Handle("/api/v1/accounts/current/budget/dismiss", protectedBudgets)
+		// The Phase 14 workspace surface. budgets.Handler has always dispatched
+		// these two prefixes, but they were never mounted here, so every
+		// request fell through to the /api/v1/ catch-all and came back 404.
+		// That made a hard spend cap and a spend alert impossible to save from
+		// the console even though the handler and its own tests were correct.
+		mux.Handle("/api/v1/budgets/", protectedBudgets)
+		mux.Handle("/api/v1/spend-alerts/", protectedBudgets)
 	}
 
 	if cfg.AccountingHandler != nil && cfg.AuthMiddleware != nil {
