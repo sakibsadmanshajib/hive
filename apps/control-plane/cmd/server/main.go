@@ -675,6 +675,25 @@ func main() {
 			}
 			catalogVisibilityHandler = catalog.NewVisibilityHandler(catalogSvc, owuiSync)
 			log.Println("tenant model visibility admin routes registered (Phase 20 Plan 04)")
+
+			// Issue #772 — the OWUI chat picker listed hive-embedding-default,
+			// hive-stt and hive-tts as selectable chat models: picking one
+			// produced a broken conversation. syncOWUI now locks non-chat-
+			// modality aliases out of the OWUI picker, but that function only
+			// runs from the admin PUT/DELETE visibility mutation path, which a
+			// migration-seeded alias (all three of the above) never goes
+			// through. Reconcile once at boot so the fix actually applies to
+			// rows already sitting in model_aliases, and so it re-applies on
+			// its own after an Open WebUI image bump resets access_control.
+			// Best-effort: a failure here logs and does not block startup, the
+			// same posture syncOWUI itself takes for a single alias.
+			if owuiClient != nil {
+				if err := catalogVisibilityHandler.ReconcileOWUISync(runCtx); err != nil {
+					log.Printf("WARNING: owui non-chat-modality reconcile failed (issue #772): %v", err)
+				} else {
+					log.Println("owui non-chat-modality reconcile complete (issue #772)")
+				}
+			}
 		}
 
 		configuredSinks := configuredAuditSinks()
