@@ -135,14 +135,20 @@ export function FeatureGateManager({ gates: initialGates }: FeatureGateManagerPr
                     >
                       Saving…
                     </span>
-                    <GateSwitch
-                      checked={gate.enabled}
-                      saving={rowStatus === "saving"}
-                      label={gate.label}
-                      onToggle={() => {
-                        void toggle(gate);
-                      }}
-                    />
+                    {gate.manageable ? (
+                      <GateSwitch
+                        checked={gate.enabled}
+                        saving={rowStatus === "saving"}
+                        label={gate.label}
+                        onToggle={() => {
+                          void toggle(gate);
+                        }}
+                      />
+                    ) : (
+                      <span className="text-2xs text-[var(--color-ink-3)]">
+                        Managed by your administrator
+                      </span>
+                    )}
                   </div>
                 </li>
               );

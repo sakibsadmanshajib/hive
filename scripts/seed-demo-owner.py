@@ -419,11 +419,15 @@ def main() -> None:
         print(f"error: tenant membership upsert failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
 
-    # 4. Guard + upsert the web-console billing account. is_platform_admin=
-    # true here is what unlocks control-plane's RequirePlatformAdmin-gated
-    # admin panels (feature gates, provider catalog, marketplace, credit
-    # grants) -- tenant OWNER above does not imply this; they are unrelated
-    # schemas. Same slug-collision risk as the tenant guard above: refuse to
+    # 4. Guard + upsert the web-console billing account. This account is
+    # deliberately NOT flagged is_platform_admin: after issue #758 the
+    # workspace-scoped admin panels (feature gates, marketplace) are reached by
+    # the OWNER of the tenant in scope, which step 3 above already granted.
+    # Platform-wide powers (credit minting, provider base-URL rewrites) are a
+    # deployment-operator concern and a demo account must not hold them; that
+    # flag was stripped from this account in production on 2026-08-06 and this
+    # script must not put it back. Same slug-collision risk as the tenant guard
+    # above: refuse to
     # merge onto an existing account unless owner_user_id already matches
     # our demo user AND no other owner-role member exists -- owner_user_id
     # is not schema-enforced to match any membership row, so checking it
@@ -452,7 +456,7 @@ def main() -> None:
             "display_name": ACCOUNT_NAME,
             "account_type": "business",
             "owner_user_id": user_id,
-            "is_platform_admin": True,
+            "is_platform_admin": False,
         },
         params={"on_conflict": "slug"},
         prefer="resolution=merge-duplicates,return=representation",

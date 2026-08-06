@@ -531,6 +531,11 @@ export interface FeatureGate {
   label: string;
   category: string;
   enabled: boolean;
+  // manageable is false for a gate this caller may read but not change:
+  // billing entitlements and deployment-shape gates stay platform-admin only
+  // (issue #758). The UI renders those rows read-only rather than offering a
+  // toggle the API would refuse.
+  manageable: boolean;
 }
 
 // FeatureGates is the control-plane response for the admin feature-gate list.
@@ -558,7 +563,11 @@ function decodeFeatureGates(payload: JsonObject): FeatureGates | null {
     if (key === null || label === null || category === null || enabled === null) {
       return null;
     }
-    gates.push({ key, label, category, enabled });
+    // A control-plane that predates issue #758 omits manageable. Treating that
+    // as manageable keeps the pre-#758 behaviour during a rolling deploy: the
+    // API is the authority and refuses what it must.
+    const manageable = readBooleanField(item, "manageable") ?? true;
+    gates.push({ key, label, category, enabled, manageable });
   }
 
   return { gates };
@@ -566,8 +575,9 @@ function decodeFeatureGates(payload: JsonObject): FeatureGates | null {
 
 // getFeatureGates lists every registered feature gate joined with the current
 // tenant's enablement. Server-only (uses the session bearer); the control-plane
-// gates this on platform-admin and returns 403 for non-admins, surfaced here as
-// a ControlPlaneError so the caller can render an access state.
+// gates this on the workspace administrator (the OWNER of the tenant in scope,
+// or a platform admin) and returns 403 otherwise, surfaced here as a
+// ControlPlaneError so the caller can render an access state.
 export async function getFeatureGates(): Promise<FeatureGates> {
   const { baseUrl, headers } = await getRequestContext();
   const response = await fetch(`${baseUrl}/api/v1/admin/feature-gates`, {
@@ -648,6 +658,11 @@ export interface MarketplaceEntry {
 
 export interface MarketplaceEntries {
   entries: MarketplaceEntry[];
+  // canCurate is false for a workspace owner: the catalog is one global table
+  // shared by every tenant, so adding, editing and removing an entry stays a
+  // platform operation (issue #758). Enabling an entry for this workspace is
+  // the part the owner controls.
+  canCurate: boolean;
 }
 
 export interface CreateMarketplaceEntryInput {
@@ -712,12 +727,16 @@ function decodeMarketplaceEntries(payload: JsonObject): MarketplaceEntries | nul
     }
     entries.push(decoded);
   }
-  return { entries };
+  // A control-plane that predates issue #758 omits can_curate. Treating that as
+  // curatable keeps the pre-#758 behaviour during a rolling deploy: the API is
+  // the authority and refuses what it must.
+  const canCurate = readBooleanField(payload, "can_curate") ?? true;
+  return { entries, canCurate };
 }
 
 // getMarketplaceEntries lists the full catalog joined with this tenant's
-// enablement (issue #309). Server-only; the control-plane gates this on
-// platform-admin and returns 403 for non-admins, surfaced as a
+// enablement (issue #309). Server-only; the control-plane gates this on the
+// workspace administrator and returns 403 otherwise, surfaced as a
 // ControlPlaneError so the caller can render an access state.
 export async function getMarketplaceEntries(): Promise<MarketplaceEntries> {
   const { baseUrl, headers } = await getRequestContext();

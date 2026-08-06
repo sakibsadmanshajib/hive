@@ -905,16 +905,32 @@ func main() {
 	// consumer nor the desktop firewall rule generator is wired here.
 	var egressPolicyHandler *egress.Handler
 	var egressSvc *egress.Service
+	var tenantRoleSvc *platform.TenantRoleService
 	if pool != nil {
 		egressRepo := egress.NewPgxRepository(pool)
-		tenantRoleSvc := platform.NewTenantRoleService(platform.NewPgxTenantRoleStore(pool))
+		tenantRoleSvc = platform.NewTenantRoleService(platform.NewPgxTenantRoleStore(pool))
 		egressSvc = egress.NewService(egressRepo, tenantRoleSvc)
 		egressPolicyHandler = egress.NewHandler(egressSvc)
 	}
 
+	// Issue #758 — the workspace-scoped admin surfaces (feature gates, the
+	// marketplace) are gated on the OWNER of the tenant in scope, with the
+	// platform-admin overlay still admitted and still required for the platform
+	// operations carved out inside those handlers. Built only when both halves
+	// resolve, so the routes are skipped rather than mounted behind half a gate.
+	// Declared as the interface the router consumes, not as the concrete pointer:
+	// a nil *WorkspaceAdminGate stored in an interface field is non-nil to the
+	// router, which would mount the routes behind a gate that panics.
+	var workspaceAdminGate interface {
+		Require(http.Handler) http.Handler
+	}
+	if tenantRoleSvc != nil && roleSvc != nil {
+		workspaceAdminGate = platform.NewWorkspaceAdminGate(tenantRoleSvc, roleSvc)
+	}
+
 	// Issue #309 (blueprint Step 2.3) — MCP and skills marketplace, admin-
-	// curated baseline. Admin CRUD + per-tenant enablement is platform-admin
-	// gated (RoleSvc, mirrors feature-gates/providers below); the internal
+	// curated baseline. Per-tenant enablement is workspace-owner gated and
+	// catalog curation stays platform-admin only (issue #758). The internal
 	// read surface is the seam apps/agent-engine/internal/marketplaceclient
 	// consumes to build a session's MCP config.
 	var marketplaceHandler *marketplace.Handler
@@ -979,6 +995,7 @@ func main() {
 		Mux:                      routerMux,
 		InternalToken:            cfg.InternalToken,
 		RoleSvc:                  roleSvc,
+		WorkspaceAdminGate:       workspaceAdminGate,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.
