@@ -629,9 +629,17 @@ services:
       # features.enable_login_form on /api/config; the login page bundle
       # (build/_app/immutable/nodes/50.*.js) gates the credential fields, the
       # submit button and the "or" divider on
-      # `features.enable_login_form || features.enable_ldap`, and
-      # routers/auths.py:835 rejects the password grant outright. With
-      # enable_ldap already false, only the OAuth button survives.
+      # `features.enable_login_form || features.enable_ldap`. With enable_ldap
+      # already false, only the OAuth button survives.
+      #
+      # Scope, so nobody later assumes more than this buys: it removes the
+      # frontend form, not the endpoint. The only place v0.10.2 consults this
+      # flag server-side is routers/auths.py:835, which sits inside signup()
+      # and fires only when a new account is being created. The signin route
+      # (routers/auths.py:653) is gated by a different variable,
+      # ENABLE_PASSWORD_AUTH (config.py:1621), which still defaults to true and
+      # is deliberately left alone here. POST /api/v1/auths/signin therefore
+      # still accepts a password grant; it just has no form pointing at it.
       #
       # Like the four RAG keys below, this one is persistent config: Open
       # WebUI's seed_defaults wrote `ui.enable_login_form` into its own

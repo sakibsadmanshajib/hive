@@ -25,7 +25,7 @@ database outranks the environment from then on, so the compose variable alone
 would have been a silent no-op on the demo box. Its startup log shows the
 reconcile winning:
 
-```
+```text
 INFO | open_webui.config:seed_registered_defaults:52 - hive: reconciled Open WebUI
 RAG config from env: rag.embedding_engine=openai,
 rag.embedding_model=sentence-transformers/all-MiniLM-L6-v2, ui.enable_login_form=False
@@ -33,7 +33,7 @@ rag.embedding_model=sentence-transformers/all-MiniLM-L6-v2, ui.enable_login_form
 
 and `/api/config` flips accordingly:
 
-```
+```text
 before: "enable_login_form":true
 after:  "enable_login_form":false
 ```
@@ -51,6 +51,45 @@ gating and it is not worth forking a pinned image over.
 
 Captured against `next dev` from this branch, which is why the Next.js dev
 badge is visible in the lower-left corner of both frames.
+
+### 2a. The copy is right on the first paint, not one render later
+
+Review finding 3 on this PR: the first version read `next` in a `useEffect`, so
+the correct heading only arrived after mount and the chat user got a beat of the
+console pitch first, which is the exact copy this change exists to remove. The
+value is now read during render with `useSearchParams()`. Every route in this
+app is dynamically rendered (`ƒ` in the build output, because the root layout
+awaits `cookies()` through next-intl), so that hook resolves from the request
+URL on the server render too. Server markup and the first client render agree,
+so there is nothing to swap and no hydration mismatch.
+
+These three frames were captured with **JavaScript disabled**, which is the
+honest way to photograph a pre-hydration state: what the browser paints is
+exactly the server HTML, with no React on top of it.
+
+| | |
+|---|---|
+| `05-signin-first-paint-before.png` | The pre-fix page, served live from the same image with only `app/auth/sign-in/page.tsx` reverted, at `/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3DPLACEHOLDER-NOT-A-REAL-ID`. First paint is "Sign in to your console" plus the API keys and credits subtitle. |
+| `06-signin-first-paint-after.png` | This branch, same URL, same viewport. First paint is already "Sign in to Hive" / "Use your Hive account to continue." |
+| `07-signin-first-paint-direct.png` | This branch at `/auth/sign-in` with no `next`. Still the console copy, so the neutral copy is gated, not hardcoded. |
+
+`05` and `07` are byte identical, and that is the finding rather than a
+duplicated file: before the change, a chat arrival's first paint was
+indistinguishable from a plain console visit.
+
+The same three cases read off the raw server HTML, no browser involved:
+
+```console
+$ curl -s 'http://localhost:3010/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3DPLACEHOLDER-NOT-A-REAL-ID' | grep -o '<h1[^>]*>[^<]*</h1>'
+<h1 ...>Sign in to Hive</h1>
+$ curl -s 'http://localhost:3010/auth/sign-in' | grep -o '<h1[^>]*>[^<]*</h1>'
+<h1 ...>Sign in to your console</h1>
+$ curl -s 'http://localhost:3010/auth/sign-in?next=%2Foauth%2Fconsent-evil' | grep -o '<h1[^>]*>[^<]*</h1>'
+<h1 ...>Sign in to your console</h1>
+```
+
+No real credential appears in any of it: `PLACEHOLDER-NOT-A-REAL-ID` is a
+literal string and no authorization request was ever created.
 
 ## 3. Submit progress state
 
