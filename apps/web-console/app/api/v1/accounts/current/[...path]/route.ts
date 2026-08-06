@@ -67,6 +67,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+// The key id arrives from the browser and is interpolated into an upstream URL
+// by revokeApiKey without encoding, so a value containing path separators would
+// steer the request at a different control-plane path carrying the caller's own
+// bearer. Every key id this surface issues is a UUID, so require that shape here
+// rather than trusting the segment.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   const body: unknown = await request.json().catch(() => null);
   return isRecord(body) ? body : {};
@@ -112,6 +120,9 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
 
   // POST /api/v1/accounts/current/api-keys/{keyId}/revoke
   if (path.length === 3 && path[0] === "api-keys" && path[2] === "revoke") {
+    if (!UUID_RE.test(path[1])) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
     try {
       return NextResponse.json(await revokeApiKey(path[1]));
     } catch (err) {
