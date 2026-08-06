@@ -656,7 +656,41 @@ services:
       OPENID_PROVIDER_URL: "${SUPABASE_URL}/auth/v1/.well-known/openid-configuration"
       OAUTH_CLIENT_ID: ${SUPABASE_OAUTH_CLIENT_ID:-}
       OAUTH_CLIENT_SECRET: ${SUPABASE_OAUTH_CLIENT_SECRET:-}
-      OAUTH_SCOPES: "openid email profile"
+      # offline_access is load-bearing, not decoration (#782). Supabase issues
+      # access tokens with a 3600 second lifetime, and Open WebUI refreshes at
+      # 5 minutes before expiry (OAuthManager.get_oauth_token). When that
+      # refresh runs, _perform_token_refresh returns None on its very first
+      # guard if the stored session has no refresh_token, and the caller then
+      # DELETES the OAuth session outright. From that moment __oauth_token__ is
+      # empty forever, hive_jwt_forward injects no upstream_auth, and every
+      # chat completion 401s with missingUserTokenMessage until the user signs
+      # in again through SSO. Without offline_access on the authorize request
+      # Supabase returns no refresh token at all, so that destruction was
+      # guaranteed roughly 55 minutes into every signed-in session.
+      #
+      # Supabase's own discovery document advertises offline_access in
+      # scopes_supported and refresh_token in grant_types_supported, so this
+      # asks for something the provider already offers. Guarded by
+      # TestOWUIOAuthScopesRequestOfflineAccess in apps/edge-api/internal/auth.
+      OAUTH_SCOPES: "openid email profile offline_access"
+      # The other half of #782, and useless without the scope above. Open
+      # WebUI's _perform_token_refresh does not go through authlib: it hand
+      # builds the refresh POST and always puts client_id and client_secret in
+      # the form body, which is client_secret_post. authlib, which performs the
+      # authorization code exchange, defaults to client_secret_basic. Supabase
+      # enforces the registered method exactly and answers a mismatch with
+      # 400 invalid_credentials, "client is registered for 'client_secret_basic'
+      # but 'client_secret_post' was used". So with the registration left on
+      # basic, adding offline_access alone still ends in a destroyed session:
+      # the refresh token exists and the refresh is rejected anyway. Verified
+      # both ways against the live provider before shipping.
+      #
+      # Pinning authlib to client_secret_post makes both legs speak the one
+      # dialect the refresh path can produce. It REQUIRES the Supabase OAuth
+      # client to be registered token_endpoint_auth_method=client_secret_post;
+      # the two must move together, since flipping either alone breaks the
+      # other leg. See the PR body for the ops step and its ordering.
+      OAUTH_TOKEN_ENDPOINT_AUTH_METHOD: "client_secret_post"
       # Supabase's OAuth 2.1 authorization server requires PKCE on every
       # authorize request. authlib (OWUI's OAuth client) only sends
       # code_challenge/code_challenge_method when this is set, so without it
