@@ -1,0 +1,30 @@
+Issue #785 proof: console sidebar workspace switcher
+
+Substrate: the real ConsoleShell / WorkspaceSwitcher component tree, run via
+`next dev` inside the project's own web-console Docker image (same image the
+build/test steps use), hit with a real Chromium browser (Playwright). This is
+NOT the hosted demo box (console-hive.scubed.co) -- this sandbox has no live
+Supabase credentials, so a throwaway, unauthenticated route rendered the same
+production ConsoleShell with two demo prop sets (one 2-membership account, one
+1-membership account) and no getViewer()/control-plane call. The route was
+deleted before committing; it is not part of the shipped diff. No live
+credential, session, or real workspace data was used or is visible in any
+image -- account names ("Hive Demo", "Acme Legal Workspace") and the user
+("Demo Owner" / owner@example.com) are fabricated placeholders. There is no
+address bar in a component-level screenshot, so no URL redaction applies.
+
+01-multi-workspace-closed.png
+  Sidebar workspace control before interaction, two-membership account.
+  Renders as a real <select>, not the old dead <button>.
+
+02-multi-workspace-menu-open.png
+  Same control after a real click. Browser-native listbox is open, showing
+  both workspaces ("Hive Demo (current)" highlighted, "Acme Legal Workspace"
+  selectable). This is the popup issue #785 said never opened.
+
+03-single-workspace-non-interactive.png
+  Same account reduced to one membership. No <select>, no chevron, no
+  aria-haspopup anywhere in the sidebar block -- confirmed programmatically
+  in the capture script (combobox count = 0, [aria-haspopup] count = 0), not
+  just visually. Satisfies "must not present itself as an interactive menu at
+  all" for the single-workspace case.

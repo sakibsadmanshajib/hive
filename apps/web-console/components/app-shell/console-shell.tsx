@@ -19,6 +19,8 @@ import { useTranslations } from "next-intl";
 import { cn } from "@/lib/cn";
 import { HiveMark } from "@/components/brand/hive-mark";
 import { LocaleSwitcher } from "@/components/locale-switcher";
+import { WorkspaceSwitcher } from "@/components/workspace-switcher";
+import type { ViewerMembership } from "@/lib/control-plane/client";
 
 // Labels are message keys resolved at render, not literals — the nav is the
 // one place every console page shares, so it has to follow the active locale.
@@ -62,9 +64,11 @@ const NAV_GROUPS: ReadonlyArray<{
 
 interface ConsoleShellProps {
   workspace: {
+    id: string;
     name: string;
     slug?: string;
   };
+  memberships: ViewerMembership[];
   user: {
     email: string;
     name?: string | null;
@@ -76,6 +80,7 @@ interface ConsoleShellProps {
 
 export function ConsoleShell({
   workspace,
+  memberships,
   user,
   topbar,
   children,
@@ -97,27 +102,12 @@ export function ConsoleShell({
               Hive
             </span>
           </Link>
-          <button
-            type="button"
-            className={cn(
-              "mt-4 w-full flex items-center justify-between gap-2",
-              "rounded-md border border-[var(--color-border)] bg-[var(--color-surface-inset)]",
-              "px-2.5 py-2 text-left",
-              "transition-colors duration-[var(--duration-fast)] hover:border-[var(--color-border-strong)]",
-            )}
-            aria-haspopup="menu"
-            aria-label={tShell("workspaceMenu")}
-          >
-            <span className="flex flex-col gap-0.5 min-w-0">
-              <span className="text-2xs uppercase tracking-wider text-[var(--color-ink-3)]">
-                {tShell("workspace")}
-              </span>
-              <span className="text-sm text-[var(--color-ink)] truncate">
-                {workspace.name}
-              </span>
-            </span>
-            <ChevronGlyph />
-          </button>
+          <WorkspaceSwitcher
+            memberships={memberships}
+            currentAccountId={workspace.id}
+            currentAccountName={workspace.name}
+            ariaLabel={tShell("workspaceMenu")}
+          />
         </div>
         <nav
           aria-label={tShell("primaryNav")}
@@ -247,25 +237,3 @@ function SignOutButton({ className }: { className?: string }) {
   );
 }
 
-function ChevronGlyph() {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 12 12"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-      className="shrink-0 text-[var(--color-ink-3)]"
-    >
-      <path
-        d="M3 4.5l3 3 3-3M3 7.5l3-3 3 3"
-        stroke="currentColor"
-        strokeWidth="1.25"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        opacity="0.6"
-      />
-    </svg>
-  );
-}
