@@ -158,6 +158,43 @@ def load_blocked_regex(text: str) -> str:
     return matches[0]
 
 
+def _dockerfile_runs_patch(dockerfile: pathlib.Path, script: str) -> tuple[bool, bool]:
+    """Report whether a Dockerfile both stages and executes an owui patch script.
+
+    Returns `(staged, invoked)`. `staged` is a COPY of the script into the
+    image; `invoked` is a RUN that actually executes it with python3. The two
+    are checked separately because they fail differently and only the second
+    one decides whether the patch reaches the shipped bundle.
+
+    Comments are dropped and backslash continuations are folded into one
+    logical line, so a multi-line `RUN a \\\n && b` chain is read as the single
+    instruction Docker sees rather than as a sequence of unrelated lines.
+    """
+    logical: list[str] = []
+    buffer = ""
+    for raw in dockerfile.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            buffer += line[:-1] + " "
+            continue
+        logical.append(buffer + line)
+        buffer = ""
+    if buffer:
+        logical.append(buffer)
+
+    staged = any(
+        line.split(maxsplit=1)[0].upper() == "COPY" and script in line for line in logical
+    )
+    invoked = any(
+        line.split(maxsplit=1)[0].upper() == "RUN"
+        and re.search(rf"python3?\s+\S*{re.escape(script)}(\s|$)", line)
+        for line in logical
+    )
+    return staged, invoked
+
+
 def main() -> int:
     text = CADDYFILE.read_text(encoding="utf-8")
     pattern = re.compile(load_blocked_regex(text))
@@ -187,10 +224,23 @@ def main() -> int:
     # the image patch that removes Settings > Integrations, and the two must not
     # drift apart in either direction: block without patch leaves a form whose
     # save now 404s, patch without block leaves the terminals proxy reachable.
+    #
+    # Assert the INVOCATION, not the filename. A substring check for
+    # "remove_integrations_tab.py" is satisfied by the COPY line alone, so it
+    # stays green with the RUN line neutered, which is the one arrangement that
+    # actually ships the panel back. Instructions are joined across backslash
+    # continuations first, because the RUN is a multi-line `&&` chain.
     dockerfile = CADDYFILE.parent / "Dockerfile.open-webui"
-    if "remove_integrations_tab.py" not in dockerfile.read_text(encoding="utf-8"):
+    staged, invoked = _dockerfile_runs_patch(dockerfile, "remove_integrations_tab.py")
+    if not staged:
         failures.append(
-            f"{dockerfile.name} no longer runs remove_integrations_tab.py, so the "
+            f"{dockerfile.name} no longer COPYs remove_integrations_tab.py into the "
+            "image, so the Settings > Integrations forms are back while their "
+            "endpoints stay blocked"
+        )
+    if not invoked:
+        failures.append(
+            f"{dockerfile.name} no longer RUNs remove_integrations_tab.py, so the "
             "Settings > Integrations forms are back while their endpoints stay blocked"
         )
 

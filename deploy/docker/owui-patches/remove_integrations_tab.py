@@ -19,20 +19,31 @@ Why removing the tab descriptor rather than neutering the guard: the descriptor
 is built out of source string literals (`id`, `title`, and the keyword list),
 which survive minification unchanged, whereas the guard is an optional-chaining
 expression over mangled locals that a rebuild would rename. Dropping the
-descriptor closes every route into the panel at once, because the nav button,
-the settings search, and the content pane are all driven from the filtered
-descriptor list: `getAvailableSettings()` filters this array,
-`setFilteredSettings()` narrows it by search, the nav `{#each}` renders only
-what survives, and `selectedTab` is reset to `filteredSettings[0]` whenever it
-names a tab that is not in the list, which is what disarms the one deep link
-into it (`showSettings.set('tools')` from the message input's terminal menu).
+descriptor removes both navigational routes into the panel at once, because the
+nav button and the settings search are driven from the same filtered descriptor
+list: `getAvailableSettings()` filters this array, `setFilteredSettings()`
+narrows it by search, and the nav `{#each}` renders only what survives.
 
-Everything downstream is data-driven off empty stores and needs no patch of its
-own. `TerminalMenu` renders only when a terminal server exists, direct ones can
-no longer be added once this tab is gone, and the system list comes from
-`GET /api/v1/terminals/`, which `Caddyfile.owui` now refuses on this origin;
-its client returns `[]` on any non-2xx, so that path degrades to "no terminals"
-rather than to an error.
+What the descriptor removal does NOT do, stated precisely so nobody relies on
+the wrong mechanism later. The content pane is not driven from that list: it is
+a plain `selectedTab === 'tools' ? ... : ...` chain that is still in the bundle
+after the descriptor is gone. The `selectedTab` reset to `filteredSettings[0]`
+lives inside the search filter function, which runs on mount and on a `$config`
+change only, not on every `selectedTab` write. So setting `selectedTab` to
+`'tools'` after mount would still render the pane with no nav entry.
+
+The deep link is disarmed by its caller instead. `showSettings.set('tools')` has
+exactly one caller, the "Add Terminal" item in the message input's terminal
+menu, and that menu renders only when a terminal server is already known. The
+system list comes from `GET /api/v1/terminals/`, which `Caddyfile.owui` now
+refuses on this origin (its client returns `[]` on any non-2xx, so that path
+degrades to "no terminals" rather than to an error), and no direct server can be
+added once this tab is gone. The one residue: the menu's last arm reads the
+user's own persisted `terminalServers`, so a user who saved one before this
+change keeps the menu, and for that user the deep link still opens the pane.
+There is no such user on this deployment, and purging stored user settings is a
+data migration rather than a containment change. Neutering the `'tools'` arm of
+the pane chain is the patch to add if that ever stops being true.
 
 Asserts its own effect and fails the build otherwise, the same posture as this
 Dockerfile's other patches: a future open-webui digest bump whose bundle shifted
