@@ -51,8 +51,42 @@
   # rerouting #736 requires for the Function installer. It fails safe: the
   # script treats a non-200 as a failure and deliberately does not revoke
   # the previous key, so a deployment is never stranded on a dead one.
+  #
+  # `terminals` closes #770. Open WebUI mounts routers/terminals.py at
+  # /api/v1/terminals and gates none of it on `get_admin_user`: the
+  # `{server_id}/{path:path}` route proxies every HTTP verb, and the
+  # `{server_id}/api/terminals/{session_id}` websocket opens an interactive
+  # session, both on `get_verified_user` alone, each attaching the
+  # server-side credential the connection was registered with. That is an
+  # authenticated request-forgery primitive against anything the chat
+  # container can reach, including the other services on the compose
+  # network. Blocking the whole router is correct here because this
+  # deployment offers no terminal feature at all. Nothing in this repo calls
+  # it, and the front end degrades cleanly: the only caller of
+  # `GET /api/v1/terminals/` is `getTerminalServers`, which returns `[]` on
+  # any non-2xx, so the terminal list is empty rather than errored, and the
+  # message input's terminal menu renders only when that list is non-empty.
+  #
+  # `configs/tool_servers` and `configs/terminal_servers` close #771. Those
+  # are the registration endpoints behind the admin panel's forms: each
+  # accepts a caller-supplied destination URL and credential with no
+  # allowlist, and #770's proxy is what then uses what they store. Their
+  # `verify`, `policy`, `lifecycle`, and `refresh` children are caught as
+  # sub-paths, which is intended -- `verify` alone will dial an arbitrary
+  # caller-supplied URL from inside the network. Segment-exact for the same
+  # reason as `configs/export` above: `/api/v1/configs/banners`,
+  # `/api/v1/configs/models`, and `/api/v1/configs/connections` all sit in
+  # the same namespace and must stay reachable. Note `terminals` and `tools`
+  # are different routers; `/api/v1/tools/` is the Workspace tool list and
+  # is deliberately untouched.
+  #
+  # This is the server-side half only. The tool servers added from Settings
+  # > Integrations are `direct` ones, fetched by the browser straight from
+  # the configured URL, so no rule on this origin can see them. Removing
+  # that panel is the control that reaches them, and it happens at image
+  # build time -- see deploy/docker/owui-patches/remove_integrations_tab.py.
   @blocked {
-    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|users/admin|users/new|auths/(?:signup|admin)|configs/export))/?(?:/.*)?$
+    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|terminal_servers|tool_servers)))/?(?:/.*)?$
   }
   respond @blocked 404
 
