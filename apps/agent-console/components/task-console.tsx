@@ -332,6 +332,11 @@ export function TaskConsole() {
 
     try {
       const task = await createTask(baseUrl, token, pack, trimmed);
+      // A create that round-trips is direct evidence the endpoint is back, so
+      // the failure count is stale. Without this the poll stays given up: the
+      // row the user just created would sit at "Queued" forever under an
+      // alert telling them to reload, which the create just disproved.
+      setFailures(0);
       setTasks((prev) => [task, ...prev]);
       setInstructions("");
       setAnnouncement(`Task submitted. Status: ${describeTask(task, Date.now()).label}.`);

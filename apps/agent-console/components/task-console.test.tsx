@@ -526,4 +526,55 @@ describe("TaskConsole polling", () => {
     }
     expect(listCalls(fetchMock)).toBe(settled);
   });
+
+  it("resumes after giving up once a create proves the endpoint is back", async () => {
+    vi.useFakeTimers();
+    // Lists fail until a create succeeds. A create round-tripping is direct
+    // evidence the endpoint is reachable again, so a stale failure count must
+    // not be what keeps the new task's row frozen at "Queued" forever.
+    const state = { tasks: [] as unknown[] };
+    let listFailing = true;
+    const fetchMock = vi.fn((url: string | URL, init?: RequestInit) => {
+      const href = String(url);
+      const method = init?.method ?? "GET";
+      if (href.endsWith("/cancel")) {
+        return Promise.resolve(jsonResponse({}));
+      }
+      if (method === "POST") {
+        listFailing = false;
+        state.tasks = [QUEUED_TASK, ...state.tasks];
+        return Promise.resolve(jsonResponse(QUEUED_TASK, 201));
+      }
+      if (listFailing) {
+        return Promise.resolve(new Response("nope", { status: 500 }));
+      }
+      return Promise.resolve(jsonResponse({ tasks: state.tasks }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TaskConsole />);
+    await advance(0);
+
+    // Burn the whole retry budget so the loop has genuinely given up.
+    for (let i = 0; i < 10; i += 1) {
+      await advance(MAX_POLL_MS);
+    }
+    const settled = listCalls(fetchMock);
+    expect(screen.getByRole("alert").textContent).toContain("Reload the page");
+
+    fireEvent.change(screen.getByLabelText("What should the agent do?"), {
+      target: { value: "Ship it." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await advance(0);
+
+    // The stale "reload the page" sentence must not outlive the create that
+    // disproved it.
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    // And the queued row the user just created has to actually track.
+    await advance(POLL_MS);
+    expect(listCalls(fetchMock)).toBe(settled + 1);
+    await advance(POLL_MS);
+    expect(listCalls(fetchMock)).toBe(settled + 2);
+  });
 });
