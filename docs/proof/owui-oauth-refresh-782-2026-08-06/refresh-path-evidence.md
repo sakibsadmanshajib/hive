@@ -35,6 +35,37 @@ GoTrue password grant returns `expires_in: 3600`, and the id_token has `exp`
 minus `iat` of exactly 3600. Open WebUI refreshes at 5 minutes before expiry,
 so the refresh path is first entered about 55 minutes after sign-in.
 
+### The timed run
+
+One session, one conversation, one message every 5 minutes. Screenshot
+`03-same-conversation-answers-at-55min-then-fails.png` shows the last three
+answers and the failure in a single frame.
+
+| probe | minutes since login | outcome |
+| --- | --- | --- |
+| ALPHA, BRAVO, CHARLIE | 0.1 to 0.3 | answered |
+| DELTA | 5.2 | answered |
+| ECHO | 10.1 | answered |
+| FOXTROT | 15.1 | answered |
+| GOLF | 20.0 | answered |
+| HOTEL | 25.0 | answered |
+| INDIA | 29.9 | answered |
+| JULIET | 34.8 | answered |
+| KILO | 40.0 | answered |
+| LIMA | 44.9 | answered |
+| MIKE | 49.8 | answered |
+| NOVEMBER | 54.7 | answered |
+| TANGO | 64.7 | **fails** |
+
+Twelve consecutive successes across 55 minutes, then failure. The refresh
+window opened at 55.0 minutes and the token expired at 60.0. Nothing about the
+message count or the conversation changed between NOVEMBER and TANGO; only the
+clock did.
+
+A brand new conversation opened on that same session immediately afterwards
+also failed on its first message, so the destruction is per session, not per
+conversation.
+
 ## 2. Root cause, first half: no refresh token is ever issued
 
 Project-wide, from `auth.sessions`:
