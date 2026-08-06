@@ -613,6 +613,36 @@ services:
         condition: service_healthy
     environment:
       ENABLE_SIGNUP: "false"
+      # Every account on this deployment is SSO-only: users are provisioned
+      # through the Hive OIDC provider and have no Open WebUI password, so the
+      # email/password form that upstream renders above "Continue with Hive"
+      # could only ever fail. It did, with an actively misleading message --
+      # POST /api/v1/auths/signin answered correct Hive credentials with
+      # HTTP 400 "The email or password provided is incorrect", which reads as
+      # a wrong password rather than as a form that was never wired to
+      # anything (found in the live login review).
+      #
+      # Verified live in the pinned v0.10.2 image, not assumed (the
+      # ENABLE_MODEL_FILTER note below is why this gets checked now):
+      # backend/open_webui/config.py:1617 reads the variable, exposes it as
+      # `ui.enable_login_form`, and main.py:1918 publishes it as
+      # features.enable_login_form on /api/config; the login page bundle
+      # (build/_app/immutable/nodes/50.*.js) gates the credential fields, the
+      # submit button and the "or" divider on
+      # `features.enable_login_form || features.enable_ldap`, and
+      # routers/auths.py:835 rejects the password grant outright. With
+      # enable_ldap already false, only the OAuth button survives.
+      #
+      # Like the four RAG keys below, this one is persistent config: Open
+      # WebUI's seed_defaults wrote `ui.enable_login_form` into its own
+      # database on this deployment's first boot, and the database has
+      # outranked the environment ever since, so this line on its own would
+      # have been a silent no-op on any already-booted box. It reaches a live
+      # deployment because owui-patches/hive_rag_env_config.py reconciles this
+      # key from the environment on every container start. Confirm after
+      # deploying with `curl -s https://<chat-host>/api/config` and check that
+      # features.enable_login_form is false.
+      ENABLE_LOGIN_FORM: "false"
       ENABLE_OAUTH_SIGNUP: "true"
       OAUTH_PROVIDER_NAME: "Hive"
       OPENID_PROVIDER_URL: "${SUPABASE_URL}/auth/v1/.well-known/openid-configuration"

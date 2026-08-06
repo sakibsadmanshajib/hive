@@ -66,11 +66,25 @@ export default function SignInPage() {
     navigate(resolveNextTarget(next));
   }
 
+  // A user who lands here mid OAuth consent came from a Hive product surface
+  // (chat today), not from the developer console, so the console pitch is both
+  // wrong and disorienting: they clicked "Continue with Hive" on a chat login
+  // screen and were answered with a page about API keys, credits and usage
+  // analytics. Resolving through the shared allow-list rather than sniffing the
+  // raw param means an unlisted or hostile `next` can never reach this branch --
+  // resolveNextTarget only ever returns "/oauth/consent" or
+  // "/oauth/consent?..." for genuine consent round-trips.
+  const fromConsent = resolveNextTarget(nextParam).startsWith("/oauth/consent");
+
   return (
     <AuthShell
       eyebrow="Welcome back"
-      title="Sign in to your console"
-      subtitle="Manage API keys, credits, and usage analytics for your workspace."
+      title={fromConsent ? "Sign in to Hive" : "Sign in to your console"}
+      subtitle={
+        fromConsent
+          ? "Use your Hive account to continue."
+          : "Manage API keys, credits, and usage analytics for your workspace."
+      }
       footer={
         <>
           Don&rsquo;t have an account?{" "}

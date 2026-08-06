@@ -148,6 +148,53 @@ describe("app/auth/sign-in/page.tsx next-target redirect", () => {
     expect((button as HTMLButtonElement).disabled).toBe(false);
   });
 
+  // Live login review: a user arriving from chat's "Continue with Hive" button
+  // was shown a developer-console pitch (API keys, credits, usage analytics)
+  // for what is, to them, simply signing in to Hive. The copy must follow the
+  // journey, and must keep the console framing for people who came to the
+  // console directly.
+  describe("headline copy follows the journey", () => {
+    it("uses neutral product copy when next is an OAuth consent target", async () => {
+      window.history.pushState(
+        {},
+        "",
+        `/auth/sign-in?next=${encodeURIComponent(
+          "/oauth/consent?authorization_id=auth-req-123",
+        )}`,
+      );
+      render(<SignInPage />);
+      expect(
+        await screen.findByRole("heading", { name: "Sign in to Hive" }),
+      ).toBeTruthy();
+      expect(screen.queryByText(/console/i)).toBeNull();
+      expect(screen.queryByText(/API keys, credits/i)).toBeNull();
+    });
+
+    it("keeps the console copy for a direct console visit", async () => {
+      render(<SignInPage />);
+      expect(
+        await screen.findByRole("heading", { name: "Sign in to your console" }),
+      ).toBeTruthy();
+      expect(
+        screen.getByText(/Manage API keys, credits, and usage analytics/i),
+      ).toBeTruthy();
+    });
+
+    // The neutral copy is gated on the same allow-list that gates the redirect,
+    // so an attacker-supplied `next` cannot reach it either.
+    it("keeps the console copy for an unlisted next target", async () => {
+      window.history.pushState(
+        {},
+        "",
+        `/auth/sign-in?next=${encodeURIComponent("/oauth/consent-evil")}`,
+      );
+      render(<SignInPage />);
+      expect(
+        await screen.findByRole("heading", { name: "Sign in to your console" }),
+      ).toBeTruthy();
+    });
+  });
+
   it("does not redirect when sign-in fails", async () => {
     mockSignInWithPassword.mockResolvedValue({
       error: { message: "Invalid credentials" },
