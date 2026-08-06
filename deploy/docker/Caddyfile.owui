@@ -26,6 +26,23 @@
   }
   respond @blocked 404
 
+  # #772: the stock Open WebUI product surfaces Hive does not ship. Their
+  # navigation entries are removed from the built bundle
+  # (owui-patches/apply_ui_surfaces_patch.py) or turned off by feature flag,
+  # but the SPA routes themselves still exist upstream, so a typed or
+  # bookmarked URL would still render them. Same 404-not-403 posture and same
+  # tolerance for trailing slashes, sub-paths and `//` traversal variants as
+  # the admin block above.
+  #
+  # Scoped to the page routes only. Open WebUI's own APIs live under /api, so
+  # this never touches /api/v1/notes and friends, and /workspace and
+  # /workspace/knowledge stay reachable because Knowledge is the one workspace
+  # surface Hive keeps.
+  @removedSurfaces {
+    path_regexp removed (?i)^/+(?:playground|notes|calendar|automations|workspace/+(?:models|prompts|tools))/?(?:/.*)?$
+  }
+  respond @removedSurfaces 404
+
   # Method-level block on admin-only endpoints that OWUI exposes under
   # /api/v1/configs/*. Even if a future regression re-exposes the
   # admin panel under a non-blocked path, mutation verbs are dropped.
