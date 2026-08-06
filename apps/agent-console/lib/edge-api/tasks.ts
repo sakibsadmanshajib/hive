@@ -4,16 +4,17 @@
 // proxy route needed since edge-api is already customer-facing (unlike
 // control-plane, which web-console proxies because it's internal-only).
 //
-// Wire shape and routes verified against origin/feat/311-task-sync-web
-// (#311, PR #329) after that branch pushed mid-build:
+// Wire shape and routes re-verified against
 // apps/control-plane/internal/agenttask/SYNC_CONTRACT.md and
-// apps/edge-api/internal/agenttask/{types,handler}.go. Notably: create only
-// takes `{"pack": "..."}`, there is no free-text prompt field on this
-// contract yet (Engine.Launch is a documented open seam -- see
-// SYNC_CONTRACT.md "Engine seam (known gap)" -- so a submitted task stays
-// `queued` until a real Engine lands in a later wave); status values are
-// queued/running/succeeded/failed/cancelled, not the pending/completed
-// naming this blueprint's prose used.
+// apps/edge-api/internal/agenttask/{types,handler}.go. The earlier note here
+// claimed create takes only `{"pack": "..."}` and that no free-text prompt
+// field existed. That has not been true since the #311 follow-up: both the
+// contract and `createTaskRequest` in edge-api's handler.go carry
+// `instructions`, the free-text goal the task's conversation starts from,
+// forwarded to the engine as the conversation's `initial_message`. It is
+// optional on the wire (empty string means no prompt), but this console
+// always sends one -- a task with no stated goal is not a task a person can
+// express. Status values are queued/running/succeeded/failed/cancelled.
 
 import {
   isJsonObject,
@@ -31,6 +32,7 @@ export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancel
 export interface AgentTask {
   id: string;
   pack: TaskPack;
+  instructions: string;
   status: TaskStatus;
   engine_session_ref: string;
   result_summary_ref: string;
@@ -81,6 +83,9 @@ function decodeTask(value: JsonObject): AgentTask | null {
   return {
     id,
     pack,
+    // Nullable column server-side; the contract promises "" rather than null
+    // on read, but decode defensively so an older row cannot crash the list.
+    instructions: readStringField(value, "instructions") ?? "",
     status,
     engine_session_ref: readStringField(value, "engine_session_ref") ?? "",
     result_summary_ref: readStringField(value, "result_summary_ref") ?? "",
@@ -136,11 +141,12 @@ export async function createTask(
   baseUrl: string,
   accessToken: string,
   pack: TaskPack,
+  instructions: string,
 ): Promise<AgentTask> {
   const response = await fetch(`${baseUrl}/v1/agent/tasks`, {
     method: "POST",
     headers: authHeaders(accessToken),
-    body: JSON.stringify({ pack }),
+    body: JSON.stringify({ pack, instructions }),
   });
   if (!response.ok) {
     await throwTaskError(response, "Failed to create task");
@@ -203,3 +209,33 @@ export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   "failed",
   "cancelled",
 ]);
+
+/*
+ * Deployment-configuration sentinels.
+ *
+ * Both strings are `const`s in apps/control-plane/internal/agenttask/
+ * service.go (`engineUnavailableMessage`, `engineLaunchFailedMessage`),
+ * persisted verbatim into `error_message` when Engine.Launch fails. They are
+ * deliberately provider-blind and generic, which also makes them stable
+ * enough to key presentation off: a task carrying one of them did not fail
+ * because of anything the user wrote, it never started at all. Matching them
+ * here is what lets this console explain a configuration state in a human
+ * sentence instead of showing the raw string.
+ *
+ * A drifted string degrades to the plain "failed" treatment, which is still
+ * honest, so this is a soft dependency rather than a coupling that can break.
+ */
+export const ENGINE_UNAVAILABLE_MESSAGE =
+  "agent engine is not available on this deployment";
+export const ENGINE_LAUNCH_FAILED_MESSAGE =
+  "agent engine could not start the task";
+
+/** True when the task failed because the deployment has no agent runtime. */
+export function isEngineUnavailable(task: AgentTask): boolean {
+  return task.status === "failed" && task.error_message === ENGINE_UNAVAILABLE_MESSAGE;
+}
+
+/** True when the engine exists but refused or failed to launch the task. */
+export function isEngineLaunchFailure(task: AgentTask): boolean {
+  return task.status === "failed" && task.error_message === ENGINE_LAUNCH_FAILED_MESSAGE;
+}

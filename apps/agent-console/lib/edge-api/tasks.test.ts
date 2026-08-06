@@ -4,10 +4,15 @@ import {
   AgentTaskError,
   cancelTask,
   createTask,
+  ENGINE_LAUNCH_FAILED_MESSAGE,
+  ENGINE_UNAVAILABLE_MESSAGE,
   getTask,
+  isEngineLaunchFailure,
+  isEngineUnavailable,
   listTasks,
   TERMINAL_STATUSES,
   isTaskPack,
+  type AgentTask,
 } from "./tasks";
 
 const BASE_URL = "http://edge-api.test";
@@ -20,9 +25,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-const TASK = {
+// Typed rather than inferred: the sentinel helpers below take an AgentTask,
+// and an untyped literal widens `pack` and `status` to string.
+const TASK: AgentTask = {
   id: "11111111-1111-1111-1111-111111111111",
   pack: "coding-pack",
+  instructions: "Audit the webhook handlers for unvalidated input.",
   status: "queued",
   engine_session_ref: "",
   result_summary_ref: "",
@@ -63,20 +71,57 @@ describe("edge-api tasks client", () => {
     expect(tasks).toEqual([TASK]);
   });
 
-  it("createTask POSTs only the pack (the contract has no prompt field) and returns the decoded task", async () => {
+  it("createTask POSTs the pack and the instructions the contract documents", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(TASK, 201));
     vi.stubGlobal("fetch", fetchMock);
 
-    const task = await createTask(BASE_URL, TOKEN, "coding-pack");
+    const task = await createTask(BASE_URL, TOKEN, "coding-pack", "Ship the thing.");
 
     expect(fetchMock).toHaveBeenCalledWith(
       `${BASE_URL}/v1/agent/tasks`,
       expect.objectContaining({
         method: "POST",
-        body: JSON.stringify({ pack: "coding-pack" }),
+        body: JSON.stringify({ pack: "coding-pack", instructions: "Ship the thing." }),
       }),
     );
     expect(task).toEqual(TASK);
+  });
+
+  it("decodes a task whose instructions field is absent as an empty string", async () => {
+    const { instructions: _dropped, ...withoutInstructions } = TASK;
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ tasks: [withoutInstructions] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tasks = await listTasks(BASE_URL, TOKEN);
+    expect(tasks[0].instructions).toBe("");
+  });
+
+  it("recognizes the control-plane engine sentinels only on failed tasks", () => {
+    const unavailable: AgentTask = {
+      ...TASK,
+      status: "failed",
+      error_message: ENGINE_UNAVAILABLE_MESSAGE,
+    };
+    const launchFailed: AgentTask = {
+      ...TASK,
+      status: "failed",
+      error_message: ENGINE_LAUNCH_FAILED_MESSAGE,
+    };
+    const realFailure: AgentTask = {
+      ...TASK,
+      status: "failed",
+      error_message: "the sandbox ran out of disk",
+    };
+
+    expect(isEngineUnavailable(unavailable)).toBe(true);
+    expect(isEngineUnavailable(launchFailed)).toBe(false);
+    expect(isEngineUnavailable(realFailure)).toBe(false);
+    expect(isEngineLaunchFailure(launchFailed)).toBe(true);
+
+    // A queued task carrying the string somehow is still not a blocked task.
+    expect(isEngineUnavailable({ ...unavailable, status: "queued" })).toBe(false);
   });
 
   it("getTask fetches a single task by id", async () => {
