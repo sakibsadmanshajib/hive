@@ -71,6 +71,22 @@ describe("edge-api tasks client", () => {
     expect(tasks).toEqual([TASK]);
   });
 
+  it("keeps a task whose status this client does not recognise", async () => {
+    // A status the console has never heard of must not delete the row. The
+    // user submitted that task; a list that quietly omits it reads as
+    // deletion, which is the one thing it definitely is not.
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ tasks: [{ ...TASK, status: "expired" }] }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tasks = await listTasks(BASE_URL, TOKEN);
+
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].id).toBe(TASK.id);
+    expect(tasks[0].status).toBe("unknown");
+  });
+
   it("createTask POSTs the pack and the instructions the contract documents", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(TASK, 201));
     vi.stubGlobal("fetch", fetchMock);

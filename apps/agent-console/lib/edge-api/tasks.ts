@@ -27,7 +27,26 @@ import {
 } from "./json";
 
 export type TaskPack = "coding-pack" | "knowledge-work-pack";
-export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+/*
+ * The five wire statuses, plus a local sixth.
+ *
+ * "unknown" is never sent by the server. It is what any status this build
+ * does not recognise decodes to, so that a row still reaches the list. The
+ * five above are a closed set only for as long as control-plane's `Status`
+ * enum stays exactly this shape; when it grows, a console that filtered the
+ * row out would make a task the user submitted vanish with no error, which
+ * reads as deletion. An honest "we do not know what state this is in" row is
+ * the same argument the sentinel-string comment at the bottom of this file
+ * makes for a drifted error message.
+ */
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "unknown";
 
 export interface AgentTask {
   id: string;
@@ -65,8 +84,9 @@ export function isTaskPack(value: string): value is TaskPack {
   return PACKS.has(value);
 }
 
-function isTaskStatus(value: string): value is TaskStatus {
-  return STATUSES.has(value);
+/** True only for a status the server actually documents. */
+function isWireStatus(value: string | null): value is TaskStatus {
+  return value !== null && STATUSES.has(value);
 }
 
 function decodeTask(value: JsonObject): AgentTask | null {
@@ -76,7 +96,11 @@ function decodeTask(value: JsonObject): AgentTask | null {
   const createdAt = readStringField(value, "created_at");
   const updatedAt = readStringField(value, "updated_at");
 
-  if (!id || !pack || !isTaskPack(pack) || !status || !isTaskStatus(status) || !createdAt || !updatedAt) {
+  // Identity fields only. A row without one of these is a malformed payload
+  // rather than a task in a state we have not met, and there is nothing
+  // honest to render for it. The status deliberately is not in this guard:
+  // see TaskStatus.
+  if (!id || !pack || !isTaskPack(pack) || !createdAt || !updatedAt) {
     return null;
   }
 
@@ -86,7 +110,7 @@ function decodeTask(value: JsonObject): AgentTask | null {
     // Nullable column server-side; the contract promises "" rather than null
     // on read, but decode defensively so an older row cannot crash the list.
     instructions: readStringField(value, "instructions") ?? "",
-    status,
+    status: isWireStatus(status) ? status : "unknown",
     engine_session_ref: readStringField(value, "engine_session_ref") ?? "",
     result_summary_ref: readStringField(value, "result_summary_ref") ?? "",
     error_message: readStringField(value, "error_message") ?? "",
@@ -203,11 +227,23 @@ export async function cancelTask(
 }
 
 // TERMINAL_STATUSES: polling and the cancel button both stop once a task
-// reaches one of these (matches SYNC_CONTRACT.md's state machine).
+// reaches one of these (matches SYNC_CONTRACT.md's state machine). "unknown"
+// is deliberately absent: a state we cannot name is not a state we can call
+// finished, and polling is the only way such a row ever becomes correct.
 export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   "succeeded",
   "failed",
   "cancelled",
+]);
+
+// IN_FLIGHT_STATUSES: the states the server can move a task out of on its
+// own, and therefore the only reason to keep polling. Deliberately not the
+// complement of TERMINAL_STATUSES: "unknown" is neither finished nor known to
+// be moving, so it keeps its row but does not hold the poll timer open
+// forever on a guess.
+export const IN_FLIGHT_STATUSES: ReadonlySet<TaskStatus> = new Set([
+  "queued",
+  "running",
 ]);
 
 /*

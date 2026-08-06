@@ -7,6 +7,7 @@ import { buttonClass, TEXTAREA_CLASS } from "@/components/ui";
 import {
   cancelTask,
   createTask,
+  IN_FLIGHT_STATUSES,
   isEngineLaunchFailure,
   isEngineUnavailable,
   listTasks,
@@ -16,6 +17,18 @@ import {
 } from "@/lib/edge-api/tasks";
 
 const POLL_INTERVAL_MS = 3000;
+
+/*
+ * Bounds on the poll.
+ *
+ * A tab left open on a finished list used to issue a request every three
+ * seconds forever, and a sustained edge-api outage turned that into a
+ * fixed-rate hammer with no end. Each consecutive failure now doubles the
+ * wait up to MAX_POLL_INTERVAL_MS, and after MAX_POLL_FAILURES the loop stops
+ * and the screen says so, rather than promising a retry that never comes.
+ */
+const MAX_POLL_INTERVAL_MS = 30_000;
+const MAX_POLL_FAILURES = 5;
 
 /*
  * A queued task only moves when something on the far side of the engine seam
@@ -163,6 +176,20 @@ function describeTask(task: AgentTask, nowMs: number): TaskView {
         live: false,
         detail: "You stopped this task before it finished.",
       };
+    case "unknown":
+      /*
+       * Not a wire status: the decoder maps anything it does not recognise
+       * here (see TaskStatus). Saying so plainly is the honest treatment.
+       * The alternative this replaced was worse than blank -- the row was
+       * dropped from the list, so a task the user submitted simply vanished.
+       */
+      return {
+        label: "Unknown",
+        tone: "neutral",
+        live: false,
+        detail:
+          "This task is in a state this page does not recognise, so there is nothing reliable to say about it yet. It is still recorded against your account. Reload to check it again.",
+      };
     case "failed":
     default: {
       if (isEngineUnavailable(task)) {
@@ -213,6 +240,9 @@ export function TaskConsole() {
   const [invalid, setInvalid] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [announcement, setAnnouncement] = React.useState("");
+  // Consecutive failed list loads. Drives both the backoff and the message,
+  // so the screen cannot claim it is retrying after it has stopped.
+  const [failures, setFailures] = React.useState(0);
 
   const promptRef = React.useRef<HTMLTextAreaElement>(null);
 
@@ -223,6 +253,8 @@ export function TaskConsole() {
   const refresh = React.useCallback(async () => {
     const token = await getAccessToken(supabase);
     if (!token) {
+      // Not counted as a failure and deliberately not rescheduled: there is
+      // no session to retry with, and signing in again reloads this screen.
       setError("Your session expired. Sign in again to see your tasks.");
       return;
     }
@@ -230,22 +262,43 @@ export function TaskConsole() {
       const next = await listTasks(baseUrl, token);
       setTasks(next);
       setError(null);
+      setFailures(0);
     } catch {
-      setError("Could not load your tasks. Retrying automatically.");
+      setFailures((n) => n + 1);
     }
   }, [supabase, baseUrl]);
 
+  const givenUp = failures >= MAX_POLL_FAILURES;
+  // Only a queued or running task can change without the user doing anything.
+  const active = tasks.some((task) => IN_FLIGHT_STATUSES.has(task.status));
+  const shouldPoll = failures > 0 ? !givenUp : active;
+
   React.useEffect(() => {
     void refresh();
-    // ponytail: one unconditional poll loop rather than per-task timers or a
-    // websocket -- demo-scale task counts, and the sync contract
-    // (SYNC_CONTRACT.md) ships no push channel yet. Add SSE against
-    // GET /v1/agent/tasks/{id}/events if/when that lands.
-    const interval = setInterval(() => {
-      void refresh();
-    }, POLL_INTERVAL_MS);
-    return () => clearInterval(interval);
   }, [refresh]);
+
+  React.useEffect(() => {
+    if (!shouldPoll) {
+      return;
+    }
+    /*
+     * ponytail: one self-rescheduling timeout rather than setInterval or a
+     * websocket -- demo-scale task counts, the sync contract
+     * (SYNC_CONTRACT.md) ships no push channel yet, and the delay is not
+     * constant. Add SSE against GET /v1/agent/tasks/{id}/events if/when that
+     * lands.
+     *
+     * Exactly one timer exists per effect run and the cleanup clears it, so
+     * a loop that stops and later resumes cannot leave a second one armed.
+     * The effect re-runs after each completed poll because a success hands
+     * `tasks` a fresh array and a failure moves `failures`.
+     */
+    const delay = Math.min(POLL_INTERVAL_MS * 2 ** failures, MAX_POLL_INTERVAL_MS);
+    const timer = setTimeout(() => {
+      void refresh();
+    }, delay);
+    return () => clearTimeout(timer);
+  }, [shouldPoll, failures, tasks, refresh]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -300,6 +353,11 @@ export function TaskConsole() {
   }
 
   async function handleCancel(id: string) {
+    // A polite region only speaks when its text changes, so cancelling a
+    // second task would otherwise be silent. Clearing before the await puts a
+    // real transition between the two identical sentences. Submitting already
+    // gets this for free from its own "Starting task." step.
+    setAnnouncement("");
     const token = await getAccessToken(supabase);
     if (!token) {
       setError("Your session expired. Sign in again to cancel this task.");
@@ -313,6 +371,20 @@ export function TaskConsole() {
       setError("Could not cancel that task.");
     }
   }
+
+  /*
+   * The load failure reads off the failure count rather than being written
+   * into `error`, so the sentence cannot outlive the retry it promises: when
+   * the loop gives up, the copy stops claiming a retry is coming.
+   */
+  const loadFailure =
+    failures === 0
+      ? null
+      : givenUp
+        ? "Could not load your tasks. Reload the page to try again."
+        : "Could not load your tasks. Retrying automatically.";
+  // A stale list outranks a one-off create or cancel error.
+  const alertMessage = loadFailure ?? error;
 
   const engineUnavailable = tasks.some(isEngineUnavailable);
   const selectedPack = PACKS.find((p) => p.value === pack) ?? PACKS[0];
@@ -449,12 +521,12 @@ export function TaskConsole() {
         </div>
       </form>
 
-      {error ? (
+      {alertMessage ? (
         <p
           role="alert"
           className="rounded-md border-l-2 border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-4 py-3 text-sm text-[var(--color-ink)]"
         >
-          {error}
+          {alertMessage}
         </p>
       ) : null}
 

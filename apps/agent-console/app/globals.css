@@ -180,8 +180,13 @@
     animation: none;
   }
 
+  /*
+   * Switched off means gone, not frozen at full width. A static bar spanning
+   * the composer is a progress claim the request cannot back, and it
+   * contradicts the note above. The disabled "Starting..." button and
+   * aria-busy carry the state on their own.
+   */
   .hive-progress {
-    width: 100%;
-    opacity: 0.5;
+    display: none;
   }
 }

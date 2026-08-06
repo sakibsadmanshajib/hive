@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 
 import { TaskConsole } from "./task-console";
 import {
@@ -335,6 +335,17 @@ describe("TaskConsole states", () => {
     expect(screen.queryByText(ENGINE_LAUNCH_FAILED_MESSAGE)).toBeNull();
   });
 
+  it("unknown status: renders an honest row instead of dropping the task", async () => {
+    // The wire can grow a status this build has never seen. Filtering the row
+    // out makes a task the user submitted disappear with no explanation.
+    stubFetch({ tasks: [{ ...QUEUED_TASK, status: "quarantined" }] });
+    render(<TaskConsole />);
+
+    expect(await screen.findByText("Unknown")).toBeTruthy();
+    expect(screen.getByText(QUEUED_TASK.instructions)).toBeTruthy();
+    expect(screen.queryByText("Nothing submitted yet")).toBeNull();
+  });
+
   it("cancelled: names who stopped it", async () => {
     stubFetch({ tasks: [{ ...QUEUED_TASK, status: "cancelled" }] });
     render(<TaskConsole />);
@@ -375,5 +386,144 @@ describe("TaskConsole states", () => {
 
     await screen.findByText("Running");
     expect(container.querySelectorAll('[aria-live="polite"]').length).toBe(1);
+  });
+});
+
+/*
+ * Polling, on the clock.
+ *
+ * These run on fake timers and never use findBy/waitFor: RTL's async helpers
+ * poll on a real interval, which a frozen clock would starve. Every step is
+ * an explicit tick instead, which is also what makes the call counts below
+ * exact rather than approximate.
+ */
+describe("TaskConsole polling", () => {
+  // Mirror POLL_INTERVAL_MS and MAX_POLL_INTERVAL_MS in task-console.tsx.
+  const POLL_MS = 3000;
+  const MAX_POLL_MS = 30_000;
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Serves whatever `state.tasks` holds, and appends on create. */
+  function stubPollingFetch(state: { tasks: unknown[] }) {
+    const fetchMock = vi.fn((url: string | URL, init?: RequestInit) => {
+      const href = String(url);
+      const method = init?.method ?? "GET";
+      if (href.endsWith("/cancel")) {
+        return Promise.resolve(jsonResponse({}));
+      }
+      if (method === "POST") {
+        state.tasks = [QUEUED_TASK, ...state.tasks];
+        return Promise.resolve(jsonResponse(QUEUED_TASK, 201));
+      }
+      return Promise.resolve(jsonResponse({ tasks: state.tasks }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  /** GETs of the list, which is what the poll costs. */
+  function listCalls(fetchMock: ReturnType<typeof stubPollingFetch>): number {
+    return fetchMock.mock.calls.filter(
+      ([url, init]) =>
+        (init as RequestInit | undefined)?.method === undefined &&
+        String(url).endsWith("/v1/agent/tasks"),
+    ).length;
+  }
+
+  /** Advance the fake clock and let every resulting update commit. */
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  it("stops polling once no task is still in flight", async () => {
+    vi.useFakeTimers();
+    const fetchMock = stubPollingFetch({
+      tasks: [
+        { ...QUEUED_TASK, status: "succeeded" },
+        // An unrecognised status holds its row but must not hold the timer
+        // open: it is not known to be moving, so polling it is a guess that
+        // never ends.
+        { ...QUEUED_TASK, id: "33333333-3333-3333-3333-333333333333", status: "quarantined" },
+      ],
+    });
+    render(<TaskConsole />);
+    await advance(0);
+
+    expect(screen.getByText("Done")).toBeTruthy();
+    expect(screen.getByText("Unknown")).toBeTruthy();
+    const afterLoad = listCalls(fetchMock);
+    expect(afterLoad).toBe(1);
+
+    // Nothing left that can change on its own: an open tab must go quiet.
+    await advance(20 * POLL_MS);
+    expect(listCalls(fetchMock)).toBe(afterLoad);
+  });
+
+  it("resumes for a new task without stacking a second timer", async () => {
+    vi.useFakeTimers();
+    const state = { tasks: [] as unknown[] };
+    const fetchMock = stubPollingFetch(state);
+    render(<TaskConsole />);
+    await advance(0);
+
+    expect(screen.getByText("Nothing submitted yet")).toBeTruthy();
+    const afterLoad = listCalls(fetchMock);
+    await advance(20 * POLL_MS);
+    expect(listCalls(fetchMock)).toBe(afterLoad);
+
+    fireEvent.change(screen.getByLabelText("What should the agent do?"), {
+      target: { value: "Ship it." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start task" }));
+    await advance(0);
+
+    // Resumed: one poll per interval, and exactly one -- a resumed loop that
+    // left the previous timer armed would double these counts.
+    await advance(POLL_MS);
+    expect(listCalls(fetchMock)).toBe(afterLoad + 1);
+    await advance(POLL_MS);
+    expect(listCalls(fetchMock)).toBe(afterLoad + 2);
+  });
+
+  it("backs off, then gives up rather than retrying a dead endpoint forever", async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response("nope", { status: 500 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TaskConsole />);
+    await advance(0);
+
+    expect(listCalls(fetchMock)).toBe(1);
+    expect(screen.getByRole("alert").textContent).toContain("Retrying automatically");
+
+    // Geometric backoff: the second attempt is not due at one interval.
+    await advance(POLL_MS);
+    expect(listCalls(fetchMock)).toBe(1);
+
+    // One attempt commits per act scope, so step the clock rather than
+    // jumping it. Ten steps of the longest possible wait is well past the
+    // whole retry budget.
+    for (let i = 0; i < 10; i += 1) {
+      await advance(MAX_POLL_MS);
+    }
+
+    // Bounded: MAX_POLL_FAILURES attempts in total, then the loop stops and
+    // the copy stops promising a retry.
+    const settled = listCalls(fetchMock);
+    expect(settled).toBe(5);
+    expect(screen.getByRole("alert").textContent).toContain("Reload the page");
+
+    for (let i = 0; i < 10; i += 1) {
+      await advance(MAX_POLL_MS);
+    }
+    expect(listCalls(fetchMock)).toBe(settled);
   });
 });
