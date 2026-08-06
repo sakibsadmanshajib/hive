@@ -94,6 +94,21 @@ REWRITES = (
         replace="!1&&s(ae)",
     ),
     Rewrite(
+        # #783. Same gate shape and same reasoning as the three above: an empty
+        # but fully writable admin surface ("No skills found", "+ New Skill",
+        # "Import") with no Hive product behind it. It was kept out of the
+        # first pass on the theory that Claude Enterprise ships Agent Skills,
+        # so it had a counterpart; it does not on this deployment, where the
+        # tab is the only thing that exists.
+        surface="workspace-skills-tab",
+        upstream="src/routes/(app)/workspace/+layout.svelte, the {#if ...workspace?.skills} tab",
+        find=(
+            '(((e=o())==null?void 0:e.role)==="admin"||(t=(r=(a=o())==null?void 0:'
+            'a.permissions)==null?void 0:r.workspace)!=null&&t.skills)&&s(j)'
+        ),
+        replace="!1&&s(j)",
+    ),
+    Rewrite(
         # /workspace itself is an index that redirects to the first surface the
         # session may see, and its admin branch redirects to /workspace/models.
         # With Models gone that lands an admin on a page reachable from nowhere,
@@ -168,6 +183,98 @@ REWRITES = (
         find='T(n,g=>{i(),r(()=>{var R;return((R=i())==null?void 0:R.role)==="admin"})&&g(y)})',
         replace="T(n,g=>{!1&&g(y)})",
     ),
+    Rewrite(
+        # #784. Settings > About is reachable by every signed-in user, not just
+        # admins, and it is the one screen the white-label pass stopped short
+        # of: the version string above it already reads "Hive Version", then
+        # the block underneath credits Open WebUI Inc. and links to the vendor.
+        #
+        # Node structure is preserved exactly. Svelte 5 walks this compiled
+        # template positionally (`we=a(ie)` takes the <pre>'s first text node,
+        # then `wr(4)` skips the two anchors and the whitespace between them),
+        # so removing an element here would desynchronise the walker and blank
+        # the tab. Both anchors therefore stay; only their text and href
+        # change. The runtime still writes "Copyright (c) <year> " into that
+        # first text node, so the line renders as Hive's own.
+        #
+        # The Twemoji CC-BY 4.0 credit two lines above is deliberately left
+        # alone: it is a licence obligation attached to an asset, not vendor
+        # branding. Whether the upstream notice may be replaced rather than
+        # retained is the same clause 4 question this Dockerfile's header
+        # already records the owner's decision on, under the <=50 user
+        # carve-out. Re-check with counsel before any rollout past it.
+        surface="about-vendor-copyright",
+        upstream="src/lib/components/chat/Settings/About.svelte, the copyright <pre>",
+        find=(
+            '<div><pre class="text-xs text-gray-400 dark:text-gray-500"> '
+            '<a href="https://openwebui.com" target="_blank" class="underline">Open WebUI Inc.</a> '
+            '<a href="https://github.com/open-webui/open-webui/blob/main/LICENSE" '
+            'target="_blank">All rights reserved.</a>\n</pre></div>'
+        ),
+        replace=(
+            '<div><pre class="text-xs text-gray-400 dark:text-gray-500"> '
+            '<a href="/" class="underline">Hive</a> '
+            '<a href="/">All rights reserved.</a>\n</pre></div>'
+        ),
+    ),
+    Rewrite(
+        # #784, second half. The creator credit is removed rather than
+        # rebranded: nobody is credited on this screen at all. Same positional
+        # constraint as above, so the anchor element survives with empty text
+        # (`p=a(N)` is its preceding text node, `wr()` skips the anchor), and
+        # the label that fills that text node is emptied by the next rewrite.
+        # Without both, the line renders a bare "Created by".
+        surface="about-creator-link",
+        upstream="src/lib/components/chat/Settings/About.svelte, the tjbck credit anchor",
+        find=(
+            '<div class="mt-2 text-xs text-gray-400 dark:text-gray-500"> '
+            '<a class=" text-gray-500 dark:text-gray-300 font-medium" '
+            'href="https://github.com/tjbck" target="_blank">Timothy J. Baek</a></div>'
+        ),
+        replace=(
+            '<div class="mt-2 text-xs text-gray-400 dark:text-gray-500"> '
+            '<a class=" text-gray-500 dark:text-gray-300 font-medium" href="/"></a></div>'
+        ),
+    ),
+    Rewrite(
+        # #784, third half, found by looking at the screen rather than at the
+        # issue text: the same tab carries a row of vendor social badges
+        # (Discord "Open WebUI", Follow @OpenWebUI, Star us on Github) that the
+        # issue's quoted block skipped. Removing the copyright while leaving
+        # these would have shipped a white-label pass whose own proof
+        # screenshot still said Open WebUI three times.
+        #
+        # This one may be emptied rather than merely retargeted because the
+        # template is instantiated and inserted whole (`D=P=>{var B=mm();
+        # i(P,B)}`) and never walked into, so no positional traversal depends
+        # on its children. The outer div stays for exactly that reason: the
+        # identifier and the call site must keep their shape.
+        #
+        # Only the copy in nodes/*.js that Settings > About uses. Admin
+        # Settings carries the same markup in its own chunk and is left alone,
+        # because /admin is already 404'd at the proxy and its template is
+        # walked positionally.
+        surface="about-vendor-social-badges",
+        upstream="src/lib/components/chat/Settings/About.svelte, the Discord/X/GitHub badge row",
+        find=(
+            """mm=g('<div class="flex space-x-1"><a href="https://discord.gg/5rJgQTnV4s" """
+            """target="_blank"><img alt="Discord" src="https://img.shields.io/badge/"""
+            """Discord-Open_WebUI-blue?logo=discord&amp;logoColor=white"/></a> """
+            """<a href="https://twitter.com/OpenWebUI" target="_blank"><img """
+            """alt="X (formerly Twitter) Follow" src="https://img.shields.io/twitter/"""
+            """follow/OpenWebUI"/></a> <a href="https://github.com/open-webui/open-webui" """
+            """target="_blank"><img alt="Github Repo" src="https://img.shields.io/github/"""
+            """stars/open-webui/open-webui?style=social&amp;label=Star us on Github"/>"""
+            """</a></div>')"""
+        ),
+        replace="""mm=g('<div class="flex space-x-1"></div>')""",
+    ),
+    Rewrite(
+        surface="about-creator-label",
+        upstream='src/lib/components/chat/Settings/About.svelte, the $i18n.t("Created by") label',
+        find=',()=>l().t("Created by")]',
+        replace=',()=>""]',
+    ),
 )
 
 
@@ -204,3 +311,26 @@ def apply(text: str) -> tuple[str, dict]:
             text = text.replace(rewrite.find, rewrite.replace)
         hits[rewrite.surface] = found
     return text, hits
+
+
+def verify_counts(totals: dict) -> list:
+    """Failures for any rewrite that did not match its expected site count.
+
+    Zero is the case that matters and the reason the caller must treat this as
+    a hard build failure rather than a warning. A `find` that has drifted off
+    the shipped bundle, because a digest bump moved it or because somebody
+    edited the string, rewrites nothing at all, and a rewrite that rewrites
+    nothing puts the surface it was supposed to remove straight back in front
+    of the customer. Nothing else in the build would notice: the pass itself
+    reports success, and the image ships.
+
+    Lives here rather than inline in apply_ui_surfaces_patch.py so this
+    failure path is reachable from a test. See
+    test_the_build_patch_fails_when_a_rewrite_matches_nothing.
+    """
+    return [
+        f"{rewrite.surface}: expected {rewrite.count} site(s), "
+        f"found {totals.get(rewrite.surface, 0)} (upstream: {rewrite.upstream})"
+        for rewrite in REWRITES
+        if totals.get(rewrite.surface, 0) != rewrite.count
+    ]

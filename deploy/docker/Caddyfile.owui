@@ -39,7 +39,7 @@
   # /workspace/knowledge stay reachable because Knowledge is the one workspace
   # surface Hive keeps.
   @removedSurfaces {
-    path_regexp removed (?i)^/+(?:playground|notes|calendar|automations|workspace/+(?:models|prompts|tools))/?(?:/.*)?$
+    path_regexp removed (?i)^/+(?:playground|notes|calendar|automations|workspace/+(?:models|prompts|skills|tools))/?(?:/.*)?$
   }
   respond @removedSurfaces 404
 

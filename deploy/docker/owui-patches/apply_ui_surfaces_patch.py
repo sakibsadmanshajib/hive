@@ -16,7 +16,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-from hive_ui_surfaces import GUARDS, REWRITES, apply  # noqa: E402
+from hive_ui_surfaces import GUARDS, REWRITES, apply, verify_counts  # noqa: E402
 
 BUNDLE = pathlib.Path("/app/build/_app/immutable")
 
@@ -34,12 +34,7 @@ def main() -> int:
         if patched != original:
             path.write_text(patched, encoding="utf-8")
 
-    failures = [
-        f"{rewrite.surface}: expected {rewrite.count} site(s), found {totals[rewrite.surface]}"
-        f" (upstream: {rewrite.upstream})"
-        for rewrite in REWRITES
-        if totals[rewrite.surface] != rewrite.count
-    ]
+    failures = verify_counts(totals)
     if failures:
         raise SystemExit(
             "open-webui bundle no longer matches hive_ui_surfaces.py; a removed "

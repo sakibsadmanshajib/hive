@@ -20,6 +20,7 @@ Run: python3 scripts/test_owui_ui_surfaces.py
 """
 import asyncio
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -29,6 +30,7 @@ PATCHES = REPO / "deploy" / "docker" / "owui-patches"
 COMPOSE = REPO / "deploy" / "docker" / "docker-compose.yml"
 CADDYFILE = REPO / "deploy" / "docker" / "Caddyfile.owui"
 DOCKERFILE = REPO / "deploy" / "docker" / "Dockerfile.open-webui"
+EXCERPTS = PATCHES / "pinned-bundle-excerpts.json"
 
 
 def _load(name: str):
@@ -47,6 +49,7 @@ hive_rag_env_config = _load("hive_rag_env_config")
 HIDDEN_SURFACES = {
     "workspace-models": "bundle",
     "workspace-prompts": "bundle",
+    "workspace-skills": "bundle",
     "workspace-tools": "bundle",
     "playground": "bundle",
     "notes": "flag",
@@ -54,6 +57,9 @@ HIDDEN_SURFACES = {
     "automations": "flag",
     "vendor-links": "bundle",
     "changelog-modal": "bundle",
+    "about-vendor-copyright": "bundle",
+    "about-creator-credit": "bundle",
+    "about-vendor-social": "bundle",
 }
 
 
@@ -102,12 +108,17 @@ def test_each_rewrite_still_targets_its_own_surface() -> None:
     markers = {
         "workspace-models-tab": (".models)", '==="admin"'),
         "workspace-prompts-tab": (".prompts)", '==="admin"'),
+        "workspace-skills-tab": (".skills)", '==="admin"'),
         "workspace-tools-tab": (".tools)", '==="admin"'),
         "workspace-index-redirect": ('"/workspace/models"', '!=="admin"'),
         "sidebar-playground-item": ('case"playground"', '==="admin"'),
         "usermenu-playground-item": ('==="admin"',),
         "usermenu-vendor-links": ('==="admin"',),
         "changelog-modal": ("get show()",),
+        "about-vendor-copyright": ("Open WebUI Inc.", "openwebui.com"),
+        "about-creator-link": ("Timothy J. Baek", "github.com/tjbck"),
+        "about-creator-label": ('"Created by"',),
+        "about-vendor-social-badges": ("Star us on Github", "discord.gg"),
     }
     guards = dict(hive_ui_surfaces.GUARDS)
     assert set(markers) == {r.surface for r in hive_ui_surfaces.REWRITES}, markers.keys()
@@ -162,6 +173,121 @@ def test_the_build_runs_the_bundle_patch() -> None:
     dockerfile = DOCKERFILE.read_text()
     assert "owui-patches/hive_ui_surfaces.py" in dockerfile, dockerfile[-400:]
     assert "python3 /tmp/apply_ui_surfaces_patch.py" in dockerfile, dockerfile[-400:]
+
+
+def test_no_rewrite_puts_vendor_branding_back() -> None:
+    """Every check above constrains what a rewrite removes; this one constrains
+    what it writes. A replacement that keeps the vendor name or a link to it
+    satisfies all of them while leaving the white-label surface un-white-labelled,
+    which is exactly how #784 survived the first pass on this file."""
+    for rewrite in hive_ui_surfaces.REWRITES:
+        for token in ("Open WebUI", "openwebui.com", "open-webui", "tjbck", "Timothy"):
+            assert token not in rewrite.replace, (rewrite.surface, token)
+
+
+def test_the_about_tab_credit_is_removed_in_both_halves() -> None:
+    """The credit line is a static anchor plus a runtime label written into the
+    text node before it. Ship one without the other and Settings > About reads
+    a bare "Created by" with nobody after it."""
+    surfaces = {rewrite.surface for rewrite in hive_ui_surfaces.REWRITES}
+    assert {"about-creator-link", "about-creator-label"} <= surfaces, surfaces
+    label = next(r for r in hive_ui_surfaces.REWRITES if r.surface == "about-creator-label")
+    link = next(r for r in hive_ui_surfaces.REWRITES if r.surface == "about-creator-link")
+    assert "Created by" not in label.replace, label.replace
+    assert "Timothy" not in link.replace and "tjbck" not in link.replace, link.replace
+    # Node structure must survive: Svelte walks this template positionally, so
+    # the anchor has to stay even though nothing renders inside it.
+    assert link.replace.count("<a ") == link.find.count("<a "), link.replace
+    assert link.replace.count("</div>") == link.find.count("</div>"), link.replace
+
+
+# --------------------------------------------------------------------------
+# 1b. The rewrite table against the real, pinned bundle
+#
+# Everything above this line checks the table against itself: the excerpts in
+# test_every_rewrite_removes_its_surface_from_a_real_bundle_excerpt are built
+# out of `rewrite.find`, so a `find` edited into a string the shipped bundle no
+# longer contains still passes. Only apply_ui_surfaces_patch.py catches that,
+# and it runs where the image is built, which is owui-nightly.yml and
+# deploy-demo-box.yml, never PR CI. So that edit used to reach `main` green and
+# fail at deploy.
+#
+# pinned-bundle-excerpts.json closes it. It holds verbatim slices of
+# /app/build/_app/immutable from the digest Dockerfile.open-webui pins, with
+# 400 characters of surrounding context, extracted by dump_bundle_excerpts.py,
+# which itself refuses to write unless every rewrite and guard matches exactly
+# one site. Checking the table against those bytes needs no Docker and no
+# network, so it runs in `make test-scripts` like everything else.
+# --------------------------------------------------------------------------
+
+def _excerpts() -> dict:
+    return json.loads(EXCERPTS.read_text())
+
+
+def test_the_excerpt_fixture_is_from_the_digest_the_dockerfile_pins() -> None:
+    """The fixture is only evidence about the image actually being built. A
+    digest bump that leaves it behind must fail here and force a regeneration,
+    because a stale fixture would happily certify a table that no longer
+    matches anything in the new bundle."""
+    match = re.search(r"^FROM\s+(\S+@sha256:[0-9a-f]{64})\s*$", DOCKERFILE.read_text(), re.M)
+    assert match, "Dockerfile.open-webui no longer pins its base image by digest"
+    assert _excerpts()["image"] == match.group(1), (
+        "pinned-bundle-excerpts.json was captured from a different image than "
+        "Dockerfile.open-webui now pins. Regenerate it: "
+        "python3 deploy/docker/owui-patches/dump_bundle_excerpts.py <extracted bundle>"
+    )
+
+
+def test_every_rewrite_matches_the_real_pinned_bundle() -> None:
+    """A `find` that no longer occurs in the shipped bundle removes nothing and
+    silently restores its surface. This is the check that sees that in review
+    rather than at deploy."""
+    excerpts = _excerpts()["rewrites"]
+    surfaces = {rewrite.surface for rewrite in hive_ui_surfaces.REWRITES}
+    assert set(excerpts) == surfaces, (set(excerpts) ^ surfaces)
+
+    for rewrite in hive_ui_surfaces.REWRITES:
+        sample = excerpts[rewrite.surface]["text"]
+        assert sample.count(rewrite.find) == 1, (
+            f"{rewrite.surface}: `find` does not occur exactly once in the real "
+            f"bundle excerpt from {excerpts[rewrite.surface]['file']}"
+        )
+        patched, hits = hive_ui_surfaces.apply(sample)
+        assert hits[rewrite.surface] == 1, (rewrite.surface, hits)
+        assert rewrite.find not in patched, rewrite.surface
+        assert rewrite.replace in patched, rewrite.surface
+
+
+def test_the_rewrites_leave_the_kept_surfaces_alone_in_the_real_bundle() -> None:
+    """The narrower version of this above uses the guard string alone. Here the
+    guard arrives inside real neighbouring bundle bytes, which is where an
+    over-broad rewrite would actually catch it."""
+    excerpts = _excerpts()["guards"]
+    assert set(excerpts) == {name for name, _ in hive_ui_surfaces.GUARDS}, set(excerpts)
+    for name, needle in hive_ui_surfaces.GUARDS:
+        sample = excerpts[name]["text"]
+        assert sample.count(needle) == 1, name
+        patched, _hits = hive_ui_surfaces.apply(sample)
+        assert needle in patched, f"a rewrite swallowed the surface Hive keeps: {name}"
+
+
+def test_the_build_patch_fails_when_a_rewrite_matches_nothing() -> None:
+    """The build-time guard's own failure path, exercised here so it cannot
+    quietly become a no-op. A rewrite that matched zero sites must be a hard
+    failure: the pass otherwise reports success and the image ships with the
+    surface back."""
+    healthy = {rewrite.surface: rewrite.count for rewrite in hive_ui_surfaces.REWRITES}
+    assert hive_ui_surfaces.verify_counts(healthy) == []
+
+    for surface in healthy:
+        starved = dict(healthy, **{surface: 0})
+        failures = hive_ui_surfaces.verify_counts(starved)
+        assert len(failures) == 1 and surface in failures[0], (surface, failures)
+
+    # A surface missing from the totals entirely is the same failure, not a
+    # KeyError and not a pass.
+    absent = {k: v for k, v in healthy.items() if k != "workspace-models-tab"}
+    assert any("workspace-models-tab" in f for f in hive_ui_surfaces.verify_counts(absent))
 
 
 # --------------------------------------------------------------------------
@@ -250,6 +376,8 @@ def test_removed_routes_are_unreachable_by_url() -> None:
         "/workspace/models",
         "/workspace/models/create",
         "/workspace/prompts",
+        "/workspace/skills",
+        "/workspace/skills/create",
         "/workspace/tools",
     ]
     for path in must_block:
@@ -295,6 +423,7 @@ def test_every_hidden_surface_has_a_live_mechanism() -> None:
     aliases = {
         "workspace-models": ("workspace-models-tab", "ENABLE_", "models"),
         "workspace-prompts": ("workspace-prompts-tab", "ENABLE_", "prompts"),
+        "workspace-skills": ("workspace-skills-tab", "ENABLE_", "skills"),
         "workspace-tools": ("workspace-tools-tab", "ENABLE_", "tools"),
         "playground": ("playground-item", "ENABLE_", "playground"),
         "notes": ("", "ENABLE_NOTES", "notes"),
@@ -302,6 +431,11 @@ def test_every_hidden_surface_has_a_live_mechanism() -> None:
         "automations": ("", "ENABLE_AUTOMATIONS", "automations"),
         "vendor-links": ("usermenu-vendor-links", "ENABLE_", ""),
         "changelog-modal": ("changelog-modal", "ENABLE_", ""),
+        # Settings > About is a dialog, not a route, so there is no path for
+        # Caddy to block; the bundle rewrite is the whole mechanism.
+        "about-vendor-copyright": ("about-vendor-copyright", "ENABLE_", ""),
+        "about-creator-credit": ("about-creator-link", "ENABLE_", ""),
+        "about-vendor-social": ("about-vendor-social-badges", "ENABLE_", ""),
     }
 
     for surface, mechanism in sorted(HIDDEN_SURFACES.items()):
