@@ -23,11 +23,21 @@
 //! and CONNECT tunnelling covers that fully. A plain-HTTP forward path can
 //! be added the same way `egressproxy.Proxy.handleForward` does if a real
 //! caller ever needs it.
+//!
+//! Transport (Integration B2): the Linux [`AllowlistProxy`] listens on a Unix
+//! socket (above); the Windows [`AllowlistProxy`] listens on a loopback TCP
+//! port inside [`crate::wfp_ports::PROXY_PORT_RANGE`] instead, because Windows
+//! has no netns/bind-mount and the WFP/firewall PERMIT is scoped to that
+//! loopback port range. The request parsing, allowlist, pinned-DNS, and
+//! no-private-IP logic are shared verbatim across both transports via the
+//! [`ProxyClientStream`] trait; only the listener type differs.
 
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, TcpStream, ToSocketAddrs};
+#[cfg(unix)]
 use std::os::unix::net::{UnixListener, UnixStream};
+#[cfg(unix)]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -63,17 +73,19 @@ const CLIENT_HEADER_READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// are refused with `503` and closed without spawning a handler.
 const MAX_CONCURRENT_CONNECTIONS: usize = 256;
 
-/// A running allowlist-enforcing proxy, listening on a Unix socket.
+/// A running allowlist-enforcing proxy, listening on a Unix socket (Linux).
 /// `Drop` shuts it down; call [`AllowlistProxy::leak_for_process_lifetime`]
 /// instead of dropping it when the caller wants the proxy to outlive this
 /// value's scope (the real `launch()` case: the proxy must stay up for as
 /// long as the sandboxed task runs, which is long after `launch()` returns).
+#[cfg(unix)]
 pub struct AllowlistProxy {
     socket_path: PathBuf,
     shutdown: Arc<AtomicBool>,
     accept_handle: Option<JoinHandle<()>>,
 }
 
+#[cfg(unix)]
 impl AllowlistProxy {
     /// Binds `socket_path` (removing a stale file there first) and starts
     /// accepting connections in a background thread. `allowed_hosts` is the
@@ -179,11 +191,172 @@ impl AllowlistProxy {
     }
 }
 
+#[cfg(unix)]
 impl Drop for AllowlistProxy {
     fn drop(&mut self) {
         self.shutdown.store(true, Ordering::SeqCst);
         if let Some(handle) = self.accept_handle.take() {
             let _ = handle.join();
+        }
+    }
+}
+
+/// A running allowlist-enforcing proxy, listening on a loopback TCP port
+/// (Windows). Same allowlist / pinned-DNS / no-private-IP enforcement as the
+/// Unix variant (shared via [`ProxyClientStream`]); the only difference is the
+/// listener. Binds a free port inside [`crate::wfp_ports::PROXY_PORT_RANGE`]
+/// so the WFP / firewall PERMIT can be scoped to it. `Drop` shuts it down;
+/// [`AllowlistProxy::leak_for_process_lifetime`] keeps it up for the task's
+/// lifetime (the real launch case).
+#[cfg(windows)]
+pub struct AllowlistProxy {
+    port: u16,
+    shutdown: Arc<AtomicBool>,
+    accept_handle: Option<JoinHandle<()>>,
+}
+
+#[cfg(windows)]
+impl AllowlistProxy {
+    /// Binds a free loopback TCP port in [`crate::wfp_ports::PROXY_PORT_RANGE`]
+    /// and starts accepting connections. `allowed_hosts` is the same wire shape
+    /// the Unix variant takes (see its `spawn`), matched case-insensitively.
+    /// Production always forbids private/loopback/link-local destinations.
+    pub fn spawn(allowed_hosts: Vec<String>) -> std::io::Result<Self> {
+        Self::spawn_with_policy(allowed_hosts, false)
+    }
+
+    /// As [`AllowlistProxy::spawn`], with control over whether resolved
+    /// destinations that are private/loopback/link-local are permitted (the
+    /// shipped path always passes `false`).
+    fn spawn_with_policy(
+        allowed_hosts: Vec<String>,
+        allow_local_dest: bool,
+    ) -> std::io::Result<Self> {
+        let (listener, port) = crate::wfp_ports::bind_loopback_proxy()?;
+        listener.set_nonblocking(true)?;
+
+        let allowed: Arc<HashSet<String>> = Arc::new(
+            allowed_hosts
+                .into_iter()
+                .map(|h| h.to_ascii_lowercase())
+                .collect(),
+        );
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_for_thread = Arc::clone(&shutdown);
+        let active = Arc::new(AtomicUsize::new(0));
+
+        let accept_handle = std::thread::spawn(move || {
+            accept_loop_tcp(
+                listener,
+                allowed,
+                shutdown_for_thread,
+                active,
+                allow_local_dest,
+            );
+        });
+
+        Ok(Self {
+            port,
+            shutdown,
+            accept_handle: Some(accept_handle),
+        })
+    }
+
+    /// The bound loopback TCP port (inside [`crate::wfp_ports::PROXY_PORT_RANGE`]).
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// Stops the accept loop and joins its thread (deterministic teardown).
+    pub fn shutdown(mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.accept_handle.take() {
+            let _ = handle.join();
+        }
+    }
+
+    /// Leaks the accept thread so the proxy runs for the rest of the process's
+    /// life. The real launch case: the proxy must outlive the `launch()` call
+    /// stack (the per-task egress-fence teardown re-blocks loopback at task
+    /// end, so the leaked proxy reaches nothing after that).
+    pub fn leak_for_process_lifetime(self) {
+        std::mem::forget(self);
+    }
+}
+
+#[cfg(windows)]
+impl Drop for AllowlistProxy {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        if let Some(handle) = self.accept_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+/// The client-side stream a proxy handler drives, abstracting over the two
+/// transports (Unix socket on Linux, loopback TCP on Windows) so the request
+/// parsing, allowlist, and relay logic below stay single-sourced.
+trait ProxyClientStream: Read + Write + Send + 'static + Sized {
+    fn try_clone_stream(&self) -> std::io::Result<Self>;
+    fn set_read_timeout_opt(&self, dur: Option<Duration>) -> std::io::Result<()>;
+}
+
+#[cfg(unix)]
+impl ProxyClientStream for UnixStream {
+    fn try_clone_stream(&self) -> std::io::Result<Self> {
+        self.try_clone()
+    }
+    fn set_read_timeout_opt(&self, dur: Option<Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(dur)
+    }
+}
+
+// Ungated: TcpStream exists on every platform. It backs the Windows proxy
+// transport and is also what the relay dials for the destination everywhere.
+impl ProxyClientStream for TcpStream {
+    fn try_clone_stream(&self) -> std::io::Result<Self> {
+        self.try_clone()
+    }
+    fn set_read_timeout_opt(&self, dur: Option<Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(dur)
+    }
+}
+
+/// Windows accept loop: mirrors [`accept_loop`] but over a loopback
+/// `TcpListener`. Over the concurrency ceiling, a new connection is refused
+/// with `503` and closed without spawning a handler.
+#[cfg(windows)]
+fn accept_loop_tcp(
+    listener: std::net::TcpListener,
+    allowed: Arc<HashSet<String>>,
+    shutdown: Arc<AtomicBool>,
+    active: Arc<AtomicUsize>,
+    allow_local_dest: bool,
+) {
+    while !shutdown.load(Ordering::SeqCst) {
+        match listener.accept() {
+            Ok((stream, _addr)) => {
+                let prior = active.fetch_add(1, Ordering::SeqCst);
+                if prior >= MAX_CONCURRENT_CONNECTIONS {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let _ = write_status(&stream, "503 Service Unavailable");
+                    continue;
+                }
+                let allowed = Arc::clone(&allowed);
+                let guard = ActiveGuard(Arc::clone(&active));
+                std::thread::spawn(move || {
+                    let _guard = guard; // decrements on scope exit
+                    let _ = handle_connection(stream, &allowed, allow_local_dest);
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(ACCEPT_POLL_INTERVAL);
+            }
+            Err(_) => {
+                // Listener broken; stop rather than spin.
+                return;
+            }
         }
     }
 }
@@ -199,6 +372,7 @@ impl Drop for ActiveGuard {
     }
 }
 
+#[cfg(unix)]
 fn accept_loop(
     listener: UnixListener,
     allowed: Arc<HashSet<String>>,
@@ -241,52 +415,52 @@ fn accept_loop(
 /// return before "200" means the caller sees a non-2xx status line and the
 /// connection is closed without ever dialing out -- the deny-by-default
 /// behaviour issue #311's acceptance check exercises.
-fn handle_connection(
-    stream: UnixStream,
+fn handle_connection<S: ProxyClientStream>(
+    mut stream: S,
     allowed: &HashSet<String>,
     allow_local_dest: bool,
 ) -> std::io::Result<()> {
     // Bound the header-reading phase in time so a silent client cannot hold
-    // this handler thread open. Set on the socket before cloning; the clone
-    // shares the same underlying socket and therefore the same timeout.
-    stream.set_read_timeout(Some(CLIENT_HEADER_READ_TIMEOUT))?;
+    // this handler thread open. Set on the stream before cloning; the clone
+    // shares the same underlying descriptor and therefore the same timeout.
+    stream.set_read_timeout_opt(Some(CLIENT_HEADER_READ_TIMEOUT))?;
 
-    let mut reader = BufReader::new(stream.try_clone()?);
+    let mut reader = BufReader::new(stream.try_clone_stream()?);
     let Some(request_line) = read_line_limited(&mut reader, MAX_REQUEST_LINE_BYTES)? else {
-        write_status(&stream, "400 Bad Request")?;
+        write_status(&mut stream, "400 Bad Request")?;
         return Ok(());
     };
     let Some(target) = parse_connect_target(&request_line) else {
-        write_status(&stream, "400 Bad Request")?;
+        write_status(&mut stream, "400 Bad Request")?;
         return Ok(());
     };
     consume_headers(&mut reader)?;
 
     if !is_allowed(&target.host, allowed) {
-        write_status(&stream, "403 Forbidden")?;
+        write_status(&mut stream, "403 Forbidden")?;
         return Ok(());
     }
 
     let pinned = match resolve_pinned(&target.host, target.port, allow_local_dest) {
         Ok(addr) => addr,
         Err(_) => {
-            write_status(&stream, "502 Bad Gateway")?;
+            write_status(&mut stream, "502 Bad Gateway")?;
             return Ok(());
         }
     };
     let dest = match TcpStream::connect(pinned) {
         Ok(d) => d,
         Err(_) => {
-            write_status(&stream, "502 Bad Gateway")?;
+            write_status(&mut stream, "502 Bad Gateway")?;
             return Ok(());
         }
     };
 
-    write_status(&stream, "200 Connection Established")?;
+    write_status(&mut stream, "200 Connection Established")?;
     // The tunnel may idle far longer than the header read timeout (an LLM
     // streaming a slow response). Clear the deadline before relaying so a
     // legitimate quiet tunnel is not torn down.
-    stream.set_read_timeout(None)?;
+    stream.set_read_timeout_opt(None)?;
     relay(stream, dest)
 }
 
@@ -389,7 +563,7 @@ fn is_ipv6_link_local(ip: Ipv6Addr) -> bool {
 /// exactly where the client expects the "200" response to have left it.
 /// Each line is length-bounded and the total count is capped so a hostile
 /// client cannot stream unbounded headers (issue #342 item 3).
-fn consume_headers(reader: &mut BufReader<UnixStream>) -> std::io::Result<()> {
+fn consume_headers<R: BufRead>(reader: &mut R) -> std::io::Result<()> {
     for _ in 0..MAX_HEADER_LINES {
         let Some(line) = read_line_limited(reader, MAX_REQUEST_LINE_BYTES)? else {
             return Err(std::io::Error::new(
@@ -411,8 +585,8 @@ fn consume_headers(reader: &mut BufReader<UnixStream>) -> std::io::Result<()> {
 /// byte limit is reached before a terminating newline (an over-length or
 /// never-terminated line), so the caller can reject it rather than block or
 /// buffer unboundedly.
-fn read_line_limited(
-    reader: &mut BufReader<UnixStream>,
+fn read_line_limited<R: BufRead>(
+    reader: &mut R,
     max_bytes: u64,
 ) -> std::io::Result<Option<String>> {
     let mut line = String::new();
@@ -423,26 +597,134 @@ fn read_line_limited(
     Ok(Some(line))
 }
 
-fn write_status(mut stream: &UnixStream, status_line: &str) -> std::io::Result<()> {
+fn write_status<W: Write>(mut stream: W, status_line: &str) -> std::io::Result<()> {
     stream.write_all(format!("HTTP/1.1 {status_line}\r\n\r\n").as_bytes())
 }
 
-fn relay(unix: UnixStream, tcp: TcpStream) -> std::io::Result<()> {
-    let mut unix_read = unix.try_clone()?;
-    let mut tcp_write = tcp.try_clone()?;
-    let mut unix_write = unix;
-    let mut tcp_read = tcp;
+fn relay<S: ProxyClientStream>(client: S, dest: TcpStream) -> std::io::Result<()> {
+    let mut client_read = client.try_clone_stream()?;
+    let mut dest_write = dest.try_clone()?;
+    let mut client_write = client;
+    let mut dest_read = dest;
 
     let to_dest = std::thread::spawn(move || {
-        let _ = std::io::copy(&mut unix_read, &mut tcp_write);
+        let _ = std::io::copy(&mut client_read, &mut dest_write);
     });
-    let _ = std::io::copy(&mut tcp_read, &mut unix_write);
+    let _ = std::io::copy(&mut dest_read, &mut client_write);
     let _ = to_dest.join();
     Ok(())
 }
 
+// Pure-logic tests: parsing, allowlist matching, pinned-DNS, and the
+// private/loopback/link-local guard. No transport, so they compile and RUN on
+// every platform (this crate's Linux CI is the runner).
 #[cfg(test)]
-mod tests {
+mod pure_tests {
+    use super::*;
+
+    #[test]
+    fn parse_connect_target_rejects_missing_port() {
+        assert!(parse_connect_target("CONNECT example.com HTTP/1.1").is_none());
+    }
+
+    #[test]
+    fn parse_connect_target_accepts_well_formed_line() {
+        let target = parse_connect_target("CONNECT example.com:443 HTTP/1.1").unwrap();
+        assert_eq!(target.host, "example.com");
+        assert_eq!(target.port, 443);
+    }
+
+    #[test]
+    fn is_allowed_is_case_insensitive() {
+        let allowed: HashSet<String> = ["Example.COM".to_string()]
+            .into_iter()
+            .map(|h| h.to_ascii_lowercase())
+            .collect();
+        assert!(is_allowed("example.com", &allowed));
+        assert!(is_allowed("EXAMPLE.COM", &allowed));
+    }
+
+    #[test]
+    fn resolve_pinned_rejects_private_loopback_and_link_local() {
+        // Literal addresses: to_socket_addrs parses them without DNS, so
+        // these assertions do no network I/O and are deterministic.
+        assert!(resolve_pinned("127.0.0.1", 443, false).is_err());
+        assert!(resolve_pinned("10.0.0.1", 443, false).is_err());
+        assert!(resolve_pinned("192.168.1.1", 443, false).is_err());
+        assert!(resolve_pinned("169.254.1.1", 443, false).is_err());
+        assert!(resolve_pinned("0.0.0.0", 443, false).is_err());
+    }
+
+    #[test]
+    fn resolve_pinned_allows_public_ip() {
+        let addr = resolve_pinned("8.8.8.8", 443, false).unwrap();
+        assert_eq!(addr.ip().to_string(), "8.8.8.8");
+        assert_eq!(addr.port(), 443);
+    }
+
+    #[test]
+    fn resolve_pinned_allow_local_opt_in_permits_loopback() {
+        // The test-only opt-out used by the relay tests.
+        assert!(resolve_pinned("127.0.0.1", 443, true).is_ok());
+    }
+
+    #[test]
+    fn is_forbidden_ip_classifies_internal_and_public() {
+        for s in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "192.168.0.1",
+            "172.16.0.1",
+            "169.254.0.1",
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "::1",
+            "::",
+            "fe80::1",
+            "fc00::1",
+            "fd12:3456::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+        ] {
+            assert!(
+                is_forbidden_ip(s.parse::<IpAddr>().unwrap()),
+                "{s} should be forbidden"
+            );
+        }
+        for s in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "2606:4700:4700::1111",
+        ] {
+            assert!(
+                !is_forbidden_ip(s.parse::<IpAddr>().unwrap()),
+                "{s} should be allowed"
+            );
+        }
+    }
+}
+
+// Windows loopback-TCP transport tests: COMPILE-ONLY under
+// `x86_64-pc-windows-gnu` (Linux is the test runner; nothing executes these
+// here). Proves the Windows [`AllowlistProxy`] surface type-checks.
+#[cfg(all(test, windows))]
+mod windows_transport_tests {
+    use super::*;
+
+    #[test]
+    fn windows_proxy_spawns_and_reports_port() {
+        let proxy = AllowlistProxy::spawn(vec!["example.com".to_string()]).unwrap();
+        assert!(crate::wfp_ports::PROXY_PORT_RANGE.contains(&proxy.port()));
+        proxy.shutdown();
+    }
+}
+
+// Unix-socket transport tests: RUN on Linux CI. Gated `unix` because they bind
+// a Unix domain socket and drive real byte relays through it.
+#[cfg(all(test, unix))]
+mod unix_transport_tests {
     use super::*;
     use std::net::TcpListener;
 
@@ -541,23 +823,14 @@ mod tests {
     }
 
     #[test]
-    fn host_match_is_case_insensitive() {
+    fn allowed_host_relays_through_unix_socket() {
+        // The case-insensitivity of `is_allowed` itself is covered in
+        // `pure_tests`; this exercises the Unix-socket relay end to end.
         let echo_port = spawn_echo_server();
         let socket_path = temp_socket_path("case");
         let proxy =
             AllowlistProxy::spawn_with_policy(&socket_path, vec!["127.0.0.1".to_string()], true)
                 .unwrap();
-
-        // Same host, would only differ in case for a real hostname; assert
-        // the lookup itself normalizes rather than relying on 127.0.0.1
-        // having case variants (it has none) -- exercise is_allowed
-        // directly instead.
-        let allowed: HashSet<String> = ["Example.COM".to_string()]
-            .into_iter()
-            .map(|h| h.to_ascii_lowercase())
-            .collect();
-        assert!(is_allowed("example.com", &allowed));
-        assert!(is_allowed("EXAMPLE.COM", &allowed));
 
         let status_line = connect_and_send(
             &socket_path,
@@ -642,78 +915,5 @@ mod tests {
             result.is_err(),
             "connecting after shutdown should fail (nothing listening)"
         );
-    }
-
-    #[test]
-    fn parse_connect_target_rejects_missing_port() {
-        assert!(parse_connect_target("CONNECT example.com HTTP/1.1").is_none());
-    }
-
-    #[test]
-    fn parse_connect_target_accepts_well_formed_line() {
-        let target = parse_connect_target("CONNECT example.com:443 HTTP/1.1").unwrap();
-        assert_eq!(target.host, "example.com");
-        assert_eq!(target.port, 443);
-    }
-
-    #[test]
-    fn resolve_pinned_rejects_private_loopback_and_link_local() {
-        // Literal addresses: to_socket_addrs parses them without DNS, so
-        // these assertions do no network I/O and are deterministic.
-        assert!(resolve_pinned("127.0.0.1", 443, false).is_err());
-        assert!(resolve_pinned("10.0.0.1", 443, false).is_err());
-        assert!(resolve_pinned("192.168.1.1", 443, false).is_err());
-        assert!(resolve_pinned("169.254.1.1", 443, false).is_err());
-        assert!(resolve_pinned("0.0.0.0", 443, false).is_err());
-    }
-
-    #[test]
-    fn resolve_pinned_allows_public_ip() {
-        let addr = resolve_pinned("8.8.8.8", 443, false).unwrap();
-        assert_eq!(addr.ip().to_string(), "8.8.8.8");
-        assert_eq!(addr.port(), 443);
-    }
-
-    #[test]
-    fn resolve_pinned_allow_local_opt_in_permits_loopback() {
-        // The test-only opt-out used by the relay tests above.
-        assert!(resolve_pinned("127.0.0.1", 443, true).is_ok());
-    }
-
-    #[test]
-    fn is_forbidden_ip_classifies_internal_and_public() {
-        for s in [
-            "127.0.0.1",
-            "10.1.2.3",
-            "192.168.0.1",
-            "172.16.0.1",
-            "169.254.0.1",
-            "0.0.0.0",
-            "255.255.255.255",
-            "224.0.0.1",
-            "::1",
-            "::",
-            "fe80::1",
-            "fc00::1",
-            "fd12:3456::1",
-            "::ffff:127.0.0.1",
-            "::ffff:10.0.0.1",
-        ] {
-            assert!(
-                is_forbidden_ip(s.parse::<IpAddr>().unwrap()),
-                "{s} should be forbidden"
-            );
-        }
-        for s in [
-            "8.8.8.8",
-            "1.1.1.1",
-            "93.184.216.34",
-            "2606:4700:4700::1111",
-        ] {
-            assert!(
-                !is_forbidden_ip(s.parse::<IpAddr>().unwrap()),
-                "{s} should be allowed"
-            );
-        }
     }
 }

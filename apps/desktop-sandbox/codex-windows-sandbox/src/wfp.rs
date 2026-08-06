@@ -21,20 +21,31 @@ use windows_sys::Win32::Foundation::HANDLE;
 use windows_sys::Win32::Foundation::HLOCAL;
 use windows_sys::Win32::Foundation::LocalFree;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_ACTION_BLOCK;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_ACTION_PERMIT;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_ACTRL_MATCH_FILTER;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_BYTE_BLOB;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_CONDITION_VALUE0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_EMPTY;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_MATCH_EQUAL;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_MATCH_RANGE;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_RANGE_TYPE;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_RANGE0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_SECURITY_DESCRIPTOR_TYPE;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT8;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT16;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_UINT64;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_V4_ADDR_AND_MASK;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_V4_ADDR_MASK;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_V6_ADDR_AND_MASK;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_V6_ADDR_MASK;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWP_VALUE0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_ACTION0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_ACTION0_0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_ALE_USER_ID;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_PROTOCOL;
+use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_REMOTE_ADDRESS;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_CONDITION_IP_REMOTE_PORT;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_DISPLAY_DATA0;
 use windows_sys::Win32::NetworkManagement::WindowsFilteringPlatform::FWPM_FILTER_CONDITION0;
@@ -66,6 +77,7 @@ use windows_sys::core::GUID;
 
 use filter_specs::ConditionSpec;
 use filter_specs::FILTER_SPECS;
+use filter_specs::FilterAction;
 use filter_specs::FilterSpec;
 
 const SESSION_NAME: &str = "Hive Desktop Sandbox WFP";
@@ -272,7 +284,7 @@ fn ensure_sublayer(engine: HANDLE) -> Result<()> {
     ensure_success_or(result, "FwpmSubLayerAdd0", &[FWP_E_ALREADY_EXISTS as u32])
 }
 
-/// Adds one blocking WFP filter from the static filter spec list.
+/// Adds one WFP filter (block or permit) from the static filter spec list.
 fn add_filter(
     engine: HANDLE,
     spec: &FilterSpec,
@@ -280,8 +292,54 @@ fn add_filter(
 ) -> Result<()> {
     let filter_name = to_wide(OsStr::new(spec.name));
     let filter_description = to_wide(OsStr::new(spec.description));
-    let mut filter_conditions = build_conditions(spec.conditions, user_condition);
+
+    // Owned condition-data holders. Their addresses are handed to WFP through
+    // the FWPM_FILTER_CONDITION0 / FWPM_FILTER0 pointers below, so they MUST
+    // outlive the FwpmFilterAdd0 call: keep them on this stack frame.
+    let v4_loopback = FWP_V4_ADDR_AND_MASK {
+        addr: 0x7F00_0000,
+        mask: 0xFF00_0000,
+    };
+    let v6_loopback = FWP_V6_ADDR_AND_MASK {
+        addr: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+        prefixLength: 128,
+    };
+    let (range_low, range_high) = spec
+        .conditions
+        .iter()
+        .find_map(|condition| match condition {
+            ConditionSpec::RemotePortRange(low, high) => Some((*low, *high)),
+            _ => None,
+        })
+        .unwrap_or((0, 0));
+    let port_range = make_port_range(range_low, range_high);
+    // Manual weight value; referenced only through the `Some` arm below.
+    let weight_val: u64 = spec.weight.unwrap_or(0);
+
+    let mut filter_conditions = build_conditions(
+        spec.conditions,
+        user_condition,
+        &v4_loopback,
+        &v6_loopback,
+        &port_range,
+    );
     let provider_key = PROVIDER_KEY;
+    let action_type = match spec.action {
+        FilterAction::Block => FWP_ACTION_BLOCK,
+        FilterAction::Permit => FWP_ACTION_PERMIT,
+    };
+    // `Some(w)` pins a manual FWP_UINT64 weight (the core loopback permit must
+    // outrank the SID block within the sublayer); `None` leaves FWP_EMPTY so
+    // the kernel auto-assigns. effectiveWeight is always empty (kernel-computed).
+    let weight = match spec.weight {
+        Some(_) => FWP_VALUE0 {
+            r#type: FWP_UINT64,
+            Anonymous: FWP_VALUE0_0 {
+                uint64: &weight_val as *const u64 as *mut u64,
+            },
+        },
+        None => empty_value(),
+    };
     let filter = FWPM_FILTER0 {
         filterKey: spec.key,
         displayData: FWPM_DISPLAY_DATA0 {
@@ -293,11 +351,11 @@ fn add_filter(
         providerData: empty_blob(),
         layerKey: spec.layer_key,
         subLayerKey: SUBLAYER_KEY,
-        weight: empty_value(),
+        weight,
         numFilterConditions: filter_conditions.len() as u32,
         filterCondition: filter_conditions.as_mut_ptr(),
         action: FWPM_ACTION0 {
-            r#type: FWP_ACTION_BLOCK,
+            r#type: action_type,
             Anonymous: FWPM_ACTION0_0 {
                 filterType: zero_guid(),
             },
@@ -313,10 +371,31 @@ fn add_filter(
     ensure_success(result, &format!("FwpmFilterAdd0({})", spec.name))
 }
 
-/// Converts our compact condition specs into WFP filter conditions.
+/// Builds an inclusive `low..=high` remote-port `FWP_RANGE0`. The range holds
+/// inline `FWP_UINT16` values (no internal pointers), so a caller can keep it
+/// on the stack and hand WFP a pointer to it.
+fn make_port_range(low: u16, high: u16) -> FWP_RANGE0 {
+    FWP_RANGE0 {
+        valueLow: FWP_VALUE0 {
+            r#type: FWP_UINT16,
+            Anonymous: FWP_VALUE0_0 { uint16: low },
+        },
+        valueHigh: FWP_VALUE0 {
+            r#type: FWP_UINT16,
+            Anonymous: FWP_VALUE0_0 { uint16: high },
+        },
+    }
+}
+
+/// Converts our compact condition specs into WFP filter conditions. The
+/// address / range holders are borrowed from the caller's stack (see
+/// [`add_filter`]) so their pointers stay valid for the FwpmFilterAdd0 call.
 fn build_conditions(
     specs: &[ConditionSpec],
     user_condition: &UserMatchCondition,
+    v4_loopback: &FWP_V4_ADDR_AND_MASK,
+    v6_loopback: &FWP_V6_ADDR_AND_MASK,
+    port_range: &FWP_RANGE0,
 ) -> Vec<FWPM_FILTER_CONDITION0> {
     specs
         .iter()
@@ -345,6 +424,36 @@ fn build_conditions(
                 conditionValue: FWP_CONDITION_VALUE0 {
                     r#type: FWP_UINT16,
                     Anonymous: FWP_CONDITION_VALUE0_0 { uint16: *port },
+                },
+            },
+            ConditionSpec::RemoteAddressLoopbackV4 => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_V4_ADDR_MASK,
+                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                        v4AddrMask: v4_loopback as *const _ as *mut _,
+                    },
+                },
+            },
+            ConditionSpec::RemoteAddressLoopbackV6 => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_ADDRESS,
+                matchType: FWP_MATCH_EQUAL,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_V6_ADDR_MASK,
+                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                        v6AddrMask: v6_loopback as *const _ as *mut _,
+                    },
+                },
+            },
+            ConditionSpec::RemotePortRange(_, _) => FWPM_FILTER_CONDITION0 {
+                fieldKey: FWPM_CONDITION_IP_REMOTE_PORT,
+                matchType: FWP_MATCH_RANGE,
+                conditionValue: FWP_CONDITION_VALUE0 {
+                    r#type: FWP_RANGE_TYPE,
+                    Anonymous: FWP_CONDITION_VALUE0_0 {
+                        rangeValue: port_range as *const _ as *mut _,
+                    },
                 },
             },
         })
@@ -427,5 +536,23 @@ mod tests {
             .map(|spec| spec.name)
             .collect::<BTreeSet<_>>();
         assert_eq!(names.len(), FILTER_SPECS.len());
+    }
+
+    #[test]
+    fn core_has_both_permit_and_block_filters() {
+        use super::FilterAction;
+        // Runtime insurance that the two-layer core survives an edit: the
+        // permit-above-block WEIGHT ordering itself is guaranteed at compile
+        // time by the `const _: () = assert!(W_LOOPBACK > W_BLOCK)` in
+        // filter_specs, so it is not re-asserted here (clippy rejects a
+        // runtime assert over two consts).
+        let has_permit = FILTER_SPECS
+            .iter()
+            .any(|spec| matches!(spec.action, FilterAction::Permit));
+        let has_block = FILTER_SPECS
+            .iter()
+            .any(|spec| matches!(spec.action, FilterAction::Block));
+        assert!(has_permit, "expected at least one Permit core filter");
+        assert!(has_block, "expected at least one Block filter");
     }
 }
