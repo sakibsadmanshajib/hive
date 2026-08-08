@@ -124,3 +124,19 @@ RUN sed -i "s/or 'native'/or os.environ.get('HIVE_DEFAULT_FUNCTION_CALLING', 'na
     && grep -q "HIVE_DEFAULT_FUNCTION_CALLING" /app/backend/open_webui/main.py \
     && ! grep -q "or 'native'" /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/main.py').read_text())"
+
+# #771: drop the Settings > Integrations tab, the chat UI's only entry point to
+# "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
+# auth credential. The tool servers added there are direct ones, called by the
+# browser itself, so they bypass the Hive gateway entirely and no rule on the
+# chat origin can reach them; removing the form is the only control that does.
+# Caddyfile.owui blocks the server-side half (#770, the /api/v1/terminals proxy
+# and the tool and terminal server registration endpoints), and this removes the
+# UI so nothing left in the interface points at a path that now 404s.
+#
+# The patch asserts its own effect and fails the build otherwise, same posture
+# as the patches above. The read-back grep is a second, independent check that
+# the descriptor is gone from the emitted bundle.
+COPY deploy/docker/owui-patches/remove_integrations_tab.py /tmp/remove_integrations_tab.py
+RUN python3 /tmp/remove_integrations_tab.py \
+    && ! grep -rq 'id:"tools",title:"Integrations"' /app/build/_app/immutable
