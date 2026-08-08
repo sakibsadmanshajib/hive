@@ -31,6 +31,13 @@ type Repository interface {
 	UpsertVisibility(ctx context.Context, row TenantModelVisibility) error
 	DeleteVisibility(ctx context.Context, tenantID uuid.UUID, aliasID string) error
 	GetAllVisibleTenantsForAlias(ctx context.Context, aliasID string) ([]TenantModelVisibility, error)
+	// ListAllAliases returns every model alias regardless of visibility class.
+	// Unlike ListPublicAliases (public/preview only) or ListAliasesForTenant
+	// (entitlement-filtered), this is the unfiltered row set: it exists for the
+	// boot-time OWUI reconcile, which must see restricted and internal aliases
+	// too so it can lock down a non-chat-modality alias no matter what
+	// visibility class it was seeded with.
+	ListAllAliases(ctx context.Context) ([]ModelAlias, error)
 }
 
 type pgxRepository struct {
@@ -303,6 +310,47 @@ func (r *pgxRepository) GetAllVisibleTenantsForAlias(ctx context.Context, aliasI
 		return nil, fmt.Errorf("catalog: iterate visible tenant rows: %w", err)
 	}
 	return out, nil
+}
+
+// ListAllAliases returns every row in model_aliases, unfiltered by
+// visibility. See the Repository interface doc for why this differs from
+// ListPublicAliases and ListAliasesForTenant.
+func (r *pgxRepository) ListAllAliases(ctx context.Context) ([]ModelAlias, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT
+			alias_id,
+			owned_by,
+			display_name,
+			summary,
+			visibility,
+			lifecycle,
+			capability_badges,
+			input_price_credits,
+			output_price_credits,
+			cache_read_price_credits,
+			cache_write_price_credits,
+			created_at,
+			updated_at
+		FROM public.model_aliases
+		ORDER BY alias_id ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("catalog: list all aliases: %w", err)
+	}
+	defer rows.Close()
+
+	var aliases []ModelAlias
+	for rows.Next() {
+		alias, err := scanModelAlias(rows)
+		if err != nil {
+			return nil, err
+		}
+		aliases = append(aliases, alias)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("catalog: iterate all aliases: %w", err)
+	}
+	return aliases, nil
 }
 
 func (r *pgxRepository) GetSnapshot(ctx context.Context) (CatalogSnapshot, error) {
