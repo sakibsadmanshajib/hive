@@ -2,13 +2,12 @@ package licensing_test
 
 import (
 	"context"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/licensing"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,13 +16,7 @@ import (
 // doesn't look like a test database.
 func newTestPool(t *testing.T, ctx context.Context) (*pgxpool.Pool, func()) {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := testdb.RequireTestDSN(t)
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool, pool.Close
