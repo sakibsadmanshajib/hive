@@ -32,12 +32,16 @@ function waitForUp(timeoutMs) {
   });
 }
 
-async function postMalformed(path) {
+async function postBody(path, body) {
   return fetch(`${ORIGIN}${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{not valid json",
+    body,
   });
+}
+
+async function postMalformed(path) {
+  return postBody(path, "{not valid json");
 }
 
 async function main() {
@@ -75,7 +79,20 @@ async function main() {
       "stub did not survive the malformed /v1/agent/tasks request",
     );
 
-    console.log("[stub-server.test] PASS: malformed JSON returns 400 on both routes, stub stays up");
+    // "null" and "[]" are valid JSON but not the object patch/payload shape
+    // every route assumes. Both must be rejected too, not just unparseable
+    // text: `patch.tasks` on a null value throws before any Array.isArray
+    // check runs.
+    for (const body of ["null", "[]", "42", '"a string"']) {
+      const res = await postBody("/__control", body);
+      assert.equal(res.status, 400, `expected 400 for JSON body ${body}, got ${res.status}`);
+      const alive = await fetch(`${ORIGIN}/__control`);
+      assert.equal(alive.status, 200, `stub did not survive a JSON body of ${body}`);
+    }
+
+    console.log(
+      "[stub-server.test] PASS: malformed and non-object JSON return 400 on both routes, stub stays up",
+    );
   } finally {
     child.kill("SIGTERM");
   }

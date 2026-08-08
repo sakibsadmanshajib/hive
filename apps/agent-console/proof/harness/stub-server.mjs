@@ -156,7 +156,12 @@ function sendJson(res, status, body) {
  */
 function parseJsonBody(res, body) {
   try {
-    return { ok: true, value: body ? JSON.parse(body) : {} };
+    const value = body ? JSON.parse(body) : {};
+    if (value === null || Array.isArray(value) || typeof value !== "object") {
+      sendJson(res, 400, { message: "stub: request body must be a JSON object" });
+      return { ok: false, value: undefined };
+    }
+    return { ok: true, value };
   } catch {
     sendJson(res, 400, { message: "stub: request body is not valid JSON" });
     return { ok: false, value: undefined };
