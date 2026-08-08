@@ -23,6 +23,10 @@ const EMAIL = process.env.E2E_WORKSPACE_OWNER_EMAIL ?? process.env.E2E_PLATFORM_
 const PASSWORD = process.env.E2E_WORKSPACE_OWNER_PASSWORD ?? process.env.E2E_PLATFORM_ADMIN_PASSWORD ?? "";
 const HAS_CREDS = Boolean(EMAIL && PASSWORD);
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function signIn(page: Page): Promise<void> {
   await page.goto("/auth/sign-in");
   await page.locator("#email").fill(EMAIL);
@@ -61,7 +65,67 @@ test.describe("workspace admin panels", () => {
 
     const toggles = page.getByRole("switch");
     await expect(toggles).not.toHaveCount(0);
-    await expect(toggles.first()).toHaveAttribute("aria-checked", /true|false/);
+  });
+
+  // Issue #796. This used to be the tail of the test above: assert the first
+  // toggle carries aria-checked matching /true|false/. That regex is unanchored
+  // and matches the only two values the attribute can hold, so it passed on a
+  // toggle nobody had ever clicked, and the spec never clicked one. A control
+  // that renders and does nothing was indistinguishable from a working one.
+  //
+  // The reload is the part that matters. Every toggle in this app flips
+  // optimistically in local state before the PUT resolves, so an assertion
+  // taken straight after the click passes even when the write never lands. The
+  // page has to be reloaded and the value re-read from the server for the flip
+  // to mean anything. No spec in this repository reloaded a page before this
+  // one, which is why no setting anywhere had a persistence test.
+  test("a feature gate toggle flips, persists across a reload, and flips back", async ({
+    page,
+  }) => {
+    await page.goto("/console/feature-gates");
+    await expect(
+      page.getByRole("heading", { name: "Feature gates" })
+    ).toBeVisible();
+
+    // Only manageable gates render a switch; unmanageable ones render the
+    // "Managed by your administrator" label instead, so any switch on the page
+    // is one this viewer is allowed to write.
+    const toggle = page.getByRole("switch").first();
+    await expect(toggle).toBeVisible();
+
+    // aria-label is `${label}: enabled|disabled`, unique per row, and survives
+    // the reload that invalidates the locator's element handle.
+    const gateLabel = ((await toggle.getAttribute("aria-label")) ?? "").replace(
+      /: (enabled|disabled)$/,
+      ""
+    );
+    expect(gateLabel).not.toBe("");
+    const byGate = () =>
+      page.getByRole("switch", { name: new RegExp(`^${escapeRegExp(gateLabel)}: `) });
+
+    const before = await toggle.getAttribute("aria-checked");
+    expect(before === "true" || before === "false").toBe(true);
+    const flipped = before === "true" ? "false" : "true";
+
+    await toggle.click();
+    // Optimistic flip lands immediately; this alone proves nothing persisted.
+    await expect(byGate()).toHaveAttribute("aria-checked", flipped);
+    // The row leaves "saving" (the switch is disabled while the PUT is in
+    // flight), so waiting for it to be enabled again waits for the write.
+    await expect(byGate()).toBeEnabled();
+
+    await page.reload();
+    await expect(
+      page.getByRole("heading", { name: "Feature gates" })
+    ).toBeVisible();
+    await expect(byGate()).toHaveAttribute("aria-checked", flipped);
+
+    // Restore the workspace to the state this spec found it in, and prove the
+    // control moves in both directions rather than latching once.
+    await byGate().click();
+    await expect(byGate()).toBeEnabled();
+    await page.reload();
+    await expect(byGate()).toHaveAttribute("aria-checked", before!);
   });
 
   test("marketplace renders the catalog, not an access wall", async ({

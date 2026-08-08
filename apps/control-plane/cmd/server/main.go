@@ -1240,13 +1240,13 @@ func main() {
 	// RequirePlatformAdmin (provider-blind 401/403 sanitised JSON); self
 	// surface gated via plain auth middleware.
 	if grantsHandler != nil && roleSvc != nil && authzMW.Initialized() {
-		adminGate := authzMW.RequirePermission(authz.PermPlatformAdmin)(grantsHandler.AdminMux())
-		protectedAdminGrants := authMiddleware.Require(adminGate)
-		routerMux.Handle("/v1/admin/credit-grants", protectedAdminGrants)
-		routerMux.Handle("/v1/admin/credit-grants/", protectedAdminGrants)
-
-		protectedSelfGrants := authMiddleware.Require(grantsHandler.SelfMux())
-		routerMux.Handle("/v1/credit-grants/me", protectedSelfGrants)
+		registerCreditGrantRoutes(
+			routerMux,
+			authMiddleware.Require,
+			authzMW,
+			grantsHandler.AdminMux(),
+			grantsHandler.SelfMux(),
+		)
 		log.Println("credit grants routes registered (Phase 14)")
 	}
 
