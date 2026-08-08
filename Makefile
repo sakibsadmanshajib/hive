@@ -26,3 +26,4 @@ test-scripts:
 	python3 scripts/test_owui_rag_env_config.py
 	python3 scripts/test_owui_ui_surfaces.py
 	python3 scripts/test_caddy_owui_blocklist.py
+	python3 scripts/test_owui_oauth_client_auth.py

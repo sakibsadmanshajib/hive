@@ -11,30 +11,29 @@ package auth_test
 //   - OAuthManager.get_oauth_token refreshes once `now + 5 minutes` reaches
 //     `expires_at`, so the refresh path is first entered roughly 55 minutes
 //     into a signed-in session.
-//   - _perform_token_refresh returns None on its first guard when the stored
-//     session has no `refresh_token`.
+//   - _perform_token_refresh returns None when the refresh cannot be completed.
 //   - get_oauth_token then calls delete_session_by_id and the OAuth session is
 //     gone. `__oauth_token__` is empty from then on, hive_jwt_forward injects
 //     nothing, and every completion 401s until the user signs in again.
 //
-// Two inputs to that chain this repository controls, and both are required.
+// Two independent inputs to that chain, and both were broken.
 //
-// First, the scope on the authorize request. Supabase advertises
-// `offline_access` in scopes_supported and `refresh_token` in
+// First, the scope on the authorize request, which this file guards. Supabase
+// advertises `offline_access` in scopes_supported and `refresh_token` in
 // grant_types_supported, so asking for it is what makes a refresh possible at
-// all. Drop `offline_access` and the deployment is guaranteed to lock every
-// user out roughly 55 minutes after they sign in.
+// all. Without it Supabase issues no refresh token, _perform_token_refresh
+// returns None on its very first guard, and the deployment locks every user
+// out roughly 55 minutes after they sign in.
 //
-// Second, the token endpoint authentication method. _perform_token_refresh
-// does not go through authlib: it hand builds the refresh POST and always
-// sends client_id and client_secret in the form body, which is
-// client_secret_post. authlib, which performs the authorization code exchange,
-// defaults to client_secret_basic. Supabase enforces the registered method
-// exactly, so leaving this unset means the refresh is rejected with 400
-// invalid_credentials even when a refresh token exists, and the session is
-// destroyed anyway. Verified live: the identical refresh token was refused
-// with client_secret_post and accepted with client_secret_basic against a
-// basic-registered client.
+// Second, the client authentication on the refresh request. That one cannot be
+// guarded from here because it is not configuration: Open WebUI hand builds
+// the refresh POST with the client credentials in the form body, which is
+// client_secret_post, while authlib performs the authorization code exchange
+// with client_secret_basic. Supabase enforces the registered method exactly,
+// so a refresh token that exists is still refused and the session destroyed
+// anyway. That half is fixed inside the image, by the patch this file asserts
+// is still wired into Dockerfile.open-webui, and its behaviour is covered by
+// scripts/test_owui_oauth_client_auth.py.
 //
 // Fixing only one of the two leaves the defect in place, which is why both are
 // asserted here.
@@ -43,13 +42,16 @@ package auth_test
 // error, because that middleware is where the defect surfaces and where the
 // next person will start reading.
 //
-// Why the e2e suite could not catch this: every phase-19 chat spec, including
-// the multi-turn one at apps/web-console/e2e/phase-19/owui/
-// 02-chat-multi-turn.spec.ts, runs all of its turns inside one short session.
-// Nothing holds a session open past the access token lifetime, so no test can
-// reach the refresh path. A test that sends one message, or several messages
-// in one minute, passes against the broken build. That is why this ships as a
-// configuration invariant instead of another chat spec.
+// Why no e2e test catches this, and why these are configuration invariants
+// instead of another chat spec: every phase-19 chat spec runs all of its turns
+// inside one short session. The multi-turn one at
+// apps/web-console/e2e/phase-19/owui/02-chat-multi-turn.spec.ts budgets 360
+// seconds for the whole file and sends its two turns back to back. Nothing in
+// the suite holds a session open past the access token lifetime or edits
+// expires_at, so nothing reaches the refresh path at all. A test that sends
+// one message, or several messages inside a minute, passes against a build
+// that locks every user out an hour later. That is the shape of defect that
+// ships.
 
 import (
 	"os"
@@ -62,10 +64,6 @@ import (
 
 // requiredOAuthScope is the scope whose absence caused #782.
 const requiredOAuthScope = "offline_access"
-
-// requiredTokenEndpointAuthMethod is the only dialect Open WebUI's refresh
-// path can produce, so the authorization code exchange has to match it.
-const requiredTokenEndpointAuthMethod = "client_secret_post"
 
 // TestOWUIOAuthScopesRequestOfflineAccess asserts that every Open WebUI OIDC
 // scope declaration under deploy/ asks for a refresh token.
@@ -97,28 +95,49 @@ func TestOWUIOAuthScopesRequestOfflineAccess(t *testing.T) {
 	}
 }
 
-// TestOWUIOAuthUsesRefreshCompatibleClientAuth asserts the deployment pins the
-// token endpoint authentication method to the one Open WebUI's refresh path
-// can actually speak.
+// TestOWUIImageAppliesOAuthRefreshClientAuthPatch asserts the Open WebUI image
+// still splices the refresh client-authentication fix in.
 //
-// Unset is a failure, not a default: authlib falls back to
-// client_secret_basic, which the refresh POST can never match, so a session
-// with a perfectly good refresh token is still destroyed at the first refresh.
-func TestOWUIOAuthUsesRefreshCompatibleClientAuth(t *testing.T) {
-	declarations := envDeclarations(t, "OAUTH_TOKEN_ENDPOINT_AUTH_METHOD")
-	require.NotEmpty(t, declarations,
-		"expected OAUTH_TOKEN_ENDPOINT_AUTH_METHOD to be declared under deploy/. "+
-			"Leaving it unset lets authlib default to client_secret_basic while "+
-			"Open WebUI's refresh always sends client_secret_post, which Supabase "+
-			"rejects with 400 invalid_credentials, destroying the session (#782)")
+// The scope above is necessary and not sufficient: with a refresh token in
+// hand, Supabase still refuses the refresh because Open WebUI sends the client
+// credentials in the form body while the client is registered for the header.
+// Nothing in the compose environment expresses that fix, so the only thing
+// standing between this deployment and a silent return to hour-long sessions
+// is that this build step keeps running. Deleting it would leave every test in
+// this repository green.
+func TestOWUIImageAppliesOAuthRefreshClientAuthPatch(t *testing.T) {
+	root := repoRootForAuth(t)
 
-	for _, d := range declarations {
-		require.Equal(t, requiredTokenEndpointAuthMethod, d.value,
-			"%s:%d sets OAUTH_TOKEN_ENDPOINT_AUTH_METHOD to %q. Open WebUI's "+
-				"_perform_token_refresh only ever sends the client credentials in "+
-				"the form body, so this and the Supabase client registration must "+
-				"both be %q or every token refresh fails (#782)",
-			d.path, d.line, d.value, requiredTokenEndpointAuthMethod)
+	dockerfile := filepath.Join(root, "deploy", "docker", "Dockerfile.open-webui")
+	body, err := os.ReadFile(dockerfile)
+	require.NoError(t, err, "the Open WebUI image definition must exist")
+
+	for _, needed := range []string{
+		"owui-patches/hive_oauth_client_auth.py",
+		"owui-patches/apply_oauth_client_auth_patch.py",
+		"python3 /tmp/apply_oauth_client_auth_patch.py",
+	} {
+		// require.True rather than require.Contains: a failed Contains prints
+		// the entire Dockerfile into the test log, which buries the message
+		// that explains what broke.
+		require.True(t, strings.Contains(string(body), needed),
+			"deploy/docker/Dockerfile.open-webui no longer references %q, so the "+
+				"image ships upstream's refresh POST, which sends the client "+
+				"credentials in the form body. Supabase rejects that with 400 "+
+				"invalid_credentials, Open WebUI deletes the OAuth session, and "+
+				"chat dies roughly 55 minutes after sign-in (#782)", needed)
+	}
+
+	// The patch and the module it splices in must both still be present, or
+	// the build step above fails only at image build time, which no unit test
+	// lane reaches.
+	for _, patchFile := range []string{
+		filepath.Join(root, "deploy", "docker", "owui-patches", "hive_oauth_client_auth.py"),
+		filepath.Join(root, "deploy", "docker", "owui-patches", "apply_oauth_client_auth_patch.py"),
+	} {
+		_, statErr := os.Stat(patchFile)
+		require.NoError(t, statErr,
+			"%s is referenced by Dockerfile.open-webui and must exist (#782)", patchFile)
 	}
 }
 
