@@ -42,7 +42,7 @@ HARNESS_PLAYWRIGHT_ROOT=/path/to/hive node apps/agent-console/proof/harness/capt
 | Flag | Default | Meaning |
 | --- | --- | --- |
 | `--scenario=<name>` | `all` | Run one scenario. Names are listed below. |
-| `--out=<dir>` | `./captures` | Where the PNGs are written. |
+| `--out=<dir>` | `apps/agent-console/proof/harness/captures/` | Where the PNGs are written. A relative value is resolved against the current working directory, not the harness directory. |
 | `--note=<text>` | none | Free text stamped into each image. |
 | `--port=<n>` | `3020` | Port for `next dev`. |
 | `--stub-port=<n>` | `4010` | Port for the stub. |

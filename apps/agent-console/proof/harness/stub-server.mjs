@@ -147,6 +147,22 @@ function sendJson(res, status, body) {
   res.end(payload);
 }
 
+/**
+ * Parses a request body as JSON, tolerating an empty body as `{}`. On
+ * malformed input this sends a 400 itself and returns `ok: false`, so every
+ * call site can bail out with `if (!parsed.ok) return;` instead of letting
+ * `JSON.parse` throw inside an async handler, which Node has no default
+ * catch for and which previously took the whole process down.
+ */
+function parseJsonBody(res, body) {
+  try {
+    return { ok: true, value: body ? JSON.parse(body) : {} };
+  } catch {
+    sendJson(res, 400, { message: "stub: request body is not valid JSON" });
+    return { ok: false, value: undefined };
+  }
+}
+
 /** Applies one pending transition per listed task, then hands back the list. */
 function listTasks() {
   return state.tasks.map((task) => {
@@ -185,7 +201,9 @@ const server = http.createServer(async (req, res) => {
 
   // --- scenario control -------------------------------------------------
   if (url.pathname === "/__control" && req.method === "POST") {
-    const patch = body ? JSON.parse(body) : {};
+    const parsedPatch = parseJsonBody(res, body);
+    if (!parsedPatch.ok) return;
+    const patch = parsedPatch.value;
     if (Array.isArray(patch.tasks)) {
       state.tasks = patch.tasks.map(makeTask);
     }
@@ -252,7 +270,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === "/v1/agent/tasks" && req.method === "POST") {
-    const payload = body ? JSON.parse(body) : {};
+    const parsedPayload = parseJsonBody(res, body);
+    if (!parsedPayload.ok) return;
+    const payload = parsedPayload.value;
     const task = makeTask({
       pack: payload.pack,
       instructions: payload.instructions ?? "",

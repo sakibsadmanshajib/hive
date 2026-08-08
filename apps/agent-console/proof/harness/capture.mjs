@@ -13,7 +13,7 @@
 // array; a framework here would be more scaffolding than scenarios.
 
 import { spawn, execSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
 import { dirname, join, resolve } from "node:path";
@@ -46,7 +46,8 @@ const BASE_PATH = "/agent-workspace";
 // stub checks neither, and no real service would accept either. The sign-in
 // field value is read from the environment and named without a
 // secret-shaped identifier (no "password"/"secret"/"token" in the name), so
-// a generic-secret scanner has nothing keyword-matched to flag here.
+// GitGuardian's generic-secret scanner has nothing keyword-matched to flag
+// here, and no allowlist entry is needed for it.
 const STUB_ANON_KEY = "stub-anon-key-not-a-credential";
 const HARNESS_EMAIL = "agent-console-harness@example.invalid";
 const HARNESS_SIGNIN_VALUE = process.env.HARNESS_SIGNIN_VALUE || "not-checked-by-the-stub";
@@ -264,6 +265,11 @@ const SCENARIOS = [
 ];
 
 async function main() {
+  // The .gitignore comment for this directory says every run overwrites it.
+  // Make that literally true: wipe stale captures before writing new ones,
+  // so an old poll-recovery-*.png from a prior --scenario run can never be
+  // mistaken for current proof.
+  rmSync(OUT_DIR, { recursive: true, force: true });
   mkdirSync(OUT_DIR, { recursive: true });
 
   const selected =
