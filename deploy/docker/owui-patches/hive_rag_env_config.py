@@ -1,5 +1,5 @@
-"""Make Open WebUI's RAG-through-Hive settings follow the container
-environment (issue #722).
+"""Make Open WebUI's environment-owned settings follow the container
+environment (issues #722, #772).
 
 Open WebUI treats every `rag.*` setting as persistent config: the environment
 seeds it into Open WebUI's own database the first time a container boots, and
@@ -16,16 +16,24 @@ with 404 `model_not_found` and no compose change could ever reach it.
 This module is spliced into that startup path by
 apply_rag_env_config_patch.py. The environment wins for the four keys that
 point Open WebUI's embedder at the Hive gateway, plus `ui.enable_login_form`
-(see its entry below, same mechanism, different symptom), and for nothing
-else: an administrator's other Open WebUI settings still persist normally,
-which is why this is a per-key reconcile rather than
-`ENABLE_PERSISTENT_CONFIG=false`.
+(see its entry below, same mechanism, different symptom) and the three
+product-surface feature flags below (#772), and for nothing else: an
+administrator's other Open WebUI settings still persist normally, which is
+why this is a per-key reconcile rather than `ENABLE_PERSISTENT_CONFIG=false`.
 
 The embedding model itself is never hardcoded here. It comes from
 `RAG_EMBEDDING_MODEL` (compose derives it from `OWUI_RAG_EMBEDDING_ALIAS`), so
 the admin-selected alias and its dimension stay the single source of truth
 (D-001). A deployment that leaves those variables unset keeps whatever its
 administrator chose inside Open WebUI.
+
+The same first-boot-wins trap applies to the product-surface feature flags
+Hive turns off (#772): Notes, Calendar and Automations are `notes.enable`,
+`calendar.enable` and `automations.enable` in `DEFAULT_CONFIG`, so a compose
+change alone would never reach the demo box. They are reconciled here for that
+reason, and as booleans rather than strings, because the non-empty string
+"false" is truthy on both sides of `/api/config` and would leave every one of
+those surfaces visible.
 """
 
 # Open WebUI persisted config key -> the environment variable that owns it.
@@ -51,6 +59,16 @@ RAG_CONFIG_ENV = {
     # and the database has outranked the environment ever since. Setting the
     # compose variable alone would have been another silent no-op.
     "ui.enable_login_form": "ENABLE_LOGIN_FORM",
+}
+
+# Same idea, boolean-valued: the stock surfaces Hive does not ship (#772).
+# Every gate on these three is `$config.features.enable_* && (role === 'admin'
+# || <permission>)`, so unlike the workspace surfaces the feature flag alone
+# hides them from administrators too, and no bundle rewrite is needed.
+FEATURE_CONFIG_ENV = {
+    "notes.enable": "ENABLE_NOTES",
+    "calendar.enable": "ENABLE_CALENDAR",
+    "automations.enable": "ENABLE_AUTOMATIONS",
 }
 
 # Keys Open WebUI stores as a JSON boolean rather than a string. The value has
@@ -93,6 +111,14 @@ def overrides(environ) -> dict:
         if value:
             applied[key] = value.lower() == "true" if key in BOOLEAN_KEYS else value
 
+    for key, variable in FEATURE_CONFIG_ENV.items():
+        value = (environ.get(variable) or "").strip()
+        if value:
+            # Upstream's own parse of these variables
+            # (open_webui.config: os.getenv(name, 'True').lower() == 'true'),
+            # so an unrecognised value means off here exactly as it does there.
+            applied[key] = value.lower() == "true"
+
     if "rag.openai.api_base_url" in applied and "rag.openai.api_key" not in applied:
         raise RuntimeError(
             "RAG_OPENAI_API_BASE_URL is set to "
@@ -114,7 +140,7 @@ def log_summary(applied: dict) -> str:
 
 
 async def reconcile(config, environ) -> dict:
-    """Overwrite the persisted RAG keys the environment names. Returns them."""
+    """Overwrite the persisted keys the environment names. Returns them."""
     applied = overrides(environ)
     if applied:
         await config.upsert(applied)

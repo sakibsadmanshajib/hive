@@ -234,19 +234,31 @@ test("launcher survives client-side navigation without duplicating", async ({
   // test green while exercising no re-render at all.
   await page.locator('button[aria-label="Open Sidebar"]').first().click();
   // The drawer's own nav links becoming visible is the proof it opened.
+  // Workspace, not Notes: #772 removes Notes from this deployment entirely
+  // (ENABLE_NOTES=false plus the persisted-config reconcile), and Caddy 404s
+  // the route, so a Notes link here would be a defect rather than a fixture.
   await expect(
-    page.locator('a[href="/notes"]').first(),
+    page.locator('a[href="/workspace"]').first(),
     "sidebar drawer did not open",
   ).toBeVisible();
+  // Ordering matters: the visible Workspace link above is what makes this
+  // absence meaningful. Without it a closed drawer would satisfy a zero count
+  // and this would pin nothing. Notes coming back fails here, which is the
+  // only place in the suite that would notice.
+  await expect(
+    page.locator('a[href="/notes"]'),
+    "Notes is removed on this deployment (#772) but the sidebar still links to it",
+  ).toHaveCount(0);
   await expect(page.locator(LAUNCHER)).toHaveCount(1);
 
-  for (const href of ["/notes", "/workspace", "/"]) {
+  for (const href of ["/workspace", "/"]) {
     const link = page.locator(`a[href="${href}"]`).first();
     await expect(link, `no link to ${href} rendered`).toBeVisible();
     await link.click();
-    // Exact match, or one segment deeper: OWUI redirects /workspace to
-    // /workspace/models. Deliberately not a bare startsWith, which "/"
-    // satisfies always and would make this hop assert nothing.
+    // Exact match, or one segment deeper: OWUI redirects /workspace to its
+    // first visible tab, which is /workspace/knowledge once #772 removes the
+    // others. Deliberately not a bare startsWith, which "/" satisfies always
+    // and would make this hop assert nothing.
     const arrived = (pathname: string) =>
       pathname === href || (href !== "/" && pathname.startsWith(`${href}/`));
     await page.waitForURL((url) => arrived(url.pathname), { timeout: 15_000 });

@@ -24,4 +24,5 @@ test-scripts:
 	python3 scripts/test_seed_demo_owner.py
 	python3 scripts/test_install_owui_jwt_forward.py
 	python3 scripts/test_owui_rag_env_config.py
+	python3 scripts/test_owui_ui_surfaces.py
 	python3 scripts/test_caddy_owui_blocklist.py
