@@ -23,6 +23,27 @@ export const INPUT_CLASS = [
   "disabled:cursor-not-allowed disabled:opacity-50",
 ].join(" ");
 
+/*
+ * The composer's prompt field. Not INPUT_CLASS with a height override: this
+ * is the one element on the workspace that carries the user's own words, so
+ * it steps up a size (--text-lg against the app's --text-base body) and gets
+ * relaxed leading. Everything else -- border, focus ring, disabled -- stays
+ * identical to INPUT_CLASS so the two read as one family. `field-sizing:
+ * content` grows the box with the text where supported and is inert
+ * elsewhere, which is why `rows` is still set by the caller.
+ */
+export const TEXTAREA_CLASS = [
+  "w-full resize-y rounded-md border border-[var(--color-border)]",
+  "bg-[var(--color-surface)] px-3.5 py-3",
+  "text-lg leading-relaxed text-[var(--color-ink)] [field-sizing:content]",
+  "placeholder:text-[var(--color-ink-3)]",
+  "transition-[border,box-shadow] duration-[var(--duration-fast)] ease-[var(--ease-out-expo)]",
+  "focus-visible:outline-none focus-visible:border-[var(--color-accent)]",
+  "focus-visible:ring-4 focus-visible:ring-[var(--color-accent-soft)]",
+  "aria-[invalid=true]:border-[var(--color-danger)]",
+  "disabled:cursor-not-allowed disabled:opacity-50",
+].join(" ");
+
 const BUTTON_BASE = [
   "inline-flex items-center justify-center gap-2 whitespace-nowrap",
   "select-none rounded-md font-medium",
@@ -36,7 +57,14 @@ const BUTTON_BASE = [
 
 const BUTTON_VARIANTS = {
   accent: [
-    "bg-[var(--color-accent)] text-white",
+    /*
+     * The label flips with the palette because the accent itself does. In
+     * light, --color-accent is a deep sienna and white sits on it at 4.5:1.
+     * In dark it lightens to oklch(0.72 ...), where white measures 2.6:1 and
+     * fails AA outright; --color-canvas is the dark ground there and gives
+     * about 6.9:1. Measured in Chrome against the running app, both modes.
+     */
+    "bg-[var(--color-accent)] text-white dark:text-[var(--color-canvas)]",
     "hover:bg-[var(--color-accent-hover)]",
     "shadow-[var(--shadow-xs)]",
   ].join(" "),

@@ -4,16 +4,17 @@
 // proxy route needed since edge-api is already customer-facing (unlike
 // control-plane, which web-console proxies because it's internal-only).
 //
-// Wire shape and routes verified against origin/feat/311-task-sync-web
-// (#311, PR #329) after that branch pushed mid-build:
+// Wire shape and routes re-verified against
 // apps/control-plane/internal/agenttask/SYNC_CONTRACT.md and
-// apps/edge-api/internal/agenttask/{types,handler}.go. Notably: create only
-// takes `{"pack": "..."}`, there is no free-text prompt field on this
-// contract yet (Engine.Launch is a documented open seam -- see
-// SYNC_CONTRACT.md "Engine seam (known gap)" -- so a submitted task stays
-// `queued` until a real Engine lands in a later wave); status values are
-// queued/running/succeeded/failed/cancelled, not the pending/completed
-// naming this blueprint's prose used.
+// apps/edge-api/internal/agenttask/{types,handler}.go. The earlier note here
+// claimed create takes only `{"pack": "..."}` and that no free-text prompt
+// field existed. That has not been true since the #311 follow-up: both the
+// contract and `createTaskRequest` in edge-api's handler.go carry
+// `instructions`, the free-text goal the task's conversation starts from,
+// forwarded to the engine as the conversation's `initial_message`. It is
+// optional on the wire (empty string means no prompt), but this console
+// always sends one -- a task with no stated goal is not a task a person can
+// express. Status values are queued/running/succeeded/failed/cancelled.
 
 import {
   isJsonObject,
@@ -26,11 +27,31 @@ import {
 } from "./json";
 
 export type TaskPack = "coding-pack" | "knowledge-work-pack";
-export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+/*
+ * The five wire statuses, plus a local sixth.
+ *
+ * "unknown" is never sent by the server. It is what any status this build
+ * does not recognise decodes to, so that a row still reaches the list. The
+ * five above are a closed set only for as long as control-plane's `Status`
+ * enum stays exactly this shape; when it grows, a console that filtered the
+ * row out would make a task the user submitted vanish with no error, which
+ * reads as deletion. An honest "we do not know what state this is in" row is
+ * the same argument the sentinel-string comment at the bottom of this file
+ * makes for a drifted error message.
+ */
+export type TaskStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "unknown";
 
 export interface AgentTask {
   id: string;
   pack: TaskPack;
+  instructions: string;
   status: TaskStatus;
   engine_session_ref: string;
   result_summary_ref: string;
@@ -63,8 +84,9 @@ export function isTaskPack(value: string): value is TaskPack {
   return PACKS.has(value);
 }
 
-function isTaskStatus(value: string): value is TaskStatus {
-  return STATUSES.has(value);
+/** True only for a status the server actually documents. */
+function isWireStatus(value: string | null): value is TaskStatus {
+  return value !== null && STATUSES.has(value);
 }
 
 function decodeTask(value: JsonObject): AgentTask | null {
@@ -74,14 +96,21 @@ function decodeTask(value: JsonObject): AgentTask | null {
   const createdAt = readStringField(value, "created_at");
   const updatedAt = readStringField(value, "updated_at");
 
-  if (!id || !pack || !isTaskPack(pack) || !status || !isTaskStatus(status) || !createdAt || !updatedAt) {
+  // Identity fields only. A row without one of these is a malformed payload
+  // rather than a task in a state we have not met, and there is nothing
+  // honest to render for it. The status deliberately is not in this guard:
+  // see TaskStatus.
+  if (!id || !pack || !isTaskPack(pack) || !createdAt || !updatedAt) {
     return null;
   }
 
   return {
     id,
     pack,
-    status,
+    // Nullable column server-side; the contract promises "" rather than null
+    // on read, but decode defensively so an older row cannot crash the list.
+    instructions: readStringField(value, "instructions") ?? "",
+    status: isWireStatus(status) ? status : "unknown",
     engine_session_ref: readStringField(value, "engine_session_ref") ?? "",
     result_summary_ref: readStringField(value, "result_summary_ref") ?? "",
     error_message: readStringField(value, "error_message") ?? "",
@@ -136,11 +165,12 @@ export async function createTask(
   baseUrl: string,
   accessToken: string,
   pack: TaskPack,
+  instructions: string,
 ): Promise<AgentTask> {
   const response = await fetch(`${baseUrl}/v1/agent/tasks`, {
     method: "POST",
     headers: authHeaders(accessToken),
-    body: JSON.stringify({ pack }),
+    body: JSON.stringify({ pack, instructions }),
   });
   if (!response.ok) {
     await throwTaskError(response, "Failed to create task");
@@ -197,9 +227,51 @@ export async function cancelTask(
 }
 
 // TERMINAL_STATUSES: polling and the cancel button both stop once a task
-// reaches one of these (matches SYNC_CONTRACT.md's state machine).
+// reaches one of these (matches SYNC_CONTRACT.md's state machine). "unknown"
+// is deliberately absent: a state we cannot name is not a state we can call
+// finished, and polling is the only way such a row ever becomes correct.
 export const TERMINAL_STATUSES: ReadonlySet<TaskStatus> = new Set([
   "succeeded",
   "failed",
   "cancelled",
 ]);
+
+// IN_FLIGHT_STATUSES: the states the server can move a task out of on its
+// own, and therefore the only reason to keep polling. Deliberately not the
+// complement of TERMINAL_STATUSES: "unknown" is neither finished nor known to
+// be moving, so it keeps its row but does not hold the poll timer open
+// forever on a guess.
+export const IN_FLIGHT_STATUSES: ReadonlySet<TaskStatus> = new Set([
+  "queued",
+  "running",
+]);
+
+/*
+ * Deployment-configuration sentinels.
+ *
+ * Both strings are `const`s in apps/control-plane/internal/agenttask/
+ * service.go (`engineUnavailableMessage`, `engineLaunchFailedMessage`),
+ * persisted verbatim into `error_message` when Engine.Launch fails. They are
+ * deliberately provider-blind and generic, which also makes them stable
+ * enough to key presentation off: a task carrying one of them did not fail
+ * because of anything the user wrote, it never started at all. Matching them
+ * here is what lets this console explain a configuration state in a human
+ * sentence instead of showing the raw string.
+ *
+ * A drifted string degrades to the plain "failed" treatment, which is still
+ * honest, so this is a soft dependency rather than a coupling that can break.
+ */
+export const ENGINE_UNAVAILABLE_MESSAGE =
+  "agent engine is not available on this deployment";
+export const ENGINE_LAUNCH_FAILED_MESSAGE =
+  "agent engine could not start the task";
+
+/** True when the task failed because the deployment has no agent runtime. */
+export function isEngineUnavailable(task: AgentTask): boolean {
+  return task.status === "failed" && task.error_message === ENGINE_UNAVAILABLE_MESSAGE;
+}
+
+/** True when the engine exists but refused or failed to launch the task. */
+export function isEngineLaunchFailure(task: AgentTask): boolean {
+  return task.status === "failed" && task.error_message === ENGINE_LAUNCH_FAILED_MESSAGE;
+}
