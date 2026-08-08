@@ -140,3 +140,53 @@
     font-weight: 600;
   }
 }
+
+/*
+ * The only two animations on this surface, both attached to a state that is
+ * genuinely ongoing rather than to decoration.
+ *
+ * `hive-pulse` marks a running task's dot. `hive-progress` sweeps the top
+ * edge of the composer while a submission is in flight -- an indeterminate
+ * bar, because the request has no progress to report and a determinate one
+ * would be a lie.
+ *
+ * Neither conveys information on its own: the running dot always sits beside
+ * the word "Running", and the sweep always accompanies a disabled button
+ * reading "Starting...". That is what makes it safe to switch both off
+ * entirely under prefers-reduced-motion rather than substituting something.
+ */
+@keyframes hive-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@keyframes hive-progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
+.hive-pulse {
+  animation: hive-pulse 1.6s var(--ease-out-expo) infinite;
+}
+
+.hive-progress {
+  width: 33%;
+  animation: hive-progress 1.1s var(--ease-out-expo) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hive-pulse,
+  .hive-progress {
+    animation: none;
+  }
+
+  /*
+   * Switched off means gone, not frozen at full width. A static bar spanning
+   * the composer is a progress claim the request cannot back, and it
+   * contradicts the note above. The disabled "Starting..." button and
+   * aria-busy carry the state on their own.
+   */
+  .hive-progress {
+    display: none;
+  }
+}

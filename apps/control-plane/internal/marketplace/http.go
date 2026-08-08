@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 // Handler serves the admin-curated marketplace catalog surface (issue #309,
@@ -17,9 +18,11 @@ import (
 // tenant enable/disable, and the internal service-to-service read the
 // agent-engine consumes to build its MCP config.
 //
-// Admin surface (owner-gated, mounted behind AuthMiddleware.Require +
-// RoleSvc.RequirePlatformAdmin — see router.go, mirrors the featuregate and
-// egress-policy admin surfaces):
+// Admin surface, mounted behind AuthMiddleware.Require plus
+// platform.WorkspaceAdminGate (see router.go, mirrors the featuregate and
+// egress-policy admin surfaces). The gate admits the OWNER of the tenant in
+// scope as well as a platform admin, because choosing which connectors a
+// workspace may use is workspace-scoped administration (issue #758):
 //
 //	GET    /api/v1/admin/marketplace              — catalog joined with this tenant's enablement
 //	POST   /api/v1/admin/marketplace              — curate a new entry
@@ -45,8 +48,8 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// AdminMux returns the owner-gated admin CRUD + enablement surface. Wrap
-// with auth.Middleware.Require + platform-admin in router wiring.
+// AdminMux returns the admin CRUD plus enablement surface. Wrap
+// with auth.Middleware.Require plus platform.WorkspaceAdminGate in router wiring.
 func (h *Handler) AdminMux() http.Handler {
 	return http.HandlerFunc(h.serveAdmin)
 }
@@ -77,12 +80,23 @@ func (h *Handler) serveAdmin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Curating the catalog is a platform operation, not a workspace one:
+	// public.marketplace_entries is one global table every tenant reads, so a
+	// create, edit or delete by a single workspace owner would change what every
+	// other workspace sees. Only per-tenant enablement, and the read that feeds
+	// it, belong to the workspace owner (issue #758).
+	canCurate := platform.PlatformAdminFromContext(r.Context())
+
 	rest := strings.Trim(strings.TrimPrefix(r.URL.Path, adminPrefix), "/")
 	if rest == "" {
 		switch r.Method {
 		case http.MethodGet:
-			h.handleList(w, r, viewer.TenantID)
+			h.handleList(w, r, viewer.TenantID, canCurate)
 		case http.MethodPost:
+			if !canCurate {
+				writeCurationDenied(w)
+				return
+			}
 			h.handleCreate(w, r, viewer.UserID)
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
@@ -101,8 +115,16 @@ func (h *Handler) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 1:
 		switch r.Method {
 		case http.MethodPut:
+			if !canCurate {
+				writeCurationDenied(w)
+				return
+			}
 			h.handleUpdate(w, r, id)
 		case http.MethodDelete:
+			if !canCurate {
+				writeCurationDenied(w)
+				return
+			}
 			h.handleDelete(w, r, id)
 		default:
 			writeJSON(w, http.StatusMethodNotAllowed, errBody("method not allowed"))
@@ -118,13 +140,19 @@ func (h *Handler) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleList(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID) {
+// writeCurationDenied refuses a catalog mutation attempted by a workspace
+// administrator who is not a platform admin.
+func writeCurationDenied(w http.ResponseWriter) {
+	writeJSON(w, http.StatusForbidden, errBody("platform admin permission required"))
+}
+
+func (h *Handler) handleList(w http.ResponseWriter, r *http.Request, tenantID uuid.UUID, canCurate bool) {
 	entries, enabled, err := h.svc.Browse(r.Context(), tenantID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errBody("failed to load marketplace catalog"))
 		return
 	}
-	writeJSON(w, http.StatusOK, listResponse{Entries: entryWires(entries, enabled)})
+	writeJSON(w, http.StatusOK, listResponse{Entries: entryWires(entries, enabled, canCurate), CanCurate: canCurate})
 }
 
 type createOrUpdateRequest struct {
@@ -238,14 +266,20 @@ type entryWire struct {
 	Kind        string          `json:"kind"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Config      json.RawMessage `json:"config"`
+	Config      json.RawMessage `json:"config,omitempty"`
 	Enabled     bool            `json:"enabled"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
+// listResponse carries the catalog plus whether this caller may curate it.
+// can_curate is false for a workspace owner: the catalog is global, so only a
+// platform admin may add, edit or remove an entry (issue #758). The console
+// uses it to hide curation controls rather than offer a control that would be
+// refused.
 type listResponse struct {
-	Entries []entryWire `json:"entries"`
+	Entries   []entryWire `json:"entries"`
+	CanCurate bool        `json:"can_curate"`
 }
 
 func newEntryWire(e Entry, enabled bool) entryWire {
@@ -261,11 +295,22 @@ func newEntryWire(e Entry, enabled bool) entryWire {
 	}
 }
 
-func entryWires(entries []Entry, enabled map[uuid.UUID]TenantEntry) []entryWire {
+// entryWires renders the catalog for the list response. includeConfig is the
+// caller curation authority: config is the raw kind-specific blob of a global
+// catalog row, and an MCP server entry routinely carries a service token in its
+// env (apps/agent-engine/internal/marketplaceclient decodes exactly that field),
+// so a reader who may not curate the catalog is told the entry exists without
+// being handed its configuration. The console renders config only in the
+// curation form, so nothing is lost. Security review of PR #788, issue #758.
+func entryWires(entries []Entry, enabled map[uuid.UUID]TenantEntry, includeConfig bool) []entryWire {
 	out := make([]entryWire, 0, len(entries))
 	for _, e := range entries {
 		_, on := enabled[e.ID]
-		out = append(out, newEntryWire(e, on))
+		wire := newEntryWire(e, on)
+		if !includeConfig {
+			wire.Config = nil
+		}
+		out = append(out, wire)
 	}
 	return out
 }

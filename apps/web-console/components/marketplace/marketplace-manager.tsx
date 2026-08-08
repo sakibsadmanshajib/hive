@@ -8,6 +8,11 @@ import type { MarketplaceEntry } from "@/lib/control-plane/client";
 
 interface MarketplaceManagerProps {
   entries: MarketplaceEntry[];
+  // canCurate is false for a workspace owner: the catalog is global, so
+  // creating, editing and deleting an entry stays platform-admin only
+  // (issue #758). Enabling an entry for this workspace is the owner decision,
+  // so those switches stay live either way.
+  canCurate: boolean;
 }
 
 // Minimal JSON value type + type guard for parsing the admin curation form's
@@ -66,7 +71,10 @@ function groupByKind(entries: MarketplaceEntry[]): KindGroup[] {
   return groups;
 }
 
-export function MarketplaceManager({ entries: initialEntries }: MarketplaceManagerProps) {
+export function MarketplaceManager({
+  entries: initialEntries,
+  canCurate,
+}: MarketplaceManagerProps) {
   const [entries, setEntries] = React.useState<MarketplaceEntry[]>(initialEntries);
   const [status, setStatus] = React.useState<Record<string, RowStatus>>({});
   const [formError, setFormError] = React.useState<string | null>(null);
@@ -177,57 +185,66 @@ export function MarketplaceManager({ entries: initialEntries }: MarketplaceManag
 
   return (
     <div className="flex flex-col gap-10">
-      <form
-        onSubmit={(event) => {
-          void handleCreate(event);
-        }}
-        className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
-      >
-        <h2 className="text-2xs font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
-          Curate a new entry
-        </h2>
-        <div className="flex flex-wrap gap-3">
-          <select name="kind" defaultValue="mcp_server" className="rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-sm">
-            {KIND_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <input
-            name="name"
-            placeholder="Name (e.g. github)"
-            className="min-w-[160px] flex-1 rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-sm"
-          />
-        </div>
-        <input
-          name="description"
-          placeholder="Description"
-          className="rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-sm"
-        />
-        <textarea
-          name="config"
-          placeholder={'{"command":"npx","args":["-y","@modelcontextprotocol/server-github"]}'}
-          rows={3}
-          className="rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 font-mono text-2xs"
-        />
-        {formError ? (
-          <span className="flex items-center gap-1 text-2xs text-[var(--color-danger,#d64545)]">
-            <AlertCircle size={12} />
-            {formError}
-          </span>
-        ) : null}
-        <button
-          type="submit"
-          disabled={submitting}
-          className={cn(
-            "self-start rounded bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white",
-            submitting ? "cursor-wait opacity-70" : "cursor-pointer",
-          )}
+      {canCurate ? (
+        <form
+          onSubmit={(event) => {
+            void handleCreate(event);
+          }}
+          className="flex flex-col gap-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-4"
         >
-          {submitting ? "Curating…" : "Curate entry"}
-        </button>
-      </form>
+          <h2 className="text-2xs font-medium uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+            Curate a new entry
+          </h2>
+          <div className="flex flex-wrap gap-3">
+            <select name="kind" defaultValue="mcp_server" className="rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-sm">
+              {KIND_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <input
+              name="name"
+              placeholder="Name (e.g. github)"
+              className="min-w-[160px] flex-1 rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-sm"
+            />
+          </div>
+          <input
+            name="description"
+            placeholder="Description"
+            className="rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 text-sm"
+          />
+          <textarea
+            name="config"
+            placeholder={'{"command":"npx","args":["-y","@modelcontextprotocol/server-github"]}'}
+            rows={3}
+            className="rounded border border-[var(--color-border)] bg-transparent px-2 py-1.5 font-mono text-2xs"
+          />
+          {formError ? (
+            <span className="flex items-center gap-1 text-2xs text-[var(--color-danger,#d64545)]">
+              <AlertCircle size={12} />
+              {formError}
+            </span>
+          ) : null}
+          <button
+            type="submit"
+            disabled={submitting}
+            className={cn(
+              "self-start rounded bg-[var(--color-accent)] px-3 py-1.5 text-sm text-white",
+              submitting ? "cursor-wait opacity-70" : "cursor-pointer",
+            )}
+          >
+            {submitting ? "Curating…" : "Curate entry"}
+          </button>
+        </form>
+      ) : null}
+
+      {entries.length === 0 && !canCurate ? (
+        <p className="text-sm text-[var(--color-ink-3)]">
+          No connectors have been published for this workspace yet. Ask your
+          administrator if you need one added.
+        </p>
+      ) : null}
 
       {groups.map((group) => (
         <section key={group.kind} className="flex flex-col gap-3">
@@ -274,17 +291,19 @@ export function MarketplaceManager({ entries: initialEntries }: MarketplaceManag
                         void toggle(entry);
                       }}
                     />
-                    <button
-                      type="button"
-                      aria-label={`Delete ${entry.name}`}
-                      disabled={rowStatus === "saving"}
-                      onClick={() => {
-                        void remove(entry);
-                      }}
-                      className="text-[var(--color-ink-3)] hover:text-[var(--color-danger,#d64545)]"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    {canCurate ? (
+                      <button
+                        type="button"
+                        aria-label={`Delete ${entry.name}`}
+                        disabled={rowStatus === "saving"}
+                        onClick={() => {
+                          void remove(entry);
+                        }}
+                        className="text-[var(--color-ink-3)] hover:text-[var(--color-danger,#d64545)]"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    ) : null}
                   </div>
                 </li>
               );

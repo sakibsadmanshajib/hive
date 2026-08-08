@@ -1,0 +1,3 @@
+# Harness output. Every run overwrites it. The shots worth keeping get copied
+# up into apps/agent-console/proof/ under the numbering already used there.
+captures/

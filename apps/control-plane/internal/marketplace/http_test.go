@@ -12,14 +12,27 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/marketplace"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
 )
 
 func adminViewer() auth.Viewer {
 	return auth.Viewer{UserID: uuid.New(), TenantID: uuid.New()}
 }
 
+// withViewer authenticates the request as a platform admin, the authority the
+// catalog-curation routes still require after issue #758 moved the rest of this
+// surface to the workspace owner.
 func withViewer(req *http.Request, v auth.Viewer) *http.Request {
-	return req.WithContext(auth.WithViewer(req.Context(), v))
+	ctx := platform.WithPlatformAdmin(req.Context(), true)
+	return req.WithContext(auth.WithViewer(ctx, v))
+}
+
+// withOwnerViewer authenticates the request as a workspace OWNER who holds no
+// platform-admin overlay, which is what platform.WorkspaceAdminGate stamps for
+// the owner of the tenant in scope.
+func withOwnerViewer(req *http.Request, v auth.Viewer) *http.Request {
+	ctx := platform.WithPlatformAdmin(req.Context(), false)
+	return req.WithContext(auth.WithViewer(ctx, v))
 }
 
 func newTestHandler() *marketplace.Handler {

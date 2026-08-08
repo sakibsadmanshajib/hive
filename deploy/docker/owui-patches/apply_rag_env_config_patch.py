@@ -32,7 +32,7 @@ INSERT = """    # hive #722: seed_defaults above only fills keys that are ABSENT
     _hive_rag_applied = await reconcile(Config, os.environ)
     if _hive_rag_applied:
         log.info(
-            'hive: reconciled Open WebUI RAG config from env: %s',
+            'hive: reconciled Open WebUI config from env: %s',
             log_summary(_hive_rag_applied),
         )
 """

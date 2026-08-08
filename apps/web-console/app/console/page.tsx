@@ -78,9 +78,11 @@ export default async function ConsolePage() {
   return (
     <ConsoleShell
       workspace={{
+        id: viewer.current_account.id,
         name: viewer.current_account.display_name,
         slug: viewer.current_account.slug,
       }}
+      memberships={viewer.memberships}
       user={{ email: viewer.user.email, name: profile.owner_name || null }}
       active="/console"
       topbar={

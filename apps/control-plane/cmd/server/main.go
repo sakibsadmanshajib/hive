@@ -675,6 +675,25 @@ func main() {
 			}
 			catalogVisibilityHandler = catalog.NewVisibilityHandler(catalogSvc, owuiSync)
 			log.Println("tenant model visibility admin routes registered (Phase 20 Plan 04)")
+
+			// Issue #772 — the OWUI chat picker listed hive-embedding-default,
+			// hive-stt and hive-tts as selectable chat models: picking one
+			// produced a broken conversation. syncOWUI now locks non-chat-
+			// modality aliases out of the OWUI picker, but that function only
+			// runs from the admin PUT/DELETE visibility mutation path, which a
+			// migration-seeded alias (all three of the above) never goes
+			// through. Reconcile once at boot so the fix actually applies to
+			// rows already sitting in model_aliases, and so it re-applies on
+			// its own after an Open WebUI image bump resets access_control.
+			// Best-effort: a failure here logs and does not block startup, the
+			// same posture syncOWUI itself takes for a single alias.
+			if owuiClient != nil {
+				if err := catalogVisibilityHandler.ReconcileOWUISync(runCtx); err != nil {
+					log.Printf("WARNING: owui non-chat-modality reconcile failed (issue #772): %v", err)
+				} else {
+					log.Println("owui non-chat-modality reconcile complete (issue #772)")
+				}
+			}
 		}
 
 		configuredSinks := configuredAuditSinks()
@@ -905,16 +924,32 @@ func main() {
 	// consumer nor the desktop firewall rule generator is wired here.
 	var egressPolicyHandler *egress.Handler
 	var egressSvc *egress.Service
+	var tenantRoleSvc *platform.TenantRoleService
 	if pool != nil {
 		egressRepo := egress.NewPgxRepository(pool)
-		tenantRoleSvc := platform.NewTenantRoleService(platform.NewPgxTenantRoleStore(pool))
+		tenantRoleSvc = platform.NewTenantRoleService(platform.NewPgxTenantRoleStore(pool))
 		egressSvc = egress.NewService(egressRepo, tenantRoleSvc)
 		egressPolicyHandler = egress.NewHandler(egressSvc)
 	}
 
+	// Issue #758 — the workspace-scoped admin surfaces (feature gates, the
+	// marketplace) are gated on the OWNER of the tenant in scope, with the
+	// platform-admin overlay still admitted and still required for the platform
+	// operations carved out inside those handlers. Built only when both halves
+	// resolve, so the routes are skipped rather than mounted behind half a gate.
+	// Declared as the interface the router consumes, not as the concrete pointer:
+	// a nil *WorkspaceAdminGate stored in an interface field is non-nil to the
+	// router, which would mount the routes behind a gate that panics.
+	var workspaceAdminGate interface {
+		Require(http.Handler) http.Handler
+	}
+	if tenantRoleSvc != nil && roleSvc != nil {
+		workspaceAdminGate = platform.NewWorkspaceAdminGate(tenantRoleSvc, roleSvc)
+	}
+
 	// Issue #309 (blueprint Step 2.3) — MCP and skills marketplace, admin-
-	// curated baseline. Admin CRUD + per-tenant enablement is platform-admin
-	// gated (RoleSvc, mirrors feature-gates/providers below); the internal
+	// curated baseline. Per-tenant enablement is workspace-owner gated and
+	// catalog curation stays platform-admin only (issue #758). The internal
 	// read surface is the seam apps/agent-engine/internal/marketplaceclient
 	// consumes to build a session's MCP config.
 	var marketplaceHandler *marketplace.Handler
@@ -979,6 +1014,7 @@ func main() {
 		Mux:                      routerMux,
 		InternalToken:            cfg.InternalToken,
 		RoleSvc:                  roleSvc,
+		WorkspaceAdminGate:       workspaceAdminGate,
 	})
 
 	// Wire filestore internal endpoints if the database pool is available.

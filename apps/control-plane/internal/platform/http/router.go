@@ -80,6 +80,16 @@ type RouterConfig struct {
 		RequirePlatformAdmin(http.Handler) http.Handler
 	}
 
+	// WorkspaceAdminGate gates the workspace-scoped admin surfaces (feature
+	// gates and the marketplace) on the OWNER of the tenant in scope, admitting
+	// a platform admin as well. Platform operations such as provider CRUD and
+	// credit grants stay on RoleSvc.RequirePlatformAdmin. When nil those
+	// workspace-scoped routes are skipped, rather than falling back to a wider
+	// gate. See issue #758.
+	WorkspaceAdminGate interface {
+		Require(http.Handler) http.Handler
+	}
+
 	// LiteLLMSyncHandler handles POST /internal/litellm/sync.
 	// Guarded by the shared-secret token. When nil the route is not registered.
 	LiteLLMSyncHandler http.Handler
@@ -299,13 +309,13 @@ func NewRouter(cfg RouterConfig) http.Handler {
 		mux.Handle("/internal/featuregate/", internal(cfg.FeatureGateHandler))
 	}
 
-	// Issue #292 (blueprint Step 1.2) — admin feature-gate CRUD, platform-admin
-	// gated (JWT path). GET lists the registry joined with the caller's tenant
-	// enablement; PUT toggles one gate for the caller's selected tenant. Mirrors
-	// the /api/v1/admin/providers gating above.
-	if cfg.FeatureGateAdminHandler != nil && cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
+	// Issue #292 (blueprint Step 1.2) — admin feature-gate CRUD, gated on the
+	// workspace administrator (JWT path). GET lists the registry joined with the
+	// tenant enablement; PUT toggles one gate for the selected tenant. Mirrors
+	// providers CRUD stays platform-admin only, see the mount above.
+	if cfg.FeatureGateAdminHandler != nil && cfg.WorkspaceAdminGate != nil && cfg.AuthMiddleware != nil {
 		adminFeatureGates := cfg.AuthMiddleware.Require(
-			cfg.RoleSvc.RequirePlatformAdmin(cfg.FeatureGateAdminHandler.AdminMux()),
+			cfg.WorkspaceAdminGate.Require(cfg.FeatureGateAdminHandler.AdminMux()),
 		)
 		mux.Handle("/api/v1/admin/feature-gates", adminFeatureGates)
 		mux.Handle("/api/v1/admin/feature-gates/", adminFeatureGates)
@@ -326,14 +336,14 @@ func NewRouter(cfg RouterConfig) http.Handler {
 	// Issue #309 (blueprint Step 2.3) — MCP and skills marketplace, admin-
 	// curated baseline. The internal read surface is the seam
 	// apps/agent-engine/internal/marketplaceclient consumes to build a
-	// session's MCP config; the admin surface is platform-admin gated,
-	// mirroring the /api/v1/admin/feature-gates and /api/v1/admin/providers
-	// gating above.
+	// session MCP config. The admin surface is workspace-administrator gated,
+	// mirroring /api/v1/admin/feature-gates, while catalog curation inside the
+	// handler stays platform-admin only.
 	if cfg.MarketplaceHandler != nil {
 		mux.Handle("/internal/marketplace/", internal(cfg.MarketplaceHandler.InternalMux()))
-		if cfg.RoleSvc != nil && cfg.AuthMiddleware != nil {
+		if cfg.WorkspaceAdminGate != nil && cfg.AuthMiddleware != nil {
 			adminMarketplace := cfg.AuthMiddleware.Require(
-				cfg.RoleSvc.RequirePlatformAdmin(cfg.MarketplaceHandler.AdminMux()),
+				cfg.WorkspaceAdminGate.Require(cfg.MarketplaceHandler.AdminMux()),
 			)
 			mux.Handle("/api/v1/admin/marketplace", adminMarketplace)
 			mux.Handle("/api/v1/admin/marketplace/", adminMarketplace)

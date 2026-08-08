@@ -111,16 +111,20 @@ cd deploy/docker && docker compose --profile tools run toolchain \
 cd deploy/docker && docker compose --profile tools run toolchain \
   "cd /workspace && go test ./apps/edge-api/... -count=1 -short"
 
-# Frontend type check + build
-cd deploy/docker && docker compose run web-console npm run build
+# Frontend type check + build. Unlike toolchain, the web-console service mounts
+# no volume and Dockerfile.web-console COPYs the source in at image build time,
+# so without `--build` the run silently exercises whatever `hive-web-console:ci`
+# was last built and reports a green result for stale code.
+cd deploy/docker && docker compose run --build web-console npm run build
 
 # Frontend unit tests
-cd deploy/docker && docker compose run web-console npm run test:unit
+cd deploy/docker && docker compose run --build web-console npm run test:unit
 
 # SDK integration tests (requires healthy core stack)
 cd deploy/docker && docker compose --env-file ../../.env --profile test up --build
 
-# E2E tests
+# E2E tests. Host-run against the working tree, so no image staleness here, but
+# it needs a stack already running.
 cd apps/web-console && npx playwright test
 ```
 
