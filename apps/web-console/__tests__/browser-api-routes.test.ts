@@ -16,6 +16,13 @@
  *
  * This walks the real files rather than a hand-maintained list, so a new client
  * component with a bad path fails here without anyone remembering to add it.
+ *
+ * Its ceiling, so nobody reads it as stronger than it is: a catch-all route
+ * matches every remaining segment, so for a `[...path]` namespace this proves
+ * only that a handler exists, never that the operation is on that handler's
+ * allowlist. `/api/v1/accounts/current/members/x/promote` passes here and
+ * answers 404 at runtime. The allowlist itself is pinned in
+ * api-keys-proxy-route.test.ts.
  */
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";

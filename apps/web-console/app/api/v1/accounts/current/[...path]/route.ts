@@ -55,6 +55,10 @@ function statusSummary(status: number): string {
   return "Request rejected";
 }
 
+// The four client functions this route calls raise ControlPlaneError, so an
+// upstream refusal keeps its status here instead of collapsing into 502. A
+// member who is not allowed to create a key sees 403, an already revoked key
+// sees 409, and only a genuine transport or decode failure reads as 502.
 function errorResponse(err: unknown, fallback: string): Response {
   if (err instanceof ControlPlaneError) {
     const status = err.status >= 400 && err.status < 600 ? err.status : 502;
@@ -136,6 +140,14 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
     const rail = body.rail;
     const credits = body.credits;
     const idempotencyKey = body.idempotency_key;
+    // Number.MAX_SAFE_INTEGER guard, the same one the sibling money proxy
+    // applies in app/api/budget/[workspaceId]/route.ts. Number.isInteger is
+    // true for 9007199254740993, but that value is not representable, so it
+    // arrives here already rounded to 9007199254740992. Forwarding it would
+    // put a silently altered purchase quantity on the wire, which is the
+    // float64 corruption this project uses math/big to avoid on the Go side.
+    // Reject rather than coerce: the customer asked for a quantity we cannot
+    // carry, so the honest answer is a 400, not a different purchase.
     if (
       typeof rail !== "string" ||
       rail === "" ||
@@ -143,11 +155,15 @@ export async function POST(request: Request, { params }: Params): Promise<Respon
       !Number.isFinite(credits) ||
       !Number.isInteger(credits) ||
       credits <= 0 ||
+      credits > Number.MAX_SAFE_INTEGER ||
       typeof idempotencyKey !== "string" ||
       idempotencyKey === ""
     ) {
       return NextResponse.json(
-        { error: "rail, credits and idempotency_key are required" },
+        {
+          error:
+            "rail and idempotency_key are required, and credits must be a positive integer within Number.MAX_SAFE_INTEGER",
+        },
         { status: 400 },
       );
     }

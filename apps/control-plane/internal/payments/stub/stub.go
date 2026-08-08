@@ -176,7 +176,7 @@ func (s *StubService) InitiateCheckout(
 	idempotencyKey string,
 ) (*payments.PaymentIntent, error) {
 	// Mirror production validation exactly.
-	if err := payments.ValidatePurchaseAmount(credits); err != nil {
+	if err := payments.ValidatePurchaseAmount(credits, rail); err != nil {
 		return nil, err
 	}
 	if idempotencyKey == "" {

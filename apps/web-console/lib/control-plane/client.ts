@@ -1562,7 +1562,7 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to fetch checkout rails"));
+    await throwControlPlaneError(response, "Failed to fetch checkout rails");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1628,7 +1628,7 @@ export async function initiateCheckout(
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to initiate checkout"));
+    await throwControlPlaneError(response, "Failed to initiate checkout");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1754,7 +1754,7 @@ export async function createApiKey(nickname: string, expiresAt?: string): Promis
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to create API key"));
+    await throwControlPlaneError(response, "Failed to create API key");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1782,7 +1782,7 @@ export async function revokeApiKey(keyId: string): Promise<ApiKey> {
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to revoke API key"));
+    await throwControlPlaneError(response, "Failed to revoke API key");
   }
 
   const payload = parseJsonValue(await readResponseText(response));

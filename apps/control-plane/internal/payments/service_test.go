@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -423,6 +424,84 @@ func TestInitiateCheckout_RejectsInvalidCredits(t *testing.T) {
 	_, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, 500, "https://cp.example.com", "https://console.example.com", "idem-004")
 	if err == nil {
 		t.Error("expected error for non-multiple-of-1000 credits, got nil")
+	}
+}
+
+// A quantity above the ceiling GetCheckoutOptions already advertises for the
+// rail must be refused before an intent exists. Until this bound landed, credits
+// was checked for sign and for the 1000 multiple only, so the advertised maximum
+// was decoration: a caller that skipped the console could post any int64.
+//
+// The last case is the one that motivated the bound. 9007199254741000 is past
+// 2^53, so a JSON encoder backed by float64 has already rounded it before it is
+// sent, yet it is positive, a multiple of 1000, and decodes cleanly into int64.
+// Every earlier check passes and the customer is billed for a quantity nobody
+// asked for.
+func TestInitiateCheckout_RejectsCreditsAboveRailMaximum(t *testing.T) {
+	cases := []struct {
+		name    string
+		country string
+		rail    Rail
+		credits int64
+	}{
+		{"stripe above its maximum", "US", RailStripe, MaxPurchaseCreditsStripe + 1000},
+		{"bkash above its maximum", "BD", RailBkash, MaxPurchaseCreditsBkash + 1000},
+		{"sslcommerz above its maximum", "BD", RailSSLCommerz, MaxPurchaseCreditsSSLCommerz + 1000},
+		{"rounded past 2^53", "US", RailStripe, 9007199254741000},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repo := newStubRepository()
+			led := &stubLedger{}
+			prof := &stubProfiles{
+				accountProfile: profiles.AccountProfile{CountryCode: tc.country},
+				billingProfile: profiles.BillingProfile{BillingContactName: "John", CountryCode: tc.country},
+			}
+			fxProv := &stubFXProvider{}
+			svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{
+				RailStripe:     newStubRail(RailStripe),
+				RailBkash:      newStubRail(RailBkash),
+				RailSSLCommerz: newStubRail(RailSSLCommerz),
+			})
+
+			_, err := svc.InitiateCheckout(context.Background(), uuid.New(), tc.rail, tc.credits, "https://cp.example.com", "https://console.example.com", "idem-max-"+tc.name)
+			if err == nil {
+				t.Fatalf("credits %d on rail %s was accepted; the advertised maximum %d is not enforced", tc.credits, tc.rail, maxCreditsForRail(tc.rail))
+			}
+			if !strings.Contains(err.Error(), "credits must be at most") {
+				t.Errorf("want an over-maximum credits error, got %v", err)
+			}
+			repo.mu.Lock()
+			intents := len(repo.intents)
+			repo.mu.Unlock()
+			if intents != 0 {
+				t.Errorf("want no payment intent created, got %d", intents)
+			}
+		})
+	}
+}
+
+// The advertised maximum is accepted exactly, so the bound rejects only what is
+// past it. Without this the guard could be tightened by accident and every
+// legitimate large purchase would start failing silently.
+func TestInitiateCheckout_AcceptsCreditsAtRailMaximum(t *testing.T) {
+	repo := newStubRepository()
+	led := &stubLedger{}
+	prof := &stubProfiles{
+		accountProfile: profiles.AccountProfile{CountryCode: "US", AccountType: "personal"},
+		billingProfile: profiles.BillingProfile{BillingContactName: "John", CountryCode: "US"},
+	}
+	fxProv := &stubFXProvider{}
+	svc := buildService(repo, led, prof, fxProv, map[Rail]PaymentRail{RailStripe: newStubRail(RailStripe)})
+
+	intent, err := svc.InitiateCheckout(context.Background(), uuid.New(), RailStripe, MaxPurchaseCreditsStripe, "https://cp.example.com", "https://console.example.com", "idem-at-max")
+	if err != nil {
+		t.Fatalf("credits at the advertised maximum were refused: %v", err)
+	}
+	if intent.Credits != MaxPurchaseCreditsStripe {
+		t.Errorf("want credits %d, got %d", MaxPurchaseCreditsStripe, intent.Credits)
 	}
 }
 
