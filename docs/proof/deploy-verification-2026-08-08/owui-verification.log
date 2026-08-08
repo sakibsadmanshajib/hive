@@ -1,0 +1,6 @@
+2026-08-08T17:10:41.591Z === chat login page ===
+2026-08-08T17:10:48.597Z   screenshot -> 01-chat-login-page.png
+2026-08-08T17:10:48.664Z PASS  login page presents only Continue with Hive :: password inputs=0, email inputs=0, "Continue with Hive" buttons=1; body="Sign in to Hive Continue with Hive Hive"
+2026-08-08T17:10:48.665Z === sign in via Continue with Hive ===
+2026-08-08T17:12:54.751Z SIGN-IN DID NOT RETURN: https://console-hive.scubed.co/auth/sign-in?next=%2Foauth%2Fconsent%3Fauthorization_id%3Dhk3hgyhnpaukmr72lqh5ouccbtbqziug
+2026-08-08T17:12:54.838Z   screenshot -> 02-signin-stuck.png

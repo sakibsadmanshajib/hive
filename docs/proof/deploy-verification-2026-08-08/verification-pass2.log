@@ -1,0 +1,11 @@
+2026-08-08T17:24:34.097Z signed in at https://chat-hive.scubed.co/auth
+2026-08-08T17:24:39.857Z === open the Settings dialog ===
+2026-08-08T17:24:43.340Z   screenshot -> 05a-user-menu.png
+2026-08-08T17:25:14.183Z   screenshot -> 05-settings-tabs.png
+2026-08-08T17:25:14.189Z   settings dialog open=false
+2026-08-08T17:25:14.190Z FAIL  settings has no Integrations tab :: INCONCLUSIVE: settings dialog never opened, so absence proves nothing
+2026-08-08T17:25:44.574Z   screenshot -> 06-settings-about.png
+2026-08-08T17:25:44.595Z FAIL  About tab is Hive-branded, no upstream copyright / creator / social row :: INCONCLUSIVE: About tab did not render; text="hive-auto Set as default hive-auto Suggested Give me ideas for what to do with my kids' art Tell me a fun fact about the Roman Empire Overcome procrastination g"
+2026-08-08T17:25:46.123Z === chat end to end ===
+2026-08-08T17:25:59.986Z   screenshot -> 07-chat-end-to-end.png
+2026-08-08T17:25:59.987Z PASS  chat completes a message end to end :: assistant replied with HIVEDEPLOYOK

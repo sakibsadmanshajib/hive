@@ -1,0 +1,9 @@
+2026-08-08T17:27:07.051Z === open user menu from the left rail ===
+2026-08-08T17:27:08.844Z   clicked rail button at x=12 y=956
+2026-08-08T17:27:11.137Z   screenshot -> 05a-user-menu.png
+2026-08-08T17:27:11.159Z   menu text: hive-auto Set as default hive-auto Suggested Show me a code snippet of a website's sticky header Give me ideas for what to do with my kids' art Overcome procrastination give me tips Explain options tr
+2026-08-08T17:27:16.896Z   screenshot -> 05-settings-tabs.png
+2026-08-08T17:27:16.961Z   settings dialog open=true
+2026-08-08T17:27:16.963Z PASS  settings has no Integrations tab :: dialog open (General and About tabs visible); Integrations present=false
+2026-08-08T17:27:46.477Z   screenshot -> 06-settings-about.png
+2026-08-08T17:27:46.530Z PASS  About tab is Hive-branded, no upstream copyright / creator / social row :: About rendered (version line present), names Hive=true; upstream markers present=[]

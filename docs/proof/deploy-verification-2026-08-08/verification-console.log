@@ -1,0 +1,9 @@
+2026-08-08T17:32:50.719Z === multi-workspace account: e2e-verified@scubed.com.bd, 1 workspace(s) ===
+2026-08-08T17:33:04.949Z   {"tenants":1,"controls":1,"options":["Acme Labs (current)","E2E Shared Workspace","E2E Verified Workspace"],"disabled":false,"visible":true,"sidebarLabel":7}
+2026-08-08T17:33:05.127Z   screenshot -> 08-console-switcher-multi-closed.png
+2026-08-08T17:33:06.804Z   screenshot -> 09-console-switcher-multi-open.png
+2026-08-08T17:33:06.805Z PASS  console sidebar workspace switcher opens and lists workspaces :: visible switcher=true, interactive=true, options=["Acme Labs (current)","E2E Shared Workspace","E2E Verified Workspace"]
+2026-08-08T17:33:08.045Z === single-workspace account: hive-owner-758@example.com, 1 workspace(s) ===
+2026-08-08T17:33:17.282Z   {"tenants":1,"controls":0,"options":[],"disabled":null,"visible":false,"sidebarLabel":8}
+2026-08-08T17:33:17.393Z   screenshot -> 10-console-switcher-single.png
+2026-08-08T17:33:17.393Z PASS  switcher renders non-interactive for a single-membership account :: WORKSPACE label rendered=true, controls=0, disabled=null, options=[]

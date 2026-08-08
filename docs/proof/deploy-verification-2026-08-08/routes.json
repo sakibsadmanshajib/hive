@@ -1,0 +1,432 @@
+[
+  {
+    "name": "credential-export",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/export",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "credential-export-trailing-slash",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/export/",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "credential-export-UPPER",
+    "url": "https://chat-hive.scubed.co/API/V1/CONFIGS/EXPORT",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "credential-export-double-slash",
+    "url": "https://chat-hive.scubed.co//api/v1/configs/export",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "credential-export-pct-encoded",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/%65xport",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "credential-export-subpath",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/export/anything",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "openai-config",
+    "url": "https://chat-hive.scubed.co/openai/config",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "openai-config-update",
+    "url": "https://chat-hive.scubed.co/openai/config/update",
+    "method": "POST",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "openai-config-trailing",
+    "url": "https://chat-hive.scubed.co/openai/config/",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "openai-config-UPPER",
+    "url": "https://chat-hive.scubed.co/OpenAI/Config",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-root",
+    "url": "https://chat-hive.scubed.co/api/v1/terminals",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-slash",
+    "url": "https://chat-hive.scubed.co/api/v1/terminals/",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-forward",
+    "url": "https://chat-hive.scubed.co/api/v1/terminals/srv1/http://169.254.169.254/",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-ws-path",
+    "url": "https://chat-hive.scubed.co/api/v1/terminals/srv1/api/terminals/sess1",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-UPPER",
+    "url": "https://chat-hive.scubed.co/API/v1/TERMINALS/",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-double-slash",
+    "url": "https://chat-hive.scubed.co//api//v1//terminals",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-pct-encoded",
+    "url": "https://chat-hive.scubed.co/api/v1/%74erminals",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminal-proxy-v2",
+    "url": "https://chat-hive.scubed.co/api/v2/terminals",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "toolserver-register",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/tool_servers",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "toolserver-register-POST",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/tool_servers",
+    "method": "POST",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "toolserver-verify-ssrf",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/tool_servers/verify",
+    "method": "POST",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "toolserver-UPPER",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/TOOL_SERVERS",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "toolserver-trailing",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/tool_servers/",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminalserver-register",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/terminal_servers",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminalserver-register-POST",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/terminal_servers",
+    "method": "POST",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "terminalserver-verify",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/terminal_servers/verify",
+    "method": "POST",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "admin-mount",
+    "url": "https://chat-hive.scubed.co/admin",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "signup-api",
+    "url": "https://chat-hive.scubed.co/api/v1/auths/signup",
+    "method": "POST",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-playground",
+    "url": "https://chat-hive.scubed.co/playground",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-notes",
+    "url": "https://chat-hive.scubed.co/notes",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-workspace-models",
+    "url": "https://chat-hive.scubed.co/workspace/models",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-workspace-prompts",
+    "url": "https://chat-hive.scubed.co/workspace/prompts",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-workspace-tools",
+    "url": "https://chat-hive.scubed.co/workspace/tools",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-workspace-skills",
+    "url": "https://chat-hive.scubed.co/workspace/skills",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "route-workspace-skills-doubleslash",
+    "url": "https://chat-hive.scubed.co/workspace//skills",
+    "method": "GET",
+    "status": 404,
+    "verdict": "caddy-block",
+    "bytes": 0,
+    "content_type": "",
+    "body_head": ""
+  },
+  {
+    "name": "CONTROL banners (frontend reads every load)",
+    "url": "https://chat-hive.scubed.co/api/v1/configs/banners",
+    "method": "GET",
+    "status": 401,
+    "verdict": "app-json",
+    "bytes": 30,
+    "content_type": "application/json",
+    "body_head": "{\"detail\":\"Not authenticated\"}"
+  },
+  {
+    "name": "CONTROL api-config",
+    "url": "https://chat-hive.scubed.co/api/config",
+    "method": "GET",
+    "status": 200,
+    "verdict": "app-json",
+    "bytes": 319,
+    "content_type": "application/json",
+    "body_head": "{\"status\":true,\"name\":\"Hive\",\"version\":\"0.10.2\",\"default_locale\":\"en\",\"oauth\":{\"providers\":{\"oidc\":\"Hive\"},\"auto_redirec"
+  },
+  {
+    "name": "CONTROL openai-models (model picker)",
+    "url": "https://chat-hive.scubed.co/openai/models",
+    "method": "GET",
+    "status": 401,
+    "verdict": "app-json",
+    "bytes": 30,
+    "content_type": "application/json",
+    "body_head": "{\"detail\":\"Not authenticated\"}"
+  },
+  {
+    "name": "CONTROL workspace tools API (kept)",
+    "url": "https://chat-hive.scubed.co/api/v1/tools/",
+    "method": "GET",
+    "status": 401,
+    "verdict": "app-json",
+    "bytes": 30,
+    "content_type": "application/json",
+    "body_head": "{\"detail\":\"Not authenticated\"}"
+  },
+  {
+    "name": "CONTROL signin POST (login must work)",
+    "url": "https://chat-hive.scubed.co/api/v1/auths/signin",
+    "method": "POST",
+    "status": 422,
+    "verdict": "app-json",
+    "bytes": 82,
+    "content_type": "application/json",
+    "body_head": "{\"detail\":[{\"type\":\"missing\",\"loc\":[\"body\"],\"msg\":\"Field required\",\"input\":null}]}"
+  },
+  {
+    "name": "CONTROL workspace/knowledge (kept surface)",
+    "url": "https://chat-hive.scubed.co/workspace/knowledge",
+    "method": "GET",
+    "status": 200,
+    "verdict": "app-html",
+    "bytes": 11092,
+    "content_type": "text/html; charset=utf-8",
+    "body_head": "<!doctype html> <html lang=\"en\"> \t<head> \t\t<meta charset=\"utf-8\" /> \t\t<link rel=\"icon\" type=\"image/png\" href=\"/static/fa"
+  },
+  {
+    "name": "CONTROL SPA root",
+    "url": "https://chat-hive.scubed.co/",
+    "method": "GET",
+    "status": 200,
+    "verdict": "app-html",
+    "bytes": 11092,
+    "content_type": "text/html; charset=utf-8",
+    "body_head": "<!doctype html> <html lang=\"en\"> \t<head> \t\t<meta charset=\"utf-8\" /> \t\t<link rel=\"icon\" type=\"image/png\" href=\"/static/fa"
+  },
+  {
+    "name": "CONTROL edge-api models (OpenAI contract)",
+    "url": "https://api-hive.scubed.co/v1/models",
+    "method": "GET",
+    "status": 401,
+    "verdict": "app-json",
+    "bytes": 86,
+    "content_type": "application/json",
+    "body_head": "{\"error\":{\"code\":\"UNAUTHENTICATED\",\"message\":\"missing bearer\",\"type\":\"UNAUTHORIZED\"}} "
+  }
+]

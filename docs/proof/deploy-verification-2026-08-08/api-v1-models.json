@@ -1,0 +1,17 @@
+{
+  "status": 200,
+  "ids": [
+    "hive-auto",
+    "hive-default",
+    "hive-embedding-default",
+    "hive-fast",
+    "hive-stt",
+    "hive-tts"
+  ],
+  "nonChatPresent": [
+    "hive-embedding-default",
+    "hive-stt",
+    "hive-tts"
+  ],
+  "missing": []
+}
