@@ -686,7 +686,13 @@ function decodeMarketplaceEntry(value: JsonValue | null): MarketplaceEntry | nul
   const kind = readStringField(value, "kind");
   const name = readStringField(value, "name");
   const description = readStringField(value, "description");
-  const config = readObjectField(value, "config");
+  // A caller who may not curate the catalogue receives no config at all: it is
+  // the raw configuration of a global catalogue row and an MCP entry can carry
+  // a credential in its env, so the control-plane withholds it (security review
+  // of PR #788). An absent key is a withheld value, not a malformed row; a
+  // present key still has to be an object. Nothing here renders config for a
+  // non-curator, so the empty default costs nothing.
+  const config = "config" in value ? readObjectField(value, "config") : {};
   const enabled = readBooleanField(value, "enabled");
   const createdAt = readStringField(value, "created_at");
   const updatedAt = readStringField(value, "updated_at");

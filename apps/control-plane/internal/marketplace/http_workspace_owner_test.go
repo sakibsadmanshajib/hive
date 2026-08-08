@@ -131,3 +131,58 @@ func TestAdmin_WorkspaceOwnerEnableIsScopedToOwnTenant(t *testing.T) {
 		t.Fatal("a second workspace sees the entry enabled: enablement leaked across tenants")
 	}
 }
+
+// Security review of PR #788, information disclosure. public.marketplace_entries
+// is one global table and an entry config is its raw kind-specific blob: an MCP
+// server routinely carries a service token in env, which
+// apps/agent-engine/internal/marketplaceclient decodes out of exactly this
+// field. A workspace owner needs to know an entry exists and to enable it for
+// their workspace, so the list response carries that much and withholds the
+// configuration. A platform admin, who curates that config in the first place,
+// still receives it.
+const seedEntryWithCredentialBody = `{"kind":"mcp_server","name":"github-with-env","description":"","config":{"command":"npx","env":{"GITHUB_TOKEN":"PLACEHOLDER_TOKEN"}}}`
+
+// listRawEntries lists the catalog and keeps each entry as raw JSON fields, so
+// the test can assert on a key being absent rather than on a decoded zero value.
+func listRawEntries(t *testing.T, h http.Handler, req *http.Request) []map[string]json.RawMessage {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list got %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Entries []map[string]json.RawMessage `json:"entries"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(resp.Entries))
+	}
+	return resp.Entries
+}
+
+func TestAdmin_ListWithholdsEntryConfigFromWorkspaceOwner(t *testing.T) {
+	h := newTestHandler().AdminMux()
+
+	seed := withViewer(httptest.NewRequest(http.MethodPost, "/api/v1/admin/marketplace", strings.NewReader(seedEntryWithCredentialBody)), adminViewer())
+	seedRec := httptest.NewRecorder()
+	h.ServeHTTP(seedRec, seed)
+	if seedRec.Code != http.StatusCreated {
+		t.Fatalf("seed entry: got %d, want 201: %s", seedRec.Code, seedRec.Body.String())
+	}
+
+	owner := listRawEntries(t, h, withOwnerViewer(httptest.NewRequest(http.MethodGet, "/api/v1/admin/marketplace", nil), adminViewer()))
+	if raw, present := owner[0]["config"]; present {
+		t.Fatalf("the list response hands a workspace owner the raw catalog config: %s", raw)
+	}
+	if _, present := owner[0]["name"]; !present {
+		t.Fatal("the workspace owner cannot see that the entry exists at all")
+	}
+
+	admin := listRawEntries(t, h, withViewer(httptest.NewRequest(http.MethodGet, "/api/v1/admin/marketplace", nil), adminViewer()))
+	if !strings.Contains(string(admin[0]["config"]), "GITHUB_TOKEN") {
+		t.Fatalf("a platform admin, who curates the config, no longer receives it: %s", admin[0]["config"])
+	}
+}

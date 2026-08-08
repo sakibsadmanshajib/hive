@@ -152,7 +152,7 @@ func (h *Handler) handleList(w http.ResponseWriter, r *http.Request, tenantID uu
 		writeJSON(w, http.StatusInternalServerError, errBody("failed to load marketplace catalog"))
 		return
 	}
-	writeJSON(w, http.StatusOK, listResponse{Entries: entryWires(entries, enabled), CanCurate: canCurate})
+	writeJSON(w, http.StatusOK, listResponse{Entries: entryWires(entries, enabled, canCurate), CanCurate: canCurate})
 }
 
 type createOrUpdateRequest struct {
@@ -266,7 +266,7 @@ type entryWire struct {
 	Kind        string          `json:"kind"`
 	Name        string          `json:"name"`
 	Description string          `json:"description"`
-	Config      json.RawMessage `json:"config"`
+	Config      json.RawMessage `json:"config,omitempty"`
 	Enabled     bool            `json:"enabled"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
@@ -295,11 +295,22 @@ func newEntryWire(e Entry, enabled bool) entryWire {
 	}
 }
 
-func entryWires(entries []Entry, enabled map[uuid.UUID]TenantEntry) []entryWire {
+// entryWires renders the catalog for the list response. includeConfig is the
+// caller curation authority: config is the raw kind-specific blob of a global
+// catalog row, and an MCP server entry routinely carries a service token in its
+// env (apps/agent-engine/internal/marketplaceclient decodes exactly that field),
+// so a reader who may not curate the catalog is told the entry exists without
+// being handed its configuration. The console renders config only in the
+// curation form, so nothing is lost. Security review of PR #788, issue #758.
+func entryWires(entries []Entry, enabled map[uuid.UUID]TenantEntry, includeConfig bool) []entryWire {
 	out := make([]entryWire, 0, len(entries))
 	for _, e := range entries {
 		_, on := enabled[e.ID]
-		out = append(out, newEntryWire(e, on))
+		wire := newEntryWire(e, on)
+		if !includeConfig {
+			wire.Config = nil
+		}
+		out = append(out, wire)
 	}
 	return out
 }

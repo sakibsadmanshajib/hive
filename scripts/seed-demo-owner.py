@@ -4,15 +4,23 @@
 Solves the "3 auth systems, 0 shared admin account" gap for live demos: one
 Supabase GoTrue user that is simultaneously an OWNER of a real (non-e2e)
 tenant (unlocks agent-console's Cowork task console, gated on ENABLE_COWORK
-via apps/agent-console/lib/edge-api/gate.ts) and an owner + platform-admin of
-a web-console personal account (unlocks the owner-only billing pages AND the
-platform-admin-only panels -- feature gates, provider catalog, marketplace,
-credit grants -- all wrapped in apps/control-plane/internal/platform.
-RoleService.RequirePlatformAdmin, see internal/platform/http/router.go).
+via apps/agent-console/lib/edge-api/gate.ts) and an owner of a web-console
+personal account (unlocks the owner-only billing pages). Since issue #758 the
+workspace-scoped admin panels -- feature gates and the marketplace -- are
+reached through that same tenant OWNER role, by apps/control-plane/internal/
+platform.WorkspaceAdminGate, see internal/platform/http/router.go.
+
+This script deliberately does NOT grant platform admin. accounts.
+is_platform_admin is written false, and because the account upsert runs with
+resolution=merge-duplicates, re-running the seeder clears that flag on an
+existing demo account rather than merely declining to set it. The platform-
+wide powers behind RoleService.RequirePlatformAdmin -- credit minting,
+provider base-URL rewrites, catalog curation -- stay a deployment-operator
+concern, and a demo account must not hold them.
 
 Two independent role systems get written here, on purpose, same account:
   - tenant_users.role = 'OWNER'   (Phase 19 tenant scope; uppercase enum)
-  - account_memberships.role = 'owner' + accounts.is_platform_admin = true
+  - account_memberships.role = 'owner', accounts.is_platform_admin = false
     (Phase 2 billing-account scope; lowercase enum, separate schema)
 web-console reads the second system (lib/control-plane/client.ts getViewer);
 agent-console's tenant gate and the custom_access_token_hook JWT claims read

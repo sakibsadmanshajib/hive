@@ -52,7 +52,12 @@ test.describe("workspace admin panels", () => {
     ).toBeVisible();
 
     await expect(page.getByText("Admin access required")).toHaveCount(0);
-    await expect(page.getByText("Managed by your administrator").first()).toBeVisible();
+    // "Managed by your administrator" is the title of the 403 EmptyState as
+    // well as the read-only row label, so the bare string passes on a fully
+    // denied page too. Scope it to a gate row: the wall renders no list item.
+    await expect(
+      page.locator("li", { hasText: "Managed by your administrator" }).first()
+    ).toBeVisible();
 
     const toggles = page.getByRole("switch");
     await expect(toggles).not.toHaveCount(0);
@@ -67,5 +72,12 @@ test.describe("workspace admin panels", () => {
       page.getByRole("heading", { name: "MCP and skills marketplace" })
     ).toBeVisible();
     await expect(page.getByText("Admin access required")).toHaveCount(0);
+    // The heading renders on the 403 wall too. This line is the one thing only
+    // the wall produces, so its absence is what separates the two states.
+    await expect(
+      page.getByText(
+        "Ask your workspace owner or administrator if you need a connector enabled."
+      )
+    ).toHaveCount(0);
   });
 });
