@@ -9,21 +9,12 @@ import {
 //
 // Asserts the workspace invoices surface:
 //   - heading + table or empty-state render
-//   - body never matches USD / $ / fx_ / exchange_rate
 //
 // Download click is asserted structurally (anchor href targets the proxy
 // route). The actual PDF byte-sniff happens in the integration test on the
 // control-plane side (Phase 14 Task 4).
 
 const HAS_CREDS = Boolean(VERIFIED_EMAIL && VERIFIED_PASSWORD);
-
-const FX_FORBIDDEN = [
-  /\$\d/,
-  /\bUSD\b/i,
-  /amount_usd/i,
-  /\bfx_/i,
-  /exchange_rate/i,
-];
 
 async function signIn(page: Page, email: string, password: string) {
   await page.goto("/auth/sign-in");
@@ -57,7 +48,7 @@ test.beforeEach(async () => {
 test.describe("/console/billing/invoices — workspace invoices (Phase 14)", () => {
   test.skip(!HAS_CREDS, "E2E_VERIFIED_EMAIL/PASSWORD not set");
 
-  test("invoices page renders BDT-only", async ({ page }) => {
+  test("invoices page renders", async ({ page }) => {
     await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
     await page.goto("/console/billing/invoices");
 
@@ -66,7 +57,7 @@ test.describe("/console/billing/invoices — workspace invoices (Phase 14)", () 
     ).toBeVisible({ timeout: 15_000 });
 
     // Either a populated table (rows with download links) OR the empty-state
-    // copy. Both surfaces are BDT-only by construction.
+    // copy.
     await expect
       .poll(
         async () => {
@@ -76,14 +67,6 @@ test.describe("/console/billing/invoices — workspace invoices (Phase 14)", () 
         { timeout: 15_000 },
       )
       .toBe(true);
-
-    const body = await page.locator("body").innerText();
-    for (const pattern of FX_FORBIDDEN) {
-      expect(
-        body,
-        `FX-leak token ${pattern} on /console/billing/invoices`,
-      ).not.toMatch(pattern);
-    }
   });
 
   test("download links target the proxy route", async ({ page }) => {

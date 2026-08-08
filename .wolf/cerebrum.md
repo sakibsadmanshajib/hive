@@ -53,7 +53,7 @@
 - Deleted outright (git history = archive, owner choice): deploy/gcp, deploy/geo-router, deploy/oci, deploy/cloudflared, docker-compose.demo.yml, scripts/phase10-*, verify-requirements-matrix.sh, scripts/seed-demo, .planning/ (all of it; planning ground truth = Obsidian vault). PR #361.
 - graphify-out fully untracked + gitignored (graph.json was 50MB per-session churn blob). Never re-track.
 - Feature-gate category "carl" renamed to "agents" with idempotent supabase migration (PR #362); Carl/EnterpriseEdge names purged from issues, milestones, labels.
-- OWNER DECISION: customer-USD lint + dedicated FX-guard test files REMOVED (PR #377). Tests = functionality/features only. Do NOT reintroduce fx-zero-leak guard-only tests or the lint. Runtime amount_usd omission behavior stays.
+- OWNER DECISION: customer-USD lint + dedicated FX-guard test files REMOVED (PR #377). Tests = functionality/features only. Do NOT reintroduce fx-zero-leak guard-only tests or the lint. Runtime amount_usd omission behavior stays. SUPERSEDED 2026-08-08 by D-035: the underlying "never show FX/USD to BD customers" rule itself is REVOKED (owner: never an actual regulatory requirement), not just its guard tests. Do not reintroduce ANY FX/USD-absence assertion on customer surfaces, in any form, ever again.
 - Branch protection reconciled DOWNWARD to live 6 checks (owner choice, PR #363); Web E2E not required. MERGE-POLICY.md is the doc of record.
 - Vault reorged: hive/README.md entry point, 11 live docs, 317 archived under hive/archive/ with ARCHIVE-SUMMARY.md.
 - Adversarial audit issues #364-#376 (label audit-2026-07-19) = current process-debt backlog.

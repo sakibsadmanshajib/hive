@@ -117,8 +117,8 @@ func callResponsesStreaming(orch *Orchestrator) *httptest.ResponseRecorder {
 }
 
 // assertRefused checks the customer-facing refusal: the expected HTTP status,
-// no provider dispatch at all, no provider identity in the payload, and no
-// currency, FX or USD language of any kind (Bangladesh regulatory rule).
+// no provider dispatch at all, and no provider identity in the payload
+// (provider-blind errors, per CLAUDE.md Conventions).
 func assertRefused(t *testing.T, w *httptest.ResponseRecorder, hits int64, wantStatus int) apierrors.OpenAIErrorBody {
 	t.Helper()
 	if hits != 0 {
@@ -132,7 +132,7 @@ func assertRefused(t *testing.T, w *httptest.ResponseRecorder, hits int64, wantS
 		t.Fatalf("refusal body is not an OpenAI error envelope: %v (body: %s)", err, w.Body.String())
 	}
 	lower := strings.ToLower(w.Body.String())
-	for _, banned := range []string{"openrouter", "groq", "litellm", "$", "usd", "bdt", "taka", "exchange rate", "fx"} {
+	for _, banned := range []string{"openrouter", "groq", "litellm"} {
 		if strings.Contains(lower, banned) {
 			t.Errorf("refusal payload leaks %q: %s", banned, w.Body.String())
 		}
