@@ -125,6 +125,15 @@ func (s *stubRepository) GetAllVisibleTenantsForAlias(_ context.Context, aliasID
 	return out, nil
 }
 
+// ListAllAliases mirrors the real pgx query: every alias, no visibility
+// filter. Used by the boot-time OWUI reconcile tests.
+func (s *stubRepository) ListAllAliases(_ context.Context) ([]ModelAlias, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return append([]ModelAlias(nil), s.aliases...), nil
+}
+
 func (s *stubRepository) GetAlias(_ context.Context, aliasID string) (ModelAlias, error) {
 	if s.err != nil {
 		return ModelAlias{}, s.err

@@ -88,8 +88,33 @@ RUN python3 /tmp/apply_tenant_role_patch.py \
 COPY deploy/docker/owui-patches/hive_rag_env_config.py /app/backend/open_webui/utils/hive_rag_env_config.py
 COPY deploy/docker/owui-patches/apply_rag_env_config_patch.py /tmp/apply_rag_env_config_patch.py
 RUN python3 /tmp/apply_rag_env_config_patch.py \
-    && grep -q 'hive: reconciled Open WebUI RAG config from env' /app/backend/open_webui/config.py \
+    && grep -q 'hive: reconciled Open WebUI config from env' /app/backend/open_webui/config.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/config.py').read_text())"
+
+# #772: remove the stock Open WebUI surfaces that have no Hive counterpart --
+# Workspace > Models (a second, instance-wide model registry that duplicates
+# the Hive catalog), Workspace > Prompts, Workspace > Tools, the Playground,
+# and the vendor's own Documentation and Releases links in the user menu.
+# Workspace > Knowledge stays: it is the document upload behind the RAG
+# surface and Hive's analogue of Claude Projects.
+#
+# Configuration cannot do this job. Every one of those gates reads
+# `role === 'admin' || <permission>`, and this deployment promotes every
+# tenant owner to Open WebUI admin (the tenant-role patch above), so a
+# permission-based hide hides nothing from the people who use it. v0.10.2 has
+# no environment variable for any of them either; in particular ENABLE_PLUGINS,
+# which third-party Open WebUI hardening guides recommend for exactly this,
+# does not exist anywhere in this image. Notes, Calendar and Automations do
+# have real flags and are handled by docker-compose.yml plus the reconcile
+# above, not here.
+#
+# The image ships a prebuilt bundle and no frontend source, so this rewrites
+# that bundle. It asserts every rewrite matched its exact expected site count,
+# that none survived, and that the surfaces Hive keeps are still present, so a
+# digest bump fails the build rather than silently restoring a removed surface.
+COPY deploy/docker/owui-patches/hive_ui_surfaces.py /tmp/hive_ui_surfaces.py
+COPY deploy/docker/owui-patches/apply_ui_surfaces_patch.py /tmp/apply_ui_surfaces_patch.py
+RUN python3 /tmp/apply_ui_surfaces_patch.py
 # Chat was broken on every route because Open WebUI attached tool schemas that
 # no route in this deployment can serve.
 #
@@ -98,8 +123,9 @@ RUN python3 /tmp/apply_rag_env_config_patch.py \
 # is on, and native is its hardcoded default: main.py resolves
 # `function_calling` from the request body, then from the model registry row,
 # then from the literal 'native'. This deployment populates no model registry
-# (ENABLE_ADMIN_PANEL is "false"), so that literal always won and every request
-# carried 21 tool specs, 12089 bytes of JSON, measured against this pinned
+# (nothing curates one, and #772 removed the Workspace > Models page that
+# would), so that literal always won and every request carried 21 tool specs,
+# 12089 bytes of JSON, measured against this pinned
 # image. On Groq that is 3144 prompt tokens for a one word answer that costs 52
 # tokens without them.
 #
@@ -124,3 +150,19 @@ RUN sed -i "s/or 'native'/or os.environ.get('HIVE_DEFAULT_FUNCTION_CALLING', 'na
     && grep -q "HIVE_DEFAULT_FUNCTION_CALLING" /app/backend/open_webui/main.py \
     && ! grep -q "or 'native'" /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/main.py').read_text())"
+
+# #771: drop the Settings > Integrations tab, the chat UI's only entry point to
+# "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
+# auth credential. The tool servers added there are direct ones, called by the
+# browser itself, so they bypass the Hive gateway entirely and no rule on the
+# chat origin can reach them; removing the form is the only control that does.
+# Caddyfile.owui blocks the server-side half (#770, the /api/v1/terminals proxy
+# and the tool and terminal server registration endpoints), and this removes the
+# UI so nothing left in the interface points at a path that now 404s.
+#
+# The patch asserts its own effect and fails the build otherwise, same posture
+# as the patches above. The read-back grep is a second, independent check that
+# the descriptor is gone from the emitted bundle.
+COPY deploy/docker/owui-patches/remove_integrations_tab.py /tmp/remove_integrations_tab.py
+RUN python3 /tmp/remove_integrations_tab.py \
+    && ! grep -rq 'id:"tools",title:"Integrations"' /app/build/_app/immutable

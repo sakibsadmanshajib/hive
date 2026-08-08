@@ -162,6 +162,35 @@ def test_values_are_stripped() -> None:
     assert config.stored["rag.embedding_model"] == ALIAS, config.stored
 
 
+def test_login_form_is_reconciled_as_a_json_boolean() -> None:
+    """The SSO-only login fix. `ui.enable_login_form` reaches the browser raw
+    as features.enable_login_form and the login page tests it for truthiness,
+    so the persisted value has to be a real boolean: the string "false" is
+    truthy in JavaScript and would render the dead credential form anyway."""
+    config = FakeConfig({"ui.enable_login_form": True})
+    applied = reconcile(config, {"ENABLE_LOGIN_FORM": "false"})
+    assert applied["ui.enable_login_form"] is False, applied
+    assert config.stored["ui.enable_login_form"] is False, config.stored
+
+
+def test_login_form_stays_enabled_when_the_environment_says_true() -> None:
+    """A deployment that wants the password form keeps it, and the coercion
+    matches Open WebUI's own (`os.getenv(...).lower() == 'true'`), so a
+    reconciled value is identical to one a first boot would have seeded."""
+    for value, expected in (("true", True), ("True", True), ("0", False), ("no", False)):
+        config = FakeConfig({})
+        reconcile(config, {"ENABLE_LOGIN_FORM": value})
+        assert config.stored["ui.enable_login_form"] is expected, (value, config.stored)
+
+
+def test_unset_login_form_leaves_the_persisted_value_alone() -> None:
+    """Same posture as the RAG keys: an unset variable never clobbers."""
+    config = FakeConfig({"ui.enable_login_form": True})
+    applied = reconcile(config, {})
+    assert applied == {}, applied
+    assert config.stored["ui.enable_login_form"] is True
+
+
 def test_reconciled_keys_are_loggable_without_the_secret() -> None:
     """The startup log line names the model (the signal this investigation
     lacked twice) and never the API key value."""

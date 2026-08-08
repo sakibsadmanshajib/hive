@@ -613,6 +613,44 @@ services:
         condition: service_healthy
     environment:
       ENABLE_SIGNUP: "false"
+      # Every account on this deployment is SSO-only: users are provisioned
+      # through the Hive OIDC provider and have no Open WebUI password, so the
+      # email/password form that upstream renders above "Continue with Hive"
+      # could only ever fail. It did, with an actively misleading message --
+      # POST /api/v1/auths/signin answered correct Hive credentials with
+      # HTTP 400 "The email or password provided is incorrect", which reads as
+      # a wrong password rather than as a form that was never wired to
+      # anything (found in the live login review).
+      #
+      # Verified live in the pinned v0.10.2 image, not assumed (the
+      # ENABLE_MODEL_FILTER note below is why this gets checked now):
+      # backend/open_webui/config.py:1617 reads the variable, exposes it as
+      # `ui.enable_login_form`, and main.py:1918 publishes it as
+      # features.enable_login_form on /api/config; the login page bundle
+      # (build/_app/immutable/nodes/50.*.js) gates the credential fields, the
+      # submit button and the "or" divider on
+      # `features.enable_login_form || features.enable_ldap`. With enable_ldap
+      # already false, only the OAuth button survives.
+      #
+      # Scope, so nobody later assumes more than this buys: it removes the
+      # frontend form, not the endpoint. The only place v0.10.2 consults this
+      # flag server-side is routers/auths.py:835, which sits inside signup()
+      # and fires only when a new account is being created. The signin route
+      # (routers/auths.py:653) is gated by a different variable,
+      # ENABLE_PASSWORD_AUTH (config.py:1621), which still defaults to true and
+      # is deliberately left alone here. POST /api/v1/auths/signin therefore
+      # still accepts a password grant; it just has no form pointing at it.
+      #
+      # Like the four RAG keys below, this one is persistent config: Open
+      # WebUI's seed_defaults wrote `ui.enable_login_form` into its own
+      # database on this deployment's first boot, and the database has
+      # outranked the environment ever since, so this line on its own would
+      # have been a silent no-op on any already-booted box. It reaches a live
+      # deployment because owui-patches/hive_rag_env_config.py reconciles this
+      # key from the environment on every container start. Confirm after
+      # deploying with `curl -s https://<chat-host>/api/config` and check that
+      # features.enable_login_form is false.
+      ENABLE_LOGIN_FORM: "false"
       ENABLE_OAUTH_SIGNUP: "true"
       OAUTH_PROVIDER_NAME: "Hive"
       OPENID_PROVIDER_URL: "${SUPABASE_URL}/auth/v1/.well-known/openid-configuration"
@@ -656,19 +694,34 @@ services:
       # unaffiliated login should land on the pending-activation screen,
       # not be silently granted app access.
       DEFAULT_USER_ROLE: "pending"
-      ENABLE_ADMIN_PANEL: "false"
       ENABLE_ADMIN_EXPORT: "false"
       ENABLE_COMMUNITY_SHARING: "false"
+      # #772: stock Open WebUI surfaces with no Hive counterpart. These three
+      # are the ones upstream actually gates on a feature flag rather than on a
+      # permission, and the flag is checked before the role, so turning them
+      # off removes them for administrators too. The rest of that issue's list
+      # (Workspace > Models, Prompts and Tools, and the Playground) has no flag
+      # at all in v0.10.2 and is removed from the built bundle instead, by
+      # Dockerfile.open-webui's owui-patches/apply_ui_surfaces_patch.py.
+      #
+      # All three are persisted config (`notes.enable`, `calendar.enable`,
+      # `automations.enable` in Open WebUI's DEFAULT_CONFIG), so these values
+      # only reach a first boot on their own. owui-patches/hive_rag_env_config.py
+      # reconciles them onto an already-booted database, which is what makes
+      # them take effect on the demo box.
+      ENABLE_NOTES: "false"
+      ENABLE_CALENDAR: "false"
+      ENABLE_AUTOMATIONS: "false"
       # Model visibility belongs to the gateway, not to Open WebUI. edge-api
       # already filters /v1/models per tenant (AliasVisibleToTenant, PR #205),
       # so a second independent filter here adds nothing and actively hides
       # upstream state: Open WebUI's own access control shows a session whose
       # role is "user" only models present in Open WebUI's Models registry,
-      # and this deployment never populates that registry (ENABLE_ADMIN_PANEL
-      # is "false", so nothing can curate it). An empty picker therefore looks
-      # identical whether edge-api served six models or refused the shim key
-      # outright, which is exactly how a gateway 403 stayed hidden for four
-      # nights (#717).
+      # and this deployment never populates that registry (nothing curates one,
+      # and #772 removed the Workspace > Models page that would). An empty
+      # picker therefore looks identical whether edge-api served six models or
+      # refused the shim key outright, which is exactly how a gateway 403
+      # stayed hidden for four nights (#717).
       #
       # BYPASS_MODEL_ACCESS_CONTROL makes the gateway the single source of
       # truth. In the pinned v0.10.2 image it skips get_filtered_models on

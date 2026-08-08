@@ -1,0 +1,31 @@
+206 distinct method+path pairs captured from the live BROWSER session
+
+STATUS  BLOCK?  METHOD  PATH
+200     -       GET     /_app/version.json
+200     -       GET     /api/changelog
+200     -       POST    /api/chat/completions
+200     -       GET     /api/config
+200     -       GET     /api/models
+200     -       GET     /api/usage
+200     -       POST    /api/v1/auths/signin
+200     -       POST    /api/v1/auths/update/timezone
+200     -       GET     /api/v1/chats/
+200     -       POST    /api/v1/chats/9efd9d20-3f26-48b0-a4de-6e7d7edd1476
+200     -       GET     /api/v1/configs/banners
+200     -       POST    /api/v1/files/
+200     -       GET     /api/v1/files/8ad40243-e06b-4534-b580-ffd7cb928917/process/status
+200     -       GET     /api/v1/functions/
+302     -       GET     /api/v1/models/model/profile/image
+200     -       GET     /api/v1/skills/
+404     BLOCKED GET     /api/v1/terminals/
+200     -       GET     /api/v1/tools/
+200     -       GET     /api/v1/users/a822d61d-100e-43a4-b054-40aa6fb171ba/profile/image
+200     -       GET     /api/v1/users/user/settings
+200     -       POST    /api/v1/users/user/settings/update
+200     -       GET     /api/version
+200     -       GET     /auth
+200     -       GET     /manifest.json
+200     -       GET     /ollama/api/version
+
+1 captured path(s) matched the @blocked regex:
+  GET /api/v1/terminals/ -> [404]

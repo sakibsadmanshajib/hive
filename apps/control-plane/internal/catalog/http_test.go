@@ -167,6 +167,16 @@ type stubOWUI struct {
 	syncErr       error
 	// groupIDs maps group name to returned ID (simulates OWUI group store).
 	groupIDs map[string]string
+	// calls records every SyncModelAccessControl invocation in order, unlike
+	// syncedModel/syncedGroups above (which only hold the most recent call).
+	// Reconcile tests walk multiple aliases in one pass and need the full
+	// history to assert which aliases were touched and which were not.
+	calls []owuiSyncCall
+}
+
+type owuiSyncCall struct {
+	modelID  string
+	groupIDs []string
 }
 
 func (s *stubOWUI) EnsureGroup(_ context.Context, name string) (string, error) {
@@ -183,6 +193,7 @@ func (s *stubOWUI) EnsureGroup(_ context.Context, name string) (string, error) {
 func (s *stubOWUI) SyncModelAccessControl(_ context.Context, modelID string, groupIDs []string) error {
 	s.syncedModel = modelID
 	s.syncedGroups = groupIDs
+	s.calls = append(s.calls, owuiSyncCall{modelID: modelID, groupIDs: groupIDs})
 	return s.syncErr
 }
 
@@ -261,16 +272,31 @@ func TestSyncOWUI_RestrictedAlias_WithGrants_UsesRealGroupIDs(t *testing.T) {
 	}
 }
 
-// TestSyncOWUI_PublicAlias_SkipsSync proves T5: public/preview aliases must
-// not have their OWUI access_control overwritten when a visibility block row
-// exists. Hive catalog filtering is the enforcement layer; OWUI sync is skipped.
+// TestSyncOWUI_PublicAlias_SkipsSync proves T5: public/preview *chat* aliases
+// must not have their OWUI access_control overwritten when a visibility block
+// row exists. Hive catalog filtering is the enforcement layer; OWUI sync is
+// skipped.
+//
+// The alias here carries real chat badges (["stable","chat","responses"],
+// matching hive-default's seed row) rather than an empty CapabilityBadges
+// slice. Before issue #772's fix this test passed even with no badges at all,
+// which meant it was not actually distinguishing "public chat alias, skip
+// sync" from "public alias with no badges, skip sync" — the same assertion
+// happened to hold for the wrong reason. TestSyncOWUI_PublicNonChatAlias_
+// UsesPlaceholder below is the case that must NOT skip sync despite also
+// being Visibility=="public".
 func TestSyncOWUI_PublicAlias_SkipsSync(t *testing.T) {
 	tenantID := uuid.MustParse("ffffffff-0000-0000-0000-000000000001")
 	aliasID := "pub-a"
 
 	repo := &stubRepository{
 		aliases: []ModelAlias{
-			{AliasID: aliasID, Visibility: "public", CreatedAt: time.Now()},
+			{
+				AliasID:          aliasID,
+				Visibility:       "public",
+				CapabilityBadges: []string{"stable", "chat", "responses"},
+				CreatedAt:        time.Now(),
+			},
 		},
 		visibilityRows: []TenantModelVisibility{
 			{TenantID: tenantID, AliasID: aliasID, Visible: false},
@@ -286,10 +312,83 @@ func TestSyncOWUI_PublicAlias_SkipsSync(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
 	}
-	// OWUI sync must be skipped for public aliases — access_control:null is correct
-	// (OWUI has no deny-list primitive; Hive catalog is the enforcement layer).
+	// OWUI sync must be skipped for public chat aliases — access_control:null
+	// is correct (OWUI has no deny-list primitive; Hive catalog is the
+	// enforcement layer).
 	if owuiStub.syncedModel != "" {
-		t.Fatalf("expected no OWUI sync for public alias, but SyncModelAccessControl was called for %q", owuiStub.syncedModel)
+		t.Fatalf("expected no OWUI sync for public chat alias, but SyncModelAccessControl was called for %q", owuiStub.syncedModel)
+	}
+}
+
+// TestSyncOWUI_PublicNonChatAlias_UsesPlaceholder proves the issue #772 fix:
+// an alias carrying a non-chat-modality badge (embeddings/stt/tts/voice) must
+// get the OWUI placeholder lockout group even though Visibility=="public" —
+// the gate that used to skip OWUI sync for every non-restricted alias must
+// not skip this one. Badges mirror the real seed row for hive-embedding-
+// default (20260423_01_embedding_alias.sql: ["stable","embeddings"]).
+func TestSyncOWUI_PublicNonChatAlias_UsesPlaceholder(t *testing.T) {
+	tenantID := uuid.MustParse("11111111-2222-0000-0000-000000000001")
+	aliasID := "hive-embedding-default"
+
+	repo := &stubRepository{
+		aliases: []ModelAlias{
+			{
+				AliasID:          aliasID,
+				Visibility:       "public",
+				CapabilityBadges: []string{"stable", "embeddings"},
+				CreatedAt:        time.Now(),
+			},
+		},
+	}
+	owuiStub := &stubOWUI{groupIDs: map[string]string{
+		"hive-restricted-placeholder": "placeholder-id",
+	}}
+	vh := NewVisibilityHandler(NewService(repo), owuiStub)
+
+	// Any visibility mutation call triggers syncOWUI; DELETE on an unrelated
+	// tenant is enough to exercise it, matching how the admin PUT/DELETE
+	// handlers invoke it in production.
+	req := httptest.NewRequest(http.MethodDelete, "/internal/catalog/visibility/"+tenantID.String()+"/"+aliasID, nil)
+	rr := httptest.NewRecorder()
+	vh.handleDeleteVisibility(rr, req, tenantID, aliasID)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rr.Code, rr.Body.String())
+	}
+	if owuiStub.syncedModel != aliasID {
+		t.Fatalf("expected OWUI sync for %q despite Visibility==public, got %q", aliasID, owuiStub.syncedModel)
+	}
+	if len(owuiStub.syncedGroups) == 0 || owuiStub.syncedGroups[0] != "placeholder-id" {
+		t.Fatalf("expected placeholder-id lockout group for non-chat-modality alias, got %v", owuiStub.syncedGroups)
+	}
+}
+
+// TestIsNonChatModality pins the exclusion predicate directly. hive-auto
+// (["auto","fallback","preview"], no "chat" badge — see
+// 20260331_01_model_catalog.sql) is the case that rules out an inclusion
+// ("has chat badge") predicate: it is a legitimate chat-selectable alias that
+// would be wrongly hidden by a chat-badge whitelist.
+func TestIsNonChatModality(t *testing.T) {
+	tests := []struct {
+		name   string
+		badges []string
+		want   bool
+	}{
+		{name: "hive-default chat badges", badges: []string{"stable", "chat", "responses"}, want: false},
+		{name: "hive-fast chat badges", badges: []string{"fast", "chat", "responses"}, want: false},
+		{name: "hive-auto has no chat badge but is chat-selectable", badges: []string{"auto", "fallback", "preview"}, want: false},
+		{name: "hive-embedding-default badges", badges: []string{"stable", "embeddings"}, want: true},
+		{name: "hive-stt badges", badges: []string{"voice", "stt"}, want: true},
+		{name: "hive-tts badges", badges: []string{"voice", "tts"}, want: true},
+		{name: "nil badges", badges: nil, want: false},
+		{name: "empty badges", badges: []string{}, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isNonChatModality(tt.badges); got != tt.want {
+				t.Fatalf("isNonChatModality(%v) = %v, want %v", tt.badges, got, tt.want)
+			}
+		})
 	}
 }
 

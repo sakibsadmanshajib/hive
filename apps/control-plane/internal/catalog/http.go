@@ -228,7 +228,7 @@ func (h *VisibilityHandler) handleUpsertVisibility(w http.ResponseWriter, r *htt
 		return
 	}
 
-	h.syncOWUI(r, aliasID)
+	h.syncOWUI(r.Context(), aliasID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -238,34 +238,85 @@ func (h *VisibilityHandler) handleDeleteVisibility(w http.ResponseWriter, r *htt
 		return
 	}
 
-	h.syncOWUI(r, aliasID)
+	h.syncOWUI(r.Context(), aliasID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// syncOWUI computes the full OWUI access_control state for aliasID after any
-// visibility mutation and writes it atomically. It is best-effort: errors do
-// not fail the HTTP response.
+// nonChatModalityBadges lists the model_aliases.capability_badges values that
+// mark an alias as something other than a text chat model (embeddings and
+// speech aliases). Open WebUI's model picker is chat-only; an alias carrying
+// any of these badges must never be chat-selectable there, independent of
+// its tenant_model_visibility class (issue #772: hive-embedding-default,
+// hive-stt, hive-tts were listed as pickable chat models and produced a
+// broken conversation when chosen).
 //
-// Visibility semantics:
-//   - restricted alias, no visible=true rows: model should be inaccessible in
-//     OWUI. We send a non-nil but empty-named sentinel group so OWUI does not
-//     fall back to public access (access_control:null = public for all users).
-//     Concretely we use the group "hive-restricted-placeholder" which by
-//     definition has no members.
-//   - restricted alias, visible=true rows exist: resolve real OWUI group UUIDs
-//     via EnsureGroup and send those as the allowlist.
-//   - public/preview alias with visible=false rows (explicit blocks): the
-//     model stays in OWUI as public (access_control:null) because OWUI cannot
-//     express per-user deny lists. Hive's catalog filtering is the enforcement
-//     layer for public-alias blocks; OWUI sync is skipped for public aliases.
-func (h *VisibilityHandler) syncOWUI(r *http.Request, aliasID string) {
+// ponytail: capability_badges is freeform jsonb with no CHECK constraint and
+// model_aliases has no dedicated modality/is_chat_model column, so this is a
+// string-membership test over admin-editable data rather than a schema
+// guarantee. It is bounded today: every embeddings/stt/tts alias is seeded by
+// a migration under our control (20260423_01_embedding_alias.sql,
+// 20260717_02_voice_groq_stt_tts.sql) and TestIsNonChatModality pins the
+// badges each one carries. The real fix is a modality or is_chat_model column
+// on model_aliases; add it and switch this predicate to read it if
+// capability_badges ever drifts from these values.
+var nonChatModalityBadges = map[string]bool{
+	"embeddings": true,
+	"stt":        true,
+	"tts":        true,
+	"voice":      true,
+}
+
+// isNonChatModality reports whether badges marks an alias as non-chat. This
+// is deliberately exclusion logic (does any badge match a known non-chat
+// tag) rather than inclusion logic (does "chat" appear): hive-auto is a
+// legitimate chat-selectable alias whose badges are
+// ["auto","fallback","preview"] with no explicit "chat" badge, so a
+// chat-badge whitelist would wrongly hide it from the OWUI picker.
+func isNonChatModality(badges []string) bool {
+	for _, b := range badges {
+		if nonChatModalityBadges[strings.ToLower(strings.TrimSpace(b))] {
+			return true
+		}
+	}
+	return false
+}
+
+// syncOWUI computes the full OWUI access_control state for aliasID and writes
+// it atomically. It runs after any visibility mutation and from the boot-time
+// ReconcileOWUISync (reconcile.go). It is best-effort: errors do not fail the
+// caller.
+//
+// Semantics:
+//   - non-chat-modality alias (isNonChatModality — embeddings/stt/tts/voice):
+//     always locked out of the OWUI chat picker via the placeholder group,
+//     regardless of Visibility class or any tenant_model_visibility grant.
+//     tenant_model_visibility governs API invocation entitlement, not chat
+//     dropdown selectability, and these aliases must never be chat-selectable
+//     (issue #772).
+//   - restricted chat alias, no visible=true rows: model should be
+//     inaccessible in OWUI. We send a non-nil but empty-named sentinel group
+//     so OWUI does not fall back to public access (access_control:null =
+//     public for all users). Concretely we use the group
+//     "hive-restricted-placeholder" which by definition has no members.
+//   - restricted chat alias, visible=true rows exist: resolve real OWUI group
+//     UUIDs via EnsureGroup and send those as the allowlist.
+//   - public/preview chat alias with visible=false rows (explicit blocks):
+//     the model stays in OWUI as public (access_control:null) because OWUI
+//     cannot express per-user deny lists. Hive's catalog filtering is the
+//     enforcement layer for public-alias blocks; OWUI sync is skipped for
+//     public chat aliases.
+func (h *VisibilityHandler) syncOWUI(ctx context.Context, aliasID string) {
 	if h.owui == nil {
 		return
 	}
-	ctx := r.Context()
 
 	alias, err := h.svc.repo.GetAlias(ctx, aliasID)
 	if err != nil {
+		return
+	}
+
+	if isNonChatModality(alias.CapabilityBadges) {
+		h.lockOWUIModel(ctx, aliasID)
 		return
 	}
 
@@ -281,14 +332,8 @@ func (h *VisibilityHandler) syncOWUI(r *http.Request, aliasID string) {
 	}
 
 	if len(visibleRows) == 0 {
-		// Restricted alias with no active grants: lock it down in OWUI by
-		// using a placeholder group that has no members. Sending null would
-		// make it public, which is the opposite of the desired state.
-		placeholderID, err := h.owui.EnsureGroup(ctx, "hive-restricted-placeholder")
-		if err != nil {
-			return
-		}
-		_ = h.owui.SyncModelAccessControl(ctx, aliasID, []string{placeholderID})
+		// Restricted alias with no active grants: lock it down in OWUI.
+		h.lockOWUIModel(ctx, aliasID)
 		return
 	}
 
@@ -302,6 +347,20 @@ func (h *VisibilityHandler) syncOWUI(r *http.Request, aliasID string) {
 		groupIDs = append(groupIDs, gid)
 	}
 	_ = h.owui.SyncModelAccessControl(ctx, aliasID, groupIDs)
+}
+
+// lockOWUIModel points aliasID's OWUI access_control at the
+// "hive-restricted-placeholder" group, a group that by definition has no
+// members. Sending a nil/empty allowlist instead would make the model public
+// (OWUI's access_control:null semantics), which is the opposite of "locked
+// out". Shared by the non-chat-modality lock and the restricted-with-no-
+// grants lock in syncOWUI.
+func (h *VisibilityHandler) lockOWUIModel(ctx context.Context, aliasID string) {
+	placeholderID, err := h.owui.EnsureGroup(ctx, "hive-restricted-placeholder")
+	if err != nil {
+		return
+	}
+	_ = h.owui.SyncModelAccessControl(ctx, aliasID, []string{placeholderID})
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
