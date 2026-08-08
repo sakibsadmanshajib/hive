@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // TestAuditCoverage_AllControlsHaveEvents reuses the JS coverage
@@ -15,13 +17,15 @@ import (
 // rows that Phase 19 does not emit. The CI gate flips this to a hard
 // failure once those phases land.
 func TestAuditCoverage_AllControlsHaveEvents(t *testing.T) {
-	if os.Getenv("HIVE_TEST_DB_URL") == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
+	_ = testdb.DSN(t)
 
 	repoRoot, err := repoRootFromCaller()
 	if err != nil {
-		t.Skip("cannot locate repo root: " + err.Error())
+		// Not a skip. runtime.Caller resolving to a path with no repo root
+		// above it means the test binary was built somewhere this suite
+		// cannot work from, which is a harness fault worth a red build
+		// rather than an invisible pass.
+		t.Fatalf("cannot locate repo root: %v", err)
 	}
 
 	cmd := exec.Command("node", "tools/soc2-coverage-report.mjs", "--check")

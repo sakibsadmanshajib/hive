@@ -3,12 +3,12 @@ package egress_test
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/egress"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // newRLSTestPool connects as the hive_app role — NOT BYPASSRLS in production
@@ -21,13 +21,7 @@ import (
 // never leaks to another test.
 func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := testdb.RequireTestDSN(t)
 
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

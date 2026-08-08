@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 	"time"
 
@@ -16,6 +15,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/tenants"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // noopWAL satisfies the audit.WALWriter interface for tests. The switch
@@ -28,10 +28,7 @@ func (noopWAL) Write(_ context.Context, _ audit.Event) error { return nil }
 
 func newTenantsPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
+	dsn := testdb.DSN(t)
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool

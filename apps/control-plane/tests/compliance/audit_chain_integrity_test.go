@@ -2,7 +2,6 @@ package compliance_test
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -11,6 +10,7 @@ import (
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/auditverifier"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // TestAuditChainIntegrity_AcrossPartition writes a streak of audit
@@ -47,10 +47,7 @@ func TestAuditChainIntegrity_AcrossPartition(t *testing.T) {
 
 func newPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
+	dsn := testdb.DSN(t)
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool

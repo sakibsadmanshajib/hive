@@ -414,7 +414,18 @@ jobs:
             # these suites (routing, catalog, providers) share one live
             # database and can observe each other's transient rows when run
             # concurrently, which is a flaky-collision risk, not a real bug.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/...
+            #
+            # The eleven packages on the second line below were gated on
+            # HIVE_TEST_DB_URL while no step that ran them ever exported it
+            # (issue #659): the variable is written to GITHUB_ENV by the
+            # bootstrap step above, which lands after the plain `go test
+            # -short` step, and these packages were absent from this step,
+            # the only one that has the DSN. Their database assertions had
+            # therefore never executed once. They are added here, and
+            # internal/testdb turns a missing DSN under CI into a hard
+            # failure so this cannot silently regress into a skip again.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... \
+              ./internal/audit/... ./internal/auditarchive/... ./internal/auditverifier/... ./internal/auditworker/... ./internal/platform/... ./internal/usage/... ./internal/licensing/... ./internal/marketplace/... ./internal/tenant/settings/... ./internal/accounting/... ./tests/compliance/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),
@@ -1095,6 +1106,15 @@ jobs:
       # the Playwright step (fixture seeding, see its own comment).
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      # Without these three, edge-api logs "phase-19 JWT auth wiring skipped"
+      # and every /v1/* call falls back to the raw API-key path, so a bearer
+      # JWT never reaches the validator at all (owui-nightly.yml hit exactly
+      # this, run 28685935882). The phase-19 API specs below assert on that
+      # validator's responses, so they need the wiring live. Derived from
+      # SUPABASE_URL the same way owui-nightly.yml derives them.
+      SUPABASE_JWT_ISSUER: ${{ secrets.SUPABASE_URL }}/auth/v1
+      SUPABASE_JWT_AUDIENCE: authenticated
+      SUPABASE_JWKS_URL: ${{ secrets.SUPABASE_URL }}/auth/v1/.well-known/jwks.json
       REDIS_URL: redis://redis:6379/0
       CONTROL_PLANE_PORT: '8081'
       CONTROL_PLANE_BASE_URL: http://localhost:8081
@@ -1322,6 +1342,70 @@ jobs:
         # limits the free `hive-default` model tier and produces 429 flakes
         # that are unrelated to anything the UI suite exercises.
         run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts tests/e2e/console-workspace-admin.spec.ts
+
+      # ------------------------------------------------------------------
+      # Phase-19 tenant-isolation specs (issue #659). These are the specs
+      # that prove one tenant cannot read another tenant's data, and they
+      # had never executed: each one skipped itself on an E2E_* variable
+      # that appeared in no workflow file, and only the collection guard in
+      # web-unit ever touched the directory. A skipped test and a passing
+      # test are indistinguishable inside a green check.
+      #
+      # The identities are minted here rather than configured as repository
+      # secrets on purpose. Depending on a hand-managed secret is how these
+      # went dark the first time; a value the job creates cannot be
+      # forgotten. Only the API subset (specs 03-07) runs here: 01 and 02
+      # drive the Open WebUI chat surface, which this job does not boot.
+      # ------------------------------------------------------------------
+
+      - name: Seed phase-19 tenant-isolation identities
+        id: phase19-seed
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          set -euo pipefail
+          out=$(python3 scripts/seed-phase19-e2e.py)
+          get() { printf '%s\n' "$out" | grep "^$1=" | cut -d= -f2-; }
+          user_a_jwt=$(get USER_A_JWT)
+          orphan_jwt=$(get ORPHAN_JWT)
+          user_a_password=$(get USER_A_PASSWORD)
+          tenant_a2=$(get TENANT_A2_ID)
+          tenant_b=$(get TENANT_B_ID)
+          if [ -z "$user_a_jwt" ] || [ -z "$orphan_jwt" ] || [ -z "$tenant_a2" ] || [ -z "$tenant_b" ]; then
+            echo "::error::seed-phase19-e2e.py did not print every required value"
+            exit 1
+          fi
+          echo "::add-mask::$user_a_jwt"
+          echo "::add-mask::$orphan_jwt"
+          echo "::add-mask::$user_a_password"
+          echo "E2E_USER_A_JWT=$user_a_jwt" >> "$GITHUB_ENV"
+          echo "E2E_ORPHAN_JWT=$orphan_jwt" >> "$GITHUB_ENV"
+          echo "E2E_USER_A_SECOND_TENANT_ID=$tenant_a2" >> "$GITHUB_ENV"
+          echo "E2E_TENANT_B_ID=$tenant_b" >> "$GITHUB_ENV"
+
+      - name: Install pg driver for the audit-log assertions
+        working-directory: apps/web-console
+        # 04 and 07 read public.audit_log directly to prove the denial was
+        # recorded, not just returned. pg is imported dynamically so the
+        # specs typecheck without a workspace dependency; installing it here
+        # keeps it out of the app's own dependency tree.
+        run: npm install --no-save pg
+
+      - name: Run phase-19 tenant-isolation specs (API subset)
+        working-directory: apps/web-console
+        env:
+          # The specs' own variable name for the database they assert
+          # against. It is the same project the booted stack writes its
+          # audit rows to, so the assertions read what the run just wrote.
+          HIVE_TEST_DB_URL: ${{ env.SUPABASE_DB_URL }}
+          CONTROL_PLANE_URL: http://localhost:8081
+          EDGE_API_URL: http://localhost:8080
+        # Expected to fail on first execution, and that is the point: these
+        # assertions have never run against the implementation, so any
+        # mismatch between the phase-19 contract and what the services
+        # actually return surfaces here for the first time. Do not paper
+        # over a failure by relaxing a spec.
+        run: npx playwright test --project=phase-19-api
 
       - name: Dump compose logs on failure
         if: failure()
