@@ -1562,7 +1562,7 @@ export async function getCheckoutRails(): Promise<CheckoutOptions> {
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to fetch checkout rails"));
+    await throwControlPlaneError(response, "Failed to fetch checkout rails");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1628,7 +1628,7 @@ export async function initiateCheckout(
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to initiate checkout"));
+    await throwControlPlaneError(response, "Failed to initiate checkout");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1754,7 +1754,7 @@ export async function createApiKey(nickname: string, expiresAt?: string): Promis
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to create API key"));
+    await throwControlPlaneError(response, "Failed to create API key");
   }
 
   const payload = parseJsonValue(await readResponseText(response));
@@ -1772,14 +1772,17 @@ export async function createApiKey(nickname: string, expiresAt?: string): Promis
 
 export async function revokeApiKey(keyId: string): Promise<ApiKey> {
   const { baseUrl, headers } = await getRequestContext();
-  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${keyId}/revoke`, {
+  // Encoded for the same reason keyLimitsUrl encodes: a key id carrying a path
+  // separator would otherwise retarget this request at a different upstream
+  // path while still carrying the caller's bearer.
+  const response = await fetch(`${baseUrl}/api/v1/accounts/current/api-keys/${encodeURIComponent(keyId)}/revoke`, {
     method: "POST",
     headers,
     cache: "no-store",
   });
 
   if (!response.ok) {
-    throw new Error(await readResponseError(response, "Failed to revoke API key"));
+    await throwControlPlaneError(response, "Failed to revoke API key");
   }
 
   const payload = parseJsonValue(await readResponseText(response));

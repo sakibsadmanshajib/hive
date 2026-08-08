@@ -80,7 +80,7 @@ func NewService(repo Repository, ledgerSvc LedgerGranter, profilesSvc ProfileRea
 // The two are never the same thing (issue #538).
 func (s *Service) InitiateCheckout(ctx context.Context, accountID uuid.UUID, rail Rail, credits int64, callbackBaseURL, returnBaseURL, idempotencyKey string) (*PaymentIntent, error) {
 	// 1. Validate credits.
-	if err := ValidatePurchaseAmount(credits); err != nil {
+	if err := ValidatePurchaseAmount(credits, rail); err != nil {
 		return nil, err
 	}
 
