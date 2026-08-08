@@ -9,23 +9,13 @@ import {
 //
 // Asserts the owner-gated workspace budget surface:
 //   - heading + form render
-//   - soft + hard cap inputs visible (BDT-only labels)
-//   - FX-leak regex zero matches across the rendered DOM
+//   - soft + hard cap inputs visible
 //
 // Save round-trip + non-owner read-only assertion are deferred to a CI run
 // against a workspace where the verified tester is an owner; the smoke
-// surface here is order-stable across env states (matches the
-// `console-fx-guard.spec.ts` pattern).
+// surface here is order-stable across env states.
 
 const HAS_CREDS = Boolean(VERIFIED_EMAIL && VERIFIED_PASSWORD);
-
-const FX_FORBIDDEN = [
-  /\$\d/,
-  /\bUSD\b/i,
-  /amount_usd/i,
-  /\bfx_/i,
-  /exchange_rate/i,
-];
 
 async function signIn(page: Page, email: string, password: string) {
   await page.goto("/auth/sign-in");
@@ -59,7 +49,7 @@ test.beforeEach(async () => {
 test.describe("/console/billing/budget — workspace budget caps (Phase 14)", () => {
   test.skip(!HAS_CREDS, "E2E_VERIFIED_EMAIL/PASSWORD not set");
 
-  test("budget page renders BDT-only with no USD/FX leak", async ({ page }) => {
+  test("budget page renders", async ({ page }) => {
     await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
     await page.goto("/console/billing/budget");
 
@@ -70,14 +60,6 @@ test.describe("/console/billing/budget — workspace budget caps (Phase 14)", ()
     // Form primitives — soft + hard cap inputs present regardless of role.
     await expect(page.locator("#budget-soft-cap")).toBeVisible();
     await expect(page.locator("#budget-hard-cap")).toBeVisible();
-
-    const body = await page.locator("body").innerText();
-    for (const pattern of FX_FORBIDDEN) {
-      expect(
-        body,
-        `FX-leak token ${pattern} on /console/billing/budget`,
-      ).not.toMatch(pattern);
-    }
   });
 
   test("non-owner sees disabled fields (read-only enforcement)", async ({

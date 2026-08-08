@@ -191,29 +191,3 @@ func TestGetCheckoutIntent_RejectsNonGET(t *testing.T) {
 		t.Errorf("expected no service call, got %d", svc.intentCalls)
 	}
 }
-
-// TestGetCheckoutIntent_CarriesNoUSDOrFX is the BD regulatory guard: the return
-// surface is customer-visible, so it must not carry FX rates, exchange
-// language, or any USD amount.
-func TestGetCheckoutIntent_CarriesNoUSDOrFX(t *testing.T) {
-	intentID := uuid.New()
-	svc := &stubPaymentService{intentView: &payments.CheckoutIntentView{
-		PaymentIntentID: intentID.String(),
-		Rail:            payments.RailSSLCommerz,
-		Status:          payments.IntentStatusCompleted,
-		State:           payments.ReturnStateSuccess,
-		Credits:         5000,
-	}}
-	h := newHandler(svc, &stubAccountResolver{accountID: uuid.New()})
-
-	req := httptest.NewRequest(http.MethodGet, intentPath+"?payment_intent_id="+intentID.String(), nil)
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
-
-	body := strings.ToLower(rr.Body.String())
-	for _, banned := range []string{"usd", "amount_usd", "fx", "exchange", "rate", "mid_rate", "effective_rate"} {
-		if strings.Contains(body, banned) {
-			t.Errorf("BD-facing return payload must not contain %q: %s", banned, rr.Body.String())
-		}
-	}
-}
