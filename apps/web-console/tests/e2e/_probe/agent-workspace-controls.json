@@ -1,0 +1,32 @@
+{
+  "surface": "agent-workspace (Cowork, apps/agent-console, served at /agent-workspace)",
+  "generated_by": "apps/web-console/scripts/build-agent-workspace-coverage.mjs",
+  "note": "This file is the enumeration ledger, hand-maintained. coverage.json (generated, gitignored) merges this against a live Playwright JSON run to compute proven/total. Add a control here whenever the UI grows one; never renumber an id once a run has used it.",
+  "not_present": [
+    "Log or output pane: the task console has no live transcript surface yet (task-console.tsx: \"There is no live transcript yet\"). Nothing to enumerate here until one ships."
+  ],
+  "controls": [
+    { "id": "C1", "description": "Sign-in: email input", "requires_creds": false },
+    { "id": "C2", "description": "Sign-in: password input", "requires_creds": false },
+    { "id": "C3", "description": "Sign-in: submit button (invalid credentials path)", "requires_creds": false },
+    { "id": "C4", "description": "Sign-in: error alert region", "requires_creds": false },
+    { "id": "C5", "description": "Sign-in: native required-field validation blocks submit", "requires_creds": false },
+    { "id": "C6", "description": "Unauthenticated /agent-workspace redirects to sign-in", "requires_creds": false },
+    { "id": "C7", "description": "Unauthenticated /agent-workspace/tasks redirects to sign-in", "requires_creds": false },
+    { "id": "C8", "description": "Sign-in: submit button (valid credentials path)", "requires_creds": true },
+    { "id": "C9", "description": "AppHeader: Back to chat link", "requires_creds": true },
+    { "id": "C10", "description": "Task composer: instructions textarea", "requires_creds": true },
+    { "id": "C11", "description": "Pack radio: Coding", "requires_creds": true },
+    { "id": "C12", "description": "Pack radio: Knowledge work", "requires_creds": true },
+    { "id": "C13", "description": "Empty-instructions submit shows inline validation, fires no request", "requires_creds": true },
+    { "id": "C14", "description": "Ctrl+Enter submits the composer", "requires_creds": true },
+    { "id": "C15", "description": "Start task button creates a task via the API", "requires_creds": true },
+    { "id": "C16", "description": "EngineNotice banner explains the engine-unavailable block", "requires_creds": true },
+    { "id": "C17", "description": "Cancel button withheld once a task is terminal, guard also enforced server side", "requires_creds": true },
+    { "id": "C18", "description": "Empty state (\"Nothing submitted yet\") when the account has no tasks", "requires_creds": true },
+    { "id": "C19", "description": "Task list load failure renders the retry/reload banner", "requires_creds": true },
+    { "id": "C20", "description": "Task create failure renders its own error, keeps the draft text", "requires_creds": true },
+    { "id": "C21", "description": "Expired session reported instead of a silent failure on submit", "requires_creds": true },
+    { "id": "C22", "description": "GET /v1/agent/tasks requires auth (401 unauthenticated)", "requires_creds": false }
+  ]
+}
