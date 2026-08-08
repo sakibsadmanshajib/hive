@@ -79,5 +79,21 @@ test.describe("workspace admin panels", () => {
         "Ask your workspace owner or administrator if you need a connector enabled."
       )
     ).toHaveCount(0);
+    // A non-403 load failure (app/console/marketplace/page.tsx loadFailed
+    // branch) renders this same heading with no error and no 403 copy either,
+    // so the assertions above alone pass on a broken marketplace too. Rule out
+    // that branch by name, then require the one thing only a successful load
+    // produces: an OWNER has no curation rights, so a populated catalog shows
+    // a switch per entry and an empty one shows its own placeholder line
+    // (see marketplace-manager.tsx); either is proof the fetch actually
+    // succeeded, neither renders on the loadFailed or notPermitted EmptyState.
+    await expect(
+      page.getByText("Could not load the marketplace catalog")
+    ).toHaveCount(0);
+    const emptyCatalogNotice = page.getByText(
+      "No connectors have been published for this workspace yet."
+    );
+    const catalogEntrySwitch = page.getByRole("switch").first();
+    await expect(emptyCatalogNotice.or(catalogEntrySwitch)).toBeVisible();
   });
 });
