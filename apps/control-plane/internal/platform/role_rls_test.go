@@ -3,13 +3,13 @@ package platform_test
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/platform"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 // The unit tests for IsTenantOwner stub TenantRoleStore, so they say nothing
@@ -33,13 +33,7 @@ import (
 // on, and the pool is closed at test end so the role change never leaks.
 func newRLSTestPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
-		t.Fatalf("refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing 'test' marker)")
-	}
+	dsn := testdb.RequireTestDSN(t)
 
 	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {

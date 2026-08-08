@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/audit"
+	"github.com/sakibsadmanshajib/hive/apps/control-plane/internal/testdb"
 )
 
 func TestWAL_WriteThenDrain(t *testing.T) {
@@ -54,10 +55,7 @@ func TestWAL_WriteThenDrain(t *testing.T) {
 
 func newWALPool(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	t.Helper()
-	dsn := os.Getenv("HIVE_TEST_DB_URL")
-	if dsn == "" {
-		t.Skip("HIVE_TEST_DB_URL not set")
-	}
+	dsn := testdb.DSN(t)
 	pool, err := pgxpool.New(ctx, dsn)
 	require.NoError(t, err)
 	return pool
