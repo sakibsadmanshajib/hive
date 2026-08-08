@@ -94,5 +94,8 @@ jobs:
         with:
           name: agent-engine-sif
           path: deploy/apptainer/agent-engine.sif
-          retention-days: 14
+          # 90 days is GitHub's hard ceiling for a public repo (private/internal
+          # repos can go to 400); this SIF can only be rebuilt on an apptainer
+          # host, none of which we have on demand, so use the widest margin.
+          retention-days: 90
           if-no-files-found: error
