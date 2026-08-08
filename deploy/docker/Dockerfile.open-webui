@@ -115,6 +115,25 @@ RUN python3 /tmp/apply_rag_env_config_patch.py \
 COPY deploy/docker/owui-patches/hive_ui_surfaces.py /tmp/hive_ui_surfaces.py
 COPY deploy/docker/owui-patches/apply_ui_surfaces_patch.py /tmp/apply_ui_surfaces_patch.py
 RUN python3 /tmp/apply_ui_surfaces_patch.py
+
+# #782: Open WebUI runs the authorization code exchange through authlib, which
+# defaults to client_secret_basic, but hand builds the refresh POST with the
+# client credentials in the form body, which is client_secret_post. Supabase
+# enforces the registered method exactly, so every refresh came back 400
+# invalid_credentials, Open WebUI read that as a dead session and deleted it,
+# and chat stopped working roughly 55 minutes after sign-in until the user
+# signed in again. Splice the refresh through a helper that authenticates the
+# client the same way the exchange already does, rather than requiring every
+# deployment to re-register its Supabase OAuth client for the other dialect;
+# the registration is manual ops with no script behind it, so an invariant
+# living only in prose would be reintroduced by the next person who registers
+# a client. Behaviour is covered by scripts/test_owui_oauth_client_auth.py.
+COPY deploy/docker/owui-patches/hive_oauth_client_auth.py /app/backend/open_webui/utils/hive_oauth_client_auth.py
+COPY deploy/docker/owui-patches/apply_oauth_client_auth_patch.py /tmp/apply_oauth_client_auth_patch.py
+RUN python3 /tmp/apply_oauth_client_auth_patch.py \
+    && test "$(grep -c '\*\*hive_refresh_request(client, refresh_data),' /app/backend/open_webui/utils/oauth.py)" = "2" \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/utils/oauth.py').read_text())"
+
 # Chat was broken on every route because Open WebUI attached tool schemas that
 # no route in this deployment can serve.
 #
