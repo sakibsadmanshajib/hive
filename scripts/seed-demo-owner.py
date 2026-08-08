@@ -4,15 +4,23 @@
 Solves the "3 auth systems, 0 shared admin account" gap for live demos: one
 Supabase GoTrue user that is simultaneously an OWNER of a real (non-e2e)
 tenant (unlocks agent-console's Cowork task console, gated on ENABLE_COWORK
-via apps/agent-console/lib/edge-api/gate.ts) and an owner + platform-admin of
-a web-console personal account (unlocks the owner-only billing pages AND the
-platform-admin-only panels -- feature gates, provider catalog, marketplace,
-credit grants -- all wrapped in apps/control-plane/internal/platform.
-RoleService.RequirePlatformAdmin, see internal/platform/http/router.go).
+via apps/agent-console/lib/edge-api/gate.ts) and an owner of a web-console
+personal account (unlocks the owner-only billing pages). Since issue #758 the
+workspace-scoped admin panels -- feature gates and the marketplace -- are
+reached through that same tenant OWNER role, by apps/control-plane/internal/
+platform.WorkspaceAdminGate, see internal/platform/http/router.go.
+
+This script deliberately does NOT grant platform admin. accounts.
+is_platform_admin is written false, and because the account upsert runs with
+resolution=merge-duplicates, re-running the seeder clears that flag on an
+existing demo account rather than merely declining to set it. The platform-
+wide powers behind RoleService.RequirePlatformAdmin -- credit minting,
+provider base-URL rewrites, catalog curation -- stay a deployment-operator
+concern, and a demo account must not hold them.
 
 Two independent role systems get written here, on purpose, same account:
   - tenant_users.role = 'OWNER'   (Phase 19 tenant scope; uppercase enum)
-  - account_memberships.role = 'owner' + accounts.is_platform_admin = true
+  - account_memberships.role = 'owner', accounts.is_platform_admin = false
     (Phase 2 billing-account scope; lowercase enum, separate schema)
 web-console reads the second system (lib/control-plane/client.ts getViewer);
 agent-console's tenant gate and the custom_access_token_hook JWT claims read
@@ -419,11 +427,15 @@ def main() -> None:
         print(f"error: tenant membership upsert failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
 
-    # 4. Guard + upsert the web-console billing account. is_platform_admin=
-    # true here is what unlocks control-plane's RequirePlatformAdmin-gated
-    # admin panels (feature gates, provider catalog, marketplace, credit
-    # grants) -- tenant OWNER above does not imply this; they are unrelated
-    # schemas. Same slug-collision risk as the tenant guard above: refuse to
+    # 4. Guard + upsert the web-console billing account. This account is
+    # deliberately NOT flagged is_platform_admin: after issue #758 the
+    # workspace-scoped admin panels (feature gates, marketplace) are reached by
+    # the OWNER of the tenant in scope, which step 3 above already granted.
+    # Platform-wide powers (credit minting, provider base-URL rewrites) are a
+    # deployment-operator concern and a demo account must not hold them; that
+    # flag was stripped from this account in production on 2026-08-06 and this
+    # script must not put it back. Same slug-collision risk as the tenant guard
+    # above: refuse to
     # merge onto an existing account unless owner_user_id already matches
     # our demo user AND no other owner-role member exists -- owner_user_id
     # is not schema-enforced to match any membership row, so checking it
@@ -452,7 +464,7 @@ def main() -> None:
             "display_name": ACCOUNT_NAME,
             "account_type": "business",
             "owner_user_id": user_id,
-            "is_platform_admin": True,
+            "is_platform_admin": False,
         },
         params={"on_conflict": "slug"},
         prefer="resolution=merge-duplicates,return=representation",

@@ -1306,19 +1306,22 @@ jobs:
           E2E_UNVERIFIED_EMAIL: e2e-unverified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_UNVERIFIED_PASSWORD: ${{ secrets.E2E_UNVERIFIED_PASSWORD }}
           E2E_INVITATION_TOKEN: e2e-invitation-token-2026-fixture-${{ github.run_id }}-${{ github.run_attempt }}
-          # Platform-admin fixture for console-platform-admin.spec.ts.
+          # Workspace-owner fixture for console-workspace-admin.spec.ts.
           # Unset leaves that spec skipped, which is why the required
           # coverage for a mispointed control-plane is the unit-level
           # drift guard in tests/unit/control-plane-host.test.ts. This
-          # spec is the rendered-symptom check on top of it.
-          E2E_PLATFORM_ADMIN_EMAIL: ${{ secrets.E2E_PLATFORM_ADMIN_EMAIL }}
-          E2E_PLATFORM_ADMIN_PASSWORD: ${{ secrets.E2E_PLATFORM_ADMIN_PASSWORD }}
+          # spec is the rendered-symptom check on top of it. The old
+          # E2E_PLATFORM_ADMIN_* names are still read as a fallback, so an
+          # existing secret keeps working: after issue #758 the account only
+          # needs to be OWNER of its workspace, not a platform admin.
+          E2E_WORKSPACE_OWNER_EMAIL: ${{ secrets.E2E_PLATFORM_ADMIN_EMAIL }}
+          E2E_WORKSPACE_OWNER_PASSWORD: ${{ secrets.E2E_PLATFORM_ADMIN_PASSWORD }}
         # `openai-sdk.spec.ts` is covered by the `live-integration` job and
         # is deliberately skipped here. It depends on an actual LLM
         # completion round-trip through OpenRouter, which currently rate-
         # limits the free `hive-default` model tier and produces 429 flakes
         # that are unrelated to anything the UI suite exercises.
-        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts tests/e2e/console-platform-admin.spec.ts
+        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts tests/e2e/console-workspace-admin.spec.ts
 
       - name: Dump compose logs on failure
         if: failure()

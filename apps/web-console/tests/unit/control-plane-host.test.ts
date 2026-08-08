@@ -15,7 +15,7 @@
  * three files, one of them moved, and the others silently did not. Asserting
  * they agree catches the next occurrence in the required unit check, with no
  * credentials and no network. The companion e2e spec
- * (`tests/e2e/console-platform-admin.spec.ts`) covers the rendered symptom
+ * (`tests/e2e/console-workspace-admin.spec.ts`) covers the rendered symptom
  * when a live deployment and platform-admin credentials are available.
  *
  * The second suite below extends the same idea to `deploy/**`, which is where

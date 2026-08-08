@@ -1,0 +1,5 @@
+signed in as the workspace OWNER, landed on /console
+feature gates: path=/console/feature-gates switches=15 admin-access-required=0 read-only-rows=10
+marketplace: path=/console/marketplace heading=1 curate-form=0 admin-access-required=0
+marketplace after owner enable: aria-checked=true curate-form=0 delete-buttons=0
+marketplace as workspace OWNER: entry-enabled=true curate-form=0 delete-buttons=0

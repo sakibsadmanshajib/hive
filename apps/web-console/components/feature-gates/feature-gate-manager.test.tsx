@@ -5,8 +5,8 @@ import { FeatureGateManager } from "./feature-gate-manager";
 import type { FeatureGate } from "@/lib/control-plane/client";
 
 const GATES: FeatureGate[] = [
-  { key: "ENABLE_RAG", label: "Agent RAG capability", category: "agents", enabled: false },
-  { key: "ENABLE_PUBLIC_BILLING", label: "Public billing", category: "billing", enabled: true },
+  { key: "ENABLE_RAG", label: "Agent RAG capability", category: "agents", enabled: false, manageable: true },
+  { key: "ENABLE_PUBLIC_BILLING", label: "Public billing", category: "billing", enabled: true, manageable: true },
 ];
 
 describe("FeatureGateManager", () => {
@@ -70,5 +70,26 @@ describe("FeatureGateManager", () => {
       expect(screen.getByText(/Could not save/i)).toBeTruthy();
     });
     expect(rag.getAttribute("aria-checked")).toBe("false");
+  });
+  // Issue #758: a workspace owner reads the platform-managed gates but does not
+  // get a control the control-plane would refuse.
+  it("renders a platform-managed gate read-only", () => {
+    render(
+      <FeatureGateManager
+        gates={[
+          {
+            key: "ENABLE_EXTRA_USAGE",
+            label: "Extra usage beyond plan",
+            category: "billing",
+            enabled: false,
+            manageable: false,
+          },
+        ]}
+      />,
+    );
+    expect(
+      screen.queryByRole("switch", { name: /Extra usage beyond plan/i }),
+    ).toBeNull();
+    expect(screen.getByText("Managed by your administrator")).toBeTruthy();
   });
 });

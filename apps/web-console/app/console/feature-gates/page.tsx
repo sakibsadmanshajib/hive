@@ -5,22 +5,23 @@ import {
   getViewer,
   getAccountProfile,
   getFeatureGates,
+  ControlPlaneError,
   type FeatureGates,
 } from "@/lib/control-plane/client";
-import { can } from "@/lib/viewer-gates";
 import { ConsoleShell } from "@/components/app-shell/console-shell";
 import { PageHeader } from "@/components/ui/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { FeatureGateManager } from "@/components/feature-gates/feature-gate-manager";
 
-// Admin feature-gate page (issue #292, agent-subsystem blueprint Step 1.2).
-// Lists every registered gate for the current workspace and lets a platform
-// admin toggle each one; the control-plane enforces platform-admin, so this is
-// defence in depth: non-admins get an access state without an upstream call.
+// Feature-gate page (issue #292, agent-subsystem blueprint Step 1.2, re-gated
+// by issue #758). Lists every registered gate for the current workspace and
+// lets the workspace administrator toggle the ones that belong to the
+// workspace. The control-plane is the authority: it admits the OWNER of the
+// tenant in scope as well as a platform admin, so this page asks it rather than
+// second-guessing with a local permission check that could disagree.
 //
-// ponytail: the nav link is shown to everyone (the shared shell has no viewer
-// permissions); gating it per-item is a follow-up. Access itself is enforced
-// here and again at the control-plane.
+// A caller who is neither gets 403 here, which renders one line pointing at
+// their administrator instead of a wall.
 export default async function FeatureGatesPage() {
   const viewer = await getViewer();
   if (viewer.user.email_verified === false) {
@@ -31,14 +32,15 @@ export default async function FeatureGatesPage() {
     (): { owner_name: string } => ({ owner_name: "" }),
   );
 
-  const isAdmin = can(viewer, "platform.admin");
-
   let gates: FeatureGates | null = null;
   let loadFailed = false;
-  if (isAdmin) {
-    try {
-      gates = await getFeatureGates();
-    } catch {
+  let notPermitted = false;
+  try {
+    gates = await getFeatureGates();
+  } catch (err) {
+    if (err instanceof ControlPlaneError && err.status === 403) {
+      notPermitted = true;
+    } else {
       loadFailed = true;
     }
   }
@@ -65,11 +67,11 @@ export default async function FeatureGatesPage() {
         description="Turn capabilities on or off for this workspace. Changes take effect across the API and apps within about a minute."
       />
 
-      {!isAdmin ? (
+      {notPermitted ? (
         <EmptyState
           icon={<ShieldAlert size={20} />}
-          title="Admin access required"
-          description="Only platform admins can view and change feature gates. Ask an admin if you need a capability turned on."
+          title="Managed by your administrator"
+          description="Ask your workspace owner or administrator if you need a capability turned on."
         />
       ) : loadFailed || !gates ? (
         <EmptyState

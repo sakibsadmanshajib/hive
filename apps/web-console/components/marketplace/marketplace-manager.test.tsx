@@ -37,7 +37,7 @@ describe("MarketplaceManager", () => {
   });
 
   it("renders each entry name, description, and grouped kind headings", () => {
-    render(<MarketplaceManager entries={ENTRIES} />);
+    render(<MarketplaceManager entries={ENTRIES} canCurate />);
     expect(screen.getByText("github")).toBeTruthy();
     expect(screen.getByText("GitHub MCP server")).toBeTruthy();
     expect(screen.getByText("MCP servers")).toBeTruthy();
@@ -45,7 +45,7 @@ describe("MarketplaceManager", () => {
   });
 
   it("reflects initial enabled state on the switches", () => {
-    render(<MarketplaceManager entries={ENTRIES} />);
+    render(<MarketplaceManager entries={ENTRIES} canCurate />);
     const github = screen.getByRole("switch", { name: /github: disabled/i });
     const deck = screen.getByRole("switch", { name: /deck-writer: enabled/i });
     expect(github.getAttribute("aria-checked")).toBe("false");
@@ -58,7 +58,7 @@ describe("MarketplaceManager", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<MarketplaceManager entries={ENTRIES} />);
+    render(<MarketplaceManager entries={ENTRIES} canCurate />);
     const github = screen.getByRole("switch", { name: /github: disabled/i });
     fireEvent.click(github);
 
@@ -77,7 +77,7 @@ describe("MarketplaceManager", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response("nope", { status: 500 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<MarketplaceManager entries={ENTRIES} />);
+    render(<MarketplaceManager entries={ENTRIES} canCurate />);
     const github = screen.getByRole("switch", { name: /github: disabled/i });
     fireEvent.click(github);
 
@@ -91,7 +91,7 @@ describe("MarketplaceManager", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ status: "deleted" }), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<MarketplaceManager entries={ENTRIES} />);
+    render(<MarketplaceManager entries={ENTRIES} canCurate />);
     const deleteButton = screen.getByRole("button", { name: /delete github/i });
     fireEvent.click(deleteButton);
 
@@ -115,7 +115,7 @@ describe("MarketplaceManager", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(created), { status: 201 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<MarketplaceManager entries={[]} />);
+    render(<MarketplaceManager entries={[]} canCurate />);
     fireEvent.change(screen.getByPlaceholderText("Name (e.g. github)"), {
       target: { value: "slack" },
     });
@@ -134,7 +134,7 @@ describe("MarketplaceManager", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<MarketplaceManager entries={[]} />);
+    render(<MarketplaceManager entries={[]} canCurate />);
     fireEvent.change(screen.getByPlaceholderText("Name (e.g. github)"), {
       target: { value: "github" },
     });
@@ -147,5 +147,13 @@ describe("MarketplaceManager", () => {
       expect(screen.getByText(/Config must be valid JSON/i)).toBeTruthy();
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+  // Issue #758: curating the shared catalog stays a platform operation, so a
+  // workspace owner sees the enablement switches and none of the curation.
+  it("hides catalog curation when the caller cannot curate", () => {
+    render(<MarketplaceManager entries={ENTRIES} canCurate={false} />);
+    expect(screen.queryByRole("button", { name: /curate entry/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
+    expect(screen.getByRole("switch", { name: /github/i })).toBeTruthy();
   });
 });
