@@ -21,8 +21,72 @@
   # the start; the trailing `/?` + `(?:/.*)?` arms tolerate any
   # combination of trailing slash, query string, or sub-paths. The
   # leading `/+` collapses path-traversal variants like `//admin`.
+  #
+  # The `api(?:/v[0-9]+)?/` arm exists because every alternative before it
+  # is anchored at `^/+` and therefore only ever covered the bare SPA
+  # routes, never the real API mount. `/auths/signup` was blocked while
+  # `POST /api/v1/auths/signup` -- the endpoint that actually creates an
+  # account -- was not. Same for the `/api/v1/auths/admin/*` family
+  # (`/admin/details`, `/admin/config`, and the ldap and oauth children),
+  # which read and write admin configuration including OAuth settings.
+  #
+  # `configs/export` and `openai/config` close #769: both return the live
+  # gateway key seeded from OWUI_SHIM_KEY, and `configs/export` also
+  # returns `oauth.client_secret`. Both are matched as whole path segments
+  # rather than as prefixes, which is load-bearing in three places:
+  #   * `/api/v1/configs/banners` is read by the front end on every page
+  #     load, so a `configs*` prefix would break the chat UI outright.
+  #   * `/openai/models` and `/openai/chat/completions` carry the model
+  #     picker and the chat itself, so an `openai*` prefix would break both.
+  #   * `/api/v1/auths/signin` is the login POST and must stay reachable,
+  #     which is why the api arm lists `auths/(?:signup|admin)` and not a
+  #     bare `auths/` prefix.
+  # `/openai/config/update` is caught as a child of `/openai/config`, on
+  # purpose: it rewrites the persisted gateway key, so it is a credential
+  # write on a public origin. Known consequence, see #769: the OWUI config
+  # sync in scripts/seed-owui-e2e-user.py defaults OWUI_BASE_URL to
+  # http://localhost:3003, which is this listener, and reads GET
+  # /openai/config before pushing the rotated key. That sync now has to run
+  # against Open WebUI's own port from inside the network, the same
+  # rerouting #736 requires for the Function installer. It fails safe: the
+  # script treats a non-200 as a failure and deliberately does not revoke
+  # the previous key, so a deployment is never stranded on a dead one.
+  #
+  # `terminals` closes #770. Open WebUI mounts routers/terminals.py at
+  # /api/v1/terminals and gates none of it on `get_admin_user`: the
+  # `{server_id}/{path:path}` route proxies every HTTP verb, and the
+  # `{server_id}/api/terminals/{session_id}` websocket opens an interactive
+  # session, both on `get_verified_user` alone, each attaching the
+  # server-side credential the connection was registered with. That is an
+  # authenticated request-forgery primitive against anything the chat
+  # container can reach, including the other services on the compose
+  # network. Blocking the whole router is correct here because this
+  # deployment offers no terminal feature at all. Nothing in this repo calls
+  # it, and the front end degrades cleanly: the only caller of
+  # `GET /api/v1/terminals/` is `getTerminalServers`, which returns `[]` on
+  # any non-2xx, so the terminal list is empty rather than errored, and the
+  # message input's terminal menu renders only when that list is non-empty.
+  #
+  # `configs/tool_servers` and `configs/terminal_servers` close #771. Those
+  # are the registration endpoints behind the admin panel's forms: each
+  # accepts a caller-supplied destination URL and credential with no
+  # allowlist, and #770's proxy is what then uses what they store. Their
+  # `verify`, `policy`, `lifecycle`, and `refresh` children are caught as
+  # sub-paths, which is intended -- `verify` alone will dial an arbitrary
+  # caller-supplied URL from inside the network. Segment-exact for the same
+  # reason as `configs/export` above: `/api/v1/configs/banners`,
+  # `/api/v1/configs/models`, and `/api/v1/configs/connections` all sit in
+  # the same namespace and must stay reachable. Note `terminals` and `tools`
+  # are different routers; `/api/v1/tools/` is the Workspace tool list and
+  # is deliberately untouched.
+  #
+  # This is the server-side half only. The tool servers added from Settings
+  # > Integrations are `direct` ones, fetched by the browser straight from
+  # the configured URL, so no rule on this origin can see them. Removing
+  # that panel is the control that reaches them, and it happens at image
+  # build time -- see deploy/docker/owui-patches/remove_integrations_tab.py.
   @blocked {
-    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|api(?:/v[0-9]+)?/(?:admin|signup|users/admin|users/new|register|invite))/?(?:/.*)?$
+    path_regexp blocked (?i)^/+(?:admin|signup|signin|signup\.html|register|create-account|users/new|invite|auth/signup|auth/signin|auth/register|auths/signup|auths/signin|openai/config|api(?:/v[0-9]+)?/(?:admin|signup|register|invite|terminals|users/admin|users/new|auths/(?:signup|admin)|configs/(?:export|terminal_servers|tool_servers)))/?(?:/.*)?$
   }
   respond @blocked 404
 
@@ -46,9 +110,20 @@
   # Method-level block on admin-only endpoints that OWUI exposes under
   # /api/v1/configs/*. Even if a future regression re-exposes the
   # admin panel under a non-blocked path, mutation verbs are dropped.
+  #
+  # `/api/v*/admin*` and `/api/v*/roles*` were removed here because Open
+  # WebUI mounts no such routers (confirmed against the pinned
+  # hive-open-webui:v0.10.2-branded image: the only prefixes are
+  # /api/v1/<router> for the routers it registers, plus /ollama and
+  # /openai). They matched nothing and made this list read as broader
+  # coverage than it has. The remaining globs still under-match by design
+  # of Caddy's `path`, which falls through to Go path.Match where `*`
+  # never crosses `/`; that gap is #736 and is deliberately left alone
+  # here, because the demo deploy currently installs hive_jwt_forward
+  # through `POST /api/v1/functions/create` on this origin.
   @adminMutation {
     method PUT POST PATCH DELETE
-    path /api/v*/configs* /api/v*/admin* /api/v*/users/* /api/v*/groups* /api/v*/roles* /api/v*/functions* /api/v*/models*
+    path /api/v*/configs* /api/v*/users/* /api/v*/groups* /api/v*/functions* /api/v*/models*
   }
   respond @adminMutation 404
 

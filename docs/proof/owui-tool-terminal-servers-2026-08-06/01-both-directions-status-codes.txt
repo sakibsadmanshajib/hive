@@ -1,0 +1,43 @@
+=== MUST BE BLOCKED (public 404 from Caddy; direct shows the route is really there) ===
+GET    /api/v1/terminals/                                   public=404  direct=200
+GET    /api/v1/terminals                                    public=404  direct=200
+GET    /api/v1/terminals/srv1/files/list                    public=404  direct=404
+POST   /api/v1/terminals/srv1/files/upload                  public=404  direct=404
+DELETE /api/v1/terminals/srv1/files/delete                  public=404  direct=404
+GET    /api/v1/terminals/srv1/api/terminals/sess1           public=404  direct=404
+GET    /api/v1/configs/tool_servers                         public=404  direct=200
+POST   /api/v1/configs/tool_servers                         public=404  direct=422
+POST   /api/v1/configs/tool_servers/verify                  public=404  direct=422
+GET    /api/v1/configs/terminal_servers                     public=404  direct=200
+POST   /api/v1/configs/terminal_servers                     public=404  direct=422
+POST   /api/v1/configs/terminal_servers/verify              public=404  direct=422
+POST   /api/v1/configs/terminal_servers/policy              public=404  direct=422
+POST   /api/v1/configs/terminal_servers/lifecycle           public=404  direct=422
+POST   /api/v1/configs/terminal_servers/refresh             public=404  direct=422
+GET    //api/v1/terminals/                                  public=404  direct=200
+GET    /API/V1/TERMINALS/                                   public=404  direct=200
+GET    /api/v1/configs/export                               public=404  direct=200
+GET    /openai/config                                       public=404  direct=200
+POST   /api/v1/auths/signup                                 public=404  direct=422
+GET    /admin                                               public=404  direct=200
+
+=== MUST STAY OPEN (Open WebUI's own answer; identical through both paths) ===
+GET    /health                                              public=200  direct=200
+GET    /api/config                                          public=200  direct=200
+GET    /api/models                                          public=200  direct=200
+GET    /api/version                                         public=200  direct=200
+GET    /api/v1/auths/                                       public=200  direct=200
+GET    /api/v1/configs/banners                              public=200  direct=200
+GET    /api/v1/configs/models                               public=200  direct=200
+GET    /api/v1/configs/connections                          public=200  direct=200
+GET    /api/v1/models/list                                  public=200  direct=200
+GET    /api/v1/models/tags                                  public=200  direct=200
+GET    /api/v1/tools/                                       public=200  direct=200
+GET    /api/v1/groups/                                      public=200  direct=200
+GET    /api/v1/files/                                       public=200  direct=200
+GET    /api/v1/knowledge/                                   public=200  direct=200
+GET    /api/v1/users/user/settings                          public=200  direct=200
+GET    /openai/models                                       public=200  direct=200
+GET    /                                                    public=200  direct=200
+
+PASS: every blocked path 404s on the public origin, every open path is unchanged
