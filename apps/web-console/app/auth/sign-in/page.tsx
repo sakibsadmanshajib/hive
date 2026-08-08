@@ -1,6 +1,7 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/browser";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRight } from "lucide-react";
 
@@ -17,12 +18,20 @@ export default function SignInPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Populated post-mount (window is unavailable during SSR) so the
-  // "Create one" link can carry the same ?next= target the user arrived
-  // with -- e.g. an OAuth consent round-trip started on chat -- through to
-  // sign-up instead of stranding them on the plain console dashboard after
-  // signup (issue found in live UI/UX pass, 2026-07-26).
-  const [nextParam, setNextParam] = useState<string | null>(null);
+  // Read during render rather than from an effect, because this value decides
+  // the page heading. Every route in this app is dynamically rendered (the root
+  // layout awaits cookies() through next-intl's getRequestConfig), so
+  // useSearchParams resolves on the server render as well as on the client:
+  // server markup and the first client render agree, which is what keeps this
+  // out of hydration-mismatch territory. An effect-populated value could not do
+  // that -- it renders once with no `next` and then swaps, and the user who
+  // would see that swap is exactly the chat user this branch is for.
+  //
+  // It also carries the ?next= target the user arrived with -- e.g. an OAuth
+  // consent round-trip started on chat -- into the "Create one" link on first
+  // paint, so signing up instead of signing in no longer strands them on the
+  // plain console dashboard (issue found in live UI/UX pass, 2026-07-26).
+  const nextParam = useSearchParams().get("next");
   // This form has no `action` and its inputs carry no `name`, so a submit that
   // lands before React attaches onSubmit is handled natively: the browser does
   // a GET to the current path with an empty form data set, which REPLACES the
@@ -37,7 +46,6 @@ export default function SignInPage() {
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    setNextParam(new URLSearchParams(window.location.search).get("next"));
     setHydrated(true);
   }, []);
 
@@ -62,15 +70,28 @@ export default function SignInPage() {
     // ran the next request before the document-cookie write had been
     // observed by the SSR pipeline, which made middleware see no user and
     // bounce /console back to /auth/sign-in.
-    const next = new URLSearchParams(window.location.search).get("next");
-    navigate(resolveNextTarget(next));
+    navigate(resolveNextTarget(nextParam));
   }
+
+  // A user who lands here mid OAuth consent came from a Hive product surface
+  // (chat today), not from the developer console, so the console pitch is both
+  // wrong and disorienting: they clicked "Continue with Hive" on a chat login
+  // screen and were answered with a page about API keys, credits and usage
+  // analytics. Resolving through the shared allow-list rather than sniffing the
+  // raw param means an unlisted or hostile `next` can never reach this branch --
+  // resolveNextTarget only ever returns "/oauth/consent" or
+  // "/oauth/consent?..." for genuine consent round-trips.
+  const fromConsent = resolveNextTarget(nextParam).startsWith("/oauth/consent");
 
   return (
     <AuthShell
       eyebrow="Welcome back"
-      title="Sign in to your console"
-      subtitle="Manage API keys, credits, and usage analytics for your workspace."
+      title={fromConsent ? "Sign in to Hive" : "Sign in to your console"}
+      subtitle={
+        fromConsent
+          ? "Use your Hive account to continue."
+          : "Manage API keys, credits, and usage analytics for your workspace."
+      }
       footer={
         <>
           Don&rsquo;t have an account?{" "}
