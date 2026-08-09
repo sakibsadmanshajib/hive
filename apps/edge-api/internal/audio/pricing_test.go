@@ -352,9 +352,9 @@ func TestLocalSTTChargesCatalogPricePerSecond(t *testing.T) {
 	}
 }
 
-// No customer-facing audio surface may carry a currency amount or a provider
-// name, whatever the charge turns out to be.
-func TestAudioResponsesCarryNoCurrencyOrProviderLanguage(t *testing.T) {
+// No customer-facing audio surface may carry a provider name, whatever the
+// charge turns out to be.
+func TestAudioResponsesCarryNoProviderLanguage(t *testing.T) {
 	mock := newMockLiteLLMAudio([]byte(`{"text":"hello","duration":45.0}`), 200, "application/json")
 	defer mock.Close()
 
@@ -362,7 +362,7 @@ func TestAudioResponsesCarryNoCurrencyOrProviderLanguage(t *testing.T) {
 	w := postAudioMultipart(t, h, "/v1/audio/transcriptions", "hive-stt", "")
 
 	lower := strings.ToLower(w.Body.String())
-	for _, forbidden := range []string{"usd", "$", "groq", "openrouter", "litellm", "amount_usd", "exchange"} {
+	for _, forbidden := range []string{"groq", "openrouter", "litellm"} {
 		if strings.Contains(lower, forbidden) {
 			t.Errorf("customer-visible transcription response contains %q: %s", forbidden, w.Body.String())
 		}

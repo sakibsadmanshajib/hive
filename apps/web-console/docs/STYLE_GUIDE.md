@@ -122,5 +122,9 @@ mode uses `prefers-color-scheme` with an inline `@theme` override.
 - No purple gradients. No glassmorphism. No drop shadows above
   `--shadow-md` on internal surfaces.
 - No three-column grids; favor two columns max with generous whitespace.
-- Never display FX rates or "≈ USD" hints to BD users (regulatory rule).
 - Never use `as`, `any`, `unknown` in component props (`feedback_strict_typescript`).
+- (Revoked 2026-08-08) FX rates and USD hints for BD users were previously
+  banned here under a rule that turned out not to be a regulatory
+  requirement; currency presentation is now an unconstrained product
+  decision — see root `CLAUDE.md` Regulatory Rules and `.wolf/decisions.md`
+  D-035.

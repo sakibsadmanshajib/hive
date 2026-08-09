@@ -24,9 +24,35 @@ on:
       - 'apps/control-plane/**'
       - 'apps/agent-console/**'
       - 'apps/agent-engine/**'
+      # console-hive.scubed.co is web-console-prod (docker-compose.yml, chat
+      # profile), built straight from this directory by
+      # Dockerfile.web-console.prod's `COPY apps/web-console/ ./`. This entry
+      # was missing entirely until 2026-08-08: PR #786 changed only files
+      # under here, merged to main, and triggered no deploy at all. It sat on
+      # main, undeployed and silently absent from the box, until a manual
+      # workflow_dispatch shipped it. Same failure class as the
+      # supabase/migrations and hive_jwt_forward gaps below: a paths filter
+      # with a missing entry does not fail loud, it just never runs.
+      - 'apps/web-console/**'
       - 'packages/**'
       - 'deploy/docker/**'
       - 'deploy/litellm/**'
+      # Copied first, by name, in every Go service Dockerfile this workflow
+      # builds (edge-api, control-plane, agent-engine): `COPY go.work
+      # go.work.sum* ./`. A change here (e.g. adding or repointing a `use`
+      # directive) is a real build input with no entry of its own, so it
+      # would silently ride along on the next unrelated deploy instead of
+      # shipping when it lands, the same blind spot as apps/web-console above.
+      - 'go.work'
+      - 'go.work.sum'
+      # Every Dockerfile in deploy/docker/ builds with repo root as its
+      # context (`../../`), so this file directly controls what BuildKit
+      # sees. It is not itself under deploy/docker/, so it had no entry. Its
+      # own header documents why it exists: the confirmed root cause of 16+
+      # red deploy runs (2026-07-26 on) before it was added. A future edit
+      # here is exactly the kind of change that must not wait for an
+      # unrelated commit to ship it.
+      - '.dockerignore'
       # A schema-only merge used to match nothing here, so it deployed nothing
       # and applied nothing. That is literally how PR #624's
       # 20260731_01_tenant_billing_account_backfill_v2.sql and PR #602's
@@ -37,6 +63,12 @@ on:
       - 'scripts/apply-migrations.sh'
       - 'scripts/migration-baseline.conf'
       - 'scripts/probe-applied-migrations.py'
+      # Directly invoked by the migrate job's retention-schedule report step
+      # and the deploy job's pooler-DSN derivation step respectively (both
+      # below in this same file). Neither had an entry, so a fix to either
+      # script would merge and never redeploy to pick the fix up.
+      - 'scripts/check-retention-schedule.sh'
+      - 'scripts/derive-pooler-dsn.py'
       # Both halves of the hive_jwt_forward install (#556). Without these
       # entries a fix to the installer itself would merge and never deploy,
       # the same blind spot the supabase/migrations entry above exists for.

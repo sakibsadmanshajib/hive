@@ -4,34 +4,18 @@ import {
   E2E_VERIFIED_PASSWORD as VERIFIED_PASSWORD,
 } from "./support/e2e-auth-creds";
 
-// Phase 17 FX-17-08 — billing surface FX/USD zero-leak Playwright spec.
+// Phase 17 FX-17-08 — billing surface checkout-rails contract Playwright
+// spec.
 //
-// Companion to the in-process Go integration test
-// (apps/control-plane/internal/payments/integration_fx_zero_leak_test.go) —
-// here we drive the *full proxied path* a browser-side BD customer hits
-// when loading /console/billing, then fetch the underlying control-plane
-// JSON via the proxy and assert the response bytes carry NONE of the
-// FX-tripwire keys.
-//
-// Distinct from console-fx-guard.spec.ts (which sweeps DOM across all
-// console routes) by:
-//   1. Fetching the raw API JSON, not just rendered DOM, so leaks below
-//      the rendering layer are caught.
-//   2. Targeting the billing surface specifically — checkout rails +
-//      invoice list — which is where USD pricing was historically
-//      surfaced.
+// Drives the *full proxied path* a browser-side BD customer hits when
+// loading /console/billing, then fetches the underlying control-plane JSON
+// via the proxy and asserts the CheckoutOptions wire shape the console
+// depends on (currency, price_per_block_minor, credit_block_size).
 //
 // Spec is env-gated. Skips when E2E_VERIFIED_EMAIL/PASSWORD absent
 // (CI without seeded fixtures, local without a logged-in account).
 
 const HAS_CREDS = Boolean(VERIFIED_EMAIL && VERIFIED_PASSWORD);
-
-const FX_FORBIDDEN: ReadonlyArray<RegExp> = [
-  /amount_usd/i,
-  /price_per_credit_usd/i,
-  /exchange_rate/i,
-  /\bfx_/i,
-];
 
 async function signIn(
   page: Page,
@@ -47,10 +31,12 @@ async function signIn(
   });
 }
 
-test.describe("billing FX/USD zero-leak (FX-17-08)", () => {
+test.describe("billing checkout-rails contract (FX-17-08)", () => {
   test.skip(!HAS_CREDS, "E2E_VERIFIED_EMAIL/PASSWORD not set");
 
-  test("checkout rails JSON carries no FX-tripwire keys", async ({ page }) => {
+  test("checkout rails JSON carries the required CheckoutOptions keys", async ({
+    page,
+  }) => {
     await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
 
     // Navigate to billing so the session+CSRF state is hydrated, then
@@ -60,13 +46,9 @@ test.describe("billing FX/USD zero-leak (FX-17-08)", () => {
       timeout: 15_000,
     });
 
-    // FX-17-08 (post-review hardening): assert (a) the fetch actually
-    // succeeded — 200 + application/json — so we are not silently
-    // passing on a redirected sign-in HTML page that happens to contain
-    // none of the banned tokens, and (b) the positive contract shape
-    // (`currency` + `price_per_block_minor`) is present. Without these
-    // anchors the forbidden-pattern sweep below would green on any
-    // unauthenticated error body.
+    // Assert (a) the fetch actually succeeded — 200 + application/json —
+    // so we are not silently passing on a redirected sign-in HTML page,
+    // and (b) the positive contract shape the console depends on.
     const rails = await page.evaluate(async () => {
       const response = await fetch(
         "/api/v1/accounts/current/checkout/rails",
@@ -90,37 +72,8 @@ test.describe("billing FX/USD zero-leak (FX-17-08)", () => {
       "checkout rails response empty — auth session likely not propagated",
     ).toBeGreaterThan(0);
 
-    // Positive-shape: the per-country pricing primitive must be present.
-    // These guarantee we are looking at a real CheckoutOptions payload
-    // before asserting the banned-token absence.
     expect(responseBody).toContain('"currency"');
     expect(responseBody).toContain('"price_per_block_minor"');
     expect(responseBody).toContain('"credit_block_size"');
-
-    for (const pattern of FX_FORBIDDEN) {
-      expect(
-        responseBody.match(pattern),
-        `checkout rails JSON leaks ${pattern} to BD account customer surface`,
-      ).toBeNull();
-    }
-  });
-
-  test("billing page DOM carries no FX-tripwire keys for BD account", async ({
-    page,
-  }) => {
-    await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
-
-    await page.goto("/console/billing", { waitUntil: "domcontentloaded" });
-    await expect(page.locator("h1, h2").first()).toBeVisible({
-      timeout: 15_000,
-    });
-
-    const html = await page.content();
-    for (const pattern of FX_FORBIDDEN) {
-      expect(
-        html.match(pattern),
-        `billing DOM leaks ${pattern} to BD account customer surface`,
-      ).toBeNull();
-    }
   });
 });

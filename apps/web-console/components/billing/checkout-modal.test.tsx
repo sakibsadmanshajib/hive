@@ -3,30 +3,15 @@ import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import { formatCurrency as formatPrice } from "@/lib/format/money";
 
-describe("CheckoutModal BDT compliance", () => {
-  it("formats BDT price without USD equivalent or FX language", () => {
+describe("CheckoutModal price formatting", () => {
+  it("formats BDT price", () => {
     const result = formatPrice(120000, "BDT");
-    // Should show BDT price only
     expect(result).toContain("1,200");
-    expect(result).not.toContain("USD");
-    expect(result).not.toContain("exchange");
-    expect(result).not.toContain("conversion");
-    expect(result).not.toContain("rate");
   });
 
   it("formats USD price directly", () => {
     const result = formatPrice(1000, "USD");
     expect(result).toContain("$10.00");
-  });
-
-  it("never returns FX-related text for any currency", () => {
-    const currencies = ["BDT", "USD", "EUR", "GBP"];
-    for (const currency of currencies) {
-      const result = formatPrice(10000, currency);
-      expect(result).not.toContain("exchange");
-      expect(result).not.toContain("conversion");
-      expect(result).not.toContain("rate");
-    }
   });
 });
 
@@ -74,7 +59,6 @@ describe("computeAmountMinor (FX-17-04 post-review per-block contract)", () => {
     expect(got).toBe(115);
     const formatted = formatPrice(got, "BDT");
     expect(formatted).toContain("1.15");
-    expect(formatted).not.toContain("USD");
   });
 
   it("BDT: 100,000 credits at 11550 paisa/block → 11550 paisa = ৳115.50", () => {
@@ -100,24 +84,20 @@ describe("computeAmountMinor (FX-17-04 post-review per-block contract)", () => {
   });
 });
 
-// FX-17-04 regulatory: getCheckoutOptions decoder MUST reject any
-// payload missing `price_per_block_minor`, `credit_block_size`, or
-// `currency`, and MUST NOT surface the legacy USD-denominated symbols.
-// Source-level assertions because client.ts depends on next/headers
-// (server-only) and cannot be imported into a jsdom worker. Mirrors the
-// spend-alert-form leakage-absence pattern.
+// FX-17-04: getCheckoutOptions decoder MUST reject any payload missing
+// `price_per_block_minor`, `credit_block_size`, or `currency`. Source-level
+// assertions because client.ts depends on next/headers (server-only) and
+// cannot be imported into a jsdom worker.
 describe("getCheckoutOptions decoder (FX-17-04 strict shape, source guard)", () => {
   const clientSrc = readFileSync(
     join(__dirname, "..", "..", "lib", "control-plane", "client.ts"),
     "utf8",
   );
 
-  it("does not reference any USD pricing primitive (legacy or per-credit)", () => {
-    expect(clientSrc).not.toContain("price_per_credit_usd");
-    expect(clientSrc).not.toContain("pricePerCreditUsd");
-    expect(clientSrc).not.toContain("amount_usd");
-    expect(clientSrc).not.toContain("amountUsd");
-    // Post-review rename: ensure the misleading per-credit name is gone.
+  it("does not reference the misleading per-credit pricing name (post-review rename)", () => {
+    // Post-review rename: ensure the misleading per-credit name (which
+    // caused the 100,000x non-BD total inflation bug) is gone in favor of
+    // the per-block primitive.
     expect(clientSrc).not.toContain("price_per_credit_minor");
     expect(clientSrc).not.toContain("pricePerCreditMinor");
   });

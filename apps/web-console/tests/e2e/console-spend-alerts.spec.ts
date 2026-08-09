@@ -11,17 +11,8 @@ import {
 //   - heading + active-alerts table + create form render
 //   - threshold dropdown lists 50/80/100
 //   - email + webhook fields present
-//   - FX-leak regex zero matches across the rendered DOM
 
 const HAS_CREDS = Boolean(VERIFIED_EMAIL && VERIFIED_PASSWORD);
-
-const FX_FORBIDDEN = [
-  /\$\d/,
-  /\bUSD\b/i,
-  /amount_usd/i,
-  /\bfx_/i,
-  /exchange_rate/i,
-];
 
 async function signIn(page: Page, email: string, password: string) {
   await page.goto("/auth/sign-in");
@@ -78,21 +69,5 @@ test.describe("/console/billing/alerts — spend alert thresholds (Phase 14)", (
 
     await expect(page.locator("#alert-email")).toBeVisible();
     await expect(page.locator("#alert-webhook")).toBeVisible();
-  });
-
-  test("alerts page is BDT-only — no USD/FX leak", async ({ page }) => {
-    await signIn(page, VERIFIED_EMAIL, VERIFIED_PASSWORD);
-    await page.goto("/console/billing/alerts");
-    await expect(
-      page.getByRole("heading", { name: /spend alerts/i }).first(),
-    ).toBeVisible({ timeout: 15_000 });
-
-    const body = await page.locator("body").innerText();
-    for (const pattern of FX_FORBIDDEN) {
-      expect(
-        body,
-        `FX-leak token ${pattern} on /console/billing/alerts`,
-      ).not.toMatch(pattern);
-    }
   });
 });
