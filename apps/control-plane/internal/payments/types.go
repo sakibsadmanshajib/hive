@@ -215,13 +215,26 @@ type RailEvent struct {
 	RawPayload       []byte `json:"raw_payload"`
 }
 
-// ValidatePurchaseAmount verifies credits are positive and a multiple of 1000.
-func ValidatePurchaseAmount(credits int64) error {
+// ValidatePurchaseAmount verifies credits are positive, a multiple of 1000, and
+// no larger than the ceiling this rail already advertises through
+// GetCheckoutOptions.
+//
+// The ceiling is enforced here rather than only in a client, because a caller
+// that skips the console reaches InitiateCheckout directly. Credits is an int64
+// on the wire but a float64 in every browser and in most JSON clients, so a
+// quantity above 2^53 decodes cleanly into int64 while having already been
+// rounded by the sender. Rejecting it keeps the advertised maximum and the
+// enforced maximum the same number, and keeps a silently altered purchase
+// quantity out of the ledger.
+func ValidatePurchaseAmount(credits int64, rail Rail) error {
 	if credits <= 0 {
 		return fmt.Errorf("payments: credits must be positive, got %d", credits)
 	}
 	if credits%1000 != 0 {
 		return fmt.Errorf("payments: credits must be a multiple of 1000, got %d", credits)
+	}
+	if maxCredits := maxCreditsForRail(rail); credits > maxCredits {
+		return fmt.Errorf("payments: credits must be at most %d for the selected payment method, got %d", maxCredits, credits)
 	}
 	return nil
 }

@@ -101,6 +101,12 @@ func TestClassifyInitiateError_SafeCategoriesPreserved(t *testing.T) {
 			wantMsg:  "credits must be a multiple of 1000",
 		},
 		{
+			name:     "credits_above_rail_maximum",
+			err:      errors.New("payments: credits must be at most 10000000 for the selected payment method, got 9007199254741000"),
+			wantCode: 400,
+			wantMsg:  "credits exceed the maximum for the selected payment method",
+		},
+		{
 			name:     "unknown_defaults_opaque",
 			err:      errors.New("payments: something exotic happened"),
 			wantCode: 400,
