@@ -157,7 +157,7 @@ With `go.work`, Docker test commands must use full module-relative paths (`./app
 
 ## Regulatory Rules
 
-**NEVER show FX rates or currency exchange language to BD customers.** Applies to API responses, frontend UI, error messages, any customer-visible surface. Omit `amount_usd` from BD payment responses.
+None currently. The prior rule here (never show FX rates, currency-exchange language, or USD equivalents to BD customers; omit `amount_usd` from BD payment responses) was revoked by owner decision on 2026-08-08: it was never an actual regulatory requirement, and the owner is fine with a USD amount reaching the customer. Currency presentation to BD customers is an unconstrained product decision, to be revisited if the product team wants to display it. See `.wolf/decisions.md` D-035. Existing code that strips `amount_usd` from customer-facing responses was left in place (no behavior change); relaxing it is a separate, future product decision.
 
 ## Known Issues
 
@@ -165,7 +165,7 @@ Full runtime UAT results, phase closure notes, and v1.1 deferred scope live in t
 
 1. **`ensureCapabilityColumns` targets wrong table** — Resolved by Phase 16 (2026-04-25). Function removed from `apps/control-plane/internal/routing/repository.go`; schema lives in `supabase/migrations/20260414_01_provider_capabilities_media_columns.sql` (correctly targets `public.provider_capabilities`); regression guard `TestRoutingRepositoryDoesNotRunCapabilityDDL` enforces non-recurrence. Evidence recorded in the project vault.
 2. **File storage wiring under final verification** — Phase 10 now wires file + media endpoints to Supabase Storage. Final live smoke verification tracked in Phase 10 Plan 10-08.
-3. **`amount_usd` exposed in BD checkout** — Resolved by Phase 17 (PR #137, 2026-05-09). FX/USD stripped from all customer-bound surfaces. The follow-up lint script and dedicated FX guard test files were removed by owner decision on 2026-07-19; USD-absence assertions remain inside the broader billing functional tests.
+3. **`amount_usd` exposed in BD checkout** — No longer tracked as an issue. Phase 17 (PR #137, 2026-05-09) stripped FX/USD from customer-bound surfaces under what was believed to be a regulatory constraint; that constraint was revoked by owner decision on 2026-08-08 (see Regulatory Rules above, `.wolf/decisions.md` D-035). The stripping code itself is unchanged; the USD-absence test assertions that treated it as a hard requirement were removed.
 4. **Batch success-path blocked by upstream provider capability** — `/v1/batches` success-path (`status=completed`) not exercisable with current provider mix. LiteLLM's managed file upload (`POST /v1/files` with `purpose=batch`) only supports `openai`, `azure`, `vertex_ai`, `manus`, `anthropic`. OpenRouter + Groq (our only configured providers) have no native batch API. Submitter + failure-path terminal settlement work correctly (reservation release + attribution verified live). Phase 15 shipped a local batch executor in control-plane. Full write-up in the project vault.
 5. **Capability-based tool routing** — Resolved by Phase 20 wave 3 (PR #206, 2026-06-11). Custom providers are DB-managed (PR #199); `tools`/`tool_choice`/`response_format` route per-route on `tools_supported` in `provider_capabilities`. Tenant model visibility (PR #205) is enforced at catalog/model-listing level, not inside `SelectRoute` dispatch, which filters on `AllowedAliases`/`AllowedProviders`.
 

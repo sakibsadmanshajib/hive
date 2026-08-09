@@ -404,10 +404,9 @@ func main() {
 			// configured for right now (see EmbeddingMismatch / checkEmbeddingGuard).
 			ragHandler = ragHandler.WithEmbeddingGuard(ragEmbedModel, ragEmbedDim)
 		}
-		ragMW := featureGate.Require(featuregate.FeatureRAG)
 		ragMux := http.NewServeMux()
 		ragHandler.Register(ragMux)
-		mux.Handle("/v1/rag/", ragMW(ragMux))
+		registerRAGRoutes(mux, featureGate, ragMux)
 	}
 
 	// Agent task lifecycle routes (#311, agent-subsystem blueprint Step 3.4):
@@ -420,11 +419,9 @@ func main() {
 	{
 		agentTaskClient := edgeagenttask.NewClient(resolveControlPlaneBaseURL())
 		agentTaskHandler := edgeagenttask.NewHandler(agentTaskClient)
-		agentTaskMW := featureGate.Require(featuregate.FeatureCowork)
 		agentTaskMux := http.NewServeMux()
 		agentTaskHandler.Register(agentTaskMux)
-		mux.Handle("/v1/agent/tasks", agentTaskMW(agentTaskMux))
-		mux.Handle("/v1/agent/tasks/", agentTaskMW(agentTaskMux))
+		registerAgentTaskRoutes(mux, featureGate, agentTaskMux)
 	}
 
 	// API routes

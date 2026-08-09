@@ -89,19 +89,6 @@ describe("CheckoutReturnStatus", () => {
     expect(screen.getByRole("heading", { name: /payment did not go through/i })).toBeDefined();
   });
 
-  it("shows no currency amount, FX rate, or exchange language on any state", () => {
-    for (const state of ["success", "pending", "failed", "cancelled"] as const) {
-      const { container, unmount } = render(
-        <CheckoutReturnStatus initial={intent({ state })} hint={null} />,
-      );
-      const text = container.textContent ?? "";
-      for (const banned of ["USD", "$", "BDT", "৳", "exchange", "FX", "rate"]) {
-        expect(text.includes(banned)).toBe(false);
-      }
-      unmount();
-    }
-  });
-
   it("polls the account-scoped status endpoint while pending and resolves to success", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       void input;
