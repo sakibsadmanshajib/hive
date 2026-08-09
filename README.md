@@ -227,9 +227,10 @@ used. Supabase admin env is still required: `SUPABASE_URL`,
 
 ## Regulatory Rules
 
-**Never show FX rates or currency-exchange language to BD customers.** Applies
-to API responses, frontend UI, error messages, and any customer-visible
-surface. Omit `amount_usd` from BD payment responses.
+None currently. The prior rule here (never show FX rates or currency-exchange
+language to BD customers; omit `amount_usd` from BD payment responses) was
+revoked by owner decision on 2026-08-08. Currency presentation to BD
+customers is an unconstrained product decision, to be revisited.
 
 ## Known Issues
 

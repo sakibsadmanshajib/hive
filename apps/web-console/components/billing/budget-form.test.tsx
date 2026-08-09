@@ -41,12 +41,4 @@ describe("BudgetForm BDT subunit conversions", () => {
       expect(takaToSubunits(taka)).toBe(s);
     }
   });
-
-  it("BDT-only — no USD or FX strings in the conversion output", () => {
-    const result = subunitsToTaka(150_000_00);
-    expect(result).not.toContain("$");
-    expect(result).not.toContain("USD");
-    expect(result).not.toContain("exchange");
-    expect(result).not.toContain("rate");
-  });
 });
