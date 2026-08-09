@@ -3,6 +3,8 @@ package db
 import (
 	"context"
 	"fmt"
+	"log"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -65,4 +67,65 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	}
 
 	return pool, nil
+}
+
+// OpenWithRetry calls Open until it succeeds or the attempt budget runs out.
+//
+// The session-mode pool this connects to is small and shared: CI runs, the demo
+// box and local stacks all draw from the same pool_size 15 (see issue #631), so
+// a boot that lands during a burst gets EMAXCONNSESSION on the first ping. That
+// is a transient condition that clears in seconds, but a single failed ping used
+// to leave the process permanently without a pool, serving none of its DB-backed
+// routes for the rest of its life (issue #816). Retrying rides through the burst.
+//
+// Giving up remains safe rather than fatal: the caller keeps a nil pool, and
+// /health reports degraded so nothing routes traffic to the process.
+//
+// An empty URL is a configuration error, not a transient one, so it fails on the
+// first attempt instead of burning the whole budget.
+func OpenWithRetry(ctx context.Context, databaseURL string, attempts int, delay time.Duration) (*pgxpool.Pool, error) {
+	if databaseURL == "" {
+		return Open(ctx, databaseURL)
+	}
+	return openWithRetry(ctx, attempts, delay, func(attemptCtx context.Context) (*pgxpool.Pool, error) {
+		return Open(attemptCtx, databaseURL)
+	})
+}
+
+// openWithRetry holds the retry loop separately from the connection itself so
+// the backoff, the budget and the context handling are testable without a
+// database.
+func openWithRetry(
+	ctx context.Context,
+	attempts int,
+	delay time.Duration,
+	open func(context.Context) (*pgxpool.Pool, error),
+) (*pgxpool.Pool, error) {
+	if attempts < 1 {
+		attempts = 1
+	}
+
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var pool *pgxpool.Pool
+		pool, err = open(ctx)
+		if err == nil {
+			if attempt > 1 {
+				log.Printf("database pool opened on attempt %d of %d", attempt, attempts)
+			}
+			return pool, nil
+		}
+		if attempt == attempts {
+			break
+		}
+
+		log.Printf("database not ready (attempt %d of %d), retrying in %s: %v", attempt, attempts, delay, err)
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+
+	return nil, err
 }

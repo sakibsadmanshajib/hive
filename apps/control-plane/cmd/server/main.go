@@ -79,6 +79,18 @@ import (
 // /metrics, kept off the public listener so the Prometheus series stay internal.
 const metricsListenAddr = ":9101"
 
+// Boot-time database retry budget. The shared session-mode pool refuses new
+// clients for a few seconds when CI, the demo box and local stacks overlap
+// (issue #631), which used to leave the process permanently poolless (issue
+// #816). Worst case here is roughly 25s of retries inside a 45s ceiling, well
+// under the 120s healthcheck start_period, so a stack that is genuinely
+// misconfigured still reports unhealthy promptly rather than hanging.
+const (
+	dbOpenAttempts   = 6
+	dbOpenRetryDelay = 5 * time.Second
+	dbOpenBudget     = 45 * time.Second
+)
+
 // ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
 // interface (which returns only error, discarding the LedgerEntry return value).
 // Used only when HIVE_PAYMENTS_STUB=true is set.
@@ -237,7 +249,17 @@ func main() {
 	// Open the database pool. A missing SUPABASE_DB_URL is treated as a
 	// non-fatal warning at startup so the service can still respond to /health
 	// in environments where the DB URL is not yet provisioned.
-	pool, dbErr := platformdb.Open(ctx, cfg.SupabaseDBURL)
+	// Retried because the failure this most often hits is transient: the shared
+	// session-mode pool runs out of client slots for a few seconds when CI, the
+	// demo box and local stacks overlap (issue #631). Six attempts five seconds
+	// apart is at most ~25s, well inside the 120s healthcheck start_period, and
+	// exhausting the budget is still non-fatal so the state stays inspectable.
+	// Its own context: the startup ctx above is capped at 10s, which would cut
+	// the retry budget off after the first delay.
+	dbCtx, dbCancel := context.WithTimeout(context.Background(), dbOpenBudget)
+	defer dbCancel()
+
+	pool, dbErr := platformdb.OpenWithRetry(dbCtx, cfg.SupabaseDBURL, dbOpenAttempts, dbOpenRetryDelay)
 	if dbErr != nil {
 		log.Printf("WARNING: database not available at startup: %v", dbErr)
 	} else {
