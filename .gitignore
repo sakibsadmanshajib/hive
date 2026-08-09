@@ -70,6 +70,10 @@ __pycache__/
 /apps/web-console/playwright-report-chat-coverage/
 /apps/web-console/chat-coverage-report/
 /apps/web-console/e2e/chat-coverage/.auth/
+# Interaction coverage gate output. Regenerated on every run and specific to
+# the origin it ran against, so it travels as a CI artifact and a Playwright
+# attachment rather than as a committed file that would go stale silently.
+/apps/web-console/interaction-coverage/
 # Added by code-review-graph
 .code-review-graph/
 

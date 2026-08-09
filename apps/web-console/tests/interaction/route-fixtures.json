@@ -1,0 +1,4 @@
+{
+  "$comment": "How to reach routes that need more than a bare path: a query string, a dynamic segment value, a specific session, or an expected redirect. Routes come from app/**/page.tsx and never from this file, so an entry here can only describe a route, never add or hide one. An entry naming a route that no longer exists fails the gate.",
+  "routes": {}
+}

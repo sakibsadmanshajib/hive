@@ -1,5 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// The interaction coverage gate is origin agnostic on purpose: CI points it
+// at the composed stack, a live run points it at the deployed console.
+const INTERACTION_BASE_URL =
+  process.env.INTERACTION_BASE_URL ??
+  process.env.PLAYWRIGHT_BASE_URL ??
+  "http://localhost:3000";
+
 export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -71,6 +78,32 @@ export default defineConfig({
       testDir: "./tests/e2e/_probe",
       testIgnore: /agent-workspace-flows\.spec\.ts$/,
       use: { ...devices["Desktop Chrome"] },
+    },
+    // Interaction coverage gate (see tests/interaction/README.md). Origin is
+    // configurable so the same run targets the composed stack in CI and the
+    // deployed box for a live run.
+    {
+      name: "interaction-setup",
+      testDir: "./tests/interaction",
+      testMatch: /auth\.setup\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: INTERACTION_BASE_URL,
+      },
+      // A live origin over the public internet signs in slower than a local
+      // stack; the default 30s cut the wait off mid-redirect.
+      timeout: 120 * 1000,
+    },
+    {
+      name: "interaction",
+      testDir: "./tests/interaction",
+      testMatch: /interaction-coverage\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        baseURL: INTERACTION_BASE_URL,
+      },
+      dependencies: ["interaction-setup"],
+      timeout: 3 * 60 * 60 * 1000,
     },
     {
       // Interaction-coverage probe for the agent workspace (Cowork), run

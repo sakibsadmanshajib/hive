@@ -1,0 +1,3 @@
+# Signed-in session state for the gate. Holds a real access token: never
+# commit it, and never upload it as a CI artifact (issue #554).
+.auth/
