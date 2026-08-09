@@ -151,6 +151,35 @@ RUN sed -i "s/or 'native'/or os.environ.get('HIVE_DEFAULT_FUNCTION_CALLING', 'na
     && ! grep -q "or 'native'" /app/backend/open_webui/main.py \
     && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/main.py').read_text())"
 
+# #792: keep the three non-chat catalog aliases (hive-embedding-default,
+# hive-stt, hive-tts) out of the chat model picker, while the gateway keeps
+# serving all six on /v1/models for direct API clients.
+#
+# Open WebUI's own per-model access control cannot do this job on this
+# deployment, which is why #776 shipped inert. docker-compose.yml sets
+# BYPASS_MODEL_ACCESS_CONTROL: "true" by design, and in this pinned image that
+# skips get_filtered_models on /api/models for every role; even with the flag
+# off, get_filtered_models exempts administrators whenever
+# BYPASS_ADMIN_ACCESS_CONTROL is set, which defaults to true, and the
+# tenant-role patch above makes every tenant owner an administrator. Measured
+# on a booted v0.10.2 container: with the flag off an administrator still saw
+# all six aliases while a member saw an empty picker and got HTTP 400 "Model
+# not found" on every chat request, so turning the flag off buys nothing and
+# breaks chat for members.
+#
+# The patch filters the /api/models response and nothing else. It does not
+# touch request.app.state.MODELS, so chat, document RAG embeddings and
+# text-to-speech all still resolve every alias. The hidden set comes from the
+# environment (HIVE_PICKER_HIDDEN_MODEL_IDS plus Open WebUI's own
+# RAG_EMBEDDING_MODEL / AUDIO_TTS_MODEL / AUDIO_STT_MODEL), never from a
+# hardcoded list, so the admin-selectable embedding alias stays single-sourced
+# (D-001).
+COPY deploy/docker/owui-patches/hive_model_picker.py /app/backend/open_webui/utils/hive_model_picker.py
+COPY deploy/docker/owui-patches/apply_model_picker_patch.py /tmp/apply_model_picker_patch.py
+RUN python3 /tmp/apply_model_picker_patch.py \
+    && grep -q 'hive_model_picker' /app/backend/open_webui/main.py \
+    && python3 -c "import ast, pathlib; ast.parse(pathlib.Path('/app/backend/open_webui/main.py').read_text())"
+
 # #771: drop the Settings > Integrations tab, the chat UI's only entry point to
 # "Manage Tool Servers" and "Open Terminal". Both accept an arbitrary URL and an
 # auth credential. The tool servers added there are direct ones, called by the
