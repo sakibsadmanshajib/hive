@@ -130,6 +130,28 @@ export async function mintSession({
   }
   const base = supabaseUrl.replace(/\/+$/, "");
 
+  // GoTrue keeps ONE outstanding one-time token per user, so two mints for the
+  // same account that interleave leave the first holding a token the second
+  // already replaced, and its verify answers 403 "Email link is invalid or has
+  // expired". Observed live on 2026-08-08. One retry clears the interleave.
+  //
+  // ponytail: one retry, not a lock. Give each parallel worker its own account
+  // if a suite ever mints for one account from several workers at once; no
+  // amount of retrying fixes a genuinely concurrent stream of mints.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await mintOnce({ base, email, serviceRoleKey, anonKey });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (attempt >= 1 || !/invalid or has expired/i.test(message)) {
+        throw error;
+      }
+    }
+  }
+}
+
+async function mintOnce({ base, email, serviceRoleKey, anonKey }) {
+
   // Addressed by email, so no admin user-listing call is involved (#791).
   const link = await postJson(
     `${base}/auth/v1/admin/generate_link`,
