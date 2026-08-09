@@ -39,11 +39,17 @@ func NewPgxTenantRoleStore(pool *pgxpool.Pool) TenantRoleStore {
 // GetMembershipRole returns the role for (userID, workspaceID).
 //
 // Returns:
-//   - (role, nil)                       — when membership row exists
-//   - ("", nil)                         — when workspace exists but no
-//                                         membership row exists for userID
+//   - (role, nil)                       — when an ACTIVE membership row exists
+//   - ("", nil)                         — when the workspace exists but userID has
+//     no active membership on it
 //   - ("", ErrWorkspaceNotFound)        — when workspaceID does not resolve
-//                                         in public.accounts
+//     in public.accounts
+//
+// The status filter is load bearing, not cosmetic (issue #803). This predicate
+// backs IsWorkspaceOwner, which gates PermBillingWrite on PUT /api/v1/budgets/
+// and POST /api/v1/spend-alerts/. Without it a row with role=owner and a non
+// active status authorized a billing write, and every sibling query in this
+// codebase already constrains status.
 func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceID uuid.UUID) (MembershipRole, error) {
 	// First confirm the workspace (account) exists.
 	var exists bool
@@ -61,7 +67,7 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 	err = s.pool.QueryRow(ctx, `
 		SELECT role
 		FROM public.account_memberships
-		WHERE account_id = $1 AND user_id = $2
+		WHERE account_id = $1 AND user_id = $2 AND status = 'active'
 		LIMIT 1
 	`, workspaceID, userID).Scan(&role)
 	if err != nil {

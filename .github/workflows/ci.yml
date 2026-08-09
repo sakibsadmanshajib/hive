@@ -414,7 +414,7 @@ jobs:
             # these suites (routing, catalog, providers) share one live
             # database and can observe each other's transient rows when run
             # concurrently, which is a flaky-collision risk, not a real bug.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/...
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/platform/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),
@@ -686,6 +686,15 @@ jobs:
       - name: Phase-19 collection guard
         if: needs.changes.outputs.run != 'false'
         run: npm run e2e:phase-19:verify-collection
+
+      # Guard for issue #813. A spec file that no workflow names never
+      # runs and emits no signal at all, so a required E2E job would
+      # protect nothing while those stay dark. Fails on a spec that is
+      # neither wired nor carried as justified debt in
+      # apps/web-console/tests/dark-spec-allowlist.json.
+      - name: Spec wiring guard (no dark spec files)
+        if: needs.changes.outputs.run != 'false'
+        run: npm run test:spec-wiring
 
       - name: Unit tests (vitest)
         if: needs.changes.outputs.run != 'false'

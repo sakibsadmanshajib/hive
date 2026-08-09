@@ -13,6 +13,7 @@
     "test:e2e": "playwright test",
     "e2e:phase-19": "playwright test --project=phase-19",
     "e2e:phase-19:verify-collection": "bash scripts/verify-phase19-collection.sh",
+    "test:spec-wiring": "node scripts/verify-spec-wiring.mjs",
     "e2e:owui": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui",
     "e2e:owui:perf": "playwright test --config=e2e/phase-19/owui/playwright.owui.config.ts --project=owui-perf"
   },
