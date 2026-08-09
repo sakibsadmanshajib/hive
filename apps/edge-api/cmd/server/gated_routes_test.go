@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -43,7 +44,7 @@ func stubControlPlane(t *testing.T, on ...featuregate.Feature) string {
 // authedRequest returns a request carrying an authenticated tenant, which is
 // what the gate resolves flags for.
 func authedRequest(method, path string) *http.Request {
-	r := httptest.NewRequest(method, path, nil)
+	r := httptest.NewRequestWithContext(context.Background(), method, path, nil)
 	return r.WithContext(auth.WithUser(r.Context(), &auth.User{TenantID: uuid.New()}))
 }
 
@@ -152,7 +153,7 @@ func TestGatedRouteAttachment(t *testing.T) {
 			if tc.authenticated {
 				req = authedRequest(http.MethodGet, tc.path)
 			} else {
-				req = httptest.NewRequest(http.MethodGet, tc.path, nil)
+				req = httptest.NewRequestWithContext(context.Background(), http.MethodGet, tc.path, nil)
 			}
 
 			rec := httptest.NewRecorder()

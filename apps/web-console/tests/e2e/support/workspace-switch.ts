@@ -11,18 +11,26 @@ export function workspaceSelect(page: Page): Locator {
   return page.getByRole("combobox", { name: WORKSPACE_SELECT_LABEL });
 }
 
-// accountIdFor returns the account id behind the option whose text starts with
-// displayName. Option text carries a " (current)" suffix for the active
-// workspace, so it is matched by prefix rather than equality.
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// accountIdFor returns the account id behind the option whose full text
+// equals displayName. Option text carries a " (current)" suffix for the
+// active workspace, so that suffix is optional but nothing else is: matching
+// is exact rather than substring, so a workspace named "Team" cannot match an
+// option for "Team Archive" that happens to sort first.
 export async function accountIdFor(
   page: Page,
   displayName: string
 ): Promise<string> {
-  const option = workspaceSelect(page)
+  const options = workspaceSelect(page)
     .locator("option")
-    .filter({ hasText: displayName })
-    .first();
-  await expect(option).toHaveCount(1);
+    .filter({
+      hasText: new RegExp(`^${escapeRegExp(displayName)}(?: \\(current\\))?$`),
+    });
+  await expect(options).toHaveCount(1);
+  const option = options.first();
   const value = await option.getAttribute("value");
   expect(value, `no account id on the option for ${displayName}`).toBeTruthy();
   return value as string;

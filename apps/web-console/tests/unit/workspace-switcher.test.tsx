@@ -46,16 +46,19 @@ function renderSwitcher() {
 }
 
 // Records what the control would have posted, in place of a real navigation.
-// jsdom never submits, so the component's requestSubmit call is intercepted and
-// the live form state snapshotted at that instant. Reading the payload rather
-// than the select's value is the point: the select's value is what the test
-// itself just wrote into the DOM, so asserting on it passes with no handler at
-// all. Only the payload proves a submission carried the new choice out.
+// The component's onChange handler calls form.requestSubmit(), which fires a
+// native "submit" event on the form; this listener prevents the default
+// navigation jsdom would otherwise attempt and snapshots the live form state
+// at that instant. Reading the payload rather than the select's value is the
+// point: the select's value is what the test itself just wrote into the DOM,
+// so asserting on it passes with no handler at all. Only the payload proves a
+// submission carried the new choice out.
 function captureSubmissions(form: HTMLFormElement): FormData[] {
   const submissions: FormData[] = [];
-  form.requestSubmit = () => {
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
     submissions.push(new FormData(form));
-  };
+  });
   return submissions;
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -176,7 +177,7 @@ func TestCreditGrantRouteAttachment(t *testing.T) {
 			registerCreditGrantRoutes(mux, stubAuth(tc.caller), authzMW, adminSpy, selfSpy)
 
 			rec := httptest.NewRecorder()
-			mux.ServeHTTP(rec, httptest.NewRequest(tc.method, tc.path, nil))
+			mux.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), tc.method, tc.path, nil))
 
 			if rec.Code != tc.wantStatus {
 				t.Errorf("%s %s: got status %d, want %d (body %s)",
