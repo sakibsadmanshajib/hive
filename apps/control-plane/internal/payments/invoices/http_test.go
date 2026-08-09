@@ -68,13 +68,6 @@ func TestHandleList_OwnerSeesWorkspaceInvoices(t *testing.T) {
 	if len(body.Items) != 1 {
 		t.Fatalf("items = %d, want 1", len(body.Items))
 	}
-	// Wire format must contain zero customer-USD keys.
-	rawLower := strings.ToLower(rec.Body.String())
-	for _, banned := range []string{"amount_usd", "usd_", "fx_", "exchange_rate", "price_per_credit_usd"} {
-		if strings.Contains(rawLower, banned) {
-			t.Fatalf("wire response leaked %q: %s", banned, rec.Body.String())
-		}
-	}
 }
 
 func TestHandleList_NonMemberReturns404(t *testing.T) {

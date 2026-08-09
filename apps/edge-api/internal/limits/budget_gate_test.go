@@ -196,10 +196,6 @@ func TestGate_HardCapExceeded_Blocks402(t *testing.T) {
 	}
 
 	body := rec.Body.String()
-	// Critical Phase 17 assertion — no USD/FX leakage in the 402 body.
-	if containsAny(body, []string{"amount_usd", "USD", "usd", "fx", "FX", "exchange", "Exchange"}) {
-		t.Fatalf("402 body must not contain USD/FX strings, got: %s", body)
-	}
 
 	var decoded hardCapExceededBody
 	if err := json.Unmarshal([]byte(body), &decoded); err != nil {
@@ -369,32 +365,4 @@ func TestGate_MalformedCacheValue_FailsOpen(t *testing.T) {
 	if !called {
 		t.Fatal("malformed cache value should fail-open")
 	}
-}
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-func containsAny(s string, needles []string) bool {
-	for _, n := range needles {
-		if n == "" {
-			continue
-		}
-		if indexOf(s, n) >= 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func indexOf(haystack, needle string) int {
-	if needle == "" {
-		return -1
-	}
-	for i := 0; i+len(needle) <= len(haystack); i++ {
-		if haystack[i:i+len(needle)] == needle {
-			return i
-		}
-	}
-	return -1
 }

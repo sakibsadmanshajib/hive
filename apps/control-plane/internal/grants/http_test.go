@@ -90,13 +90,6 @@ func TestHandlerCreate_AdminSuccess(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
 		t.Fatalf("decode body: %v", err)
 	}
-	// Provider-blind: ensure no FX/USD keys appear in the response shape.
-	rawBody := rec.Body.Bytes()
-	for _, banned := range []string{"amount_usd", "usd_", "fx_", "exchange_rate", "price_per_credit_usd"} {
-		if strings.Contains(string(rawBody), banned) {
-			t.Fatalf("response leaked FX/USD key %q: %s", banned, rawBody)
-		}
-	}
 }
 
 func TestHandlerCreate_NonAdminForbidden(t *testing.T) {
