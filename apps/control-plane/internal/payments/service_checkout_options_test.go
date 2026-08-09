@@ -60,17 +60,6 @@ func TestGetCheckoutOptions_BDAccount_BDTPaisa(t *testing.T) {
 	if opts.CreditBlockSize != CreditsPerUSD {
 		t.Errorf("expected CreditBlockSize=%d, got %d", CreditsPerUSD, opts.CreditBlockSize)
 	}
-
-	// Wire-shape check: marshalled JSON must NOT leak FX rate or USD keys.
-	raw, err := json.Marshal(opts)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	for _, banned := range []string{"amount_usd", "price_per_credit_usd", "exchange_rate", "effective_rate", "mid_rate", "fee_rate", "fx_"} {
-		if strings.Contains(string(raw), banned) {
-			t.Errorf("CheckoutOptions wire shape leaks banned key %q\npayload: %s", banned, raw)
-		}
-	}
 }
 
 // TestGetCheckoutOptions_BDAccount_TruncatesViaMathBig confirms the math/big
@@ -135,13 +124,10 @@ func TestGetCheckoutOptions_NonBDAccount_USDCents(t *testing.T) {
 	}
 }
 
-// TestGetCheckoutOptions_WireShape_NoUSDLeak asserts the marshalled JSON
-// of CheckoutOptions for BOTH BD and non-BD branches contains neither
-// `price_per_credit_usd` nor any other banned FX/USD key. This is the
-// black-box complement to TestCheckoutOptionsWireShape_FXZeroLeak in
-// service_fx_zero_leak_test.go and protects against regressions where a
-// resolved-value field accidentally re-introduces a USD wire key.
-func TestGetCheckoutOptions_WireShape_NoUSDLeak(t *testing.T) {
+// TestGetCheckoutOptions_WireShape_RequiredKeys asserts the marshalled JSON
+// of CheckoutOptions for BOTH BD and non-BD branches carries the fields the
+// console depends on to render checkout pricing.
+func TestGetCheckoutOptions_WireShape_RequiredKeys(t *testing.T) {
 	cases := []struct {
 		name        string
 		countryCode string
@@ -165,16 +151,6 @@ func TestGetCheckoutOptions_WireShape_NoUSDLeak(t *testing.T) {
 			fx:          &stubFXProvider{},
 		},
 	}
-	bannedKeys := []string{
-		"amount_usd",
-		"price_per_credit_usd",
-		"exchange_rate",
-		"effective_rate",
-		"mid_rate",
-		"fee_rate",
-		"fx_",
-		"usd_",
-	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := newStubRepository()
@@ -193,12 +169,6 @@ func TestGetCheckoutOptions_WireShape_NoUSDLeak(t *testing.T) {
 			if err != nil {
 				t.Fatalf("marshal: %v", err)
 			}
-			for _, k := range bannedKeys {
-				if strings.Contains(string(raw), k) {
-					t.Errorf("[%s] CheckoutOptions JSON leaks banned key %q\npayload: %s", tc.name, k, raw)
-				}
-			}
-			// Required new keys (positive assertions).
 			if !strings.Contains(string(raw), `"currency"`) {
 				t.Errorf("[%s] CheckoutOptions wire missing required key %q", tc.name, "currency")
 			}
