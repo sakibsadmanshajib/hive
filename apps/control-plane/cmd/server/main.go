@@ -990,6 +990,9 @@ func main() {
 	}
 
 	router := platformhttp.NewRouter(platformhttp.RouterConfig{
+		// Same condition that gates every DB-backed handler above, so /health
+		// cannot report ok while those routes are absent (issue #816).
+		DBReady:                  pool != nil,
 		AuthMiddleware:           authMiddleware,
 		AccountsHandler:          accountsHandler,
 		IdentityHandler:          identityHandler,
