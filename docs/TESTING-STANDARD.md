@@ -366,27 +366,63 @@ component read its source text for the `"use client"` directive (#794).
 an audit rather than as a step in writing one test. Run it against anything
 that guards money, authorization, or data loss.
 
-### 14. A spec file that no workflow names
+### 14. A spec file that no workflow runs
 
-Nothing skips. There is no variable to blame. The file simply is not passed
+Nothing skips. There is no variable to blame. The file simply is never passed
 to any runner, and an uninvoked file emits no signal at all.
 
 `web-e2e` invokes Playwright by explicit file path and names four of the
-nineteen spec files in the tree. The rest are collected by the `chromium`
-project's `testDir`, so `npx playwright test` locally runs the lot, which is
-why this is invisible to anyone working on the specs. Seven specs have never
-run in CI, including `billing-fx-zero-leak.spec.ts`, written to enforce what
-was at the time a regulatory constraint (#813).
+thirty three spec files in the tree. The rest are collected by a project's
+`testDir`, so `npx playwright test` locally runs the lot, which is why this is
+invisible to anyone working on the specs. **Eighteen of thirty three spec
+files have never run in CI**, including `billing-fx-zero-leak.spec.ts`,
+written to enforce what was at the time a regulatory constraint (#813).
 
 **Instead:** run the directory, not a file list. Where a file list is
-unavoidable, add a guard that fails when a spec file exists that no workflow
-invokes, with an allowlist whose every entry names a justification, an owner,
-and a tracking issue. `apps/web-console/scripts/verify-phase19-collection.sh`
-is the model for the collection half: it derives the expected count from
-disk, so a broken `testMatch` that collects zero cannot pass.
+unavoidable, add a guard that fails when a spec exists that no workflow runs,
+with an allowlist whose every entry names a justification, an owner and a
+tracking issue. `apps/web-console/scripts/verify-spec-wiring.mjs` is that
+guard.
+
+#### Resolve wiring by asking the runner, never by matching filenames
+
+The first version of that guard matched spec filenames against the text of
+`.github/`. It was wrong in **both** directions at once, which is worth
+recording because the mistake is inviting and it looks like it works:
+
+- **False positives.** `openai-sdk.spec.ts` and `performance/ttfb.spec.ts`
+  were counted as wired because a workflow **comment** mentions them. A
+  comment runs nothing.
+- **False negatives.** The nine `owui/NN-*.spec.ts` and the two
+  `owui/performance/*.spec.ts` were counted as dark, when `owui-nightly.yml`
+  runs all eleven through `npm run e2e:owui` and `e2e:owui:perf`. Those
+  select by `--project`, so no filename ever appears in the workflow.
+
+It reported 6 wired and 27 dark. The truth is 15 and 18. A guard that
+miscounts in both directions is worse than no guard, because it manufactures
+confidence in a number nobody checked.
+
+The root cause is structural: workflows select tests by project and by
+config, so any filename based detection is measuring something the runner does
+not use. This is camouflage shape 5, a weaker duplicate of the real predicate,
+appearing inside the tooling built to catch camouflage.
+
+The corrected guard runs `playwright test --list --reporter=json` for every
+invocation a workflow actually makes, and unions the collected files. Three
+details are load bearing:
+
+1. `spec.file` in that report is relative to `config.rootDir`, which differs
+   per config. Resolve against it or the owui specs silently fail to match.
+2. The owui config chooses its `testMatch` from credential environment
+   variables and collects **zero** files without them. The guard supplies
+   placeholders, because the question is whether the workflow runs the spec
+   when it has its secrets.
+3. An invocation that collects zero files is a **failure**, not an empty
+   result. That is the phase-19 `testMatch` bug, and treating it as "no specs
+   here" is how a broken selector reports success.
 
 A collection guard certifies that files are found, not that they run. Phase
-19 is dark twice over: no workflow executes the project, and
-`E2E_TENANT_B_ID`, `E2E_EXPIRED_JWT` and `E2E_ORPHAN_JWT` appear in zero
-workflow files, so even if it were invoked, four of its specs would
+19 is dark twice over: no workflow runs the project, `ci.yml` only collects
+it, and `E2E_TENANT_B_ID`, `E2E_EXPIRED_JWT` and `E2E_ORPHAN_JWT` appear in
+zero workflow files, so even if it were invoked, four of its specs would
 `test.skip` on their first line. Both halves have to be closed.
