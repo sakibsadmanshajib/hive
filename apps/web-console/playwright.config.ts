@@ -9,9 +9,17 @@ export default defineConfig({
   // concurrently races on that reset and flaps sessions mid-test, so we
   // serialize.
   workers: 1,
+  // flake-reporter names every test that only passed on a retry and fails the
+  // run when there is one, in both CI and local runs. The `list` reporter
+  // folds retry-passes into its "N passed" tail, so without this a run that
+  // needed two retries is indistinguishable from a clean one.
   reporter: process.env.CI
-    ? [["list"], ["html", { open: "never" }]]
-    : "html",
+    ? [
+        ["list"],
+        ["html", { open: "never" }],
+        ["./tests/e2e/support/flake-reporter.ts"],
+      ]
+    : [["html"], ["./tests/e2e/support/flake-reporter.ts"]],
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
     trace: "retain-on-failure",

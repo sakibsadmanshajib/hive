@@ -1,12 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { reseedFixtures } from "./support/fixture-reset";
 import {
   E2E_VERIFIED_EMAIL as VERIFIED_EMAIL,
   E2E_VERIFIED_PASSWORD as VERIFIED_PASSWORD,
   E2E_UNVERIFIED_EMAIL as UNVERIFIED_EMAIL,
   E2E_UNVERIFIED_PASSWORD as UNVERIFIED_PASSWORD,
 } from "./support/e2e-auth-creds";
-import { resetProfileBetweenSpecs } from "./support/reset-profile";
 
 async function signIn(
   page: import("@playwright/test").Page,
@@ -29,20 +28,8 @@ async function signIn(
 // flap mid-test, so this file MUST run serially against the shared backend.
 test.describe.configure({ mode: "serial" });
 
-test.beforeEach(async () => {
-  try {
-    execFileSync("node", ["tests/e2e/support/e2e-auth-fixtures.mjs"], {
-      cwd: process.cwd(),
-      env: { ...process.env, NODE_OPTIONS: "" },
-      stdio: "pipe",
-    });
-  } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer };
-    process.stderr.write(
-      `[e2e-auth-fixtures] reset failed\n${e.stdout ?? ""}${e.stderr ?? ""}\n`
-    );
-    throw err;
-  }
+test.beforeEach(async ({}, testInfo) => {
+  await reseedFixtures(testInfo);
 });
 
 test.describe("profile completion", () => {
@@ -71,8 +58,8 @@ test.describe("profile completion", () => {
 
     // The preceding "setup saves profile" test sets profile_setup_complete=true.
     // Reset it before this test so the dashboard renders the "Complete setup" CTA.
-    test.beforeEach(() => {
-      resetProfileBetweenSpecs({ email: VERIFIED_EMAIL });
+    test.beforeEach(async ({}, testInfo) => {
+      await reseedFixtures(testInfo, ["reset-profile", VERIFIED_EMAIL]);
     });
 
     test("dashboard shows setup reminder instead of forcing setup after completion", async ({
