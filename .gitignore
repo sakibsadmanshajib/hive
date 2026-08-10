@@ -87,6 +87,21 @@ supabase/.temp/
 /r1-*.png
 /rev-*.png
 
+# Playwright/browser storage-state fixtures. writeStorageState() in
+# tests/e2e/support/live-auth.mjs (and the older phase-19 auth.setup.ts) dumps
+# a live GoTrue session (access_token + refresh_token JWTs) into one of
+# these at runtime. The two known .auth/ directories already carry their own
+# local .gitignore, but that protection is per-directory, not repo-wide: a
+# 2026-08-09 scratch run wrote the same shape of file (shot-state.json)
+# outside any .auth/ dir, and it stayed off git only because it was outside
+# the repo tree, not because anything here would have stopped it. Ignored
+# globally so no future storage-state dump, wherever it lands inside the
+# repo, is ever stageable.
+**/.auth/
+**/*storageState*.json
+**/*storage-state*.json
+**/*-state.json
+
 # OpenWolf per-tool-call telemetry. The hooks in .wolf/hooks/ rewrite these on
 # every Read, Write, and Edit, so tracking them makes every session dirty the
 # working tree continuously: `git pull --ff-only` gets blocked by churn that
