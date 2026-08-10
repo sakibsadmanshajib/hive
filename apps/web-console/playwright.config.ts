@@ -9,10 +9,22 @@ export default defineConfig({
   // concurrently races on that reset and flaps sessions mid-test, so we
   // serialize.
   workers: 1,
-  // flake-reporter names every test that only passed on a retry and fails the
-  // run when there is one, in both CI and local runs. The `list` reporter
-  // folds retry-passes into its "N passed" tail, so without this a run that
-  // needed two retries is indistinguishable from a clean one.
+  // A retry-pass must not be able to report success. Two layers, because
+  // either one alone has a hole:
+  //
+  //   failOnFlakyTests is Playwright's own gate and survives everything,
+  //   including `--reporter=list` on the command line, which replaces the
+  //   configured reporters outright and would otherwise silently disable the
+  //   custom reporter below and restore exit 0.
+  //
+  //   flake-reporter is what says *which* test, with its attempt count, in the
+  //   job summary. The built-in flag gives an exit code and nothing to act on;
+  //   finding the two retry-passes behind CI run 31361681115 without it meant
+  //   unzipping a 5MB artifact by hand.
+  failOnFlakyTests: true,
+  // The `list` reporter folds retry-passes into its "N passed" tail, so
+  // without the reporter below a run that needed two retries is
+  // indistinguishable from a clean one.
   reporter: process.env.CI
     ? [
         ["list"],

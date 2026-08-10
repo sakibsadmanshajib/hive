@@ -36,9 +36,11 @@ export default class FlakeReporter implements Reporter {
     const tests: TestCase[] = this.root ? this.root.allTests() : [];
     const entries: FlakeEntry[] = tests.map((test) => ({
       file: test.location.file.split("/").slice(-2).join("/"),
-      // titlePath() is [project, file, ...describes, title]; the file has its
-      // own column and the project is constant for this config.
-      title: test.titlePath().slice(2).filter(Boolean).join(" > "),
+      // titlePath() is ["", project, file, ...describes, title]. Filter the
+      // empty root out first, then drop project and file: the file has its own
+      // column and the project is constant for this config. Slicing before
+      // filtering keeps the file and repeats it in both columns.
+      title: test.titlePath().filter(Boolean).slice(2).join(" > "),
       outcome: test.outcome(),
       attempts: test.results.length,
     }));

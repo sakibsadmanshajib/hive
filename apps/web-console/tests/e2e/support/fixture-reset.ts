@@ -5,9 +5,10 @@ import type { TestInfo } from "@playwright/test";
 const execFileAsync = promisify(execFile);
 
 // Ceiling for one reseed. Generous on purpose: the point is not to be tight,
-// it is to make a wedged seeder die with its own message ("reseed exceeded
-// 120000ms") instead of surfacing as a Playwright test timeout attributed to
-// whatever the browser happened to be doing.
+// it is to make a wedged seeder die on its own terms instead of surfacing as a
+// Playwright test timeout attributed to whatever the browser happened to be
+// doing. Node kills the child with a bare signal, so the message below turns
+// that into something a reader can act on.
 const RESEED_TIMEOUT_MS = 120_000;
 
 /**
@@ -70,19 +71,33 @@ export async function reseedFixtures(
       }
     );
   } catch (err: unknown) {
-    const e = err as { stdout?: string; stderr?: string };
+    const e = err as { stdout?: string; stderr?: string; killed?: boolean };
+    const elapsed = Date.now() - startedAt;
+    // `timeout` kills the child with a signal and no explanation of its own.
+    if (e.killed) {
+      process.stderr.write(
+        `[e2e-auth-fixtures] reseed exceeded ${RESEED_TIMEOUT_MS}ms and was killed (ran ${elapsed}ms)\n`
+      );
+    }
     process.stderr.write(
-      `[e2e-auth-fixtures] reset failed after ${Date.now() - startedAt}ms\n${
-        e.stdout ?? ""
-      }${e.stderr ?? ""}\n`
+      `[e2e-auth-fixtures] reset failed after ${elapsed}ms\n${e.stdout ?? ""}${
+        e.stderr ?? ""
+      }\n`
     );
     throw err;
   } finally {
     // Settle on the declared budget plus what this hook actually consumed.
     // Composes: a second reseeding hook in the same test reads the already
     // extended value and adds its own elapsed time on top.
+    const elapsed = Date.now() - startedAt;
     if (productBudgetMs > 0) {
-      testInfo.setTimeout(productBudgetMs + (Date.now() - startedAt));
+      testInfo.setTimeout(productBudgetMs + elapsed);
     }
+    // Always, not only on failure. This one number is what diagnoses the whole
+    // class: it ranged from 2618ms to 30248ms inside a single CI job, and
+    // nothing in the log said so.
+    process.stdout.write(
+      `[e2e-auth-fixtures] reseed took ${elapsed}ms (product budget kept at ${productBudgetMs}ms)\n`
+    );
   }
 }
