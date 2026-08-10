@@ -78,6 +78,17 @@ export type Result = {
  * every few seconds, so counting it would hand a free pass to every control
  * whose click happened to land near a poll.
  */
+const NOT_MOUNTED = new Set([404, 405, 410, 501]);
+
+/**
+ * Wording an application uses to say that what the user asked for did not
+ * happen. Narrow on purpose: a live region that announces a result is not a
+ * failure, and treating one as a failure trades a false pass for a false
+ * accusation.
+ */
+const FAILURE_TEXT =
+  /\b(error|failed|failure|unable to|could ?n[o']t|went wrong|try again|invalid|denied|unauthori[sz]ed|forbidden|not found|timed out|too many requests)\b/i;
+
 function isMeaningfulRequest(url: string): boolean {
   if (/\.(js|mjs|css|png|jpe?g|svg|webp|woff2?|ico|map)(\?|$)/i.test(url)) return false;
   if (/\/_app\/|\/static\/|\/favicon/i.test(url)) return false;
@@ -220,6 +231,30 @@ async function startWatch(page: Page): Promise<() => Promise<{ mutations: number
   };
 }
 
+/**
+ * Error surfaces on screen right now.
+ *
+ * Open WebUI reports a failed action as a toast, which is both a change to the
+ * render and usually the tail of a request, so without this the two strongest
+ * evidence channels both vote to prove a control that visibly did not work.
+ */
+async function errorSurfaces(page: Page): Promise<string[]> {
+  return page
+    .evaluate(() => {
+      const nodes = document.querySelectorAll(
+        '[role="alert"], [aria-live="assertive"], [data-sonner-toast], .toast-error, .Toastify__toast--error',
+      );
+      const out: string[] = [];
+      nodes.forEach((node) => {
+        if (node.getAttribute("role") === "alertdialog") return;
+        const text = (node.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+        if (text !== "") out.push(text);
+      });
+      return out;
+    })
+    .catch((): string[] => []);
+}
+
 async function overlayCount(page: Page): Promise<number> {
   return page.evaluate(
     () =>
@@ -306,6 +341,20 @@ async function proveByClickInner(
     if (isMeaningfulRequest(u)) requests.push(u);
   };
   page.on("request", onRequest);
+  // Statuses, not just URLs. This file never registered a response listener at
+  // all, so a click that answered 500 and rendered an error toast came back
+  // proven twice over, once on the request and once on the toast.
+  const failed: string[] = [];
+  const onResponse = (r: {
+    status: () => number;
+    url: () => string;
+    request: () => { method: () => string };
+  }) => {
+    const u = r.url();
+    if (!isMeaningfulRequest(u)) return;
+    if (r.status() >= 400) failed.push(String(r.status()) + " " + r.request().method() + " " + u);
+  };
+  page.on("response", onResponse);
   let download = false;
   let filechooser = false;
   const onDownload = () => {
@@ -330,6 +379,7 @@ async function proveByClickInner(
   const urlBefore = page.url();
   const overlaysBefore = await overlayCount(page);
   const signatureBefore = await visibleSignature(page);
+  const errorsBefore = new Set(await errorSurfaces(page));
   const stop = await startWatch(page);
 
   let clickError = "";
@@ -347,10 +397,48 @@ async function proveByClickInner(
   const urlAfter = page.url();
   const overlaysAfter = await overlayCount(page);
   const signatureAfter = await visibleSignature(page);
+  const errorsAfter = (await errorSurfaces(page)).filter(
+    (text) => !errorsBefore.has(text) && FAILURE_TEXT.test(text),
+  );
   page.off("request", onRequest);
+  page.off("response", onResponse);
   page.off("download", onDownload);
   page.off("filechooser", onFileChooser);
   page.context().off("page", onPopup);
+
+  // Failure first, and before any positive channel. Evidence that an
+  // activation was refused is not evidence that the control works, and a
+  // refusal produces a request and a rendered change just like a success does.
+  // No harnessSuppliedInput exception is carved out here: nothing in this
+  // sweep feeds a control synthetic input before clicking it, because typed
+  // values are proven by reading state back rather than by clicking, so every
+  // 4xx and 5xx a click provokes is unexpected by construction.
+  const notMounted = failed.filter((e) => {
+    const code = Number.parseInt(e.slice(0, 3), 10);
+    return NOT_MOUNTED.has(code) || code >= 500;
+  });
+  const refused = failed.filter((e) => !notMounted.includes(e));
+  if (notMounted.length > 0)
+    return {
+      ...base,
+      proven: false,
+      proof: "none",
+      detail: "called an endpoint that is not mounted or that failed: " + notMounted.slice(0, 2).join(", ").slice(0, 180),
+    };
+  if (refused.length > 0)
+    return {
+      ...base,
+      proven: false,
+      proof: "none",
+      detail: "the server refused the request it sent: " + refused.slice(0, 2).join(", ").slice(0, 180),
+    };
+  if (errorsAfter.length > 0)
+    return {
+      ...base,
+      proven: false,
+      proof: "none",
+      detail: "raised an error to the user: " + errorsAfter.slice(0, 2).join(" | ").slice(0, 180),
+    };
 
   if (download) return { ...base, proven: true, proof: "download", detail: "download started" };
   if (filechooser) return { ...base, proven: true, proof: "filechooser", detail: "file chooser opened" };
@@ -455,4 +543,100 @@ export function summarise(results: Result[]) {
     ratio: total === 0 ? 0 : Number((proven / total).toFixed(4)),
     surfaces: Object.fromEntries(bySurface),
   };
+}
+
+/**
+ * Denominator guard.
+ *
+ * The ratio is proven over enumerated and both sides are read out of the
+ * rendered DOM, so a surface that renders less than it used to shrinks the
+ * denominator along with the numerator and the percentage holds or climbs
+ * while the app degrades. A floor per surface, committed to the repository,
+ * makes that drop a failure instead of an improvement. A floor rather than a
+ * comparison against the previous run because a run starts from a clean
+ * checkout with no artifact from the last one, so previous-run state can
+ * always be missing and the check would become no check at all.
+ */
+export type Floors = Record<string, number>;
+
+export function floorFailures(
+  floors: Floors,
+  swept: Array<{ surface: string; enumerated: number }>,
+): string[] {
+  const out: string[] = [];
+  for (const entry of swept) {
+    const floor = floors[entry.surface];
+    if (floor === undefined) {
+      out.push(
+        entry.surface +
+          ": enumerated " +
+          String(entry.enumerated) +
+          " controls but has no floor in surface-floors.json; record one, or a later run that renders nothing here reports full coverage of an empty surface",
+      );
+      continue;
+    }
+    if (entry.enumerated < floor) {
+      out.push(
+        entry.surface +
+          ": enumerated " +
+          String(entry.enumerated) +
+          " controls, below its recorded floor of " +
+          String(floor) +
+          "; the surface renders less than it used to, which shrinks the denominator and inflates coverage. Fix the surface, or lower the floor in this PR with a reason",
+      );
+    }
+  }
+  return out;
+}
+
+/**
+ * A surface deliberately left out of the sweep.
+ *
+ * Excluding a surface is allowed. Excluding it forever is not. An exclusion
+ * that exists because something is broken names the issue that is broken, and
+ * the gate fails the moment that issue closes, so the exclusion cannot outlive
+ * its reason. A standing decision says permanent instead and names no issue.
+ */
+export type SurfaceExclusion = {
+  id: string;
+  reason?: string;
+  issue?: number;
+  permanent?: boolean;
+  owner?: string;
+};
+
+export function exclusionFailures(exclusions: SurfaceExclusion[]): string[] {
+  const out: string[] = [];
+  for (const entry of exclusions) {
+    const label = "surface exclusion " + (entry.id || "(no id)");
+    if (!entry.id) out.push(label + " has no id");
+    if (!(entry.reason ?? "").trim()) out.push(label + " has no reason");
+    if (!(entry.owner ?? "").trim()) out.push(label + " has no owner");
+    if (entry.issue === undefined && entry.permanent !== true) {
+      out.push(
+        label +
+          " names no blocking issue and is not declared permanent; an exclusion with no end is how a denominator shrinks without anyone deciding it should",
+      );
+    }
+    if (entry.issue !== undefined && entry.permanent === true) {
+      out.push(label + " declares itself permanent and also names an issue; it is one or the other");
+    }
+  }
+  return out;
+}
+
+export function expiredExclusions(
+  exclusions: SurfaceExclusion[],
+  closed: ReadonlySet<number>,
+): string[] {
+  return exclusions
+    .filter((entry) => entry.issue !== undefined && closed.has(entry.issue))
+    .map(
+      (entry) =>
+        "surface " +
+        entry.id +
+        " is excluded because issue " +
+        String(entry.issue) +
+        " blocks it, but that issue is closed; delete the exclusion and let the gate measure the surface, or cite the issue that still blocks it",
+    );
 }

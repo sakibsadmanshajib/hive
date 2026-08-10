@@ -13,6 +13,9 @@ import { test, expect, type Page } from "@playwright/test";
 
 import {
   enumerate,
+  exclusionFailures,
+  expiredExclusions,
+  floorFailures,
   flip,
   isStateful,
   locate,
@@ -20,7 +23,9 @@ import {
   readState,
   summarise,
   type Control,
+  type Floors,
   type Result,
+  type SurfaceExclusion,
 } from "./lib";
 import {
   STATIC_SURFACES,
@@ -37,6 +42,13 @@ const REPORT_DIR = path.join(__dirname, "../../chat-coverage-report");
 const REGISTRY = JSON.parse(
   fs.readFileSync(path.join(__dirname, "inert-registry.json"), "utf8"),
 ) as { allowed: Array<{ key?: string; justification?: string }> };
+const FLOOR_COMMENT =
+  "Minimum control count per surface, recorded from a live run. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. Regenerate deliberately with COV_FLOORS=update and commit the result with a reason.";
+const FLOOR_FILE = path.join(__dirname, "surface-floors.json");
+const FLOORS = JSON.parse(fs.readFileSync(FLOOR_FILE, "utf8")).surfaces as Floors;
+const EXCLUSIONS = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "surface-exclusions.json"), "utf8"),
+).surfaces as SurfaceExclusion[];
 const REMOVED = JSON.parse(
   fs.readFileSync(path.join(__dirname, "removed-surfaces.json"), "utf8"),
 ) as {
@@ -323,6 +335,28 @@ async function valuePass(
   }
 }
 
+const SELF_TEST_HTML = `
+<main style="min-height:400px">
+  <div id="out">idle</div>
+  <div id="toast" role="alert"></div>
+  <button aria-label="Wired">Wired</button>
+  <button aria-label="Dead">Dead</button>
+  <button aria-label="Failing">Failing</button>
+  <button aria-label="Toasty">Toasty</button>
+</main>
+<script>
+  const out = document.getElementById('out');
+  const toast = document.getElementById('toast');
+  const at = (n) => document.querySelector('[aria-label="' + n + '"]');
+  at('Wired').addEventListener('click', () => { out.textContent = 'the wired button did something'; });
+  at('Failing').addEventListener('click', async () => {
+    try { await fetch('/api/save', { method: 'POST' }); } catch (e) {}
+    toast.textContent = 'Something went wrong, please try again';
+  });
+  at('Toasty').addEventListener('click', () => { toast.textContent = 'Error: could not save'; });
+</script>
+`;
+
 test.describe("chat interaction coverage", () => {
   test("every rendered chat control has a proven live effect", async ({ page }) => {
     test.setTimeout(45 * 60_000);
@@ -383,17 +417,27 @@ test.describe("chat interaction coverage", () => {
     // can outlive its own credentials. COV_SURFACES runs one slice per
     // invocation; the tracker file below merges slices back into one number.
     const filter = process.env.COV_SURFACES ? new RegExp(process.env.COV_SURFACES) : null;
-    const surfaces = filter ? allSurfaces.filter((s) => filter.test(s.id)) : allSurfaces;
+    // Exclusions are enumerated, owned, and tied to an open issue, and they
+    // leave the denominator entirely rather than counting as covered. The
+    // expiry test below fails once the blocking issue closes, so an exclusion
+    // cannot quietly outlive its reason.
+    const excludedIds = new Set(EXCLUSIONS.map((e) => e.id));
+    const surfaces = (filter ? allSurfaces.filter((s) => filter.test(s.id)) : allSurfaces).filter(
+      (s) => !excludedIds.has(s.id),
+    );
     expect(surfaces.length, "surface filter matched nothing").toBeGreaterThan(0);
 
     const results: Result[] = [];
     const errors: string[] = [];
+    const swept: Array<{ surface: string; enumerated: number }> = [];
+    errors.push(...exclusionFailures(EXCLUSIONS));
 
     for (const surface of surfaces) {
       let controls: Control[] = [];
       stage(`enumerating ${surface.id}`);
       try {
         controls = await enumerateSurface(page, surface);
+        swept.push({ surface: surface.id, enumerated: controls.length });
         stage(`${surface.id}: ${controls.length} controls`);
       } catch (err) {
         errors.push(`${surface.id}: could not open (${String(err).split("\n")[0]})`);
@@ -438,6 +482,20 @@ test.describe("chat interaction coverage", () => {
         .evaluate(() => (window as unknown as { __covBlocked?: number }).__covBlocked ?? 0)
         .catch(() => 0);
       stage(`sabotage "${sabotage}" intercepted ${blocked} events on the last page`);
+    }
+
+    // Denominator guard, before anything is said about the ratio.
+    if (process.env.COV_FLOORS === "update") {
+      const next: Floors = { ...FLOORS };
+      for (const entry of swept) next[entry.surface] = entry.enumerated;
+      const ordered: Floors = {};
+      for (const key of Object.keys(next).sort()) ordered[key] = next[key];
+      const body = { "$comment": FLOOR_COMMENT, surfaces: ordered };
+      fs.writeFileSync(FLOOR_FILE, JSON.stringify(body, null, 2) + "\n");
+      // eslint-disable-next-line no-console
+      console.log("[coverage] surface-floors.json rewritten from this run");
+    } else {
+      errors.push(...floorFailures(FLOORS, swept));
     }
 
     const summary = summarise(results);
@@ -537,45 +595,53 @@ test.describe("chat interaction coverage", () => {
   });
 
   test("the prover tells a working control from a broken one", async ({ page }) => {
-    test.setTimeout(60_000);
-    // A gate nobody has watched fail is worth nothing. This is the smallest
-    // thing that fails if the detector breaks: two buttons that look identical,
-    // one wired and one whose handler was deleted. The wired one must come back
-    // proven and the dead one must come back unproven. Deliberately a fixture
-    // and not the deployment: it is the *detector* under test here, and pinning
-    // that to a live page makes the check hostage to whatever the deployment is
-    // doing that minute.
-    await page.setContent(`
-      <main style="min-height:400px">
-        <div id="out">idle</div>
-        <button id="wired" aria-label="Wired">Wired</button>
-        <button id="dead" aria-label="Dead">Dead</button>
-      </main>
-      <script>
-        document.getElementById('wired').addEventListener('click', () => {
-          document.getElementById('out').textContent = 'the wired button did something';
-        });
-        // #dead has no listener at all: this is the broken control.
-      </script>
-    `);
+    test.setTimeout(120_000);
+    // A gate nobody has watched fail is worth nothing. Four buttons that look
+    // alike: wired does something and must be proven; dead has no handler and
+    // must be unproven; failing calls an endpoint that answers 500 and shows a
+    // toast and must be unproven, which is the case that used to come back
+    // proven twice over; toasty only shows an error and must be unproven.
+    //
+    // An intercepted origin rather than setContent, so the failing button has a
+    // same-origin endpoint whose status the prover can actually read.
+    await page.route("https://cov.selftest/**", async (route) => {
+      if (route.request().url().endsWith("/index")) {
+        await route.fulfill({ contentType: "text/html", body: SELF_TEST_HTML });
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "boom" }),
+      });
+    });
+    await page.goto("https://cov.selftest/index");
 
     const controls = await enumerate(page, "self-test");
-    const wired = controls.find((c) => c.name === "Wired");
-    const dead = controls.find((c) => c.name === "Dead");
-    expect(wired && dead, "the fixture must render both buttons").toBeTruthy();
+    const byName = (name: string) => controls.find((c) => c.name === name);
+    for (const name of ["Wired", "Dead", "Failing", "Toasty"]) {
+      expect(byName(name), "the fixture must render " + name).toBeTruthy();
+    }
 
-    const wiredResult = await proveByClick(page, wired!);
-    const deadResult = await proveByClick(page, dead!);
+    const wired = await proveByClick(page, byName("Wired")!);
+    const dead = await proveByClick(page, byName("Dead")!);
+    const failing = await proveByClick(page, byName("Failing")!);
+    const toasty = await proveByClick(page, byName("Toasty")!);
 
+    expect(wired.proven, "a working control was reported as broken: " + wired.detail).toBe(true);
+    expect(dead.proven, "a control with no handler was reported as working: " + dead.detail).toBe(
+      false,
+    );
     expect(
-      wiredResult.proven,
-      `a working control was reported as broken: ${wiredResult.detail}`,
-    ).toBe(true);
-    expect(
-      deadResult.proven,
-      `a broken control was reported as working: ${deadResult.proof} ${deadResult.detail}`,
+      failing.proven,
+      "a control whose endpoint answered 500 was reported as working: " + failing.detail,
     ).toBe(false);
-    expect(deadResult.proof).toBe("none");
+    expect(failing.detail).toContain("500");
+    expect(
+      toasty.proven,
+      "a control that only raised an error was reported as working: " + toasty.detail,
+    ).toBe(false);
+    expect(toasty.detail).toContain("raised an error");
   });
 
   test("surfaces removed from upstream Open WebUI stay absent", async ({ page }) => {
@@ -637,5 +703,27 @@ test.describe("chat interaction coverage", () => {
       bad.map((e) => e.key ?? "(no key)"),
       "registry entries without a key or a justification",
     ).toEqual([]);
+    expect(exclusionFailures(EXCLUSIONS), "malformed surface exclusions").toEqual([]);
+  });
+
+  // An exclusion ends when the thing blocking it is fixed, and the only
+  // authority on that is the issue tracker. Without a token the state cannot be
+  // read, so this reports that it could not run rather than passing quietly.
+  test("no excluded surface waits on an issue that already closed", async ({ request }) => {
+    const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+    test.skip(token === "", "GITHUB_TOKEN is required to read issue state");
+    const repo = process.env.GITHUB_REPOSITORY ?? "sakibsadmanshajib/hive";
+    const closed = new Set<number>();
+    for (const entry of EXCLUSIONS) {
+      if (entry.issue === undefined) continue;
+      const url =
+        "https://api.github.com/repos/" + repo + "/issues/" + String(entry.issue);
+      const headers = { authorization: "Bearer " + token, accept: "application/vnd.github+json" };
+      const response = await request.get(url, { headers });
+      if (!response.ok()) continue;
+      const body = (await response.json()) as { state?: string };
+      if (body.state === "closed") closed.add(entry.issue);
+    }
+    expect(expiredExclusions(EXCLUSIONS, closed)).toEqual([]);
   });
 });
