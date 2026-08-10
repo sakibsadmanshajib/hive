@@ -585,6 +585,20 @@ test.describe("interaction coverage", () => {
           });
           dirty = result.dirty;
 
+          // Proving the locale switcher works (it does) changes the language
+          // of every remaining control's label, while this route's
+          // enumeration snapshot still holds the English keys. Detect the
+          // drift from the document itself rather than guessing which control
+          // caused it, and force a reload so the next lookup runs against a
+          // pinned page.
+          const lang = await page
+            .evaluate(() => document.documentElement.lang)
+            .catch(() => "en");
+          if (lang !== "" && lang !== "en") {
+            await pinLocale(page);
+            dirty = true;
+          }
+
           if (item.revealPath.length < 2) {
             for (const candidate of result.revealed) {
               const candidateKey = controlKey(candidate);
@@ -654,6 +668,10 @@ test.describe("interaction coverage", () => {
         detail: "could not be located in a fresh session",
       };
       try {
+        // A brand new context has never had the locale pinned, so the shell
+        // renders in whatever locale the account last chose and a key lookup
+        // finds nothing. That reported a working sign out as unlocatable.
+        await pinLocale(page);
         await page.goto(item.url, { waitUntil: "domcontentloaded", timeout: 45000 });
         const locator = await locateByKey(page, item.key);
         if (locator !== null) {
