@@ -51,9 +51,13 @@ const ALLOWED = new Map([
 ]);
 
 const CALL_RE = new RegExp(`\\b(${BANNED.join("|")})\\s*\\(`);
-// An import or require clause that pulls a banned name in, including under an
-// alias (`import { execSync as run }`), which a call-shape match alone misses.
-const CHILD_PROCESS_CLAUSE_RE = /(?:from\s*["'](?:node:)?child_process["']|require\(\s*["'](?:node:)?child_process["']\s*\))/;
+// A banned name reached through a property, whether it is called there or only
+// aliased: `cp.execSync(...)`, `require("node:child_process").execSync`,
+// `cp["spawnSync"]`. Without this, binding the function to a local name and
+// calling that name would slip past the call-shape match entirely.
+const PROP_RE = new RegExp(
+  `(?:\\.\\s*(${BANNED.join("|")})\\b|\\[\\s*["'](${BANNED.join("|")})["']\\s*\\])`,
+);
 
 export function findOffences(source) {
   const offences = [];
@@ -62,6 +66,10 @@ export function findOffences(source) {
   lines.forEach((line, index) => {
     const call = line.match(CALL_RE);
     if (call) offences.push({ line: index + 1, name: call[1], text: line.trim() });
+    const prop = line.match(PROP_RE);
+    if (prop) {
+      offences.push({ line: index + 1, name: prop[1] ?? prop[2], text: line.trim() });
+    }
   });
 
   // Import clauses can span lines, so scan the whole source for the module
@@ -118,6 +126,12 @@ const MUST_CATCH = [
   ["bare-specifier import", 'import { spawnSync } from "child_process";'],
   ["multi-line import", 'import {\n  execFileSync,\n} from "node:child_process";'],
   ["require destructure", 'const { execFileSync } = require("node:child_process");'],
+  ["require renamed destructure", 'const { execSync: run } = require("child_process");'],
+  // Bound to a local name and called through that, so no call site ever spells
+  // a banned name. CodeRabbit found this bypass on PR #843.
+  ["require property alias", 'const run = require("node:child_process").execSync;\nrun(cmd);'],
+  ["namespace property alias", 'import cp from "node:child_process";\nconst run = cp.spawnSync;'],
+  ["bracket property alias", 'const run = cp["execFileSync"];'],
 ];
 
 const MUST_ALLOW = [
