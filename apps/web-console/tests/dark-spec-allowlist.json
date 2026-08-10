@@ -1,51 +1,51 @@
 {
-  "comment": "Debt ledger for docs/TESTING-STANDARD.md shape 14. Every entry is a spec file that no workflow runs, as resolved by scripts/verify-spec-wiring.mjs asking Playwright what each workflow invocation collects. Entries are debt, not decisions: remove one by running the spec from a workflow. The guard fails on a stale entry, so this list cannot silently outlive the problem.",
+  "comment": "Debt ledger for docs/TESTING-STANDARD.md shape 14. Every entry is a spec file no workflow runs, resolved by scripts/verify-spec-wiring.mjs asking Playwright what each discovered workflow invocation collects. Entries are debt: remove one by running the spec from a workflow. The guard fails on a stale entry, so this list cannot outlive the problem.",
   "entries": [
     {
       "spec": "e2e/phase-19/01-signin-google.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/02-first-chat.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/03-tenant-isolation.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/04-tenant-switch.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/05-jwt-expiry.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/06-no-tenant-block.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/07-cross-tenant-attack.spec.ts",
-      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it via the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
+      "reason": "Phase 19 tenant isolation suite. No workflow runs the phase-19 project; ci.yml only collects it through the collection guard. E2E_TENANT_B_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT are also set in no workflow.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
     {
       "spec": "e2e/phase-19/owui/deployed-login.spec.ts",
-      "reason": "Belongs to the owui-deployed-login project, which owui-nightly.yml does not invoke. Only the owui and owui-perf projects are run there.",
+      "reason": "Belongs to the owui-deployed-login project, which owui-nightly.yml does not invoke. Only the owui and owui-perf projects run there.",
       "owner": "sakibsadmanshajib",
       "issue": 708
     },
@@ -63,49 +63,37 @@
     },
     {
       "spec": "tests/e2e/billing-fx-zero-leak.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
+      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
       "owner": "sakibsadmanshajib",
       "issue": 813
     },
     {
       "spec": "tests/e2e/console-billing.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/console-budgets.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
+      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
       "owner": "sakibsadmanshajib",
       "issue": 813
     },
     {
       "spec": "tests/e2e/console-invoices.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
+      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
       "owner": "sakibsadmanshajib",
       "issue": 813
     },
     {
       "spec": "tests/e2e/console-spend-alerts.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
+      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
       "owner": "sakibsadmanshajib",
       "issue": 813
     },
     {
       "spec": "tests/e2e/i18n-bengali.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
+      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work.",
       "owner": "sakibsadmanshajib",
       "issue": 813
     },
     {
       "spec": "tests/e2e/openai-sdk.spec.ts",
-      "reason": "Deliberate and documented in ci.yml: it needs a real completion round trip and that path is covered by the Live integration job instead. Kept here so the decision stays visible rather than implicit.",
-      "owner": "sakibsadmanshajib",
-      "issue": 813
-    },
-    {
-      "spec": "tests/e2e/rbac-unverified.spec.ts",
-      "reason": "Console spec that has never run in CI. Turning it on is expected to go red against open defects on the surface it covers, so it is scheduled work rather than a wiring change.",
+      "reason": "Deliberate and documented in ci.yml: it needs a real completion round trip and that path is covered by the Live integration job instead. Listed so the decision stays visible.",
       "owner": "sakibsadmanshajib",
       "issue": 813
     }

@@ -128,10 +128,10 @@ before commit. `npm run lint:proof-tokens` catches the text half in CI. It
 cannot inspect image pixels, so masking the screenshot is on whoever captured
 it. PR #578 leaked four live invitation tokens publicly this way.
 
-## The fourteen camouflage shapes
+## The fifteen camouflage shapes
 
 Each of these hid a real defect in this repository. Read them as a review
-checklist: for any test you are about to approve, ask which of these fourteen
+checklist: for any test you are about to approve, ask which of these fifteen
 it might be.
 
 ### 1. Skipped on a variable that is absent from CI
@@ -371,10 +371,10 @@ that guards money, authorization, or data loss.
 Nothing skips. There is no variable to blame. The file simply is never passed
 to any runner, and an uninvoked file emits no signal at all.
 
-`web-e2e` invokes Playwright by explicit file path and names four of the
-thirty three spec files in the tree. The rest are collected by a project's
+`web-e2e` invokes Playwright by explicit file path and names seven of the
+thirty four spec files in the tree. The rest are collected by a project's
 `testDir`, so `npx playwright test` locally runs the lot, which is why this is
-invisible to anyone working on the specs. **Eighteen of thirty three spec
+invisible to anyone working on the specs. **Sixteen of thirty four spec
 files have never run in CI**, including `billing-fx-zero-leak.spec.ts`,
 written to enforce what was at the time a regulatory constraint (#813).
 
@@ -398,9 +398,10 @@ recording because the mistake is inviting and it looks like it works:
   runs all eleven through `npm run e2e:owui` and `e2e:owui:perf`. Those
   select by `--project`, so no filename ever appears in the workflow.
 
-It reported 6 wired and 27 dark. The truth is 15 and 18. A guard that
-miscounts in both directions is worse than no guard, because it manufactures
-confidence in a number nobody checked.
+It reported 6 wired and 27 dark. Measured correctly at that commit the answer
+was 15 and 18, and after #808 wired three more it is 18 run and 16 dark. A
+guard that miscounts in both directions is worse than no guard, because it
+manufactures confidence in a number nobody checked.
 
 The root cause is structural: workflows select tests by project and by
 config, so any filename based detection is measuring something the runner does
@@ -426,3 +427,52 @@ A collection guard certifies that files are found, not that they run. Phase
 it, and `E2E_TENANT_B_ID`, `E2E_EXPIRED_JWT` and `E2E_ORPHAN_JWT` appear in
 zero workflow files, so even if it were invoked, four of its specs would
 `test.skip` on their first line. Both halves have to be closed.
+
+### 15. A coverage metric that measures the wrong artifact
+
+The previous fourteen are ways a test can lie. This one is a way the
+**measurement** lies, and it is more dangerous, because a bad coverage number
+is trusted by everyone who never opens the tool that produced it.
+
+The first version of `verify-spec-wiring.mjs` answered "is this spec run in
+CI" by searching the text of `.github/` for the spec's filename. That is not
+the question. Workflows start Playwright by `--project` and by `--config`, and
+in one job by path. The filename is an artifact that correlates with wiring
+sometimes and is causally unrelated to it. So the metric was wrong in both
+directions at once:
+
+- A spec named only in a **comment** counted as covered.
+- Eleven specs selected by `--project`, which genuinely run nightly, counted
+  as dark.
+
+Both errors are silent, and they partly cancel, so the total looks plausible.
+It reported 6 of 33 where the truth was 15.
+
+The tell is always the same: **the metric reads a different artifact than the
+system does.** The runner never reads workflow text looking for filenames, so
+nothing that does can agree with it except by coincidence.
+
+**Instead:** measure by asking the system the same question it asks itself.
+Here that means running `playwright test --list --reporter=json` for every
+invocation a workflow makes and unioning what comes back. Same idea elsewhere:
+
+| Question | Wrong artifact | Right artifact |
+| --- | --- | --- |
+| Does this spec run in CI? | filenames in workflow text | what `--list` collects for each real invocation |
+| Is this route authorized? | the middleware's own tests | a request through the registered mux |
+| Was the user charged correctly? | the price table | the ledger row |
+| Did the toggle save? | the DOM after clicking | the value after a reload |
+| Does this Go package run? | the test file existing | the package named in a workflow step |
+
+A second rule follows: **do not hardcode the list of things being measured.**
+The corrected guard discovers workflow invocations by parsing the `run:` blocks
+rather than carrying a table of them. The first attempt at the fix did carry a
+table, and it broke within a day, because #808 wired three more specs and
+rewrote the line the table was keyed on. A measurement that needs hand editing
+whenever the thing it measures changes is a measurement that will be stale
+exactly when it matters.
+
+And the corollary that applies to this document as much as to the code: when a
+peer disproves a number, the number was wrong, not the peer. The correction
+belongs in the artifact, with the old figure left visible next to it, which is
+why "it reported 6 and 27" is still written above.
