@@ -79,6 +79,18 @@ import (
 // /metrics, kept off the public listener so the Prometheus series stay internal.
 const metricsListenAddr = ":9101"
 
+// How long startup waits for the database before giving up, and how often it
+// retries inside that window. The session-mode pooler is shared and capped at
+// 15 clients across CI, developer stacks and the live deployment, so a boot can
+// be refused for a few seconds while another consumer holds the last slot.
+// The budget is sized to fit inside the compose healthcheck's 120s start_period
+// with room for the rest of startup, so a database that is genuinely
+// unreachable still fails the container instead of stretching the boot out.
+const (
+	dbOpenBudget        = 75 * time.Second
+	dbOpenRetryInterval = 3 * time.Second
+)
+
 // ledgerGrantAdapter wraps *ledger.Service to satisfy the paymentStub.LedgerGranter
 // interface (which returns only error, discarding the LedgerEntry return value).
 // Used only when HIVE_PAYMENTS_STUB=true is set.
@@ -224,9 +236,6 @@ func main() {
 		sslcommerzBaseURL = "https://sandbox.sslcommerz.com"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	// runCtx is the process-lifetime context for background goroutines
 	// (audit sink worker, WAL drainer, hash-chain verifier). It is cancelled
 	// on shutdown so those goroutines unwind cleanly instead of being killed
@@ -237,13 +246,24 @@ func main() {
 	// Open the database pool. A missing SUPABASE_DB_URL is treated as a
 	// non-fatal warning at startup so the service can still respond to /health
 	// in environments where the DB URL is not yet provisioned.
-	pool, dbErr := platformdb.Open(ctx, cfg.SupabaseDBURL)
+	//
+	// The attempt is retried for dbOpenBudget rather than made once: every
+	// route below is wired on whether this pool exists, and /health reports on
+	// it, so losing a single race for the shared session-mode pooler would
+	// otherwise strand the whole process in a degraded state it can never leave.
+	pool, dbErr := platformdb.OpenWithRetry(context.Background(), cfg.SupabaseDBURL, dbOpenBudget, dbOpenRetryInterval)
 	if dbErr != nil {
 		log.Printf("WARNING: database not available at startup: %v", dbErr)
 	} else {
 		defer pool.Close()
 		log.Println("database pool ready")
 	}
+
+	// Budget for the remaining startup probes (the redis ping below). Created
+	// after the database open so a slow open cannot expire it in advance and
+	// turn an available redis into a spurious "redis not available" warning.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Build auth client and middleware. The membership check is what makes
 	// Viewer.TenantID trustworthy: it is derived from user-writable
