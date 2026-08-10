@@ -39,12 +39,13 @@ export const ROUTE_FIXTURE_FILE = join(INTERACTION_DIR, "route-fixtures.json");
 export const AUTH_STATE_FILE = join(INTERACTION_DIR, ".auth", "user.json");
 export const REPORT_DIR = join(WEB_CONSOLE_DIR, "interaction-coverage");
 
-export function interactionCredentials(): { email: string; password: string } {
-  return {
-    email: process.env.INTERACTION_EMAIL ?? process.env.E2E_VERIFIED_EMAIL ?? "",
-    password:
-      process.env.INTERACTION_PASSWORD ?? process.env.E2E_VERIFIED_PASSWORD ?? "",
-  };
+/**
+ * The account the gate signs in as. Only an address: the shared live-auth
+ * helper mints the session without a password, so no credential of a shared
+ * account is read, set, or rotated by this suite.
+ */
+export function interactionEmail(): string {
+  return process.env.INTERACTION_EMAIL ?? process.env.E2E_VERIFIED_EMAIL ?? "";
 }
 
 /**

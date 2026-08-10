@@ -132,10 +132,22 @@ async function locateByKey(page: Page, key: string): Promise<Locator | null> {
 const LOCALE_COOKIE = "locale";
 
 async function pinLocale(page: Page): Promise<void> {
-  await page
-    .context()
-    .addCookies([{ name: LOCALE_COOKIE, value: "en", url: BASE_URL }])
-    .catch(() => undefined);
+  // Adding a host-scoped cookie is not enough: the app sets its own on a
+  // parent domain, both then exist, and the app's wins. Drop every cookie of
+  // that name whatever domain carries it, keep the rest (the session lives
+  // there), then set ours.
+  const context = page.context();
+  try {
+    const cookies = await context.cookies();
+    const survivors = cookies.filter((cookie) => cookie.name !== LOCALE_COOKIE);
+    if (survivors.length !== cookies.length) {
+      await context.clearCookies();
+      await context.addCookies(survivors);
+    }
+    await context.addCookies([{ name: LOCALE_COOKIE, value: "en", url: BASE_URL }]);
+  } catch {
+    // Never let locale pinning be the reason a run fails.
+  }
 }
 
 /** True for the control that ends the session, in any language. */
