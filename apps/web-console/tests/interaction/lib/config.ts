@@ -36,6 +36,7 @@ export const APP_DIR = join(WEB_CONSOLE_DIR, "app");
 export const INTERACTION_DIR = join(WEB_CONSOLE_DIR, "tests", "interaction");
 export const REGISTRY_FILE = join(INTERACTION_DIR, "control-registry.json");
 export const ROUTE_FIXTURE_FILE = join(INTERACTION_DIR, "route-fixtures.json");
+export const ROUTE_FLOOR_FILE = join(INTERACTION_DIR, "route-floors.json");
 export const AUTH_STATE_FILE = join(INTERACTION_DIR, ".auth", "user.json");
 export const REPORT_DIR = join(WEB_CONSOLE_DIR, "interaction-coverage");
 

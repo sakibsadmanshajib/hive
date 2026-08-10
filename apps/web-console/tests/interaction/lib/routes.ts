@@ -17,6 +17,13 @@ export interface RouteFixture {
   skip?: string;
   /** Owner accountable for a skip. */
   owner?: string;
+  /**
+   * Issue that has to stay open for a skip to remain valid. Required on any
+   * skip that is not declared permanent: see lib/exclusions.ts.
+   */
+  issue?: number;
+  /** True for a skip that is a standing decision rather than a deferral. */
+  permanent?: boolean;
   /** Values for dynamic segments when no instance can be discovered live. */
   params?: Record<string, string>;
   /** Which session the route is visited with. Defaults by path. */
