@@ -48,6 +48,7 @@ export type Control = {
   reason: string;
   state: string | null;
   href: string;
+  contentEditable: boolean;
 };
 
 export type Proof =
@@ -71,10 +72,16 @@ export type Result = {
   detail: string;
 };
 
-/** Assets and telemetry never count as evidence that a control did something. */
+/**
+ * Assets and background chatter never count as evidence that a control did
+ * something. socket.io is the important exclusion: Open WebUI long-polls it
+ * every few seconds, so counting it would hand a free pass to every control
+ * whose click happened to land near a poll.
+ */
 function isMeaningfulRequest(url: string): boolean {
   if (/\.(js|mjs|css|png|jpe?g|svg|webp|woff2?|ico|map)(\?|$)/i.test(url)) return false;
   if (/\/_app\/|\/static\/|\/favicon/i.test(url)) return false;
+  if (/\/socket\.io\/|\/ws(\/|$)|\/__nextjs/i.test(url)) return false;
   return true;
 }
 
@@ -117,6 +124,9 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
   const stateOf = (el: Element): string | null => {
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute("role") ?? "";
+    if (el.getAttribute("contenteditable") === "true") {
+      return (el as HTMLElement).innerText;
+    }
     if (role === "switch" || role === "checkbox") {
       return el.getAttribute("aria-checked") ?? (el as HTMLElement).innerText.trim();
     }
@@ -161,6 +171,7 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
         "",
       state: stateOf(el),
       href: el.getAttribute("href") ?? "",
+      contentEditable: el.getAttribute("contenteditable") === "true",
     });
   });
   return out;
@@ -218,12 +229,62 @@ async function overlayCount(page: Page): Promise<number> {
 }
 
 /**
+ * A cheap fingerprint of what the user can currently see.
+ *
+ * Counting mutation records alone could not tell a settings tab switch (6 or 7
+ * records) from idle churn, and any threshold that cleared the churn also
+ * swallowed the tab switch. Comparing the rendered text before and after says
+ * plainly whether the screen changed.
+ */
+async function visibleSignature(page: Page): Promise<string> {
+  return page
+    .evaluate(() => {
+      const scope =
+        document.querySelector('[role="dialog"]') ??
+        document.querySelector("main") ??
+        document.body;
+      const text = (scope as HTMLElement).innerText ?? "";
+      return `${text.length}:${text.replace(/\s+/g, " ").slice(0, 400)}`;
+    })
+    .catch(() => "");
+}
+
+/**
  * Click a control and report the first observable consequence: a navigation, a
  * meaningful network call, a new overlay, a download, a file chooser, or a
  * non-trivial DOM mutation. No consequence at all is a failure, which is the
  * whole point of the gate.
  */
 export async function proveByClick(
+  page: Page,
+  ctl: Control,
+  opts: { settleMs?: number; budgetMs?: number } = {},
+): Promise<Result> {
+  // Hard budget. A single control that wedges the page (a native dialog, a
+  // beforeunload prompt, a permission request) must not be able to consume the
+  // whole run; it gets reported and the sweep moves on.
+  const budget = opts.budgetMs ?? 40_000;
+  return Promise.race([
+    proveByClickInner(page, ctl, opts),
+    new Promise<Result>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            key: ctl.key,
+            surface: ctl.surface,
+            name: ctl.label || ctl.name,
+            role: ctl.role || ctl.tag,
+            proven: false,
+            proof: "none",
+            detail: `no verdict within ${budget}ms (the page stopped responding to the harness)`,
+          }),
+        budget,
+      ),
+    ),
+  ]);
+}
+
+async function proveByClickInner(
   page: Page,
   ctl: Control,
   opts: { settleMs?: number } = {},
@@ -247,14 +308,25 @@ export async function proveByClick(
   const onDownload = () => {
     download = true;
   };
-  const onFileChooser = () => {
+  // Cancel it immediately. An open file chooser is modal to the page, and a
+  // registered handler that never answers leaves it open, which hangs every
+  // action that follows.
+  const onFileChooser = (chooser: { setFiles: (f: string[]) => Promise<void> }) => {
     filechooser = true;
+    void chooser.setFiles([]).catch(() => {});
   };
   page.on("download", onDownload);
   page.on("filechooser", onFileChooser);
+  // External links carry target=_blank, so their whole effect is a new tab.
+  let popup = false;
+  const onPopup = () => {
+    popup = true;
+  };
+  page.context().on("page", onPopup);
 
   const urlBefore = page.url();
   const overlaysBefore = await overlayCount(page);
+  const signatureBefore = await visibleSignature(page);
   const stop = await startWatch(page);
 
   let clickError = "";
@@ -271,20 +343,28 @@ export async function proveByClick(
   const { mutations } = await stop();
   const urlAfter = page.url();
   const overlaysAfter = await overlayCount(page);
+  const signatureAfter = await visibleSignature(page);
   page.off("request", onRequest);
   page.off("download", onDownload);
   page.off("filechooser", onFileChooser);
+  page.context().off("page", onPopup);
 
   if (download) return { ...base, proven: true, proof: "download", detail: "download started" };
   if (filechooser) return { ...base, proven: true, proof: "filechooser", detail: "file chooser opened" };
+  if (popup) return { ...base, proven: true, proof: "navigate", detail: "opened a new tab" };
   if (urlAfter !== urlBefore)
     return { ...base, proven: true, proof: "navigate", detail: `${urlBefore} -> ${urlAfter}` };
-  if (overlaysAfter > overlaysBefore)
+  // Either direction. Closing a modal is as real an effect as opening one, and
+  // an increase-only check reported every close button as dead.
+  if (overlaysAfter !== overlaysBefore)
     return { ...base, proven: true, proof: "overlay", detail: `overlays ${overlaysBefore} -> ${overlaysAfter}` };
   if (requests.length > 0)
     return { ...base, proven: true, proof: "network", detail: requests.slice(0, 3).join(", ").slice(0, 200) };
-  // 8 records is above the idle churn Open WebUI produces on its own (cursor
-  // blink, relative timestamps) and below anything a real state change causes.
+  if (signatureAfter !== signatureBefore)
+    return { ...base, proven: true, proof: "dom", detail: "what is on screen changed" };
+  // Last resort. A settings tab switch emits 6 or 7 mutation records, so any
+  // threshold that filtered idle churn also swallowed it; the signature above
+  // is the real test and this only catches changes too subtle to render.
   if (mutations > 8)
     return { ...base, proven: true, proof: "dom", detail: `${mutations} mutations` };
   return {
@@ -298,6 +378,7 @@ export async function proveByClick(
 export function isStateful(ctl: Control): boolean {
   if (ctl.role === "switch" || ctl.role === "checkbox") return true;
   if (ctl.tag === "select" || ctl.tag === "textarea") return true;
+  if (ctl.contentEditable) return true;
   if (ctl.tag === "input") return !["file", "submit", "button", "image"].includes(ctl.type);
   return false;
 }
@@ -340,6 +421,7 @@ export async function readState(page: Page, covId: string): Promise<string | nul
     if (!el) return null;
     const tag = el.tagName.toLowerCase();
     const role = el.getAttribute("role") ?? "";
+    if (el.getAttribute("contenteditable") === "true") return (el as HTMLElement).innerText;
     if (role === "switch" || role === "checkbox")
       return el.getAttribute("aria-checked") ?? (el as HTMLElement).innerText.trim();
     if (tag === "select") return (el as HTMLSelectElement).value;

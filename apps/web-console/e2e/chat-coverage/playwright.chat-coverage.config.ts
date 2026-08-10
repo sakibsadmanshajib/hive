@@ -7,13 +7,13 @@ import { defineConfig, devices } from "@playwright/test";
 // timeouts here are an order of magnitude larger and the auth path differs.
 const CHAT = process.env.CHAT_URL ?? process.env.OWUI_URL ?? "";
 const hasTarget = Boolean(CHAT);
+// live-auth.mjs mints the session, so what is needed is an account to mint for
+// and the keys it uses. No password is involved at any point.
 const hasCreds = Boolean(
-  (process.env.OWUI_E2E_EMAIL && process.env.OWUI_E2E_PASSWORD) ||
-    (process.env.SUPABASE_SERVICE_ROLE_KEY &&
-      process.env.SUPABASE_ANON_KEY &&
-      process.env.SUPABASE_URL &&
-      process.env.CONSOLE_URL &&
-      process.env.OWUI_E2E_EMAIL),
+  (process.env.OWUI_E2E_EMAIL || process.env.HIVE_QA_AGENT_EMAIL) &&
+    process.env.SUPABASE_URL &&
+    process.env.SUPABASE_SERVICE_ROLE_KEY &&
+    process.env.SUPABASE_ANON_KEY,
 );
 const runnable = hasTarget && hasCreds;
 
@@ -31,6 +31,12 @@ export default defineConfig({
   ],
   use: {
     baseURL: CHAT || "http://localhost:3002",
+    // Playwright's default for both is 0, meaning "borrow the whole test
+    // timeout". With a 45 minute test that turns one stalled navigation into a
+    // dead run with no diagnosis, which is exactly how this suite lost its
+    // first two attempts at a number.
+    navigationTimeout: 60_000,
+    actionTimeout: 20_000,
     trace: "retain-on-failure",
     video: "retain-on-failure",
     screenshot: "only-on-failure",

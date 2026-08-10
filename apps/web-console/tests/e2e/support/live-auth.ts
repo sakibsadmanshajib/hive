@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import type { BrowserContext } from "@playwright/test";
+import type { BrowserContext, Page } from "@playwright/test";
 
 const execFileAsync = promisify(execFile);
 
@@ -75,4 +75,75 @@ export async function reauthenticate(
     // The file holds live session cookies. It never outlives the call.
     rmSync(dir, { recursive: true, force: true });
   }
+}
+
+export interface ChatSessionOptions {
+  /** An existing account. Its password is neither needed nor modified. */
+  email: string;
+  /** Console origin: where the minted Supabase session is valid. */
+  consoleUrl: string;
+  /** Chat origin (Open WebUI). */
+  chatUrl: string;
+}
+
+/**
+ * Signs a context in to the chat surface and returns a page already on it.
+ *
+ * The only implementation of the chat hop. live-auth.mjs deliberately does not
+ * carry a second one: the mint has to stay in a child process to keep the
+ * service-role key out of this worker's module graph, but the hop itself is
+ * pure browser driving with no credential in it, so it belongs on the side
+ * that can be imported from a spec. Two copies of a login path is how a repo
+ * ends up with one of them quietly broken.
+ *
+ * A mint alone does not sign in to Open WebUI. The minted cookies authenticate
+ * the console origin; Open WebUI keeps its own session cookie that only its
+ * OAuth callback can set, so a context carrying only the minted session lands
+ * on /auth and reads as a broken login. This carries the session through the
+ * real "Continue with Hive" hop, which is what a user does.
+ */
+export async function signInToChat(
+  context: BrowserContext,
+  options: ChatSessionOptions,
+): Promise<Page> {
+  await reauthenticate(context, { email: options.email, targetUrl: options.consoleUrl });
+  const page = await context.newPage();
+  await page.goto(`${options.consoleUrl}/console`, {
+    waitUntil: "domcontentloaded",
+    timeout: 60_000,
+  });
+  if (new URL(page.url()).pathname.startsWith("/auth")) {
+    throw new Error("live-auth: the console rejected the minted session");
+  }
+
+  await page.goto(options.chatUrl, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  // The sign-in page hydrates late and animates continuously: a click dispatched
+  // before hydration lands on a button with no handler bound and silently does
+  // nothing, and Playwright's click-stability check never settles on it.
+  await page.waitForTimeout(4000);
+  const hive = page.getByRole("button", { name: /continue with hive/i });
+  if (await hive.isVisible().catch(() => false)) {
+    await hive.dispatchEvent("click");
+    await page.waitForTimeout(8000);
+  }
+  // Supabase auto-approves a client the user has already granted, so consent
+  // shows at most once per user and client and must stay optional.
+  const approve = page.getByRole("button", { name: /approve/i });
+  if (await approve.isVisible().catch(() => false)) {
+    await approve.click().catch(() => {});
+    await page.waitForTimeout(8000);
+  }
+
+  await page.waitForURL((u) => u.origin === new URL(options.chatUrl).origin, {
+    timeout: 90_000,
+  });
+  // "New Chat" is a button while the sidebar is collapsed and a link once it is
+  // open, so a role-specific wait passes on a fresh profile and times out on a
+  // returning one.
+  await page
+    .getByRole("button", { name: /new chat/i })
+    .or(page.getByRole("link", { name: /new chat/i }))
+    .first()
+    .waitFor({ timeout: 90_000 });
+  return page;
 }

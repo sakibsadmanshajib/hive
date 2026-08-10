@@ -16,6 +16,11 @@ export type Surface = {
    * the sidebar's buttons are not re-counted inside every dropdown.
    */
   delta?: boolean;
+  /**
+   * True for the settings tab that owns the modal's own chrome, whose delta is
+   * taken against the chat page rather than against the open modal.
+   */
+  chrome?: boolean;
   /** Settings persist; a composer or search box does not. */
   persists?: boolean;
 };
@@ -23,20 +28,82 @@ export type Surface = {
 const SETTLE = 1500;
 
 export async function gotoHome(page: Page): Promise<void> {
-  if (new URL(page.url()).pathname !== "/") {
+  // Always dismiss whatever is open first. A modal left over from the previous
+  // surface swallows the clicks that follow, and the resulting timeout would be
+  // recorded as a dead control rather than as the harness's own mess.
+  await page.keyboard.press("Escape").catch(() => {});
+  if (new URL(page.url()).pathname !== "/" || (await isOverlayOpen(page))) {
     await page.goto("/", { waitUntil: "domcontentloaded" });
   }
-  await page.getByRole("button", { name: /new chat/i }).first().waitFor({ timeout: 60_000 });
-  await page.waitForTimeout(SETTLE);
+  // Three attempts, because the demo box has gone unreachable for a few minutes
+  // at a time mid-run (#815) and recovered on its own. Failing here on the
+  // first miss turns an outage into a page of dead controls.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await homeReady(page).waitFor({ timeout: 45_000 });
+      await page.waitForTimeout(SETTLE);
+      return;
+    } catch (err) {
+      if (attempt === 2) {
+        // Say where it actually was. "waitFor timed out" on its own cannot tell
+        // a signed-out session (#782) from an unreachable box (#815) from a
+        // control that navigated somewhere unexpected.
+        const names = await page
+          .$$eval("button, a[href]", (els) =>
+            els
+              .map((e) => (e.getAttribute("aria-label") || e.textContent || "").trim().slice(0, 30))
+              .filter(Boolean)
+              .slice(0, 12),
+          )
+          .catch(() => []);
+        throw new Error(
+          `could not get back to the chat home. url=${page.url()} visible=${JSON.stringify(names)}`,
+        );
+      }
+      await page.waitForTimeout(20_000);
+      await page.goto("/", { waitUntil: "domcontentloaded" }).catch(() => {});
+    }
+  }
+}
+
+/**
+ * "New Chat" is a button while the sidebar is collapsed and a link once it is
+ * open, so a role-specific wait passes before the first click and then times
+ * out for the rest of the run. Match either.
+ */
+export function homeReady(page: Page) {
+  return page
+    .getByRole("button", { name: /new chat/i })
+    .or(page.getByRole("link", { name: /new chat/i }))
+    .first();
+}
+
+async function isOverlayOpen(page: Page): Promise<boolean> {
+  return page.evaluate(
+    () => document.querySelectorAll('[role="dialog"], [role="menu"], [role="listbox"]').length > 0,
+  );
+}
+
+/**
+ * The sidebar is the one piece of chrome that rewrites the whole control set
+ * when it moves: collapsed it offers "Open Sidebar" and a button "New Chat",
+ * expanded it offers "Close Sidebar", a link "New Chat" and the chat list. Each
+ * surface therefore pins it, so a control proven on one pass is still present
+ * on the next.
+ */
+export async function ensureSidebar(page: Page, open: boolean): Promise<void> {
+  const toggle = page.getByRole("button", {
+    name: open ? /open sidebar/i : /close sidebar/i,
+  });
+  if (await toggle.isVisible().catch(() => false)) {
+    await toggle.click().catch(() => {});
+    await page.waitForTimeout(SETTLE);
+  }
 }
 
 export async function openSidebar(page: Page): Promise<void> {
   await gotoHome(page);
-  const opener = page.getByRole("button", { name: /open sidebar/i });
-  if (await opener.isVisible().catch(() => false)) {
-    await opener.click();
-    await page.waitForTimeout(SETTLE);
-  }
+  await ensureSidebar(page, true);
 }
 
 export async function openSettings(page: Page): Promise<void> {
@@ -50,13 +117,36 @@ export async function openSettings(page: Page): Promise<void> {
 
 async function clickTop(page: Page, name: RegExp): Promise<void> {
   await gotoHome(page);
+  await ensureSidebar(page, false);
   await page.getByRole("button", { name }).first().click();
   await page.waitForTimeout(SETTLE);
 }
 
+/**
+ * Put the surface back exactly as it was first enumerated and find one control
+ * on it again. Every proof starts from this, because clicking a control can
+ * change what the surface contains, and attributing that drift to the *next*
+ * control reports working controls as dead ones.
+ */
+export async function relocate(
+  page: Page,
+  surface: Surface,
+  key: string,
+): Promise<Control | undefined> {
+  await surface.open(page);
+  const all = await enumerate(page, surface.id);
+  return all.find((c) => c.key === key);
+}
+
 /** The surfaces that exist regardless of what the deployment contains. */
 export const STATIC_SURFACES: Surface[] = [
-  { id: "home", open: gotoHome },
+  {
+    id: "home",
+    open: async (page) => {
+      await gotoHome(page);
+      await ensureSidebar(page, false);
+    },
+  },
   { id: "sidebar", open: openSidebar, delta: true },
   {
     id: "model-picker",
@@ -123,9 +213,12 @@ export async function discoverSettingsTabs(page: Page): Promise<Surface[]> {
     .map((tab, index) => ({
       id: `settings:${tab}`,
       persists: true,
-      // The first tab owns the modal chrome (close, search, tablist, the
-      // Admin Settings link); every later tab is a delta on top of it.
-      delta: index > 0,
+      // Always a delta. The first tab owns the modal chrome (close, search, the
+      // tablist, the Admin Settings link) but not the chat page underneath it,
+      // which is what the sidebar and composer surfaces already cover and which
+      // the modal makes unclickable anyway.
+      delta: true,
+      chrome: index === 0,
       open: async (page: Page) => {
         await openSettings(page);
         if (index > 0) {
@@ -165,12 +258,21 @@ export async function enumerateSurface(page: Page, surface: Surface): Promise<Co
   let baseline = new Set<string>();
   if (surface.delta) {
     if (surface.id.startsWith("settings:")) {
-      await openSettings(page);
+      if (surface.chrome) {
+        await gotoHome(page);
+        await ensureSidebar(page, false);
+      } else {
+        await openSettings(page);
+      }
     } else if (surface.id.startsWith("workspace:")) {
       await page.goto("/workspace", { waitUntil: "domcontentloaded" });
       await page.waitForTimeout(3000);
     } else {
+      // The canonical home state, sidebar collapsed. Taking the baseline in
+      // whatever state the previous surface left behind made the sidebar's own
+      // delta come out empty, because the sidebar was already open.
       await gotoHome(page);
+      await ensureSidebar(page, false);
     }
     baseline = new Set(
       (await enumerate(page, "__base")).map((c) => signature(c.key)),

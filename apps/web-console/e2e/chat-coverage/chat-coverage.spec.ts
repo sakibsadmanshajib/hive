@@ -27,6 +27,7 @@ import {
   discoverSettingsTabs,
   discoverWorkspaceTabs,
   enumerateSurface,
+  relocate,
   gotoHome,
   openSettings,
   type Surface,
@@ -66,7 +67,7 @@ async function withDestructiveGuard<T>(
       await route.abort();
       return;
     }
-    await route.fallback();
+    await route.continue();
   });
   try {
     const value = await fn();
@@ -84,65 +85,72 @@ async function saveIfPresent(page: Page): Promise<void> {
   }
 }
 
-/** Click pass: one control at a time, re-opening the surface when an action moved the app. */
+/**
+ * Click pass: one control at a time, re-opening the surface when an action
+ * moved the app. Results are appended to the caller's array as they are
+ * produced: an earlier version returned them at the end, and one timeout in
+ * the middle of a surface threw away every proof collected before it.
+ */
 async function clickPass(
   page: Page,
   surface: Surface,
   controls: Control[],
-): Promise<Result[]> {
-  const results: Result[] = [];
-  let live = controls;
-  let dirty = false;
-
+  results: Result[],
+): Promise<void> {
   for (const ctl of controls) {
-    if (dirty) {
-      live = await enumerateSurface(page, surface);
-      dirty = false;
-    }
-    const current = live.find((c) => c.key === ctl.key);
-    if (!current) {
-      // One more attempt from a clean state before calling it unproven: a
-      // control that cannot be reached twice in a row is a finding, not noise.
-      live = await enumerateSurface(page, surface);
-      const retry = live.find((c) => c.key === ctl.key);
-      if (!retry) {
-        results.push({
+    let res: Result | null = null;
+
+    // Two attempts. The demo box has gone unreachable for minutes at a time
+    // mid-run and recovered on its own (#815); a click that lands in that
+    // window is indistinguishable from a dead control, so only a control that
+    // does nothing twice from a clean surface is reported as one.
+    for (let attempt = 0; attempt < 2 && !res?.proven; attempt++) {
+      let target: Control | undefined;
+      try {
+        target = await relocate(page, surface, ctl.key);
+      } catch (err) {
+        res = {
           key: ctl.key,
           surface: surface.id,
           name: ctl.label || ctl.name,
           role: ctl.role || ctl.tag,
           proven: false,
           proof: "none",
-          detail: "control could not be re-located after re-opening the surface",
-        });
+          detail: `surface would not re-open: ${String(err).split("\n")[0].slice(0, 120)}`,
+        };
         continue;
       }
-    }
-    const target = live.find((c) => c.key === ctl.key)!;
-    const urlBefore = page.url();
+      if (!target) {
+        res = {
+          key: ctl.key,
+          surface: surface.id,
+          name: ctl.label || ctl.name,
+          role: ctl.role || ctl.tag,
+          proven: false,
+          proof: "none",
+          detail: "control was not there when the surface was re-opened",
+        };
+        continue;
+      }
 
-    if (DESTRUCTIVE.test(target.label || target.name)) {
-      const { value, blocked } = await withDestructiveGuard(page, () =>
-        proveByClick(page, target),
-      );
-      results.push(
-        blocked.length > 0 && !value.proven
-          ? { ...value, proven: true, proof: "network", detail: `blocked write: ${blocked[0]}` }
-          : value,
-      );
-      await page.keyboard.press("Escape").catch(() => {});
-      dirty = true;
-    } else {
-      const res = await proveByClick(page, target);
-      results.push(res);
-      dirty =
-        page.url() !== urlBefore ||
-        res.proof === "overlay" ||
-        res.proof === "navigate" ||
-        res.proof === "filechooser";
+      if (DESTRUCTIVE.test(target.label || target.name)) {
+        const { value, blocked } = await withDestructiveGuard(page, () =>
+          proveByClick(page, target!),
+        );
+        res =
+          blocked.length > 0 && !value.proven
+            ? { ...value, proven: true, proof: "network", detail: `blocked write: ${blocked[0]}` }
+            : value;
+        await page.keyboard.press("Escape").catch(() => {});
+      } else {
+        res = await proveByClick(page, target);
+      }
     }
+
+    results.push(res!);
+    // eslint-disable-next-line no-console
+    console.log(`[control] ${res!.proven ? res!.proof : "UNPROVEN"} :: ${res!.key}`);
   }
-  return results;
 }
 
 /**
@@ -155,9 +163,9 @@ async function persistencePass(
   page: Page,
   surface: Surface,
   statefuls: Control[],
-): Promise<Result[]> {
-  const results: Result[] = [];
-  if (statefuls.length === 0) return results;
+  results: Result[],
+): Promise<void> {
+  if (statefuls.length === 0) return;
 
   let live = await enumerateSurface(page, surface);
   const baselines = new Map<string, string | null>();
@@ -178,6 +186,7 @@ async function persistencePass(
   live = await enumerateSurface(page, surface);
 
   const missing: Control[] = [];
+  const reverted: Control[] = [];
   for (const ctl of statefuls) {
     if (!baselines.has(ctl.key)) {
       results.push(unprovable(surface, ctl, "control was not present when the pass started"));
@@ -189,19 +198,16 @@ async function persistencePass(
       continue;
     }
     const before = baselines.get(ctl.key) ?? null;
-    results.push(
-      after.state !== before
-        ? proven(surface, ctl, "persisted", `${before} -> ${after.state} survived a reload`)
-        : {
-            key: ctl.key,
-            surface: surface.id,
-            name: ctl.label || ctl.name,
-            role: ctl.role || ctl.tag,
-            proven: false,
-            proof: "none",
-            detail: `changed in the UI but reverted to ${before} after reload`,
-          },
-    );
+    if (after.state !== before) {
+      results.push(proven(surface, ctl, "persisted", `${before} -> ${after.state} survived a reload`));
+    } else {
+      // Do not report a batch result as a defect. Open WebUI saves some
+      // sections on their own Save button and some immediately, and flipping a
+      // whole tab at once can leave one of them behind for reasons that have
+      // nothing to do with this control. Re-check it on its own before saying
+      // it saves nothing.
+      reverted.push(ctl);
+    }
   }
 
   // Put the surface back the way it was found before doing anything else.
@@ -217,10 +223,9 @@ async function persistencePass(
 
   // Controls the batch could not re-locate (a flipped toggle can hide its own
   // dependants) get an individual pass rather than a false negative.
-  for (const ctl of missing) {
+  for (const ctl of [...missing, ...reverted]) {
     results.push(await persistOne(page, surface, ctl));
   }
-  return results;
 }
 
 async function restore(page: Page, ctl: Control, before: string | null): Promise<void> {
@@ -291,9 +296,13 @@ function unprovable(surface: Surface, ctl: Control, detail: string): Result {
 }
 
 /** Non-persisting surfaces still have to show that typing lands somewhere. */
-async function valuePass(page: Page, surface: Surface, statefuls: Control[]): Promise<Result[]> {
-  const results: Result[] = [];
-  if (statefuls.length === 0) return results;
+async function valuePass(
+  page: Page,
+  surface: Surface,
+  statefuls: Control[],
+  results: Result[],
+): Promise<void> {
+  if (statefuls.length === 0) return;
   const live = await enumerateSurface(page, surface);
   for (const ctl of statefuls) {
     const target = live.find((c) => c.key === ctl.key);
@@ -312,7 +321,6 @@ async function valuePass(page: Page, surface: Surface, statefuls: Control[]): Pr
     );
     await restore(page, target, before).catch(() => {});
   }
-  return results;
 }
 
 test.describe("chat interaction coverage", () => {
@@ -342,28 +350,44 @@ test.describe("chat interaction coverage", () => {
       }, sabotage);
     }
 
+    const stage = (msg: string) => {
+      // eslint-disable-next-line no-console
+      console.log(`[stage ${new Date().toISOString().slice(11, 19)}] ${msg}`);
+    };
+    stage("opening the chat surface");
     await gotoHome(page);
 
     // Surface list is assembled live. Settings tabs and Workspace sections come
     // from the DOM, so this run covers whatever the deployment actually renders.
+    stage("discovering settings tabs");
     const settings = await discoverSettingsTabs(page);
     await page.keyboard.press("Escape").catch(() => {});
+    stage(`discovering workspace sections (settings tabs: ${settings.length})`);
     const workspace = await discoverWorkspaceTabs(page);
-    const surfaces: Surface[] = [
+    stage(`workspace sections: ${workspace.length}`);
+    const allSurfaces: Surface[] = [
       ...STATIC_SURFACES.filter((s) => s.id !== "user-menu"),
       ...settings,
       ...workspace,
       // Last: it holds Sign Out, which ends the session.
       ...STATIC_SURFACES.filter((s) => s.id === "user-menu"),
     ];
+    // #782 kills a chat session about 55 minutes after sign-in, so a full sweep
+    // can outlive its own credentials. COV_SURFACES runs one slice per
+    // invocation; the tracker file below merges slices back into one number.
+    const filter = process.env.COV_SURFACES ? new RegExp(process.env.COV_SURFACES) : null;
+    const surfaces = filter ? allSurfaces.filter((s) => filter.test(s.id)) : allSurfaces;
+    expect(surfaces.length, "surface filter matched nothing").toBeGreaterThan(0);
 
     const results: Result[] = [];
     const errors: string[] = [];
 
     for (const surface of surfaces) {
       let controls: Control[] = [];
+      stage(`enumerating ${surface.id}`);
       try {
         controls = await enumerateSurface(page, surface);
+        stage(`${surface.id}: ${controls.length} controls`);
       } catch (err) {
         errors.push(`${surface.id}: could not open (${String(err).split("\n")[0]})`);
         continue;
@@ -376,14 +400,23 @@ test.describe("chat interaction coverage", () => {
       const clickable = controls.filter((c) => !isStateful(c));
 
       try {
-        results.push(...(await clickPass(page, surface, clickable)));
-        results.push(
-          ...(surface.persists
-            ? await persistencePass(page, surface, stateful)
-            : await valuePass(page, surface, stateful)),
-        );
+        await clickPass(page, surface, clickable, results);
       } catch (err) {
-        errors.push(`${surface.id}: pass aborted (${String(err).split("\n")[0]})`);
+        errors.push(`${surface.id}: click pass aborted (${String(err).split("\n")[0]})`);
+      }
+      try {
+        // A search or filter box on a settings screen is a view control, not a
+        // setting, and nothing is wrong with it forgetting what was typed. It
+        // still has to prove that typing lands somewhere.
+        const transient = (c: Control) => /search|filter/i.test(c.label || c.name);
+        if (surface.persists) {
+          await persistencePass(page, surface, stateful.filter((c) => !transient(c)), results);
+          await valuePass(page, surface, stateful.filter(transient), results);
+        } else {
+          await valuePass(page, surface, stateful, results);
+        }
+      } catch (err) {
+        errors.push(`${surface.id}: state pass aborted (${String(err).split("\n")[0]})`);
       }
       // eslint-disable-next-line no-console
       console.log(
@@ -411,9 +444,11 @@ test.describe("chat interaction coverage", () => {
     );
 
     fs.mkdirSync(REPORT_DIR, { recursive: true });
+    const generatedAt = new Date().toISOString();
     const report = {
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       target: process.env.CHAT_URL ?? process.env.OWUI_URL ?? "",
+      surfaceFilter: process.env.COV_SURFACES ?? null,
       sabotage: sabotage || null,
       summary,
       excused: excused.map((r) => r.key),
@@ -421,8 +456,41 @@ test.describe("chat interaction coverage", () => {
       results,
     };
     fs.writeFileSync(
-      path.join(REPORT_DIR, "coverage.json"),
+      path.join(REPORT_DIR, "coverage.run.json"),
       JSON.stringify(report, null, 2),
+    );
+
+    // Tracker. Assertions below judge this run only; this file carries the
+    // running total across sliced runs so the ratio is comparable over time.
+    const trackerPath = path.join(REPORT_DIR, "coverage.json");
+    const tracker: Record<string, Result & { lastSeen: string }> = fs.existsSync(trackerPath)
+      ? (JSON.parse(fs.readFileSync(trackerPath, "utf8")).controls ?? {})
+      : {};
+    // Drop stale keys before merging. A surface swept in this run is fully
+    // described by this run, so anything it used to contain and no longer does
+    // has to go, or a control that was removed (or an enumeration bug that has
+    // since been fixed) keeps dragging the ratio down forever.
+    const sweptSurfaces = new Set(results.map((r) => r.surface));
+    const seenKeys = new Set(results.map((r) => r.key));
+    for (const key of Object.keys(tracker)) {
+      if (sweptSurfaces.has(tracker[key].surface) && !seenKeys.has(key)) {
+        delete tracker[key];
+      }
+    }
+    for (const r of results) tracker[r.key] = { ...r, lastSeen: generatedAt };
+    const trackedResults = Object.values(tracker);
+    fs.writeFileSync(
+      trackerPath,
+      JSON.stringify(
+        {
+          generatedAt,
+          target: report.target,
+          summary: summarise(trackedResults),
+          controls: tracker,
+        },
+        null,
+        2,
+      ),
     );
     const lines = [
       `# Chat interaction coverage`,
