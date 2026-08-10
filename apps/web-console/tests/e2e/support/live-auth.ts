@@ -1,8 +1,11 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import type { BrowserContext } from "@playwright/test";
+
+const execFileAsync = promisify(execFile);
 
 // Spec-side entry to live-auth.mjs, which is the single implementation (see
 // its header for how a session is minted and why a password is never touched).
@@ -21,19 +24,29 @@ export interface LiveSessionOptions {
   targetUrl: string;
 }
 
-/** Mints a session and writes a Playwright storage state file for it. */
-export function writeStorageState(
+/**
+ * Mints a session and writes a Playwright storage state file for it.
+ *
+ * Awaited rather than synchronous. `execFileSync` freezes the worker's event
+ * loop, and Playwright's timeout is an ordinary timer that cannot fire while
+ * the loop is blocked, so every timeout in the calling file silently stops
+ * working for the duration. `reauthenticate` below is explicitly designed to
+ * be called mid-test, which is exactly when that matters: a test could then
+ * overrun its deadline and still be reported as passed, which is the defect
+ * removed from the fixture reseed in this same change.
+ */
+export async function writeStorageState(
   { email, targetUrl }: LiveSessionOptions,
   statePath: string,
-): void {
+): Promise<void> {
   try {
-    execFileSync(
+    await execFileAsync(
       "node",
       ["tests/e2e/support/live-auth.mjs", email, targetUrl, statePath],
-      { cwd: process.cwd(), env: { ...process.env, NODE_OPTIONS: "" }, stdio: "pipe" },
+      { cwd: process.cwd(), env: { ...process.env, NODE_OPTIONS: "" } },
     );
   } catch (err: unknown) {
-    const e = err as { stdout?: Buffer; stderr?: Buffer };
+    const e = err as { stdout?: string; stderr?: string };
     // live-auth.mjs redacts its own output, so relaying it is safe.
     throw new Error(`[live-auth] mint failed\n${e.stdout ?? ""}${e.stderr ?? ""}`);
   }
@@ -53,7 +66,7 @@ export async function reauthenticate(
   const dir = mkdtempSync(join(tmpdir(), "hive-live-auth-"));
   const statePath = join(dir, "state.json");
   try {
-    writeStorageState(options, statePath);
+    await writeStorageState(options, statePath);
     const state: { cookies: Parameters<BrowserContext["addCookies"]>[0] } = JSON.parse(
       readFileSync(statePath, "utf8"),
     );

@@ -499,13 +499,20 @@ async function resetProfilesAndInvitation(
   // COALESCEs every column, so a missing row after this delete reads back as
   // blank fields, never ErrNotFound — there is nothing here for a concurrent
   // read to observe as broken. And there is no concurrent read to begin with:
-  // the fixture CLI runs via execFileSync (fully synchronous — it blocks the
-  // calling test's beforeEach until the child process exits) from a single
-  // Playwright worker (playwright.config.ts pins workers: 1 for exactly this
-  // reason). No spec's page load can ever land inside this function's
-  // execution window, in this run or a concurrent one (account ids are
-  // namespaced per E2E_RUN_KEY, so two jobs never touch the same row). Revisit
-  // if workers ever goes above 1 or this CLI is invoked without blocking.
+  // the fixture CLI runs as a child process that every caller awaits to
+  // completion before its test body starts (tests/e2e/support/fixture-reset.ts)
+  // from a single Playwright worker (playwright.config.ts pins workers: 1 for
+  // exactly this reason), and the context/page fixtures are not built until
+  // after the last beforeEach returns. No spec's page load can ever land inside
+  // this function's execution window, in this run or a concurrent one (account
+  // ids are namespaced per E2E_RUN_KEY, so two jobs never touch the same row).
+  //
+  // This used to say "runs via execFileSync, fully synchronous". It no longer
+  // does: blocking the worker's event loop also froze Playwright's timeout
+  // timer, so a test could overrun its deadline and still be reported as
+  // passed. The guarantee above never depended on the loop being blocked, only
+  // on the await and on workers: 1. Revisit if workers ever goes above 1, or if
+  // a caller stops awaiting this CLI before touching a page.
   const accountIds = [
     ids.verifiedPrimaryAccountId,
     ids.verifiedSecondaryAccountId,
