@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Build-time rewrite of Open WebUI's prebuilt bundle to remove the chat
-surfaces Hive does not ship (#772). See hive_ui_surfaces.py for why each
-surface needs a bundle rewrite rather than a config flag.
+surfaces Hive does not ship (#772) and to give the sidebar toggle and its
+neighbouring navbar controls the accessible names they ship without (#833).
+See hive_ui_surfaces.py for why each surface needs a bundle rewrite rather
+than a config flag.
 
 Asserts its own effect, the same posture as this Dockerfile's other patches:
 every rewrite must match its expected number of sites and leave none behind,
@@ -64,7 +66,7 @@ def main() -> int:
         )
 
     print(
-        "hive: removed open-webui surfaces "
+        "hive: rewrote open-webui surfaces "
         + ", ".join(rewrite.surface for rewrite in REWRITES)
         + "; kept "
         + ", ".join(name for name, _ in GUARDS)

@@ -63,6 +63,10 @@ HIDDEN_SURFACES = {
 }
 
 
+def _rewrite(surface: str):
+    return next(r for r in hive_ui_surfaces.REWRITES if r.surface == surface)
+
+
 class FakeConfig:
     def __init__(self, stored: dict):
         self.stored = dict(stored)
@@ -119,6 +123,14 @@ def test_each_rewrite_still_targets_its_own_surface() -> None:
         "about-creator-link": ("Timothy J. Baek", "github.com/tjbck"),
         "about-creator-label": ('"Created by"',),
         "about-vendor-social-badges": ("Star us on Github", "discord.gg"),
+        # #833. These six identify themselves by the element they name, which
+        # is also what a `find` edited into a guess would lose first.
+        "sidebar-toggle-rail": ('id="sidebar">', "<button>"),
+        "sidebar-toggle-navbar": ("<button", "rounded-lg"),
+        "sidebar-toggle-expanded-state": ("<button>", 'class=" self-center p-1.5"'),
+        "navbar-temporary-chat-button": ('id="temporary-chat-button"',),
+        "navbar-save-chat-button": ('id="save-temporary-chat-button"',),
+        "navbar-chat-menu-button": ('id="chat-context-menu-button"',),
     }
     guards = dict(hive_ui_surfaces.GUARDS)
     assert set(markers) == {r.surface for r in hive_ui_surfaces.REWRITES}, markers.keys()
@@ -199,6 +211,64 @@ def test_the_about_tab_credit_is_removed_in_both_halves() -> None:
     # the anchor has to stay even though nothing renders inside it.
     assert link.replace.count("<a ") == link.find.count("<a "), link.replace
     assert link.replace.count("</div>") == link.find.count("</div>"), link.replace
+
+
+# The #833 rewrites and the exact attributes each one is allowed to insert.
+# The list is written out here rather than derived from the patch module on
+# purpose: a test that read the answer off the thing it is checking would pass
+# no matter what those rewrites did.
+ACCESSIBILITY_ATTRIBUTES = {
+    "sidebar-toggle-rail": (' aria-label="Open Sidebar"', ' aria-expanded="false"'),
+    "sidebar-toggle-navbar": (' aria-label="Open Sidebar"', ' aria-expanded="false"'),
+    "sidebar-toggle-expanded-state": (' aria-expanded="true"',),
+    "navbar-temporary-chat-button": (' aria-label="Temporary Chat"',),
+    "navbar-save-chat-button": (' aria-label="Save Chat"',),
+    "navbar-chat-menu-button": (' aria-label="Chat Menu"',),
+}
+
+
+def test_the_accessibility_rewrites_only_add_attributes() -> None:
+    """#833 is a naming fix, so none of its rewrites may change behaviour,
+    styling or layout. Take the inserted attributes back out of `replace` and
+    what is left has to be `find` byte for byte, which fails on any edit that
+    also moved a node, altered a class or dropped a handler."""
+    for surface, attributes in ACCESSIBILITY_ATTRIBUTES.items():
+        rewrite = _rewrite(surface)
+        stripped = rewrite.replace
+        for attribute in attributes:
+            assert stripped.count(attribute) == 1, (surface, attribute)
+            stripped = stripped.replace(attribute, "", 1)
+        assert stripped == rewrite.find, surface
+
+
+def test_the_sidebar_toggle_gets_a_name_and_a_disclosure_state() -> None:
+    """The reason #833 exists: a screen reader announced the control that
+    opens the chat sidebar as a bare "button". A name on its own is still not
+    enough for a disclosure, so each collapsed-state toggle also has to report
+    that what it controls is closed, and the expanded counterpart has to
+    report the opposite."""
+    for surface in ("sidebar-toggle-rail", "sidebar-toggle-navbar"):
+        rewrite = _rewrite(surface)
+        assert "aria-label" not in rewrite.find, f"{surface} was already named"
+        assert 'aria-label="Open Sidebar"' in rewrite.replace, surface
+        assert 'aria-expanded="false"' in rewrite.replace, surface
+
+    expanded = _rewrite("sidebar-toggle-expanded-state")
+    assert "aria-expanded" not in expanded.find, expanded.find
+    assert 'aria-expanded="true"' in expanded.replace, expanded.replace
+
+
+def test_the_toggles_navbar_siblings_are_named_too() -> None:
+    """An unnamed control rarely sits alone. The three beside the toggle kept
+    their label in a tooltip, which is not an accessible name."""
+    for surface in (
+        "navbar-temporary-chat-button",
+        "navbar-save-chat-button",
+        "navbar-chat-menu-button",
+    ):
+        rewrite = _rewrite(surface)
+        assert "aria-label" not in rewrite.find, f"{surface} was already named"
+        assert "aria-label=" in rewrite.replace, surface
 
 
 # --------------------------------------------------------------------------
