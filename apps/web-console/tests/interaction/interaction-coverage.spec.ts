@@ -667,6 +667,14 @@ test.describe("interaction coverage", () => {
     // first proof destroyed, which reports six false failures for one control
     // that works. Prove it once and attribute that verdict everywhere it
     // appears.
+    // Deferred controls are not independent of each other. Sign out revokes
+    // the session server side, so every deferred control proven after it gets
+    // a fresh context carrying a storage state that no longer authenticates,
+    // lands on the sign in page, and is reported as unlocatable. That accused
+    // both locale buttons on seventeen routes. Session enders go last.
+    deferred.sort(
+      (a, b) => Number(isSessionEnding(a.control)) - Number(isSessionEnding(b.control)),
+    );
     const provenDeferred = new Map<string, ProofOutcome>();
     for (const item of deferred) {
       const cached = provenDeferred.get(item.key);
