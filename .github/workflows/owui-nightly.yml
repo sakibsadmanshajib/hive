@@ -347,6 +347,47 @@ jobs:
           fi
           npm run e2e:owui
           npm run e2e:owui:perf
+
+      - name: Run phase-19 tenant isolation suite
+        # Issue #813. The `phase-19` project had an npm script, a dedicated
+        # Playwright project and a collection guard, and no workflow that ever
+        # executed it: `e2e:phase-19:verify-collection` asks the runner what it
+        # would collect and then stops, which is not the same thing as running
+        # it. Seven spec files sat collected-but-never-executed as a result.
+        #
+        # This job is where they belong. It is the only one that boots Open
+        # WebUI, and `auth.setup.ts` signs in through the real OAuth journey
+        # against it. E2E_USER_A_* reuses the user the "Seed OWUI e2e test
+        # user" step already provisioned, so this needs no new secret.
+        #
+        # What actually executes here, stated plainly so a skip is not mistaken
+        # for coverage: 01 and 02 run against HIVE_TEST_DB_URL. 03, 04, 05, 06
+        # and 07 skip themselves by name on E2E_TENANT_B_ID,
+        # E2E_USER_A_SECOND_TENANT_ID, E2E_EXPIRED_JWT and E2E_ORPHAN_JWT,
+        # none of which any environment provides yet. Provisioning a second
+        # tenant and the two crafted JWTs is the remaining half of #708 and is
+        # tracked there, not worked around here.
+        #
+        # `pg` is a runtime import in those specs (they skip when it is
+        # missing, which would be a silent pass), so it is installed before the
+        # run rather than by the SOC2 step further down.
+        if: always()
+        working-directory: apps/web-console
+        env:
+          OWUI_URL: http://localhost:3003
+          CONTROL_PLANE_URL: http://localhost:8081
+          EDGE_API_URL: http://localhost:8080
+          E2E_USER_A_EMAIL: ${{ env.OWUI_E2E_EMAIL }}
+          E2E_USER_A_PASSWORD: ${{ env.OWUI_E2E_PASSWORD }}
+          # Transaction-mode pooler DSN in libpq form, which is what node-pg
+          # accepts. The session-mode DSN is capped at the project's pool_size
+          # of 15 and is shared with the live stack, so a test client must not
+          # take one of those slots.
+          HIVE_TEST_DB_URL: ${{ env.SUPABASE_DB_POOL_URL_LIBPQ }}
+        run: |
+          npm i --no-save pg
+          npm run e2e:phase-19
+
       - name: Dump container logs on failure
         # The OWUI OAuth callback can hang with no visible error on the
         # Playwright side (e.g. run 28676421973's 30s hang after the token
