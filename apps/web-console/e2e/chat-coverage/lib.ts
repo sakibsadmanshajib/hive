@@ -244,7 +244,10 @@ async function visibleSignature(page: Page): Promise<string> {
         document.querySelector("main") ??
         document.body;
       const text = (scope as HTMLElement).innerText ?? "";
-      return `${text.length}:${text.replace(/\s+/g, " ").slice(0, 400)}`;
+      // Digits are stripped because relative timestamps ("2d", "3m ago") tick
+      // on their own; without this a control that did nothing still came back
+      // proven whenever a clock in the sidebar rolled over during its click.
+      return text.replace(/\d+/g, "#").replace(/\s+/g, " ").trim().slice(0, 600);
     })
     .catch(() => "");
 }

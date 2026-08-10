@@ -1,0 +1,242 @@
+{
+  "generatedAt": "2026-08-10T07:31:50.959Z",
+  "target": "https://chat-hive.scubed.co",
+  "note": "Live run against the demo box. The denominator is every focusable control enumerated from the rendered DOM on each surface; no control is hand listed. Surfaces that could not be opened are listed in surfacesNotSwept and are NOT in the denominator, so this figure is partial by exactly those surfaces.",
+  "summary": {
+    "proven": 196,
+    "total": 222,
+    "ratio": 0.8829
+  },
+  "surfaces": {
+    "composer-integrations": {
+      "proven": 2,
+      "total": 2
+    },
+    "composer-more": {
+      "proven": 6,
+      "total": 6
+    },
+    "home": {
+      "proven": 23,
+      "total": 25
+    },
+    "model-picker": {
+      "proven": 13,
+      "total": 15
+    },
+    "search": {
+      "proven": 48,
+      "total": 50
+    },
+    "settings:About": {
+      "proven": 3,
+      "total": 5
+    },
+    "settings:Account": {
+      "proven": 5,
+      "total": 5
+    },
+    "settings:Audio": {
+      "proven": 5,
+      "total": 8
+    },
+    "settings:Data Controls": {
+      "proven": 5,
+      "total": 7
+    },
+    "settings:General": {
+      "proven": 14,
+      "total": 17
+    },
+    "settings:Interface": {
+      "proven": 49,
+      "total": 56
+    },
+    "settings:Personalization": {
+      "proven": 2,
+      "total": 2
+    },
+    "user-menu": {
+      "proven": 6,
+      "total": 6
+    },
+    "workspace": {
+      "proven": 10,
+      "total": 12
+    },
+    "workspace:knowledge/create": {
+      "proven": 5,
+      "total": 6
+    }
+  },
+  "unproven": {
+    "home": [
+      {
+        "name": "",
+        "role": "div",
+        "detail": "not present on re-open"
+      },
+      {
+        "name": "hive-auto Set as default",
+        "role": "button",
+        "detail": "control was not there when the surface was re-opened"
+      }
+    ],
+    "model-picker": [
+      {
+        "name": "All",
+        "role": "button",
+        "detail": "no effect (mutations=0)"
+      },
+      {
+        "name": "External",
+        "role": "button",
+        "detail": "no effect (mutations=4)"
+      }
+    ],
+    "search": [
+      {
+        "name": "Show me a code snippet of a website's sticky header in CSS and JavaScr",
+        "role": "a",
+        "detail": "control was not there when the surface was re-opened"
+      },
+      {
+        "name": "Chat Menu",
+        "role": "button",
+        "detail": "control was not there when the surface was re-opened"
+      }
+    ],
+    "settings:About": [
+      {
+        "name": "See what's new",
+        "role": "button",
+        "detail": "no effect (mutations=0)"
+      },
+      {
+        "name": "CC-BY 4.0",
+        "role": "a",
+        "detail": "no effect (mutations=0)"
+      }
+    ],
+    "settings:Audio": [
+      {
+        "name": "Off",
+        "role": "switch",
+        "detail": "not present on a clean re-open"
+      },
+      {
+        "name": "Voice",
+        "role": "select",
+        "detail": "changed in the UI but reverted to  after reload"
+      },
+      {
+        "name": "On",
+        "role": "switch",
+        "detail": "not present on a clean re-open"
+      }
+    ],
+    "settings:Data Controls": [
+      {
+        "name": "Archive All",
+        "role": "button",
+        "detail": "no effect (mutations=3)"
+      },
+      {
+        "name": "Delete All",
+        "role": "button",
+        "detail": "no effect (mutations=3)"
+      }
+    ],
+    "settings:General": [
+      {
+        "name": "General",
+        "role": "tab",
+        "detail": "no effect (mutations=0)"
+      },
+      {
+        "name": "Off",
+        "role": "switch",
+        "detail": "changed in the UI but reverted to false after reload"
+      },
+      {
+        "name": "",
+        "role": "div",
+        "detail": "not present on a clean re-open"
+      }
+    ],
+    "settings:Interface": [
+      {
+        "name": "Default",
+        "role": "button",
+        "detail": "control was not there when the surface was re-opened"
+      },
+      {
+        "name": "Allow User Location",
+        "role": "switch",
+        "detail": "changed in the UI but reverted to false after reload"
+      },
+      {
+        "name": "Auto-Copy Response to Clipboard",
+        "role": "switch",
+        "detail": "changed in the UI but reverted to false after reload"
+      },
+      {
+        "name": "Manage",
+        "role": "switch",
+        "detail": "disappeared after its own change"
+      },
+      {
+        "name": "Image Compression",
+        "role": "switch",
+        "detail": "not present on a clean re-open"
+      },
+      {
+        "name": "Floating Quick Actions",
+        "role": "switch",
+        "detail": "not present on a clean re-open"
+      },
+      {
+        "name": "Compress Images in Channels",
+        "role": "switch",
+        "detail": "not present on a clean re-open"
+      }
+    ],
+    "workspace": [
+      {
+        "name": "Open Sidebar",
+        "role": "button",
+        "detail": "control was not there when the surface was re-opened"
+      },
+      {
+        "name": "Knowledge",
+        "role": "a",
+        "detail": "no effect (mutations=2)"
+      }
+    ],
+    "workspace:knowledge/create": [
+      {
+        "name": "Create Knowledge",
+        "role": "button",
+        "detail": "no effect (mutations=0)"
+      }
+    ]
+  },
+  "surfacesNotSwept": [
+    {
+      "surface": "sidebar",
+      "reason": "enumerated zero controls: the collapse toggle is an unnamed button, so the harness could not pin the sidebar open for its delta"
+    },
+    {
+      "surface": "composer-controls",
+      "reason": "enumerated zero controls: the advanced-parameters panel did not open from a clean home state"
+    },
+    {
+      "surface": "chat-item-menu",
+      "reason": "could not open: the per-chat menu needs the sidebar expanded, same root cause as sidebar"
+    },
+    {
+      "surface": "chat-message-actions",
+      "reason": "could not open: reaching a message needs the sidebar expanded, same root cause as sidebar"
+    }
+  ]
+}

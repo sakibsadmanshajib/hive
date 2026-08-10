@@ -332,21 +332,28 @@ test.describe("chat interaction coverage", () => {
       // Self-test hook: neuter one named control so the gate can be watched
       // going red on a control that works in reality.
       await page.addInitScript((needle: string) => {
-        window.addEventListener(
-          "click",
-          (e) => {
-            const el = (e.target as HTMLElement | null)?.closest(
-              "button, a, [role=button], [role=tab], [role=switch]",
-            );
-            if (!el) return;
-            const text = (el.getAttribute("aria-label") || el.textContent || "").trim();
-            if (text.toLowerCase().includes(needle.toLowerCase())) {
-              e.stopImmediatePropagation();
-              e.preventDefault();
-            }
-          },
-          true,
-        );
+        // Every event a handler could be bound to, stopped in the capture phase
+        // so it never reaches Svelte's delegated listeners at the document root.
+        // Blocking "click" alone left pointerdown handlers running.
+        for (const type of ["pointerdown", "mousedown", "mouseup", "click", "keydown"]) {
+          window.addEventListener(
+            type,
+            (e) => {
+              const el = (e.target as HTMLElement | null)?.closest(
+                "button, a, [role=button], [role=tab], [role=switch]",
+              );
+              if (!el) return;
+              const text = (el.getAttribute("aria-label") || el.textContent || "").trim();
+              if (text.toLowerCase() === needle.toLowerCase()) {
+                e.stopImmediatePropagation();
+                e.preventDefault();
+                const w = window as unknown as { __covBlocked?: number };
+                w.__covBlocked = (w.__covBlocked ?? 0) + 1;
+              }
+            },
+            true,
+          );
+        }
       }, sabotage);
     }
 
@@ -424,6 +431,13 @@ test.describe("chat interaction coverage", () => {
           results.filter((r) => r.surface === surface.id).length
         } proven`,
       );
+    }
+
+    if (sabotage) {
+      const blocked = await page
+        .evaluate(() => (window as unknown as { __covBlocked?: number }).__covBlocked ?? 0)
+        .catch(() => 0);
+      stage(`sabotage "${sabotage}" intercepted ${blocked} events on the last page`);
     }
 
     const summary = summarise(results);
@@ -522,40 +536,46 @@ test.describe("chat interaction coverage", () => {
     ).toEqual([]);
   });
 
-  test("the gate reports a control as unproven when its handler is neutered", async ({
-    page,
-  }) => {
-    test.setTimeout(5 * 60_000);
-    // Proof that the gate can go red. "Search" opens the search overlay on a
-    // healthy deployment; here its click handler is stopped in the capture
-    // phase, and the prover must notice that nothing happened.
-    const needle = "Search";
-    await page.addInitScript((text: string) => {
-      window.addEventListener(
-        "click",
-        (e) => {
-          const el = (e.target as HTMLElement | null)?.closest("button");
-          if (!el) return;
-          const label = (el.getAttribute("aria-label") || el.textContent || "").trim();
-          if (label === text) {
-            e.stopImmediatePropagation();
-            e.preventDefault();
-          }
-        },
-        true,
-      );
-    }, needle);
+  test("the prover tells a working control from a broken one", async ({ page }) => {
+    test.setTimeout(60_000);
+    // A gate nobody has watched fail is worth nothing. This is the smallest
+    // thing that fails if the detector breaks: two buttons that look identical,
+    // one wired and one whose handler was deleted. The wired one must come back
+    // proven and the dead one must come back unproven. Deliberately a fixture
+    // and not the deployment: it is the *detector* under test here, and pinning
+    // that to a live page makes the check hostage to whatever the deployment is
+    // doing that minute.
+    await page.setContent(`
+      <main style="min-height:400px">
+        <div id="out">idle</div>
+        <button id="wired" aria-label="Wired">Wired</button>
+        <button id="dead" aria-label="Dead">Dead</button>
+      </main>
+      <script>
+        document.getElementById('wired').addEventListener('click', () => {
+          document.getElementById('out').textContent = 'the wired button did something';
+        });
+        // #dead has no listener at all: this is the broken control.
+      </script>
+    `);
 
-    await gotoHome(page);
-    const controls = await enumerate(page, "sabotage");
-    const target = controls.find((c) => (c.name || c.label) === needle && c.tag === "button");
-    expect(target, "the Search button must exist for this self-test to mean anything").toBeTruthy();
+    const controls = await enumerate(page, "self-test");
+    const wired = controls.find((c) => c.name === "Wired");
+    const dead = controls.find((c) => c.name === "Dead");
+    expect(wired && dead, "the fixture must render both buttons").toBeTruthy();
 
-    const result = await proveByClick(page, target!);
-    expect(result.proven, `neutered control was reported as proven: ${result.detail}`).toBe(
-      false,
-    );
-    expect(result.proof).toBe("none");
+    const wiredResult = await proveByClick(page, wired!);
+    const deadResult = await proveByClick(page, dead!);
+
+    expect(
+      wiredResult.proven,
+      `a working control was reported as broken: ${wiredResult.detail}`,
+    ).toBe(true);
+    expect(
+      deadResult.proven,
+      `a broken control was reported as working: ${deadResult.proof} ${deadResult.detail}`,
+    ).toBe(false);
+    expect(deadResult.proof).toBe("none");
   });
 
   test("surfaces removed from upstream Open WebUI stay absent", async ({ page }) => {
