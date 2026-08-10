@@ -1,4 +1,6 @@
-import { test as setup, expect } from "@playwright/test";
+import { test as setup } from "@playwright/test";
+
+import { signInWithHive } from "./sign-in-with-hive";
 
 const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3003";
 const STATE_A = "e2e/phase-19/.auth/user-a.json";
@@ -6,8 +8,8 @@ const STATE_B = "e2e/phase-19/.auth/user-b.json";
 
 setup("authenticate user A (tenant T1)", async ({ page }) => {
   // Run 28681926134: consent can load first, then its client-side session
-  // check bounces to sign-in -- give the retry-heavy journey below real
-  // time to survive that bounce instead of the 30s test default.
+  // check bounces to sign-in -- give the retry-heavy journey real time to
+  // survive that bounce instead of the 30s test default.
   setup.setTimeout(180_000);
 
   const email = process.env.E2E_USER_A_EMAIL;
@@ -17,91 +19,11 @@ setup("authenticate user A (tenant T1)", async ({ page }) => {
     return;
   }
   await page.goto(`${OWUI_URL}/`);
-  // ponytail: OWUI login page has a continuously animating element, so
-  // Playwright's click-stability check never settles, and its force-click still
-  // requires the element in the viewport, which fails during the same
-  // animation. dispatchEvent fires the DOM click handler directly, regardless of
-  // geometry, stability, or overlays.
-  const hiveButton = page.getByRole("button", { name: /continue with hive/i });
-  await expect(hiveButton).toBeVisible({ timeout: 30_000 });
-  await hiveButton.dispatchEvent("click");
-
-  // getByLabel("Password") is a strict-mode violation here: the browser's
-  // native password-reveal toggle button shares "Password" in its
-  // accessible name. getByRole("textbox", ...) excludes it by role.
-  const emailBox = page.getByRole("textbox", { name: /email/i });
-  const passwordBox = page.getByRole("textbox", { name: /password/i });
-  // Run 28681926134: consent can load first, then its client-side session
-  // check bounces to sign-in -- a URL/pathname wait can resolve on that
-  // transient consent page. Wait for the email field itself instead of
-  // guessing from the URL.
-  await expect(emailBox).toBeVisible({ timeout: 30_000 });
-
-  // web-console runs in dev mode in CI; React hydration can remount the
-  // controlled input *after* a fill already verified as stuck, wiping it, so
-  // a submit fired after that remount hits an empty field (run 28680373668:
-  // "missing email or phone" alert, both textboxes empty). Fill and submit
-  // can never be separated safely -- fuse them into one retry unit so every
-  // submit attempt re-fills first.
-  // Run 28682845959: a successful submit can move the page past this step
-  // before the next-field wait below resolves. An unguarded refill on the
-  // next attempt then fills a detached email box and hangs until the test
-  // timeout -- check the email box is still there before touching it.
-  for (let i = 0; i < 6; i++) {
-    if (!(await emailBox.isVisible().catch(() => false))) break;
-    await emailBox.fill(email, { timeout: 2_000 });
-    if ((await emailBox.inputValue()) !== email) continue;
-    try {
-      await page
-        .getByRole("button", { name: /next/i })
-        .click({ timeout: 2_000 });
-    } catch {
-      // button may already be gone if a prior click's navigation landed late
-    }
-    try {
-      await expect(passwordBox).toBeVisible({ timeout: 5_000 });
-      break;
-    } catch {
-      // retry
-    }
-  }
-  await expect(passwordBox).toBeVisible();
-
-  // Same fusion, same reason: the password field can be wiped after a
-  // verified fill, so refill it on every sign-in attempt too (run
-  // 28680373668: "missing email or phone" alert, both textboxes empty).
-  // Run 28682845959: same hang risk as the step above -- a successful
-  // submit can move the page on before the origin wait below resolves, so
-  // check the password box is still there before refilling it.
-  const owuiOrigin = new URL(OWUI_URL).origin;
-  for (let i = 0; i < 6; i++) {
-    if (!(await passwordBox.isVisible().catch(() => false))) break;
-    await passwordBox.fill(password, { timeout: 2_000 });
-    if ((await passwordBox.inputValue()) !== password) continue;
-    try {
-      await page
-        .getByRole("button", { name: /sign in/i })
-        .click({ timeout: 2_000 });
-    } catch {
-      // button may already be gone if a prior click's navigation landed late
-    }
-    try {
-      await page.waitForURL((u) => u.origin === owuiOrigin, {
-        timeout: 5_000,
-      });
-      break;
-    } catch {
-      // retry
-    }
-  }
-  expect(new URL(page.url()).origin).toBe(owuiOrigin);
+  await signInWithHive(page, email, password, new URL(OWUI_URL).origin);
   await page.context().storageState({ path: STATE_A });
 });
 
 setup("authenticate user B (tenant T2)", async ({ page }) => {
-  // Run 28681926134: consent can load first, then its client-side session
-  // check bounces to sign-in -- give the retry-heavy journey below real
-  // time to survive that bounce instead of the 30s test default.
   setup.setTimeout(180_000);
 
   const email = process.env.E2E_USER_B_EMAIL;
@@ -111,83 +33,6 @@ setup("authenticate user B (tenant T2)", async ({ page }) => {
     return;
   }
   await page.goto(`${OWUI_URL}/`);
-  // ponytail: OWUI login page has a continuously animating element, so
-  // Playwright's click-stability check never settles, and its force-click still
-  // requires the element in the viewport, which fails during the same
-  // animation. dispatchEvent fires the DOM click handler directly, regardless of
-  // geometry, stability, or overlays.
-  const hiveButton = page.getByRole("button", { name: /continue with hive/i });
-  await expect(hiveButton).toBeVisible({ timeout: 30_000 });
-  await hiveButton.dispatchEvent("click");
-
-  // getByLabel("Password") is a strict-mode violation here: the browser's
-  // native password-reveal toggle button shares "Password" in its
-  // accessible name. getByRole("textbox", ...) excludes it by role.
-  const emailBox = page.getByRole("textbox", { name: /email/i });
-  const passwordBox = page.getByRole("textbox", { name: /password/i });
-  // Run 28681926134: consent can load first, then its client-side session
-  // check bounces to sign-in -- a URL/pathname wait can resolve on that
-  // transient consent page. Wait for the email field itself instead of
-  // guessing from the URL.
-  await expect(emailBox).toBeVisible({ timeout: 30_000 });
-
-  // web-console runs in dev mode in CI; React hydration can remount the
-  // controlled input *after* a fill already verified as stuck, wiping it, so
-  // a submit fired after that remount hits an empty field (run 28680373668:
-  // "missing email or phone" alert, both textboxes empty). Fill and submit
-  // can never be separated safely -- fuse them into one retry unit so every
-  // submit attempt re-fills first.
-  // Run 28682845959: a successful submit can move the page past this step
-  // before the next-field wait below resolves. An unguarded refill on the
-  // next attempt then fills a detached email box and hangs until the test
-  // timeout -- check the email box is still there before touching it.
-  for (let i = 0; i < 6; i++) {
-    if (!(await emailBox.isVisible().catch(() => false))) break;
-    await emailBox.fill(email, { timeout: 2_000 });
-    if ((await emailBox.inputValue()) !== email) continue;
-    try {
-      await page
-        .getByRole("button", { name: /next/i })
-        .click({ timeout: 2_000 });
-    } catch {
-      // button may already be gone if a prior click's navigation landed late
-    }
-    try {
-      await expect(passwordBox).toBeVisible({ timeout: 5_000 });
-      break;
-    } catch {
-      // retry
-    }
-  }
-  await expect(passwordBox).toBeVisible();
-
-  // Same fusion, same reason: the password field can be wiped after a
-  // verified fill, so refill it on every sign-in attempt too (run
-  // 28680373668: "missing email or phone" alert, both textboxes empty).
-  // Run 28682845959: same hang risk as the step above -- a successful
-  // submit can move the page on before the origin wait below resolves, so
-  // check the password box is still there before refilling it.
-  const owuiOrigin = new URL(OWUI_URL).origin;
-  for (let i = 0; i < 6; i++) {
-    if (!(await passwordBox.isVisible().catch(() => false))) break;
-    await passwordBox.fill(password, { timeout: 2_000 });
-    if ((await passwordBox.inputValue()) !== password) continue;
-    try {
-      await page
-        .getByRole("button", { name: /sign in/i })
-        .click({ timeout: 2_000 });
-    } catch {
-      // button may already be gone if a prior click's navigation landed late
-    }
-    try {
-      await page.waitForURL((u) => u.origin === owuiOrigin, {
-        timeout: 5_000,
-      });
-      break;
-    } catch {
-      // retry
-    }
-  }
-  expect(new URL(page.url()).origin).toBe(owuiOrigin);
+  await signInWithHive(page, email, password, new URL(OWUI_URL).origin);
   await page.context().storageState({ path: STATE_B });
 });

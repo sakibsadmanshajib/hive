@@ -1324,15 +1324,18 @@ jobs:
         # without ever executing: a spec that never runs cannot fail, and
         # unlike a skip it emits no signal at all.
         #
-        # Two files in that directory stay quiet, and both do it through
-        # their own documented `test.skip` rather than through an
-        # exclusion here, so the reason travels with the spec:
-        #   * openai-sdk.spec.ts skips unless EDGE_BASE_URL is set. This
-        #     job does not set it, because the spec needs a real LLM
-        #     completion round-trip and this job deliberately boots with
-        #     stub provider keys.
-        #   * _probe/*.spec.ts skip unless the HIVE_QA_* staging
-        #     identities are set. They are manual staging probes.
+        # openai-sdk.spec.ts is in that directory and stays quiet through
+        # its own documented `test.skip`, so the reason travels with the
+        # spec rather than living here: it needs EDGE_BASE_URL and a real
+        # completion round-trip, and this job deliberately boots with stub
+        # provider keys.
+        #
+        # tests/e2e/_probe is excluded by the project's own testIgnore, not
+        # by anything here. Those specs target deployed staging hosts and
+        # two of their tests carry no credential gate, so against this
+        # locally booted stack they fail on DNS rather than on the change
+        # under test. They keep their own `probe` project and are carried
+        # as justified debt in tests/dark-spec-allowlist.json.
         run: npx playwright test --project=chromium
 
       - name: Dump compose logs on failure

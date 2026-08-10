@@ -1,0 +1,111 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Hive" [ref=e5] [cursor=pointer]:
+          - /url: /console
+          - img [ref=e6]
+          - generic [ref=e9]: Hive
+        - generic [ref=e10]:
+          - generic [ref=e11]: Workspace
+          - combobox "Switch workspace" [ref=e12] [cursor=pointer]:
+            - option "E2E Verified Workspace (current)" [selected]
+            - option "E2E Shared Workspace"
+      - navigation "Console sections" [ref=e13]:
+        - generic [ref=e14]:
+          - generic [ref=e15]: Build
+          - list [ref=e16]:
+            - listitem [ref=e17]:
+              - link "Overview" [ref=e18] [cursor=pointer]:
+                - /url: /console
+                - img [ref=e20]
+                - generic [ref=e25]: Overview
+            - listitem [ref=e26]:
+              - link "API keys" [ref=e27] [cursor=pointer]:
+                - /url: /console/api-keys
+                - img [ref=e29]
+                - generic [ref=e32]: API keys
+            - listitem [ref=e33]:
+              - link "Model catalog" [ref=e34] [cursor=pointer]:
+                - /url: /console/catalog
+                - img [ref=e36]
+                - generic [ref=e46]: Model catalog
+            - listitem [ref=e47]:
+              - link "Analytics" [ref=e48] [cursor=pointer]:
+                - /url: /console/analytics
+                - img [ref=e50]
+                - generic [ref=e52]: Analytics
+        - generic [ref=e53]:
+          - generic [ref=e54]: Workspace
+          - list [ref=e55]:
+            - listitem [ref=e56]:
+              - link "Billing" [ref=e57] [cursor=pointer]:
+                - /url: /console/billing
+                - img [ref=e59]
+                - generic [ref=e62]: Billing
+            - listitem [ref=e63]:
+              - link "Members" [ref=e64] [cursor=pointer]:
+                - /url: /console/members
+                - img [ref=e66]
+                - generic [ref=e71]: Members
+            - listitem [ref=e72]:
+              - link "Settings" [ref=e73] [cursor=pointer]:
+                - /url: /console/settings/profile
+                - img [ref=e75]
+                - generic [ref=e78]: Settings
+        - generic [ref=e79]:
+          - generic [ref=e80]: Admin
+          - list [ref=e81]:
+            - listitem [ref=e82]:
+              - link "Feature gates" [ref=e83] [cursor=pointer]:
+                - /url: /console/feature-gates
+                - img [ref=e85]
+                - generic [ref=e88]: Feature gates
+            - listitem [ref=e89]:
+              - link "Marketplace" [ref=e90] [cursor=pointer]:
+                - /url: /console/marketplace
+                - img [ref=e92]
+                - generic [ref=e97]: Marketplace
+      - generic [ref=e99]:
+        - generic [ref=e100]: E
+        - generic [ref=e101]:
+          - generic [ref=e102]: E2E Verified Owner
+          - generic [ref=e103]: e2e-verified+local-r1@scubed.com.bd
+        - button "Sign out" [ref=e105]:
+          - img [ref=e106]
+    - generic [ref=e109]:
+      - banner [ref=e110]:
+        - generic [ref=e112]: Budget
+        - generic [ref=e113]:
+          - link "Documentation" [ref=e114] [cursor=pointer]:
+            - /url: https://hivegpt.io
+          - form "Language" [ref=e115]:
+            - button "Switch to EN" [ref=e116]: EN
+            - button "Switch to বাংলা" [ref=e117]: বাংলা
+      - main [ref=e118]:
+        - generic [ref=e119]:
+          - generic [ref=e121]:
+            - generic [ref=e122]: Workspace
+            - heading "Budget settings" [level=1] [ref=e123]
+            - paragraph [ref=e124]: Set soft and hard caps for monthly spend in Bangladeshi taka.
+          - generic [ref=e125]:
+            - generic [ref=e126]:
+              - heading "Workspace budget" [level=3] [ref=e127]
+              - paragraph [ref=e128]: Set a soft cap (advisory alerts) and a hard cap (requests blocked beyond this amount). Amounts are in Bangladeshi taka.
+            - generic [ref=e130]:
+              - generic [ref=e131]:
+                - generic [ref=e132]: Soft cap (BDT)
+                - textbox "Soft cap (BDT)" [ref=e133]:
+                  - /placeholder: "1000.00"
+                - paragraph [ref=e134]: Advisory threshold
+              - generic [ref=e135]:
+                - generic [ref=e136]: Hard cap (BDT)
+                - textbox "Hard cap (BDT)" [ref=e137]:
+                  - /placeholder: "2000.00"
+                - paragraph [ref=e138]: Requests blocked beyond this
+              - button "Save budget" [ref=e140]
+  - alert [ref=e141]
+```
