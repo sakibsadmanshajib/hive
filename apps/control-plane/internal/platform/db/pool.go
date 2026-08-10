@@ -18,6 +18,12 @@ const transactionPoolerPort = 6543
 // cannot consume a caller's whole retry budget.
 const openAttemptTimeout = 10 * time.Second
 
+// minOpenAttemptTimeout is the floor the per-attempt clamp will not go under,
+// so a caller with a very short budget still gets one honest attempt rather
+// than a context that expires mid-dial and reports a timeout for a connection
+// it never really tried to make.
+const minOpenAttemptTimeout = time.Second
+
 // ErrConfig marks a failure that no amount of waiting repairs: the DSN is
 // missing, unparseable, or names the wrong pooler mode. A caller riding out a
 // transient outage matches on it to stop immediately rather than spend its
@@ -100,7 +106,19 @@ func Open(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 func OpenWithRetry(ctx context.Context, databaseURL string, budget, interval time.Duration) (*pgxpool.Pool, error) {
 	deadline := time.Now().Add(budget)
 	for attempt := 1; ; attempt++ {
-		attemptCtx, cancel := context.WithTimeout(ctx, openAttemptTimeout)
+		// Cap the attempt to what is left of the budget. A host that accepts the
+		// connection and then stalls in the startup exchange would otherwise
+		// block for the full openAttemptTimeout past the deadline, and the
+		// budget is sized against a healthcheck window: overrunning it fails the
+		// container just as surely as never retrying at all.
+		attemptTimeout := openAttemptTimeout
+		if remaining := time.Until(deadline); remaining < attemptTimeout {
+			attemptTimeout = remaining
+		}
+		if attemptTimeout < minOpenAttemptTimeout {
+			attemptTimeout = minOpenAttemptTimeout
+		}
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 		pool, err := Open(attemptCtx, databaseURL)
 		cancel()
 		if err == nil {

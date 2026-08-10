@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -166,6 +167,56 @@ func TestOpenWithRetry_RidesOutATransientRefusal(t *testing.T) {
 	// The operator needs to see that waiting was tried and did not help.
 	if !strings.Contains(err.Error(), "attempt(s) over") {
 		t.Errorf("error should report the attempts made, got: %v", err)
+	}
+}
+
+// TestOpenWithRetry_CapsAnAttemptToTheRemainingBudget covers the failure a
+// refused connection cannot reach: a host that accepts the TCP connection and
+// then stalls in the Postgres startup exchange. Without the per-attempt clamp
+// that dial blocks for the full 10s openAttemptTimeout no matter how small the
+// budget was, which would push a boot past the healthcheck window the budget
+// exists to fit inside.
+func TestOpenWithRetry_CapsAnAttemptToTheRemainingBudget(t *testing.T) {
+	// A listener that accepts and then says nothing. Connections are held open
+	// (not closed) so the client blocks on the startup exchange rather than
+	// seeing EOF.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				<-done
+				_ = conn.Close()
+			}()
+		}
+	}()
+
+	const budget = 300 * time.Millisecond
+	start := time.Now()
+	pool, err := db.OpenWithRetry(
+		context.Background(),
+		"postgres://u:p@"+ln.Addr().String()+"/db",
+		budget, 50*time.Millisecond,
+	)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		pool.Close()
+		t.Fatal("expected an error against a stalled server, got nil")
+	}
+	// The clamp floor is one second. Without the clamp this takes the full
+	// ten-second attempt timeout instead.
+	if elapsed > 3*time.Second {
+		t.Fatalf("a stalled dial ran for %s: the attempt was not capped to the budget", elapsed)
 	}
 }
 
