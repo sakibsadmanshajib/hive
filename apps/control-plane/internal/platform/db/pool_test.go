@@ -3,7 +3,9 @@ package db_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -291,4 +293,91 @@ func TestOpen_ErrorWrapping(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSessionPoolReleasesIdleConnections is the measurement behind the two pool
+// lifetime parameters the session DSN now carries.
+//
+// A session-mode slot is held for as long as the pgxpool connection that owns
+// it exists, not for as long as it is being used, and pgxpool holds an idle
+// connection for thirty minutes by default. That is what exhausts the fifteen
+// shared session slots: a consumer that bursts to its cap once keeps that many
+// slots for the next half hour of running no queries at all, so three idle
+// consumers can hold the whole ceiling between them. Measured on 2026-08-10
+// with no CI job running, six parallel session-mode connections were all
+// refused with EMAXCONNSESSION.
+//
+// The assertion is on the count of live server backends rather than on the
+// parsed config, because a config value that never reaches the reaper releases
+// nothing. Timings here are the DSN's own, shortened: an explicit value in the
+// DSN wins over the deployment default, which is the same override path a
+// deployment under steady traffic would use to lengthen the window.
+func TestSessionPoolReleasesIdleConnections(t *testing.T) {
+	base := os.Getenv("HIVE_TEST_DB_URL")
+	if base == "" {
+		t.Skip("HIVE_TEST_DB_URL not set; this test needs a live Postgres")
+	}
+
+	const held = 4
+	separator := "?"
+	if strings.Contains(base, "?") {
+		separator = "&"
+	}
+	appName := fmt.Sprintf("hive_idle_release_%d", time.Now().UnixNano())
+	dsn := fmt.Sprintf(
+		"%s%sapplication_name=%s&pool_max_conns=%d&pool_max_conn_idle_time=1s&pool_health_check_period=250ms",
+		base, separator, appName, held,
+	)
+
+	ctx := context.Background()
+	pool, err := db.Open(ctx, dsn)
+	if err != nil {
+		t.Fatalf("open pool: %v", err)
+	}
+	defer pool.Close()
+
+	// Count from outside the pool under test, or the counting query would
+	// itself occupy one of the connections being counted.
+	observer, err := pgx.Connect(ctx, base)
+	if err != nil {
+		t.Fatalf("connect observer: %v", err)
+	}
+	defer observer.Close(context.Background())
+
+	backends := func() int {
+		var n int
+		if err := observer.QueryRow(ctx,
+			`SELECT count(*) FROM pg_stat_activity WHERE application_name = $1`,
+			appName).Scan(&n); err != nil {
+			t.Fatalf("count backends: %v", err)
+		}
+		return n
+	}
+
+	conns := make([]*pgxpool.Conn, 0, held)
+	for i := 0; i < held; i++ {
+		c, err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		conns = append(conns, c)
+	}
+	if got := backends(); got != held {
+		t.Fatalf("with %d connections checked out: want %d server backends, got %d", held, held, got)
+	}
+	for _, c := range conns {
+		c.Release()
+	}
+
+	// Idle window plus one reaper tick, with slack for a loaded CI runner.
+	deadline := time.Now().Add(15 * time.Second)
+	got := held
+	for time.Now().Before(deadline) {
+		if got = backends(); got == 0 {
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("after release: want 0 server backends once the idle window elapses, still holding %d; "+
+		"the pool is squatting session slots it is not using", got)
 }
