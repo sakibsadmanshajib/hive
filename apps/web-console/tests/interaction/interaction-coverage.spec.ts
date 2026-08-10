@@ -115,6 +115,36 @@ async function enumeratePage(page: Page): Promise<RawControl[]> {
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+/**
+ * Re-locates a control whose own key may have changed.
+ *
+ * A toggle commonly announces its state in its accessible name ("Agent cowork
+ * capability: enabled"), so flipping it renames it and a key lookup after the
+ * reload finds nothing. Reporting that as "does not persist" would be exactly
+ * the false accusation this gate exists to prevent, so fall back to the same
+ * position in the fresh enumeration, requiring the tag and role to agree.
+ */
+async function locateStable(
+  page: Page,
+  key: string,
+  control: RawControl,
+): Promise<Locator | null> {
+  const byKey = await locateByKey(page, key);
+  if (byKey !== null) {
+    return byKey;
+  }
+  const controls = await enumeratePage(page);
+  const atSamePosition = controls[control.idx];
+  if (
+    atSamePosition !== undefined &&
+    atSamePosition.tag === control.tag &&
+    atSamePosition.role === control.role
+  ) {
+    return page.locator(`[data-ic-idx="${String(atSamePosition.idx)}"]`);
+  }
+  return null;
+}
+
 async function locateByKey(page: Page, key: string): Promise<Locator | null> {
   const controls = await enumeratePage(page);
   const match = controls.find((control) => controlKey(control) === key);
@@ -248,7 +278,7 @@ async function proveControl(
   if (control.kind === "toggle") {
     const outcome = await proveToggle(page, locator, async () => {
       const ok = await prepare(page, url, item.revealPath);
-      return ok ? locateByKey(page, key) : null;
+      return ok ? locateStable(page, key, control) : null;
     });
     return { outcome, dirty: true, revealed: [] };
   }
@@ -582,6 +612,22 @@ test.describe("interaction coverage", () => {
       record.unproven = mine.filter((c) => c.status === "unproven").length;
       record.coverage = ratio(record.proven, record.enumerated);
       routeRecords.push(record);
+
+      // Checkpoint after every route. A long run against a deployed origin
+      // gets killed sooner or later (a CI timeout, a reaped process), and a
+      // ledger that only exists at the end means a killed run measured
+      // nothing.
+      writeReport(
+        REPORT_DIR,
+        buildReport({
+          baseUrl: BASE_URL,
+          partial: true,
+          routesDiscovered: discovered.length,
+          routes: routeRecords,
+          controls: controlRecords,
+          problems,
+        }),
+      );
     }
 
     // Session ending controls run last, in a context that can be thrown away.
