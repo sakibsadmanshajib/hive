@@ -10,7 +10,8 @@
 //   INTERACTION_BASE_URL=https://console-hive.scubed.co   (deployed box)
 
 import { test, expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
-import { readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import {
   APP_DIR,
@@ -28,6 +29,7 @@ import { indexRegistry, parseRegistry, validateRegistry } from "./lib/registry";
 import {
   DESTRUCTIVE_PATTERN,
   SESSION_ENDING_PATTERN,
+  fillFormFor,
   observe,
   proveExternalLink,
   proveField,
@@ -57,6 +59,20 @@ import {
 const BASE_URL = interactionBaseUrl();
 const FILTER = routeFilter();
 
+// Playwright buffers a test's stdout until the test ends, and this one runs
+// for tens of minutes. Progress goes to a file so a run in flight can be
+// watched, locally and from a CI artifact after a timeout.
+const PROGRESS_LOG = join(REPORT_DIR, "progress.log");
+
+function progress(line: string): void {
+  process.stdout.write(`${line}\n`);
+  try {
+    appendFileSync(PROGRESS_LOG, `${line}\n`, "utf8");
+  } catch {
+    // Progress logging must never be the reason a run fails.
+  }
+}
+
 interface WorkItem {
   control: RawControl;
   /** Control keys that must be activated, in order, to reveal this control. */
@@ -78,8 +94,25 @@ function authModeFor(route: DiscoveredRoute): "user" | "anon" {
 }
 
 async function enumeratePage(page: Page): Promise<RawControl[]> {
-  const result = await page.evaluate(enumerateInPage);
-  return result.controls;
+  // `page.evaluate` throws "Execution context was destroyed" when a
+  // navigation lands mid-call, which is routine on a server rendered app and
+  // says nothing about any control. Retry rather than abandoning the route:
+  // an aborted route reads as zero coverage, which is a far worse lie than a
+  // slow one.
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const result = await page.evaluate(enumerateInPage);
+      return result.controls;
+    } catch (error) {
+      lastError = error;
+      await page
+        .waitForLoadState("domcontentloaded", { timeout: 10000 })
+        .catch(() => undefined);
+      await page.waitForTimeout(500);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 async function locateByKey(page: Page, key: string): Promise<Locator | null> {
@@ -91,12 +124,39 @@ async function locateByKey(page: Page, key: string): Promise<Locator | null> {
   return page.locator(`[data-ic-idx="${String(match.idx)}"]`);
 }
 
+// The console renders every control's label through next-intl, so a run that
+// activates the locale switcher (correctly, it works) continues against a page
+// whose control keys are all in another language and matches none of them. Pin
+// the locale before every navigation: the switcher still gets proven, and the
+// rest of the surface stays addressable.
+const LOCALE_COOKIE = "locale";
+
+async function pinLocale(page: Page): Promise<void> {
+  await page
+    .context()
+    .addCookies([{ name: LOCALE_COOKIE, value: "en", url: BASE_URL }])
+    .catch(() => undefined);
+}
+
+/** True for the control that ends the session, in any language. */
+function isSessionEnding(control: RawControl): boolean {
+  // Matching on the form action rather than the label: the sidebar sign out
+  // button is localized, and an English-only name match let a Bengali render
+  // of it be clicked inline, which killed the session and turned every
+  // remaining control in the run into a false failure.
+  if (control.formAction.includes("sign-out") || control.formAction.includes("signout")) {
+    return true;
+  }
+  return SESSION_ENDING_PATTERN.test(`${control.name} ${control.testid}`);
+}
+
 /** Navigates to a route and, when needed, re-opens the reveal chain. */
 async function prepare(
   page: Page,
   url: string,
   revealPath: string[],
 ): Promise<boolean> {
+  await pinLocale(page);
   await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
   await page.waitForLoadState("networkidle", { timeout: 4000 }).catch(() => undefined);
   for (const step of revealPath) {
@@ -170,10 +230,32 @@ async function proveControl(
   }
 
   const destructive = DESTRUCTIVE_PATTERN.test(`${control.name} ${control.testid}`);
+
+  // A submit button clicked against an empty form is stopped by the browser's
+  // own required-field validation, which is indistinguishable from a button
+  // with no handler. Fill the form first so the click actually reaches the
+  // application.
+  let filledFields: string[] = [];
+  if (control.kind === "submit") {
+    filledFields = await fillFormFor(locator);
+  }
+
+  // Tag the element so the reveal pass can tell "a new control appeared" from
+  // "the control I just clicked relabelled itself to Sending…", which is a
+  // transient state of one control, not two controls.
+  await locator
+    .evaluate((element: Element) => {
+      element.setAttribute("data-ic-active", "1");
+    })
+    .catch(() => undefined);
+
   const observation = await observe(page, async () => {
     await locator.click({ timeout: 8000 });
   });
   const outcome = verdictFromObservation(observation);
+  if (filledFields.length > 0) {
+    outcome.detail = `${outcome.detail} (form pre-filled: ${filledFields.join(", ")})`;
+  }
 
   // A control that opened something reveals controls the first enumeration
   // could not see. Those are part of the surface and must be enumerated too,
@@ -185,7 +267,17 @@ async function proveControl(
     observation.popup ||
     observation.requests.length > 0;
   if (observation.domChanged && !observation.urlChanged) {
-    revealed = await enumeratePage(page);
+    const all = await enumeratePage(page);
+    const activeIdx = await page.evaluate((): number => {
+      const element = document.querySelector("[data-ic-active='1']");
+      if (element === null) {
+        return -1;
+      }
+      const raw = element.getAttribute("data-ic-idx");
+      element.removeAttribute("data-ic-active");
+      return raw === null ? -1 : Number(raw);
+    });
+    revealed = all.filter((candidate) => candidate.idx !== activeIdx);
   }
 
   if (destructive) {
@@ -202,6 +294,9 @@ test.describe("interaction coverage", () => {
 
   test("every rendered control has a proven effect", async ({ browser }) => {
     test.setTimeout(3 * 60 * 60 * 1000);
+
+    mkdirSync(REPORT_DIR, { recursive: true });
+    rmSync(PROGRESS_LOG, { force: true });
 
     const fixtures = loadRouteFixtures(ROUTE_FIXTURE_FILE);
     const discovered = discoverRoutes(APP_DIR, fixtures);
@@ -297,10 +392,30 @@ test.describe("interaction coverage", () => {
       };
 
       try {
-        const response = await page.goto(url, {
-          waitUntil: "domcontentloaded",
-          timeout: 45000,
-        });
+        await pinLocale(page);
+        // A deployed origin can drop for a couple of minutes and come back on
+        // its own (issue #815). Retry once before recording anything, so a
+        // transient outage is never written down as a dead surface.
+        let response = await page
+          .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
+          .catch(() => null);
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const transient =
+            response === null || response.status() === 502 || response.status() >= 503;
+          if (!transient) {
+            break;
+          }
+          progress(
+            `[retry] ${route.pattern} answered ${response === null ? "nothing" : String(response.status())}, retrying`,
+          );
+          await page.waitForTimeout(20000);
+          response = await page
+            .goto(url, { waitUntil: "domcontentloaded", timeout: 45000 })
+            .catch(() => null);
+        }
+        if (response === null) {
+          throw new Error("origin never answered after three attempts");
+        }
         await page.waitForLoadState("networkidle", { timeout: 8000 }).catch(() => undefined);
         const landed = pathOf(page.url());
         const requested = pathOf(url);
@@ -334,9 +449,7 @@ test.describe("interaction coverage", () => {
           }
         }
 
-        process.stdout.write(
-          `\n[route] ${route.pattern} -> ${String(top.length)} controls enumerated\n`,
-        );
+        progress(`[route] ${route.pattern} -> ${String(top.length)} controls enumerated`);
         const queue: WorkItem[] = top.map((control) => ({ control, revealPath: [] }));
         const seen = new Set<string>(top.map((control) => `|${controlKey(control)}`));
         let dirty = false;
@@ -373,7 +486,7 @@ test.describe("interaction coverage", () => {
             continue;
           }
 
-          if (SESSION_ENDING_PATTERN.test(`${item.control.name} ${item.control.testid}`)) {
+          if (isSessionEnding(item.control)) {
             deferred.push({ url, route: route.pattern, key, control: item.control });
             continue;
           }
@@ -392,8 +505,8 @@ test.describe("interaction coverage", () => {
           }
 
           const result = await proveControl(page, url, item, key);
-          process.stdout.write(
-            `${result.outcome.proven ? "  ok  " : "  XX  "}${route.pattern}  ${key}  ${result.outcome.proofType}\n`,
+          progress(
+            `${result.outcome.proven ? "  ok  " : "  XX  "}${route.pattern}  ${key}  ${result.outcome.proofType}`,
           );
           controlRecords.push({
             ...base,

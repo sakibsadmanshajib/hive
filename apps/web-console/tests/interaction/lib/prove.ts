@@ -384,7 +384,7 @@ export async function proveField(
   control: RawControl,
 ): Promise<ProofOutcome> {
   const original = await locator.inputValue().catch(() => "");
-  const probe = probeValueFor(control);
+  const probe = probeValueFor(control.type);
   const observation = await observe(page, async () => {
     await locator.fill(probe, { timeout: 5000 });
   });
@@ -424,8 +424,46 @@ export async function proveField(
   };
 }
 
-function probeValueFor(control: RawControl): string {
-  switch (control.type) {
+/**
+ * Fills the empty fields of the form a submit control belongs to.
+ *
+ * A submit button activated against an empty form is stopped by the browser's
+ * own required-field validation, which looks exactly like a button with no
+ * handler. Proving a submit means submitting something the form accepts.
+ * Returns the fields it touched, so the report can say what was submitted.
+ */
+export async function fillFormFor(locator: Locator): Promise<string[]> {
+  const form = locator.locator("xpath=ancestor::form[1]");
+  if ((await form.count()) === 0) {
+    return [];
+  }
+  const fields = form.locator(
+    "input:not([type=hidden]):not([type=submit]):not([type=button]):not([type=checkbox]):not([type=radio]), textarea",
+  );
+  const filled: string[] = [];
+  const count = await fields.count();
+  for (let index = 0; index < count; index += 1) {
+    const field = fields.nth(index);
+    if (await field.isDisabled().catch(() => true)) {
+      continue;
+    }
+    const current = await field.inputValue().catch(() => "");
+    if (current !== "") {
+      continue;
+    }
+    const descriptor = await field.evaluate((element: Element) => ({
+      type: element.getAttribute("type") ?? "",
+      name: element.getAttribute("name") ?? element.getAttribute("id") ?? "",
+    }));
+    const probe = probeValueFor(descriptor.type);
+    await field.fill(probe, { timeout: 5000 }).catch(() => undefined);
+    filled.push(descriptor.name === "" ? descriptor.type : descriptor.name);
+  }
+  return filled;
+}
+
+function probeValueFor(type: string): string {
+  switch (type) {
     case "email":
       return "interaction-gate@example.invalid";
     case "number":
