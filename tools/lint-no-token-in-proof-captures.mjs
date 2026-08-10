@@ -38,7 +38,23 @@ const BINARY_EXT = new Set([
 
 // The parameter names a credential rides in on. `code=` covers an OAuth
 // authorization code, which is a bearer credential exactly like a token.
-const PARAM_NAMES = ["access_token", "refresh_token", "token", "code"];
+// `token_hash`/`hashed_token`/`email_otp` are the one-time credentials the
+// live-session helper handles (docs/live-test-auth.md); each one is a valid
+// login on its own until consumed.
+const PARAM_NAMES = [
+  "access_token",
+  "refresh_token",
+  "token_hash",
+  "hashed_token",
+  "email_otp",
+  "token",
+  "code",
+];
+
+// A bare JWT with no parameter name in front of it. On 2026-08-08 an agent
+// printed a live session token to stdout as a plain value, so the leak a
+// proof capture can carry is not always shaped like `name=value`.
+const BARE_JWT_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
 
 // An obvious placeholder, not a real value. Matched before the entropy check
 // so a deliberately redacted or documented example never trips the guard.
@@ -82,6 +98,10 @@ export function findOffenders(text) {
       }
       match = PARAM_RE.exec(line);
     }
+    BARE_JWT_RE.lastIndex = 0;
+    if (BARE_JWT_RE.test(line)) {
+      offenders.push({ line: i + 1, text: line.trim() });
+    }
   });
   return offenders;
 }
@@ -108,6 +128,10 @@ const MUST_CATCH = [
   ["access_token= query param", `redirect: /callback?access_token=${FAKE_HEX}`],
   ["refresh_token= query param", `refresh_token=${FAKE_HEX}&expires_in=3600`],
   ["code= query param (OAuth authorization code)", `/auth/callback?code=${FAKE_HEX}`],
+  // GoTrue returns a verified session in the FRAGMENT, never the query string.
+  ["access_token= in a URL fragment", `landed on /tasks#access_token=${FAKE_HEX}&token_type=bearer`],
+  ["token_hash= one-time credential", `generate_link -> /auth/v1/verify?token_hash=${FAKE_HEX}`],
+  ["bare JWT with no parameter name", `stdout: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZW1vIn0.${FAKE_HEX}`],
 ];
 
 const MUST_ALLOW = [

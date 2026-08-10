@@ -128,6 +128,19 @@ cd deploy/docker && docker compose --env-file ../../.env --profile test up --bui
 cd apps/web-console && npx playwright test
 ```
 
+### Live sessions for tests
+
+A run that must be signed in against a deployed environment uses
+`apps/web-console/tests/e2e/support/live-auth.mjs` (CLI and storage-state
+producer) or `live-auth.ts` (spec-side). It mints a session through the admin
+one-time-token flow: no password needed, and none changed.
+
+**Never set, reset or rotate a shared test account's password to obtain a
+session.** That account is shared mutable state and the control-plane resolves
+every bearer against GoTrue per request, so a rotation invalidates every
+concurrent run; it broke three agents at once on 2026-08-08. Full protocol and
+the forbidden-shortcut list: `docs/live-test-auth.md`.
+
 ### Go workspace gotcha
 
 With `go.work`, Docker test commands must use full module-relative paths (`./apps/control-plane/internal/...`), not short `./internal/...` form.

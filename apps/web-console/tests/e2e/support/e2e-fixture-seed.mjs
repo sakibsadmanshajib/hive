@@ -108,10 +108,53 @@ export function buildIds(runKey) {
   };
 }
 
+// Parameter names that carry a credential. They are matched wherever a
+// `name=value` pair appears, which deliberately includes a URL FRAGMENT and
+// not only a query string.
+//
+// 2026-08-08 incident: an agent's own redactor split URLs on "?" and scrubbed
+// query parameters only. GoTrue hands a session back from
+// GET /auth/v1/verify as a redirect whose credentials live after the "#"
+// (`...#access_token=<jwt>&refresh_token=...`), so that redactor printed a
+// live session token to stdout while looking like it was protecting the log.
+// Anything that only understands query strings is not a redactor.
+const CREDENTIAL_PARAMS = [
+  "access_token",
+  "refresh_token",
+  "provider_token",
+  "provider_refresh_token",
+  "id_token",
+  "token_hash",
+  "hashed_token",
+  "confirmation_token",
+  "recovery_token",
+  "invitation_token",
+  "invite_token",
+  "email_otp",
+  "client_secret",
+  "api_key",
+  "apikey",
+  "password",
+  "secret",
+  "token",
+  "code",
+  "otp",
+];
+// Longest names first so `provider_refresh_token` never degrades to `token`.
+const CREDENTIAL_PARAM_RE = new RegExp(
+  `\\b(${[...CREDENTIAL_PARAMS].sort((a, b) => b.length - a.length).join("|")})=([^&#\\s"'\\\\]+)`,
+  "gi"
+);
+// A bare JWT with no parameter name around it: an access token logged on its
+// own line, an `Authorization: Bearer ...` header, or a service-role key that
+// was passed in rather than read from the environment.
+const BARE_JWT_RE = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+
 // redactSecrets scrubs the service-role key (and anything else worth hiding)
 // out of text that is about to be printed. The fixture CLI runs as a child
 // process whose stdout and stderr are relayed into the CI log on failure, so
-// every message that leaves this module goes through here first.
+// every message that leaves this module goes through here first, as does
+// every message from live-auth.mjs. It is safe to run with verbose logging.
 export function redactSecrets(text, secrets = [process.env.SUPABASE_SERVICE_ROLE_KEY]) {
   let out = String(text);
   for (const secret of secrets) {
@@ -119,6 +162,8 @@ export function redactSecrets(text, secrets = [process.env.SUPABASE_SERVICE_ROLE
       out = out.split(secret).join("<redacted>");
     }
   }
+  out = out.replace(CREDENTIAL_PARAM_RE, (_match, name) => `${name}=<redacted>`);
+  out = out.replace(BARE_JWT_RE, "<redacted>");
   return out;
 }
 
