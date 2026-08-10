@@ -1321,7 +1321,15 @@ jobs:
         # completion round-trip through OpenRouter, which currently rate-
         # limits the free `hive-default` model tier and produces 429 flakes
         # that are unrelated to anything the UI suite exercises.
-        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts tests/e2e/console-workspace-admin.spec.ts
+        #
+        # console-budgets.spec.ts and rbac-unverified.spec.ts were in the tree
+        # but in no workflow, so neither had run in CI since it was written: a
+        # spec that never executes cannot fail, which is the same hole issue
+        # #796 is about, one level up. Both need only the E2E_VERIFIED_* and
+        # E2E_UNVERIFIED_* identities this step already sets.
+        # console-workspace-switch.spec.ts is the reload-persistence guard for
+        # the sidebar switcher (issue #794) and uses the same verified user.
+        run: npx playwright test tests/e2e/unauth.spec.ts tests/e2e/auth-shell.spec.ts tests/e2e/profile-completion.spec.ts tests/e2e/console-workspace-admin.spec.ts tests/e2e/console-workspace-switch.spec.ts tests/e2e/console-budgets.spec.ts tests/e2e/rbac-unverified.spec.ts
 
       - name: Dump compose logs on failure
         if: failure()

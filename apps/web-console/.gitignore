@@ -15,6 +15,11 @@ dist/
 # Local env files
 .env*.local
 
+# Playwright storage state. These files hold live session cookies.
+.auth/
+tests/e2e/.auth/
+e2e/**/.auth/
+
 # Vercel
 .vercel
 
