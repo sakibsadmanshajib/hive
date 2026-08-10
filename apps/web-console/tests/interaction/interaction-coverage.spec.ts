@@ -192,6 +192,23 @@ function isSessionEnding(control: RawControl): boolean {
   return SESSION_ENDING_PATTERN.test(`${control.name} ${control.testid}`);
 }
 
+/**
+ * Controls that change the state every other control is addressed through.
+ *
+ * The locale switcher is one form POST that renames every label on the page,
+ * including its own siblings in the shell. Activating it mid-sweep left the
+ * run holding English keys against a Bengali render and reporting working
+ * navigation links as dead. Pinning the cookie only papered over it. These
+ * are proven once, last, in a context that is then thrown away, exactly like
+ * sign out, so nothing they change can reach another control's verdict.
+ */
+function isDeferred(control: RawControl): boolean {
+  if (control.formAction.includes("/locale")) {
+    return true;
+  }
+  return isSessionEnding(control);
+}
+
 /** Navigates to a route and, when needed, re-opens the reveal chain. */
 async function prepare(
   page: Page,
@@ -555,7 +572,7 @@ test.describe("interaction coverage", () => {
             continue;
           }
 
-          if (isSessionEnding(item.control)) {
+          if (isDeferred(item.control)) {
             deferred.push({ url, route: route.pattern, key, control: item.control });
             continue;
           }
