@@ -374,7 +374,8 @@ jobs:
         if: always()
         working-directory: apps/web-console
         env:
-          OWUI_URL: http://localhost:3003
+          # OWUI_URL is already job-level. Repeating it here would be a second
+          # place for it to drift from the port the stack actually publishes.
           CONTROL_PLANE_URL: http://localhost:8081
           EDGE_API_URL: http://localhost:8080
           E2E_USER_A_EMAIL: ${{ env.OWUI_E2E_EMAIL }}
