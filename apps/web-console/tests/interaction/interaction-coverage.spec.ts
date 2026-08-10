@@ -18,12 +18,21 @@ import {
   REGISTRY_FILE,
   REPORT_DIR,
   ROUTE_FIXTURE_FILE,
+  ROUTE_FLOOR_FILE,
   AUTH_STATE_FILE,
   interactionBaseUrl,
   routeFilter,
 } from "./lib/config";
 import { WEB_CONSOLE_DIR } from "./lib/config";
 import { enumerateInPage, type RawControl } from "./lib/enumerate";
+import { collectExclusions, exclusionProblems } from "./lib/exclusions";
+import {
+  floorProblems,
+  loadFloors,
+  staleFloors,
+  writeFloors,
+  type VisitedRoute,
+} from "./lib/floors";
 import { controlKey } from "./lib/key";
 import { indexRegistry, parseRegistry, validateRegistry } from "./lib/registry";
 import {
@@ -263,7 +272,12 @@ async function proveControl(
           const observation = await observe(page, async () => {
             await refreshed.click({ timeout: 8000 });
           });
-          const outcome = verdictFromObservation(observation);
+          // The gate typed the values this submission carries, so a 400, 409
+          // or 422 back is the endpoint validating the gate's own probe input,
+          // which is the control working rather than the control failing.
+          const outcome = verdictFromObservation(observation, {
+            harnessSuppliedInput: true,
+          });
           outcome.detail = `${outcome.detail} (enabled by filling ${filled.join(", ")})`;
           return { outcome, dirty: true, revealed: [] };
         }
@@ -338,7 +352,9 @@ async function proveControl(
   const observation = await observe(page, async () => {
     await locator.click({ timeout: 8000 });
   });
-  const outcome = verdictFromObservation(observation);
+  const outcome = verdictFromObservation(observation, {
+    harnessSuppliedInput: filledFields.length > 0,
+  });
   if (filledFields.length > 0) {
     outcome.detail = `${outcome.detail} (form pre-filled: ${filledFields.join(", ")})`;
   }
@@ -390,6 +406,13 @@ test.describe("interaction coverage", () => {
     const registryIndex = indexRegistry(registry);
 
     const problems: string[] = validateRegistry(registry, WEB_CONSOLE_DIR);
+    problems.push(...exclusionProblems(collectExclusions(fixtures, registry)));
+    const floors = loadFloors(ROUTE_FLOOR_FILE);
+    for (const stale of staleFloors(floors, discovered.map((r) => r.pattern))) {
+      problems.push(
+        `route-floors.json records a floor for "${stale}", which is not a route in app/; delete the entry`,
+      );
+    }
     for (const stale of staleFixtureRoutes(fixtures, discovered)) {
       problems.push(
         `route-fixtures.json declares "${stale}", which is not a route in app/; delete the entry or restore the route`,
@@ -403,6 +426,48 @@ test.describe("interaction coverage", () => {
     const anon: BrowserContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
     });
+
+    // Break proof hook. A gate nobody has watched fail is worth nothing, so
+    // this neuters named controls at the event layer, leaving the markup and
+    // every sibling untouched. Running the same route with and without it is
+    // the only evidence that a proven verdict means anything:
+    //
+    //   INTERACTION_ROUTES=/console/analytics INTERACTION_SABOTAGE=24h,7d,30d,90d
+    //
+    // Blocking in the capture phase at the window, because React delegates to
+    // a root listener and a handler removed from the element itself would
+    // still be reached through delegation.
+    const sabotage = (process.env.INTERACTION_SABOTAGE ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value !== "");
+    if (sabotage.length > 0) {
+      for (const context of [authed, anon]) {
+        await context.addInitScript((names: string[]) => {
+          for (const type of ["pointerdown", "mousedown", "mouseup", "click", "keydown"]) {
+            window.addEventListener(
+              type,
+              (event) => {
+                const target = event.target as HTMLElement | null;
+                const element = target?.closest("button, a, [role=button], [role=tab], [role=switch]");
+                if (!element) return;
+                const label = (
+                  element.getAttribute("aria-label") ??
+                  element.textContent ??
+                  ""
+                ).trim();
+                if (names.some((name) => name.toLowerCase() === label.toLowerCase())) {
+                  event.stopImmediatePropagation();
+                  event.preventDefault();
+                }
+              },
+              true,
+            );
+          }
+        }, sabotage);
+      }
+      progress(`[sabotage] handlers blocked for: ${sabotage.join(", ")}`);
+    }
 
     const routeRecords: RouteRecord[] = [];
     const controlRecords: ControlRecord[] = [];
@@ -747,6 +812,22 @@ test.describe("interaction coverage", () => {
         }
         record.coverage = ratio(record.proven, record.enumerated);
       }
+    }
+
+    // Denominator guard. Coverage is proven/enumerated and both sides come
+    // from the rendered DOM, so a route that renders less than it used to
+    // shrinks the denominator and holds the percentage up while the surface
+    // is degrading. Compare every visited route against a committed floor.
+    const visited: VisitedRoute[] = routeRecords.map((record) => ({
+      route: record.route,
+      visited: record.visited,
+      enumerated: record.enumerated,
+    }));
+    if (process.env.INTERACTION_FLOORS === "update") {
+      writeFloors(ROUTE_FLOOR_FILE, visited);
+      progress("[floors] route-floors.json rewritten from this run");
+    } else {
+      problems.push(...floorProblems(floors, visited));
     }
 
     for (const entry of registryIndex.unmatched()) {

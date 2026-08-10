@@ -1,0 +1,27 @@
+{
+  "$comment": "Minimum control count per route, recorded from a live run. A run that enumerates fewer controls on a route than the number here fails the gate: coverage is proven/enumerated, so a route rendering less than it used to would otherwise shrink the denominator and hold the percentage up during an outage. Regenerate deliberately with INTERACTION_FLOORS=update and commit the result with a reason.",
+  "routes": {
+    "/auth/forgot-password": 3,
+    "/auth/reset-password": 3,
+    "/auth/sign-in": 5,
+    "/auth/sign-up": 4,
+    "/console": 20,
+    "/console/analytics": 28,
+    "/console/api-keys": 17,
+    "/console/billing": 22,
+    "/console/billing/alerts": 19,
+    "/console/billing/budget": 17,
+    "/console/billing/checkout/return": 15,
+    "/console/billing/invoices": 14,
+    "/console/catalog": 14,
+    "/console/feature-gates": 29,
+    "/console/marketplace": 14,
+    "/console/members": 19,
+    "/console/settings/billing": 25,
+    "/console/settings/profile": 22,
+    "/console/setup": 20,
+    "/invitations/accept": 1,
+    "/no-workspace": 2,
+    "/oauth/consent": 0
+  }
+}

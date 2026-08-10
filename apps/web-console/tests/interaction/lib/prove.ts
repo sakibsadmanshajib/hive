@@ -37,6 +37,47 @@ export interface Observation {
   navStatus: number | null;
   /** Non-2xx statuses seen on the XHR/fetch traffic the activation caused. */
   failedRequests: string[];
+  /**
+   * Error surfaces the activation put on screen that were not there before.
+   *
+   * A failed action is not a working control. A click that answers 500 and
+   * renders "Something went wrong" produces both a request and a change to
+   * the render, so without this the two strongest evidence channels both vote
+   * to prove a control that plainly did not do its job.
+   */
+  errorSurfaces: string[];
+}
+
+/**
+ * Wording an application uses to tell a user that what they asked for did not
+ * happen. Deliberately narrow: a live region that merely announces a result
+ * ("3 keys", "Saved") is not a failure, and treating it as one would replace
+ * a false pass with a false accusation.
+ */
+const FAILURE_TEXT =
+  /\b(error|failed|failure|unable to|could ?n[o']t|went wrong|try again|invalid|denied|unauthori[sz]ed|forbidden|not found|timed out|too many requests)\b/i;
+
+/**
+ * Collects the text of every error surface currently rendered.
+ *
+ * `alertdialog` is excluded on purpose: a "delete this key?" confirmation is
+ * an effect, not a failure.
+ */
+function errorSurfacesInPage(): string[] {
+  const nodes = document.querySelectorAll(
+    '[role="alert"], [aria-live="assertive"], [data-sonner-toast][data-type="error"], .toast-error, .Toastify__toast--error',
+  );
+  const out: string[] = [];
+  nodes.forEach((node) => {
+    if (node.getAttribute("role") === "alertdialog") {
+      return;
+    }
+    const text = (node.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 200);
+    if (text !== "") {
+      out.push(text);
+    }
+  });
+  return out;
 }
 
 function normalizeUrl(url: string): string {
@@ -76,6 +117,9 @@ export async function observe(
   await page.waitForTimeout(250);
   const signatureB = await safeSignature(page);
   const domStableBaseline = signatureA === signatureB;
+  const errorsBefore = new Set(
+    await page.evaluate(errorSurfacesInPage).catch((): string[] => []),
+  );
 
   const requests: string[] = [];
   const consoleErrors: string[] = [];
@@ -164,6 +208,7 @@ export async function observe(
 
   const signatureAfter = await safeSignature(page);
   const urlAfter = page.url();
+  const errorsAfter = await page.evaluate(errorSurfacesInPage).catch((): string[] => []);
 
   return {
     urlBefore,
@@ -179,6 +224,9 @@ export async function observe(
     actError,
     navStatus,
     failedRequests,
+    errorSurfaces: errorsAfter.filter(
+      (text) => !errorsBefore.has(text) && FAILURE_TEXT.test(text),
+    ),
   };
 }
 
@@ -190,26 +238,51 @@ export interface ProofOutcome {
 }
 
 /**
- * Requests whose status means the endpoint is not there at all, as opposed to
- * a server that answered the semantics of the call. A control that fires a
- * request into a route nobody mounted is broken, not proven: that is the
- * exact shape of the console's api-keys, spend-alerts, budget and checkout
- * defects, each of which fires a perfectly observable request into a 404.
+ * How a failed request is classified.
+ *
+ * `broken-endpoint`  the route is not mounted, or the server crashed on it.
+ * `rate-limited`     the gate itself ran into a limiter, so the verdict is
+ *                    unusable; reported rather than counted either way.
+ * `failed-request`   the server read the request and refused it.
+ *
+ * Only the last of these can ever be evidence of a working control, and only
+ * under the condition documented on `ProofContext.harnessSuppliedInput`.
  */
-const MISSING_ENDPOINT_STATUS = /^(404|405|410|501|5\d\d) /;
+const NOT_MOUNTED = new Set([404, 405, 410, 501]);
+const SEMANTIC_REJECTION = new Set([400, 409, 422]);
+
+function statusOf(entry: string): number {
+  return Number.parseInt(entry.slice(0, 3), 10);
+}
+
+export interface ProofContext {
+  /**
+   * True when the harness itself supplied the values the request carried.
+   *
+   * This is the whole rule for telling an expected 4xx from an unexpected one,
+   * and it is deliberately a property of the *activation*, not of the status.
+   * When the gate fills a form with "interaction gate probe" and submits it, a
+   * 400, 409 or 422 back is the endpoint validating input, which is the
+   * control working. Nothing else earns the exception: 401 and 403 mean the
+   * session is wrong, 404, 405, 410 and 501 mean nothing is mounted there, 429
+   * means the gate hit a limiter, and 5xx means the server fell over. None of
+   * those is evidence that a control did its job, and a 400 on an activation
+   * the gate did not feed is the application sending a request its own server
+   * will not accept, which is a defect and not a proof.
+   */
+  harnessSuppliedInput?: boolean;
+}
 
 /** Reduces an observation to a verdict, using the generic evidence channels. */
-export function verdictFromObservation(observation: Observation): ProofOutcome {
-  const missing = observation.failedRequests.filter((entry) =>
-    MISSING_ENDPOINT_STATUS.test(entry),
-  );
-  if (missing.length > 0) {
-    return {
-      proven: false,
-      proofType: "broken-endpoint",
-      detail: `activation called an endpoint that is not mounted: ${missing.slice(0, 3).join(", ")}`,
-    };
-  }
+export function verdictFromObservation(
+  observation: Observation,
+  context: ProofContext = {},
+): ProofOutcome {
+  // A navigation that landed on a live document is proof on its own, and it is
+  // settled before the request log is judged: everything the destination
+  // fetches on load belongs to the destination, not to the control that got
+  // there, and blaming a control for its target page background traffic is
+  // exactly the false accusation this gate must never make.
   if (observation.navStatus !== null && observation.navStatus >= 400) {
     return {
       proven: false,
@@ -224,6 +297,57 @@ export function verdictFromObservation(observation: Observation): ProofOutcome {
       detail: `${observation.urlBefore} -> ${observation.urlAfter}`,
     };
   }
+
+  const failures = observation.failedRequests;
+  const notMounted = failures.filter((entry) => {
+    const status = statusOf(entry);
+    return NOT_MOUNTED.has(status) || status >= 500;
+  });
+  if (notMounted.length > 0) {
+    return {
+      proven: false,
+      proofType: "broken-endpoint",
+      detail: `activation called an endpoint that is not mounted or that failed: ${notMounted.slice(0, 3).join(", ")}`,
+    };
+  }
+  const limited = failures.filter((entry) => statusOf(entry) === 429);
+  if (limited.length > 0) {
+    return {
+      proven: false,
+      proofType: "rate-limited",
+      detail: `activation was rate limited, so it produced no usable verdict: ${limited.slice(0, 3).join(", ")}`,
+    };
+  }
+  const unexcused = failures.filter((entry) => {
+    const status = statusOf(entry);
+    if (status === 429 || status >= 500 || NOT_MOUNTED.has(status)) {
+      return false;
+    }
+    if (SEMANTIC_REJECTION.has(status)) {
+      return context.harnessSuppliedInput !== true;
+    }
+    return true;
+  });
+  if (unexcused.length > 0) {
+    return {
+      proven: false,
+      proofType: "failed-request",
+      detail: `activation sent a request the server refused: ${unexcused.slice(0, 3).join(", ")}`,
+    };
+  }
+
+  // An activation whose only visible consequence is an error message did not
+  // work, whatever the transport said. Excused on the same terms as a 4xx:
+  // when the gate typed the value that was rejected, the message is the
+  // application validating the gate own nonsense, which is it working.
+  if (observation.errorSurfaces.length > 0 && context.harnessSuppliedInput !== true) {
+    return {
+      proven: false,
+      proofType: "error-surface",
+      detail: `activation raised an error to the user: ${observation.errorSurfaces.slice(0, 2).join(" | ")}`,
+    };
+  }
+
   if (observation.download !== "") {
     return { proven: true, proofType: "download", detail: observation.download };
   }
@@ -398,7 +522,7 @@ export async function proveField(
       detail: `field did not accept input: wrote "${probe}", read back "${readBack}"`,
     };
   }
-  const generic = verdictFromObservation(observation);
+  const generic = verdictFromObservation(observation, { harnessSuppliedInput: true });
   if (generic.proven) {
     return generic;
   }
