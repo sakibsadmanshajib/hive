@@ -190,16 +190,43 @@ async function proveControl(
   const { control } = item;
 
   if (control.disabled) {
-    return { outcome: verdictForDisabled(control), dirty: false, revealed: [] };
+    // A save button disabled until its form is valid is not an inert control,
+    // it is a control with a precondition. Satisfy the precondition and look
+    // again before reporting it as doing nothing.
+    const disabledLocator = await locateByKey(page, key);
+    if (disabledLocator !== null) {
+      const filled = await fillFormFor(disabledLocator);
+      if (filled.length > 0) {
+        const refreshed = await locateByKey(page, key);
+        const stillDisabled =
+          refreshed === null || (await refreshed.isDisabled().catch(() => true));
+        if (!stillDisabled && refreshed !== null) {
+          const observation = await observe(page, async () => {
+            await refreshed.click({ timeout: 8000 });
+          });
+          const outcome = verdictFromObservation(observation);
+          outcome.detail = `${outcome.detail} (enabled by filling ${filled.join(", ")})`;
+          return { outcome, dirty: true, revealed: [] };
+        }
+      }
+    }
+    return { outcome: verdictForDisabled(control), dirty: true, revealed: [] };
   }
 
-  const locator = await locateByKey(page, key);
+  let locator = await locateByKey(page, key);
+  if (locator === null) {
+    // Almost always a stale page rather than a missing control: the previous
+    // activation moved the document and this key was resolved against what
+    // was left. Reload the route and look once more before recording it.
+    const reopened = await prepare(page, url, item.revealPath);
+    locator = reopened ? await locateByKey(page, key) : null;
+  }
   if (locator === null) {
     return {
       outcome: {
         proven: false,
         proofType: "unproven",
-        detail: "control disappeared before it could be activated",
+        detail: "control could not be found on a freshly loaded page, so it could not be activated",
       },
       dirty: true,
       revealed: [],
@@ -546,7 +573,18 @@ test.describe("interaction coverage", () => {
     }
 
     // Session ending controls run last, in a context that can be thrown away.
+    // Sign out appears in the shared shell on every console route, but there is
+    // only one of it: proving it a second time runs against the session the
+    // first proof destroyed, which reports six false failures for one control
+    // that works. Prove it once and attribute that verdict everywhere it
+    // appears.
+    const provenDeferred = new Map<string, ProofOutcome>();
     for (const item of deferred) {
+      const cached = provenDeferred.get(item.key);
+      if (cached) {
+        recordDeferred(item, cached);
+        continue;
+      }
       const context = await browser.newContext({
         storageState: AUTH_STATE_FILE,
         viewport: { width: 1440, height: 900 },
@@ -575,6 +613,17 @@ test.describe("interaction coverage", () => {
       } finally {
         await context.close().catch(() => undefined);
       }
+      provenDeferred.set(item.key, outcome);
+      recordDeferred(item, outcome);
+    }
+
+    function recordDeferred(
+      item: { url: string; route: string; key: string; control: RawControl },
+      outcome: ProofOutcome,
+    ): void {
+      progress(
+        `${outcome.proven ? "  ok  " : "  XX  "}${item.route}  ${item.key}  ${outcome.proofType}`,
+      );
       controlRecords.push({
         route: item.route,
         url: item.url,
