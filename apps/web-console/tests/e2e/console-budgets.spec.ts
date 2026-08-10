@@ -34,7 +34,14 @@ async function signIn(page: Page, email: string, password: string) {
   });
 }
 
-test.describe.configure({ mode: "serial" });
+// Every test here drives several full server-rendered navigations (sign-in,
+// a workspace switch, the budget page, a reload), each one a control-plane
+// round trip. The 30s default is a budget for a single page, so on a slower
+// runner the clock runs out before the assertions are reached and the result
+// is decided by machine speed rather than by the product. A larger budget
+// cannot turn a failing assertion green; it only stops a timeout from
+// standing in for one.
+test.describe.configure({ mode: "serial", timeout: 120_000 });
 
 test.beforeEach(async () => {
   if (!HAS_CREDS) return;
