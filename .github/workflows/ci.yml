@@ -414,7 +414,12 @@ jobs:
             # these suites (routing, catalog, providers) share one live
             # database and can observe each other's transient rows when run
             # concurrently, which is a flaky-collision risk, not a real bug.
-            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/...
+            # ./internal/platform/db/... is here for
+            # TestSessionPoolReleasesIdleConnections, which asserts on live
+            # server backends and so needs HIVE_TEST_DB_URL. Listing it in the
+            # -short step above instead would have skipped it silently, which
+            # is the same never-runs trap as issues #701 and #708.
+            go test -tags integration -count=1 -p 1 -v ./internal/accounts/... ./internal/agenttask/... ./internal/egress/... ./internal/payments/... ./internal/profiles/... ./internal/rag/... ./internal/tenants/... ./internal/signup/... ./internal/routing/... ./internal/litellmconfig/... ./internal/catalog/... ./internal/providers/... ./internal/platform/db/...
           else
             # -tags integration additionally compiles in
             # inference/chat_completions_integration_test.go (issue #708),

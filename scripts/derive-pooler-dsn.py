@@ -37,6 +37,14 @@ them and leave nothing for Open WebUI, which is exactly the observed failure.
 An explicit cap makes the budget a property of the deployment rather than of
 whatever hardware it lands on.
 
+The session DSN additionally carries `pool_max_conn_idle_time` and
+`pool_health_check_period`. A cap alone bounds how many slots a consumer may
+take; it does nothing about how long it keeps them. pgxpool holds an idle
+connection for 30 minutes by default, so a consumer that burst to its cap once
+squats that many session slots for the next half hour while running no queries
+at all, and the ceiling is reached by consumers that are all idle. These two
+parameters release an idle connection about a minute after its last use instead.
+
 Usage
 -----
     derive-pooler-dsn.py --dsn "postgresql://user:pw@host:5432/postgres"
@@ -79,6 +87,28 @@ TRANSACTION_PORT = 6543
 # for a second control-plane instance and any transient psql.
 SESSION_MAX_CONNS = 6
 
+# A session slot is held for as long as the pgxpool connection that owns it
+# exists, not for as long as it is in use, and pgxpool's own defaults are
+# `pool_max_conn_idle_time` 30 minutes with a `pool_health_check_period` of 1
+# minute. So any consumer that ever burst to `pool_max_conns` keeps that many of
+# the 15 slots pinned for the next half hour of doing nothing at all, and three
+# mostly-idle consumers (the demo box, a developer stack, one CI job) can hold
+# the whole ceiling between them while none of them is running a query.
+#
+# Measured on 2026-08-10 with no CI running and one 30-minute-old local stack
+# up: six parallel session-mode connections were all refused with
+# EMAXCONNSESSION, so the pool was fully squatted by idle connections.
+#
+# Releasing an idle connection after a minute turns "pinned for 30 minutes" into
+# "pinned while actually working", which is the resource CI and the live stack
+# are really competing for. The health check period is the reaper's own tick, so
+# it bounds how late that release can be: 60s + 15s worst case, against 30m + 1m
+# before. Both are deliberately knobs rather than inlined literals: a deployment
+# under steady traffic may prefer a longer idle window to avoid re-handshaking,
+# and an explicit value in the input DSN still wins over both (see with_params).
+SESSION_MAX_CONN_IDLE_TIME = "60s"
+SESSION_HEALTH_CHECK_PERIOD = "15s"
+
 # Transaction-mode clients are multiplexed, so this bound is only about not
 # stampeding the upstream server connections.
 TRANSACTION_MAX_CONNS = 8
@@ -86,7 +116,12 @@ TRANSACTION_MAX_CONNS = 8
 # pgx reads these out of the DSN itself. libpq has no such connection options and
 # fails the whole connection on an unknown one, so every non-pgx consumer
 # (psycopg2 in Open WebUI, psql in the purge job) needs them removed.
-PGX_ONLY_PARAMS = ("pool_max_conns", "default_query_exec_mode")
+PGX_ONLY_PARAMS = (
+    "pool_max_conns",
+    "default_query_exec_mode",
+    "pool_max_conn_idle_time",
+    "pool_health_check_period",
+)
 
 
 def is_pooler_host(host: str) -> bool:
@@ -152,7 +187,12 @@ def derive(dsn: str) -> tuple[str, str, str]:
     if not host:
         raise ValueError(f"DSN has no host: {dsn!r}")
 
-    session = with_params(dsn, pool_max_conns=str(SESSION_MAX_CONNS))
+    session = with_params(
+        dsn,
+        pool_max_conns=str(SESSION_MAX_CONNS),
+        pool_max_conn_idle_time=SESSION_MAX_CONN_IDLE_TIME,
+        pool_health_check_period=SESSION_HEALTH_CHECK_PERIOD,
+    )
 
     if not is_pooler_host(host):
         # A direct Postgres serves every mode on its one port. Capping is still
@@ -183,6 +223,11 @@ def self_test() -> int:
 
     assert ":5432/" in session, session
     assert "pool_max_conns=6" in session, session
+    # A cap without an idle release still lets one consumer squat six of the
+    # fifteen session slots for pgxpool's default 30 idle minutes, which is how
+    # three idle consumers exhaust the pool between them.
+    assert "pool_max_conn_idle_time=60s" in session, session
+    assert "pool_health_check_period=15s" in session, session
     # The session DSN must never disable prepared statements or otherwise
     # advertise transaction-mode settings.
     assert "default_query_exec_mode" not in session, session
@@ -225,6 +270,13 @@ def self_test() -> int:
     # ...but libpq still cannot parse it, so the strip has to win over the pin.
     assert "pool_max_conns" not in pinned_libpq, pinned_libpq
 
+    # The two pool-lifetime parameters are pgx-only in exactly the way
+    # pool_max_conns is, so an input DSN that already carries them must not
+    # hand them to psql or psycopg2 either.
+    _, _, idle_libpq = derive(pooler + "?pool_max_conn_idle_time=5s&pool_health_check_period=1s")
+    assert "pool_max_conn_idle_time" not in idle_libpq, idle_libpq
+    assert "pool_health_check_period" not in idle_libpq, idle_libpq
+
     # A password with URL-significant characters must not be mangled.
     built = build_dsn("h.pooler.supabase.com", "5432", "u", "postgres", "p@ss/w:rd?")
     assert "p%40ss%2Fw%3Ard%3F" in built, built
@@ -242,7 +294,7 @@ def self_test() -> int:
         assert "options=-c%20statement_timeout%3D3000" in flavour, flavour
         assert "+" not in urlsplit(flavour).query, flavour
 
-    print("derive-pooler-dsn: self-test ok (27 assertions)")
+    print("derive-pooler-dsn: self-test ok (33 assertions)")
     return 0
 
 

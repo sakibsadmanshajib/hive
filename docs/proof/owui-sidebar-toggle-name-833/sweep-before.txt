@@ -1,0 +1,14 @@
+seed Accessibility proof chat: HTTP 200
+seed Second proof chat: HTTP 200
+
+===== before =====
+url: http://localhost:3010/
+[pin] getByRole(button, name="Open Sidebar", expanded=false) -> 0
+[pin] getByRole(button, name="Open Sidebar") (any state)     -> 1
+[pin] getByRole(button, name="Close Sidebar", expanded=true) -> 0
+[after click] Close Sidebar, expanded=true -> 0
+[after click] Open Sidebar, expanded=false -> 0
+[surface sidebar] chat rows visible -> 0
+[surface composer-controls] Controls button -> 1
+[surface composer-controls] panel content after click -> 1
+aria snapshot -> aria-before-sweep.txt

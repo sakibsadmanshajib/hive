@@ -102,6 +102,13 @@ async function installHiveJwtForwardFilter(
     );
   }
 
+  // Left synchronous on purpose, unlike the reseed in
+  // tests/e2e/support/fixture-reset.ts and the mint in support/live-auth.ts.
+  // Blocking the event loop stops Playwright's timeout timer from firing, but
+  // this runs once inside a setup project rather than mid-test, so the only
+  // deadline it can eat is its own, and `stdio: "inherit"` streams the
+  // installer's progress into the job log live, which a buffered async child
+  // would withhold until it exits. Convert it if this ever moves into a test.
   execFileSync("python3", [HIVE_JWT_FORWARD_INSTALLER, "--base-url", owuiOrigin], {
     env: { ...process.env, OWUI_ADMIN_TOKEN: token },
     stdio: "inherit",

@@ -1,0 +1,137 @@
+- link:
+  - /url: /
+- link "Open WebUI":
+  - /url: /
+- button "Close Sidebar" [expanded]
+- link "New Chat":
+  - /url: /
+- button "Search"
+- link "Notes":
+  - /url: /notes
+- link "Workspace":
+  - /url: /workspace
+  - img
+  - text: Workspace
+- button "Folders"
+- button "Chats"
+- text: Today
+- link "Second proof chat 1m":
+  - /url: /c/86248283-34c2-4592-b3b4-de5cec5af847
+- button "Chat Menu":
+  - button "Chat Menu":
+    - img
+- link "Accessibility proof chat 1m":
+  - /url: /c/c4b6a85a-19d1-4f95-9bf5-96ee7d0c4bfc
+- button "User menu":
+  - button "User menu":
+    - img "Open User Profile Menu"
+    - text: User
+- separator
+- navigation:
+  - button "Select a model"
+  - button "Add Model":
+    - img
+  - button "Chat Menu":
+    - button "Chat Menu"
+  - button "Controls"
+  - button "User menu":
+    - button "User menu"
+- region "Chat Conversation":
+  - heading "Chat Conversation" [level=2]
+  - log:
+    - listitem:
+      - paragraph: What does the sidebar toggle announce?
+    - listitem:
+      - text: proof-model
+      - paragraph: Its accessible name, and whether the sidebar is open.
+      - button "Edit"
+      - button "Copy"
+      - button "Read Aloud"
+      - button "Good Response"
+      - button "Bad Response"
+      - button "Continue Response"
+      - button "Regenerate"
+- paragraph: Send a Message
+- button "More":
+  - button "More"
+- button "Integrations":
+  - button "Integrations"
+- button "Voice Input":
+  - img
+- button "Voice mode"
+- separator
+- button "Controls"
+- button "Overview"
+- button "Close":
+  - img
+- text: Valves
+- separator
+- text: System Prompt
+- textbox "Enter system prompt"
+- separator
+- text: Advanced Params Stream Chat Response
+- button "Default"
+- text: Stream Delta Chunk Size
+- button "Default"
+- text: Context Compaction Threshold
+- button "Default"
+- text: Function Calling
+- button "Default"
+- text: Reasoning Tags
+- button "Default"
+- text: Seed
+- button "Default"
+- text: Stop Sequence
+- button "Default"
+- text: Temperature
+- button "Default"
+- text: Reasoning Effort
+- button "Default"
+- text: logit_bias
+- button "Default"
+- text: max_tokens
+- button "Default"
+- text: top_k
+- button "Default"
+- text: top_p
+- button "Default"
+- text: min_p
+- button "Default"
+- text: frequency_penalty
+- button "Default"
+- text: presence_penalty
+- button "Default"
+- text: mirostat
+- button "Default"
+- text: mirostat_eta
+- button "Default"
+- text: mirostat_tau
+- button "Default"
+- text: repeat_last_n
+- button "Default"
+- text: tfs_z
+- button "Default"
+- text: repeat_penalty
+- button "Default"
+- text: use_mmap
+- button "Default"
+- text: use_mlock
+- button "Default"
+- text: think (Ollama)
+- button "Default"
+- text: format (Ollama)
+- button "Default"
+- text: num_keep (Ollama)
+- button "Default"
+- text: num_ctx (Ollama)
+- button "Default"
+- text: num_batch (Ollama)
+- button "Default"
+- text: num_thread (Ollama)
+- button "Default"
+- text: num_gpu (Ollama)
+- button "Default"
+- text: keep_alive (Ollama)
+- button "Default"
+- button "Add Custom Parameter"
+- text: Open WebUI
