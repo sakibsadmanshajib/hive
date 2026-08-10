@@ -53,11 +53,47 @@
       "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
       "text": "owControls=U?\"true\":\"false\"}),ki.set(localStorage.selectedTerminalId??null),ki.subscribe(U=>{U===null?delete localStorage.selectedTerminalId:localStorage.selectedTerminalId=U}),await _a(),s(de,!0)});const O=async()=>{s(Y,await ld(localStorage.token).catch(p=>({current:$r,latest:$r})))};kt();var re=q1(),ge=tt(re);P1(ge,{get show(){return Js(),w()},set show(p){Ys(Vs,p)},$$legacy:!0});var ee=o(ge,2);j1(ee,{get show(){return Js(),W()},set show(p){Ys(qs,p)},$$legacy:!0});var D=o(ee,2);{var L=p=>{var P=H1(),B=a(P);W1(B,{get version(){return e(Y)},$$events:{close:()=>{localStorage.setItem(\"dismissedUpdateToast\",Date.now().toString()),s(Y,null)}}}),t(P),Fo(1,P,()=>nd,()=>({duration:100})),i(p,P)},ie=Za(()=>{var p;return e(Y)&&dd(e(Y).latest,e(Y).current)&&(((p=r())==null?void 0:p.showUpdateToast)??!0)});J(D,p=>{e(ie)&&p(L)})}var we=o(D,2);{var N=p=>{var P=G1(),B=a(P"
     },
+    "navbar-chat-menu-button": {
+      "file": "chunks/D4rfk4Lu.js",
+      "offset": 160692,
+      "sha256": "ea3ddfe01c42955d1fbf195234a494b4f50749f35bdcb236c64c15b46c1f5443",
+      "text": "g-gray-850 transition\" id=\"temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Dy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"save-temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Ly=B('<button aria-label=\"New Chat\"><div class=\" m-auto self-center\"><!></div></button>'),By=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"chat-context-menu-button\"><div class=\" m-auto self-center\"><!></div></button>'),Ry=B('<button class=\" flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" aria-label=\"Controls\"><div class=\" m-auto self-center\"><!></div></button>'),Ay=B('<button type=\"button\" class=\"select-none flex rounded-xl p-1.5 w-full hover:bg-gray-50 dark:hover:bg-gray-850 transition\"><div class=\" self-center\"><"
+    },
+    "navbar-save-chat-button": {
+      "file": "chunks/D4rfk4Lu.js",
+      "offset": 160402,
+      "sha256": "ea3ddfe01c42955d1fbf195234a494b4f50749f35bdcb236c64c15b46c1f5443",
+      "text": "850 transition\"><div class=\" self-center p-1.5\"><!></div></button>'),Ty=B('<div class=\"-translate-x-0.5 mr-1 mt-1 self-start flex flex-none items-center text-gray-600 dark:text-gray-400\"><!></div>'),Iy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Dy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"save-temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Ly=B('<button aria-label=\"New Chat\"><div class=\" m-auto self-center\"><!></div></button>'),By=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"chat-context-menu-button\"><div class=\" m-auto self-center\"><!></div></button>'),Ry=B('<button class=\" flex cursor-pointer px-2 py-2 rounde"
+    },
+    "navbar-temporary-chat-button": {
+      "file": "chunks/D4rfk4Lu.js",
+      "offset": 160207,
+      "sha256": "ea3ddfe01c42955d1fbf195234a494b4f50749f35bdcb236c64c15b46c1f5443",
+      "text": "4\"),i=x(t,\"strokeWidth\",8,\"1.5\");var n=$y();Z(()=>{Ue(n,\"stroke-width\",i()),ct(n,0,Yr(s()))}),b(e,n)}var Py=B('<button class=\" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition\"><div class=\" self-center p-1.5\"><!></div></button>'),Ty=B('<div class=\"-translate-x-0.5 mr-1 mt-1 self-start flex flex-none items-center text-gray-600 dark:text-gray-400\"><!></div>'),Iy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Dy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"save-temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Ly=B('<button aria-label=\"New Chat\"><div class=\" m-auto self-center\"><!></div></button>'),By=B('<button class=\"flex cursor-pointer px-2 py-2 round"
+    },
     "sidebar-playground-item": {
       "file": "nodes/2.u-NXhYVX.js",
       "offset": 121297,
       "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
       "text": "automations)&&(((Ga=r())==null?void 0:Ga.role)===\"admin\"||((Ta=(ya=(Ma=r())==null?void 0:Ma.permissions)==null?void 0:ya.features)==null?void 0:Ta.automations));case\"calendar\":return((rr=(Ca=l())==null?void 0:Ca.features)==null?void 0:rr.enable_calendar)&&(((Qa=r())==null?void 0:Qa.role)===\"admin\"||((hr=(er=(vr=r())==null?void 0:vr.permissions)==null?void 0:er.features)==null?void 0:hr.calendar));case\"playground\":return((sr=r())==null?void 0:sr.role)===\"admin\";default:return!1}},Oe=fe=>({notes:{label:\"Notes\",href:\"/notes\",iconType:\"note\"},workspace:{label:\"Workspace\",href:\"/workspace\",iconType:\"workspace\"},automations:{label:\"Automations\",href:\"/automations\",iconType:\"automations\"},calendar:{label:\"Calendar\",href:\"/calendar\",iconType:\"calendar\"},playground:{label:\"Playground\",href:\"/playground\",iconType:\"playground\"}})[fe],Ne=()=>{const fe=document.getE"
+    },
+    "sidebar-toggle-expanded-state": {
+      "file": "nodes/2.u-NXhYVX.js",
+      "offset": 113891,
+      "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
+      "text": "col justify-between text-black dark:text-white hover:bg-gray-50/30 dark:hover:bg-gray-950/30 h-full z-10 transition-all border-e-[0.5px] border-gray-50 dark:border-gray-850/30\" id=\"sidebar\"><button><div class=\"pb-1.5\"><!></div> <div class=\"-mt-[0.5px]\"><div><!></div> <div><!></div> <!></div></button> <div><div><div class=\" py-2 flex justify-center items-center\"><!></div></div></div></div>'),Tp=g('<button><div class=\" self-center p-1.5\"><!></div></button>'),Dp=Ia('<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"2\" stroke=\"currentColor\" class=\"size-4.5\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"M13.5 16.875h3.375m0 0h3.375m-3.375 0V13.5m0 3.375v3.375M6 10.5h2.25a2.25 2.25 0 0 0 2.25-2.25V6a2.25 2.25 0 0 0-2.25-2.25H6A2.25 2.25 0 0 0 3.75 6v2.25A2.25 2.25 0 0 0 6 10.5Zm0 9.75h2.25A2.25 2.25 0 0 0 1"
+    },
+    "sidebar-toggle-navbar": {
+      "file": "chunks/D4rfk4Lu.js",
+      "offset": 159918,
+      "sha256": "ea3ddfe01c42955d1fbf195234a494b4f50749f35bdcb236c64c15b46c1f5443",
+      "text": "=\"M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 13.8214 2.48697 15.5291 3.33782 17L2.5 21.5L7 20.6622C8.47087 21.513 10.1786 22 12 22Z\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>');function My(e,t){let s=x(t,\"className\",8,\"w-4 h-4\"),i=x(t,\"strokeWidth\",8,\"1.5\");var n=$y();Z(()=>{Ue(n,\"stroke-width\",i()),ct(n,0,Yr(s()))}),b(e,n)}var Py=B('<button class=\" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover:bg-gray-850 transition\"><div class=\" self-center p-1.5\"><!></div></button>'),Ty=B('<div class=\"-translate-x-0.5 mr-1 mt-1 self-start flex flex-none items-center text-gray-600 dark:text-gray-400\"><!></div>'),Iy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-850 transition\" id=\"temporary-chat-button\"><div class=\" m-auto self-center\"><!></div></button>'),Dy=B('<button class=\"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-g"
+    },
+    "sidebar-toggle-rail": {
+      "file": "nodes/2.u-NXhYVX.js",
+      "offset": 113668,
+      "sha256": "496186a07f557abfc3035b851e33476757593e1fbfe4ea0fc643c5294431474c",
+      "text": " rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 transition group\"><div class=\"self-center relative\"><img class=\" size-7 object-cover rounded-full\"/> <!></div></button>'),Np=g('<div class=\" pt-[7px] pb-2 px-2 flex flex-col justify-between text-black dark:text-white hover:bg-gray-50/30 dark:hover:bg-gray-950/30 h-full z-10 transition-all border-e-[0.5px] border-gray-50 dark:border-gray-850/30\" id=\"sidebar\"><button><div class=\"pb-1.5\"><!></div> <div class=\"-mt-[0.5px]\"><div><!></div> <div><!></div> <!></div></button> <div><div><div class=\" py-2 flex justify-center items-center\"><!></div></div></div></div>'),Tp=g('<button><div class=\" self-center p-1.5\"><!></div></button>'),Dp=Ia('<svg xmlns=\"http://www.w3.org/2000/svg\" fill=\"none\" viewBox=\"0 0 24 24\" stroke-width=\"2\" stroke=\"currentColor\" class=\"size-4.5\"><path stroke-linecap=\""
     },
     "usermenu-playground-item": {
       "file": "chunks/D0RRQevw.js",

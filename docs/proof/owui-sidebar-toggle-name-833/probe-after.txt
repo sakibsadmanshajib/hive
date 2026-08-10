@@ -1,0 +1,61 @@
+
+===== after / desktop 1280x720 =====
+url: http://localhost:3009/
+-- buttons in DOM (visible only) --
+{"id":null,"cls":"flex flex-col flex-1 cursor-[e-resize]","ariaLabel":"Open Sidebar","ariaExpanded":"false","ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"flex rounded-xl hover:bg-gray-100 dark:hover:bg-gray-850 tra","ariaLabel":"Open Sidebar","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover","ariaLabel":"Search","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":" cursor-pointer flex rounded-xl hover:bg-gray-100 dark:hover","ariaLabel":"User menu","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"model-selector-0-button","cls":"relative w-full outline-hidden focus:outline-hidden","ariaLabel":"Select a model","ariaExpanded":"false","ariaControls":null,"ariaHaspopup":"listbox","text":"Select a model","visible":true}
+{"id":null,"cls":" ","ariaLabel":"Add Model","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Set as default","visible":true}
+{"id":"temporary-chat-button","cls":"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 da","ariaLabel":"Temporary Chat","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":" flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 d","ariaLabel":"Controls","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"select-none flex rounded-xl p-1.5 w-full hover:bg-gray-50 da","ariaLabel":"User menu","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"","ariaLabel":"Get information on  in the UI","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"input-menu-button","cls":"bg-transparent hover:bg-gray-100 text-gray-700 dark:text-whi","ariaLabel":"More","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"integration-menu-button","cls":"bg-transparent hover:bg-gray-100 text-gray-700 dark:text-whi","ariaLabel":"Integrations","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"voice-input-button","cls":" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:h","ariaLabel":"Voice Input","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":" bg-black text-white hover:bg-gray-900 dark:bg-white dark:te","ariaLabel":"Voice mode","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Explain options trading\nif I'm familiar ","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Tell me a fun fact\nabout the Roman Empir","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Show me a code snippet\nof a website's st","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Help me study\nvocabulary for a college e","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Overcome procrastination\ngive me tips","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Give me ideas\nfor what to do with my kid","visible":true}
+{"id":null,"cls":"!bg-white/80 !text-gray-500 !border-gray-200 hover:!bg-gray-","ariaLabel":"Close toast","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+getByRole(button, name="Open Sidebar") -> 2
+getByRole(button, name="Close Sidebar") -> 0
+getByRole(button, name="Temporary Chat") -> 1
+getByRole(button, name="Save Chat") -> 0
+getByRole(button, name="Chat options") -> 0
+aria snapshot -> aria-after-desktop.txt (47 lines)
+
+===== after / mobile 390x844 =====
+url: http://localhost:3009/
+-- buttons in DOM (visible only) --
+{"id":null,"cls":" cursor-pointer flex rounded-lg hover:bg-gray-100 dark:hover","ariaLabel":"Open Sidebar","ariaExpanded":"false","ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"model-selector-0-button","cls":"relative w-full outline-hidden focus:outline-hidden","ariaLabel":"Select a model","ariaExpanded":"false","ariaControls":null,"ariaHaspopup":"listbox","text":"Select a model","visible":true}
+{"id":null,"cls":" ","ariaLabel":"Add Model","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Set as default","visible":true}
+{"id":"temporary-chat-button","cls":"flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 da","ariaLabel":"Temporary Chat","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":" flex cursor-pointer px-2 py-2 rounded-xl hover:bg-gray-50 d","ariaLabel":"Controls","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"select-none flex rounded-xl p-1.5 w-full hover:bg-gray-50 da","ariaLabel":"User menu","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"","ariaLabel":"Get information on  in the UI","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"input-menu-button","cls":"bg-transparent hover:bg-gray-100 text-gray-700 dark:text-whi","ariaLabel":"More","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"integration-menu-button","cls":"bg-transparent hover:bg-gray-100 text-gray-700 dark:text-whi","ariaLabel":"Integrations","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":"voice-input-button","cls":" text-gray-600 dark:text-gray-300 hover:text-gray-700 dark:h","ariaLabel":"Voice Input","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":" bg-black text-white hover:bg-gray-900 dark:bg-white dark:te","ariaLabel":"Voice mode","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Overcome procrastination\ngive me tips","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Give me ideas\nfor what to do with my kid","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Help me study\nvocabulary for a college e","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Tell me a fun fact\nabout the Roman Empir","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Show me a code snippet\nof a website's st","visible":true}
+{"id":null,"cls":"waterfall flex flex-col flex-1 shrink-0 w-full justify-betwe","ariaLabel":null,"ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"Explain options trading\nif I'm familiar ","visible":true}
+{"id":null,"cls":"!bg-white/80 !text-gray-500 !border-gray-200 hover:!bg-gray-","ariaLabel":"Close toast","ariaExpanded":null,"ariaControls":null,"ariaHaspopup":null,"text":"","visible":true}
+getByRole(button, name="Open Sidebar") -> 1
+getByRole(button, name="Close Sidebar") -> 0
+getByRole(button, name="Temporary Chat") -> 1
+getByRole(button, name="Save Chat") -> 0
+getByRole(button, name="Chat options") -> 0
+aria snapshot -> aria-after-mobile.txt (35 lines)
