@@ -94,7 +94,8 @@ func TestOpen_RefusesTransactionModePooler(t *testing.T) {
 // services would silently revert to pgxpool's default of max(4, NumCPU)
 // connections each and re-exhaust the 15-client session-mode pooler.
 func TestPoolerDSNCarriesBudgetAndExecMode(t *testing.T) {
-	sessionDSN := "postgresql://u:p@aws-1-us-east-1.pooler.supabase.com:5432/postgres?pool_max_conns=6"
+	sessionDSN := "postgresql://u:p@aws-1-us-east-1.pooler.supabase.com:5432/postgres" +
+		"?pool_max_conns=6&pool_max_conn_idle_time=60s&pool_health_check_period=15s"
 	cfg, err := pgxpool.ParseConfig(sessionDSN)
 	if err != nil {
 		t.Fatalf("parse session DSN: %v", err)
@@ -102,9 +103,25 @@ func TestPoolerDSNCarriesBudgetAndExecMode(t *testing.T) {
 	if cfg.MaxConns != 6 {
 		t.Errorf("session MaxConns: want 6 got %d", cfg.MaxConns)
 	}
+	// A cap bounds how many session slots a consumer may take. These two bound
+	// how long it keeps them: pgxpool's own defaults are 30 minutes idle with a
+	// 1 minute reaper tick, so without them one consumer squats six of the
+	// fifteen shared slots for half an hour after its last query.
+	if cfg.MaxConnIdleTime != time.Minute {
+		t.Errorf("session MaxConnIdleTime: want 1m got %v", cfg.MaxConnIdleTime)
+	}
+	if cfg.HealthCheckPeriod != 15*time.Second {
+		t.Errorf("session HealthCheckPeriod: want 15s got %v", cfg.HealthCheckPeriod)
+	}
 	if cfg.ConnConfig.DefaultQueryExecMode != pgx.QueryExecModeCacheStatement {
 		t.Errorf("session exec mode: want the pgx default of cache statement, got %v",
 			cfg.ConnConfig.DefaultQueryExecMode)
+	}
+	// None of the three may survive as a server runtime parameter either.
+	for _, unwanted := range []string{"pool_max_conns", "pool_max_conn_idle_time", "pool_health_check_period"} {
+		if _, ok := cfg.ConnConfig.RuntimeParams[unwanted]; ok {
+			t.Errorf("%q leaked into session server runtime params", unwanted)
+		}
 	}
 
 	transactionDSN := "postgresql://u:p@aws-1-us-east-1.pooler.supabase.com:6543/postgres?pool_max_conns=8&default_query_exec_mode=exec"
