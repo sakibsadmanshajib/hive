@@ -62,16 +62,22 @@ func (s *Service) WithBillingPool(pool *pgxpool.Pool) *Service {
 
 // EnsureViewerContext returns the full viewer context for the given viewer.
 // If requestedAccountID is non-nil and the viewer is an active member, that
-// account is used as current_account; otherwise the first membership is used.
-// On first visit (no memberships) a default workspace is provisioned.
+// account is used as current_account; otherwise the first ACTIVE membership is
+// used. On first visit (no active membership) a default workspace is
+// provisioned.
 func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, requestedAccountID uuid.UUID) (ViewerContext, error) {
 	memberships, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
 	if err != nil {
 		return ViewerContext{}, fmt.Errorf("accounts: list memberships: %w", err)
 	}
 
-	// Provision default workspace on first login.
-	if len(memberships) == 0 {
+	// Provision a default workspace when the viewer has no ACTIVE membership.
+	// An invited row is an offered seat, not an accepted one: selecting it as
+	// the current account would hand the viewer that workspace's role (the
+	// actor resolver reads the chosen membership's role) before they accepted
+	// anything, so a viewer holding only invitations is treated the same as a
+	// first-time visitor.
+	if len(activeMemberships(memberships)) == 0 {
 		if err := s.provisionDefaultWorkspace(ctx, viewer); err != nil {
 			return ViewerContext{}, err
 		}
@@ -81,11 +87,17 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 		}
 	}
 
-	// Resolve current account.
-	chosen := memberships[0]
+	// Resolve current account. Only active memberships are candidates; the
+	// summaries below still list invited ones so the console can render a
+	// pending invitation.
+	active := activeMemberships(memberships)
+	if len(active) == 0 {
+		return ViewerContext{}, fmt.Errorf("accounts: no active membership after workspace provisioning for user %s", viewer.UserID)
+	}
+	chosen := active[0]
 	if requestedAccountID != uuid.Nil {
-		for _, m := range memberships {
-			if m.AccountID == requestedAccountID && m.Status == "active" {
+		for _, m := range active {
+			if m.AccountID == requestedAccountID {
 				chosen = m
 				break
 			}
@@ -446,6 +458,22 @@ func (s *Service) resolveWorkspaceActor(ctx context.Context, accountID uuid.UUID
 }
 
 // --- helpers ---
+
+// activeMemberships filters out the rows that carry no authority.
+// ListMembershipsByUserID deliberately returns invited rows too (the console
+// renders pending invitations, and AcceptInvitation checks against every row to
+// detect an already-joined workspace), so callers making an authorization
+// decision filter here rather than the repository dropping the rows for
+// everyone.
+func activeMemberships(memberships []Membership) []Membership {
+	active := make([]Membership, 0, len(memberships))
+	for _, m := range memberships {
+		if m.Status == StatusActive {
+			active = append(active, m)
+		}
+	}
+	return active
+}
 
 // buildDisplayName returns the workspace display name from the viewer's info.
 func buildDisplayName(fullName, email string) string {

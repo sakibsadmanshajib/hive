@@ -36,8 +36,17 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 	return &pgxRepository{pool: pool}
 }
 
-// ListMembershipsByUserID returns userID's memberships ordered by created_at
-// then id. Without an explicit ORDER BY, Postgres may return rows for the
+// ListMembershipsByUserID returns userID's memberships, active and invited
+// alike, ordered by created_at then id.
+//
+// The absence of a status predicate here is deliberate and must stay that way:
+// this is a listing primitive, not an authorization primitive. The console
+// renders pending invitations from these rows, and AcceptInvitation checks
+// every row (not only active ones) to tell an already-joined workspace from a
+// fresh one. Callers that make an access decision filter with
+// activeMemberships instead; an invited row grants nothing.
+//
+// Without an explicit ORDER BY, Postgres may return rows for the
 // same user in a different order across calls (heap/index layout shifts on
 // UPDATE, e.g. every account_memberships upsert), which made
 // EnsureViewerContext's "first membership is the default workspace" pick

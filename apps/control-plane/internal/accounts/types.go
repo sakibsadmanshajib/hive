@@ -153,6 +153,15 @@ const (
 	RoleMember = "member"
 )
 
+// Supported membership statuses, matching the CHECK constraint on
+// public.account_memberships.status. Only StatusActive carries authority:
+// StatusInvited records an offered seat that nobody has accepted yet, so every
+// authorization decision reads the status as well as the role.
+const (
+	StatusActive  = "active"
+	StatusInvited = "invited"
+)
+
 // NormalizeRole lower-cases and trims a caller-supplied role, defaulting an
 // empty value to RoleMember. Anything outside the supported set is rejected
 // with ErrInvalidRole rather than silently coerced.

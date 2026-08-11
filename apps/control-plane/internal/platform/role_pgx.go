@@ -36,12 +36,18 @@ func NewPgxTenantRoleStore(pool *pgxpool.Pool) TenantRoleStore {
 	return &pgxRoleStore{pool: pool}
 }
 
-// GetMembershipRole returns the role for (userID, workspaceID).
+// GetMembershipRole returns the role for (userID, workspaceID), considering
+// only ACTIVE memberships.
+//
+// public.account_memberships.status is either 'active' or 'invited', and an
+// invited row records an offered seat, not an accepted one. Without the status
+// predicate a user invited as owner held owner authority on the workspace
+// (budget writes, egress policy) before accepting the invitation.
 //
 // Returns:
-//   - (role, nil)                       — when membership row exists
-//   - ("", nil)                         — when workspace exists but no
-//                                         membership row exists for userID
+//   - (role, nil)                       — when an active membership row exists
+//   - ("", nil)                         — when workspace exists but userID has
+//                                         no active membership row on it
 //   - ("", ErrWorkspaceNotFound)        — when workspaceID does not resolve
 //                                         in public.accounts
 func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceID uuid.UUID) (MembershipRole, error) {
@@ -61,7 +67,7 @@ func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceI
 	err = s.pool.QueryRow(ctx, `
 		SELECT role
 		FROM public.account_memberships
-		WHERE account_id = $1 AND user_id = $2
+		WHERE account_id = $1 AND user_id = $2 AND status = 'active'
 		LIMIT 1
 	`, workspaceID, userID).Scan(&role)
 	if err != nil {
@@ -114,11 +120,17 @@ func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.
 	return TenantRole(role), nil
 }
 
-// IsPlatformAdmin returns whether userID owns at least one account row
-// flagged with is_platform_admin = true. The flag lives on the workspace
-// (account) so any owner of a flagged workspace is a platform admin —
-// this matches the v1.1 single-tenant-admin model where the platform team
-// owns its own internal workspace flagged as platform-admin.
+// IsPlatformAdmin returns whether userID holds an ACTIVE owner membership on
+// at least one account row flagged with is_platform_admin = true. The flag
+// lives on the workspace (account) so any active owner of a flagged workspace
+// is a platform admin — this matches the v1.1 single-tenant-admin model where
+// the platform team owns its own internal workspace flagged as platform-admin.
+//
+// The status predicate is load-bearing, not defensive tidiness. This predicate
+// gates POST /v1/admin/credit-grants, which mints credit, and the provider
+// administration surface. Without it, anyone invited as owner to a
+// platform-admin account held both from the moment the membership row was
+// written, without ever accepting the invitation.
 func (s *pgxRoleStore) IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
 	var isAdmin bool
 	err := s.pool.QueryRow(ctx, `
@@ -128,6 +140,7 @@ func (s *pgxRoleStore) IsPlatformAdmin(ctx context.Context, userID uuid.UUID) (b
 			JOIN public.accounts a ON a.id = m.account_id
 			WHERE m.user_id = $1
 			  AND m.role = 'owner'
+			  AND m.status = 'active'
 			  AND a.is_platform_admin = true
 		)
 	`, userID).Scan(&isAdmin)
