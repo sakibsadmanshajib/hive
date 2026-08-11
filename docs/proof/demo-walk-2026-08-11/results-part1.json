@@ -1,0 +1,26 @@
+{
+  "results": {
+    "chat": "works",
+    "chatMarker": "HIVE-WALK-831590",
+    "voice": "fails",
+    "voiceDetail": {
+      "tts": 404,
+      "ttsMs": 62,
+      "ttsBody": "{\"detail\":\"We could not find what you're looking for :/\"}"
+    },
+    "embeddingsConfig": {
+      "cfgStatus": 200,
+      "hybrid": false,
+      "raw": "{\"status\":true,\"RAG_TEMPLATE\":\"### Task:\\nRespond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id=\\\"1\\\">).\\n\\n### Guidelines:\\n- If you don't know the answer, clearly state that.\\n- If uncertain, ask the user for clarification.\\n- Respond in the same language as the user's query.\\n- If the context is unreadable or of poor quality, inform the user and provide the best possible answer.\\n- If the answer isn't present in the context but you possess the knowledge, expla"
+    },
+    "knowledgeCollection": "created",
+    "knowledgeIngest": "indexed",
+    "knowledgeRetrieval": "retrieved",
+    "knowledgeCollectionId": "cbd1444d-6eac-421b-8c58-7a167136b40a",
+    "knowledgeChat": "fails"
+  },
+  "failedResponses": [
+    "404 GET https://chat-hive.scubed.co/api/v1/terminals/",
+    "404 POST https://chat-hive.scubed.co/api/v1/audio/speech"
+  ]
+}

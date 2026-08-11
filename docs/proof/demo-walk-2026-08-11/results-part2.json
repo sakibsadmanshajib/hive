@@ -1,0 +1,7 @@
+{
+  "voiceApi": "works",
+  "voiceText": "{\"text\":\"The Sovereign Gateway transcribed speech on the demo box.\",\"filename\":\"251f2a18-dc06-4aed-bd48-6aa9af214ea8.wav\"}",
+  "voiceUi": "fails: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#chat-input')\u001b[22m\n\u001b[2m    - locator resolved to <div tabindex=\"0\" translate=\"no",
+  "knowledgeCollectionId2": "4266e4e4-be1e-4176-97ae-12aa4dd6ad6e",
+  "knowledgeChat": "works"
+}

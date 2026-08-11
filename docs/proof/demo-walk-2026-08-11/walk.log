@@ -1,0 +1,75 @@
+[2026-08-11T16:13:55.297Z] session minted for demo@hive-demo.invalid (console origin)
+[2026-08-11T16:13:56.453Z] session cookies also installed for the chat origin
+[2026-08-11T16:14:19.693Z] chat url after sign in: https://chat-hive.scubed.co/
+[2026-08-11T16:14:19.773Z] owui version: 0.10.2 name: Hive login_form: false
+[2026-08-11T16:14:20.085Z] screenshot: 01-chat-signed-in.png
+[2026-08-11T16:14:37.179Z] chat: POST /api/chat/completions after Enter = 1
+[2026-08-11T16:14:37.180Z] chat: assistant answer = "HIVE-WALK-831590"
+[2026-08-11T16:14:37.416Z] screenshot: 02-chat-answer.png
+[2026-08-11T16:14:37.491Z] voice: {"tts":404,"ttsMs":62,"ttsBody":"{\"detail\":\"We could not find what you're looking for :/\"}"}
+[2026-08-11T16:14:37.717Z] screenshot: 03-voice-ui.png
+[2026-08-11T16:14:37.940Z] embeddings config: {"cfgStatus":200,"hybrid":false,"raw":"{\"status\":true,\"RAG_TEMPLATE\":\"### Task:\\nRespond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id=\\\"1\\\">).\\n\\n### Guidelines:\\n- If you don't know the answer, clearly state that.\\n- If uncertain, ask the user for clarification.\\n- Respond in the same language as the user's query.\\n- If the context is unreadable or of poor quality, inform the user and provide the best possible answer.\\n- If the answer isn't present in the context but you possess the knowledge, expla"}
+[2026-08-11T16:15:08.054Z] knowledge: create collection -> 200
+[2026-08-11T16:15:46.015Z] knowledge: upload=200 add=200
+[2026-08-11T16:16:15.734Z] knowledge: retrieval/query/collection -> 200 in 30s, codename present: true
+[2026-08-11T16:16:25.387Z] screenshot: 04-knowledge-attached.png
+[2026-08-11T16:18:17.746Z] knowledge: chat answer = "One Step Ahead"
+[2026-08-11T16:18:17.934Z] screenshot: 05-knowledge-answer.png
+[2026-08-11T16:18:23.321Z] screenshot: 06-knowledge-workspace.png
+[2026-08-11T16:18:23.322Z] results so far: {"chat":"works","chatMarker":"HIVE-WALK-831590","voice":"fails","voiceDetail":{"tts":404,"ttsMs":62,"ttsBody":"{\"detail\":\"We could not find what you're looking for :/\"}"},"embeddingsConfig":{"cfgStatus":200,"hybrid":false,"raw":"{\"status\":true,\"RAG_TEMPLATE\":\"### Task:\\nRespond to the user query using the provided context, incorporating inline citations in the format [id] **only when the <source> tag includes an explicit id attribute** (e.g., <source id=\\\"1\\\">).\\n\\n### Guidelines:\\n- If you don't know the answer, clearly state that.\\n- If uncertain, ask the user for clarification.\\n- Respond in the same language as the user's query.\\n- If the context is unreadable or of poor quality, inform the user and provide the best possible answer.\\n- If the answer isn't present in the context but you possess the knowledge, expla"},"knowledgeCollection":"created","knowledgeIngest":"indexed","knowledgeRetrieval":"retrieved","knowledgeCollectionId":"cbd1444d-6eac-421b-8c58-7a167136b40a","knowledgeChat":"fails"}
+[2026-08-11T16:18:23.359Z] 4xx/5xx seen: ["404 GET https://chat-hive.scubed.co/api/v1/terminals/","404 POST https://chat-hive.scubed.co/api/v1/audio/speech"]
+[2026-08-11T16:22:22.089Z] part2 signed in at https://chat-hive.scubed.co/
+[2026-08-11T16:22:29.037Z] voice: /api/v1/audio/config -> 200
+[2026-08-11T16:22:29.037Z] voice: config body {"tts":{"OPENAI_API_BASE_URL":"https://api.openai.com/v1","OPENAI_API_KEY":"","OPENAI_PARAMS":{},"API_KEY":"","ENGINE":"","MODEL":"tts-1","VOICE":"alloy","SPLIT_ON":"punctuation","AZURE_SPEECH_REGION":"","AZURE_SPEECH_BASE_URL":"","AZURE_SPEECH_OUTPUT_FORMAT":"audio-24khz-160kbitrate-mono-mp3","MISTRAL_API_KEY":"","MISTRAL_API_BASE_URL":"https://api.mistral.ai/v1"},"stt":{"OPENAI_API_BASE_URL":"ht
+[2026-08-11T16:22:29.038Z] voice: /api/v1/audio/transcriptions -> 200 in 7s body={"text":"The Sovereign Gateway transcribed speech on the demo box.","filename":"251f2a18-dc06-4aed-bd48-6aa9af214ea8.wav"}
+[2026-08-11T16:22:29.107Z] voice ui: microphone control found = true
+[2026-08-11T16:22:38.806Z] screenshot: 07-voice-recording.png
+[2026-08-11T16:23:34.756Z] voice ui: composer after speaking = ""
+[2026-08-11T16:23:34.876Z] screenshot: 08-voice-transcript.png
+[2026-08-11T16:24:02.682Z] voice ui threw locator.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('#chat-input')[22m
+[2m    - locator resolved to <div tabindex="0" translate="no" id="chat-input" contenteditable="true"
+[2026-08-11T16:25:23.310Z] knowledge: create=200 upload=200 add=200
+[2026-08-11T16:25:31.793Z] screenshot: 09-knowledge-picker.png
+[2026-08-11T16:25:35.091Z] screenshot: 10-knowledge-attached.png
+[2026-08-11T16:26:14.583Z] knowledge chat answer: "Retrieved 1 source\n\nZARBAND831590\n\n1 Source"
+[2026-08-11T16:26:14.669Z] screenshot: 11-knowledge-answer.png
+[2026-08-11T16:26:14.670Z] part2 results: {"voiceApi":"works","voiceText":"{\"text\":\"The Sovereign Gateway transcribed speech on the demo box.\",\"filename\":\"251f2a18-dc06-4aed-bd48-6aa9af214ea8.wav\"}","voiceUi":"fails: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('#chat-input')\u001b[22m\n\u001b[2m    - locator resolved to <div tabindex=\"0\" translate=\"no","knowledgeCollectionId2":"4266e4e4-be1e-4176-97ae-12aa4dd6ad6e","knowledgeChat":"works"}
+[2026-08-11T16:27:33.471Z] part3 signed in at https://chat-hive.scubed.co/
+[2026-08-11T16:27:43.281Z] voice ui: 19 visible buttons: ["waterfall flex flex-col flex-1 shrink-0 ","waterfall flex flex-col flex-1 shrink-0 ","waterfall flex flex-col flex-1 shrink-0 ","waterfall flex flex-col flex-1 shrink-0 ","p-1.5\n\n            bg-indigo-400/20 text","p-1.5 bg-indigo-500 text-white dark:bg-i"]
+[2026-08-11T16:27:50.984Z] voice ui: composer text = "The Sovereign Gateway Transcribe Speech on the demo box."
+[2026-08-11T16:27:51.111Z] screenshot: 12-voice-transcript-in-composer.png
+[2026-08-11T16:27:57.185Z] screenshot: 13-cowork-workspace.png
+[2026-08-11T16:27:57.218Z] 13-cowork: engine-unavailable notice present = false
+[2026-08-11T16:27:57.451Z] screenshot: 13-cowork-composed.png
+[2026-08-11T16:28:01.635Z] screenshot: 13-cowork-submitted.png
+[2026-08-11T16:28:01.647Z] 13-cowork: terminal-ish status = Blocked
+[2026-08-11T16:28:01.647Z] 13-cowork: page head = "Hive | Agent workspace | ← Back to chat | WORKSPACE | Give the agent a task |  | Describe what you want done. The task runs in its own sandbox, and it stays on this page so you can pick it up from any session. |  | Starting task. |  | What should the agent do? |  | Be specific about the goal and wha"
+[2026-08-11T16:28:01.755Z] screenshot: 13-cowork-result.png
+[2026-08-11T16:28:08.796Z] screenshot: 14-coding-workspace.png
+[2026-08-11T16:28:08.822Z] 14-coding: engine-unavailable notice present = false
+[2026-08-11T16:28:08.991Z] screenshot: 14-coding-composed.png
+[2026-08-11T16:28:13.168Z] screenshot: 14-coding-submitted.png
+[2026-08-11T16:38:16.323Z] 14-coding: terminal-ish status = Running
+[2026-08-11T16:38:16.325Z] 14-coding: page head = "Hive | Agent workspace | ← Back to chat | WORKSPACE | Give the agent a task |  | Describe what you want done. The task runs in its own sandbox, and it stays on this page so you can pick it up from any session. |  | What should the agent do? |  | Be specific about the goal and what a finished result "
+[2026-08-11T16:38:16.481Z] screenshot: 14-coding-result.png
+[2026-08-11T16:38:16.481Z] part3 results: {"voiceUi":"works","cowork":"Blocked","coding":"Running"}
+[2026-08-11T16:58:36.574Z] console url: https://console-hive.scubed.co/console
+[2026-08-11T16:58:36.813Z] screenshot: 15-console-overview.png
+[2026-08-11T16:58:54.266Z] screenshot: 16-console-analytics.png
+[2026-08-11T16:58:54.338Z] analytics text: "WORKSPACE Usage and analytics Inspect requests, tokens, spend and errors broken down by model, key or endpoint. Overview Usage Spend Errors Group by Model API key Endpoint Time window 24h 7d 30d 90d Custom TOTAL REQUESTS 0 INPUT TOKENS 0 OUTPUT TOKENS 0 CREDITS SPENT 0 Usage Requests and tokens. Input tokensOutput tokens"
+[2026-08-11T16:59:18.492Z] api key: minted, prefix hk_, length 46, written to a scratch file outside the repo
+[2026-08-11T16:59:19.107Z] screenshot: 17-console-api-key.png
+[2026-08-11T16:59:26.687Z] agent workspace: "Hive | Agent workspace | ← Back to chat | WORKSPACE | Give the agent a task | Describe what you want done. The task runs in its own sandbox, and it stays on this page so you can pick it up from any session. | What should the agent do? | Be specific about the goal and what a finished result looks like. For example: “Audit the payment webhook handlers for unvalidated input and list what you find.” Press Ctrl + Enter to start. | PACK | Coding | Knowledge work | Reads and edits a codebase, runs commands, and reports what changed. | Start task | YOUR TASKS | Demo readiness walk 831590: write a Python function that returns the nth Fibonacci number, run it for n=10, and report the output. | Done | "
+[2026-08-11T16:59:26.789Z] screenshot: 18-agent-workspace-status.png
+[2026-08-11T16:59:26.790Z] part4 results: {"analytics":"has numbers","apiKey":"minted","codingStatus":"done"}
+[2026-08-11T17:03:27.378Z] analytics net: 200 GET https://console-hive.scubed.co/console/analytics :: <!DOCTYPE html><html lang="en" class="__variable_246ccd __variable_c29908 __variable_63a023"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="stylesheet" href="/_next/static/css/5037bc1ba51d3227.css" data-precedence="next"/><link rel="prelo
+[2026-08-11T17:03:27.393Z] analytics shell: {"accountAttr":null,"title":"Hive Console"}
+[2026-08-11T17:03:27.488Z] screenshot: 19-console-analytics-7d.png
+[2026-08-11T17:03:40.821Z] screenshot: 20-console-model-catalog.png
+[2026-08-11T17:04:06.833Z] api key: revoke submitted
+[2026-08-11T17:04:06.947Z] screenshot: 21-console-api-key-revoked.png
+[2026-08-11T17:04:24.716Z] cleanup: knowledge [] chats ["What is the project code=200","#Walk 831590What is the =200","Reply with exactly this =200","What is the internal cod=200","What is the internal cod=200"]
+[2026-08-11T17:04:29.944Z] screenshot: 22-knowledge-after-cleanup.png
+[cleanup] {"tries":{"/api/v1/knowledge/":200},"names":["WalkKB831590","Walk 831590","readiness probe kb"],"deleted":["WalkKB831590=200","Walk 831590=200"]}
