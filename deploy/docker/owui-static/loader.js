@@ -81,9 +81,8 @@
     // so it follows the pill's text colour in both OWUI themes.
     link.innerHTML =
       '<svg viewBox="0 0 64 64" aria-hidden="true" focusable="false">' +
-      '<rect x="11" y="11" width="42" height="42" rx="11" fill="none"' +
-      ' stroke="currentColor" stroke-width="6"/>' +
-      '<rect x="25" y="25" width="14" height="14" rx="3.5" fill="currentColor"/>' +
+      '<polygon points="32,8 53,20 53,44 32,56 11,44 11,20" fill="none"' +
+      ' stroke="currentColor" stroke-width="6" stroke-linejoin="round"/>' +
       "</svg>" +
       '<span id="' + ID + '-label">Agent workspace</span>';
 

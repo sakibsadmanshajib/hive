@@ -69,6 +69,12 @@ type FinalizeReservationInput struct {
 	ActualCredits          int64
 	TerminalUsageConfirmed bool
 	Status                 string
+	// InputTokens and OutputTokens are the metered quantities behind
+	// ActualCredits, recorded on the settlement usage event so one row carries
+	// both the consumption and its cost. Optional: a caller that omits them
+	// settles exactly as before, with zeroes.
+	InputTokens  int64
+	OutputTokens int64
 }
 
 type ReleaseReservationInput struct {
