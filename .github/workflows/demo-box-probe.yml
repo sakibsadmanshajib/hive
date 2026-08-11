@@ -1,0 +1,63 @@
+name: demo-box-probe
+
+# Temporary read-only probe of the demo box, run through the self-hosted
+# runner because there is no SSH path to that host from anywhere else. It
+# prints host capability facts only: never a value out of the box's .env,
+# only key names. Deleted before this branch merges.
+
+on:
+  push:
+    branches:
+      - feat/agent-engine-demo-box
+
+concurrency:
+  group: demo-box-probe
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    runs-on: [self-hosted, hive-demo]
+    permissions: {}
+    timeout-minutes: 10
+    steps:
+      - name: Host facts
+        run: |
+          set -uo pipefail
+          echo "== identity =="
+          id
+          echo "HOME=$HOME PWD=$PWD"
+          echo "== os / kernel =="
+          uname -a
+          cat /etc/os-release | head -3
+          echo "== sudo =="
+          if sudo -n true 2>/dev/null; then echo "PASSWORDLESS_SUDO=yes"; else echo "PASSWORDLESS_SUDO=no"; fi
+          sudo -n -l 2>&1 | head -20 || true
+          echo "== apptainer =="
+          command -v apptainer || echo "apptainer: absent"
+          command -v singularity || echo "singularity: absent"
+          apptainer --version 2>/dev/null || true
+          echo "== fuse / userns =="
+          ls -l /dev/fuse 2>&1 || echo "/dev/fuse absent"
+          cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo "max_user_namespaces unreadable"
+          sysctl kernel.unprivileged_userns_clone 2>/dev/null || echo "unprivileged_userns_clone unset"
+          command -v squashfuse || echo "squashfuse: absent"
+          command -v fuse2fs || echo "fuse2fs: absent"
+          echo "== apt =="
+          apt-cache policy apptainer 2>/dev/null | head -5 || echo "no apptainer in apt index"
+          echo "== disk =="
+          df -h / /home 2>/dev/null | head -5
+          echo "== docker =="
+          docker ps --format '{{.Names}}\t{{.Status}}' | head -30
+          echo "== repo checkout =="
+          ls -d /home/sakib/hive 2>&1
+          echo "== .env keys of interest (NAMES ONLY) =="
+          grep -oE '^[A-Z0-9_]+' /home/sakib/hive/.env 2>/dev/null | grep -E 'AGENT|SANDBOX|QUOTA|EGRESS' | sort -u || echo "(none)"
+          echo "== agent env paths =="
+          ls -ld /home/sakib/hive/.agent 2>/dev/null || echo "no /home/sakib/hive/.agent"
+          ls -ld /opt/hive 2>/dev/null || echo "no /opt/hive"
+          echo "== control-plane container base =="
+          docker exec hive-control-plane-1 sh -c 'cat /etc/os-release | head -2; ls /lib/ld-musl* 2>/dev/null; command -v apptainer || echo no-apptainer-in-container' 2>&1 | head -10 || true
+          echo "== systemd =="
+          systemctl --version 2>/dev/null | head -1 || echo "no systemctl"
+          echo "== go toolchain on host =="
+          command -v go && go version || echo "go: absent on host"
