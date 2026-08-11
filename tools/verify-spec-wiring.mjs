@@ -163,6 +163,13 @@ function reactsToOrdinaryPullRequest(doc) {
 // Can this `if:` be true on an ordinary pull request? The guard does not
 // evaluate the expression language, and it answers no whenever it cannot tell,
 // so a job it misreads is reported as debt rather than as coverage.
+//
+// Known ceiling: a path gate such as `needs.changes.outputs.web_e2e == 'true'`
+// counts as yes. web-e2e carries one, so a pull request touching no web path
+// does not run those specs even though they are counted here as pull-request
+// gated. That is a deliberate design in ci.yml rather than a hole, and
+// modelling it would mean evaluating the `changes` job's path filters against
+// a diff this guard does not have.
 function survivesOrdinaryPullRequest(condition) {
   if (!condition) return true;
   if (/github\.event\.pull_request\.labels/.test(condition)) return false;
