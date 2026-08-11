@@ -24,5 +24,22 @@ context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, c
 7. After any worktree agent completes, verify the shared checkout is still on main.
 8. Visual proof before merge (non-negotiable, owner directive 2026-07-21): no feature or fix touching a live UI/UX surface merges, and no completion claim reaches the owner, without a fresh screenshot or screen recording taken against the actually-running stack after the change, showing the claimed behavior. The proof artifact itself must be posted in the PR (attached to the PR body or a PR comment), not just described in a subagent's text report or held in a scratch dir. A text description alone is not proof. Bypass only on explicit owner instruction for that specific change. Applies to the main agent's own claims to the owner as much as to builder self-reports. Any flow whose URL carries a credential in the query string (invitation accept, password reset, magic link, OAuth callback) must have that value redacted in both the captured text log and the screenshot's URL overlay before commit, never the raw value (PR #578 leaked four real invite tokens this way; `npm run lint:proof-tokens` catches the text half in CI but cannot inspect screenshot pixels, so masking the image is on the capturing agent).
 
+## Coding pipeline (every dispatched implementation task)
+
+Every task the orchestrator hands to a builder subagent runs this sequence. The subagent executes each stage itself; the orchestrator only dispatches, verifies, and merges, per Orchestrator only (strict) above.
+
+1. Context: read .wolf/decisions.md, .wolf/cerebrum.md, and .wolf/anatomy.md, plus the touched code, before proposing anything.
+2. Plan: superpowers:writing-plans (superpowers:brainstorming first if the design is still open), final plan saved to the Obsidian vault per the obsidian-working-docs rule.
+3. Spec: spec-driven-development skill for requirements and acceptance criteria before code, folded into the same vault doc.
+4. Implement: TDD (superpowers:test-driven-development / tdd-guide), in the task's own worktree, per Agent fleet rules above.
+5. Open the PR now, before review starts (gh pr create; a draft PR is fine). Review comments land on this PR, not a private report.
+6. Adversarial review: adversarial-pr-review skill, pipeline mode. Stream 1 is CodeRabbit (`coderabbit review --agent -t all --base main`, installed locally; a clean pass from the CodeRabbit GitHub App bot alone is not proof of a clean review, since credit or rate limit exhaustion can silently zero it out, per project_coderabbit_merge_ops memory). Stream 2 is domain peer review (code-review-and-quality by default, frontend-ui-engineering or emil-design-eng for UI, api-and-interface-design for interface changes, security-and-hardening plus security-reviewer or database-reviewer for auth, money, or input-parsing paths), run by an independent subagent with no shared context with Stream 1. Both streams post their findings as inline PR comments.
+7. Address every posted comment, either with a fix or a reasoned rebuttal, resolve the thread, and rerun any tests the fix touches.
+8. Verify: superpowers:verification-before-completion. Confirm CI is green and zero threads are unresolved before merge, per Thread clearing and Merge policy above.
+9. Merge: squash and delete the branch, per Thread clearing and Merge policy above.
+10. Deploy: automatic, since pushing to main triggers deploy-demo-box.yml and deploy-web-console-workers.yml. Confirm the triggered run actually succeeds (`gh run watch`) before reporting the task done. UI-touching changes still need the visual-proof screenshot required above, captured against the deployed result once step 10 lands.
+
+Skip a stage only when it plainly does not apply (a one-line typo fix has no meaningful spec), and say so in the report. Never skip stage 6 or stage 8 for anything touching auth, money, or input-parsing paths.
+
 ## Repetitive work
 When a task pattern repeats three or more times, mint a repo-local skill via skill-creator. Use claude-md-management skills for CLAUDE.md upkeep. Hooks for anything that must fire automatically.
