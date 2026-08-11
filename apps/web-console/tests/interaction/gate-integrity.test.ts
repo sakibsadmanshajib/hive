@@ -21,11 +21,12 @@ import {
   expiredExclusions,
   type Exclusion,
 } from "./lib/exclusions";
-import { floorProblems, loadFloors, staleFloors } from "./lib/floors";
-import { enumerateInPage } from "./lib/enumerate";
-import { verdictFromObservation, type Observation } from "./lib/prove";
+import { floorProblems, loadFloors, staleFloors, type FloorFile } from "./lib/floors";
+import { enumerateInPage, type RawControl } from "./lib/enumerate";
+import { verdictForDisabled, verdictFromObservation, type Observation } from "./lib/prove";
 import { controlKey } from "./lib/key";
 import { indexRegistry, parseRegistry, validateRegistry } from "./lib/registry";
+import { ratio } from "./lib/report";
 import {
   discoverRoutes,
   isDynamic,
@@ -33,6 +34,31 @@ import {
   patternForPageFile,
   staleFixtureRoutes,
 } from "./lib/routes";
+
+/** A control with every field at its empty value, to vary one at a time. */
+const blankControl: RawControl = {
+  idx: 0,
+  tag: "button",
+  role: "",
+  type: "",
+  name: "Apply",
+  href: "",
+  testid: "",
+  id: "",
+  fieldName: "",
+  kind: "button",
+  matchedBy: "selector",
+  disabled: false,
+  disabledReason: "",
+  ariaChecked: "",
+  ariaExpanded: "",
+  ariaHasPopup: "",
+  inForm: false,
+  formAction: "",
+  formMethod: "",
+  ordinal: 0,
+  depth: 0,
+};
 
 describe("control registry", () => {
   it("parses and every entry carries a justification, an owner and real proof", () => {
@@ -208,35 +234,92 @@ describe("enumerator", () => {
 });
 
 describe("denominator floor", () => {
-  it("fails a route that enumerates fewer controls than its floor", () => {
-    const problems = floorProblems(
-      { "/console": 40 },
-      [{ route: "/console", visited: true, enumerated: 3 }],
-    );
-    expect(problems.join(" ")).toContain("below its recorded floor of 40");
+  const floors: FloorFile = {
+    shell: { prefix: "/console", require: ["a|Overview", "button|Sign out"] },
+    routes: { "/auth/sign-in": ["button|Continue"] },
+  };
+
+  it("fails a route that did not render a required control", () => {
+    const problems = floorProblems(floors, [
+      { route: "/console/billing", visited: true, enabled: ["a|Overview"], disabled: [] },
+    ]);
+    expect(problems.join(" ")).toContain('did not render required control "button|Sign out"');
   });
 
-  it("fails a visited route that has no floor at all", () => {
-    const problems = floorProblems({}, [
-      { route: "/console/new", visited: true, enumerated: 12 },
+  it("fails a required control that rendered disabled", () => {
+    const problems = floorProblems(floors, [
+      {
+        route: "/console/billing",
+        visited: true,
+        enabled: ["a|Overview"],
+        disabled: ["button|Sign out"],
+      },
     ]);
-    expect(problems.join(" ")).toContain("has no floor");
+    expect(problems.join(" ")).toContain("disabled");
+  });
+
+  it("fails a visited route that rendered no control at all", () => {
+    const problems = floorProblems(floors, [
+      { route: "/console", visited: true, enabled: [], disabled: [] },
+    ]);
+    expect(problems.join(" ")).toContain("rendered no interactive control at all");
+  });
+
+  it("fails a visited route nothing requires anything of", () => {
+    const problems = floorProblems(floors, [
+      { route: "/somewhere-new", visited: true, enabled: ["button|Go"], disabled: [] },
+    ]);
+    expect(problems.join(" ")).toContain("has no entry in route-floors.json");
+  });
+
+  it("passes a route that rendered everything required of it", () => {
+    expect(
+      floorProblems(floors, [
+        {
+          route: "/console/billing",
+          visited: true,
+          enabled: ["a|Overview", "button|Sign out", "input|#threshold"],
+          disabled: [],
+        },
+        {
+          route: "/auth/sign-in",
+          visited: true,
+          enabled: ["button|Continue"],
+          disabled: [],
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it("says nothing about a route the run never visited", () => {
     expect(
-      floorProblems({}, [{ route: "/console", visited: false, enumerated: 0 }]),
+      floorProblems(floors, [
+        { route: "/console", visited: false, enabled: [], disabled: [] },
+      ]),
     ).toEqual([]);
   });
 
   it("reports a floor for a route that no longer exists", () => {
-    expect(staleFloors({ "/gone": 4 }, ["/console"])).toEqual(["/gone"]);
+    expect(
+      staleFloors({ shell: { prefix: "/console", require: [] }, routes: { "/gone": ["a|X"] } }, [
+        "/console",
+      ]),
+    ).toEqual(["/gone"]);
   });
 
   it("the committed floors name only real routes", () => {
     const fixtures = loadRouteFixtures(ROUTE_FIXTURE_FILE);
     const patterns = discoverRoutes(APP_DIR, fixtures).map((r) => r.pattern);
     expect(staleFloors(loadFloors(ROUTE_FLOOR_FILE), patterns)).toEqual([]);
+  });
+});
+
+describe("coverage arithmetic", () => {
+  it("scores an empty measurement as zero, never as full marks", () => {
+    // /oauth/consent shipped with a recorded floor of zero controls and scored
+    // 100%: nothing had ever rendered there, so nothing could ever fail.
+    expect(ratio(0, 0)).toBe(0);
+    expect(ratio(3, 4)).toBe(0.75);
   });
 });
 
@@ -282,9 +365,22 @@ describe("exclusion blockers are still open", () => {
   const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
   const repo = process.env.GITHUB_REPOSITORY ?? "sakibsadmanshajib/hive";
 
-  it.runIf(token !== "")(
+  it(
     "no exclusion cites an issue that has already closed",
     async () => {
+      if (token === "") {
+        // In CI a missing token is a broken check, not an absent one: the job
+        // is supposed to supply it, and `it.runIf` used to turn that into a
+        // silent skip, so this never ran anywhere. Locally there is nothing to
+        // supply it, and requiring a personal token to run the unit suite is
+        // not a trade worth making.
+        if (process.env.CI) {
+          throw new Error(
+            "GITHUB_TOKEN is not set, so exclusion expiry cannot be checked; the workflow must pass it (see the web-unit job)",
+          );
+        }
+        return;
+      }
       const exclusions = collectExclusions(
         loadRouteFixtures(ROUTE_FIXTURE_FILE),
         parseRegistry(readFileSync(REGISTRY_FILE, "utf8")),
@@ -303,13 +399,19 @@ describe("exclusion blockers are still open", () => {
           { headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json" } },
         );
         if (!response.ok) {
-          // A tracker that will not answer is not evidence of anything. Do not
-          // turn it into a failure and do not turn it into a pass either: the
-          // assertion below still runs against whatever was resolved.
-          continue;
+          // A tracker that will not answer leaves the question unanswered, and
+          // an unanswered question must not read as a clean bill of health.
+          throw new Error(
+            `could not read issue ${String(issue)} from ${repo} (HTTP ${String(response.status)}), so whether this exclusion has expired is unknown`,
+          );
         }
         const body: unknown = await response.json();
-        if ((body as { state?: unknown }).state === "closed") {
+        if (
+          typeof body === "object" &&
+          body !== null &&
+          "state" in body &&
+          body.state === "closed"
+        ) {
           closed.add(issue);
         }
       }
@@ -317,6 +419,23 @@ describe("exclusion blockers are still open", () => {
     },
     30_000,
   );
+});
+
+// Rot the browser sweep cannot be trusted to find, because whether a declared
+// control renders at all depends on the account's data. This asks the only
+// question that is environment independent, and it asks it in the required
+// unit job.
+describe("declared controls name routes that exist", () => {
+  it("every registry entry points at a real route, or at the shell", () => {
+    const registry = parseRegistry(readFileSync(REGISTRY_FILE, "utf8"));
+    const patterns = new Set(
+      discoverRoutes(APP_DIR, loadRouteFixtures(ROUTE_FIXTURE_FILE)).map((r) => r.pattern),
+    );
+    const orphans = registry.entries
+      .filter((entry) => entry.route !== "*" && !patterns.has(entry.route))
+      .map((entry) => `${entry.route} :: ${entry.control}`);
+    expect(orphans).toEqual([]);
+  });
 });
 
 // The predicate that decides every verdict in the ledger. A live run can go a
@@ -369,6 +488,69 @@ describe("proof predicate", () => {
   });
 });
 
+describe("markup is not behaviour", () => {
+  it("never proves a disabled control, whatever its markup says", () => {
+    // A title attribute used to be enough. That made "disable it" the cheapest
+    // way to pass this gate, and a permission regression that greys out a page
+    // would have kept it green.
+    const withTitle = verdictForDisabled({
+      ...blankControl,
+      disabled: true,
+      disabledReason: "You do not have permission",
+    });
+    expect(withTitle.proven).toBe(false);
+    expect(withTitle.proofType).toBe("disabled");
+
+    const bare = verdictForDisabled({ ...blankControl, disabled: true });
+    expect(bare.proven).toBe(false);
+    expect(bare.proofType).toBe("disabled");
+    expect(bare.detail).toContain("no reason exposed");
+  });
+});
+
+describe("blocked writes still prove the control", () => {
+  const base: Observation = {
+    urlBefore: "https://console.example/console/api-keys",
+    urlAfter: "https://console.example/console/api-keys",
+    urlChanged: false,
+    requests: ["POST /api/v1/accounts/current/api-keys"],
+    domChanged: false,
+    domStableBaseline: true,
+    popup: false,
+    download: "",
+    dialog: "",
+    consoleErrors: [],
+    actError: "",
+    navStatus: null,
+    failedRequests: [],
+    errorSurfaces: [],
+  };
+
+  it("counts a request the guard stopped as proof that the control is wired", () => {
+    const verdict = verdictFromObservation(base, {
+      blockedMutations: ["POST https://console.example/api/v1/accounts/current/api-keys"],
+    });
+    expect(verdict.proven).toBe(true);
+    expect(verdict.proofType).toBe("wired-write-blocked");
+  });
+
+  it("does not let the error the abort caused veto that proof", () => {
+    const verdict = verdictFromObservation(
+      { ...base, errorSurfaces: ["Network error. Please try again."] },
+      { blockedMutations: ["POST https://console.example/api/keys"] },
+    );
+    expect(verdict.proven).toBe(true);
+  });
+
+  it("still fails an activation that produced nothing to block", () => {
+    const verdict = verdictFromObservation(
+      { ...base, requests: [] },
+      { blockedMutations: [] },
+    );
+    expect(verdict.proven).toBe(false);
+  });
+});
+
 describe("expected versus unexpected rejections", () => {
   const base: Observation = {
     urlBefore: "https://console.example/console",
@@ -387,16 +569,12 @@ describe("expected versus unexpected rejections", () => {
     errorSurfaces: [],
   };
 
-  it("counts a 422 as proof when the gate typed the value that was rejected", () => {
-    const verdict = verdictFromObservation(
-      { ...base, failedRequests: ["422 POST /api/settings"] },
-      { harnessSuppliedInput: true },
-    );
-    expect(verdict.proven).toBe(true);
-    expect(verdict.proofType).toBe("network");
-  });
-
-  it("counts the same 422 as a failure when the gate supplied nothing", () => {
+  it("counts a 422 as a failure: the gate no longer feeds any request that lands", () => {
+    // This used to be excused whenever the harness had typed the values, which
+    // was the only way to prove a submit while still letting it through. The
+    // guard stops those requests inside the browser now, so a 4xx that does
+    // come back was the application's own, and an application whose server
+    // refuses its own request is a defect.
     const verdict = verdictFromObservation({
       ...base,
       failedRequests: ["422 POST /api/settings"],
@@ -405,11 +583,11 @@ describe("expected versus unexpected rejections", () => {
     expect(verdict.proofType).toBe("failed-request");
   });
 
-  it("never excuses a 403, whatever the gate typed", () => {
-    const verdict = verdictFromObservation(
-      { ...base, failedRequests: ["403 POST /api/settings"] },
-      { harnessSuppliedInput: true },
-    );
+  it("never excuses a 403", () => {
+    const verdict = verdictFromObservation({
+      ...base,
+      failedRequests: ["403 POST /api/settings"],
+    });
     expect(verdict.proven).toBe(false);
     expect(verdict.proofType).toBe("failed-request");
   });

@@ -26,19 +26,15 @@ import {
 import { WEB_CONSOLE_DIR } from "./lib/config";
 import { enumerateInPage, type RawControl } from "./lib/enumerate";
 import { collectExclusions, exclusionProblems } from "./lib/exclusions";
-import {
-  floorProblems,
-  loadFloors,
-  staleFloors,
-  writeFloors,
-  type VisitedRoute,
-} from "./lib/floors";
+import { floorProblems, loadFloors, staleFloors, type VisitedRoute } from "./lib/floors";
 import { controlKey } from "./lib/key";
 import { indexRegistry, parseRegistry, validateRegistry } from "./lib/registry";
 import {
   DESTRUCTIVE_PATTERN,
+  DISABLED_PROOF_TYPE,
   SESSION_ENDING_PATTERN,
   fillFormFor,
+  installMutationGuard,
   observe,
   proveExternalLink,
   proveField,
@@ -46,6 +42,8 @@ import {
   proveToggle,
   verdictForDisabled,
   verdictFromObservation,
+  type MutationGuard,
+  type Observation,
   type ProofOutcome,
 } from "./lib/prove";
 import {
@@ -54,6 +52,7 @@ import {
   ratio,
   writeReport,
   type ControlRecord,
+  type ControlStatus,
   type RouteRecord,
 } from "./lib/report";
 import {
@@ -90,6 +89,26 @@ interface WorkItem {
 
 function pathOf(url: string): string {
   return new URL(url).pathname;
+}
+
+/**
+ * Which bucket a verdict is recorded under.
+ *
+ * "disabled" is neither a pass nor a failure: it is not proof of anything, so
+ * it never joins the numerator, and it is not the control's fault, so it never
+ * fails the gate on its own. What fails an unexpected disable is
+ * route-floors.json, which names the controls each route must leave usable.
+ */
+function statusOf(outcome: ProofOutcome): ControlStatus {
+  if (outcome.proven) {
+    return "proven";
+  }
+  return outcome.proofType === DISABLED_PROOF_TYPE ? "disabled" : "unproven";
+}
+
+/** A control key with the duplicate ordinal dropped: one thing a user can do. */
+function identityOfKey(key: string): string {
+  return key.replace(/~\d+$/, "");
 }
 
 function authModeFor(route: DiscoveredRoute): "user" | "anon" {
@@ -254,6 +273,7 @@ async function proveControl(
   url: string,
   item: WorkItem,
   key: string,
+  guard: MutationGuard,
 ): Promise<{ outcome: ProofOutcome; dirty: boolean; revealed: RawControl[] }> {
   const { control } = item;
 
@@ -269,15 +289,15 @@ async function proveControl(
         const stillDisabled =
           refreshed === null || (await refreshed.isDisabled().catch(() => true));
         if (!stillDisabled && refreshed !== null) {
-          const observation = await observe(page, async () => {
-            await refreshed.click({ timeout: 8000 });
-          });
-          // The gate typed the values this submission carries, so a 400, 409
-          // or 422 back is the endpoint validating the gate's own probe input,
-          // which is the control working rather than the control failing.
-          const outcome = verdictFromObservation(observation, {
-            harnessSuppliedInput: true,
-          });
+          // The gate typed the values this submission carries, so the write is
+          // blocked: the click still reaches the application and the request it
+          // builds is still proof, it just never lands on a real record.
+          const { value: observation, blocked } = await guard.withWritesBlocked(() =>
+            observe(page, async () => {
+              await refreshed.click({ timeout: 8000 });
+            }),
+          );
+          const outcome = verdictFromObservation(observation, { blockedMutations: blocked });
           outcome.detail = `${outcome.detail} (enabled by filling ${filled.join(", ")})`;
           return { outcome, dirty: true, revealed: [] };
         }
@@ -315,12 +335,12 @@ async function proveControl(
   }
 
   if (control.kind === "textfield") {
-    const outcome = await proveField(page, locator, control);
+    const outcome = await proveField(page, locator, control, guard);
     return { outcome, dirty: outcome.proofType === "navigation", revealed: [] };
   }
 
   if (control.kind === "select") {
-    const outcome = await proveSelect(page, locator, control);
+    const outcome = await proveSelect(page, locator, control, guard);
     return { outcome, dirty: true, revealed: [] };
   }
 
@@ -334,11 +354,18 @@ async function proveControl(
   // A submit button clicked against an empty form is stopped by the browser's
   // own required-field validation, which is indistinguishable from a button
   // with no handler. Fill the form first so the click actually reaches the
-  // application.
+  // application. Not for a destructive control: nothing the gate types belongs
+  // in a form whose submit deletes something.
   let filledFields: string[] = [];
-  if (control.kind === "submit") {
+  if (control.kind === "submit" && !destructive) {
     filledFields = await fillFormFor(locator);
   }
+
+  // The two cases where a real write must not leave the browser: a control
+  // whose label says it destroys something, and a form the gate itself filled
+  // in. Both are still clicked, and the request the application builds is
+  // still what proves the control is wired; it is stopped on the way out.
+  const blockWrites = destructive || filledFields.length > 0;
 
   // Tag the element so the reveal pass can tell "a new control appeared" from
   // "the control I just clicked relabelled itself to Sending…", which is a
@@ -349,12 +376,16 @@ async function proveControl(
     })
     .catch(() => undefined);
 
-  const observation = await observe(page, async () => {
-    await locator.click({ timeout: 8000 });
-  });
-  const outcome = verdictFromObservation(observation, {
-    harnessSuppliedInput: filledFields.length > 0,
-  });
+  const click = async (): Promise<Observation> =>
+    observe(page, async () => {
+      await locator.click({ timeout: 8000 });
+    });
+  const { observation, blocked } = blockWrites
+    ? await guard
+        .withWritesBlocked(click)
+        .then((result) => ({ observation: result.value, blocked: result.blocked }))
+    : { observation: await click(), blocked: [] };
+  const outcome = verdictFromObservation(observation, { blockedMutations: blocked });
   if (filledFields.length > 0) {
     outcome.detail = `${outcome.detail} (form pre-filled: ${filledFields.join(", ")})`;
   }
@@ -383,8 +414,11 @@ async function proveControl(
   }
 
   if (destructive) {
-    // Back out of anything a destructive control opened, so the gate never
-    // leaves a live surface mid-confirmation.
+    // Close whatever the click opened. This is tidying, not the safeguard:
+    // what keeps the deletion from happening is the mutation guard above,
+    // which stopped the request inside the browser. Escape after a click can
+    // only ever close a dialog that is already open, and if the control
+    // deleted on the first click there was nothing left to press it for.
     await page.keyboard.press("Escape").catch(() => undefined);
   }
 
@@ -395,7 +429,11 @@ test.describe("interaction coverage", () => {
   test.describe.configure({ mode: "serial" });
 
   test("every rendered control has a proven effect", async ({ browser }) => {
-    test.setTimeout(3 * 60 * 60 * 1000);
+    // Under the CI job's 60 minute cap, so Playwright ends the run itself and
+    // still writes the ledger and attaches it. A job killed by GitHub's own
+    // timeout uploads nothing, which is the difference between "the sweep is
+    // too slow" and no information at all.
+    test.setTimeout(process.env.CI ? 50 * 60 * 1000 : 3 * 60 * 60 * 1000);
 
     mkdirSync(REPORT_DIR, { recursive: true });
     rmSync(PROGRESS_LOG, { force: true });
@@ -426,6 +464,10 @@ test.describe("interaction coverage", () => {
     const anon: BrowserContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
     });
+    const guards = new Map<BrowserContext, MutationGuard>([
+      [authed, await installMutationGuard(authed)],
+      [anon, await installMutationGuard(anon)],
+    ]);
 
     // Break proof hook. A gate nobody has watched fail is worth nothing, so
     // this neuters named controls at the event layer, leaving the markup and
@@ -448,8 +490,11 @@ test.describe("interaction coverage", () => {
             window.addEventListener(
               type,
               (event) => {
-                const target = event.target as HTMLElement | null;
-                const element = target?.closest("button, a, [role=button], [role=tab], [role=switch]");
+                const target = event.target;
+                if (!(target instanceof Element)) return;
+                const element = target.closest(
+                  "button, a, [role=button], [role=tab], [role=switch]",
+                );
                 if (!element) return;
                 const label = (
                   element.getAttribute("aria-label") ??
@@ -491,8 +536,11 @@ test.describe("interaction coverage", () => {
           enumerated: 0,
           proven: 0,
           declared: 0,
+          disabled: 0,
           unproven: 0,
-          coverage: 1,
+          // Not one. A route nobody measured is zero percent measured, and the
+          // exclusion is what makes that acceptable, not the number.
+          coverage: 0,
         });
         if (!route.fixture.owner) {
           problems.push(`route ${route.pattern} is skipped with no owner`);
@@ -518,6 +566,7 @@ test.describe("interaction coverage", () => {
             enumerated: 0,
             proven: 0,
             declared: 0,
+            disabled: 0,
             unproven: 0,
             coverage: 0,
           });
@@ -527,6 +576,10 @@ test.describe("interaction coverage", () => {
       }
 
       const context = authModeFor(route) === "anon" ? anon : authed;
+      const guard = guards.get(context);
+      if (guard === undefined) {
+        throw new Error("no mutation guard installed for this context");
+      }
       const page = await context.newPage();
       const url = new URL(concretePath, BASE_URL).toString();
 
@@ -538,6 +591,7 @@ test.describe("interaction coverage", () => {
         enumerated: 0,
         proven: 0,
         declared: 0,
+        disabled: 0,
         unproven: 0,
         coverage: 0,
       };
@@ -655,13 +709,14 @@ test.describe("interaction coverage", () => {
             dirty = false;
           }
 
-          const result = await proveControl(page, url, item, key);
+          const result = await proveControl(page, url, item, key, guard);
+          const status = statusOf(result.outcome);
           progress(
-            `${result.outcome.proven ? "  ok  " : "  XX  "}${route.pattern}  ${key}  ${result.outcome.proofType}`,
+            `${status === "proven" ? "  ok  " : status === "disabled" ? "  --  " : "  XX  "}${route.pattern}  ${key}  ${result.outcome.proofType}`,
           );
           controlRecords.push({
             ...base,
-            status: result.outcome.proven ? "proven" : "unproven",
+            status,
             proofType: result.outcome.proofType,
             detail: result.outcome.detail,
           });
@@ -705,6 +760,7 @@ test.describe("interaction coverage", () => {
       record.enumerated = mine.length;
       record.proven = mine.filter((c) => c.status === "proven").length;
       record.declared = mine.filter((c) => c.status === "declared").length;
+      record.disabled = mine.filter((c) => c.status === "disabled").length;
       record.unproven = mine.filter((c) => c.status === "unproven").length;
       record.coverage = ratio(record.proven, record.enumerated);
       routeRecords.push(record);
@@ -798,15 +854,18 @@ test.describe("interaction coverage", () => {
         name: item.control.name,
         matchedBy: item.control.matchedBy,
         revealPath: [],
-        status: outcome.proven ? "proven" : "unproven",
+        status: statusOf(outcome),
         proofType: outcome.proofType,
         detail: outcome.detail,
       });
       const record = routeRecords.find((r) => r.route === item.route);
       if (record) {
         record.enumerated += 1;
-        if (outcome.proven) {
+        const status = statusOf(outcome);
+        if (status === "proven") {
           record.proven += 1;
+        } else if (status === "disabled") {
+          record.disabled += 1;
         } else {
           record.unproven += 1;
         }
@@ -817,24 +876,47 @@ test.describe("interaction coverage", () => {
     // Denominator guard. Coverage is proven/enumerated and both sides come
     // from the rendered DOM, so a route that renders less than it used to
     // shrinks the denominator and holds the percentage up while the surface
-    // is degrading. Compare every visited route against a committed floor.
-    const visited: VisitedRoute[] = routeRecords.map((record) => ({
-      route: record.route,
-      visited: record.visited,
-      enumerated: record.enumerated,
-    }));
-    if (process.env.INTERACTION_FLOORS === "update") {
-      writeFloors(ROUTE_FLOOR_FILE, visited);
-      progress("[floors] route-floors.json rewritten from this run");
-    } else {
-      problems.push(...floorProblems(floors, visited));
+    // is degrading. Every visited route is measured against what
+    // route-floors.json says it must render and leave usable.
+    const visited: VisitedRoute[] = routeRecords.map((record) => {
+      const mine = controlRecords.filter((control) => control.route === record.route);
+      return {
+        route: record.route,
+        visited: record.visited,
+        enabled: mine
+          .filter((control) => control.status !== "disabled")
+          .map((control) => identityOfKey(control.key)),
+        disabled: mine
+          .filter((control) => control.status === "disabled")
+          .map((control) => identityOfKey(control.key)),
+      };
+    });
+    problems.push(...floorProblems(floors, visited));
+
+    // A run that measured nothing must never report success. This gate spent
+    // its whole first life in exactly that state: its sign-in wrote no session,
+    // so the sweep never ran, and the only thing that eventually said so was an
+    // unrelated ENOENT. An empty result is the loudest possible failure of a
+    // coverage gate and it needs to be stated as one.
+    if (FILTER.length === 0) {
+      if (routeRecords.filter((record) => record.visited).length === 0) {
+        problems.push(
+          "the sweep visited no route at all, so it measured nothing; check the session, the origin, and that the app is up",
+        );
+      }
+      if (controlRecords.length === 0) {
+        problems.push(
+          "the sweep enumerated no control at all, so it measured nothing; a coverage report over an empty set is not coverage",
+        );
+      }
     }
 
-    for (const entry of registryIndex.unmatched()) {
-      problems.push(
-        `control registry declares "${entry.route} :: ${entry.control}" (owner ${entry.owner}), but no run enumerated that control; delete the stale entry`,
+    const staleDeclarations = registryIndex
+      .unmatched()
+      .map(
+        (entry) =>
+          `control registry declares "${entry.route} :: ${entry.control}" (owner ${entry.owner}), and this run enumerated no such control`,
       );
-    }
 
     await authed.close();
     await anon.close();
@@ -846,6 +928,7 @@ test.describe("interaction coverage", () => {
       routes: routeRecords,
       controls: controlRecords,
       problems,
+      staleDeclarations,
     });
     const file = writeReport(REPORT_DIR, report);
     const summary = formatSummary(report);

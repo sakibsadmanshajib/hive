@@ -37,6 +37,7 @@ export interface RouteRecord {
   enumerated: number;
   proven: number;
   declared: number;
+  disabled: number;
   unproven: number;
   coverage: number;
 }
@@ -74,6 +75,20 @@ export interface CoverageReport {
    * route-floors.json, which names the controls each route must leave usable.
    */
   disabledControls: ControlRecord[];
+  /**
+   * Registry entries no control in this run matched.
+   *
+   * Reported rather than fatal, and that is a deliberate retreat from where
+   * this started. Whether a declared control renders at all depends on the
+   * account: the analytics chart surface needs usage data to exist before
+   * Recharts draws anything, so a CI tenant with no traffic legitimately never
+   * produces it, and failing the run there would be the same environment
+   * coupled red the control counts used to be. The rot this was guarding
+   * against, an entry naming a route that no longer exists, is caught in the
+   * required unit job instead, where it does not depend on what any tenant
+   * happens to hold.
+   */
+  staleDeclarations: string[];
   /** Registry and route-fixture integrity failures. */
   problems: string[];
 }
@@ -118,6 +133,7 @@ export function buildReport(input: {
   routes: RouteRecord[];
   controls: ControlRecord[];
   problems: string[];
+  staleDeclarations?: string[];
 }): CoverageReport {
   const proven = input.controls.filter((c) => c.status === "proven").length;
   // Primary figure. An identity counts as proven only when every instance of
@@ -165,6 +181,7 @@ export function buildReport(input: {
     controls: input.controls,
     unprovenControls,
     disabledControls,
+    staleDeclarations: input.staleDeclarations ?? [],
     problems: input.problems,
   };
 }
@@ -227,6 +244,15 @@ export function formatSummary(report: CoverageReport): string {
         control.revealPath.length > 0 ? ` [revealed by ${control.revealPath.join(" > ")}]` : "";
       lines.push(`    ${control.route}  ${control.key}${reveal}`);
       lines.push(`      ${control.proofType}: ${control.detail}`);
+    }
+  }
+  if (report.staleDeclarations.length > 0) {
+    lines.push("");
+    lines.push(
+      `  DECLARATIONS NO CONTROL MATCHED (${String(report.staleDeclarations.length)}) — either the control is gone and the entry should be too, or this environment never rendered it`,
+    );
+    for (const entry of report.staleDeclarations) {
+      lines.push(`    ${entry}`);
     }
   }
   if (report.problems.length > 0) {
