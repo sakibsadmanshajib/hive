@@ -69,6 +69,19 @@ PASS or the first step that could not be proven. Note that the serverless
 embedding route is slow and uneven, so the script retries each step a few
 times and prints every attempt.
 
+The chat account you will present from needs one more check, because Open WebUI
+keeps "Enter Key Behavior" as a per-user setting and a shared account carries
+whatever the last automated run left on it. With that preference on, Enter
+inserts a newline instead of sending, the send arrow still works, and there is
+no error anywhere on screen (issue #855, found on the demo account on
+2026-08-11).
+
+```bash
+cd apps/web-console
+node scripts/demo-chat-settings.mjs <demo account email>            # exit 1 on drift
+node scripts/demo-chat-settings.mjs <demo account email> --repair   # correct it
+```
+
 Do not present until all are green.
 
 ## Demo walkthrough (per surface)
