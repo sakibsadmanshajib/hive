@@ -867,13 +867,16 @@ services:
       # forest-green outline + inner cell); sizes are not per-purpose
       # optimized (favicon-96x96/apple-touch-icon reuse the closest existing
       # size, not the ideal one for each use). No dark-mode splash variant --
-      # same asset for both. custom.css and loader.js are the only supported
-      # hooks for changing a pinned, unforked Open WebUI image, and both now
-      # carry real overrides: the agent-workspace launcher in OWUI's header
-      # band, and a replacement for the emoji glyph upstream uses to anchor its
-      # Workspace empty states. Dockerfile.open-webui asserts the markup
-      # contract the second override depends on. Known gap: FONTS_DIR under
-      # STATIC_DIR is still unseeded.
+      # same asset for both. custom.css and loader.js change the pinned upstream
+      # image without rebuilding its bundle, and both now carry real overrides:
+      # the agent-workspace launcher in OWUI's header band, and a replacement
+      # for the emoji glyph upstream uses to anchor its Workspace empty states.
+      # Dockerfile.open-webui asserts the markup contract the second override
+      # depends on. Known gap: FONTS_DIR under STATIC_DIR is still unseeded.
+      # These two were previously described as the only supported hooks because
+      # forking Open WebUI was forbidden under D-013. That rule is revoked
+      # (owner 2026-08-11, .wolf/decisions.md D-036): Open WebUI is forked and
+      # heavily modified, so this pair is the old ceiling, not a constraint.
       #
       # #712: user.png (the same badge mark as the rest) is included here too.
       # open_webui.routers.users.get_user_profile_image_by_id falls back to

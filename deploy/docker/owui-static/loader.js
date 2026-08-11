@@ -1,8 +1,14 @@
 // Open WebUI's prebuilt index.html unconditionally loads this script
 // (<script src="/static/loader.js" defer>) from STATIC_DIR before the SPA
 // hydrates. Upstream intends it as an optional hook for a custom
-// pre-hydration splash; Hive uses it as the one supported place to add chrome
-// to a pinned, unforked Open WebUI image.
+// pre-hydration splash; Hive uses it to add chrome to the pinned upstream
+// image without rebuilding the bundle.
+//
+// NOT A RULE ANY MORE (owner decision 2026-08-11, .wolf/decisions.md D-036):
+// this file used to say it was "the one supported place" because forking Open
+// WebUI was forbidden under D-013. D-013 is revoked. Open WebUI is forked and
+// heavily modified, so this hook is the old ceiling, not a constraint, and
+// nothing here may be cited to refuse fork work.
 //
 // What it adds: an entry point to the Hive agent workspace, which Caddy serves
 // at /agent-workspace on this same origin (deploy/docker/Caddyfile.owui). Until
@@ -22,7 +28,9 @@
 // navigation because SvelteKit hydrates its own container (the
 // `<div style="display: contents">` in index.html) and never this sibling, and
 // degrades to nothing if upstream changes. A genuine nav item needs a fork of
-// Open WebUI's frontend, or an upstream nav-slot API; neither is in scope here.
+// Open WebUI's frontend, or an upstream nav-slot API. That fork was out of
+// scope when this was written and is now the chosen direction (D-036), so the
+// real nav item is buildable; this launcher stands until the fork lands it.
 //
 // Styling lives in custom.css (#hive-agent-launcher), which matches OWUI's own
 // header icon buttons value for value and carries the measurements behind the
