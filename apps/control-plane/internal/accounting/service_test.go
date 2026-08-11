@@ -966,6 +966,15 @@ func TestFinalizeClampsNegativeProviderTokenCounts(t *testing.T) {
 		t.Fatalf("FinalizeReservation returned error: %v", err)
 	}
 
+	// The charge itself, not only the number reported next to it: a regression
+	// that skipped ChargeUsage entirely would still record -22 on the event.
+	if len(ledgerSvc.chargeCalls) != 1 {
+		t.Fatalf("expected exactly one ledger charge, got %#v", ledgerSvc.chargeCalls)
+	}
+	if ledgerSvc.chargeCalls[0].credits != 22 {
+		t.Fatalf("expected a 22-credit charge, got %d", ledgerSvc.chargeCalls[0].credits)
+	}
+
 	var settlements []usage.RecordEventInput
 	for _, event := range usageSvc.eventCalls {
 		if event.EventType == usage.UsageEventCompleted {
