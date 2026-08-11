@@ -98,4 +98,7 @@ Gateway embedding latency of 7 to 17 seconds against a provider that answers in
 about one second is unexplained by this change and is what keeps a
 knowledge-backed answer near 30 seconds instead of near 5. It wants its own
 investigation across edge-api, LiteLLM retry and fallback behaviour, and the
-free-tier embedding pool.
+free-tier embedding pool, and is filed as issue #865 with the measurements.
+
+The other two observations in #832, the Knowledge nav link and the Data
+Controls destructive buttons, are untouched here and are split out to #866.
