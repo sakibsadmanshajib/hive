@@ -97,8 +97,23 @@ type Config struct {
 	ResolveEgressHosts func(ctx context.Context, tenantID, userID uuid.UUID) ([]string, error)
 
 	// AgentProfileID is the server-side agent profile every launched
-	// conversation uses (see the package doc's "known gap" section).
+	// conversation uses (see the package doc's "known gap" section). Ignored
+	// when LLMModel is set.
 	AgentProfileID uuid.UUID
+
+	// LLMModel, LLMBaseURL and LLMAPIKey describe the OpenAI-compatible
+	// endpoint launched conversations call. When LLMModel is set, Launch
+	// sends an inline agent_settings payload instead of AgentProfileID.
+	//
+	// This is the only shape that works on a sandbox launched with
+	// --containall: the agent-server resolves an agent_profile_id against a
+	// profile store on its own filesystem, and that filesystem is a fresh
+	// empty container every session, so no stored profile can ever exist
+	// there. The key reaches the agent-server over the per-session Unix
+	// control socket only.
+	LLMModel   string
+	LLMBaseURL string
+	LLMAPIKey  string
 
 	// SessionAPIKey, when set, is both passed to the sandbox
 	// (sandbox.LaunchConfig.SessionAPIKey, actually enforced server-side)
@@ -362,10 +377,22 @@ func (e *SandboxEngine) Launch(ctx context.Context, t Task) (sessionRef string, 
 	}
 
 	client := controlclient.New(controlSocketPath, e.cfg.SessionAPIKey)
-	profileID := e.cfg.AgentProfileID
 	req := controlclient.StartConversationRequest{
-		Workspace:      controlclient.LocalWorkspace("/workspace"),
-		AgentProfileID: &profileID,
+		Workspace: controlclient.LocalWorkspace("/workspace"),
+	}
+	if e.cfg.LLMModel != "" {
+		req.AgentSettings = &controlclient.AgentSettings{
+			AgentKind: "openhands",
+			LLM: controlclient.LLMSettings{
+				Model:   e.cfg.LLMModel,
+				BaseURL: e.cfg.LLMBaseURL,
+				APIKey:  e.cfg.LLMAPIKey,
+				UsageID: "hive-agent",
+			},
+		}
+	} else {
+		profileID := e.cfg.AgentProfileID
+		req.AgentProfileID = &profileID
 	}
 	if t.Instructions != "" {
 		req.InitialMessage = &controlclient.SendMessageRequest{

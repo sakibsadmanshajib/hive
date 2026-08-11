@@ -1,0 +1,257 @@
+package main
+
+// Daemon mode (issue #780). `agent-engine -serve <socket>` runs the same
+// engine.SandboxEngine control-plane used to construct in-process, but as a
+// long-lived host process behind a Unix socket.
+//
+// Why it exists: SandboxEngine execs the host's `apptainer` binary. On the
+// demo and Enterprise single-box topology control-plane runs inside an
+// Alpine container (deploy/docker/Dockerfile.control-plane) which has no
+// glibc loader for that binary, no /dev/fuse, and no CAP_SYS_ADMIN-class
+// privilege. Granting that container those privileges was considered and
+// refused: it is the same process that holds the Stripe keys, the Supabase
+// service-role key and the platform database DSN, and sandbox-escape-class
+// privilege there is the worst place on the box to put it. Running the
+// launcher as a separate unprivileged host process instead keeps Apptainer's
+// rootless user-namespace launch exactly where it already works and leaves
+// control-plane's capability set untouched.
+//
+// Trust boundary: the socket file itself. It is created 0600 under a
+// directory only the deploying user and root can reach, and bind-mounted
+// into control-plane; anyone who can open it can already read the host
+// filesystem as that user. The shared internal token is checked as well so
+// that a bind mount into one more container does not silently widen the
+// boundary.
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/engineapi"
+	"github.com/sakibsadmanshajib/hive/apps/agent-engine/internal/egressclient"
+)
+
+// InternalTokenHeader is the shared-secret header control-plane sends. It
+// mirrors the header control-plane's own internal endpoints already expect
+// from this binary's egressclient calls.
+const InternalTokenHeader = "X-Internal-Token"
+
+type launchRequest struct {
+	ID           uuid.UUID `json:"id"`
+	TenantID     uuid.UUID `json:"tenant_id"`
+	UserID       uuid.UUID `json:"user_id"`
+	Pack         string    `json:"pack"`
+	Instructions string    `json:"instructions"`
+}
+
+type launchResponse struct {
+	SessionRef string `json:"session_ref"`
+}
+
+type sessionRequest struct {
+	SessionRef string `json:"session_ref"`
+}
+
+type statusResponse struct {
+	Status        string `json:"status"`
+	ResultSummary string `json:"result_summary"`
+	ErrorMessage  string `json:"error_message"`
+}
+
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+// serve runs the daemon until the process is signalled.
+func serve(socketPath, controlPlaneURL, controlPlaneToken string) error {
+	sifPath := os.Getenv("HIVE_AGENT_ENGINE_SIF_PATH")
+	packsDir := os.Getenv("HIVE_AGENT_ENGINE_PACKS_DIR")
+	workspaceRoot := os.Getenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT")
+	runDir := os.Getenv("HIVE_AGENT_ENGINE_RUN_DIR")
+	llmModel := os.Getenv("HIVE_AGENT_ENGINE_LLM_MODEL")
+	profileIDRaw := os.Getenv("HIVE_AGENT_ENGINE_PROFILE_ID")
+	var missing []string
+	for name, v := range map[string]string{
+		"HIVE_AGENT_ENGINE_SIF_PATH":       sifPath,
+		"HIVE_AGENT_ENGINE_PACKS_DIR":      packsDir,
+		"HIVE_AGENT_ENGINE_WORKSPACE_ROOT": workspaceRoot,
+		"HIVE_AGENT_ENGINE_RUN_DIR":        runDir,
+	} {
+		if v == "" {
+			missing = append(missing, name)
+		}
+	}
+	if llmModel == "" && profileIDRaw == "" {
+		missing = append(missing, "HIVE_AGENT_ENGINE_LLM_MODEL (or HIVE_AGENT_ENGINE_PROFILE_ID)")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("agent-engine: -serve needs %v", missing)
+	}
+	var profileID uuid.UUID
+	if profileIDRaw != "" {
+		var err error
+		if profileID, err = uuid.Parse(profileIDRaw); err != nil {
+			return fmt.Errorf("agent-engine: HIVE_AGENT_ENGINE_PROFILE_ID: %w", err)
+		}
+	}
+	for _, dir := range []string{workspaceRoot, runDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("agent-engine: create %s: %w", dir, err)
+		}
+	}
+
+	egress := egressclient.New(controlPlaneURL, controlPlaneToken)
+	engine := engineapi.New(engineapi.Config{
+		SIFPath:       sifPath,
+		PacksDir:      packsDir,
+		WorkspaceRoot: workspaceRoot,
+		RunDir:        runDir,
+		// Fails the launch when the policy cannot be resolved, exactly as
+		// the in-process wiring does: never launch with an unknown egress
+		// policy.
+		ResolveEgressHosts: egress.Effective,
+		AgentProfileID:     profileID,
+		LLMModel:           llmModel,
+		LLMBaseURL:         os.Getenv("HIVE_AGENT_ENGINE_LLM_BASE_URL"),
+		LLMAPIKey:          os.Getenv("HIVE_AGENT_ENGINE_LLM_API_KEY"),
+		SessionAPIKey:      os.Getenv("HIVE_AGENT_ENGINE_SESSION_API_KEY"),
+		QuotaTenantConcurrency: envInt("HIVE_QUOTA_TENANT_CONCURRENCY", 4),
+		QuotaUserConcurrency:   envInt("HIVE_QUOTA_USER_CONCURRENCY", 2),
+		MemoryLimit:            envOr("HIVE_SANDBOX_MEMORY_LIMIT", "4G"),
+		CPULimit:               envOr("HIVE_SANDBOX_CPU_LIMIT", "2"),
+		PidsLimit:              envInt("HIVE_SANDBOX_PIDS_LIMIT", 512),
+	})
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /launch", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req launchRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		ref, err := engine.Launch(r.Context(), engineapi.Task{
+			ID:           req.ID,
+			TenantID:     req.TenantID,
+			UserID:       req.UserID,
+			Pack:         req.Pack,
+			Instructions: req.Instructions,
+		})
+		if err != nil {
+			log.Printf("agent-engine: launch task %s: %v", req.ID, err)
+			writeJSON(w, http.StatusBadGateway, errorResponse{Error: err.Error()})
+			return
+		}
+		log.Printf("agent-engine: launched task %s as session %s", req.ID, ref)
+		writeJSON(w, http.StatusOK, launchResponse{SessionRef: ref})
+	})
+	mux.HandleFunc("POST /status", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req sessionRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		status, summary, errMessage, err := engine.Status(r.Context(), req.SessionRef)
+		if err != nil {
+			code := http.StatusBadGateway
+			if errors.Is(err, engineapi.ErrUnknownSession) {
+				code = http.StatusNotFound
+			}
+			writeJSON(w, code, errorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, statusResponse{
+			Status:        string(status),
+			ResultSummary: summary,
+			ErrorMessage:  errMessage,
+		})
+	})
+	mux.HandleFunc("POST /cancel", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(w, r, controlPlaneToken) {
+			return
+		}
+		var req sessionRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := engine.Cancel(r.Context(), req.SessionRef); err != nil {
+			code := http.StatusBadGateway
+			if errors.Is(err, engineapi.ErrUnknownSession) {
+				code = http.StatusNotFound
+			}
+			writeJSON(w, code, errorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, struct{}{})
+	})
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+
+	// A leftover socket from a killed process would make Listen fail with
+	// EADDRINUSE even though nothing is serving it. The deploy restarts this
+	// daemon on every deploy, so that is the normal path, not the rare one.
+	if err := os.Remove(socketPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("agent-engine: remove stale socket %s: %w", socketPath, err)
+	}
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return fmt.Errorf("agent-engine: listen on %s: %w", socketPath, err)
+	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		return fmt.Errorf("agent-engine: chmod %s: %w", socketPath, err)
+	}
+
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-stop
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	}()
+
+	log.Printf("agent-engine: serving on %s (sif=%s, packs=%s)", socketPath, sifPath, packsDir)
+	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+// authorized enforces the shared internal token when one is configured.
+func authorized(w http.ResponseWriter, r *http.Request, token string) bool {
+	if token == "" || r.Header.Get(InternalTokenHeader) == token {
+		return true
+	}
+	writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "unauthorized"})
+	return false
+}
+
+func decode(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return false
+	}
+	return true
+}
+
+func writeJSON(w http.ResponseWriter, code int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(body)
+}

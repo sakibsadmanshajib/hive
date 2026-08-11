@@ -160,7 +160,36 @@ type SendMessageRequest struct {
 type StartConversationRequest struct {
 	Workspace      Workspace           `json:"workspace"`
 	AgentProfileID *uuid.UUID          `json:"agent_profile_id,omitempty"`
+	AgentSettings  *AgentSettings      `json:"agent_settings,omitempty"`
 	InitialMessage *SendMessageRequest `json:"initial_message,omitempty"`
+}
+
+// AgentSettings is the inline alternative to AgentProfileID: the subset of
+// vendor/openhands/openhands-sdk's OpenHandsAgentSettings
+// (openhands/sdk/settings/model.py) needed to launch a conversation without
+// a profile stored server-side. StartConversationRequest's own validator
+// (openhands/sdk/conversation/request.py) treats agent_profile_id and
+// agent_settings as mutually exclusive, and requires one of them.
+//
+// This exists because a sandbox launched with --containall has no persisted
+// profile store at all: every session starts from a fresh, empty container
+// filesystem, so an agent_profile_id can only ever resolve to
+// ProfileNotFound there. The credentials travel over the per-session Unix
+// control socket, never over a network, and are never written to disk by
+// this client.
+type AgentSettings struct {
+	AgentKind string      `json:"agent_kind"`
+	LLM       LLMSettings `json:"llm"`
+}
+
+// LLMSettings mirrors the LLM fields (openhands/sdk/llm/llm.py) an
+// OpenAI-compatible gateway needs. Every other field on that model has a
+// default, so this is the whole shape a Hive-gateway-backed launch sets.
+type LLMSettings struct {
+	Model   string `json:"model"`
+	BaseURL string `json:"base_url,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
+	UsageID string `json:"usage_id,omitempty"`
 }
 
 // ConversationInfo is the subset of
