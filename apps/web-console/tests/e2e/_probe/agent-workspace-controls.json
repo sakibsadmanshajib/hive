@@ -1,32 +1,175 @@
 {
   "surface": "agent-workspace (Cowork, apps/agent-console, served at /agent-workspace)",
-  "generated_by": "apps/web-console/scripts/build-agent-workspace-coverage.mjs",
-  "note": "This file is the enumeration ledger, hand-maintained. coverage.json (generated, gitignored) merges this against a live Playwright JSON run to compute proven/total. Add a control here whenever the UI grows one; never renumber an id once a run has used it.",
+  "consumed_by": "apps/web-console/scripts/build-agent-workspace-coverage.mjs",
+  "note": "The control ledger. It is edited by hand, and control C23 in agent-workspace-flows.spec.ts checks that hand against the deployed page: it enumerates every focusable control the two screens actually render and requires the set to equal the `dom` values below. A control that ships without an entry here fails that test rather than quietly shrinking the denominator. Entries with an empty `dom` are behaviours rather than elements (a redirect, an API status, an error state), so nothing in the DOM can enumerate them. The coverage file is generated from a live run and is not committed; see the build script. Never renumber an id once a run has used it.",
   "not_present": [
-    "Log or output pane: the task console has no live transcript surface yet (task-console.tsx: \"There is no live transcript yet\"). Nothing to enumerate here until one ships."
+    {
+      "what": "Live transcript or output pane",
+      "why": "The task console has no live transcript surface yet (task-console.tsx: \"There is no live transcript yet\"), so there is no control to enumerate.",
+      "guard": "C23 asserts the tasks screen renders no role=log element, so this claim fails the run the day a transcript ships."
+    }
   ],
   "controls": [
-    { "id": "C1", "description": "Sign-in: email input", "requires_creds": false },
-    { "id": "C2", "description": "Sign-in: password input", "requires_creds": false },
-    { "id": "C3", "description": "Sign-in: submit button (invalid credentials path)", "requires_creds": false },
-    { "id": "C4", "description": "Sign-in: error alert region", "requires_creds": false },
-    { "id": "C5", "description": "Sign-in: native required-field validation blocks submit", "requires_creds": false },
-    { "id": "C6", "description": "Unauthenticated /agent-workspace redirects to sign-in", "requires_creds": false },
-    { "id": "C7", "description": "Unauthenticated /agent-workspace/tasks redirects to sign-in", "requires_creds": false },
-    { "id": "C8", "description": "Sign-in: submit button (valid credentials path)", "requires_creds": true },
-    { "id": "C9", "description": "AppHeader: Back to chat link", "requires_creds": true },
-    { "id": "C10", "description": "Task composer: instructions textarea", "requires_creds": true },
-    { "id": "C11", "description": "Pack radio: Coding", "requires_creds": true },
-    { "id": "C12", "description": "Pack radio: Knowledge work", "requires_creds": true },
-    { "id": "C13", "description": "Empty-instructions submit shows inline validation, fires no request", "requires_creds": true },
-    { "id": "C14", "description": "Ctrl+Enter submits the composer", "requires_creds": true },
-    { "id": "C15", "description": "Start task button creates a task via the API", "requires_creds": true },
-    { "id": "C16", "description": "EngineNotice banner explains the engine-unavailable block", "requires_creds": true },
-    { "id": "C17", "description": "Cancel button withheld once a task is terminal, guard also enforced server side", "requires_creds": true },
-    { "id": "C18", "description": "Empty state (\"Nothing submitted yet\") when the account has no tasks", "requires_creds": true },
-    { "id": "C19", "description": "Task list load failure renders the retry/reload banner", "requires_creds": true },
-    { "id": "C20", "description": "Task create failure renders its own error, keeps the draft text", "requires_creds": true },
-    { "id": "C21", "description": "Expired session reported instead of a silent failure on submit", "requires_creds": true },
-    { "id": "C22", "description": "GET /v1/agent/tasks requires auth (401 unauthenticated)", "requires_creds": false }
+    {
+      "id": "C1",
+      "description": "Sign-in: email input",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": "input[email]#email"
+    },
+    {
+      "id": "C2",
+      "description": "Sign-in: password input",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": "input[password]#password"
+    },
+    {
+      "id": "C3",
+      "description": "Sign-in: submit button (invalid credentials path)",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": "button[submit]:Sign in"
+    },
+    {
+      "id": "C4",
+      "description": "Sign-in: error alert region",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": ""
+    },
+    {
+      "id": "C5",
+      "description": "Sign-in: required attributes are advisory only, because the form is noValidate, so an empty submit reaches the server and surfaces the same error as a wrong password",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": ""
+    },
+    {
+      "id": "C6",
+      "description": "Unauthenticated /agent-workspace redirects to sign-in",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": ""
+    },
+    {
+      "id": "C7",
+      "description": "Unauthenticated /agent-workspace/tasks redirects to sign-in",
+      "requires_creds": false,
+      "screen": "sign-in",
+      "dom": ""
+    },
+    {
+      "id": "C8",
+      "description": "Sign-in: submit button (valid credentials path)",
+      "requires_creds": true,
+      "screen": "sign-in",
+      "dom": ""
+    },
+    {
+      "id": "C9",
+      "description": "AppHeader: Back to chat link",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": "a:Back to chat"
+    },
+    {
+      "id": "C10",
+      "description": "Task composer: instructions textarea",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": "textarea#task-instructions"
+    },
+    {
+      "id": "C11",
+      "description": "Pack radio: Coding",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": "input[radio]=coding-pack"
+    },
+    {
+      "id": "C12",
+      "description": "Pack radio: Knowledge work",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": "input[radio]=knowledge-work-pack"
+    },
+    {
+      "id": "C13",
+      "description": "Start task button with empty instructions shows inline validation and fires no request",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": "button[submit]:Start task"
+    },
+    {
+      "id": "C14",
+      "description": "Ctrl+Enter submits the composer",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C15",
+      "description": "Task create round-trips through POST /v1/agent/tasks and the new row appears in the list",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C16",
+      "description": "EngineNotice reflects the deployment's current runtime state, so it is absent while a real agent runtime is configured",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C17",
+      "description": "Cancel button stops a task that is still running, and a second cancel on the now-terminal task is refused server side with 409",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": "button[button]:Cancel"
+    },
+    {
+      "id": "C18",
+      "description": "Empty state (\"Nothing submitted yet\") when the list holds no tasks",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C19",
+      "description": "Task list load failure renders the retry/reload banner",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C20",
+      "description": "Task create failure renders its own error, keeps the draft text",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C21",
+      "description": "Expired session reported instead of a silent failure on submit",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    },
+    {
+      "id": "C22",
+      "description": "GET /v1/agent/tasks requires auth (401 unauthenticated)",
+      "requires_creds": false,
+      "screen": "api",
+      "dom": ""
+    },
+    {
+      "id": "C23",
+      "description": "Every focusable control rendered on the sign-in and tasks screens is claimed by this ledger, and no live transcript pane exists yet",
+      "requires_creds": true,
+      "screen": "tasks",
+      "dom": ""
+    }
   ]
 }
