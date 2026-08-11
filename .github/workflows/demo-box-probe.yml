@@ -1,9 +1,8 @@
 name: demo-box-probe
 
-# Temporary read-only probe of the demo box, run through the self-hosted
-# runner because there is no SSH path to that host from anywhere else. It
-# prints host capability facts only: never a value out of the box's .env,
-# only key names. Deleted before this branch merges.
+# Temporary pre-merge bring-up of this branch on the demo box, run through the
+# self-hosted runner because there is no SSH path to that host from anywhere
+# else. It never prints a secret value. Deleted before this branch merges.
 
 on:
   push:
@@ -14,83 +13,51 @@ concurrency:
   group: demo-box-probe
   cancel-in-progress: true
 
-env:
-  RUNTIME_DIR: /home/sakib/agent-runtime
-
 jobs:
-  probe:
+  bring-up:
     runs-on: [self-hosted, hive-demo]
     permissions:
       actions: read
+      contents: read
     timeout-minutes: 30
     steps:
-      - name: Session bus facts
-        run: |
-          set -uo pipefail
-          echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-unset}"
-          echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unset}"
-          ls -l /run/user/1000/bus 2>&1 || echo "no /run/user/1000/bus"
-          ls -ld /run/user/1000 2>&1 || echo "no /run/user/1000"
-          loginctl show-user sakib 2>&1 | head -8 || true
-          cat /sys/fs/cgroup/user.slice/user-1000.slice/cgroup.controllers 2>&1 || echo "no user slice controllers"
+      - uses: actions/checkout@v4
 
-      - name: Launch with a user session bus in the environment
+      - name: Install and restart the agent-engine launch daemon from this branch
         env:
-          XDG_RUNTIME_DIR: /run/user/1000
-          DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+          GH_TOKEN: ${{ github.token }}
+          HIVE_AGENT_ENGINE_LLM_MODEL: openai/hive-default
+          HIVE_AGENT_ENGINE_LLM_BASE_URL: https://api-hive.scubed.co/v1
+          HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
+        run: |
+          set -euo pipefail
+          CONTROL_PLANE_INTERNAL_TOKEN=$(grep -E '^CONTROL_PLANE_INTERNAL_TOKEN=' /home/sakib/hive/.env | head -1 | cut -d= -f2-)
+          export CONTROL_PLANE_INTERNAL_TOKEN
+          REPO_DIR="$GITHUB_WORKSPACE" bash scripts/install-agent-engine-host.sh
+
+      - name: Recreate control-plane from this branch, pointed at the socket
+        working-directory: deploy/docker
+        env:
+          HIVE_AGENT_ENGINE_SOCKET_DIR: /home/sakib/agent-runtime/run
+          HIVE_AGENT_ENGINE_SOCKET: /run/hive-agent/engine.sock
+        run: |
+          set -euo pipefail
+          existing=$(grep -E '^SUPABASE_DB_URL=' /home/sakib/hive/.env | head -1 | cut -d= -f2-)
+          existing="${existing%\"}"; existing="${existing#\"}"
+          eval "$(python3 /home/sakib/hive/scripts/derive-pooler-dsn.py --dsn "$existing" | sed 's/^/export /')"
+          docker compose -p hive --env-file /home/sakib/hive/.env \
+            --profile local --profile chat up -d --build control-plane
+
+      - name: Prove control-plane reached the daemon
         run: |
           set -uo pipefail
-          sess=$(mktemp -d "$RUNTIME_DIR/probe-XXXX")
-          ctl="$sess/c"; work="$sess/w"
-          mkdir -p "$ctl" "$work"
-          egress="$sess/e.sock"
-          python3 -c "import socket,sys;s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);s.bind(sys.argv[1]);s.listen(8);[s.accept()[0].close() for _ in iter(int,1)]" "$egress" &
-          egress_pid=$!
-          for _ in $(seq 1 50); do [ -S "$egress" ] && break; sleep 0.1; done
-
-          apptainer run \
-            --pid --containall --net --network none \
-            --no-mount hostfs --no-mount bind-paths \
-            --memory 4G --cpus 2 --pids-limit 512 \
-            --env HTTP_PROXY=http://127.0.0.1:3128 \
-            --env HTTPS_PROXY=http://127.0.0.1:3128 \
-            --env NO_PROXY=127.0.0.1,localhost \
-            --env HIVE_CONTROL_TARGET_PORT=38080 \
-            --bind "$egress":/opt/hive/egress.sock \
-            --bind "$ctl":/opt/hive/control \
-            --bind /home/sakib/hive/apps/agent-engine/packs/coding-pack:/opt/hive/pack:ro \
-            --bind "$work":/workspace \
-            "$RUNTIME_DIR/agent-engine.sif" --host 0.0.0.0 --port 38080 \
-            > "$sess/sandbox.log" 2>&1 &
-          sandbox_pid=$!
-
-          ok=no
-          for _ in $(seq 1 180); do
-            if [ -S "$ctl/agent.sock" ]; then ok=yes; break; fi
-            kill -0 "$sandbox_pid" 2>/dev/null || { echo "sandbox process died"; break; }
-            sleep 1
+          for _ in $(seq 1 30); do
+            docker logs hive-control-plane-1 2>&1 | grep -E "agent-engine daemon" && break
+            sleep 5
           done
-          echo "CONTROL_SOCKET_PRESENT=$ok"
-
-          if [ "$ok" = yes ]; then
-            for _ in $(seq 1 60); do
-              body=$(curl -s --max-time 5 --unix-socket "$ctl/agent.sock" http://localhost/health || true)
-              [ -n "$body" ] && break
-              sleep 2
-            done
-            echo "HEALTH=$body"
-            echo "== POST /api/conversations with inline agent_settings =="
-            curl -s --max-time 60 --unix-socket "$ctl/agent.sock" \
-              -H 'Content-Type: application/json' \
-              -d '{"workspace":{"kind":"local","working_dir":"/workspace"},"agent_settings":{"agent_kind":"openhands","llm":{"model":"openai/hive-probe-model","base_url":"https://api-hive.scubed.co/v1","api_key":"probe-not-a-real-key","usage_id":"hive-agent"}}}' \
-              http://localhost/api/conversations | head -c 1500 || true
-            echo
-          fi
-
-          echo "== sandbox log (tail) =="
-          tail -30 "$sess/sandbox.log" || true
-
-          kill "$sandbox_pid" 2>/dev/null || true
-          kill "$egress_pid" 2>/dev/null || true
-          sleep 2
-          rm -rf "$sess"
+          echo "== control-plane health =="
+          curl -sS --max-time 10 http://127.0.0.1:8081/health || true
+          echo
+          echo "== daemon health from the host =="
+          curl -sS --max-time 10 --unix-socket /home/sakib/agent-runtime/run/engine.sock http://localhost/health
+          echo
