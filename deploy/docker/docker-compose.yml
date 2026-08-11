@@ -848,7 +848,29 @@ services:
       # crash-looped this container and returned 502 on chat-hive.scubed.co.
       PGVECTOR_DB_URL: ${SUPABASE_DB_POOL_URL_LIBPQ:-${SUPABASE_DB_URL:-}}
       RAG_TOP_K: "5"
-      ENABLE_RAG_HYBRID_SEARCH: "true"
+      # Off by default because this deployment configures no reranking model,
+      # and Open WebUI's hybrid path is not merely "vector plus BM25" without
+      # one. retrieval/utils.py builds a RerankCompressor for every hybrid
+      # query, and when reranking_function is None that compressor re-embeds
+      # the query and every retrieved document through the same embedder just
+      # to compute cosine similarity, which the vector search has already
+      # produced. One question therefore costs three gateway embedding round
+      # trips instead of one. Measured live on the demo box (issue #832): each
+      # embedding call takes 7 to 17 seconds through the gateway, so a single
+      # /api/v1/retrieval/query/collection took longer than Caddyfile.owui's
+      # 60s response_header_timeout and every knowledge-backed answer died as a
+      # 504 before the model was ever called. With this off the same query
+      # returns in about 29 seconds and a knowledge-backed chat answer arrives
+      # in about 35 seconds with its citation.
+      #
+      # Set OWUI_RAG_HYBRID_SEARCH=true to turn it back on, which is the right
+      # move once a reranking model exists in the catalog: with a real reranker
+      # the compressor calls that instead of re-embedding, and hybrid recall is
+      # worth the one extra call. Reconciled on every boot by
+      # owui-patches/hive_rag_env_config.py for the same first-boot-wins reason
+      # as the keys above, so flipping it here reaches a deployment that has
+      # already booted.
+      ENABLE_RAG_HYBRID_SEARCH: ${OWUI_RAG_HYBRID_SEARCH:-false}
       DATA_DIR: "/data"
       STATIC_DIR: "/data/static"
       OWUI_E2E_MODE: ${OWUI_E2E_MODE:-false}
