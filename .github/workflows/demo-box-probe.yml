@@ -23,6 +23,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Logs from before anything is restarted
+        env:
+          XDG_RUNTIME_DIR: /run/user/1000
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+        run: |
+          set -uo pipefail
+          echo "== daemon journal, last hour =="
+          journalctl --user -u hive-agent-engine.service --since "60 min ago" --no-pager 2>&1 | tail -60
+          echo "== control-plane, last 30 min, agent lines =="
+          docker logs --since 30m hive-control-plane-1 2>&1 | grep -iE "agent|launch|task|sandbox" | tail -40
+
       - name: Install and restart the agent-engine launch daemon from this branch
         env:
           GH_TOKEN: ${{ github.token }}
