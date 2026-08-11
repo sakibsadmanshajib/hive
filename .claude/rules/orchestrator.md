@@ -12,7 +12,7 @@ The main agent never edits code or docs, commits, pushes, resolves review thread
 4. Code, commits, PR bodies, issues, review comments: normal professional prose. No dash punctuation in prose.
 
 ## Context hygiene
-context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, ctx_fetch_and_index); Bash only for git, mkdir, rm, mv, navigation, short output. Superpowers skills for structure (brainstorming, writing-plans, systematic-debugging, verification-before-completion). claude-mem is the cross-session store: search before familiar-smelling work, record observations after solving anything notable. Keep the task ledger current; after a process restart rebuild it from GitHub ground truth, never from memory.
+context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, ctx_fetch_and_index); Bash only for git, mkdir, rm, mv, navigation, short output. Carve-out for pipeline commands: `gh pr create`, `gh pr comment`, `coderabbit review`, `gh run watch` (steps 5-10 above). Superpowers skills for structure (brainstorming, writing-plans, systematic-debugging, verification-before-completion). claude-mem is the cross-session store: search before familiar-smelling work, record observations after solving anything notable. Keep the task ledger current; after a process restart rebuild it from GitHub ground truth, never from memory.
 
 ## Agent fleet rules
 1. Library-first subagent selection with explicit subagent_type. planner, architect, and Explore are read only, never give them write tasks.
@@ -23,6 +23,23 @@ context-mode tools for everything (ctx_execute, ctx_batch_execute, ctx_search, c
 6. haiku only for watch loops and single-shot queries, sonnet default, opus for design docs, security review, and quality-critical generation.
 7. After any worktree agent completes, verify the shared checkout is still on main.
 8. Visual proof before merge (non-negotiable, owner directive 2026-07-21): no feature or fix touching a live UI/UX surface merges, and no completion claim reaches the owner, without a fresh screenshot or screen recording taken against the actually-running stack after the change, showing the claimed behavior. The proof artifact itself must be posted in the PR (attached to the PR body or a PR comment), not just described in a subagent's text report or held in a scratch dir. A text description alone is not proof. Bypass only on explicit owner instruction for that specific change. Applies to the main agent's own claims to the owner as much as to builder self-reports. Any flow whose URL carries a credential in the query string (invitation accept, password reset, magic link, OAuth callback) must have that value redacted in both the captured text log and the screenshot's URL overlay before commit, never the raw value (PR #578 leaked four real invite tokens this way; `npm run lint:proof-tokens` catches the text half in CI but cannot inspect screenshot pixels, so masking the image is on the capturing agent).
+
+## Coding pipeline (every dispatched implementation task)
+
+Every task the orchestrator hands to a builder subagent runs this sequence. The subagent executes each stage itself; the orchestrator only dispatches, verifies, and merges, per Orchestrator only (strict) above.
+
+1. Context: read .wolf/decisions.md, .wolf/cerebrum.md, and .wolf/anatomy.md, plus the touched code, before proposing anything.
+2. Plan: superpowers:writing-plans (superpowers:brainstorming first if the design is still open), final plan saved to the Obsidian vault per the obsidian-working-docs rule.
+3. Spec: spec-driven-development skill for requirements and acceptance criteria before code, folded into the same vault doc.
+4. Implement: TDD (superpowers:test-driven-development / tdd-guide), in the task's own worktree, per Agent fleet rules above.
+5. Open the PR now, before review starts (gh pr create; a draft PR is fine). Review comments land on this PR, not a private report.
+6. Adversarial review: adversarial-pr-review skill, pipeline mode. Stream 1 runs CodeRabbit (`coderabbit review --agent -t all --base main`, installed locally), parses its structured findings, publishes each as an inline PR comment (via `gh pr comment`), and confirms publication succeeded before proceeding. A clean pass from the CodeRabbit GitHub App bot alone is not proof, since credit or rate limit exhaustion can silently zero findings out, per project_coderabbit_merge_ops memory. Stream 2 is domain peer review (code-review-and-quality by default, frontend-ui-engineering or emil-design-eng for UI, api-and-interface-design for interface changes, security-and-hardening plus security-reviewer or database-reviewer for auth, money, or input-parsing paths), run by an independent subagent with no shared context with Stream 1. Both streams post their findings as inline PR comments.
+6a. (Builder, not orchestrator): Address every posted comment, either with a fix or a reasoned rebuttal, resolve the thread, and rerun any tests the fix touches. Push fixes to the same branch; the PR auto-updates.
+8. (Orchestrator, not builder): Verify: superpowers:verification-before-completion applied by orchestrator only. Confirm CI is green and zero threads are unresolved before merge, per Thread clearing and Merge policy above.
+9. (Orchestrator, not builder): Merge: orchestrator only. Squash and delete the branch, per Thread clearing and Merge policy above.
+10. (Orchestrator, not builder): Deploy: automatic, since pushing to main triggers deploy-demo-box.yml and deploy-web-console-workers.yml. Orchestrator confirms the triggered run actually succeeds (`gh run watch`) before reporting the task done. UI-touching changes still need the visual-proof screenshot required above, captured against the deployed result once step 10 lands.
+
+Skip a stage only when it plainly does not apply (a one-line typo fix has no meaningful spec), and say so in the report. Never skip stage 6 or stage 8 for anything touching auth, money, or input-parsing paths.
 
 ## Repetitive work
 When a task pattern repeats three or more times, mint a repo-local skill via skill-creator. Use claude-md-management skills for CLAUDE.md upkeep. Hooks for anything that must fire automatically.
