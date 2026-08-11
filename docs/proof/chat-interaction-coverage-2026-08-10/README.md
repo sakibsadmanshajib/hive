@@ -72,3 +72,28 @@ intercepted origin so the failing button has a same origin endpoint whose
 status the prover can read.
 
 No credential appears in this directory.
+
+## Run notes: the box timed out twice under our own load
+
+Recorded here because two independent surfaces failing under agent load is a
+stability signal rather than noise, and because a silent re-run would have
+hidden it.
+
+- The console box returned 504 on seven routes during an earlier attempt at the
+  console sweep on the same evening: /console/members, /console/settings/billing,
+  /console/settings/profile, /console/setup, /invitations/accept, /no-workspace
+  and /oauth/consent. It recovered unattended, matching #815.
+- The Supabase magic link mint answered 504 once, which failed a run at the
+  authentication step before any control was touched.
+
+Both recovered without intervention. Every figure recorded in this directory
+comes from a run with no 504 in it.
+
+## The percentage is not a stable measure yet
+
+The search surface is the chat list, so its control count is the number of
+chats the account holds: 52 Chat Menu buttons and 25 New Chat links, one per
+row, several of them left behind by other automated runs. The denominator
+therefore drifts with data state rather than with the product, which is why
+this run is not comparable to the previous one. Recommendation is in PR #809
+and is deliberately not implemented here.
