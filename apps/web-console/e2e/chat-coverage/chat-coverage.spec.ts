@@ -571,7 +571,9 @@ test.describe("chat interaction coverage", () => {
     const lines = [
       `# Chat interaction coverage`,
       ``,
-      `Proven ${summary.proven}/${summary.total} (${(summary.ratio * 100).toFixed(1)}%)`,
+      `Proven ${summary.identitiesProven}/${summary.identities} distinct control identities (${(summary.identityRatio * 100).toFixed(1)}%)`,
+      ``,
+      `Secondary, not comparable between runs: ${summary.proven}/${summary.total} raw instances (${(summary.ratio * 100).toFixed(1)}%). Instance counts move with account data, for example the number of chat rows, so only the identity figure above should be compared over time.`,
       ``,
       `| surface | proven | total |`,
       `| --- | ---: | ---: |`,
@@ -588,7 +590,7 @@ test.describe("chat interaction coverage", () => {
 
     // eslint-disable-next-line no-console
     console.log(
-      `[coverage] TOTAL ${summary.proven}/${summary.total} (${(summary.ratio * 100).toFixed(1)}%)`,
+      `[coverage] TOTAL ${summary.identitiesProven}/${summary.identities} identities (${(summary.identityRatio * 100).toFixed(1)}%), ${summary.proven}/${summary.total} instances`,
     );
 
     expect(errors, `surfaces that could not be swept: ${errors.join(" | ")}`).toEqual([]);

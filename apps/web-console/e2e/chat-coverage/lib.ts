@@ -526,6 +526,19 @@ export async function readState(page: Page, covId: string): Promise<string | nul
   }, covId);
 }
 
+/**
+ * Collapses instance keys to the identity they are instances of.
+ *
+ * The enumerator appends an ordinal to a duplicate key, so 52 rows of the chat
+ * list produce 52 keys that differ only by that ordinal. Counting them as 52
+ * controls made the ratio track how many chats the account happens to hold,
+ * which is our own test litter as much as anything, rather than tracking the
+ * product. One identity is one thing a user can do.
+ */
+export function identityOf(key: string): string {
+  return key.replace(/#\d+$/, "");
+}
+
 export function summarise(results: Result[]) {
   const bySurface = new Map<string, { total: number; proven: number; unproven: string[] }>();
   for (const r of results) {
@@ -537,11 +550,36 @@ export function summarise(results: Result[]) {
   }
   const total = results.length;
   const proven = results.filter((r) => r.proven).length;
+  // Primary figure. An identity counts as proven only when every instance of
+  // it proved, so a control that works on the first chat row and fails on the
+  // seventh is unproven, and the gate fails on the failing instance anyway
+  // because it fails on any unproven result at all.
+  const byIdentity = new Map<string, { instances: number; proven: number }>();
+  for (const r of results) {
+    const id = identityOf(r.key);
+    const cell = byIdentity.get(id) ?? { instances: 0, proven: 0 };
+    cell.instances += 1;
+    if (r.proven) cell.proven += 1;
+    byIdentity.set(id, cell);
+  }
+  const identityTotal = byIdentity.size;
+  const identityProven = [...byIdentity.values()].filter(
+    (cell) => cell.proven === cell.instances,
+  ).length;
   return {
+    // Primary. Distinct control identities, independent of how many rows of
+    // repeated chrome the account happens to render.
+    identities: identityTotal,
+    identitiesProven: identityProven,
+    identityRatio:
+      identityTotal === 0 ? 0 : Number((identityProven / identityTotal).toFixed(4)),
+    // Secondary, and not comparable between runs: raw instances, whose count
+    // moves with account data rather than with the product.
     total,
     proven,
     ratio: total === 0 ? 0 : Number((proven / total).toFixed(4)),
     surfaces: Object.fromEntries(bySurface),
+    identityInstances: Object.fromEntries(byIdentity),
   };
 }
 

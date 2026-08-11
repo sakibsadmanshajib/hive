@@ -4,9 +4,21 @@ Re-measurement after the engine was taught to read HTTP statuses. Run against
 https://chat-hive.scubed.co, signed in through the shared live-auth helper,
 which mints a session without touching any password.
 
-**248 of 270 enumerated controls proven, 91.9 percent.**
+**144 of 165 distinct control identities proven, 87.3 percent.**
 
-The 2026-08-08 run recorded 196 of 222, 88.3 percent.
+Secondary and not comparable between runs: 248 of 270 raw instances, 91.9
+percent. The instance figure is the one this file first carried and it is
+superseded, because an instance count moves with how many chat rows the
+account holds rather than with the product.
+
+An identity counts as proven only when every instance of it proved, so a
+control that works on the first chat row and fails on the seventh is
+unproven. The gate fails on the failing instance regardless, because it
+fails on any unproven result at all, so collapsing instances cannot hide a
+broken one. Each identity carries its instance count in the ledger under
+summary.identityInstances.
+
+The 2026-08-08 run recorded 196 of 222 instances, 88.3 percent. It predates the identity metric and is not comparable to either figure above.
 
 ## Two controls the old predicate called proven are broken
 
