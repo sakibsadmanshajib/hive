@@ -69,6 +69,10 @@ on:
       # script would merge and never redeploy to pick the fix up.
       - 'scripts/check-retention-schedule.sh'
       - 'scripts/derive-pooler-dsn.py'
+      # Installs and restarts the host-side agent-engine launch daemon in the
+      # deploy job below. Same blind spot as every other script listed here:
+      # without an entry, a fix to it would merge and never deploy.
+      - 'scripts/install-agent-engine-host.sh'
       # Both halves of the hive_jwt_forward install (#556). Without these
       # entries a fix to the installer itself would merge and never deploy,
       # the same blind spot the supabase/migrations entry above exists for.
@@ -201,11 +205,15 @@ jobs:
     name: Pull + recreate stack on the demo box
     needs: migrate
     runs-on: [self-hosted, hive-demo]
-    # This job never checks out the repo (the box already has its own clone),
-    # and makes no GitHub API calls of its own: failure reporting lives in the
-    # report-failure job at the end of this file, so that a failed migrate is
-    # reported too rather than vanishing when this job is skipped.
-    permissions: {}
+    # This job never checks out the repo (the box already has its own clone).
+    # Failure reporting lives in the report-failure job at the end of this
+    # file, so that a failed migrate is reported too rather than vanishing
+    # when this job is skipped. actions:read exists for one reason: the
+    # agent-engine step below downloads the CI-built Apptainer image when the
+    # box has none, since that image is linux/amd64 only and cannot be built
+    # on the dev machine.
+    permissions:
+      actions: read
     timeout-minutes: 15
     steps:
       - name: Pull latest main
@@ -215,6 +223,49 @@ jobs:
           git checkout main
           git fetch origin
           git pull --ff-only origin main
+
+      - name: Install and restart the agent-engine launch daemon
+        # Issue #780. Cowork tasks need an Apptainer sandbox per task, and
+        # control-plane's own container cannot exec Apptainer. The launcher
+        # therefore runs on the box as this unprivileged user and
+        # control-plane talks to it over a Unix socket; see the script header
+        # for why the container is deliberately NOT given that privilege.
+        working-directory: /home/sakib/hive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CONTROL_PLANE_INTERNAL_TOKEN: ${{ secrets.CONTROL_PLANE_INTERNAL_TOKEN }}
+          HIVE_AGENT_ENGINE_LLM_MODEL: ${{ vars.HIVE_AGENT_ENGINE_LLM_MODEL || 'openai/hive-default' }}
+          HIVE_AGENT_ENGINE_LLM_BASE_URL: ${{ vars.HIVE_AGENT_ENGINE_LLM_BASE_URL || 'https://api-hive.scubed.co/v1' }}
+          HIVE_AGENT_ENGINE_LLM_API_KEY: ${{ secrets.HIVE_API_KEY }}
+          HIVE_AGENT_ENGINE_SESSION_API_KEY: ${{ secrets.HIVE_AGENT_ENGINE_SESSION_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CONTROL_PLANE_INTERNAL_TOKEN:-}" ]; then
+            # The box's .env is the source of truth for this token; the
+            # secret is optional so a box that only has it there still works.
+            CONTROL_PLANE_INTERNAL_TOKEN=$(grep -E '^CONTROL_PLANE_INTERNAL_TOKEN=' .env | head -1 | cut -d= -f2-)
+            export CONTROL_PLANE_INTERNAL_TOKEN
+          fi
+          bash scripts/install-agent-engine-host.sh
+
+      - name: Point control-plane at the launch daemon's socket
+        # Shell environment beats --env-file in compose interpolation, so
+        # exporting here is what actually reaches the container (the same
+        # mechanism the pooler DSN step below relies on). The values are also
+        # appended to the box's .env when absent, so that a compose run by
+        # hand on the box behaves like the deploy rather than silently coming
+        # up with the agent engine unconfigured.
+        working-directory: /home/sakib/hive
+        run: |
+          set -euo pipefail
+          socket_dir=/home/sakib/agent-runtime/run
+          socket_in_container=/run/hive-agent/engine.sock
+          {
+            echo "HIVE_AGENT_ENGINE_SOCKET_DIR=$socket_dir"
+            echo "HIVE_AGENT_ENGINE_SOCKET=$socket_in_container"
+          } >> "$GITHUB_ENV"
+          grep -qE '^HIVE_AGENT_ENGINE_SOCKET_DIR=' .env || echo "HIVE_AGENT_ENGINE_SOCKET_DIR=$socket_dir" >> .env
+          grep -qE '^HIVE_AGENT_ENGINE_SOCKET=' .env || echo "HIVE_AGENT_ENGINE_SOCKET=$socket_in_container" >> .env
 
       - name: Derive the pooler DSN split from the box's own .env
         # The box's .env holds one SUPABASE_DB_URL, pointing at Supavisor's

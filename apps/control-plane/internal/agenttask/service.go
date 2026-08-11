@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -44,6 +45,11 @@ const engineUnavailableMessage = "agent engine is not available on this deployme
 // record.
 const engineLaunchFailedMessage = "agent engine could not start the task"
 
+// launchTimeout bounds one launch attempt. A cold sandbox has to mount a
+// multi-gigabyte image and start a Python server inside it before it answers
+// anything, so this is minutes rather than seconds.
+const launchTimeout = 5 * time.Minute
+
 // CreateTask persists a new task and attempts to hand it to the agent-engine.
 // Any Launch error, including ErrEngineNotConfigured, transitions the task
 // straight to StatusFailed so a caller never polls a task that can never
@@ -60,16 +66,28 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 		return Task{}, err
 	}
 
-	sessionRef, err := s.engine.Launch(ctx, t)
+	// Everything from here on runs on a context detached from the caller's.
+	// A launch cold-starts a sandbox, which takes tens of seconds, and the
+	// browser tab that submitted the task is free to go away in the middle
+	// of that. Measured on the demo box: closing the tab cancelled the
+	// request context, the launch died with "context canceled", and the task
+	// was recorded as failed for a reason that had nothing to do with the
+	// task. Worse, the Transition calls below would inherit the same dead
+	// context and fail too, leaving the row queued forever.
+	opCtx := context.WithoutCancel(ctx)
+	launchCtx, cancel := context.WithTimeout(opCtx, launchTimeout)
+	defer cancel()
+
+	sessionRef, err := s.engine.Launch(launchCtx, t)
 	switch {
 	case err == nil:
-		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusRunning, sessionRef, "", "")
+		return s.repo.Transition(opCtx, tenantID, userID, t.ID, StatusRunning, sessionRef, "", "")
 	case errors.Is(err, ErrEngineNotConfigured):
-		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", engineUnavailableMessage)
+		return s.repo.Transition(opCtx, tenantID, userID, t.ID, StatusFailed, "", "", engineUnavailableMessage)
 	default:
-		slog.Default().WarnContext(ctx, "agenttask: launch failed, engine detail",
+		slog.Default().WarnContext(opCtx, "agenttask: launch failed, engine detail",
 			"task_id", t.ID, "error", err)
-		return s.repo.Transition(ctx, tenantID, userID, t.ID, StatusFailed, "", "", engineLaunchFailedMessage)
+		return s.repo.Transition(opCtx, tenantID, userID, t.ID, StatusFailed, "", "", engineLaunchFailedMessage)
 	}
 }
 

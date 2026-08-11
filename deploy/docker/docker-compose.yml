@@ -114,10 +114,13 @@ services:
     # the placeholder tenant/user do not exist in this database (egress
     # policy resolution 500s for an unknown tenant) -- expected for a
     # placeholder ID, not a regression. Real per-task sandbox launches do
-    # not go through this container at all: apps/control-plane embeds
-    # apps/agent-engine/engineapi in-process (see cmd/server/main.go's
-    # buildAgentEngine) and calls it directly on whatever host runs
-    # control-plane.
+    # not go through this container at all: when HIVE_AGENT_ENGINE_SOCKET is
+    # set, control-plane sends them to the unprivileged host daemon
+    # (apps/agent-engine/cmd/agent-engine -serve, installed by
+    # scripts/install-agent-engine-host.sh) over that Unix socket; see
+    # cmd/server/main.go's buildAgentEngine. Only a deployment where
+    # control-plane itself can exec Apptainer falls back to the in-process
+    # engineapi wiring below that branch.
     command:
       - "-tenant=00000000-0000-0000-0000-000000000000"
       - "-user=00000000-0000-0000-0000-000000000000"
@@ -279,6 +282,10 @@ services:
       # access). control-plane calls POST /containers/<name>/restart over the
       # Unix socket directly via net/http; no docker CLI binary is needed.
       - /var/run/docker.sock:/var/run/docker.sock
+      # Issue #780 — the agent-engine launch daemon's socket directory on the
+      # host. Empty on a host that runs no daemon, in which case
+      # HIVE_AGENT_ENGINE_SOCKET is unset too and nothing reads this mount.
+      - ${HIVE_AGENT_ENGINE_SOCKET_DIR:-/tmp/hive-agent-engine}:/run/hive-agent
     environment:
       # SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY:
       # Enterprise profile: SUPABASE_URL must point at GoTrue, not PostgREST.
@@ -371,19 +378,25 @@ services:
       LITELLM_CONTAINER_NAME: ${LITELLM_CONTAINER_NAME:-litellm}
       LITELLM_CONFIG_PATH: ${LITELLM_CONFIG_PATH:-/etc/litellm/config.yaml}
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-litellm-dev-key}
-      # Agent task execution (issue #305). See .env.example for the full
-      # explanation: buildAgentEngine (cmd/server/main.go) needs all five of
-      # these non-empty to launch real Apptainer sandboxes; any empty and
-      # tasks stay queued forever by design (agenttask.NotConfiguredEngine).
-      # These were previously documented in .env.example but never forwarded
-      # into this container's environment, so setting them in .env alone did
-      # nothing. Forwarding them here is necessary but not sufficient: this
-      # service still runs inside a golang:1.24-alpine dev container, which
+      # Agent task execution. THE variable that matters on a containerised
+      # deployment is this one (issue #780): the path, inside this container,
+      # of the Unix socket the unprivileged host launch daemon
+      # (apps/agent-engine/cmd/agent-engine -serve) listens on, bind-mounted
+      # from HIVE_AGENT_ENGINE_SOCKET_DIR below. When it is set,
+      # buildAgentEngine ignores every HIVE_AGENT_ENGINE_* path variable
+      # below and forwards launches to that daemon.
+      #
+      # Why: this service runs inside a golang:1.24-alpine container, which
       # cannot exec the host's Apptainer directly (glibc-linked binary, no
       # musl dynamic loader; no /dev/fuse; would need real CAP_SYS_ADMIN-class
       # privilege on the service holding Stripe/Supabase/payment secrets).
-      # Real sandbox launches require control-plane to run as a bare host
-      # process on whatever box executes agent tasks, not this container.
+      # The daemon keeps that privilege question off this container entirely:
+      # it runs as an ordinary host user with no added capabilities.
+      HIVE_AGENT_ENGINE_SOCKET: ${HIVE_AGENT_ENGINE_SOCKET:-}
+      # The five path variables below only apply when control-plane itself
+      # runs as a bare host process next to an Apptainer install (no compose
+      # topology in this repo does). They are still forwarded so that
+      # deployment stays possible without a code change.
       HIVE_AGENT_ENGINE_SIF_PATH: ${HIVE_AGENT_ENGINE_SIF_PATH:-}
       HIVE_AGENT_ENGINE_PACKS_DIR: ${HIVE_AGENT_ENGINE_PACKS_DIR:-}
       HIVE_AGENT_ENGINE_WORKSPACE_ROOT: ${HIVE_AGENT_ENGINE_WORKSPACE_ROOT:-}

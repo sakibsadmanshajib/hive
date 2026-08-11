@@ -531,3 +531,58 @@ func TestSandboxEngine_Cancel_InterruptsAndKillsProcess(t *testing.T) {
 		t.Fatalf("expected cancelled after Cancel, got %s", status)
 	}
 }
+
+// Issue #780: a sandbox launched with --containall has no persisted profile
+// store, so an agent_profile_id can only ever resolve to ProfileNotFound
+// there. With an LLM configured, Launch must send the inline agent_settings
+// payload instead, and must not send both (the agent-server's own validator
+// rejects the combination outright).
+func TestSandboxEngine_Launch_SendsInlineAgentSettingsWhenLLMConfigured(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+	e.cfg.LLMModel = "openai/hive-test-model"
+	e.cfg.LLMBaseURL = "https://gateway.example/v1"
+	e.cfg.LLMAPIKey = "test-key-not-a-real-one"
+
+	if _, err := e.Launch(context.Background(), testTask()); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	req := fake.startConversationRequest()
+	if req.AgentProfileID != nil {
+		t.Fatalf("expected no agent_profile_id alongside agent_settings, got %v", req.AgentProfileID)
+	}
+	if req.AgentSettings == nil {
+		t.Fatal("expected inline agent_settings")
+	}
+	if req.AgentSettings.AgentKind != "openhands" {
+		t.Fatalf("agent_kind = %q, want openhands", req.AgentSettings.AgentKind)
+	}
+	if got := req.AgentSettings.LLM.Model; got != e.cfg.LLMModel {
+		t.Fatalf("llm.model = %q, want %q", got, e.cfg.LLMModel)
+	}
+	if got := req.AgentSettings.LLM.BaseURL; got != e.cfg.LLMBaseURL {
+		t.Fatalf("llm.base_url = %q, want %q", got, e.cfg.LLMBaseURL)
+	}
+	if got := req.AgentSettings.LLM.APIKey; got != e.cfg.LLMAPIKey {
+		t.Fatal("llm.api_key did not round-trip")
+	}
+}
+
+// The profile path stays intact for a deployment that does persist profiles.
+func TestSandboxEngine_Launch_SendsProfileIDWhenNoLLMConfigured(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngine(t, &fake)
+
+	if _, err := e.Launch(context.Background(), testTask()); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	req := fake.startConversationRequest()
+	if req.AgentSettings != nil {
+		t.Fatalf("expected no agent_settings without an LLM configured, got %+v", req.AgentSettings)
+	}
+	if req.AgentProfileID == nil || *req.AgentProfileID != e.cfg.AgentProfileID {
+		t.Fatalf("agent_profile_id = %v, want %v", req.AgentProfileID, e.cfg.AgentProfileID)
+	}
+}

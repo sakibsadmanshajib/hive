@@ -1644,6 +1644,29 @@ func parseDurationEnv(key string, fallback time.Duration) time.Duration {
 // cmd/server/main.go's poller wiring uses, since NotConfiguredEngine has no
 // Status method to poll.
 func buildAgentEngine(egressSvc *egress.Service) (agenttask.Engine, agenttask.StatusChecker) {
+	// Issue #780: on any deployment where this process runs in a container
+	// (every compose topology this repo ships), it cannot exec Apptainer at
+	// all — musl base, no /dev/fuse, no CAP_SYS_ADMIN — and granting it
+	// those privileges would put sandbox-escape-class capability on the one
+	// process holding the payment and database secrets. When
+	// HIVE_AGENT_ENGINE_SOCKET is set, launches go to the unprivileged host
+	// daemon (apps/agent-engine/cmd/agent-engine -serve) over that socket
+	// instead, and none of the local paths below are read.
+	if socketPath := os.Getenv("HIVE_AGENT_ENGINE_SOCKET"); socketPath != "" {
+		remote := agentengine.NewRemote(socketPath, os.Getenv("CONTROL_PLANE_INTERNAL_TOKEN"))
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := remote.Health(ctx); err != nil {
+			// Not fatal: the daemon may still be starting, and a task that
+			// arrives before it is up fails with this same error rather than
+			// silently queueing forever.
+			log.Printf("control-plane: WARN agent-engine daemon at %s did not answer /health: %v", socketPath, err)
+		} else {
+			log.Printf("control-plane: agent-engine daemon reachable at %s", socketPath)
+		}
+		return remote, remote
+	}
+
 	sifPath := os.Getenv("HIVE_AGENT_ENGINE_SIF_PATH")
 	packsDir := os.Getenv("HIVE_AGENT_ENGINE_PACKS_DIR")
 	workspaceRoot := os.Getenv("HIVE_AGENT_ENGINE_WORKSPACE_ROOT")
