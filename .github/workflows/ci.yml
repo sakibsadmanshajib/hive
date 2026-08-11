@@ -275,6 +275,7 @@ jobs:
   go-tests:
     name: Go tests (${{ matrix.module }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # REQUIRED CHECK. Always runs and always reports its own conclusion; the
     # docs-only decision is applied per step. See the note above `changes`.
     needs: changes
@@ -444,6 +445,7 @@ jobs:
   rust-tests:
     name: Rust tests (desktop-sandbox)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: changes
     if: needs.changes.outputs.run == 'true'
     defaults:
@@ -505,6 +507,7 @@ jobs:
   desktop-tests:
     name: Desktop app (Rust + TS)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: changes
     if: needs.changes.outputs.run == 'true'
     steps:
@@ -642,6 +645,7 @@ jobs:
   agent-console-unit:
     name: Agent console (type + unit + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: changes
     if: needs.changes.outputs.run == 'true'
     defaults:
@@ -674,6 +678,7 @@ jobs:
   web-unit:
     name: Web console (type + unit + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     # REQUIRED CHECK. Always runs and always reports its own conclusion; the
     # docs-only decision is applied per step. See the note above `changes`.
     needs: changes
@@ -741,6 +746,7 @@ jobs:
   docker-build:
     name: Docker build smoke (fork PRs only)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: changes
     if: >-
       needs.changes.outputs.run == 'true' &&
@@ -1402,6 +1408,7 @@ jobs:
   egress-firewall-e2e:
     name: Egress firewall e2e (bwrap)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: changes
     if: needs.changes.outputs.run == 'true'
     defaults:
