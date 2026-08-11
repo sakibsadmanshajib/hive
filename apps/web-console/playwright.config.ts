@@ -82,8 +82,22 @@ export default defineConfig({
       // and 02 genuinely do drive that UI and stay out of this project.
       name: "phase-19-api",
       testDir: "./e2e/phase-19",
-      testMatch: /\/phase-19\/0[34567]-[^/]+\.spec\.ts$/,
-      use: { ...devices["Desktop Chrome"] },
+      // Everything in the directory except the two that drive Open WebUI,
+      // rather than an enumerated 03 through 07. An enumerated list is how a
+      // spec goes dark by being added: 08 would have matched nothing and run
+      // nowhere, with no error. Adding a spec here now needs a deliberate
+      // testIgnore edit to keep it out.
+      testMatch: /\/phase-19\/[^/]+\.spec\.ts$/,
+      testIgnore: /\/phase-19\/0[12]-[^/]+\.spec\.ts$/,
+      use: {
+        ...devices["Desktop Chrome"],
+        // No browser is driven here, and a trace records request headers
+        // verbatim, so retaining one would put a live Supabase bearer token
+        // into an artifact that anyone can download from this public
+        // repository. `::add-mask::` redacts log text only, never files.
+        trace: "off",
+        video: "off",
+      },
     },
   ],
 });

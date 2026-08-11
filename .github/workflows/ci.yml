@@ -1319,6 +1319,7 @@ jobs:
           echo "::error::Next.js did not start"; cat /tmp/nextjs.log; exit 1
 
       - name: Run UI Playwright suite (unauth + credentialed)
+        id: ui-suite
         working-directory: apps/web-console
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:3000
@@ -1395,24 +1396,49 @@ jobs:
       # web-unit ever touched the directory. A skipped test and a passing
       # test are indistinguishable inside a green check.
       #
+      # What these steps are and are not, stated plainly. web-e2e is NOT a
+      # required check, so a failure here is visible but does not by itself
+      # block a merge, and the job is skipped outright on a pull request
+      # whose changed paths cannot reach the booted flow (see the `changes`
+      # decide step). The blocking coverage for the same invariants is at
+      # the Go level, in the required `Go tests (control-plane)` and `Go
+      # tests (edge-api)` checks, which apply the whole supabase/migrations
+      # chain to an ephemeral Postgres first: internal/tenants
+      # (TENANT_SWITCH plus CROSS_TENANT_ATTEMPT and their audit rows),
+      # edge-api internal/chat (NO_TENANT), and the RLS suites in
+      # internal/rag, internal/platform, internal/auditarchive and edge-api
+      # internal/artifacts. Those are the tests a migration that breaks RLS
+      # turns red. What these Playwright steps add on top is the same
+      # contract over real HTTP against a booted stack and a real Supabase
+      # session, which no Go test covers.
+      #
       # The identities are minted here rather than configured as repository
       # secrets on purpose. Depending on a hand-managed secret is how these
       # went dark the first time; a value the job creates cannot be
       # forgotten. Only the API subset (specs 03-07) runs here: 01 and 02
       # drive the Open WebUI chat surface, which this job does not boot.
+      #
+      # The `if:` on each step below runs them when everything before
+      # succeeded, and also when the only thing that failed was the UI
+      # suite. Without that, one unrelated UI failure hides the isolation
+      # result entirely, which is the same "no signal" outcome as the skip
+      # this PR removes.
       # ------------------------------------------------------------------
 
       - name: Seed phase-19 tenant-isolation identities
         id: phase19-seed
+        if: success() || steps.ui-suite.conclusion == 'failure'
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
           set -euo pipefail
+          # Proves the script's refusal to write a password is still wired
+          # before it touches the live project. Dials nothing.
+          python3 scripts/seed-phase19-e2e.py --self-test
           out=$(python3 scripts/seed-phase19-e2e.py)
           get() { printf '%s\n' "$out" | grep "^$1=" | cut -d= -f2-; }
           user_a_jwt=$(get USER_A_JWT)
           orphan_jwt=$(get ORPHAN_JWT)
-          user_a_password=$(get USER_A_PASSWORD)
           tenant_a2=$(get TENANT_A2_ID)
           tenant_b=$(get TENANT_B_ID)
           if [ -z "$user_a_jwt" ] || [ -z "$orphan_jwt" ] || [ -z "$tenant_a2" ] || [ -z "$tenant_b" ]; then
@@ -1421,21 +1447,26 @@ jobs:
           fi
           echo "::add-mask::$user_a_jwt"
           echo "::add-mask::$orphan_jwt"
-          echo "::add-mask::$user_a_password"
           echo "E2E_USER_A_JWT=$user_a_jwt" >> "$GITHUB_ENV"
           echo "E2E_ORPHAN_JWT=$orphan_jwt" >> "$GITHUB_ENV"
           echo "E2E_USER_A_SECOND_TENANT_ID=$tenant_a2" >> "$GITHUB_ENV"
           echo "E2E_TENANT_B_ID=$tenant_b" >> "$GITHUB_ENV"
 
       - name: Install pg driver for the audit-log assertions
+        if: success() || steps.ui-suite.conclusion == 'failure'
         working-directory: apps/web-console
         # 04 and 07 read public.audit_log directly to prove the denial was
         # recorded, not just returned. pg is imported dynamically so the
         # specs typecheck without a workspace dependency; installing it here
         # keeps it out of the app's own dependency tree.
-        run: npm install --no-save pg
+        #
+        # Pinned exactly, and with scripts disabled. This job holds the
+        # service-role key, so resolving a floating range at run time would
+        # let whatever the registry serves that minute execute inside it.
+        run: npm install --no-save --no-audit --no-fund --ignore-scripts pg@8.13.1
 
       - name: Run phase-19 tenant-isolation specs (API subset)
+        if: success() || steps.ui-suite.conclusion == 'failure'
         working-directory: apps/web-console
         env:
           # The specs' own variable name for the database they assert
@@ -1471,6 +1502,15 @@ jobs:
           name: playwright-report-api
           path: apps/web-console/playwright-report/
           if-no-files-found: ignore
+          # This repository is public, so anyone with the run URL can
+          # download this. A Playwright trace records request headers
+          # verbatim, including the Authorization bearer of whatever session
+          # the suite held, and `::add-mask::` only ever redacts log text,
+          # never an uploaded file. The phase-19 project turns tracing off
+          # for that reason (see playwright.config.ts); this bounds the
+          # window for everything else in the report to a day, well inside
+          # a Supabase access token's own lifetime.
+          retention-days: 1
 
       - name: Tear down stack
         if: always()
