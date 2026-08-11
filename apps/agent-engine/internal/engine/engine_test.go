@@ -491,6 +491,37 @@ func TestSandboxEngine_Cancel_CleansUpDirs(t *testing.T) {
 	assertDirEmpty(t, e.cfg.WorkspaceRoot)
 }
 
+// The launcher half of issue #886. Control-plane now calls Cancel when a task
+// is cancelled, and the only reason that helps is this: the cancelled
+// session's concurrency slot has to go back to the pool immediately, not
+// whenever the sandbox happens to finish on its own (roughly sixteen minutes
+// on the demo box, which is how two cancels exhausted a user's ceiling).
+func TestSandboxEngine_Cancel_FreesQuotaSlot(t *testing.T) {
+	var fake *fakeAgentServer
+	e := newTestEngineWithQuota(t, &fake, 1, 1)
+
+	task := testTask()
+	sessionRef, err := e.Launch(context.Background(), task)
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if err := e.Cancel(context.Background(), sessionRef); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if tenant, user := e.q.InUse(task.TenantID, task.UserID); tenant != 0 || user != 0 {
+		t.Fatalf("cancel left quota held: tenant=%d user=%d, want 0/0", tenant, user)
+	}
+
+	// The observable consequence: the same user can start work again at once.
+	next := testTask()
+	next.TenantID = task.TenantID
+	next.UserID = task.UserID
+	if _, err := e.Launch(context.Background(), next); err != nil {
+		t.Fatalf("expected the cancelled session's slot to be reusable, got %v", err)
+	}
+}
+
 func assertDirEmpty(t *testing.T, dir string) {
 	t.Helper()
 	entries, err := os.ReadDir(dir)

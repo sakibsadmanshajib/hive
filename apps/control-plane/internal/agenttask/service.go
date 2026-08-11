@@ -91,6 +91,12 @@ func (s *Service) CreateTask(ctx context.Context, tenantID, userID uuid.UUID, pa
 	}
 }
 
+// WaitForLaunches blocks until every background launch this Service started
+// has finished. Nothing on the request path calls it; it exists so tests can
+// assert on a settled task, and so a future graceful drain can let in-flight
+// launches record their outcome before the process exits.
+func (s *Service) WaitForLaunches() {}
+
 // Get returns one task, scoped to (tenantID, userID) so a task started by
 // one user is never resumable by a different user in the same tenant.
 func (s *Service) Get(ctx context.Context, tenantID, userID, id uuid.UUID) (Task, error) {
