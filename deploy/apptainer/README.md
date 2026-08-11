@@ -47,7 +47,7 @@ fakeroot: run the script under `sudo`, or pass
 There are two launch paths and they read different variables. Almost everyone
 arriving here wants the first one.
 
-### Real per-task execution (Cowork, agent tasks) — `HIVE_AGENT_ENGINE_*`
+### Real per-task execution (Cowork, agent tasks): `HIVE_AGENT_ENGINE_*`
 
 Real agent-task sandbox launches run inside the `control-plane` process
 itself via `buildAgentEngine` (`apps/control-plane/cmd/server/main.go`), gated
@@ -90,7 +90,7 @@ running on a substrate that can exec Apptainer, which the compose container
 is not. That deployment-topology decision is still open and tracked in issue
 #780.
 
-### Standalone `agent-engine` CLI — `HIVE_AGENT_SIF_PATH`
+### Standalone `agent-engine` CLI: `HIVE_AGENT_SIF_PATH`
 
 `HIVE_AGENT_SIF_PATH` is only the default for the `agent-engine` binary's own
 `-sif` flag (`apps/agent-engine/cmd/agent-engine/main.go`), which refuses to
