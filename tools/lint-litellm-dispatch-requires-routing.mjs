@@ -89,20 +89,52 @@ function dispatchesToLiteLLM(source) {
 // packagesGivenTheLiteLLMTarget returns the package qualifiers that receive the
 // LiteLLM address or master key at the wiring site, e.g. "chat" from
 // `chat.NewDispatch(chat.Deps{ ... LiteLLMURL: resolveLiteLLMBaseURL() ... })`.
-// It walks back from each resolver call to the nearest constructor or composite
-// literal, which is a heuristic but a stable one: Go composite literals name
-// their type, and the wiring site is a flat list of them.
+//
+// Attribution is to the type of the composite literal or call that LEXICALLY
+// ENCLOSES the resolver, found by walking back with a brace/paren counter. The
+// earlier version took the nearest package qualifier on any preceding line
+// instead, which is unsound in the direction that matters: adding an unrelated
+// package-qualified sibling field above the credential line moved attribution
+// off the real recipient and onto that sibling. That is a false positive on the
+// sibling AND a false negative on the package actually handed the credential,
+// which is the entire point of this rule. See the self-test cases below.
+function enclosingConstructorLine(lines, index) {
+  let depth = 0;
+  for (let back = index; back >= 0; back--) {
+    // On the resolver's own line, only look left of the resolver call, so its
+    // own `()` does not read as an enclosing scope.
+    const line =
+      back === index ? lines[back].slice(0, lines[back].search(WIRING_RESOLVERS)) : lines[back];
+    for (let i = line.length - 1; i >= 0; i--) {
+      const ch = line[i];
+      if (ch === "}" || ch === ")") depth++;
+      else if (ch === "{" || ch === "(") {
+        if (depth === 0) return back;
+        depth--;
+      }
+    }
+  }
+  return -1;
+}
+
 function packagesGivenTheLiteLLMTarget(source) {
   const lines = source.split("\n");
   const packages = new Set();
   lines.forEach((line, index) => {
     if (!WIRING_RESOLVERS.test(line)) return;
-    for (let back = index; back >= Math.max(0, index - 20); back--) {
-      const matches = [...lines[back].matchAll(PACKAGE_QUALIFIER)];
+    // Walk outward through nested literals until one names a package-qualified
+    // type. `Billing: &metering.PGBillingAccountResolver{...}` sitting above the
+    // credential is a sibling field, never the recipient; the recipient is the
+    // literal both fields belong to.
+    for (let at = index; at >= 0; ) {
+      const opener = enclosingConstructorLine(lines, at);
+      if (opener < 0) return;
+      const matches = [...lines[opener].matchAll(PACKAGE_QUALIFIER)];
       if (matches.length > 0) {
         packages.add(matches[matches.length - 1][1]);
         return;
       }
+      at = opener - 1;
     }
   });
   return packages;
@@ -173,6 +205,64 @@ function selfTest() {
     wired.has("rogue"),
     true,
     "wiring-site rule no longer attributes the LiteLLM address to the package that receives it",
+  );
+
+  // ...and it must still name the recipient when an unrelated package-qualified
+  // field sits between the literal's opening line and the credential. This is
+  // the shape that broke the previous nearest-preceding-qualifier rule: it
+  // attributed the credential to `telemetry`, which is both a false positive on
+  // a package that never receives it and, worse, a false negative on `rogue`,
+  // which does. A guard that can be pointed away from the real recipient by
+  // inserting a sibling field is a guard that can be silenced on purpose.
+  const wiringWithSibling = `
+	rogueHandler := rogue.NewHandler(rogue.Deps{
+		Metrics:     telemetry.NewCounter(),
+		UpstreamURL: resolveLiteLLMBaseURL(),
+		UpstreamKey: resolveLiteLLMMasterKey(),
+	})
+  `;
+  const wiredWithSibling = packagesGivenTheLiteLLMTarget(wiringWithSibling);
+  assert.equal(
+    wiredWithSibling.has("rogue"),
+    true,
+    "a package-qualified sibling field moves attribution off the package handed the credential",
+  );
+  assert.equal(
+    wiredWithSibling.has("telemetry"),
+    false,
+    "attribution leaks onto a sibling field's package, which never receives the credential",
+  );
+
+  // A nested literal between the two is the same trap one level deeper.
+  const wiringWithNestedSibling = `
+	rogueHandler := rogue.NewHandler(rogue.Deps{
+		Billing: &metering.PGBillingAccountResolver{
+			Pool: dbPool,
+		},
+		UpstreamURL: resolveLiteLLMBaseURL(),
+	})
+  `;
+  const wiredNested = packagesGivenTheLiteLLMTarget(wiringWithNestedSibling);
+  assert.equal(
+    wiredNested.has("rogue"),
+    true,
+    "a nested sibling literal moves attribution off the package handed the credential",
+  );
+  assert.equal(
+    wiredNested.has("metering"),
+    false,
+    "attribution leaks onto a nested sibling literal's package",
+  );
+
+  // A credential passed straight into a call rather than a struct literal is
+  // still attributed to the callee.
+  const wiringPositional = `
+	rogueHandler := rogue.NewHandler(resolveLiteLLMBaseURL(), resolveLiteLLMMasterKey())
+  `;
+  assert.equal(
+    packagesGivenTheLiteLLMTarget(wiringPositional).has("rogue"),
+    true,
+    "a positional constructor argument is no longer attributed to its callee",
   );
 }
 

@@ -192,9 +192,36 @@ func (h *Handler) startSettlement(
 // request context: a client disconnect is exactly what cancels that one, and
 // settling on it converts a delivered response into a free one.
 func (s *settlement) finalize(credits int64, confirmed bool, inTokens, outTokens int64) bool {
+	err := s.finalizeOnce(credits, confirmed, inTokens, outTokens)
+	if err == nil {
+		return true
+	}
+	// A transport error or a timeout does not say the charge failed, only that
+	// its answer was lost. Treating that as uncharged releases a hold the
+	// control-plane has already settled, which the control-plane then rejects,
+	// leaving the trace claiming charged=false and cost 0 for a request the
+	// ledger did charge. So try once more: FinalizeReservation is idempotent by
+	// construction (finalizeLocked replays the stored row for an already
+	// finalized or needs_reconciliation reservation instead of charging again,
+	// which TestFinalizeReservationTwiceChargesOnce holds in place), so the
+	// retry either confirms the settled charge or lands the one that never did.
+	// It cannot produce a second charge.
+	slog.Warn("session chat finalize failed, retrying once before release",
+		"err", err, "request_id", s.requestID, "reservation_id", s.reservationID)
+	if retryErr := s.finalizeOnce(credits, confirmed, inTokens, outTokens); retryErr != nil {
+		slog.Error("session chat finalize failed twice, releasing hold instead",
+			"err", retryErr, "request_id", s.requestID, "reservation_id", s.reservationID)
+		return false
+	}
+	return true
+}
+
+// finalizeOnce is one attempt, on its own fresh context so a retry is never
+// handed the timed-out context of the attempt it is retrying.
+func (s *settlement) finalizeOnce(credits int64, confirmed bool, inTokens, outTokens int64) error {
 	ctx, cancel := context.WithTimeout(context.Background(), settlementTimeout)
 	defer cancel()
-	err := s.accounting.FinalizeReservation(ctx, inference.FinalizeReservationInput{
+	return s.accounting.FinalizeReservation(ctx, inference.FinalizeReservationInput{
 		AccountID:     s.accountID,
 		ReservationID: s.reservationID,
 		ActualCredits: credits,
@@ -206,12 +233,6 @@ func (s *settlement) finalize(credits int64, confirmed bool, inTokens, outTokens
 		OutputTokens:           outTokens,
 		Status:                 "completed",
 	})
-	if err != nil {
-		slog.Error("session chat finalize failed, releasing hold instead",
-			"err", err, "request_id", s.requestID, "reservation_id", s.reservationID)
-		return false
-	}
-	return true
 }
 
 // release hands the whole hold back. The control-plane records the release as
@@ -260,8 +281,12 @@ func writeReservationUnavailable(w http.ResponseWriter) {
 		"Credit reservation is temporarily unavailable. Please retry.", &code)
 }
 
+// An alias with no token price is a stable property of its catalog row, not a
+// passing fault, so this is a 4xx: a 503 with type api_error tells every SDK
+// retry layer to send the same request again, and it can never succeed. The
+// wording asks for a different model rather than a retry, matching the status.
 func writeUnpriceableModel(w http.ResponseWriter) {
 	code := "model_not_supported"
-	apierrors.WriteError(w, http.StatusServiceUnavailable, "api_error",
-		"The requested model is not available for this endpoint. Please retry with a supported model.", &code)
+	apierrors.WriteError(w, http.StatusBadRequest, "invalid_request_error",
+		"The requested model is not available for this endpoint. Choose a supported model.", &code)
 }

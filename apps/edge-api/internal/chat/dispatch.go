@@ -72,6 +72,14 @@ type sseEnvelope struct {
 		FinishReason string `json:"finish_reason,omitempty"`
 		Delta        struct {
 			Content string `json:"content,omitempty"`
+			// A refusal is delivered output like any other: the customer
+			// received it, and it cost provider tokens to produce. The
+			// API-key accumulator has always counted it
+			// (inference.UsageAccumulator.Add), and leaving it out here made
+			// a refusal-only answer with no terminal usage frame look like
+			// nothing was produced, which released the hold and served it
+			// free.
+			Refusal string `json:"refusal,omitempty"`
 		} `json:"delta,omitempty"`
 	} `json:"choices,omitempty"`
 }
@@ -235,6 +243,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		for _, choice := range envelope.Choices {
 			if choice.Delta.Content != "" {
 				completion.WriteString(choice.Delta.Content)
+			}
+			if choice.Delta.Refusal != "" {
+				completion.WriteString(choice.Delta.Refusal)
 			}
 			if choice.FinishReason != "" {
 				finishReason = choice.FinishReason

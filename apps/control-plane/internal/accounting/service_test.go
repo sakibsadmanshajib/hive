@@ -929,3 +929,56 @@ func TestFinalizeReservationTwiceChargesOnce(t *testing.T) {
 		t.Fatalf("expected a -22 credit delta, got %d", settlements[0].HiveCreditDelta)
 	}
 }
+
+// TestFinalizeClampsNegativeProviderTokenCounts: the token counts on a
+// settlement originate in a provider response, so they are external input on a
+// money path. CreditsForTokens already clamps them before pricing, so a
+// negative count cannot reduce a charge, but an unclamped count reaching
+// usage_events would sit in the console's analytics beside a non-negative
+// credit delta and make a SUM over that column understate consumption.
+func TestFinalizeClampsNegativeProviderTokenCounts(t *testing.T) {
+	repo := newRepoStub()
+	ledgerSvc := &ledgerStub{}
+	usageSvc := &usageStub{}
+	svc := NewService(repo, ledgerSvc, usageSvc)
+
+	accountID := uuid.New()
+	reservationID := uuid.New()
+	repo.reservations[reservationID] = Reservation{
+		ID:               reservationID,
+		AccountID:        accountID,
+		RequestAttemptID: uuid.New(),
+		ReservationKey:   "req_negative:1",
+		PolicyMode:       PolicyModeStrict,
+		Status:           ReservationStatusActive,
+		ReservedCredits:  10000,
+	}
+
+	if _, err := svc.FinalizeReservation(context.Background(), FinalizeReservationInput{
+		AccountID:              accountID,
+		ReservationID:          reservationID,
+		ActualCredits:          22,
+		TerminalUsageConfirmed: true,
+		Status:                 string(usage.AttemptStatusCompleted),
+		InputTokens:            -111,
+		OutputTokens:           -70,
+	}); err != nil {
+		t.Fatalf("FinalizeReservation returned error: %v", err)
+	}
+
+	var settlements []usage.RecordEventInput
+	for _, event := range usageSvc.eventCalls {
+		if event.EventType == usage.UsageEventCompleted {
+			settlements = append(settlements, event)
+		}
+	}
+	if len(settlements) != 1 {
+		t.Fatalf("expected exactly one settlement usage event, got %d", len(settlements))
+	}
+	if settlements[0].InputTokens != 0 || settlements[0].OutputTokens != 0 {
+		t.Fatalf("negative provider token counts reached usage_events: %+v", settlements[0])
+	}
+	if settlements[0].HiveCreditDelta != -22 {
+		t.Fatalf("expected a -22 credit delta, got %d", settlements[0].HiveCreditDelta)
+	}
+}

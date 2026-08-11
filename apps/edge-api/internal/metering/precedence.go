@@ -63,6 +63,15 @@ type PGBillingAccountResolver struct {
 	Pool *pgxpool.Pool
 }
 
+// ErrNoPool is returned when the resolver has no database pool to read. It is
+// deliberately an error rather than an empty result: a missing pool means the
+// billing position is UNKNOWN, and the empty result means the tenant is
+// known to have no billing account. The enforcing caller turns the first into
+// a retryable billing_unavailable and the second into a permanent
+// billing_not_configured, so collapsing them would report a database outage as
+// a workspace-provisioning problem and tell every client not to retry.
+var ErrNoPool = errors.New("metering: billing resolver has no database pool")
+
 // Resolve implements BillingAccountResolver.
 func (r *PGBillingAccountResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, bool, error) {
 	state, err := r.ResolveState(ctx, tenantID)
@@ -79,7 +88,7 @@ func (r *PGBillingAccountResolver) Resolve(ctx context.Context, tenantID uuid.UU
 // caller (apps/edge-api/internal/chat) refuses on rather than serving free.
 func (r *PGBillingAccountResolver) ResolveState(ctx context.Context, tenantID uuid.UUID) (TenantBillingState, error) {
 	if r == nil || r.Pool == nil {
-		return TenantBillingState{}, nil
+		return TenantBillingState{}, ErrNoPool
 	}
 	var deployment string
 	var accountID *uuid.UUID

@@ -366,8 +366,15 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		// The quantities behind the charge, when the caller measured them, so
 		// this one row answers both what was consumed and what it cost. Spend
 		// stays the negative credit delta; these are counts, never credits.
-		InputTokens:     input.InputTokens,
-		OutputTokens:    input.OutputTokens,
+		//
+		// Clamped, because these originate in a provider response and reach
+		// here as external input. CreditsForTokens already clamps them before
+		// pricing, so an unclamped count here would put a negative token total
+		// into usage_events and the console's analytics beside a non-negative
+		// credit delta, and a SUM over that column would silently understate
+		// consumption.
+		InputTokens:     max(input.InputTokens, 0),
+		OutputTokens:    max(input.OutputTokens, 0),
 		HiveCreditDelta: -actualCredits,
 		CustomerTags:    reservation.CustomerTags,
 		InternalMetadata: map[string]any{

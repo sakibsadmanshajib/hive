@@ -48,6 +48,7 @@ type fakeAccounting struct {
 
 	reservationStatus int // non-zero to refuse reservation creation with this status
 	finalizeStatus    int // non-zero to fail settlement with this status
+	finalizeFailures  int // when finalizeStatus is set, fail only this many times
 
 	attempts     []inference.StartAttemptInput
 	reservations []inference.CreateReservationInput
@@ -88,6 +89,14 @@ func (f *fakeAccounting) server(t *testing.T) *httptest.Server {
 		f.mu.Lock()
 		f.finalized = append(f.finalized, in)
 		status := f.finalizeStatus
+		if status != 0 && f.finalizeFailures > 0 {
+			f.finalizeFailures--
+			if f.finalizeFailures == 0 {
+				// Budget spent: subsequent attempts succeed, which is the
+				// transient-fault shape rather than a permanent refusal.
+				f.finalizeStatus = 0
+			}
+		}
 		f.mu.Unlock()
 		if status != 0 {
 			w.WriteHeader(status)
@@ -165,6 +174,10 @@ type usageUpstream struct {
 	promptTokens int
 	outputTokens int
 	servedModel  string
+	// refusalOnly streams the answer as delta.refusal rather than
+	// delta.content, which is what a provider sends when it declines. It is
+	// still delivered output the customer received.
+	refusalOnly bool
 
 	calls  int
 	bodies []string
@@ -178,6 +191,7 @@ func (u *usageUpstream) server(t *testing.T) *httptest.Server {
 		u.calls++
 		u.bodies = append(u.bodies, string(raw))
 		status, in, out, model := u.status, u.promptTokens, u.outputTokens, u.servedModel
+		refusal := u.refusalOnly
 		u.mu.Unlock()
 
 		if status != 0 && (status < 200 || status > 299) {
@@ -188,7 +202,11 @@ func (u *usageUpstream) server(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		_, _ = fmt.Fprintf(w, "data: {\"model\":%q,\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n", model)
+		field := "content"
+		if refusal {
+			field = "refusal"
+		}
+		_, _ = fmt.Fprintf(w, "data: {\"model\":%q,\"choices\":[{\"delta\":{%q:\"hello\"}}]}\n\n", model, field)
 		if flusher != nil {
 			flusher.Flush()
 		}
@@ -472,8 +490,9 @@ func TestSessionChatReleasesTheHoldWhenSettlementFails(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 
 	_, finalized, released := accounting.calls()
-	require.Len(t, finalized, 1, "settlement is attempted once")
-	require.Len(t, released, 1, "a failed settlement releases the hold instead")
+	require.Len(t, finalized, 2,
+		"a lost settlement answer is retried once, because it may already have committed")
+	require.Len(t, released, 1, "a failed settlement releases the hold instead, exactly once")
 	require.Equal(t, "finalize_failed", released[0].Reason)
 }
 
@@ -527,4 +546,174 @@ func TestSessionChatRefusesWhenAccountingIsNotWired(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	calls, _ := upstream.observed()
 	require.Zero(t, calls)
+}
+
+// unpriceableRouting resolves any alias to a route priced per second, the shape
+// an audio alias carries. Nothing on this endpoint can turn that into a
+// per-token charge.
+func unpriceableRouting(t *testing.T) *inference.RoutingClient {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var in inference.SelectRouteInput
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		_ = json.NewEncoder(w).Encode(inference.SelectRouteResult{
+			AliasID:          in.AliasID,
+			LiteLLMModelName: "route-test-audio",
+			Provider:         "test-provider",
+			Pricing:          inference.SelectRoutePricing{InputPriceCredits: 1_000},
+			PriceUnit:        "seconds",
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return inference.NewRoutingClient(srv.URL)
+}
+
+// TestSessionChatRefusesAnUnpriceableAliasPermanently: an alias with no token
+// price is a stable property of its catalog row, so the refusal must be a 4xx.
+// A 503 with type api_error tells every SDK retry layer to resend a request
+// that can never succeed, which turns one misconfigured alias into a retry
+// storm against a provider nobody can be charged for.
+func TestSessionChatRefusesAnUnpriceableAliasPermanently(t *testing.T) {
+	accounting := &fakeAccounting{}
+	cp := accounting.server(t)
+	upstream := &usageUpstream{promptTokens: 11, outputTokens: 7}
+	ll := upstream.server(t)
+
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    unpriceableRouting(t),
+		Accounting: inference.NewAccountingClient(cp.URL),
+		Billing: stubBilling{state: metering.TenantBillingState{
+			AccountID: uuid.New(), Found: true, Deployment: metering.DeploymentHiveCloud,
+		}},
+		LiteLLMURL: ll.URL,
+	})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, sessionChatRequest(t, uuid.New(), uuid.New(),
+		`{"model":"hive-voice","messages":[{"role":"user","content":"hi"}]}`))
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Less(t, rec.Code, http.StatusInternalServerError,
+		"a permanent condition must not be reported as a retryable server fault")
+	require.Contains(t, rec.Body.String(), "model_not_supported")
+	require.Contains(t, rec.Body.String(), "invalid_request_error")
+
+	calls, _ := upstream.observed()
+	require.Zero(t, calls, "a request nobody can price must not reach a provider")
+	reservations, finalized, released := accounting.calls()
+	require.Empty(t, reservations, "no hold is taken for a request that is refused")
+	require.Empty(t, finalized)
+	require.Empty(t, released)
+}
+
+// TestSessionChatReportsAnUnknownBillingPositionAsRetryable uses the REAL
+// production resolver with no pool, which is exactly what cmd/server wires when
+// SUPABASE_DB_URL is missing or the pgx pool failed to open. An outage there
+// must not be reported as "this workspace is not set up", because that is a
+// permanent 403 the client will never retry and the operator will chase as a
+// provisioning bug. Unknown and known-absent are different answers.
+func TestSessionChatReportsAnUnknownBillingPositionAsRetryable(t *testing.T) {
+	accounting := &fakeAccounting{}
+	cp := accounting.server(t)
+	upstream := &usageUpstream{promptTokens: 11, outputTokens: 7}
+	ll := upstream.server(t)
+
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    pricedRouting(t, "route-test-auto", 56_000, 224_000),
+		Accounting: inference.NewAccountingClient(cp.URL),
+		Billing:    &metering.PGBillingAccountResolver{}, // no pool
+		LiteLLMURL: ll.URL,
+	})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, sessionChatRequest(t, uuid.New(), uuid.New(),
+		`{"model":"hive-auto","messages":[{"role":"user","content":"hi"}]}`))
+
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Contains(t, rec.Body.String(), "billing_unavailable")
+	require.NotContains(t, rec.Body.String(), "billing_not_configured")
+	calls, _ := upstream.observed()
+	require.Zero(t, calls, "an unknown billing position must not serve inference")
+	reservations, _, _ := accounting.calls()
+	require.Empty(t, reservations)
+}
+
+// TestSessionChatRetriesAnAmbiguousFinalizeBeforeReleasing: when the settlement
+// answer is lost rather than refused, the charge may already have committed.
+// Reading that as uncharged releases a hold the ledger has already settled and
+// records charged=false against a customer who was charged. The retry resolves
+// it, and cannot double charge: control-plane replays the stored row for an
+// already finalized reservation (TestFinalizeReservationTwiceChargesOnce).
+func TestSessionChatRetriesAnAmbiguousFinalizeBeforeReleasing(t *testing.T) {
+	accounting := &fakeAccounting{
+		finalizeStatus:   http.StatusGatewayTimeout,
+		finalizeFailures: 1,
+	}
+	cp := accounting.server(t)
+	upstream := &usageUpstream{promptTokens: 111, outputTokens: 70, servedModel: "route-test-auto"}
+	ll := upstream.server(t)
+
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    pricedRouting(t, "route-test-auto", 56_000, 224_000),
+		Accounting: inference.NewAccountingClient(cp.URL),
+		Billing: stubBilling{state: metering.TenantBillingState{
+			AccountID: uuid.New(), Found: true, Deployment: metering.DeploymentHiveCloud,
+		}},
+		LiteLLMURL: ll.URL,
+	})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, sessionChatRequest(t, uuid.New(), uuid.New(),
+		`{"model":"hive-auto","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	_, finalized, released := accounting.calls()
+	require.Len(t, finalized, 2, "the lost answer is retried exactly once")
+	require.Empty(t, released, "a settled charge must not also hand the hold back")
+	// Both attempts carry the same figure, so the retry cannot settle at a
+	// different magnitude than the attempt whose answer was lost.
+	want := expectedCredits(111, 70, 56_000, 224_000)
+	for i, call := range finalized {
+		require.Equal(t, want, call.ActualCredits, "finalize attempt %d changed the charge", i)
+		require.Equal(t, int64(111), call.InputTokens)
+		require.Equal(t, int64(70), call.OutputTokens)
+	}
+}
+
+// TestSessionChatSettlesARefusalOnlyAnswer: a provider that declines streams
+// delta.refusal, not delta.content. The customer received output and the
+// provider charged for producing it, so it settles. Counting only delta.content
+// made this look like nothing was delivered, which released the hold and served
+// the refusal free. The API-key accumulator has always counted refusal text
+// (inference.UsageAccumulator.Add); this is the session path catching up.
+func TestSessionChatSettlesARefusalOnlyAnswer(t *testing.T) {
+	accounting := &fakeAccounting{}
+	cp := accounting.server(t)
+	// No terminal usage frame, so settlement falls back to the content
+	// estimate, which is the only path where the accumulated text decides
+	// whether anything was delivered at all.
+	upstream := &usageUpstream{refusalOnly: true, servedModel: "route-test-auto"}
+	ll := upstream.server(t)
+
+	handler := chat.NewDispatch(chat.Deps{
+		Routing:    pricedRouting(t, "route-test-auto", 56_000, 224_000),
+		Accounting: inference.NewAccountingClient(cp.URL),
+		Billing: stubBilling{state: metering.TenantBillingState{
+			AccountID: uuid.New(), Found: true, Deployment: metering.DeploymentHiveCloud,
+		}},
+		LiteLLMURL: ll.URL,
+	})
+
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, sessionChatRequest(t, uuid.New(), uuid.New(),
+		`{"model":"hive-auto","messages":[{"role":"user","content":"hi"}]}`))
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "refusal", "the refusal still reaches the customer")
+
+	_, finalized, released := accounting.calls()
+	require.Len(t, finalized, 1, "delivered output settles, whatever field carried it")
+	require.Empty(t, released, "a delivered answer must not be handed back as undelivered")
+	require.Positive(t, finalized[0].ActualCredits, "delivered output is never free")
+	require.False(t, finalized[0].TerminalUsageConfirmed,
+		"an estimate is flagged for reconciliation rather than billed as measured truth")
 }
