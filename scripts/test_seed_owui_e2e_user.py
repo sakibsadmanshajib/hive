@@ -528,6 +528,40 @@ def test_account_slug_defaults_to_ci_and_is_overridable() -> None:
     print("ok: --account-slug defaults to the CI account and can be overridden")
 
 
+def test_password_is_never_rotated_on_an_existing_account() -> None:
+    """An account that already exists keeps its password unless the caller
+    explicitly supplies one. This script runs unattended from the nightly
+    workflow, and rotating a shared account revokes every session that any
+    concurrent run is holding on it (docs/live-test-auth.md). Mirrors the
+    same guard in scripts/test_seed_demo_owner.py."""
+    password_to_set = seed_owui_e2e_user.password_to_set
+    assert password_to_set(True, "", "generated-pw") is None
+    assert password_to_set(True, "   ", "generated-pw") is None
+    assert password_to_set(True, "explicit-pw", "generated-pw") == "explicit-pw"
+
+    # A brand-new account has no session to break and no credential to keep.
+    assert password_to_set(False, "", "generated-pw") == "generated-pw"
+    assert password_to_set(False, "explicit-pw", "generated-pw") == "explicit-pw"
+    print("ok: password_to_set never rotates an existing account by default")
+
+
+def test_run_key_namespaces_the_fixture_addresses() -> None:
+    """A run key gives each run its own users, so the guard above never has to
+    refuse anything in CI: there is no shared account left to rotate."""
+    with_run_key = seed_owui_e2e_user.with_run_key
+    assert with_run_key("owui-e2e@hive-e2e.invalid", "") == "owui-e2e@hive-e2e.invalid"
+    assert with_run_key("owui-e2e@hive-e2e.invalid", "  ") == "owui-e2e@hive-e2e.invalid"
+    assert (
+        with_run_key("owui-e2e@hive-e2e.invalid", "12345-1")
+        == "owui-e2e+12345-1@hive-e2e.invalid"
+    )
+    # Two attempts of the same workflow run must not collide.
+    assert with_run_key("owui-e2e@hive-e2e.invalid", "12345-1") != with_run_key(
+        "owui-e2e@hive-e2e.invalid", "12345-2"
+    )
+    print("ok: with_run_key namespaces the fixture addresses per run")
+
+
 def main() -> None:
     os.environ["OWUI_ADMIN_EMAIL"] = "admin@example.com"
     os.environ["OWUI_ADMIN_PASSWORD"] = "pw"
@@ -556,6 +590,8 @@ def main() -> None:
     test_billing_mapping_accepts_a_lost_race_on_the_same_pairing()
     test_billing_mapping_still_fails_when_the_race_winner_is_another_account()
     test_tenant_slug_defaults_to_ci_and_is_overridable()
+    test_password_is_never_rotated_on_an_existing_account()
+    test_run_key_namespaces_the_fixture_addresses()
 
     del os.environ["OWUI_ADMIN_EMAIL"]
     del os.environ["OWUI_ADMIN_PASSWORD"]

@@ -1323,10 +1323,14 @@ jobs:
           # reassign rows out from under this job's own reads mid-test.
           # github.run_attempt makes a manual re-run of a flake get a fresh
           # identity too, not the one the previous attempt already consumed.
-          # Passwords stay the shared default (from secrets, or the fixture
-          # defaults in e2e-auth-defaults.json when those secrets are
-          # unset): nothing looks a user up by password, so they never need
-          # to be unique per run.
+          # The passwords come from secrets and have no fallback. They used to
+          # fall back to plaintext values committed in
+          # e2e-auth-defaults.json, in a public repository, for live accounts
+          # holding a tenant OWNER role; the seeder then wrote those values
+          # back onto the accounts. The fallback is gone and an unset secret
+          # now fails this job by name. They need not be unique per run:
+          # nothing looks a user up by password, and the addresses above are
+          # already run-scoped.
           E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
           E2E_VERIFIED_EMAIL: e2e-verified+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
           E2E_VERIFIED_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
@@ -1383,8 +1387,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report-api
-          path: apps/web-console/playwright-report/
+          # Traces (.zip) and videos (.webm) are excluded. This repository is
+          # public, so any artifact here is downloadable by anyone with the run
+          # URL, and playwright.config.ts retains a trace on failure: it holds
+          # every request header (Authorization: Bearer) and every
+          # sb-*-auth-token cookie for the fixture session. The HTML report and
+          # error text still upload, and a text linter cannot inspect a trace
+          # zip, so exclusion is the only reliable scrub.
+          path: |
+            apps/web-console/playwright-report/
+            !apps/web-console/playwright-report/**/*.zip
+            !apps/web-console/playwright-report/**/*.webm
           if-no-files-found: ignore
+          retention-days: 5
 
       - name: Tear down stack
         if: always()

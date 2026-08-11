@@ -78,6 +78,15 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # One fixture identity per job attempt. The seeder no longer
+          # overwrites an existing account's password, because doing so revoked
+          # the sessions of every run holding one (docs/live-test-auth.md), and
+          # this workflow triggers on a schedule, on dispatch, and on a
+          # labelled pull request, whose concurrency group is keyed on the ref
+          # and so does not join the scheduled run's. A run-scoped identity has
+          # no prior password to preserve, so this run still gets a usable one
+          # and no other run is disturbed. Same shape as E2E_RUN_KEY in ci.yml.
+          OWUI_E2E_RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
           out=$(python3 scripts/seed-owui-e2e-user.py)
@@ -418,7 +427,20 @@ jobs:
         if: always()
         with:
           name: owui-playwright-report
-          path: apps/web-console/playwright-report-owui
+          # Traces (.zip) and videos (.webm) are excluded, and the repository
+          # is public, so anyone with a run URL can download what is left.
+          # These specs walk the full OAuth journey for a seeded account: a
+          # trace holds every request header (Authorization: Bearer), every
+          # sb-*-auth-token cookie, and the callback URLs whose query string
+          # and fragment carry code= and access_token=. The HTML report,
+          # screenshots and error text remain, which is what triage actually
+          # reads. Nothing here can be scrubbed by a text linter: a trace is a
+          # zip of binary resources.
+          path: |
+            apps/web-console/playwright-report-owui
+            !apps/web-console/playwright-report-owui/**/*.zip
+            !apps/web-console/playwright-report-owui/**/*.webm
+          retention-days: 5
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

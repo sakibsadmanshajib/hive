@@ -3,9 +3,26 @@
 
 Run before the phase-19 OWUI nightly Playwright suite so OWUI_E2E_EMAIL /
 OWUI_E2E_PASSWORD never need to be hand-managed GitHub secrets. Safe to
-re-run: the tenant and membership rows are upserted, the GoTrue user is
-found-or-created, and its password is always rotated to a fresh random
-value so no run reuses a prior credential.
+re-run: the tenant and membership rows are upserted and the GoTrue user is
+found-or-created.
+
+PASSWORDS ARE NOT ROTATED. This script used to overwrite both fixture
+users' passwords on every run, which is the shape docs/live-test-auth.md
+forbids: the control-plane resolves every bearer against GoTrue per
+request, so rotating an account revokes the sessions every concurrent run
+is holding on it, and this script runs automatically from
+.github/workflows/owui-nightly.yml on a schedule, on dispatch, and on any
+pull request labelled run-owui-e2e (whose concurrency group is keyed on the
+ref, so it does not join the scheduled run's group). An existing account is
+now left alone, and a PASSWORD line is printed only for a password this run
+actually set. See password_to_set.
+
+OWUI_E2E_RUN_KEY is how the nightly keeps working under that rule: it
+namespaces both fixture addresses per run (foo@x -> foo+key@x), so every
+run provisions its own users, meets no existing account, and shares no
+credential with any other run. Same idea as E2E_RUN_KEY in the web-console
+fixture seeder. Left unset, the script uses the shared addresses below and
+will refuse to overwrite their passwords.
 
 Also mints a real, resolvable Hive API key to use as OWUI_SHIM_KEY. OWUI's
 own GET /v1/models connection probe sends OPENAI_API_KEY with no request
@@ -30,9 +47,11 @@ passes its own --account-slug must pass its own --tenant-slug as well;
 see provision_billing_mapping.
 
 ROTATION AND ACCOUNT SCOPING. Every run mints a fresh key and revokes the
-account's previous ones, the same rotate-every-run posture as the GoTrue
-password: a key's raw secret only exists in the response to its own mint,
-so a re-run cannot hand back an existing key's value. That makes the
+account's previous ones: a key's raw secret only exists in the response to
+its own mint, so a re-run cannot hand back an existing key's value. (The
+GoTrue passwords above no longer rotate. An API key is not a login: nothing
+holds a session against it, and the revocation here is deferred until every
+configured consumer carries the replacement.) That makes the
 account boundary load-bearing. --account-slug defaults to the CI account,
 which the nightly OWUI job rotates on a schedule; a long-lived deployment
 MUST pass its own slug (for example --account-slug owui-shim-demo-box) so
@@ -61,6 +80,9 @@ consumer IS configured and its update fails, the old keys are left active
 and the script exits non-zero.
 
 Required env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+Optional env (fixture identity): OWUI_E2E_RUN_KEY (namespace both fixture
+addresses for this run), OWUI_E2E_PASSWORD and OWUI_E2E_BOOTSTRAP_PASSWORD
+(write these passwords deliberately, including onto an existing account)
 Optional env (OWUI config sync): OWUI_BASE_URL (default
 http://localhost:3003), OWUI_ADMIN_TOKEN, OWUI_ADMIN_EMAIL,
 OWUI_ADMIN_PASSWORD, EDGE_API_URL_FOR_OWUI (default
@@ -80,13 +102,14 @@ first so the real fixture user is provably the second OWUI account, the same
 position every real tenant's OWNER is in once the OWUI instance already has
 at least one user.
 
-Prints exactly five lines to stdout (and nothing else):
+Prints to stdout (and nothing else):
   EMAIL=<email>
-  PASSWORD=<password>
+  PASSWORD=<password>             only when this run set that password
   SHIM_KEY=<hk_ api key>
   BOOTSTRAP_EMAIL=<email>
-  BOOTSTRAP_PASSWORD=<password>
-Everything else (progress, errors) goes to stderr.
+  BOOTSTRAP_PASSWORD=<password>   only when this run set that password
+Everything else (progress, errors, and the reason a PASSWORD line is
+missing) goes to stderr.
 """
 import argparse
 import base64
@@ -168,6 +191,53 @@ def random_password() -> str:
     # policy with room to spare, well under bcrypt's 72-byte limit.
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
     return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
+
+
+def password_to_set(user_exists: bool, env_password: str, new_user_password: str) -> str | None:
+    """The password this run should write, or None to leave it untouched.
+
+    This script used to rotate unconditionally, on the reasoning that no run
+    should reuse a prior credential. That is wrong for an account other runs
+    are holding sessions on. The control-plane resolves every bearer against
+    GoTrue on each request, so a rotation revokes those sessions mid-run, and
+    this script is invoked automatically by .github/workflows/owui-nightly.yml
+    on a schedule, on dispatch, and on any pull request labelled run-owui-e2e.
+    The workflow's concurrency group is keyed on the ref, so a labelled-pull-
+    request run and the scheduled run do not join the same group and can rotate
+    each other's account mid-flight. docs/live-test-auth.md forbids exactly
+    this shape.
+
+    So the default is to leave an existing account alone, and a caller that
+    genuinely wants to set the password says so through an environment
+    variable. A brand-new account still gets new_user_password: there is no
+    session to break and no credential to preserve. Generation stays in the
+    caller so this selector is pure and directly assertable.
+
+    Same helper, same semantics as scripts/seed-demo-owner.py.
+    """
+    env_password = env_password.strip()
+    if env_password:
+        return env_password
+    if not user_exists:
+        return new_user_password
+    return None
+
+
+def with_run_key(email: str, run_key: str) -> str:
+    """Namespace an address per run (foo@x -> foo+key@x), or return it
+    unchanged when run_key is empty.
+
+    This is what keeps the guard above from simply breaking the nightly. CI
+    passes one key per job attempt, so every run provisions its own users, no
+    run ever meets an existing account, and no shared credential exists to
+    rotate in the first place. Same idea and same shape as E2E_RUN_KEY in
+    apps/web-console/tests/e2e/support/e2e-fixture-seed.mjs.
+    """
+    run_key = run_key.strip()
+    if not run_key:
+        return email
+    local, at, domain = email.partition("@")
+    return f"{local}+{run_key}{at}{domain}"
 
 
 def random_api_key() -> tuple[str, str, str]:
@@ -445,11 +515,14 @@ def provision_billing_mapping(rest, headers, tenant_id: str, account_id: str) ->
     sys.exit(1)
 
 
-def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, role: str) -> tuple[str, str]:
-    """Find-or-create a GoTrue user for `email`, upsert its `role` membership
-    in `tenant_id`, and rotate its password. Returns (user_id, password).
-    Shared by the real fixture user and the throwaway bootstrap user (see
-    module docstring)."""
+def provision_tenant_member(
+    rest, gotrue, headers, tenant_id: str, email: str, role: str, env_password: str = "",
+) -> tuple[str, str | None]:
+    """Find-or-create a GoTrue user for `email` and upsert its `role`
+    membership in `tenant_id`. Returns (user_id, password), where password is
+    None when this run deliberately left an existing account's password
+    untouched: see password_to_set. Shared by the real fixture user and the
+    throwaway bootstrap user (see module docstring)."""
     # `filter=<email>` does an exact server-side match (verified live; the
     # `email=` param is NOT supported and 500s on this GoTrue version).
     status, body = request(gotrue, headers, "GET", "/admin/users", params={"filter": email})
@@ -461,7 +534,7 @@ def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, r
         None,
     )
 
-    password = random_password()
+    password = password_to_set(existing is not None, env_password, random_password())
     user_metadata = {"selected_tenant_id": tenant_id}
 
     if existing is None:
@@ -482,10 +555,14 @@ def provision_tenant_member(rest, gotrue, headers, tenant_id: str, email: str, r
         user_id = existing["id"]
         # GoTrue's admin updateUserById MERGES user_metadata (verified
         # live), so this only ever adds/refreshes selected_tenant_id.
-        # Password is rotated unconditionally on every run.
+        # The password key is present only when this run is entitled to write
+        # it (see password_to_set): omitting it leaves every session another
+        # run is holding on this account alive.
+        update = {"user_metadata": user_metadata}
+        if password is not None:
+            update["password"] = password
         status, body = request(
-            gotrue, headers, "PUT", f"/admin/users/{user_id}",
-            body={"password": password, "user_metadata": user_metadata},
+            gotrue, headers, "PUT", f"/admin/users/{user_id}", body=update,
         )
         if status != 200:
             print(f"error: user update failed for {email}: {status} {body}", file=sys.stderr)
@@ -572,12 +649,18 @@ def main() -> None:
     # 2 + 3. Provision the bootstrap user first so it -- not the real fixture
     # user below -- absorbs Open WebUI's unconditional first-user-becomes-
     # admin promotion (see module docstring).
+    run_key = os.environ.get("OWUI_E2E_RUN_KEY", "")
+    user_email = with_run_key(USER_EMAIL, run_key)
+    bootstrap_email = with_run_key(BOOTSTRAP_EMAIL, run_key)
+
     _, bootstrap_password = provision_tenant_member(
-        rest, gotrue, headers, tenant_id, BOOTSTRAP_EMAIL, BOOTSTRAP_ROLE,
+        rest, gotrue, headers, tenant_id, bootstrap_email, BOOTSTRAP_ROLE,
+        os.environ.get("OWUI_E2E_BOOTSTRAP_PASSWORD", ""),
     )
 
     user_id, password = provision_tenant_member(
-        rest, gotrue, headers, tenant_id, USER_EMAIL, USER_ROLE,
+        rest, gotrue, headers, tenant_id, user_email, USER_ROLE,
+        os.environ.get("OWUI_E2E_PASSWORD", ""),
     )
 
     # 4. Upsert the throwaway shim billing account (older accounts/api_keys
@@ -666,11 +749,35 @@ def main() -> None:
             print(f"error: shim key cleanup failed: {status} {body}", file=sys.stderr)
             sys.exit(1)
 
-    print(f"EMAIL={USER_EMAIL}")
-    print(f"PASSWORD={password}")
+    # A PASSWORD line appears only when this run actually set that password.
+    # For an account that already existed, this run does not know the password
+    # and must not invent one, so the line is omitted and the reason is named
+    # on stderr. A caller that needs the line (the nightly workflow does, and
+    # fails loudly without it) either supplies the value or asks for a
+    # run-scoped identity that has no prior password to preserve.
+    print(f"EMAIL={user_email}")
+    if password is not None:
+        print(f"PASSWORD={password}")
     print(f"SHIM_KEY={raw_secret}")
-    print(f"BOOTSTRAP_EMAIL={BOOTSTRAP_EMAIL}")
-    print(f"BOOTSTRAP_PASSWORD={bootstrap_password}")
+    print(f"BOOTSTRAP_EMAIL={bootstrap_email}")
+    if bootstrap_password is not None:
+        print(f"BOOTSTRAP_PASSWORD={bootstrap_password}")
+
+    for label, value, variable in (
+        ("fixture user", password, "OWUI_E2E_PASSWORD"),
+        ("bootstrap user", bootstrap_password, "OWUI_E2E_BOOTSTRAP_PASSWORD"),
+    ):
+        if value is None:
+            print(
+                f"note: the {label} already existed, so its password was left "
+                f"untouched and no line was printed for it. Rotating a shared "
+                f"account revokes every session another run is holding on it "
+                f"(docs/live-test-auth.md). Set OWUI_E2E_RUN_KEY to provision a "
+                f"run-scoped identity instead, or {variable} to write a password "
+                f"deliberately.",
+                file=sys.stderr,
+            )
+
     if consumer_failed:
         sys.exit(1)
 
