@@ -312,13 +312,14 @@ test.describe("authenticated task console", () => {
      * extra coverage. The task is cancelled at the end rather than left to run
      * its full course.
      *
-     * Do not read a second run inside the same quarter hour as a flake. Cancel
-     * is a database transition only: it never reaches the engine, so the
-     * sandbox keeps running and keeps its concurrency slot until it ends on its
-     * own (issue #886). Two runs in quick succession exhaust
-     * HIVE_QUOTA_USER_CONCURRENCY, and the third create then genuinely fails
-     * with "agent engine could not start the task", which the row renders as
-     * Blocked. That is the deployment answering honestly, not this test.
+     * Do not read a repeated Blocked row as a flake in this test. Cancel is a
+     * database transition only: it never reaches the engine, so the sandbox is
+     * never told to stop and the concurrency slot it holds is not returned
+     * (issue #886). Observed on the demo box, two cancels were enough to hold
+     * both of HIVE_QUOTA_USER_CONCURRENCY's slots for over half an hour, after
+     * which every create was refused instantly with "agent engine could not
+     * start the task". That is the deployment answering honestly, and it is
+     * why this test cancels exactly one task per run and no more.
      */
     test.setTimeout(360_000);
     await signIn(page);
