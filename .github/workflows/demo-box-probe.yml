@@ -48,6 +48,19 @@ jobs:
           docker compose -p hive --env-file /home/sakib/hive/.env \
             --profile local --profile chat up -d --build control-plane
 
+      - name: Daemon and control-plane logs
+        env:
+          XDG_RUNTIME_DIR: /run/user/1000
+          DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+        run: |
+          set -uo pipefail
+          echo "== unit =="
+          systemctl --user status hive-agent-engine.service --no-pager --lines=0 2>&1 | head -12
+          echo "== daemon log =="
+          journalctl --user -u hive-agent-engine.service --no-pager --lines=80 2>&1 | tail -80
+          echo "== control-plane agent lines =="
+          docker logs hive-control-plane-1 2>&1 | grep -iE "agent|task" | tail -30
+
       - name: Prove control-plane reached the daemon
         run: |
           set -uo pipefail
