@@ -14,50 +14,120 @@ concurrency:
   group: demo-box-probe
   cancel-in-progress: true
 
+env:
+  RUNTIME_DIR: /home/sakib/agent-runtime
+  SIF_ARTIFACT_ID: '9093355682'
+
 jobs:
   probe:
     runs-on: [self-hosted, hive-demo]
-    permissions: {}
-    timeout-minutes: 10
+    permissions:
+      actions: read
+    timeout-minutes: 30
     steps:
-      - name: Host facts
+      - name: Fetch the CI-built SIF onto the box
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNTIME_DIR"
+          sif="$RUNTIME_DIR/agent-engine.sif"
+          if [ -s "$sif" ]; then
+            echo "SIF already present: $(stat -c%s "$sif") bytes"
+          else
+            curl -sSL -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -o "$RUNTIME_DIR/sif.zip" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${SIF_ARTIFACT_ID}/zip"
+            python3 -c "
+import zipfile, sys
+z = zipfile.ZipFile('$RUNTIME_DIR/sif.zip')
+print(z.namelist())
+z.extractall('$RUNTIME_DIR')
+"
+            rm -f "$RUNTIME_DIR/sif.zip"
+            ls -l "$RUNTIME_DIR"
+            [ -s "$sif" ] || mv "$RUNTIME_DIR"/*.sif "$sif"
+          fi
+          ls -l "$sif"
+
+      - name: Does the box run this SIF unprivileged at all
+        run: |
+          set -euo pipefail
+          apptainer exec --containall "$RUNTIME_DIR/agent-engine.sif" \
+            python3 -c "import openhands.agent_server as m; print('SIF_EXEC_OK', m.__file__)"
+
+      - name: Full sandbox launch, exactly as sandbox.BuildArgv builds it
         run: |
           set -uo pipefail
-          echo "== identity =="
-          id
-          echo "HOME=$HOME PWD=$PWD"
-          echo "== os / kernel =="
-          uname -a
-          cat /etc/os-release | head -3
-          echo "== sudo =="
-          if sudo -n true 2>/dev/null; then echo "PASSWORDLESS_SUDO=yes"; else echo "PASSWORDLESS_SUDO=no"; fi
-          sudo -n -l 2>&1 | head -20 || true
-          echo "== apptainer =="
-          command -v apptainer || echo "apptainer: absent"
-          command -v singularity || echo "singularity: absent"
-          apptainer --version 2>/dev/null || true
-          echo "== fuse / userns =="
-          ls -l /dev/fuse 2>&1 || echo "/dev/fuse absent"
-          cat /proc/sys/user/max_user_namespaces 2>/dev/null || echo "max_user_namespaces unreadable"
-          sysctl kernel.unprivileged_userns_clone 2>/dev/null || echo "unprivileged_userns_clone unset"
-          command -v squashfuse || echo "squashfuse: absent"
-          command -v fuse2fs || echo "fuse2fs: absent"
-          echo "== apt =="
-          apt-cache policy apptainer 2>/dev/null | head -5 || echo "no apptainer in apt index"
-          echo "== disk =="
-          df -h / /home 2>/dev/null | head -5
-          echo "== docker =="
-          docker ps --format '{{.Names}}\t{{.Status}}' | head -30
-          echo "== repo checkout =="
-          ls -d /home/sakib/hive 2>&1
-          echo "== .env keys of interest (NAMES ONLY) =="
-          grep -oE '^[A-Z0-9_]+' /home/sakib/hive/.env 2>/dev/null | grep -E 'AGENT|SANDBOX|QUOTA|EGRESS' | sort -u || echo "(none)"
-          echo "== agent env paths =="
-          ls -ld /home/sakib/hive/.agent 2>/dev/null || echo "no /home/sakib/hive/.agent"
-          ls -ld /opt/hive 2>/dev/null || echo "no /opt/hive"
-          echo "== control-plane container base =="
-          docker exec hive-control-plane-1 sh -c 'cat /etc/os-release | head -2; ls /lib/ld-musl* 2>/dev/null; command -v apptainer || echo no-apptainer-in-container' 2>&1 | head -10 || true
-          echo "== systemd =="
-          systemctl --version 2>/dev/null | head -1 || echo "no systemctl"
-          echo "== go toolchain on host =="
-          command -v go && go version || echo "go: absent on host"
+          cd /home/sakib/hive
+          sess=$(mktemp -d "$RUNTIME_DIR/probe-XXXX")
+          ctl="$sess/c"; work="$sess/w"
+          mkdir -p "$ctl" "$work"
+          egress="$sess/e.sock"
+
+          # Stand-in for internal/egressproxy: the bind mount needs a real
+          # socket at this path before apptainer starts. It answers nothing;
+          # this step only proves the sandbox comes up and its control
+          # channel answers.
+          python3 - "$egress" <<'PY' &
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.bind(sys.argv[1]); s.listen(8)
+while True:
+    c, _ = s.accept(); c.close()
+PY
+          egress_pid=$!
+          for _ in $(seq 1 50); do [ -S "$egress" ] && break; sleep 0.1; done
+
+          apptainer run \
+            --pid --containall --net --network none \
+            --no-mount hostfs --no-mount bind-paths \
+            --memory 4G --cpus 2 --pids-limit 512 \
+            --env HTTP_PROXY=http://127.0.0.1:3128 \
+            --env HTTPS_PROXY=http://127.0.0.1:3128 \
+            --env NO_PROXY=127.0.0.1,localhost \
+            --env HIVE_CONTROL_TARGET_PORT=38080 \
+            --bind "$egress":/opt/hive/egress.sock \
+            --bind "$ctl":/opt/hive/control \
+            --bind /home/sakib/hive/apps/agent-engine/packs/coding-pack:/opt/hive/pack:ro \
+            --bind "$work":/workspace \
+            "$RUNTIME_DIR/agent-engine.sif" --host 0.0.0.0 --port 38080 \
+            > "$sess/sandbox.log" 2>&1 &
+          sandbox_pid=$!
+
+          echo "== waiting for control socket =="
+          ok=no
+          for _ in $(seq 1 120); do
+            if [ -S "$ctl/agent.sock" ]; then ok=yes; break; fi
+            kill -0 "$sandbox_pid" 2>/dev/null || { echo "sandbox process died"; break; }
+            sleep 1
+          done
+          echo "CONTROL_SOCKET_PRESENT=$ok"
+
+          if [ "$ok" = yes ]; then
+            echo "== GET /health =="
+            for _ in $(seq 1 60); do
+              body=$(curl -s --max-time 5 --unix-socket "$ctl/agent.sock" http://localhost/health || true)
+              [ -n "$body" ] && break
+              sleep 2
+            done
+            echo "HEALTH=$body"
+            echo "== GET /api/agent-profiles =="
+            curl -s --max-time 10 --unix-socket "$ctl/agent.sock" http://localhost/api/agent-profiles || true
+            echo
+            echo "== POST /api/conversations with no profile =="
+            curl -s --max-time 30 --unix-socket "$ctl/agent.sock" \
+              -H 'Content-Type: application/json' \
+              -d '{"workspace":{"kind":"local","working_dir":"/workspace"}}' \
+              http://localhost/api/conversations | head -c 2000 || true
+            echo
+          fi
+
+          echo "== sandbox log (tail) =="
+          tail -40 "$sess/sandbox.log" || true
+
+          kill "$sandbox_pid" 2>/dev/null || true
+          kill "$egress_pid" 2>/dev/null || true
+          sleep 2
+          rm -rf "$sess"
