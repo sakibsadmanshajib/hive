@@ -5,9 +5,20 @@ the deployed console at `https://console-hive.scubed.co`, signed in through
 the shared live-auth helper (`docs/live-test-auth.md`), which mints a session
 without touching any password.
 
-**294 of 313 enumerated controls proven, 93.9%, across 22 of 24 routes.**
+**290 of 309 distinct control identities proven, 93.9%, across 22 of 24 routes.**
 
-The 2026-08-08 run recorded 287 of 312, 92.0%.
+Secondary and not comparable between runs: 294 of 313 raw instances, 93.9%.
+The instance figure is what this file first carried and it is superseded. An
+instance count moves with how many rows a page happens to render, so two runs
+against different data are not comparable; an identity is one thing a user can
+do and does not move with row counts.
+
+An identity counts as proven only when every instance of it proved, so a
+control that works in one row and fails in another is unproven. The gate fails
+on the failing instance regardless, because it asserts the unproven list is
+empty, so collapsing instances cannot hide a broken one.
+
+The 2026-08-08 run recorded 287 of 312 instances, 92.0%. It predates the identity metric and is not comparable to either figure above.
 
 ## What changed in the predicate
 

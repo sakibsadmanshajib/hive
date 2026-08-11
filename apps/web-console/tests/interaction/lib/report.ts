@@ -48,6 +48,11 @@ export interface CoverageReport {
   totals: {
     routesDiscovered: number;
     routesVisited: number;
+    /** Primary: distinct control identities, independent of row counts. */
+    identities: number;
+    identitiesProven: number;
+    identityCoverage: number;
+    /** Secondary and not comparable between runs: raw instances. */
     enumerated: number;
     proven: number;
     declared: number;
@@ -60,6 +65,20 @@ export interface CoverageReport {
   unprovenControls: ControlRecord[];
   /** Registry and route-fixture integrity failures. */
   problems: string[];
+}
+
+/**
+ * Collapses an instance key to the identity it is an instance of.
+ *
+ * `controlKey` appends an ordinal to a duplicate, so a list that renders the
+ * same row action forty times produces forty keys differing only by that
+ * ordinal. Counting those as forty controls makes the denominator track how
+ * much data the account holds rather than what the product offers, and two
+ * runs against different data are then not comparable. One identity is one
+ * thing a user can do.
+ */
+export function identityOf(route: string, key: string): string {
+  return route + " " + key.replace(/~\d+$/, "");
 }
 
 export function ratio(proven: number, enumerated: number): number {
@@ -78,6 +97,22 @@ export function buildReport(input: {
   problems: string[];
 }): CoverageReport {
   const proven = input.controls.filter((c) => c.status === "proven").length;
+  // Primary figure. An identity counts as proven only when every instance of
+  // it proved, so a control that works in one row and fails in another is
+  // unproven; the gate fails on the failing instance regardless, because it
+  // asserts that the unproven list is empty.
+  const byIdentity = new Map<string, { instances: number; proven: number }>();
+  for (const control of input.controls) {
+    const id = identityOf(control.route, control.key);
+    const cell = byIdentity.get(id) ?? { instances: 0, proven: 0 };
+    cell.instances += 1;
+    if (control.status === "proven") cell.proven += 1;
+    byIdentity.set(id, cell);
+  }
+  const identities = byIdentity.size;
+  const identitiesProven = [...byIdentity.values()].filter(
+    (cell) => cell.proven === cell.instances,
+  ).length;
   const declared = input.controls.filter((c) => c.status === "declared").length;
   const unprovenControls = input.controls.filter((c) => c.status === "unproven");
   const proofTypes: Record<string, number> = {};
@@ -91,6 +126,9 @@ export function buildReport(input: {
     totals: {
       routesDiscovered: input.routesDiscovered,
       routesVisited: input.routes.filter((r) => r.visited).length,
+      identities,
+      identitiesProven,
+      identityCoverage: ratio(identitiesProven, identities),
       enumerated: input.controls.length,
       proven,
       declared,
@@ -127,7 +165,13 @@ export function formatSummary(report: CoverageReport): string {
   lines.push(
     `  controls      ${String(report.totals.enumerated)} enumerated, ${String(report.totals.proven)} proven, ${String(report.totals.declared)} declared, ${String(report.totals.unproven)} unproven`,
   );
-  lines.push(`  COVERAGE      ${percent(report.totals.coverage)}`);
+  lines.push(
+    `  identities    ${String(report.totals.identitiesProven)} proven of ${String(report.totals.identities)} distinct`,
+  );
+  lines.push(`  COVERAGE      ${percent(report.totals.identityCoverage)}  (distinct control identities)`);
+  lines.push(
+    `  instances     ${percent(report.totals.coverage)}  (secondary, moves with row counts, not comparable between runs)`,
+  );
   if (report.partial) {
     lines.push("  PARTIAL RUN: a route filter was applied, this number is not the gate number");
   }
