@@ -65,19 +65,40 @@ type PGBillingAccountResolver struct {
 
 // Resolve implements BillingAccountResolver.
 func (r *PGBillingAccountResolver) Resolve(ctx context.Context, tenantID uuid.UUID) (uuid.UUID, bool, error) {
-	if r == nil || r.Pool == nil {
-		return uuid.Nil, false, nil
+	state, err := r.ResolveState(ctx, tenantID)
+	if err != nil {
+		return uuid.Nil, false, err
 	}
-	var accountID uuid.UUID
+	return state.AccountID, state.Found, nil
+}
+
+// ResolveState answers both questions the money path asks about a tenant in
+// one indexed lookup: which account its usage settles against, and the
+// deployment posture that decides whether it settles at all. A tenant row with
+// no tenant_billing_accounts match returns Found false, which the enforcing
+// caller (apps/edge-api/internal/chat) refuses on rather than serving free.
+func (r *PGBillingAccountResolver) ResolveState(ctx context.Context, tenantID uuid.UUID) (TenantBillingState, error) {
+	if r == nil || r.Pool == nil {
+		return TenantBillingState{}, nil
+	}
+	var deployment string
+	var accountID *uuid.UUID
 	err := r.Pool.QueryRow(ctx, `
-		SELECT account_id FROM public.tenant_billing_accounts WHERE tenant_id = $1`, tenantID).Scan(&accountID)
+		SELECT t.deployment, tba.account_id
+		FROM public.tenants t
+		LEFT JOIN public.tenant_billing_accounts tba ON tba.tenant_id = t.id
+		WHERE t.id = $1`, tenantID).Scan(&deployment, &accountID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return uuid.Nil, false, nil
+		return TenantBillingState{}, nil
 	}
 	if err != nil {
-		return uuid.Nil, false, fmt.Errorf("metering: read billing account: %w", err)
+		return TenantBillingState{}, fmt.Errorf("metering: read tenant billing state: %w", err)
 	}
-	return accountID, true, nil
+	state := TenantBillingState{Deployment: deployment}
+	if accountID != nil {
+		state.AccountID, state.Found = *accountID, true
+	}
+	return state, nil
 }
 
 // resolvePrecedence applies the precedence order (design brief section 3.1,

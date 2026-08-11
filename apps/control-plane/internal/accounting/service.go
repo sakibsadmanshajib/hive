@@ -363,8 +363,13 @@ func (s *Service) finalizeLocked(ctx context.Context, input FinalizeReservationI
 		Endpoint:         reservation.Endpoint,
 		ModelAlias:       reservation.ModelAlias,
 		Status:           string(status),
-		HiveCreditDelta:  -actualCredits,
-		CustomerTags:     reservation.CustomerTags,
+		// The quantities behind the charge, when the caller measured them, so
+		// this one row answers both what was consumed and what it cost. Spend
+		// stays the negative credit delta; these are counts, never credits.
+		InputTokens:     input.InputTokens,
+		OutputTokens:    input.OutputTokens,
+		HiveCreditDelta: -actualCredits,
+		CustomerTags:    reservation.CustomerTags,
 		InternalMetadata: map[string]any{
 			"reservation_id":           reservation.ID.String(),
 			"released_credits":         releaseCredits,

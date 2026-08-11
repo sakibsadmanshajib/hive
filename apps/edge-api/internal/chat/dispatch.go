@@ -17,6 +17,7 @@ import (
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	apierr "github.com/sakibsadmanshajib/hive/apps/edge-api/internal/errors"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
 type Deps struct {
@@ -25,7 +26,12 @@ type Deps struct {
 	// underlying LiteLLM route. Required: LiteLLM only knows route names
 	// (e.g. "route-groq-fast"), never Hive aliases, so forwarding
 	// parsed.Model unresolved 400s upstream on every real request (#269).
-	Routing    *inference.RoutingClient
+	Routing *inference.RoutingClient
+	// Accounting and Billing are the money path for session chat (#746).
+	// Without both, this handler refuses every request rather than serving
+	// inference it cannot charge for: see startSettlement in billing.go.
+	Accounting *inference.AccountingClient
+	Billing    BillingResolver
 	LiteLLMURL string
 	LiteLLMKey string
 	DeploySHA  string
@@ -57,6 +63,10 @@ type usage struct {
 }
 
 type sseEnvelope struct {
+	// Model is the upstream's own name for what served the request. It is
+	// read for the cross-alias fallback check (#743) and logged, never
+	// forwarded to audit_log, which fans out to third-party sinks.
+	Model   string `json:"model,omitempty"`
 	Usage   *usage `json:"usage,omitempty"`
 	Choices []struct {
 		FinishReason string `json:"finish_reason,omitempty"`
@@ -127,6 +137,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	clientModel := parsed.Model
 	requestID := uuid.New()
+
+	// Money path (#746): a session turn is served only once it can be
+	// charged. Every refusal inside startSettlement is written before a
+	// provider is reached, and the hold it takes reaches a terminal state
+	// exactly once -- finalized on the success path below, released by this
+	// deferred call on every other exit, never both and never neither.
+	settle, refused := h.startSettlement(r.Context(), w, user.TenantID, route, clientModel, requestID)
+	if refused {
+		return
+	}
+	settled := false
+	releaseReason := "interrupted"
+	defer func() {
+		if settle != nil && !settled {
+			settle.release(releaseReason)
+		}
+	}()
 	// Rewrite only the two fields this path owns (the resolved route name, and
 	// streaming, which it always uses) and keep every other field the caller
 	// sent. Re-marshalling the narrow chatRequest struct instead silently dropped
@@ -157,12 +184,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	resp, err := h.deps.HTTP.Do(upstream)
 	if err != nil {
+		releaseReason = "upstream_error"
 		apierr.Write(w, http.StatusServiceUnavailable, apierr.CodeServiceUnavailable, "upstream unavailable")
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= http.StatusBadRequest {
 		rawBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		releaseReason = "upstream_error"
 		apierr.WriteProviderBlindUpstreamError(w, clientModel, resp.StatusCode, string(rawBody))
 		return
 	}
@@ -174,6 +203,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	flusher, _ := w.(http.Flusher)
 
 	var inTokens, outTokens int
+	var hasUsage bool
+	var servedModel string
 	var finishReason string
 	var completion strings.Builder
 
@@ -209,7 +240,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				finishReason = choice.FinishReason
 			}
 		}
+		if envelope.Model != "" {
+			servedModel = envelope.Model
+		}
 		if envelope.Usage != nil {
+			hasUsage = true
 			inTokens = envelope.Usage.PromptTokens
 			outTokens = envelope.Usage.CompletionTokens
 		}
@@ -230,21 +265,54 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	latency := int(time.Since(started).Milliseconds())
-	// The cost recorded for this JWT-session request comes from the alias's
-	// catalog row, the same conversion the API-key path settles with (#688), so
-	// the two surfaces cannot report different costs for identical usage. This
-	// path takes no hold and issues no charge (JWT traffic is pre-billing by
-	// design, see cmd/server/main.go), so an alias that cannot be priced in
-	// tokens is recorded as an unpriced trace rather than refused: there is no
-	// charge here to fail closed on, and totalTokens is deliberately not used
-	// as a stand-in figure, since that is exactly the one-credit-per-token
-	// fiction #688 removed.
-	var costCredits int64
-	if inference.CanPriceTokens(route) {
-		costCredits = inference.CreditsForTokens(route, int64(inTokens), int64(outTokens))
-	} else {
-		slog.Warn("dispatch trace cost not priceable",
-			"request_id", requestID, "model", clientModel, "price_unit", route.PriceUnit)
+
+	// The charge is the catalog price of the route that actually served the
+	// request applied to the tokens the provider reported, the same conversion
+	// the API-key path settles with (#688), so the two surfaces cannot report
+	// different costs for identical usage. When no usage frame arrives at all,
+	// the same helper falls back to a content estimate and flags it
+	// unconfirmed, which is what tells control-plane to clamp the figure to the
+	// hold and open a reconciliation job. It never settles a delivered response
+	// at zero, and never bills a token count as though it were a credit amount.
+	costCredits, confirmed, delivered := inference.ChatSettlementCredits(
+		route, hasUsage, int64(inTokens), int64(outTokens), raw, completion.String())
+	if servedModel != "" && servedModel != route.LiteLLMModelName {
+		// An upstream fallback that crosses an alias boundary serves one model
+		// and would be priced at another's rate (#743). The charge below still
+		// uses the route this gateway dispatched to, which is the only price it
+		// can defend, and the mismatch is recorded so #743 has evidence rather
+		// than an assumption. Operator log only: an upstream model name can
+		// carry a provider name, and audit_log fans out to third-party sinks.
+		slog.Warn("session chat served by a different upstream model than dispatched",
+			"request_id", requestID, "alias", clientModel,
+			"dispatched", route.LiteLLMModelName, "served", servedModel)
+	}
+	switch {
+	case settle == nil:
+		// Enterprise posture (D-027): no prepaid relationship, so nothing is
+		// charged. costCredits stays the priced figure for the trace row, which
+		// is observability, not a ledger entry, and drops to zero for an alias
+		// the catalog cannot price rather than reporting the never-free floor
+		// as though a rate existed.
+		if !inference.CanPriceTokens(route) {
+			costCredits = 0
+		}
+	case !delivered:
+		// Nothing was produced, so there is no quantity to charge. The deferred
+		// release hands the hold back in full.
+		releaseReason = "upstream_error"
+		if r.Context().Err() != nil {
+			releaseReason = "client_disconnect"
+		}
+		costCredits = 0
+	case settle.finalize(costCredits, confirmed, int64(inTokens), int64(outTokens)):
+		settled = true
+	default:
+		// The charge did not land. Leaving settled false hands the reservation
+		// to the deferred release, so it still reaches a terminal state exactly
+		// once rather than stranding the hold behind a lost charge (#616).
+		releaseReason = "finalize_failed"
+		costCredits = 0
 	}
 	if traceErr := InsertTrace(r.Context(), h.deps.Pool, TraceRow{
 		TenantID:       user.TenantID,
@@ -279,6 +347,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"out_tokens":    outTokens,
 			"latency_ms":    latency,
 			"cost_credits":  costCredits,
+			"charged":       settled,
 			"finish_reason": finishReason,
 		},
 	}); auditErr != nil {
@@ -287,8 +356,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // rewriteDispatchBody returns the caller's body with the model replaced by the
-// resolved LiteLLM route name and streaming forced on, leaving all other fields
-// untouched.
+// resolved LiteLLM route name, streaming forced on and the terminal usage frame
+// requested, leaving all other fields untouched.
 func rewriteDispatchBody(raw []byte, litellmModel string) ([]byte, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
@@ -300,7 +369,16 @@ func rewriteDispatchBody(raw []byte, litellmModel string) ([]byte, error) {
 	}
 	fields["model"] = model
 	fields["stream"] = json.RawMessage("true")
-	return json.Marshal(fields)
+	out, err := json.Marshal(fields)
+	if err != nil {
+		return nil, err
+	}
+	// stream_options.include_usage is what makes the terminal usage frame
+	// arrive at all. Without it the usage envelope is always nil, the token
+	// counts stay zero, and a settlement would charge for a request it never
+	// measured (#746). The single copy of that rewrite lives in
+	// internal/metering, so this delegates rather than carrying a second.
+	return metering.RewriteBody(out)
 }
 
 func flush(flusher http.Flusher) {
