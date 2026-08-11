@@ -139,7 +139,7 @@ async function main() {
         session.edit_counts[editKey] = (session.edit_counts[editKey] || 0) + 1;
         writeJSON(sessionFile, session);
         if (session.edit_counts[editKey] >= 3) {
-            process.stderr.write(`⚠️ OpenWolf: ${baseName} has been edited ${session.edit_counts[editKey]} times this session. If you're fixing a bug, remember to log it to .wolf/buglog.json.\n`);
+            process.stderr.write(`⚠️ OpenWolf: ${baseName} has been edited ${session.edit_counts[editKey]} times this session. If you're fixing a bug, remember to record it: on a feature branch the entry goes in the PR body, not into .wolf/buglog.jsonl (.claude/rules/openwolf.md).\n`);
         }
     }
     catch { }
