@@ -37,19 +37,26 @@ The agent-engine runs each session inside an Apptainer SIF built from `deploy/ap
 Control-plane never execs Apptainer itself. It hands each launch to an unprivileged host launcher over a Unix socket, so the SIF has to sit on the host beside that launcher, not inside a container.
 
 ```bash
-# On the host, once per deploy. Fetches the CI-built .sif if the host has none,
-# builds the launcher, and restarts its systemd user unit.
+# On the host, once per deploy, run from the repository root (the compose step
+# above leaves the shell in deploy/docker). Fetches the CI-built .sif if the
+# host has none, builds the launcher, and restarts its systemd user unit.
+# RUNTIME_DIR defaults to /home/sakib/agent-runtime inside the script, so set
+# it explicitly and reuse the same path in HIVE_AGENT_ENGINE_SOCKET_DIR below.
+cd "$(git rev-parse --show-toplevel)"
+RUNTIME_DIR="$HOME/agent-runtime" \
 HIVE_AGENT_ENGINE_LLM_MODEL=openai/hive-default \
 HIVE_AGENT_ENGINE_LLM_BASE_URL=https://api-hive.scubed.co/v1 \
-HIVE_AGENT_ENGINE_LLM_API_KEY=<gateway key> \
-CONTROL_PLANE_INTERNAL_TOKEN=<internal token> \
+HIVE_AGENT_ENGINE_LLM_API_KEY=REPLACE_WITH_GATEWAY_KEY \
+CONTROL_PLANE_INTERNAL_TOKEN=REPLACE_WITH_INTERNAL_TOKEN \
   bash scripts/install-agent-engine-host.sh
 ```
 
-Then point control-plane at the socket in `.env`:
+Then point control-plane at the socket in `.env`. A dotenv file does no shell
+expansion, so write the same absolute path the installer used, with `/run`
+appended (for example `/home/hive/agent-runtime/run`):
 
 ```dotenv
-HIVE_AGENT_ENGINE_SOCKET_DIR=/home/<user>/agent-runtime/run
+HIVE_AGENT_ENGINE_SOCKET_DIR=/home/REPLACE_WITH_HOST_USER/agent-runtime/run
 HIVE_AGENT_ENGINE_SOCKET=/run/hive-agent/engine.sock
 ```
 
