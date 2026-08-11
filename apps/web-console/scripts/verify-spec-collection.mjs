@@ -64,8 +64,12 @@ const CONFIGS = [
 
 // Where Playwright test modules live. Anything matching TEST_FILE under these
 // is expected to be collected by at least one project.
+// `.test.ts` is here because the chromium project sets a testDir and no
+// testMatch, so Playwright's default pattern collects that suffix too. Walking
+// for `.spec.ts` alone would leave a file the runner does load invisible to the
+// DARK check below.
 const TEST_ROOTS = ["e2e", "tests/e2e"];
-const TEST_FILE = /\.(spec|setup)\.ts$/;
+const TEST_FILE = /\.(spec|test|setup)\.ts$/;
 
 function listFilesOnDisk() {
   const found = [];

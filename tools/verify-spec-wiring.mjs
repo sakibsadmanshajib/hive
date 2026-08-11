@@ -353,8 +353,13 @@ for (const [label, projects] of Object.entries(configs)) {
   }
 }
 
+// Everything the manifest pins except the setup files, which exist to prepare
+// state for a project rather than to assert anything. Filtering to `.spec.ts`
+// instead would hardcode a filename pattern into the denominator, and the
+// chromium project's testDir has no testMatch, so Playwright's default picks
+// up `*.test.ts` there as well.
 const specFiles = Object.keys(specProjects)
-  .filter((file) => file.endsWith(".spec.ts"))
+  .filter((file) => !file.endsWith(".setup.ts"))
   .sort();
 if (specFiles.length === 0) {
   console.error(`spec wiring guard FAILED: ${MANIFEST_PATH} lists no spec files, so nothing is measured`);
