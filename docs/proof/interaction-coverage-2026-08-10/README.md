@@ -1,5 +1,19 @@
 # Interaction coverage, live console, 2026-08-10
 
+> **This run predates the write guard, and it wrote to the live demo tenant.**
+> Reviewed on 2026-08-11: the ledger below records eight form submissions that
+> the gate itself filled in and sent for real, including `POST /api/v1/accounts/
+> current/api-keys` (an API key named after the probe value) and the workspace
+> invitation on `/console/members`, plus a sign-up attempt and a password
+> recovery request for `interaction-gate@example.invalid`. No delete or revoke
+> ever fired: the only control matching the destructive pattern in either run
+> was the `Top up credits` link, and the workspace held no rows carrying a
+> revoke control. The gate no longer works this way. It now aborts, inside the
+> browser, every state changing request whose values it supplied and anything
+> named delete, revoke or purchase, and the interception is what proves the
+> control is wired. Read the numbers below as a measurement of the console, not
+> as a description of how the gate behaves today.
+
 Re-measurement after two defects were fixed in the gate itself. Run against
 the deployed console at `https://console-hive.scubed.co`, signed in through
 the shared live-auth helper (`docs/live-test-auth.md`), which mints a session
