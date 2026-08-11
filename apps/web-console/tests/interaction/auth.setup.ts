@@ -6,23 +6,32 @@
 // shared account's credentials. INTERACTION_EMAIL names an existing account;
 // nothing about that account is created or modified.
 //
-// The `.mjs` extension is deliberate and load bearing. `../e2e/support/live-auth`
-// without it resolves to this same module anyway, but as an untyped import: the
-// call then type checked against the `.ts` wrapper's synchronous signature while
-// actually invoking the asynchronous one here. The returned promise floated, the
-// mint never happened, and the setup reported success in 13 milliseconds having
-// written nothing (CI run 31445547804). The sweep then died on a missing storage
-// state file, which is how a gate that had never measured a single control still
-// looked like it was running.
+// WHY IT SHELLS OUT INSTEAD OF IMPORTING
+// --------------------------------------
+// Two modules answer to the name `../e2e/support/live-auth`: the `.mjs` that
+// implements the mint, and the `.ts` wrapper that shells out to it. An
+// extensionless import resolves to the `.ts` for the type checker and to the
+// `.mjs` at run time, so the call was checked against a synchronous signature
+// while invoking an asynchronous one. The returned promise floated, the mint
+// never happened, and the setup reported success in 13 milliseconds having
+// written nothing (CI run 31445547804). The sweep then died on a missing
+// storage state file, which is how a gate that had never measured a single
+// control still looked like it was running. Naming the `.mjs` explicitly does
+// not fix it either: Playwright compiles specs to CommonJS and evaluating that
+// output in ES module scope fails with "exports is not defined".
+//
+// So: the documented command line form. No resolution ambiguity, a
+// non-zero exit is impossible to ignore, and the service role key stays in a
+// child process rather than entering this worker's module graph.
 
+import { execFileSync } from "node:child_process";
 import { existsSync, rmSync } from "node:fs";
 
 import { test as setup } from "@playwright/test";
 
-import { writeStorageState } from "../e2e/support/live-auth.mjs";
 import { AUTH_STATE_FILE, interactionBaseUrl, interactionEmail } from "./lib/config";
 
-setup("authenticate", async () => {
+setup("authenticate", () => {
   const email = interactionEmail();
   if (email === "") {
     throw new Error(
@@ -34,11 +43,24 @@ setup("authenticate", async () => {
   // for a successful one, and would sign the sweep in as whoever ran last.
   rmSync(AUTH_STATE_FILE, { force: true });
 
-  await writeStorageState({
-    email,
-    targetUrl: new URL("/console", interactionBaseUrl()).toString(),
-    statePath: AUTH_STATE_FILE,
-  });
+  const targetUrl = new URL("/console", interactionBaseUrl()).toString();
+  try {
+    execFileSync(
+      "node",
+      ["tests/e2e/support/live-auth.mjs", email, targetUrl, AUTH_STATE_FILE],
+      { cwd: process.cwd(), env: { ...process.env, NODE_OPTIONS: "" }, stdio: "pipe" },
+    );
+  } catch (error: unknown) {
+    // live-auth.mjs redacts its own output, so relaying it is safe.
+    const streams =
+      typeof error === "object" && error !== null
+        ? [
+            "stdout" in error ? String(error.stdout ?? "") : "",
+            "stderr" in error ? String(error.stderr ?? "") : "",
+          ].join("")
+        : String(error);
+    throw new Error(`[live-auth] mint failed\n${streams}`);
+  }
 
   // The mint throws on every failure it can see, so this catches the one it
   // cannot: a helper that returns without having written the file. Failing here
