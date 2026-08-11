@@ -1246,6 +1246,17 @@ jobs:
         working-directory: deploy/docker
         env:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # control-plane's phase-19 identity wiring is all-or-nothing on four
+          # variables (cmd/server/main.go, missingPhase19), and skipping it
+          # skips registering /v1/tenants/switch, which is the route the
+          # tenant-isolation specs assert against. Without these the route is
+          # simply absent and the specs get a 404 that reads like a broken
+          # test rather than a stack that never wired the feature. Both values
+          # are stubs: no Open WebUI is booted in this job, and nothing here
+          # calls the signup webhook, whose handler is the only reader of the
+          # secret and is reachable on this runner's loopback alone.
+          OWUI_ADMIN_TOKEN: 'ci-stub-not-used'
+          SUPABASE_WEBHOOK_SECRET: 'ci-stub-not-used'
         run: |
           # `--profile local` activates the in-stack docker redis. Staging
           # uses Upstash via REDIS_URL and never carries that profile.
