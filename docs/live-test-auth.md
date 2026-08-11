@@ -8,7 +8,36 @@ apps/web-console/tests/e2e/support/live-auth.mjs   # the implementation, also a 
 apps/web-console/tests/e2e/support/live-auth.ts    # the spec-side entry point
 ```
 
-## Rotating the shared demo password is forbidden
+## No credential is ever committed
+
+This repository is public. A test credential in a tracked file is a published
+credential, and a fixture password is not inert: the seeder writes it back onto
+the live account on every run, so the committed value is the account's actual
+password.
+
+The sanctioned pattern is an environment variable with **no fallback**. A
+missing one fails loudly and names itself. It never falls back to a default and
+never turns into a silent skip, because a silent skip is how a committed value
+survives unnoticed:
+
+```js
+// apps/web-console/tests/e2e/support/e2e-auth-creds.ts
+export const E2E_VERIFIED_PASSWORD = requiredSecretEnv(
+  "E2E_VERIFIED_PASSWORD",
+  DEFAULTS.minPasswordLength
+);
+```
+
+`e2e-auth-defaults.json` carries addresses and length limits only. Two unit
+guards in `apps/web-console/tests/unit/e2e-auth-creds.test.ts` fail if a
+credential-shaped field reappears there. Addresses may stay: an address is not
+a credential.
+
+Local runs therefore need `E2E_VERIFIED_PASSWORD`, `E2E_UNVERIFIED_PASSWORD`
+and `E2E_INVITATION_TOKEN` exported before `npx playwright test`. CI passes the
+first two from repository secrets and derives the third per run.
+
+## Rotating a shared account's password is forbidden
 
 Never set, reset or rotate the password of a shared test account to obtain a
 session. Not as a fallback, not "just this once", not behind a flag.
@@ -18,6 +47,40 @@ bearer against GoTrue on each request, so changing the password invalidates
 every session that any other run currently holds. On 2026-08-08 a scratch
 script did exactly that and broke three agents working concurrently; four
 separate agents were blocked on credentials across that day and the one after.
+
+### What this repository does about it
+
+Three scripts here used to rotate unconditionally. They no longer do, and the
+shape they now share is the one to copy:
+
+| script | account | how it behaves now |
+| --- | --- | --- |
+| `scripts/seed-demo-owner.py` | `demo@hive-demo.invalid` | `password_to_set` leaves an existing account alone unless `HIVE_DEMO_PASSWORD` is set. Creation still generates one. |
+| `scripts/seed-owui-e2e-user.py` | `owui-e2e@…`, `owui-e2e-bootstrap@…` | Same helper. Prints a `PASSWORD` line only for a password it actually set. `OWUI_E2E_RUN_KEY` namespaces both addresses per run, which is how the nightly gets a usable credential without touching a shared one. |
+| `scripts/verify-rag-roundtrip.py` | `rag-verify-e2e@hive-e2e.invalid` | Signs in with `RAG_VERIFY_PASSWORD` and refuses to rotate. Only a first run, which creates the account, generates one. |
+
+`scripts/seed-owui-e2e-user.py` matters most of the three: it is the only one
+invoked automatically. `.github/workflows/owui-nightly.yml` runs it on a
+schedule, on `workflow_dispatch`, and on any pull request labelled
+`run-owui-e2e`. That workflow's `concurrency.group` is keyed on the ref, so a
+labelled pull request run and the scheduled run are in different groups and can
+overlap. Before the run key, they rotated the same two accounts out from under
+each other.
+
+The web-console fixture seeder
+(`apps/web-console/tests/e2e/support/e2e-fixture-seed.mjs`) writes the resolved
+passwords onto its fixture accounts too. In CI the addresses are run-scoped, so
+it only ever touches its own run's users. Run locally with no `E2E_RUN_KEY`, it
+targets the shared `e2e-verified@scubed.com.bd` and
+`e2e-unverified@scubed.com.bd` accounts, which is why the credentials it seeds
+with must come from your environment and why that path must never silently
+default.
+
+`scripts/verify-control-plane.py` states the same rule in its docstring and
+signs in with an existing password it is given. That is fine. Inventing a new
+password is not.
+
+### The scratch script to avoid
 
 The scratch helper `demo_login.py` (agent scratchpad, not in this repository)
 is the specific script to avoid. Its only login path is:
@@ -31,10 +94,6 @@ Step 1 has also been returning intermittent `500 Database error finding users`
 (issue #791), and step 2 is the rotation described above. It is left in place
 only because other agents still reference it; do not use it to log in, and do
 not copy its shape into anything new.
-
-`scripts/verify-control-plane.py` states the same rule in its docstring and
-signs in with an existing password it is given. That is fine. Inventing a new
-password is not.
 
 ## What the helper does instead
 
@@ -140,3 +199,22 @@ token, so the fix cannot be quietly regressed into the version that leaked.
 Related: `npm run lint:proof-tokens` catches credentials in committed proof
 text, but cannot inspect screenshot pixels. Masking an image is still on the
 agent capturing it.
+
+## Playwright artifacts are public
+
+A workflow artifact on this repository is downloadable by anyone holding the
+run URL, for as long as it is retained. A Playwright trace is not a log: it
+records every request header (`Authorization: Bearer`), every cookie
+(`sb-*-auth-token`), and every navigation URL, including an OAuth callback
+whose `code=` and `access_token=` sit in the query string and the fragment. No
+text linter can see inside it, because it is a zip of binary resources.
+
+So the two report uploads exclude `*.zip` and `*.webm` and set
+`retention-days: 5`:
+
+* `playwright-report-api` in `.github/workflows/ci.yml`
+* `owui-playwright-report` in `.github/workflows/owui-nightly.yml`
+
+The HTML report, the screenshots and the error text still upload, which is what
+triage reads. Renaming an artifact is not a fix. If you add a job that uploads
+Playwright output, exclude the same two patterns and set a short retention.

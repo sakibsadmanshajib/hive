@@ -18,7 +18,10 @@
 // Nothing here is browser code. The service-role key stays in this Node
 // process and its callers, never reaches page context, and must never be
 // written to stdout, stderr, a screenshot, or an artifact. Route any error
-// text that could embed it through `redactSecrets` first.
+// text that could embed it through `redactSecrets` first. That is a rule
+// about every printing site in this file, not only the ones at the CLI
+// boundary: the sweep below relays raw client-library messages, and those
+// messages are exactly where a key or a token ends up embedded.
 
 import { createHash, randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
@@ -660,7 +663,9 @@ async function sweepStaleFixtureRuns(admin) {
       .eq("account_id", acct.id);
     if (delMapErr) {
       console.error(
-        `sweep: unmap billing account ${acct.id} failed: ${delMapErr.message}`
+        redactSecrets(
+          `sweep: unmap billing account ${acct.id} failed: ${delMapErr.message}`
+        )
       );
       continue;
     }
@@ -675,7 +680,7 @@ async function sweepStaleFixtureRuns(admin) {
       .eq("id", acct.id);
     if (delAcctErr) {
       console.error(
-        `sweep: delete account ${acct.id} failed: ${delAcctErr.message}`
+        redactSecrets(`sweep: delete account ${acct.id} failed: ${delAcctErr.message}`)
       );
       continue;
     }
@@ -684,7 +689,9 @@ async function sweepStaleFixtureRuns(admin) {
     );
     if (delUserErr) {
       console.error(
-        `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`
+        redactSecrets(
+          `sweep: delete user ${acct.owner_user_id} failed: ${delUserErr.message}`
+        )
       );
     }
   }
