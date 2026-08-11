@@ -81,6 +81,18 @@ func (p Principal) principalType() string {
 	return "api_key"
 }
 
+// TenantBillingState is what a session principal's tenant resolves to on the
+// money path. Found false means the tenant has no billing account: it is the
+// unmapped case #721 tracks, and the enforcing caller refuses on it rather
+// than serving inference nothing can be charged for. Deployment carries the
+// posture, because an ENTERPRISE_EDGE tenant has no prepaid relationship with
+// Hive and is deliberately not billable (D-027).
+type TenantBillingState struct {
+	AccountID  uuid.UUID
+	Found      bool
+	Deployment string
+}
+
 // RouteInfo is this package's OWN view of a resolved route's pricing,
 // deliberately decoupled from control-plane's routing.SelectionResult --
 // which does not carry pricing fields as of this PR (that field lands in a

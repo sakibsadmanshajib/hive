@@ -18,11 +18,14 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/google/uuid"
+
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/anthropic"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/auth"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/authz"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/chat"
 	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/inference"
+	"github.com/sakibsadmanshajib/hive/apps/edge-api/internal/metering"
 )
 
 // controlPlane is a fake control-plane covering the two internal surfaces the
@@ -205,9 +208,25 @@ func newSessionChain(t *testing.T, cp *controlPlane, ll *liteLLM) http.Handler {
 
 	return chat.NewDispatch(chat.Deps{
 		Routing:    inference.NewRoutingClient(cpSrv.URL),
+		Accounting: inference.NewAccountingClient(cpSrv.URL),
+		// A session turn holds and settles credits like any other (#746), so
+		// the chain needs a tenant that maps to an account. Without it the
+		// dispatcher refuses rather than serving something it cannot charge.
+		Billing:    sessionBilling{accountID: uuid.MustParse("11111111-1111-4111-8111-111111111111")},
 		LiteLLMURL: llSrv.URL,
 		LiteLLMKey: "test-master-key",
 	})
+}
+
+// sessionBilling maps every tenant to one Hive Cloud account.
+type sessionBilling struct{ accountID uuid.UUID }
+
+func (b sessionBilling) ResolveState(ctx context.Context, tenantID uuid.UUID) (metering.TenantBillingState, error) {
+	return metering.TenantBillingState{
+		AccountID:  b.accountID,
+		Found:      true,
+		Deployment: metering.DeploymentHiveCloud,
+	}, nil
 }
 
 // newAPIKeyChain builds the API-key half of the /v1/chat/completions chain (the
