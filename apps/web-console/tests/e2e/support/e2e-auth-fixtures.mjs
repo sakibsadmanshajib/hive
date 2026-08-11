@@ -9,7 +9,9 @@
 //   node tests/e2e/support/e2e-auth-fixtures.mjs
 //   node tests/e2e/support/e2e-auth-fixtures.mjs reset-profile <email>
 //
-// Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY. Neither has a
+// Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, and (for the default
+// seeding action) E2E_VERIFIED_PASSWORD, E2E_UNVERIFIED_PASSWORD and
+// E2E_INVITATION_TOKEN. None has a
 // fallback: seeding used to POST to a deployed `e2e-fixtures` Supabase Edge
 // Function and quietly no-op when its URL and secret were absent, which is
 // what let a caller change while the deployed seeder stayed behind, with
@@ -26,8 +28,12 @@ import {
   seedFixtures,
 } from "./e2e-fixture-seed.mjs";
 
-// Shared defaults with `e2e-auth-creds.ts`. Both modules read the same JSON
-// so the spec-side env lookup and this CLI cannot drift apart.
+// Shared non-secret defaults with `e2e-auth-creds.ts`. Both modules read the
+// same JSON so the spec-side env lookup and this CLI cannot drift apart. That
+// file carries addresses and length limits only. No credential has a committed
+// default here or there, and none may be added back: this repository is
+// public, and the values that used to live in that JSON were live ones this
+// very CLI then wrote back onto shared accounts on every credential-less run.
 const DEFAULTS = JSON.parse(
   readFileSync(
     join(dirname(fileURLToPath(import.meta.url)), "e2e-auth-defaults.json"),
@@ -35,15 +41,9 @@ const DEFAULTS = JSON.parse(
   )
 );
 
-function envOrDefault(name, fallback, { minLength = 0, validator } = {}) {
+function envOrDefault(name, fallback, { validator } = {}) {
   const raw = process.env[name];
   if (raw === undefined || raw === "") {
-    return fallback;
-  }
-  if (minLength > 0 && raw.length < minLength) {
-    console.warn(
-      `[e2e-auth-fixtures] ${name} is set but too short (${raw.length} < ${minLength}); using fallback`
-    );
     return fallback;
   }
   if (validator && !validator(raw)) {
@@ -51,6 +51,27 @@ function envOrDefault(name, fallback, { minLength = 0, validator } = {}) {
       `[e2e-auth-fixtures] ${name} is set but failed validation; using fallback`
     );
     return fallback;
+  }
+  return raw;
+}
+
+// Mirrors requiredSecretEnv in `e2e-auth-creds.ts`. Throws rather than
+// returning a fallback, so a run with nothing configured stops here with the
+// name of the variable to set instead of seeding shared live accounts with a
+// value that is public in this repository's history.
+function requiredSecretEnv(name, minLength) {
+  const raw = process.env[name] ?? "";
+  if (raw === "") {
+    throw new Error(
+      `[e2e-auth-fixtures] ${name} is required and has no default. Set it in ` +
+        "your shell (or as a CI secret) before seeding fixtures. Credentials " +
+        "are never committed to this repository; see docs/live-test-auth.md."
+    );
+  }
+  if (raw.length < minLength) {
+    throw new Error(
+      `[e2e-auth-fixtures] ${name} is set but too short (${raw.length} < ${minLength}).`
+    );
   }
   return raw;
 }
@@ -71,21 +92,9 @@ export const E2E_UNVERIFIED_EMAIL = envOrDefault(
   DEFAULTS.unverifiedEmail,
   { validator: isValidEmail }
 );
-export const E2E_VERIFIED_PASSWORD = envOrDefault(
-  "E2E_VERIFIED_PASSWORD",
-  DEFAULTS.verifiedPassword,
-  { minLength: DEFAULTS.minPasswordLength }
-);
-export const E2E_UNVERIFIED_PASSWORD = envOrDefault(
-  "E2E_UNVERIFIED_PASSWORD",
-  DEFAULTS.unverifiedPassword,
-  { minLength: DEFAULTS.minPasswordLength }
-);
-export const E2E_INVITATION_TOKEN = envOrDefault(
-  "E2E_INVITATION_TOKEN",
-  DEFAULTS.invitationToken,
-  { minLength: DEFAULTS.minTokenLength }
-);
+// The three credentials are resolved inside prepareE2EAuthFixtures rather
+// than at module scope, so the `reset-profile <email>` action (which needs no
+// credential at all) still runs when they are unset.
 // Set by CI to one value per job attempt (see .github/workflows/ci.yml),
 // e.g. `${{ github.run_id }}-${{ github.run_attempt }}`. Empty for local and
 // manual runs, which means "no run key": the seeder then uses the single
@@ -114,9 +123,18 @@ export async function prepareE2EAuthFixtures() {
     runKey: E2E_RUN_KEY,
     verifiedEmail: E2E_VERIFIED_EMAIL,
     unverifiedEmail: E2E_UNVERIFIED_EMAIL,
-    verifiedPassword: E2E_VERIFIED_PASSWORD,
-    unverifiedPassword: E2E_UNVERIFIED_PASSWORD,
-    invitationToken: E2E_INVITATION_TOKEN,
+    verifiedPassword: requiredSecretEnv(
+      "E2E_VERIFIED_PASSWORD",
+      DEFAULTS.minPasswordLength
+    ),
+    unverifiedPassword: requiredSecretEnv(
+      "E2E_UNVERIFIED_PASSWORD",
+      DEFAULTS.minPasswordLength
+    ),
+    invitationToken: requiredSecretEnv(
+      "E2E_INVITATION_TOKEN",
+      DEFAULTS.minTokenLength
+    ),
   });
 }
 
