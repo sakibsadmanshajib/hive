@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 
+import { auditRowsSince } from "./support/audit-db";
 import { requireEnv } from "./support/require-env";
 
 const CONTROL_PLANE_URL =
@@ -34,22 +35,7 @@ test("crafting a body with another tenant_id is denied and audited CRITICAL", as
     await api.dispose();
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pgMod: any = await import("pg").catch(() => null);
-  // Not a skip: see 04-tenant-switch.spec.ts.
-  expect(pgMod, "pg module not installed").not.toBeNull();
-
-  const db = new pgMod.Client({ connectionString: dbURL });
-  await db.connect();
-  try {
-    const audits = await db.query(
-      `SELECT action, severity FROM public.audit_log
-        WHERE ts >= $1 AND action = 'CROSS_TENANT_ATTEMPT'`,
-      [startedAt],
-    );
-    expect(audits.rowCount).toBeGreaterThan(0);
-    expect(audits.rows[0].severity).toBe("CRITICAL");
-  } finally {
-    await db.end();
-  }
+  const audits = await auditRowsSince(dbURL, "CROSS_TENANT_ATTEMPT", startedAt);
+  expect(audits.length).toBeGreaterThan(0);
+  expect(audits[0].severity).toBe("CRITICAL");
 });

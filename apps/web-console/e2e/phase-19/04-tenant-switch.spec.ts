@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 
+import { auditRowsSince } from "./support/audit-db";
 import { requireEnv } from "./support/require-env";
 
 const CONTROL_PLANE_URL =
@@ -30,25 +31,6 @@ test("switch to second tenant updates metadata and audits TENANT_SWITCH", async 
     await api.dispose();
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const pgMod: any = await import("pg").catch(() => null);
-  // Not a skip: the workflow installs pg before invoking this project, so a
-  // missing module means that install broke, and the spec would otherwise
-  // report green while asserting nothing about the audit trail.
-  expect(pgMod, "pg module not installed").not.toBeNull();
-
-  const db = new pgMod.Client({ connectionString: dbURL });
-  await db.connect();
-  try {
-    const audits = await db.query(
-      `SELECT action
-         FROM public.audit_log
-        WHERE ts >= $1
-          AND action = 'TENANT_SWITCH'`,
-      [startedAt],
-    );
-    expect(audits.rowCount).toBeGreaterThan(0);
-  } finally {
-    await db.end();
-  }
+  const audits = await auditRowsSince(dbURL, "TENANT_SWITCH", startedAt);
+  expect(audits.length).toBeGreaterThan(0);
 });

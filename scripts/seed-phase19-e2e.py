@@ -21,17 +21,20 @@ went dark the first time, so this script mints them inside the job instead:
   * a live Supabase access token for each of those two users.
 
 Everything is idempotent: tenants upsert on slug, memberships upsert on
-(tenant_id, user_id), and both users are found-or-created with their password
-rotated on every run. Rerunning is the normal case, not a repair path.
+(tenant_id, user_id), and both users are created if absent and otherwise left
+alone. Rerunning is the normal case, not a repair path.
 
-Deliberately mirrors scripts/seed-owui-e2e-user.py: same GoTrue admin and
-PostgREST call shapes, same "filter=<email>" user lookup (the `email=` param
-is not supported by this GoTrue version), same Prefer merge-duplicates upsert.
-That script is proven against the live project nightly; copying its call
-shapes is cheaper than rediscovering them.
+NO PASSWORD IS EVER WRITTEN. Sessions come from the admin one-time-token flow
+(POST /auth/v1/admin/generate_link, then POST /auth/v1/verify), the same flow
+apps/web-console/tests/e2e/support/live-auth.mjs uses and the only sanctioned
+one. Setting, resetting or rotating a shared account's password to obtain a
+session is forbidden outright: the control-plane resolves every bearer against
+GoTrue per request, so a rotation invalidates every concurrent run, and doing
+it broke three agents at once on 2026-08-08. See docs/live-test-auth.md. There
+is no fallback path here that writes a password and there must never be one.
 
-Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (admin writes) and
-SUPABASE_ANON_KEY (the password grant that mints the two tokens).
+Requires SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY (admin calls) and
+SUPABASE_ANON_KEY (the verify call that exchanges the one-time token).
 
 Prints KEY=value lines on stdout for the caller to push into GITHUB_ENV:
 
@@ -39,7 +42,6 @@ Prints KEY=value lines on stdout for the caller to push into GITHUB_ENV:
     TENANT_A2_ID=...
     TENANT_B_ID=...
     USER_A_EMAIL=...
-    USER_A_PASSWORD=...
     USER_A_JWT=...
     ORPHAN_JWT=...
 
@@ -54,8 +56,6 @@ spec for what that leaves.
 """
 import json
 import os
-import secrets
-import string
 import sys
 import urllib.error
 import urllib.parse
@@ -83,7 +83,21 @@ def env(name: str) -> str:
     return value
 
 
+class PasswordWriteRefused(Exception):
+    """Raised when a request body would set a credential on a shared account."""
+
+
 def request(base, headers, method, path, body=None, params=None, prefer=None):
+    if isinstance(body, dict) and "password" in body:
+        # The tripwire for the one mistake this script exists to not make. It
+        # is enforced here, at the single point every call goes through, so a
+        # future edit cannot reintroduce a password write by adding one field
+        # to one call site. Run `--self-test` to prove it still bites.
+        raise PasswordWriteRefused(
+            f"refusing to send a password to {method} {path}: rotating a shared "
+            "account's credential invalidates every concurrent run "
+            "(docs/live-test-auth.md). Use the generate_link flow instead."
+        )
     url = base + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -105,14 +119,6 @@ def request(base, headers, method, path, body=None, params=None, prefer=None):
             sys.exit(1)
 
 
-def random_password() -> str:
-    # Prefix guarantees upper/lower/digit/symbol classes regardless of the
-    # random draw; total length (28) clears any realistic GoTrue min-length
-    # policy with room to spare, well under bcrypt's 72-byte limit.
-    alphabet = string.ascii_letters + string.digits + "!@#$%^&*-_"
-    return "Aa1!" + "".join(secrets.choice(alphabet) for _ in range(24))
-
-
 def upsert_tenant(rest, headers, slug: str, name: str) -> str:
     status, body = request(
         rest, headers, "POST", "/tenants",
@@ -126,44 +132,43 @@ def upsert_tenant(rest, headers, slug: str, name: str) -> str:
     return body[0]["id"]
 
 
-def find_or_create_user(gotrue, headers, email: str, user_metadata: dict) -> tuple[str, str]:
-    """Find-or-create a GoTrue user and rotate its password.
+def ensure_user(gotrue, headers, email: str) -> None:
+    """Create the account if it is absent, and touch nothing if it is present.
 
-    Returns (user_id, password)."""
-    status, body = request(gotrue, headers, "GET", "/admin/users", params={"filter": email})
-    if status != 200:
-        print(f"error: user lookup failed for {email}: {status} {body}", file=sys.stderr)
-        sys.exit(1)
-    existing = next(
-        (u for u in body.get("users", []) if u.get("email", "").lower() == email.lower()),
-        None,
+    No password is sent, on either path. GoTrue accepts an admin create with no
+    password (the account simply has none), and the session flow below needs
+    none. An account that already exists is left exactly as it is: it is shared
+    mutable state and a run that writes to it breaks every concurrent run.
+    """
+    status, body = request(
+        gotrue, headers, "POST", "/admin/users",
+        body={"email": email, "email_confirm": True},
     )
+    if status in (200, 201):
+        return
+    # 422 is GoTrue's "a user with this email address has already been
+    # registered", which is the normal case on every run after the first.
+    if status == 422:
+        return
+    print(f"error: user create failed for {email}: {status} {body}", file=sys.stderr)
+    sys.exit(1)
 
-    password = random_password()
-    if existing is None:
-        status, body = request(
-            gotrue, headers, "POST", "/admin/users",
-            body={
-                "email": email,
-                "password": password,
-                "email_confirm": True,
-                "user_metadata": user_metadata,
-            },
-        )
-        if status not in (200, 201):
-            print(f"error: user create failed for {email}: {status} {body}", file=sys.stderr)
-            sys.exit(1)
-        return body["id"], password
 
-    user_id = existing["id"]
+def set_user_metadata(gotrue, headers, user_id: str, user_metadata: dict) -> None:
+    """Write user_metadata only. Never a password.
+
+    control-plane resolves the caller's tenant by reading live user_metadata
+    through GET /auth/v1/user on every request (apps/control-plane/internal/
+    auth/client.go), so this may run after the session was minted and still
+    takes effect for it.
+    """
     status, body = request(
         gotrue, headers, "PUT", f"/admin/users/{user_id}",
-        body={"password": password, "user_metadata": user_metadata},
+        body={"user_metadata": user_metadata},
     )
     if status != 200:
-        print(f"error: user update failed for {email}: {status} {body}", file=sys.stderr)
+        print(f"error: user metadata update failed: {status} {body}", file=sys.stderr)
         sys.exit(1)
-    return user_id, password
 
 
 def upsert_membership(rest, headers, tenant_id: str, user_id: str, role: str) -> None:
@@ -213,24 +218,56 @@ def strip_memberships(rest, headers, user_id: str) -> None:
         sys.exit(1)
 
 
-def mint_token(gotrue, anon_key: str, email: str, password: str) -> str:
-    """Exchange the password for a live Supabase access token.
+def mint_session(gotrue, headers, anon_key: str, email: str) -> tuple[str, str]:
+    """Mint a live session the way a magic-link login does.
 
-    Signed by the project, so edge-api's JWKS validation accepts it. Uses the
-    anon key rather than the service-role key on purpose: this is the same
-    grant a real browser session uses, so the token carries the same claims
-    the production path would see.
+    The Python twin of apps/web-console/tests/e2e/support/live-auth.mjs, whose
+    header carries the full rationale. Two calls: an admin generate_link for a
+    one-shot token hash, then a verify that exchanges it for a normal access
+    token and consumes it. Addressed by email, so no admin user listing is
+    involved (that endpoint has been returning intermittent 500s, issue #791).
+    Writes no credential: the only column it touches is the transient one-time
+    token that verify immediately clears.
+
+    The token is signed by the project itself, so edge-api's JWKS validation
+    accepts it, and it carries the same claims a real browser session would.
+
+    Returns (access_token, user_id).
     """
-    headers = {"apikey": anon_key, "Content-Type": "application/json"}
-    status, body = request(
-        gotrue, headers, "POST", "/token",
-        body={"email": email, "password": password},
-        params={"grant_type": "password"},
-    )
-    if status != 200 or not body or not body.get("access_token"):
-        print(f"error: password grant failed for {email}: {status} {body}", file=sys.stderr)
+    # GoTrue keeps ONE outstanding one-time token per user, so two mints for
+    # the same account that interleave leave the first holding a token the
+    # second already replaced. One retry clears that; see live-auth.mjs.
+    for attempt in range(2):
+        status, body = request(
+            gotrue, headers, "POST", "/admin/generate_link",
+            body={"type": "magiclink", "email": email},
+        )
+        if status != 200 or not body:
+            print(f"error: generate_link failed for {email}: {status} {body}", file=sys.stderr)
+            sys.exit(1)
+        # GoTrue returns these flat; supabase-js nests them under `properties`.
+        properties = body.get("properties") or body
+        token_hash = properties.get("hashed_token")
+        if not token_hash:
+            print(f"error: generate_link for {email} carried no hashed_token", file=sys.stderr)
+            sys.exit(1)
+
+        # POST rather than GET: the GET form answers with a redirect that puts
+        # the session in the URL fragment, which is far easier to leak into a
+        # log or a screenshot.
+        status, body = request(
+            gotrue, {"apikey": anon_key, "Content-Type": "application/json"},
+            "POST", "/verify",
+            body={"type": "magiclink", "token_hash": token_hash},
+        )
+        if status == 200 and body and body.get("access_token"):
+            return body["access_token"], (body.get("user") or {}).get("id", "")
+        if attempt == 0 and status in (401, 403):
+            continue
+        print(f"error: verify failed for {email}: {status} {body}", file=sys.stderr)
         sys.exit(1)
-    return body["access_token"]
+    print(f"error: verify failed for {email} after a retry", file=sys.stderr)
+    sys.exit(1)
 
 
 def main() -> None:
@@ -249,28 +286,51 @@ def main() -> None:
     tenant_a2 = upsert_tenant(rest, headers, TENANT_A2_SLUG, "Phase 19 E2E A2")
     tenant_b = upsert_tenant(rest, headers, TENANT_B_SLUG, "Phase 19 E2E B")
 
-    # selected_tenant_id pins the session to tenant A, so the cross-tenant
-    # specs start from a tenant that is genuinely not B.
-    user_a_id, user_a_password = find_or_create_user(
-        gotrue, headers, USER_A_EMAIL, {"selected_tenant_id": tenant_a},
-    )
+    # The user id comes back from the session mint rather than from an admin
+    # user listing, which keeps this script off the endpoint in issue #791.
+    ensure_user(gotrue, headers, USER_A_EMAIL)
+    user_a_jwt, user_a_id = mint_session(gotrue, headers, anon_key, USER_A_EMAIL)
+    if not user_a_id:
+        print("error: verify returned no user id for user A", file=sys.stderr)
+        sys.exit(1)
+    # selected_tenant_id pins the caller to tenant A, so the cross-tenant specs
+    # start from a tenant that is genuinely not B.
+    set_user_metadata(gotrue, headers, user_a_id, {"selected_tenant_id": tenant_a})
     upsert_membership(rest, headers, tenant_a, user_a_id, USER_A_ROLE)
     upsert_membership(rest, headers, tenant_a2, user_a_id, USER_A_ROLE)
 
-    orphan_id, orphan_password = find_or_create_user(gotrue, headers, ORPHAN_EMAIL, {})
+    ensure_user(gotrue, headers, ORPHAN_EMAIL)
+    orphan_jwt, orphan_id = mint_session(gotrue, headers, anon_key, ORPHAN_EMAIL)
+    if not orphan_id:
+        print("error: verify returned no user id for the orphan", file=sys.stderr)
+        sys.exit(1)
     strip_memberships(rest, headers, orphan_id)
-
-    user_a_jwt = mint_token(gotrue, anon_key, USER_A_EMAIL, user_a_password)
-    orphan_jwt = mint_token(gotrue, anon_key, ORPHAN_EMAIL, orphan_password)
 
     print(f"TENANT_A_ID={tenant_a}")
     print(f"TENANT_A2_ID={tenant_a2}")
     print(f"TENANT_B_ID={tenant_b}")
     print(f"USER_A_EMAIL={USER_A_EMAIL}")
-    print(f"USER_A_PASSWORD={user_a_password}")
     print(f"USER_A_JWT={user_a_jwt}")
     print(f"ORPHAN_JWT={orphan_jwt}")
 
 
+def self_test() -> None:
+    """Prove the password tripwire still bites. Dials nothing."""
+    try:
+        request("https://example.invalid", {}, "PUT", "/admin/users/x", body={"password": "p"})
+    except PasswordWriteRefused:
+        pass
+    else:
+        print("self-test FAILED: a password body was not refused", file=sys.stderr)
+        sys.exit(1)
+
+    # A password grant would have to send the same field through the same
+    # function, so the one check above covers that route back in too.
+    print("self-test OK: a request body carrying a password is refused")
+
+
 if __name__ == "__main__":
-    main()
+    if "--self-test" in sys.argv[1:]:
+        self_test()
+    else:
+        main()

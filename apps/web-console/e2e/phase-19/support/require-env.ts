@@ -16,22 +16,21 @@ import { test } from "@playwright/test";
  * scripts/seed-phase19-e2e.py), so a missing value there means the wiring
  * broke, and a broken wire should be a red run rather than a quiet one.
  *
- * `unavailableReason` is for the one value CI genuinely cannot produce. Pass
- * it and the CI-side error explains why instead of implying somebody forgot
- * a secret.
+ * Only for values CI is expected to have. The one value CI cannot produce
+ * (E2E_EXPIRED_JWT) skips with its reason stated in the spec itself rather
+ * than throwing here, because a permanently red step teaches everyone to
+ * ignore the four steps beside it that can go red for real.
  */
-export function requireEnv(name: string, unavailableReason?: string): string {
+export function requireEnv(name: string): string {
   const value = process.env[name];
   if (value) {
     return value;
   }
   if (process.env.CI) {
-    const detail = unavailableReason
-      ? `\n${unavailableReason}`
-      : "\nThe workflow is expected to mint this (scripts/seed-phase19-e2e.py). " +
-        "It did not, so this spec has no coverage.";
     throw new Error(
-      `${name} is not set in CI; this spec must not silently skip (issue #659).${detail}`,
+      `${name} is not set in CI; this spec must not silently skip (issue #659).\n` +
+        "The workflow is expected to mint this (scripts/seed-phase19-e2e.py). " +
+        "It did not, so this spec has no coverage.",
     );
   }
   test.skip(true, `${name} not set`);
