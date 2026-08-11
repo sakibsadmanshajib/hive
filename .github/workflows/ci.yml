@@ -616,6 +616,18 @@ jobs:
         run: npm run lint:pgx-dsn
       - if: needs.changes.outputs.run != 'false'
         run: npm run lint:litellm-config
+      # A synchronous child process in a Playwright spec freezes the worker's
+      # event loop, so no test timeout in that file can fire while it runs.
+      # PR #838 found a test recorded as passed at 30194 ms under a 30000 ms
+      # timeout. Runs here, in a required check, rather than in web-unit,
+      # because it needs nothing but node and must fire on every PR.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:sync-child-process
+      # Drive-by, found while checking the wiring above: this lint existed in
+      # package.json but no workflow ran it, so it was coverage on paper only.
+      # It passes on main today.
+      - if: needs.changes.outputs.run != 'false'
+        run: npm run lint:no-client-cost-fields
 
       # Self-checks for the provisioning scripts (pure python, no network, no
       # framework). Wired into CI here because nothing ran them before: the
@@ -688,9 +700,13 @@ jobs:
         if: needs.changes.outputs.run != 'false'
         run: npx tsc --noEmit
 
-      - name: Phase-19 collection guard
+      # Every Playwright spec must still land in the project the manifest pins
+      # it to. Catches a spec that fails to load (the listing exits non-zero), a
+      # testDir/testMatch edit that quietly stops matching a file, and a new
+      # spec no project collects. Needs no browsers, no stack and no secrets.
+      - name: Spec collection guard
         if: needs.changes.outputs.run != 'false'
-        run: npm run e2e:phase-19:verify-collection
+        run: npm run e2e:verify-collection
 
       - name: Unit tests (vitest)
         if: needs.changes.outputs.run != 'false'
