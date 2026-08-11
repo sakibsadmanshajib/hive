@@ -11,6 +11,7 @@
     { "path": "/workspace/models", "issue": "#772" },
     { "path": "/workspace/prompts", "issue": "#772" },
     { "path": "/workspace/tools", "issue": "#772" },
+    { "path": "/workspace/skills", "issue": "#772" },
     { "path": "/playground", "issue": "#772" }
   ]
 }

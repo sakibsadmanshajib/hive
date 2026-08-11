@@ -280,6 +280,11 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
   };
   const seen = new Map<string, number>();
   const out: Control[] = [];
+  // Clear the previous enumeration's tags first. Ids are positional
+  // (surface#index), so an element that was tagged on the last pass and is no
+  // longer visible keeps an id the next pass hands to a different element, and
+  // locate() then matches two nodes and its click is ambiguous.
+  document.querySelectorAll("[data-cov-id]").forEach((el) => el.removeAttribute("data-cov-id"));
   const els = [...root.querySelectorAll(args.selector)].filter(visible);
   els.forEach((el, i) => {
     const tag = el.tagName.toLowerCase();
@@ -497,6 +502,25 @@ async function proveByClickInner(
       failed.push(String(r.status()) + " " + r.request().method() + " " + redactUrl(u));
   };
   page.on("response", onResponse);
+  // A request that never reaches a server emits `request` and then
+  // `requestfailed`, and no `response` at all. Without this listener a
+  // connection reset, a DNS failure, or a write this suite's own safety net
+  // aborted looks exactly like a successful call on the request channel, and
+  // is credited as network proof with no verdict behind it.
+  const transportFailed: string[] = [];
+  const onRequestFailed = (r: {
+    url: () => string;
+    method: () => string;
+    failure: () => { errorText: string } | null;
+  }) => {
+    const u = r.url();
+    if (!isMeaningfulRequest(u)) return;
+    if (chatter.has(requestSignature(u))) return;
+    transportFailed.push(
+      (r.failure()?.errorText ?? "failed") + " " + r.method() + " " + redactUrl(u),
+    );
+  };
+  page.on("requestfailed", onRequestFailed);
   let download = false;
   let filechooser = false;
   const onDownload = () => {
@@ -517,7 +541,31 @@ async function proveByClickInner(
     popup = true;
   };
   page.context().on("page", onPopup);
+  // Cleanup in a finally, not on the happy path. Everything below can throw
+  // (the page can die mid-settle, and the budget race can abandon this call
+  // entirely), and a throw used to leave five listeners and a MutationObserver
+  // attached for the rest of a 45 minute run.
+  const release = () => {
+    page.off("request", onRequest);
+    page.off("response", onResponse);
+    page.off("requestfailed", onRequestFailed);
+    page.off("download", onDownload);
+    page.off("filechooser", onFileChooser);
+    page.context().off("page", onPopup);
+  };
 
+  try {
+    return await proveInner();
+  } finally {
+    release();
+    await page
+      .evaluate(() => {
+        window.__covObs?.disconnect();
+      })
+      .catch(() => {});
+  }
+
+  async function proveInner(): Promise<Result> {
   const urlBefore = page.url();
   const overlaysBefore = await overlayCount(page);
   const signatureBefore = await visibleSignature(page);
@@ -542,12 +590,6 @@ async function proveByClickInner(
   const errorsAfter = (await errorSurfaces(page)).filter(
     (text) => !errorsBefore.has(text) && FAILURE_TEXT.test(text),
   );
-  page.off("request", onRequest);
-  page.off("response", onResponse);
-  page.off("download", onDownload);
-  page.off("filechooser", onFileChooser);
-  page.context().off("page", onPopup);
-
   // Failure first, and before any positive channel. Evidence that an
   // activation was refused is not evidence that the control works, and a
   // refusal produces a request and a rendered change just like a success does.
@@ -580,6 +622,15 @@ async function proveByClickInner(
       proven: false,
       proof: "none",
       detail: "raised an error to the user: " + errorsAfter.slice(0, 2).join(" | ").slice(0, 180),
+    };
+  if (transportFailed.length > 0)
+    return {
+      ...base,
+      proven: false,
+      proof: "none",
+      detail:
+        "its request never reached a server: " +
+        transportFailed.slice(0, 2).join(", ").slice(0, 180),
     };
 
   if (download) return { ...base, proven: true, proof: "download", detail: "download started" };
@@ -617,6 +668,7 @@ async function proveByClickInner(
     proof: "none",
     detail: clickError || `no effect (mutations=${mutations})`,
   };
+  }
 }
 
 /**
@@ -967,8 +1019,14 @@ export function parseExclusions(value: unknown): SurfaceExclusion[] {
     const where = `surface-exclusions.json entry ${index}`;
     const map = fields(entry, where);
     const issue = map.get("issue");
-    if (issue !== undefined && typeof issue !== "number") {
-      throw new Error(`${where}: "issue" must be a number`);
+    if (
+      issue !== undefined &&
+      (typeof issue !== "number" || !Number.isInteger(issue) || issue <= 0)
+    ) {
+      // A zero, a float or a string here would be looked up as an issue number
+      // that cannot exist, GitHub would answer 404, and the exclusion would sit
+      // there permanently with nothing able to expire it.
+      throw new Error(`${where}: "issue" must be a positive integer issue number`);
     }
     const permanent = map.get("permanent");
     if (permanent !== undefined && typeof permanent !== "boolean") {

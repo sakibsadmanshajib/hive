@@ -95,12 +95,25 @@ async function isOverlayOpen(page: Page): Promise<boolean> {
  * on the next.
  */
 export async function ensureSidebar(page: Page, open: boolean): Promise<void> {
-  const toggle = page.getByRole("button", {
-    name: open ? /open sidebar/i : /close sidebar/i,
-  });
-  if (await toggle.isVisible().catch(() => false)) {
-    await toggle.click().catch(() => {});
+  // The toggle names the action, not the state: "Open Sidebar" is offered
+  // while it is closed. So the button that ends the call visible is the
+  // opposite one, and its absence means the sidebar is in neither state the
+  // harness can name.
+  const actionNow = page.getByRole("button", { name: open ? /open sidebar/i : /close sidebar/i });
+  const actionAfter = page.getByRole("button", { name: open ? /close sidebar/i : /open sidebar/i });
+  if (await actionNow.isVisible().catch(() => false)) {
+    await actionNow.click().catch(() => {});
     await page.waitForTimeout(SETTLE);
+  }
+  // Say so rather than carrying on. A missing toggle used to be
+  // indistinguishable from "already in the requested state", and the sweep
+  // then enumerated whatever happened to be on screen: that is how the sidebar
+  // surface came back with zero controls instead of an error naming the cause.
+  if (!(await actionAfter.isVisible().catch(() => false))) {
+    throw new Error(
+      `the sidebar is not ${open ? "open" : "closed"} and neither toggle is on screen, so this ` +
+        "surface cannot be pinned into a known state",
+    );
   }
 }
 
