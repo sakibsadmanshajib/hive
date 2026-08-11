@@ -1,10 +1,16 @@
 // Signs the coverage sweep in and saves storageState.
 //
-// signInToChat lives in tests/e2e/support/live-auth (PR #810 plus the chat hop
-// this suite contributed back): it mints a session the way a magic link does,
-// so no password is read, written or rotated, then carries it through the real
-// "Continue with Hive" OIDC hop, which is the only thing that gets Open WebUI's
-// own session cookie set. See docs/live-test-auth.md.
+// signInToChat lives in tests/e2e/support/live-auth.ts, and is the only
+// implementation of the chat hop: the mint itself stays in live-auth.mjs,
+// which this shells out to, so the service-role key never enters this worker's
+// module graph. It mints a session the way a magic link does, so no password
+// is read, written or rotated, then carries it through the real "Continue with
+// Hive" OIDC hop, which is the only thing that gets Open WebUI's own session
+// cookie set. See docs/live-test-auth.md.
+//
+// This project records no trace, video or screenshot (see the config): the
+// callback URL it walks through carries a live `code` and `state`, and no text
+// lint can read inside a trace or a video to catch them.
 import path from "node:path";
 
 import { test as setup } from "@playwright/test";

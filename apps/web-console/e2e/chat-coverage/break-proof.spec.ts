@@ -1,0 +1,173 @@
+// The checks that keep the coverage gate honest, none of which need a live
+// deployment or a session.
+//
+// They are in their own file, and their own Playwright project, because they
+// used to sit inside the live sweep behind the same credential gate: with no
+// CHAT_URL and no Supabase keys the config matched zero files, so the one test
+// that proves the detector can tell a working control from a broken one never
+// ran anywhere except on a machine already able to run the full sweep. A gate
+// nobody has watched fail is worth nothing.
+import { test, expect } from "@playwright/test";
+
+import { EXCLUSIONS, REGISTRY } from "./data";
+import {
+  enumerate,
+  exclusionFailures,
+  expiredExclusions,
+  proveByClick,
+  sampleChatter,
+} from "./lib";
+
+const SELF_TEST_HTML = `
+<main style="min-height:400px">
+  <div id="out">idle</div>
+  <div id="toast" role="alert"></div>
+  <button aria-label="Wired">Wired</button>
+  <button aria-label="Dead">Dead</button>
+  <button aria-label="Failing">Failing</button>
+  <button aria-label="Toasty">Toasty</button>
+  <button aria-label="Pollster">Pollster</button>
+</main>
+<script>
+  const out = document.getElementById('out');
+  const toast = document.getElementById('toast');
+  const at = (n) => document.querySelector('[aria-label="' + n + '"]');
+  at('Wired').addEventListener('click', () => { out.textContent = 'the wired button did something'; });
+  at('Failing').addEventListener('click', async () => {
+    try { await fetch('/api/save', { method: 'POST' }); } catch (e) {}
+    toast.textContent = 'Something went wrong, please try again';
+  });
+  at('Toasty').addEventListener('click', () => { toast.textContent = 'Error: could not save'; });
+  // Polls on its own, exactly like Open WebUI does, and its button does
+  // nothing. Without the idle sample the poll lands inside the settle window
+  // and is counted as this button's network proof.
+  setInterval(() => { fetch('/api/poll').catch(() => {}); }, 300);
+</script>
+`;
+
+test.describe("chat coverage gate self-checks", () => {
+  test("the prover tells a working control from a broken one", async ({ page }) => {
+    test.setTimeout(120_000);
+    // Five buttons that look alike: wired does something and must be proven;
+    // dead has no handler and must be unproven; failing calls an endpoint that
+    // answers 500 and shows a toast and must be unproven, which is the case
+    // that used to come back proven twice over; toasty only shows an error and
+    // must be unproven; pollster does nothing at all while the page polls
+    // underneath it, and must be unproven despite the traffic.
+    //
+    // An intercepted origin rather than setContent, so the failing button has a
+    // same-origin endpoint whose status the prover can actually read.
+    await page.route("https://cov.selftest/**", async (route) => {
+      const url = route.request().url();
+      if (url.endsWith("/index")) {
+        await route.fulfill({ contentType: "text/html", body: SELF_TEST_HTML });
+        return;
+      }
+      if (url.endsWith("/api/poll")) {
+        await route.fulfill({ status: 200, contentType: "application/json", body: "{}" });
+        return;
+      }
+      await route.fulfill({
+        status: 500,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "boom" }),
+      });
+    });
+    await page.goto("https://cov.selftest/index");
+
+    const controls = await enumerate(page, "self-test");
+    const byName = (name: string) => {
+      const found = controls.find((c) => c.name === name);
+      expect(found, "the fixture must render " + name).toBeTruthy();
+      if (!found) throw new Error("unreachable: the assertion above already failed");
+      return found;
+    };
+
+    // What the page does with nobody touching it, the same sample the sweep
+    // takes per surface.
+    const chatter = await sampleChatter(page, 1500);
+    expect(
+      [...chatter].some((signature) => signature.endsWith("/api/poll")),
+      "the idle sample must see the fixture's own polling, or it is not sampling anything",
+    ).toBe(true);
+
+    const wired = await proveByClick(page, byName("Wired"), { ignoreRequests: chatter });
+    const dead = await proveByClick(page, byName("Dead"), { ignoreRequests: chatter });
+    const failing = await proveByClick(page, byName("Failing"), { ignoreRequests: chatter });
+    const toasty = await proveByClick(page, byName("Toasty"), { ignoreRequests: chatter });
+    const pollster = await proveByClick(page, byName("Pollster"), { ignoreRequests: chatter });
+
+    expect(wired.proven, "a working control was reported as broken: " + wired.detail).toBe(true);
+    expect(dead.proven, "a control with no handler was reported as working: " + dead.detail).toBe(
+      false,
+    );
+    expect(
+      failing.proven,
+      "a control whose endpoint answered 500 was reported as working: " + failing.detail,
+    ).toBe(false);
+    expect(failing.detail).toContain("500");
+    expect(
+      toasty.proven,
+      "a control that only raised an error was reported as working: " + toasty.detail,
+    ).toBe(false);
+    expect(toasty.detail).toContain("raised an error");
+    expect(
+      pollster.proven,
+      "a dead control was proven by the page's own background polling: " + pollster.detail,
+    ).toBe(false);
+  });
+
+  test("every inert-registry entry carries a justification", async () => {
+    const bad = REGISTRY.filter((e) => !e.key || !e.justification.trim());
+    expect(
+      bad.map((e) => e.key || "(no key)"),
+      "registry entries without a key or a justification",
+    ).toEqual([]);
+    expect(exclusionFailures(EXCLUSIONS), "malformed surface exclusions").toEqual([]);
+  });
+
+  // An exclusion ends when the thing blocking it is fixed, and the only
+  // authority on that is the issue tracker. Every path through this test that
+  // cannot read that state now fails. It used to skip on a missing token and
+  // `continue` past any non-ok response, which meant the expiry could never
+  // fire: an exclusion would outlive its own issue forever and the check would
+  // report green the whole time.
+  test("no excluded surface waits on an issue that already closed", async ({ request }) => {
+    const pending = EXCLUSIONS.filter((entry) => entry.issue !== undefined);
+    if (pending.length === 0) return;
+
+    const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? "";
+    expect(
+      token,
+      "GITHUB_TOKEN (or GH_TOKEN) is required: this check reads whether the issues that " +
+        `justify ${pending.length} surface exclusion(s) are still open, and it fails rather ` +
+        "than passes when it cannot find out",
+    ).not.toBe("");
+
+    const repo = process.env.GITHUB_REPOSITORY ?? "sakibsadmanshajib/hive";
+    const closed = new Set<number>();
+    const unreadable: string[] = [];
+    for (const entry of pending) {
+      const url = "https://api.github.com/repos/" + repo + "/issues/" + String(entry.issue);
+      const response = await request.get(url, {
+        headers: { authorization: "Bearer " + token, accept: "application/vnd.github+json" },
+      });
+      if (!response.ok()) {
+        unreadable.push(`#${String(entry.issue)}: HTTP ${response.status()}`);
+        continue;
+      }
+      const body: unknown = await response.json();
+      const state =
+        typeof body === "object" && body !== null
+          ? new Map(Object.entries(body)).get("state")
+          : undefined;
+      if (state === "closed" && entry.issue !== undefined) closed.add(entry.issue);
+    }
+
+    expect(
+      unreadable,
+      "issue state could not be read, so an exclusion whose reason has expired would go unnoticed",
+    ).toEqual([]);
+    expect(expiredExclusions(EXCLUSIONS, closed)).toEqual([]);
+  });
+});

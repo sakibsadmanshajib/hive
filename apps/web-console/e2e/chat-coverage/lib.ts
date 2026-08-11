@@ -279,7 +279,7 @@ const ENUMERATE = (args: { selector: string; surface: string; scope: string | nu
     return null;
   };
   const seen = new Map<string, number>();
-  const out: unknown[] = [];
+  const out: Control[] = [];
   const els = [...root.querySelectorAll(args.selector)].filter(visible);
   els.forEach((el, i) => {
     const tag = el.tagName.toLowerCase();
@@ -320,11 +320,13 @@ export async function enumerate(
   surface: string,
   scope?: string,
 ): Promise<Control[]> {
-  return (await page.evaluate(ENUMERATE, {
+  // No cast: ENUMERATE builds Control values, so page.evaluate carries the
+  // type across on its own.
+  return page.evaluate(ENUMERATE, {
     selector: SELECTOR,
     surface,
     scope: scope ?? null,
-  })) as Control[];
+  });
 }
 
 export function locate(page: Page, ctl: Control): Locator {

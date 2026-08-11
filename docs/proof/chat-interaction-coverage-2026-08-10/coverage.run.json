@@ -4,13 +4,19 @@
   "surfaceFilter": null,
   "sabotage": null,
   "summary": {
+    "identities": 165,
+    "identitiesProven": 144,
+    "identitiesDeferred": 0,
+    "identityRatio": 0.8727,
     "total": 270,
     "proven": 248,
+    "deferred": 0,
     "ratio": 0.9185,
     "surfaces": {
       "home": {
         "total": 28,
         "proven": 25,
+        "deferred": 0,
         "unproven": [
           "(unnamed) [button] :: control was not there when the surface was re-opened",
           "(unnamed) [button] :: control was not there when the surface was re-opened",
@@ -20,6 +26,7 @@
       "model-picker": {
         "total": 15,
         "proven": 13,
+        "deferred": 0,
         "unproven": [
           "All [button] :: no effect (mutations=0)",
           "External [button] :: no effect (mutations=4)"
@@ -28,6 +35,7 @@
       "composer-more": {
         "total": 6,
         "proven": 5,
+        "deferred": 0,
         "unproven": [
           "Upload Files [button] :: raised an error to the user: File not found."
         ]
@@ -35,16 +43,19 @@
       "composer-integrations": {
         "total": 2,
         "proven": 2,
+        "deferred": 0,
         "unproven": []
       },
       "search": {
         "total": 106,
         "proven": 106,
+        "deferred": 0,
         "unproven": []
       },
       "workspace": {
         "total": 12,
         "proven": 10,
+        "deferred": 0,
         "unproven": [
           "Open Sidebar [button] :: control was not there when the surface was re-opened",
           "Knowledge [a] :: no effect (mutations=2)"
@@ -53,6 +64,7 @@
       "settings:General": {
         "total": 16,
         "proven": 12,
+        "deferred": 0,
         "unproven": [
           "General [tab] :: no effect (mutations=0)",
           "Admin Settings [a] :: called an endpoint that is not mounted or that failed: 404 GET https://chat-hive.scubed.co/api/v1/auths/admin/config",
@@ -63,6 +75,7 @@
       "settings:Interface": {
         "total": 48,
         "proven": 44,
+        "deferred": 0,
         "unproven": [
           "Floating Quick Actions [switch] :: not present on a clean re-open",
           "Image Compression [switch] :: not present on a clean re-open",
@@ -73,11 +86,13 @@
       "settings:Personalization": {
         "total": 2,
         "proven": 2,
+        "deferred": 0,
         "unproven": []
       },
       "settings:Audio": {
         "total": 7,
         "proven": 5,
+        "deferred": 0,
         "unproven": [
           "Off [switch] :: not present on a clean re-open",
           "Voice [select] :: changed in the UI but reverted to  after reload"
@@ -86,6 +101,7 @@
       "settings:Data Controls": {
         "total": 7,
         "proven": 5,
+        "deferred": 0,
         "unproven": [
           "Archive All [button] :: no effect (mutations=3)",
           "Delete All [button] :: no effect (mutations=3)"
@@ -94,11 +110,13 @@
       "settings:Account": {
         "total": 5,
         "proven": 5,
+        "deferred": 0,
         "unproven": []
       },
       "settings:About": {
         "total": 5,
         "proven": 4,
+        "deferred": 0,
         "unproven": [
           "See what's new [button] :: no effect (mutations=0)"
         ]
@@ -106,6 +124,7 @@
       "workspace:knowledge/create": {
         "total": 6,
         "proven": 5,
+        "deferred": 0,
         "unproven": [
           "Create Knowledge [button] :: no effect (mutations=0)"
         ]
@@ -113,7 +132,835 @@
       "user-menu": {
         "total": 5,
         "proven": 5,
+        "deferred": 0,
         "unproven": []
+      }
+    },
+    "identityInstances": {
+      "home::button::Open Sidebar": {
+        "instances": 2,
+        "proven": 2,
+        "deferred": 0
+      },
+      "home::a::New Chat": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Search": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::a::Workspace": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::User menu": {
+        "instances": 2,
+        "proven": 2,
+        "deferred": 0
+      },
+      "home::button::Selected model: hive-auto": {
+        "instances": 2,
+        "proven": 2,
+        "deferred": 0
+      },
+      "home::button::Add Model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Remove Model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Set as default": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Temporary Chat": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Controls": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::(unnamed)": {
+        "instances": 2,
+        "proven": 0,
+        "deferred": 0
+      },
+      "home::listitem::Show me a code snippet of a website's sticky header": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::listitem::Tell me a fun fact about the Roman Empire": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::listitem::Explain options trading if I'm familiar with buying and selling stocks": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::listitem::Overcome procrastination give me tips": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::listitem::Give me ideas for what to do with my kids' art": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::listitem::Help me study vocabulary for a college entrance exam": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::More": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Integrations": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Voice Input": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::button::Voice mode": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::a::Open the Hive agent workspace": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "home::div::(unnamed)": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "model-picker::button::All": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "model-picker::button::External": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "model-picker::option::Select hive-auto model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "model-picker::button::More Options": {
+        "instances": 6,
+        "proven": 6,
+        "deferred": 0
+      },
+      "model-picker::option::Select hive-default model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "model-picker::option::Select hive-embedding-default model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "model-picker::option::Select hive-fast model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "model-picker::option::Select hive-stt model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "model-picker::option::Select hive-tts model": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "model-picker::input::Search In Models": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-more::button::Upload Files": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "composer-more::button::Capture": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-more::button::Attach Webpage": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-more::button::Attach Files": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-more::button::Attach Knowledge": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-more::button::Reference Chats": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-integrations::button::Enable Code Interpreter": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "composer-integrations::switch::Code Interpreter": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "search::button::Start a new conversation": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "search::a::Help me study vocabulary: write a sentence for me to fill in the blank": {
+        "instances": 4,
+        "proven": 4,
+        "deferred": 0
+      },
+      "search::button::Chat Menu": {
+        "instances": 52,
+        "proven": 52,
+        "deferred": 0
+      },
+      "search::a::What are 5 creative things I could do with my kids' art? I don't want ": {
+        "instances": 4,
+        "proven": 4,
+        "deferred": 0
+      },
+      "search::a::Could you start by asking me about instances when I procrastinate the ": {
+        "instances": 3,
+        "proven": 3,
+        "deferred": 0
+      },
+      "search::a::Explain options trading in simple terms if I'm familiar with buying an": {
+        "instances": 4,
+        "proven": 4,
+        "deferred": 0
+      },
+      "search::a::Tell me a random fun fact about the Roman Empire": {
+        "instances": 4,
+        "proven": 4,
+        "deferred": 0
+      },
+      "search::a::Show me a code snippet of a website's sticky header in CSS and JavaScr": {
+        "instances": 3,
+        "proven": 3,
+        "deferred": 0
+      },
+      "search::a::New Chat": {
+        "instances": 25,
+        "proven": 25,
+        "deferred": 0
+      },
+      "search::a::Reply with exactly: ALPHA": {
+        "instances": 2,
+        "proven": 2,
+        "deferred": 0
+      },
+      "search::a::Reply with exactly: SIERRA": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "search::a::Reply with exactly: PONYTAILTEST42": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "search::a::ping": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "search::input::Search": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::button::Open Sidebar": {
+        "instances": 2,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::a::New Chat": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::button::Search": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::a::Workspace": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::button::User menu": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::a::Knowledge": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "workspace::a::New Knowledge": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::button::Select view": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::a::Open the Hive agent workspace": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::input::Search Knowledge": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace::select::All Sources Local Connected": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::button::Close settings modal": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::tab::General": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:General::tab::Interface": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::tab::Personalization": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::tab::Audio": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::tab::Data Controls": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::tab::Account": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::tab::About": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::a::Admin Settings": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:General::button::Show": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:General::button::Save": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::select::Select a theme": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::select::Select a language": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::textarea::Enter system prompt here": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:General::switch::Off": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:General::input::Search": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::button::Default": {
+        "instances": 2,
+        "proven": 2,
+        "deferred": 0
+      },
+      "settings:Interface::button::RTL": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::button::Chat": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::button::Upload": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::button::Enter to Send": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::High Contrast Mode": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Display Chat Title in Tab": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Notification Sound": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Haptic Feedback (Android)": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Copy Formatted Text": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Toast Notifications for New Updates": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Show \"What's New\" Modal on Login": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Enable Message Queue": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Chat Bubble UI": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Widescreen Mode": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Temporary Chat by Default": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Fade Effect for Streaming Text": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Render Markdown in User Messages": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Render Markdown in Assistant Messages": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Title Auto-Generation": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Follow-Up Auto-Generation": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Chat Tags Auto-Generation": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Insert Suggestion Prompt to Input": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Keep Follow-Up Prompts in Chat": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Insert Follow-Up Prompt to Input": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Regenerate Menu": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Always Collapse Code Blocks": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Always Expand Details": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Render Markdown in Previews": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Display Multi-model Responses in Tabs": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Scroll On Branch Change": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Show Files on Terminal Select": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Stylized PDF Export": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Rich Text Input for Chat": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Paste Large Text as File": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Detect Artifacts Automatically": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::iframe Sandbox Allow Same Origin": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::iframe Sandbox Allow Forms": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Allow Voice Interruption in Call": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Display Emoji in Call": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Always Play Notification Sound": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Floating Quick Actions": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Show Formatting Toolbar": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Insert Prompt as Rich Text": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Image Compression": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Allow User Location": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Interface::switch::Auto-Copy Response to Clipboard": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Personalization::button::Manage": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Personalization::switch::Memory EXPERIMENTAL": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Audio::select::Speech-to-Text Engine": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Audio::input::Speech-to-Text Language": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Audio::select::Text-to-Speech Engine": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Audio::input::Speech Playback Speed": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Audio::switch::Off": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Audio::select::Voice": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Audio::switch::Allow non-local voices": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Data Controls::button::Import": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Data Controls::button::Export": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Data Controls::button::Manage": {
+        "instances": 3,
+        "proven": 3,
+        "deferred": 0
+      },
+      "settings:Data Controls::button::Archive All": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Data Controls::button::Delete All": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:Account::button::Remove Initials Gravatar": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Account::input::Name": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Account::textarea::Bio": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Account::select::Gender": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:Account::input::Birth Date": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:About::button::See what's new": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "settings:About::a::Twemoji": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:About::a::CC-BY 4.0": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:About::a::Hive": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "settings:About::a::All rights reserved.": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace:knowledge/create::button::Back": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace:knowledge/create::button::Add Access": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace:knowledge/create::button::Create Knowledge": {
+        "instances": 1,
+        "proven": 0,
+        "deferred": 0
+      },
+      "workspace:knowledge/create::input::Name your knowledge base": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace:knowledge/create::textarea::Describe your knowledge base and objectives": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "workspace:knowledge/create::select::Private Public": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "user-menu::button::Update your status": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "user-menu::button::Settings": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "user-menu::a::Admin Panel": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "user-menu::button::Archived Chats": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
+      },
+      "user-menu::a::Workspace": {
+        "instances": 1,
+        "proven": 1,
+        "deferred": 0
       }
     }
   },

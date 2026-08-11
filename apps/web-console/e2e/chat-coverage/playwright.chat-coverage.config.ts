@@ -15,6 +15,11 @@ const hasCreds = Boolean(
     process.env.SUPABASE_SERVICE_ROLE_KEY &&
     process.env.SUPABASE_ANON_KEY,
 );
+// Only the LIVE projects are gated on credentials. break-proof.spec.ts needs
+// none: it serves its own fixture from an intercepted origin, and it is the
+// check that proves the detector can still tell a working control from a
+// broken one. Gating it too meant the one test that watches the gate fail
+// could only run on a machine that could already run everything else.
 const runnable = hasTarget && hasCreds;
 
 export default defineConfig({
@@ -37,16 +42,36 @@ export default defineConfig({
     // first two attempts at a number.
     navigationTimeout: 60_000,
     actionTimeout: 20_000,
-    trace: "retain-on-failure",
-    video: "retain-on-failure",
+    // CREDENTIALS. A Playwright trace records every request with its headers,
+    // and a video records the address bar, so a trace or a video of any
+    // project here holds this account's live session cookies, and one of the
+    // setup project holds the OAuth callback's `code` and `state` as well.
+    // tools/lint-no-token-in-proof-captures.mjs cannot see inside either: it
+    // skips binaries by design. So both are off unless someone deliberately
+    // asks for them while debugging, and the artefact that produces must never
+    // be attached to a pull request. Screenshots stay on: they frame the page,
+    // not the URL bar, and they are the visual proof the merge rule wants.
+    trace: process.env.COV_TRACE === "1" ? "retain-on-failure" : "off",
+    video: process.env.COV_TRACE === "1" ? "retain-on-failure" : "off",
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "setup", testMatch: runnable ? /auth\.setup\.ts$/ : [] },
     {
-      name: "coverage",
+      name: "chat-coverage-break-proof",
+      testMatch: /break-proof\.spec\.ts$/,
+    },
+    {
+      name: "chat-coverage-setup",
+      testMatch: /auth\.setup\.ts$/,
+      // Belt and braces on top of the switch above: this is the project that
+      // walks the OAuth hop, so it never records a trace, a video or a
+      // screenshot, whatever COV_TRACE says.
+      use: { trace: "off", video: "off", screenshot: "off" },
+    },
+    {
+      name: "chat-coverage",
       testMatch: runnable ? /chat-coverage\.spec\.ts$/ : [],
-      dependencies: ["setup"],
+      dependencies: ["chat-coverage-setup"],
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1440, height: 950 },

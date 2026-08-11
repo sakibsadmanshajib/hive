@@ -1,5 +1,5 @@
 {
-  "$comment": "Minimum control count per surface, recorded from a live run. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. Regenerate deliberately with COV_FLOORS=update and commit the result with a reason.",
+  "$comment": "Minimum control count per surface, the highest count a live run has ever enumerated there. A run that enumerates fewer controls on a surface than the number here fails the gate: coverage is proven over enumerated, so a surface rendering less than it used to would otherwise shrink the denominator and hold the percentage up while the app degrades. A floor key this run never swept fails too. Raising or lowering a floor is a separate, deliberate commit made with scripts/update-chat-coverage-floors.mjs against a recorded ledger, never by the run that checks them.",
   "surfaces": {
     "composer-integrations": 2,
     "composer-more": 6,
@@ -8,10 +8,10 @@
     "search": 106,
     "settings:About": 5,
     "settings:Account": 5,
-    "settings:Audio": 7,
+    "settings:Audio": 8,
     "settings:Data Controls": 7,
-    "settings:General": 16,
-    "settings:Interface": 48,
+    "settings:General": 17,
+    "settings:Interface": 56,
     "settings:Personalization": 2,
     "user-menu": 6,
     "workspace": 12,

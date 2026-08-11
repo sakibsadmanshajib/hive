@@ -68,12 +68,29 @@ const WEB_CONSOLE_LIST_ENV = {
   E2E_RUN_KEY: "collection-guard",
 };
 
+// Same reasoning as OWUI_LIST_ENV for the chat-coverage config: its live
+// project matches zero files without a target and the keys live-auth.mjs mints
+// with, so listing it bare would report the live sweep as collected by nothing
+// and the guard would call that fine. Nothing dials out during a listing.
+const CHAT_COVERAGE_LIST_ENV = {
+  CHAT_URL: "https://collection-guard.invalid",
+  OWUI_E2E_EMAIL: "collection-guard@example.invalid",
+  SUPABASE_URL: "https://collection-guard.invalid",
+  SUPABASE_SERVICE_ROLE_KEY: "unused-collection-guard-placeholder",
+  SUPABASE_ANON_KEY: "unused-collection-guard-placeholder",
+};
+
 const CONFIGS = [
   { label: "playwright.config.ts", args: [], env: WEB_CONSOLE_LIST_ENV },
   {
     label: "e2e/phase-19/owui/playwright.owui.config.ts",
     args: ["--config=e2e/phase-19/owui/playwright.owui.config.ts"],
     env: OWUI_LIST_ENV,
+  },
+  {
+    label: "e2e/chat-coverage/playwright.chat-coverage.config.ts",
+    args: ["--config=e2e/chat-coverage/playwright.chat-coverage.config.ts"],
+    env: CHAT_COVERAGE_LIST_ENV,
   },
 ];
 
