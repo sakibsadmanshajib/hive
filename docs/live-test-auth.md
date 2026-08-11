@@ -33,9 +33,44 @@ guards in `apps/web-console/tests/unit/e2e-auth-creds.test.ts` fail if a
 credential-shaped field reappears there. Addresses may stay: an address is not
 a credential.
 
-Local runs therefore need `E2E_VERIFIED_PASSWORD`, `E2E_UNVERIFIED_PASSWORD`
-and `E2E_INVITATION_TOKEN` exported before `npx playwright test`. CI passes the
-first two from repository secrets and derives the third per run.
+Local runs therefore need this before `npx playwright test`:
+
+```bash
+export E2E_RUN_KEY="$(whoami)-$(date +%s)"
+export E2E_VERIFIED_PASSWORD=...
+export E2E_UNVERIFIED_PASSWORD=...
+export E2E_INVITATION_TOKEN=...
+```
+
+CI passes the two passwords from repository secrets, generates the invitation
+token randomly per job (it used to be a committed literal joined to the public
+run id, and the seeder stores its sha256 as a live pending invitation, so
+anyone reading the run page could compute it), and sets the run key to
+`run_id-run_attempt`.
+
+`E2E_RUN_KEY` is not optional, and the next section is why.
+
+## Every fixture address belongs to the run
+
+Seeding writes a password to whatever address it is handed. So the address it
+is handed must never be a shared one:
+
+* `runScopedEmail` (`e2e-fixture-seed.mjs`, mirrored in `e2e-auth-creds.ts`)
+  throws without a run key, and otherwise turns the shared base address into
+  this run's own (`e2e-verified+<key>@...`). It is idempotent, because CI
+  passes an already-namespaced address alongside the same key.
+* There is no default address anywhere in the seeding path. The `DEFAULT_EMAILS`
+  constant that used to supply the two shared live accounts is gone.
+* Stale run-scoped rows are swept after three hours by `sweepStaleFixtureRuns`,
+  so this costs no permanent rows.
+
+This closes a real hole rather than a theoretical one. `ensureUser` sends
+`password:` on both of its update paths, so before the guard, every
+credential-less local run overwrote the password of two shared live accounts
+that hold a tenant OWNER role, and revoked every session other runs held on
+them. A committed default made that write idempotent and therefore invisible;
+removing the default without this guard would have made each operator write a
+different value.
 
 ## Rotating a shared account's password is forbidden
 
@@ -56,8 +91,15 @@ shape they now share is the one to copy:
 | script | account | how it behaves now |
 | --- | --- | --- |
 | `scripts/seed-demo-owner.py` | `demo@hive-demo.invalid` | `password_to_set` leaves an existing account alone unless `HIVE_DEMO_PASSWORD` is set. Creation still generates one. |
-| `scripts/seed-owui-e2e-user.py` | `owui-e2e@…`, `owui-e2e-bootstrap@…` | Same helper. Prints a `PASSWORD` line only for a password it actually set. `OWUI_E2E_RUN_KEY` namespaces both addresses per run, which is how the nightly gets a usable credential without touching a shared one. |
-| `scripts/verify-rag-roundtrip.py` | `rag-verify-e2e@hive-e2e.invalid` | Signs in with `RAG_VERIFY_PASSWORD` and refuses to rotate. Only a first run, which creates the account, generates one. |
+| `scripts/seed-owui-e2e-user.py` | `owui-e2e@…`, `owui-e2e-bootstrap@…` | Same helper. Prints a `PASSWORD` line only for a password it actually set. `OWUI_E2E_RUN_KEY` namespaces both addresses per run, which is how the nightly gets a usable credential without touching a shared one, and `sweep_stale_fixture_users` clears what earlier runs left. |
+| `scripts/verify-rag-roundtrip.py` | `rag-verify-e2e@hive-e2e.invalid` | Signs in with `RAG_VERIFY_PASSWORD` and refuses to rotate. The run that creates the account generates one and prints it on stderr, once. Save it. |
+
+The shim API key that `seed-owui-e2e-user.py` mints is a separate hazard with
+the same shape. Its billing account stays shared (a tenant bills to exactly one
+account, so a per-run account needs a per-run tenant and leaves a permanent row
+behind), so the revocation of previously minted keys is bounded by age rather
+than by "every key except mine". An identity-bounded delete had two overlapping
+runs revoking each other's key mid-flight.
 
 `scripts/seed-owui-e2e-user.py` matters most of the three: it is the only one
 invoked automatically. `.github/workflows/owui-nightly.yml` runs it on a
@@ -209,12 +251,28 @@ records every request header (`Authorization: Bearer`), every cookie
 whose `code=` and `access_token=` sit in the query string and the fragment. No
 text linter can see inside it, because it is a zip of binary resources.
 
-So the two report uploads exclude `*.zip` and `*.webm` and set
+`index.html` is no better. The HTML reporter base64-inlines the entire report
+payload into it, stdout, stderr and error text included, and a `waitForURL`
+timeout enumerates every URL it navigated, fragment and all. Same material,
+same binary wrapper, same blindness in any text linter.
+
+So both report uploads exclude `*.zip`, `*.webm` and `index.html`, and set
 `retention-days: 5`:
 
 * `playwright-report-api` in `.github/workflows/ci.yml`
 * `owui-playwright-report` in `.github/workflows/owui-nightly.yml`
 
-The HTML report, the screenshots and the error text still upload, which is what
-triage reads. Renaming an artifact is not a fix. If you add a job that uploads
-Playwright output, exclude the same two patterns and set a short retention.
+Screenshots still upload, and the failing test names and error text are already
+in the job log. Renaming an artifact is not a fix.
+
+Container log dumps are the same problem in plain text: Open WebUI's uvicorn
+access lines print `GET /oauth/oidc/callback?code=...` verbatim, and edge-api
+logs carry the shim key. The three log artifacts
+(`compose-logs`, `compose-logs-web-e2e-api`, `owui-compose-logs`) pipe through
+`scripts/redact-log-credentials.py`, which mirrors `redactSecrets`, handles
+fragments as well as query strings, and carries its own self-check
+(`python3 scripts/redact-log-credentials.py --selfcheck`, also in
+`make test-scripts`).
+
+If you add a job that uploads Playwright output or container logs, apply the
+same exclusions, pipe the logs through the redactor, and set a short retention.
