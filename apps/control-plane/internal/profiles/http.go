@@ -166,7 +166,7 @@ func (h *Handler) resolveVerifiedCurrentAccountID(w http.ResponseWriter, r *http
 			AccountID: viewerContext.CurrentAccount.ID,
 			UserID:    viewerContext.User.ID,
 			Role:      viewerContext.CurrentAccount.Role,
-			Status:    "active",
+			Status:    accounts.StatusActive,
 		},
 		isAdmin,
 	)

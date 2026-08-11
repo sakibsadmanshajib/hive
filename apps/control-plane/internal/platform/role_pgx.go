@@ -45,11 +45,11 @@ func NewPgxTenantRoleStore(pool *pgxpool.Pool) TenantRoleStore {
 // (budget writes, egress policy) before accepting the invitation.
 //
 // Returns:
-//   - (role, nil)                       — when an active membership row exists
-//   - ("", nil)                         — when workspace exists but userID has
-//                                         no active membership row on it
-//   - ("", ErrWorkspaceNotFound)        — when workspaceID does not resolve
-//                                         in public.accounts
+//   - (role, nil) when an active membership row exists.
+//   - ("", nil) when the workspace exists but userID has no active membership
+//     row on it.
+//   - ("", ErrWorkspaceNotFound) when workspaceID does not resolve in
+//     public.accounts.
 func (s *pgxRoleStore) GetMembershipRole(ctx context.Context, userID, workspaceID uuid.UUID) (MembershipRole, error) {
 	// First confirm the workspace (account) exists.
 	var exists bool
@@ -123,7 +123,7 @@ func (s *pgxRoleStore) GetTenantRole(ctx context.Context, userID, tenantID uuid.
 // IsPlatformAdmin returns whether userID holds an ACTIVE owner membership on
 // at least one account row flagged with is_platform_admin = true. The flag
 // lives on the workspace (account) so any active owner of a flagged workspace
-// is a platform admin — this matches the v1.1 single-tenant-admin model where
+// is a platform admin. This matches the v1.1 single-tenant-admin model where
 // the platform team owns its own internal workspace flagged as platform-admin.
 //
 // The status predicate is load-bearing, not defensive tidiness. This predicate

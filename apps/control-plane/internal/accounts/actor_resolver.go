@@ -21,14 +21,30 @@ type AdminChecker interface {
 }
 
 // ActorFor builds an authz.Actor from the already-resolved viewer, chosen
-// membership, and admin-overlay flag. It is a pure mapping function — no DB
-// calls — so it is safe to call from any handler that has already loaded the
+// membership, and admin-overlay flag. It is a pure mapping function, no DB
+// calls, so it is safe to call from any handler that has already loaded the
 // viewer context.
+//
+// A membership carries its role only while it is active. Every workspace-scoped
+// permission in authz.Policy is granted on Role being owner or member, so
+// blanking the role here denies the entire workspace surface for a seat that was
+// merely offered. This is the single funnel every handler builds its actor
+// through, which is why the check lives here: a handler that starts passing a
+// row loaded straight from the database cannot reopen the escalation by
+// forgetting to filter first.
+//
+// The platform-admin overlay is deliberately untouched. It comes from its own
+// query, which applies its own active-membership predicate, and it is not a
+// property of this workspace membership.
 func ActorFor(viewer auth.Viewer, chosen Membership, isAdmin bool) authz.Actor {
+	role := chosen.Role
+	if chosen.Status != StatusActive {
+		role = ""
+	}
 	return authz.Actor{
 		UserID:      viewer.UserID,
 		WorkspaceID: chosen.AccountID,
-		Role:        platform.MembershipRole(chosen.Role),
+		Role:        platform.MembershipRole(role),
 		Verified:    viewer.EmailVerified,
 		IsAdmin:     isAdmin,
 	}
@@ -65,7 +81,7 @@ func NewActorResolver(svc *Service, roleSvc *platform.RoleService) authz.ActorRe
 			AccountID: vc.CurrentAccount.ID,
 			UserID:    viewer.UserID,
 			Role:      vc.CurrentAccount.Role,
-			Status:    "active",
+			Status:    StatusActive,
 		}
 
 		isAdmin, err := roleSvc.IsPlatformAdmin(r.Context(), viewer.UserID)

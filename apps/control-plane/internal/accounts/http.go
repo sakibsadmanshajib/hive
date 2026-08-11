@@ -111,7 +111,7 @@ func (h *Handler) handleListMembers(w http.ResponseWriter, r *http.Request) {
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      vc.CurrentAccount.Role,
-		Status:    "active",
+		Status:    StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermMembersInvite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{

@@ -168,7 +168,7 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		AccountID: viewerContext.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      viewerContext.CurrentAccount.Role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
@@ -548,7 +548,7 @@ func (h *Handler) requireWorkspaceOwner(w http.ResponseWriter, r *http.Request, 
 		AccountID: workspaceID,
 		UserID:    userID,
 		Role:      role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "owner permission required"})
@@ -592,7 +592,7 @@ func (h *Handler) requireWorkspaceMembership(r *http.Request, userID, workspaceI
 		AccountID: workspaceID,
 		UserID:    userID,
 		Role:      role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermBillingWrite) {
 		return errors.New("not a member")

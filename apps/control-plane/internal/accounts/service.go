@@ -92,7 +92,12 @@ func (s *Service) EnsureViewerContext(ctx context.Context, viewer auth.Viewer, r
 	// pending invitation.
 	active := activeMemberships(memberships)
 	if len(active) == 0 {
-		return ViewerContext{}, fmt.Errorf("accounts: no active membership after workspace provisioning for user %s", viewer.UserID)
+		// Unreachable unless provisioning above wrote nothing. The identifier
+		// goes to the log, never to the client: this error reaches the caller
+		// verbatim through the viewer handler, and an error string is not a
+		// place to put a user id.
+		log.Printf("accounts: no active membership after workspace provisioning user=%s", viewer.UserID)
+		return ViewerContext{}, ErrNoActiveWorkspace
 	}
 	chosen := active[0]
 	if requestedAccountID != uuid.Nil {
@@ -182,8 +187,8 @@ func (s *Service) provisionDefaultWorkspace(ctx context.Context, viewer auth.Vie
 		ID:        uuid.New(),
 		AccountID: accountID,
 		UserID:    viewer.UserID,
-		Role:      "owner",
-		Status:    "active",
+		Role:      RoleOwner,
+		Status:    StatusActive,
 	}
 	if err := s.repo.CreateMembership(ctx, membership); err != nil {
 		return fmt.Errorf("accounts: create owner membership: %w", err)
@@ -300,17 +305,26 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 		return uuid.Nil, ErrAlreadyAccepted
 	}
 
-	// Already a member: the invitation is moot, not broken. Detected before any
-	// write so the caller gets a truthful reason instead of the unique-constraint
-	// violation surfacing as an opaque server error.
+	// Two kinds of existing row, and they mean opposite things. An ACTIVE row
+	// means the invitation is moot, not broken, and saying so beats letting the
+	// unique constraint surface as an opaque server error. An INVITED row is a
+	// seat written ahead of acceptance, and it confers nothing, so refusing it
+	// would lock the invitee out permanently: no authority, and no way to ever
+	// gain any. That row is what acceptance is for, so activate it.
 	existing, err := s.repo.ListMembershipsByUserID(ctx, viewer.UserID)
 	if err != nil {
 		return uuid.Nil, fmt.Errorf("accounts: list memberships: %w", err)
 	}
+	pending := false
 	for _, m := range existing {
-		if m.AccountID == inv.AccountID {
+		if m.AccountID != inv.AccountID {
+			continue
+		}
+		if m.Status == StatusActive {
 			return uuid.Nil, ErrAlreadyMember
 		}
+		pending = true
+		break
 	}
 
 	// The membership carries the role the workspace chose at invite time. An
@@ -326,12 +340,19 @@ func (s *Service) AcceptInvitation(ctx context.Context, viewer auth.Viewer, rawT
 		return uuid.Nil, fmt.Errorf("accounts: accept invitation: %w", err)
 	}
 
+	if pending {
+		if err := s.repo.ActivateMembership(ctx, inv.AccountID, viewer.UserID, grantedRole); err != nil {
+			return uuid.Nil, fmt.Errorf("accounts: activate membership: %w", err)
+		}
+		return inv.AccountID, nil
+	}
+
 	membership := Membership{
 		ID:        uuid.New(),
 		AccountID: inv.AccountID,
 		UserID:    viewer.UserID,
 		Role:      grantedRole,
-		Status:    "active",
+		Status:    StatusActive,
 	}
 	if err := s.repo.CreateMembership(ctx, membership); err != nil {
 		return uuid.Nil, fmt.Errorf("accounts: create member membership: %w", err)
@@ -382,7 +403,7 @@ func (s *Service) UpdateMemberRole(ctx context.Context, accountID uuid.UUID, vie
 	found := false
 	activeOwners := 0
 	for _, m := range members {
-		if m.Status != "active" {
+		if m.Status != StatusActive {
 			continue
 		}
 		if m.Role == RoleOwner {
@@ -429,7 +450,7 @@ func (s *Service) resolveWorkspaceActor(ctx context.Context, accountID uuid.UUID
 	var chosen Membership
 	found := false
 	for _, m := range memberships {
-		if m.AccountID == accountID && m.Status == "active" {
+		if m.AccountID == accountID && m.Status == StatusActive {
 			chosen = m
 			found = true
 			break

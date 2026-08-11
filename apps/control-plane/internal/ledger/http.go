@@ -197,7 +197,7 @@ func (h *Handler) resolveCurrentAccountID(w http.ResponseWriter, r *http.Request
 		AccountID: viewerContext.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      viewerContext.CurrentAccount.Role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, authz.PermLedgerView) {
 		writeJSON(w, http.StatusForbidden, map[string]string{

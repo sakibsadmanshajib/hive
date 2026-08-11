@@ -109,6 +109,21 @@ func (s *stubRepo) ListMembersByAccountID(_ context.Context, accountID uuid.UUID
 	return members, nil
 }
 
+func (s *stubRepo) ActivateMembership(_ context.Context, accountID, userID uuid.UUID, role string) error {
+	for i := range s.memberships {
+		m := s.memberships[i]
+		if m.AccountID == accountID && m.UserID == userID && m.Status == accounts.StatusInvited {
+			// Immutable update: replace the row rather than mutating in place.
+			updated := m
+			updated.Role = role
+			updated.Status = accounts.StatusActive
+			s.memberships[i] = updated
+			return nil
+		}
+	}
+	return accounts.ErrNotFound
+}
+
 func (s *stubRepo) UpdateMembershipRole(_ context.Context, accountID, userID uuid.UUID, role string) error {
 	for i := range s.memberships {
 		m := s.memberships[i]

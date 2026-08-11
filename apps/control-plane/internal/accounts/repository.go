@@ -24,6 +24,7 @@ type Repository interface {
 	AcceptInvitation(ctx context.Context, invitationID uuid.UUID, acceptedAt time.Time) error
 	ListMembersByAccountID(ctx context.Context, accountID uuid.UUID) ([]Member, error)
 	UpdateMembershipRole(ctx context.Context, accountID, userID uuid.UUID, role string) error
+	ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error
 }
 
 // pgxRepository is the production implementation backed by Supabase Postgres.
@@ -39,12 +40,14 @@ func NewPgxRepository(pool *pgxpool.Pool) Repository {
 // ListMembershipsByUserID returns userID's memberships, active and invited
 // alike, ordered by created_at then id.
 //
-// The absence of a status predicate here is deliberate and must stay that way:
-// this is a listing primitive, not an authorization primitive. The console
-// renders pending invitations from these rows, and AcceptInvitation checks
-// every row (not only active ones) to tell an already-joined workspace from a
-// fresh one. Callers that make an access decision filter with
-// activeMemberships instead; an invited row grants nothing.
+// The absence of a status predicate here is deliberate: this is a listing
+// primitive, not an authorization primitive. AcceptInvitation needs the invited
+// row so it can activate it rather than dead-ending on it, and the viewer
+// context reports each membership's status on the wire so the console can tell
+// a joined workspace from a pending invitation (the account switch route in
+// apps/web-console filters on exactly that field). Callers making an access
+// decision filter with activeMemberships instead; an invited row grants
+// nothing.
 //
 // Without an explicit ORDER BY, Postgres may return rows for the
 // same user in a different order across calls (heap/index layout shifts on
@@ -179,6 +182,30 @@ func (r *pgxRepository) AcceptInvitation(ctx context.Context, invitationID uuid.
 		WHERE id = $2
 	`, acceptedAt, invitationID)
 	return err
+}
+
+// ActivateMembership turns an invited membership row into an active one and
+// stamps the role the invitation granted.
+//
+// The statement matches only an invited row, so it can neither resurrect a
+// removed member nor re-stamp the role of somebody who is already active. Zero
+// rows affected therefore means there was nothing pending to accept, which
+// surfaces as ErrNotFound.
+func (r *pgxRepository) ActivateMembership(ctx context.Context, accountID, userID uuid.UUID, role string) error {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE public.account_memberships
+		SET role = $3, status = 'active'
+		WHERE account_id = $1
+		  AND user_id = $2
+		  AND status = 'invited'
+	`, accountID, userID, role)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // ListMembersByAccountID returns the account's memberships joined to the

@@ -146,6 +146,11 @@ var ErrSelfRoleChange = errors.New("accounts: cannot change your own role")
 // active owner.
 var ErrLastOwner = errors.New("accounts: workspace must keep at least one owner")
 
+// ErrNoActiveWorkspace is returned when a viewer holds no active membership and
+// workspace provisioning did not produce one. The message carries no
+// identifiers because the viewer handler writes it straight to the client.
+var ErrNoActiveWorkspace = errors.New("accounts: no active workspace available")
+
 // Supported membership roles. The database enforces the same set via a CHECK
 // constraint on public.account_memberships.role.
 const (

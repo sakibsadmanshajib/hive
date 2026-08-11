@@ -133,7 +133,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request, p
 					AccountID: h.testVC.CurrentAccount.ID,
 					UserID:    h.testVC.User.ID,
 					Role:      h.testVC.CurrentAccount.Role,
-					Status:    "active",
+					Status:    accounts.StatusActive,
 				},
 				false,
 			)
@@ -182,7 +182,7 @@ func (h *Handler) resolveViewerContext(w http.ResponseWriter, r *http.Request, p
 		AccountID: vc.CurrentAccount.ID,
 		UserID:    viewer.UserID,
 		Role:      vc.CurrentAccount.Role,
-		Status:    "active",
+		Status:    accounts.StatusActive,
 	}, isAdmin)
 	if !h.policy.Can(actor, perm) {
 		writeJSON(w, http.StatusForbidden, map[string]string{
