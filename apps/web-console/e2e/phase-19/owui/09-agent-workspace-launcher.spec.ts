@@ -8,10 +8,13 @@ test.use({ storageState: "e2e/phase-19/owui/.auth/owui-user.json" });
 const OWUI_URL = process.env.OWUI_URL ?? "http://localhost:3002";
 
 // The launcher is injected by deploy/docker/owui-static/loader.js and styled by
-// deploy/docker/owui-static/custom.css. Both are hand-written overrides against
-// a pinned, unforked Open WebUI image, so nothing else in the build fails when
-// they rot. These are the three properties that were verified by hand and would
-// otherwise silently regress.
+// deploy/docker/owui-static/custom.css. Both are hand-written overrides layered
+// onto the pinned upstream image, so nothing else in the build fails when they
+// rot. These are the three properties that were verified by hand and would
+// otherwise silently regress. The "unforked" framing this comment used to carry
+// is obsolete: forking Open WebUI is now the chosen direction (owner 2026-08-11,
+// .wolf/decisions.md D-036), and these assertions cover the launcher as it
+// stands today, not a rule against replacing it.
 const LAUNCHER = "#hive-agent-launcher";
 
 // Open WebUI's own model selector, matched by the id upstream's code depends on

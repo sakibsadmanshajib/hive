@@ -191,6 +191,43 @@ def test_unset_login_form_leaves_the_persisted_value_alone() -> None:
     assert config.stored["ui.enable_login_form"] is True
 
 
+def test_hybrid_search_is_reconciled_as_a_json_boolean() -> None:
+    """Issue #832. Open WebUI's hybrid retrieval path builds a RerankCompressor
+    for every query, and with no reranking model configured that compressor
+    re-embeds the query and every retrieved document to score them, so one
+    question costs three gateway embedding round trips instead of one. On the
+    demo box that took longer than Caddy's 60s response_header_timeout and
+    every knowledge-backed answer came back 504. The flag lives in Open WebUI's
+    persisted config, so it is subject to the same first-boot-wins trap as the
+    keys above and has to be reconciled rather than merely set in compose."""
+    config = FakeConfig({"rag.enable_hybrid_search": True})
+    applied = reconcile(config, {"ENABLE_RAG_HYBRID_SEARCH": "false"})
+    assert applied["rag.enable_hybrid_search"] is False, applied
+    assert config.stored["rag.enable_hybrid_search"] is False, config.stored
+
+
+def test_hybrid_search_can_be_turned_back_on() -> None:
+    """A deployment that configures a real reranking model should get hybrid
+    retrieval back, because then the compressor calls the reranker instead of
+    re-embedding and the extra recall is worth one call."""
+    config = FakeConfig({"rag.enable_hybrid_search": False})
+    reconcile(config, {"ENABLE_RAG_HYBRID_SEARCH": "true"})
+    assert config.stored["rag.enable_hybrid_search"] is True, config.stored
+
+
+def test_compose_leaves_hybrid_search_off_by_default() -> None:
+    """The reconcile only helps if compose actually names a value, and the
+    default has to be off: the whole failure was a persisted `true` that no
+    compose edit could reach. Asserted against the file rather than trusted,
+    because this is one line away from silently reinstating the 504."""
+    compose = (
+        Path(__file__).resolve().parents[1] / "deploy" / "docker" / "docker-compose.yml"
+    ).read_text(encoding="utf-8")
+    assert (
+        "ENABLE_RAG_HYBRID_SEARCH: ${OWUI_RAG_HYBRID_SEARCH:-false}" in compose
+    ), "docker-compose.yml must default Open WebUI hybrid retrieval to off (issue #832)"
+
+
 def test_reconciled_keys_are_loggable_without_the_secret() -> None:
     """The startup log line names the model (the signal this investigation
     lacked twice) and never the API key value."""
