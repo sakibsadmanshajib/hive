@@ -70,24 +70,42 @@ func New(socketPath string, sessionAPIKey string) *Client {
 	}
 }
 
-// WaitReady blocks until socketPath is dialable (the in-SIF shim has
-// created its listening socket, see apps/agent-engine/internal/sandbox's
-// package doc) or ctx is done, whichever comes first. The shim's startup
-// time is unpredictable but usually sub-second, so this retries on a short
-// fixed interval rather than anything more elaborate.
+// WaitReady blocks until the agent-server behind socketPath answers an HTTP
+// request, or ctx is done, whichever comes first.
+//
+// Dialability alone is NOT readiness, and treating it as such is what made
+// the first real launch on the demo box fail. The socat shim inside the SIF
+// creates its listening socket immediately (it is the first line of the
+// image's runscript), while the Python agent-server it forwards to takes
+// tens of seconds to import its dependencies and bind its port. In that
+// window the socket connects and the shim's forward attempt fails, so the
+// very next request dies with a bare EOF. Requiring a real HTTP response
+// closes that window: any status code proves the far end is a live HTTP
+// server, and only a transport failure counts as not-yet-ready.
 func WaitReady(ctx context.Context, socketPath string) error {
-	dialer := &net.Dialer{}
-	ticker := time.NewTicker(50 * time.Millisecond)
+	client := New(socketPath, "")
+	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	var lastErr error
 	for {
-		conn, err := dialer.DialContext(ctx, "unix", socketPath)
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, controlBaseURL+"/health", nil)
+		if err != nil {
+			cancel()
+			return fmt.Errorf("controlclient: build readiness probe: %w", err)
+		}
+		resp, err := client.http.Do(req)
 		if err == nil {
-			_ = conn.Close()
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+			_ = resp.Body.Close()
+			cancel()
 			return nil
 		}
+		lastErr = err
+		cancel()
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("controlclient: control socket %s never became ready: %w", socketPath, ctx.Err())
+			return fmt.Errorf("controlclient: agent-server on %s never became ready (last error: %v): %w", socketPath, lastErr, ctx.Err())
 		case <-ticker.C:
 		}
 	}

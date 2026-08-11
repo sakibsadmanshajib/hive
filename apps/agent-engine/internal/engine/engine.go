@@ -122,8 +122,11 @@ type Config struct {
 	// the only trust boundary.
 	SessionAPIKey string
 
-	// ControlReadyTimeout bounds how long Launch waits for the in-SIF shim
-	// to create its control socket. Defaults to 30s.
+	// ControlReadyTimeout bounds how long Launch waits for the agent-server
+	// inside the sandbox to answer. Defaults to 3 minutes: measured on the
+	// demo box, a cold launch spends roughly 15 seconds mounting the image
+	// and importing the server before it serves anything, and a box under
+	// load is slower still.
 	ControlReadyTimeout time.Duration
 
 	// QuotaTenantConcurrency and QuotaUserConcurrency cap how many sessions
@@ -141,7 +144,7 @@ type Config struct {
 
 func (c Config) withDefaults() Config {
 	if c.ControlReadyTimeout <= 0 {
-		c.ControlReadyTimeout = 30 * time.Second
+		c.ControlReadyTimeout = 3 * time.Minute
 	}
 	if c.QuotaTenantConcurrency <= 0 {
 		c.QuotaTenantConcurrency = 4
