@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
 """Regenerate every raster brand asset in this directory from one geometry.
 
-Run: python3 deploy/docker/owui-static/generate-brand-assets.py
+Run it through Docker, like every other command in this repository, so it does
+not depend on a host Python or a host Pillow:
+
+    docker run --rm -v "$PWD:/workspace" -w /workspace python:3.12-slim \\
+      sh -c "pip install --quiet --root-user-action=ignore pillow==10.2.0 \\
+             && python3 deploy/docker/owui-static/generate-brand-assets.py"
+
+The Pillow version is pinned because the output is committed: an unpinned
+resampling or encoder change would show up as a diff in every PNG for no reason
+anyone could explain at review time.
 
 Why this script exists at all: the alternative is a dozen opaque binaries that
 no reviewer can check and nobody can regenerate when the brand moves again.
@@ -46,6 +55,10 @@ HEX_POINTS = [(0.5, 0.0), (1.0, 0.25), (1.0, 0.75), (0.5, 1.0), (0.0, 0.75), (0.
 RADIUS_RATIO = 7 / 32
 
 SS = 4  # supersample factor; PIL polygons are not antialiased on their own
+
+# Frames in favicon.ico. 16 and 32 are what a browser tab actually draws; the
+# larger ones cover Windows shortcut and taskbar surfaces.
+ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 
 def _hexagon(box_x: float, box_y: float, box_w: float, box_h: float):
@@ -130,10 +143,12 @@ def main() -> None:
     render(192, **LIGHT, rounded=False, inset=0.34).save(HERE / "web-app-manifest-192x192.png")
     render(512, **LIGHT, rounded=False, inset=0.34).save(HERE / "web-app-manifest-512x512.png")
 
-    write_ico(HERE / "favicon.ico", [16, 24, 32, 48, 64, 128, 256])
+    write_ico(HERE / "favicon.ico", ICO_SIZES)
 
-    # Self check: every file this script claims to write exists, is a decodable
-    # image, and is exactly the size its filename or consumer promises.
+    # Self check: every file this script claims to write exists, is exactly the
+    # size its consumer promises, and actually decodes. Image.open() reads only
+    # the header, so load() is what proves the pixel data is not truncated;
+    # without it a corrupt file passes a size assertion happily.
     expected = {
         "favicon.png": 256, "favicon-96x96.png": 96, "apple-touch-icon.png": 180,
         "user.png": 256, "splash.png": 512, "favicon-dark.png": 256,
@@ -143,9 +158,20 @@ def main() -> None:
     for name, want in expected.items():
         with Image.open(HERE / name) as im:
             assert im.size == (want, want), f"{name} is {im.size}, expected {want}x{want}"
-    with Image.open(HERE / "favicon.ico") as im:
-        assert im.size[0] >= 16, "favicon.ico did not decode"
-    print(f"wrote {len(expected) + 1} brand assets, all sizes verified")
+            im.load()
+
+    # Pillow hands back the largest ICO frame by default, so opening the file and
+    # checking one size would miss a missing or corrupt smaller frame, which is
+    # exactly the frame a browser tab renders. Walk every frame instead.
+    with Image.open(HERE / "favicon.ico") as ico:
+        got = sorted(w for w, _ in ico.ico.sizes())
+        assert got == ICO_SIZES, f"favicon.ico has frames {got}, expected {ICO_SIZES}"
+        for size in ICO_SIZES:
+            frame = ico.ico.getimage((size, size))
+            assert frame.size == (size, size), f"favicon.ico {size}px frame is {frame.size}"
+            frame.load()
+
+    print(f"wrote {len(expected) + 1} brand assets; sizes and every ICO frame verified")
 
 
 if __name__ == "__main__":
