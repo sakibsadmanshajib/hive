@@ -1,5 +1,5 @@
 {
-  "$comment": "Controls that are deliberately inert, or whose effect is proven by another spec. Every entry needs a route, a control key, a one line justification of at least 25 characters, and an owner. covered_elsewhere entries additionally need a spec file that exists and a marker string that file actually contains. Stale entries fail the gate. See README.md in this directory.",
+  "$comment": "Controls that are deliberately inert, whose effect is proven by another spec, or that this gate found broken and that a tracked issue now covers. Every entry needs a route, a control key, a one line justification of at least 25 characters, and an owner. covered_elsewhere entries additionally need a spec file that exists and a marker string that file actually contains. known_broken entries need an issue number, so the entry expires when the defect is fixed. Stale entries fail the gate. See README.md in this directory.",
   "entries": [
     {
       "route": "/console/analytics",
@@ -7,6 +7,22 @@
       "kind": "inert",
       "reason": "Recharts renders its chart surface focusable with role application, but the chart itself has no activation behaviour: every control that changes it is a sibling that this gate proves separately",
       "owner": "@sakibsadmanshajib"
+    },
+    {
+      "route": "*",
+      "control": "a|Documentation",
+      "kind": "known_broken",
+      "reason": "the shell links every console route to https://hivegpt.io, which accepts no connection, so the destination is dead rather than the control being wrong",
+      "owner": "@sakibsadmanshajib",
+      "issue": 883
+    },
+    {
+      "route": "/console",
+      "control": "a|Read the docs",
+      "kind": "known_broken",
+      "reason": "same dead destination as the shell Documentation link, rendered as a card on the overview page",
+      "owner": "@sakibsadmanshajib",
+      "issue": 883
     }
   ]
 }
