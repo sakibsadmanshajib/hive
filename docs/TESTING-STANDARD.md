@@ -118,10 +118,12 @@ control-plane resolves every bearer against GoTrue on each request, so
 changing the password invalidates every session every other run currently
 holds. On 2026-08-08 a scratch script named `demo_login.py` did exactly that
 and broke three agents working concurrently. That script no longer exists.
-Do not reconstruct its shape: find the account, overwrite its password with a
-value you just generated, sign in with that value. Supplying an existing
-password you were given is fine. Inventing one by rotating a shared account
-is not.
+
+The shape it had, written out so it is recognised and **not** reproduced: find
+the account, overwrite its password with a value you just generated, then sign
+in with that value. Every step of that is forbidden. Use the helper above, or
+sign in with an existing password you were given. Never invent one by
+overwriting what a shared account already has.
 
 The `POST` form of `/auth/v1/verify` is used deliberately. The `GET` form
 answers with a redirect carrying the session in the URL fragment, which is

@@ -29,7 +29,7 @@ import (
 
 const (
 	skipNoTestDSN  = "HIVE_TEST_DB_URL not set"
-	errNotTestDSN  = "refusing to run: HIVE_TEST_DB_URL must point at a test database (DSN missing the test marker)"
+	errNotTestDSN  = "refusing to run: HIVE_TEST_DB_URL must name a database whose name carries the test marker"
 	errParseDSN    = "parse HIVE_TEST_DB_URL: %v"
 	errConnect     = "connect: %v"
 	errSeedPool    = "seed pool: %v"
@@ -39,13 +39,22 @@ const (
 	errOwnerCall   = "IsWorkspaceOwner: %v"
 )
 
+// The marker is checked on the parsed database name, not on the whole DSN.
+// Searching the raw string matches a host, a user, a password or a query
+// parameter that happens to contain the substring, and this suite inserts and
+// deletes rows, so a loose check is a licence to write to whatever it was
+// pointed at.
 func requireAccountRoleTestDSN(t *testing.T) string {
 	t.Helper()
 	dsn := os.Getenv("HIVE_TEST_DB_URL")
 	if dsn == "" {
 		t.Skip(skipNoTestDSN)
 	}
-	if !strings.Contains(strings.ToLower(dsn), "test") {
+	cfg, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatalf(errParseDSN, err)
+	}
+	if !strings.Contains(strings.ToLower(cfg.ConnConfig.Database), "test") {
 		t.Fatal(errNotTestDSN)
 	}
 	return dsn
