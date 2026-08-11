@@ -857,8 +857,16 @@ jobs:
       # Coverage is advisory in this job: the v8 provider has no thresholds
       # configured, so the summary line informs without gating anything. This
       # step replaces the plain unit run instead of adding a second one.
+      #
+      # GITHUB_TOKEN is read by tests/interaction/gate-integrity.test.ts, which
+      # asks the issue tracker whether any exclusion still cites an open issue.
+      # An exclusion whose blocker closed is a permanent blind spot, and the
+      # only authority on "closed" is the tracker, so without a token that check
+      # cannot run. It fails rather than skipping when CI is set.
       - name: Unit tests with coverage summary (advisory)
         if: needs.changes.outputs.run != 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm run test:coverage
 
       - name: Build (Next.js)
@@ -2242,20 +2250,26 @@ jobs:
   # Interaction coverage gate. Enumerates every interactive control in
   # every console route from the rendered DOM, activates each one, and
   # requires observable evidence that it did something: a request, a
-  # navigation, a change to the render, a persisted value that survives a
-  # reload, or a disabled state carrying a reason. A control with no
-  # proven effect fails the job.
+  # navigation, a change to the render, or a value that survives a reload.
+  # A control with no proven effect fails the job.
   #
   # This exists because every UI test we had asserted that a control
   # rendered. A button with aria-haspopup="menu" and no click handler
   # passed all of them (issue #785), and so would a toggle that flips in
   # the browser and persists nothing.
   #
-  # Not a required check yet: it graduates once it has a track record on
-  # main, matching how rust-tests and desktop-tests were introduced. Its
-  # unit-level half (tests/interaction/gate-integrity.test.ts) already
-  # runs inside the required web-unit job, so a malformed registry or a
-  # broken enumerator fails fast even when this job does not run.
+  # ADVISORY, not a required check, and deliberately so for now. It is a
+  # sweep of a whole application against a live-ish stack, so its failure
+  # modes include the stack, the network and the seeded account, not only
+  # the console. Making it required before it has a run history on main
+  # would block every merge on any of those. It graduates the same way
+  # rust-tests and desktop-tests did: a track record first.
+  #
+  # Advisory does not mean silent. The job reports its own red, and the
+  # unit-level half (tests/interaction/gate-integrity.test.ts) runs inside
+  # the required web-unit job, so a malformed registry, a stale exclusion
+  # or a broken enumerator fails a required check even when this job does
+  # not run.
   # ------------------------------------------------------------------
 
   interaction-coverage:
@@ -2431,12 +2445,20 @@ jobs:
           E2E_INVITATION_TOKEN: interaction-gate-invitation-${{ github.run_id }}-${{ github.run_attempt }}
         run: node tests/e2e/support/e2e-auth-fixtures.mjs
 
+      # SUPABASE_SERVICE_ROLE_KEY is what mints the session: the setup project
+      # calls tests/e2e/support/live-auth.mjs, which needs SUPABASE_URL (job
+      # env), SUPABASE_ANON_KEY (job env) and the service role key here. Without
+      # it the mint throws, and the sweep has no session to enumerate with.
+      #
+      # No password variable: live-auth mints through the admin one-time-token
+      # flow, so the gate never reads, sets or rotates a credential of the
+      # account it signs in as.
       - name: Run the interaction coverage gate
         working-directory: apps/web-console
         env:
           INTERACTION_BASE_URL: http://localhost:3000
           INTERACTION_EMAIL: interaction-gate+${{ github.run_id }}-${{ github.run_attempt }}@scubed.com.bd
-          INTERACTION_PASSWORD: ${{ secrets.E2E_VERIFIED_PASSWORD }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run test:interaction
 
       - name: Upload coverage report
