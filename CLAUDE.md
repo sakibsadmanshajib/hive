@@ -46,8 +46,10 @@ docker compose --env-file ../../.env --profile local up --build
 # agent-engine (agent) + in-stack Redis (local), in ONE command. RAG query
 # embeddings run serverless via LiteLLM (EMBEDDING_BASE_URL default). Live
 # agent-task sandbox launch additionally needs a built Apptainer runtime image
-# (HIVE_AGENT_SIF_PATH); build it from deploy/apptainer/agent-engine.def on a
-# host with apptainer (unavailable on WSL2), then set HIVE_AGENT_SIF_PATH in .env.
+# (HIVE_AGENT_ENGINE_SIF_PATH, not HIVE_AGENT_SIF_PATH -- issue #781); build it
+# from deploy/apptainer/agent-engine.def on a host with apptainer (unavailable
+# on WSL2), then set the five HIVE_AGENT_ENGINE_* vars in .env. Those five are
+# necessary but not sufficient under compose (issue #780).
 docker compose --env-file ../../.env --profile local --profile chat --profile agent up --build
 
 # Hive Cloud (hosted SaaS): core services expecting managed Upstash Redis.
@@ -80,19 +82,27 @@ supabase db push                    # If Supabase CLI is linked
 
 The agent-engine service launches each agent session inside an Apptainer
 sandbox built from `deploy/apptainer/agent-engine.def`. It needs a prebuilt
-`.sif` and reads its path from `HIVE_AGENT_SIF_PATH`. The image is `linux/amd64`
-only and cannot be built on the WSL2 dev box.
+`.sif`. The image is `linux/amd64` only and cannot be built on the WSL2 dev
+box.
 
 ```bash
 # Demo/prod host with apptainer installed:
 make agent-sif                       # -> deploy/apptainer/agent-engine.sif
-export HIVE_AGENT_SIF_PATH=$(pwd)/deploy/apptainer/agent-engine.sif
 
 # No local apptainer: download the CI-built image instead.
 gh workflow run "agent-engine SIF"   # or use the latest successful run
 gh run download -n agent-engine-sif -D /opt/hive
-export HIVE_AGENT_SIF_PATH=/opt/hive/agent-engine.sif
 ```
+
+Real agent-task (Cowork) launches are gated on the five `HIVE_AGENT_ENGINE_*`
+vars that `buildAgentEngine` (`apps/control-plane/cmd/server/main.go`) reads,
+starting with `HIVE_AGENT_ENGINE_SIF_PATH`. `HIVE_AGENT_SIF_PATH` is a
+different variable, feeding only the standalone `agent-engine` CLI's `-sif`
+default, and setting it does nothing for agent tasks (issue #781). With any of
+the five unset, every task fails immediately with "agent engine is not
+available on this deployment" and the console shows Blocked. Setting all five
+is still not sufficient under docker compose, where control-plane runs in a
+container that cannot exec the host's Apptainer (issue #780).
 
 The `agent-engine SIF` workflow builds the `.sif` in CI (which also validates
 the def) and uploads it as the `agent-engine-sif` artifact. Full detail:

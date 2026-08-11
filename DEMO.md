@@ -41,7 +41,16 @@ make agent-sif          # -> deploy/apptainer/agent-engine.sif
 gh run download -n agent-engine-sif -D /opt/hive
 ```
 
-Set `HIVE_AGENT_SIF_PATH` in `.env` to the resulting `.sif` path.
+Set `HIVE_AGENT_ENGINE_SIF_PATH` in `.env` to the resulting `.sif` path, plus
+the other four `HIVE_AGENT_ENGINE_*` variables listed in `.env.example`. All
+five gate real task launches; `HIVE_AGENT_SIF_PATH` is a different variable
+that only feeds the standalone `agent-engine` CLI and does nothing for agent
+tasks (issue #781).
+
+Those five are necessary but not sufficient under docker compose: control-plane
+runs in a container that cannot exec the host's Apptainer, so agent tasks still
+fail there. Issue #780 tracks it, and `deploy/apptainer/README.md` has the
+detail.
 
 ### Verify
 
