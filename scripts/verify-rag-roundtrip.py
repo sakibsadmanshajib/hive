@@ -18,8 +18,9 @@ upserted. It writes nothing outside its own tenant, and it does not rotate the
 member user's password. It used to, on every run, against a hardcoded shared
 address, which is the shape docs/live-test-auth.md forbids: the control-plane
 resolves every bearer against GoTrue per request, so a rotation revokes the
-sessions of every other run holding one. A first run creates the account with a
-fresh random password; every later run signs in with RAG_VERIFY_PASSWORD.
+sessions of every other run holding one. A first run creates the account and
+prints the password it generated, on stderr, once. Save that value: every later
+run signs in with it through RAG_VERIFY_PASSWORD, and no run will rotate it.
 
 Retries: the serverless embedding route is slow and uneven (measured between
 one and over a hundred seconds per call on the demo stack), so ingest and query
@@ -145,6 +146,18 @@ def provision(supabase_url: str, service_key: str) -> tuple[str, str]:
         if status not in (200, 201):
             fail(f"user create: {status} {body}")
         user_id = body["id"]
+        if not env_password:
+            # Print it, once, on the only run that can know it. Without this
+            # the account exists with a password nobody holds, and every later
+            # run fails on the branch below demanding a value no operator could
+            # ever obtain, which would leave DEMO.md's RAG proof permanently
+            # dead on any environment this has already run against.
+            print(
+                f"created {USER_EMAIL} with a fresh password. Save it: every later "
+                f"run needs it, and no run will rotate it.\n"
+                f"  export RAG_VERIFY_PASSWORD={password}",
+                file=sys.stderr,
+            )
     else:
         if not env_password:
             fail(

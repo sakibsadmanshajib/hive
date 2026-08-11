@@ -20,6 +20,7 @@ agent-sif:
 # network). These guard credential-rotation ordering and .env rewriting, where
 # a regression strands a deployment on a revoked key.
 test-scripts:
+	python3 scripts/redact-log-credentials.py --selfcheck
 	python3 scripts/test_seed_owui_e2e_user.py
 	python3 scripts/test_seed_demo_owner.py
 	python3 scripts/test_install_owui_jwt_forward.py

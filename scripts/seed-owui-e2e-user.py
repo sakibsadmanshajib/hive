@@ -113,6 +113,7 @@ missing) goes to stderr.
 """
 import argparse
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -221,6 +222,69 @@ def password_to_set(user_exists: bool, env_password: str, new_user_password: str
     if not user_exists:
         return new_user_password
     return None
+
+
+# A key older than this is nobody's live key: the nightly job's own timeout is
+# 30 minutes, and a deployment that needs to keep one longer has its own
+# billing account through --account-slug (see the module docstring).
+STALE_KEY_HOURS = 6
+
+
+def stale_key_cutoff_iso(now: datetime.datetime | None = None) -> str:
+    """The created_at boundary for revoking previously minted shim keys.
+
+    Bounding the delete by age rather than by identity is what stops two
+    overlapping runs from revoking each other's key mid-flight."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    return (now - datetime.timedelta(hours=STALE_KEY_HOURS)).isoformat()
+
+
+def sweep_stale_fixture_users(gotrue, headers, run_key: str) -> None:
+    """Delete the run-scoped fixture users left behind by earlier runs.
+
+    Every run now provisions its own users rather than rotating shared ones,
+    which trades a live incident for a slow leak: two permanent GoTrue users
+    per run, one of them an OWNER of the owui-e2e tenant. This is the same
+    trade, and the same answer, as sweepStaleFixtureRuns in
+    apps/web-console/tests/e2e/support/e2e-fixture-seed.mjs.
+
+    Best effort by design. A sweep failure must never fail a run that has
+    already provisioned what it needs, so every error here is a note on stderr.
+    Only addresses this script itself derives are considered: the two bases,
+    each with a "+" tag, and never the unnamespaced shared address.
+    """
+    if not run_key:
+        return
+    cutoff = stale_key_cutoff_iso()
+    prefixes = tuple(f"{email.split('@')[0].lower()}+" for email in (USER_EMAIL, BOOTSTRAP_EMAIL))
+    domains = tuple(email.split("@")[1].lower() for email in (USER_EMAIL, BOOTSTRAP_EMAIL))
+
+    status, body = request(gotrue, headers, "GET", "/admin/users", params={"per_page": "1000"})
+    if status != 200 or not isinstance(body, dict):
+        print(f"note: fixture sweep skipped (user listing returned {status})", file=sys.stderr)
+        return
+
+    swept = 0
+    for user in body.get("users", []):
+        email = (user.get("email") or "").lower()
+        local, _, domain = email.partition("@")
+        # Both halves must match, so a real customer address that happens to
+        # start with the same word is never a candidate.
+        if domain not in domains or not local.startswith(prefixes):
+            continue
+        # Never this run's own users, and never the shared base address, which
+        # carries no "+" tag at all and is what the prefixes above require.
+        if f"+{run_key}@" in email:
+            continue
+        if (user.get("created_at") or "") >= cutoff:
+            continue
+        del_status, del_body = request(gotrue, headers, "DELETE", f"/admin/users/{user['id']}")
+        if del_status not in (200, 204):
+            print(f"note: fixture sweep could not delete {email}: {del_status} {del_body}", file=sys.stderr)
+            continue
+        swept += 1
+    if swept:
+        print(f"fixture sweep: removed {swept} stale run-scoped user(s)", file=sys.stderr)
 
 
 def with_run_key(email: str, run_key: str) -> str:
@@ -730,9 +794,19 @@ def main() -> None:
         consumer_failed = not rewrite_env_file(args.env_file, raw_secret) or consumer_failed
     consumer_failed = sync_owui_config(raw_secret) is False or consumer_failed
 
-    # 7. Revoke the account's previous keys (cascades to their policy rows),
-    # excluding the one just minted. Held back until the consumers above are
-    # updated: revoking first is what turns a failed sync into an outage.
+    # 7. Revoke the account's STALE keys (cascades to their policy rows). Held
+    # back until the consumers above are updated: revoking first is what turns
+    # a failed sync into an outage.
+    #
+    # The billing account is shared even when the users are not: OWUI_E2E_RUN_KEY
+    # namespaces the GoTrue identities, and deliberately does not namespace this
+    # account, because a tenant bills to exactly one account and inventing a
+    # tenant per run would leave a permanent row behind on every run. So the
+    # deletion is bounded by age rather than by "everything except mine". Two
+    # runs overlapping (the schedule and a labelled pull request sit in
+    # different concurrency groups, so they can) used to revoke each other's key
+    # mid-flight, which is the outage already recorded in .wolf/cerebrum.md.
+    # A key minted minutes ago now survives any concurrent run.
     if consumer_failed:
         print(
             "error: leaving the previous shim key(s) active because a configured "
@@ -741,13 +815,23 @@ def main() -> None:
             file=sys.stderr,
         )
     else:
+        cutoff = stale_key_cutoff_iso()
         status, body = request(
             rest, headers, "DELETE", "/api_keys",
-            params={"account_id": f"eq.{shim_account_id}", "id": f"neq.{shim_key_id}"},
+            params={
+                "account_id": f"eq.{shim_account_id}",
+                "id": f"neq.{shim_key_id}",
+                "created_at": f"lt.{cutoff}",
+            },
         )
         if status not in (200, 204):
             print(f"error: shim key cleanup failed: {status} {body}", file=sys.stderr)
             sys.exit(1)
+
+    # 8. Remove the run-scoped users older runs left behind. After the key
+    # revocation above, so a stale user no longer has an api_keys row pointing
+    # at it. Best effort: never fails the run.
+    sweep_stale_fixture_users(gotrue, headers, run_key)
 
     # A PASSWORD line appears only when this run actually set that password.
     # For an account that already existed, this run does not know the password

@@ -8,6 +8,7 @@ rotation from revoking a deployment's key. No framework, no network: mocks
 urllib.request.urlopen and exercises the functions directly.
 Run: python3 scripts/test_seed_owui_e2e_user.py
 """
+import datetime
 import importlib.util
 import io
 import json
@@ -562,6 +563,68 @@ def test_run_key_namespaces_the_fixture_addresses() -> None:
     print("ok: with_run_key namespaces the fixture addresses per run")
 
 
+def test_stale_key_cutoff_is_backdated_not_now() -> None:
+    """The shim key delete is bounded by age, not by "everything except mine".
+    Two runs overlap (the schedule and a labelled pull request are in different
+    concurrency groups), and an identity-bounded delete had each revoking the
+    other's key mid-flight, which is the outage in .wolf/cerebrum.md."""
+    now = datetime.datetime(2026, 8, 11, 12, 0, tzinfo=datetime.timezone.utc)
+    cutoff = seed_owui_e2e_user.stale_key_cutoff_iso(now)
+    assert cutoff == "2026-08-11T06:00:00+00:00", cutoff
+    # A key minted seconds ago sorts after the cutoff, so PostgREST's
+    # created_at=lt.<cutoff> filter cannot match it.
+    assert now.isoformat() > cutoff
+    print("ok: stale_key_cutoff_iso spares a concurrent run's fresh key")
+
+
+def test_sweep_only_deletes_stale_run_scoped_fixture_users() -> None:
+    """The sweep must never reach the shared base address or a real account,
+    and never this run's own users."""
+    old = "2020-01-01T00:00:00+00:00"
+    fresh = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    users = [
+        {"id": "stale", "email": "owui-e2e+111-1@hive-e2e.invalid", "created_at": old},
+        {"id": "stale-bootstrap", "email": "owui-e2e-bootstrap+111-1@hive-e2e.invalid", "created_at": old},
+        {"id": "mine", "email": "owui-e2e+222-1@hive-e2e.invalid", "created_at": old},
+        {"id": "recent", "email": "owui-e2e+333-1@hive-e2e.invalid", "created_at": fresh},
+        {"id": "shared-base", "email": "owui-e2e@hive-e2e.invalid", "created_at": old},
+        {"id": "customer", "email": "owui-e2e+x@real-customer.example", "created_at": old},
+        {"id": "lookalike", "email": "owui-e2e-someone-else@hive-e2e.invalid", "created_at": old},
+    ]
+    deleted = []
+
+    def fake_request(base, headers, method, path, body=None, params=None, prefer=None):
+        if method == "GET":
+            return 200, {"users": users}
+        assert method == "DELETE", method
+        deleted.append(path.rsplit("/", 1)[-1])
+        return 204, None
+
+    original = seed_owui_e2e_user.request
+    seed_owui_e2e_user.request = fake_request
+    try:
+        seed_owui_e2e_user.sweep_stale_fixture_users("gotrue", {}, "222-1")
+    finally:
+        seed_owui_e2e_user.request = original
+
+    assert sorted(deleted) == ["stale", "stale-bootstrap"], deleted
+    print("ok: sweep removes only stale run-scoped fixture users")
+
+
+def test_sweep_is_a_no_op_without_a_run_key() -> None:
+    """No run key means the shared identity, and nothing about it is sweepable."""
+    def explode(*args, **kwargs):
+        raise AssertionError("sweep must not call out without a run key")
+
+    original = seed_owui_e2e_user.request
+    seed_owui_e2e_user.request = explode
+    try:
+        seed_owui_e2e_user.sweep_stale_fixture_users("gotrue", {}, "")
+    finally:
+        seed_owui_e2e_user.request = original
+    print("ok: sweep is inert without a run key")
+
+
 def main() -> None:
     os.environ["OWUI_ADMIN_EMAIL"] = "admin@example.com"
     os.environ["OWUI_ADMIN_PASSWORD"] = "pw"
@@ -592,6 +655,9 @@ def main() -> None:
     test_tenant_slug_defaults_to_ci_and_is_overridable()
     test_password_is_never_rotated_on_an_existing_account()
     test_run_key_namespaces_the_fixture_addresses()
+    test_stale_key_cutoff_is_backdated_not_now()
+    test_sweep_only_deletes_stale_run_scoped_fixture_users()
+    test_sweep_is_a_no_op_without_a_run_key()
 
     del os.environ["OWUI_ADMIN_EMAIL"]
     del os.environ["OWUI_ADMIN_PASSWORD"]
