@@ -20,7 +20,7 @@ export const WEB_CONSOLE_DIR = (() => {
       typeof manifest === "object" &&
       manifest !== null &&
       "name" in manifest &&
-      (manifest as { name: unknown }).name === "@hive/web-console"
+      manifest.name === "@hive/web-console"
     ) {
       return cwd;
     }

@@ -5,8 +5,29 @@
 // change, a DOM mutation, a download, a popup, a native dialog, or (for a
 // toggle) a value that survives a reload because the server gave it back.
 // A control that produces none of those is a failure, not a skip.
+//
+// WHAT THE GATE IS ALLOWED TO CHANGE
+// ----------------------------------
+// One rule: when the gate supplies the value, the request never leaves the
+// browser. Concretely, writes are blocked for
+//
+//   * anything whose label says delete, revoke, purchase and the like, and
+//   * any activation carrying values the gate typed or chose: a filled form's
+//     submit, a text field, a select.
+//
+// The activation still happens, the application still builds and issues its
+// request, and the interception is the proof that the control is wired. What
+// does not happen is the write. That matters because this gate is origin
+// agnostic and has been run against the deployed console: the earlier version
+// clicked first and pressed Escape afterwards, which is not a safeguard at
+// all, and its recorded runs created API keys and sent a workspace invitation
+// on the live demo tenant (docs/proof/interaction-coverage-2026-08-10).
+//
+// Toggles are the one exception, and deliberately: a toggle carries no value
+// of the gate's own invention, its whole proof is that the flip survives a
+// reload, and the gate flips it back and fails if the restore did not take.
 
-import type { Locator, Page, Request } from "@playwright/test";
+import type { BrowserContext, Locator, Page, Request } from "@playwright/test";
 
 import { signatureInPage, type RawControl } from "./enumerate";
 
@@ -19,6 +40,8 @@ export const SESSION_ENDING_PATTERN = /\b(sign ?out|log ?out|logout|signout)\b/i
 
 const ASSET_PATTERN =
   /(_next\/static|__nextjs|\/favicon|\.(png|jpe?g|gif|svg|webp|ico|woff2?|ttf|css|map)(\?|$))/i;
+
+const MUTATING_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 export interface Observation {
   urlBefore: string;
@@ -46,6 +69,51 @@ export interface Observation {
    * to prove a control that plainly did not do its job.
    */
   errorSurfaces: string[];
+}
+
+/**
+ * Blocks state-changing requests while an activation runs.
+ *
+ * Installed once per browser context. Disarmed by default, so an ordinary
+ * click behaves exactly as a user's would; `withWritesBlocked` arms it for the
+ * duration of one activation and reports what it stopped.
+ *
+ * The URL predicate keeps static assets out of the interceptor entirely: they
+ * are the bulk of the traffic and can never be a mutation.
+ */
+export interface MutationGuard {
+  withWritesBlocked<T>(act: () => Promise<T>): Promise<{ value: T; blocked: string[] }>;
+}
+
+export async function installMutationGuard(context: BrowserContext): Promise<MutationGuard> {
+  let armed = false;
+  let blocked: string[] = [];
+
+  await context.route(
+    (url) => !ASSET_PATTERN.test(url.href),
+    async (route) => {
+      const request = route.request();
+      if (armed && MUTATING_METHODS.has(request.method().toUpperCase())) {
+        blocked.push(`${request.method()} ${normalizeUrl(request.url())}`);
+        await route.abort("blockedbyclient").catch(() => undefined);
+        return;
+      }
+      await route.continue().catch(() => undefined);
+    },
+  );
+
+  return {
+    async withWritesBlocked<T>(act: () => Promise<T>): Promise<{ value: T; blocked: string[] }> {
+      blocked = [];
+      armed = true;
+      try {
+        const value = await act();
+        return { value, blocked: [...blocked] };
+      } finally {
+        armed = false;
+      }
+    },
+  };
 }
 
 /**
@@ -237,6 +305,9 @@ export interface ProofOutcome {
   detail: string;
 }
 
+/** Proof types that are neither a pass nor a failure of the control itself. */
+export const DISABLED_PROOF_TYPE = "disabled";
+
 /**
  * How a failed request is classified.
  *
@@ -245,11 +316,11 @@ export interface ProofOutcome {
  *                    unusable; reported rather than counted either way.
  * `failed-request`   the server read the request and refused it.
  *
- * Only the last of these can ever be evidence of a working control, and only
- * under the condition documented on `ProofContext.harnessSuppliedInput`.
+ * Only the last of these can ever be evidence of a working control, and it
+ * never is here: the gate blocks the requests it fed the values for, so a 4xx
+ * that does come back was the application's own doing.
  */
 const NOT_MOUNTED = new Set([404, 405, 410, 501]);
-const SEMANTIC_REJECTION = new Set([400, 409, 422]);
 
 function statusOf(entry: string): number {
   return Number.parseInt(entry.slice(0, 3), 10);
@@ -257,20 +328,14 @@ function statusOf(entry: string): number {
 
 export interface ProofContext {
   /**
-   * True when the harness itself supplied the values the request carried.
+   * Mutating requests the guard stopped during this activation.
    *
-   * This is the whole rule for telling an expected 4xx from an unexpected one,
-   * and it is deliberately a property of the *activation*, not of the status.
-   * When the gate fills a form with "interaction gate probe" and submits it, a
-   * 400, 409 or 422 back is the endpoint validating input, which is the
-   * control working. Nothing else earns the exception: 401 and 403 mean the
-   * session is wrong, 404, 405, 410 and 501 mean nothing is mounted there, 429
-   * means the gate hit a limiter, and 5xx means the server fell over. None of
-   * those is evidence that a control did its job, and a 400 on an activation
-   * the gate did not feed is the application sending a request its own server
-   * will not accept, which is a defect and not a proof.
+   * Their presence is the proof, and it is read before anything else that
+   * could veto it: the application asked the server to change something, so
+   * the control is wired, and the error the aborted request then puts on
+   * screen is the gate's doing rather than a defect.
    */
-  harnessSuppliedInput?: boolean;
+  blockedMutations?: string[];
 }
 
 /** Reduces an observation to a verdict, using the generic evidence channels. */
@@ -278,6 +343,15 @@ export function verdictFromObservation(
   observation: Observation,
   context: ProofContext = {},
 ): ProofOutcome {
+  const blocked = context.blockedMutations ?? [];
+  if (blocked.length > 0) {
+    return {
+      proven: true,
+      proofType: "wired-write-blocked",
+      detail: `activation issued ${String(blocked.length)} state changing request(s), stopped before leaving the browser: ${blocked.slice(0, 3).join(", ")}`,
+    };
+  }
+
   // A navigation that landed on a live document is proof on its own, and it is
   // settled before the request log is judged: everything the destination
   // fetches on load belongs to the destination, not to the control that got
@@ -320,13 +394,7 @@ export function verdictFromObservation(
   }
   const unexcused = failures.filter((entry) => {
     const status = statusOf(entry);
-    if (status === 429 || status >= 500 || NOT_MOUNTED.has(status)) {
-      return false;
-    }
-    if (SEMANTIC_REJECTION.has(status)) {
-      return context.harnessSuppliedInput !== true;
-    }
-    return true;
+    return !(status === 429 || status >= 500 || NOT_MOUNTED.has(status));
   });
   if (unexcused.length > 0) {
     return {
@@ -337,10 +405,8 @@ export function verdictFromObservation(
   }
 
   // An activation whose only visible consequence is an error message did not
-  // work, whatever the transport said. Excused on the same terms as a 4xx:
-  // when the gate typed the value that was rejected, the message is the
-  // application validating the gate own nonsense, which is it working.
-  if (observation.errorSurfaces.length > 0 && context.harnessSuppliedInput !== true) {
+  // work, whatever the transport said.
+  if (observation.errorSurfaces.length > 0) {
     return {
       proven: false,
       proofType: "error-surface",
@@ -386,21 +452,28 @@ export function verdictFromObservation(
 }
 
 /**
- * A disabled control is allowed to do nothing, but only when the markup says
- * why. "Disabled with no explanation" is indistinguishable from "broken".
+ * A disabled control is never proof of anything.
+ *
+ * It used to count as proven whenever the markup carried any `title`, which
+ * made "disabled" the cheapest way to pass this gate: a permission regression
+ * that greys out every action on a page would have kept it green, and so would
+ * a feature that broke into a permanently disabled state. Markup is not
+ * behaviour.
+ *
+ * So a disabled control is reported in its own bucket, never in the numerator,
+ * and the controls that have to be usable are named in route-floors.json,
+ * where "present and enabled" is asserted per route. That is the check an
+ * accidental disable actually fails.
  */
 export function verdictForDisabled(control: RawControl): ProofOutcome {
-  if (control.disabledReason.trim() !== "") {
-    return {
-      proven: true,
-      proofType: "disabled-with-reason",
-      detail: control.disabledReason.trim(),
-    };
-  }
+  const reason = control.disabledReason.trim();
   return {
     proven: false,
-    proofType: "unproven",
-    detail: "disabled with no reason exposed to the user (no title, no aria-describedby)",
+    proofType: DISABLED_PROOF_TYPE,
+    detail:
+      reason === ""
+        ? "rendered disabled, with no reason exposed to the user (no title, no aria-describedby)"
+        : `rendered disabled: ${reason}`,
   };
 }
 
@@ -454,22 +527,30 @@ export async function proveToggle(
     };
   }
 
-  // Restore, and confirm the restore also persisted. Leaving a live surface
-  // flipped would be a side effect of the gate itself.
+  // Restore, and confirm the restore also persisted. A failed restore is a
+  // failure of the run, not a footnote: this is the one activation the gate
+  // performs that deliberately changes real state, and the only thing that
+  // makes that acceptable is putting it back. Reporting the control as proven
+  // while walking away from a flipped setting is how a test suite becomes the
+  // thing that broke the environment.
   const restoreObservation = await observe(page, async () => {
     await reloaded.click({ timeout: 5000 });
   });
   const restored = await relocate();
-  const finalState = restored ? await readToggleState(restored) : null;
-  const restoreNote =
-    finalState === before
-      ? "restored"
-      : `WARNING: could not restore the original value (${restoreObservation.requests.slice(0, 2).join(", ")})`;
+  const finalState = restored === null ? null : await readToggleState(restored);
+  if (finalState !== before) {
+    const context = verdictFromObservation(restoreObservation);
+    return {
+      proven: false,
+      proofType: "unrestored",
+      detail: `flip ${String(before)} -> ${String(after)} survived a reload, but the gate could not put it back: it now reads ${String(finalState)} (${context.proofType}: ${context.detail}). Restore this setting by hand`,
+    };
+  }
 
   return {
     proven: true,
     proofType: "persisted",
-    detail: `flip ${String(before)} -> ${String(after)} survived a reload; ${restoreNote}`,
+    detail: `flip ${String(before)} -> ${String(after)} survived a reload; restored`,
   };
 }
 
@@ -498,20 +579,38 @@ async function readToggleState(locator: Locator): Promise<boolean | null> {
 }
 
 /**
- * A form field's effect is the value it contributes to a submission. Proving
- * it means the value is accepted by the field and the field is actually wired
- * into a form (a name plus a form action), or the edit itself moves the page.
+ * A form field's effect is the value it contributes to a submission.
+ *
+ * Two ways to prove it, and a name attribute on its own is not one of them:
+ *
+ *   1. Typing produces an observable consequence. For a controlled React input
+ *      this is the strong case, and it is why the DOM signature tracks the
+ *      disabled state of every control: typing into a field that gates a Save
+ *      button visibly changes the page. It is also why deleting the onChange
+ *      handler fails here, twice over, since React then reverts the value and
+ *      the read-back below never matches.
+ *   2. The field is named and lives inside a form, so the value it accepted is
+ *      what that form submits.
+ *
+ * A named input in no form, whose edits change nothing anywhere, is exactly
+ * the orphan this gate should report, and it used to pass on the name alone.
  */
 export async function proveField(
   page: Page,
   locator: Locator,
   control: RawControl,
+  guard: MutationGuard,
 ): Promise<ProofOutcome> {
   const original = await locator.inputValue().catch(() => "");
   const probe = probeValueFor(control.type);
-  const observation = await observe(page, async () => {
-    await locator.fill(probe, { timeout: 5000 });
-  });
+  // The gate typed this value, so nothing it triggers may reach the server: an
+  // autosaving field would otherwise persist "interaction gate probe" into a
+  // real record.
+  const { value: observation, blocked } = await guard.withWritesBlocked(() =>
+    observe(page, async () => {
+      await locator.fill(probe, { timeout: 5000 });
+    }),
+  );
   const readBack = await locator.inputValue().catch(() => "");
   await locator.fill(original, { timeout: 5000 }).catch(() => undefined);
 
@@ -522,29 +621,25 @@ export async function proveField(
       detail: `field did not accept input: wrote "${probe}", read back "${readBack}"`,
     };
   }
-  const generic = verdictFromObservation(observation, { harnessSuppliedInput: true });
+  const generic = verdictFromObservation(observation, { blockedMutations: blocked });
   if (generic.proven) {
     return generic;
   }
-  if (control.fieldName !== "" && control.formAction !== "") {
+  if (control.fieldName !== "" && control.inForm) {
     return {
       proven: true,
       proofType: "form-field",
-      detail: `accepts input and submits as "${control.fieldName}" to ${control.formMethod.toUpperCase()} ${control.formAction}`,
-    };
-  }
-  if (control.fieldName !== "") {
-    return {
-      proven: true,
-      proofType: "form-field",
-      detail: `accepts input and is bound to field "${control.fieldName}" of a client submitted form`,
+      detail:
+        control.formAction === ""
+          ? `accepts input and submits as "${control.fieldName}" of a client submitted form`
+          : `accepts input and submits as "${control.fieldName}" to ${control.formMethod.toUpperCase()} ${control.formAction}`,
     };
   }
   return {
     proven: false,
     proofType: "unproven",
     detail:
-      "accepts input but has no name, no form action, and typing into it triggers no request and no rendered change",
+      "accepts input but belongs to no form and typing into it triggers no request and no rendered change, so nothing it holds can reach anywhere",
   };
 }
 
@@ -555,6 +650,10 @@ export async function proveField(
  * own required-field validation, which looks exactly like a button with no
  * handler. Proving a submit means submitting something the form accepts.
  * Returns the fields it touched, so the report can say what was submitted.
+ *
+ * Every caller arms the mutation guard around the click that follows, because
+ * these values are the gate's invention: a live run of the earlier version
+ * created API keys and sent a workspace invitation this way.
  */
 export async function fillFormFor(locator: Locator): Promise<string[]> {
   const form = locator.locator("xpath=ancestor::form[1]");
@@ -610,6 +709,7 @@ export async function proveSelect(
   page: Page,
   locator: Locator,
   control: RawControl,
+  guard: MutationGuard,
 ): Promise<ProofOutcome> {
   const options = await locator.evaluate((element: Element): string[] => {
     if (!(element instanceof HTMLSelectElement)) {
@@ -620,11 +720,11 @@ export async function proveSelect(
   const current = await locator.inputValue().catch(() => "");
   const next = options.find((value) => value !== current);
   if (next === undefined) {
-    if (control.fieldName !== "" && control.formAction !== "") {
+    if (control.fieldName !== "" && control.inForm) {
       return {
         proven: true,
         proofType: "form-field",
-        detail: `single-option select bound to "${control.fieldName}" of ${control.formMethod.toUpperCase()} ${control.formAction}`,
+        detail: `single-option select bound to "${control.fieldName}" of a form`,
       };
     }
     return {
@@ -634,19 +734,22 @@ export async function proveSelect(
     };
   }
 
-  const observation = await observe(page, async () => {
-    await locator.selectOption(next, { timeout: 5000 });
-  });
-  const generic = verdictFromObservation(observation);
+  // The gate chose this option, so the same rule as a typed value applies.
+  const { value: observation, blocked } = await guard.withWritesBlocked(() =>
+    observe(page, async () => {
+      await locator.selectOption(next, { timeout: 5000 });
+    }),
+  );
+  const generic = verdictFromObservation(observation, { blockedMutations: blocked });
   if (generic.proven) {
     return generic;
   }
   await locator.selectOption(current, { timeout: 5000 }).catch(() => undefined);
-  if (control.fieldName !== "" && control.formAction !== "") {
+  if (control.fieldName !== "" && control.inForm) {
     return {
       proven: true,
       proofType: "form-field",
-      detail: `changing the value submits as "${control.fieldName}" to ${control.formMethod.toUpperCase()} ${control.formAction}`,
+      detail: `changing the value submits as "${control.fieldName}" of a form`,
     };
   }
   return {
@@ -659,11 +762,27 @@ export async function proveSelect(
 /**
  * External links are browser primitives: the click always navigates, so the
  * only thing worth proving is that the destination is alive.
+ *
+ * Cached per destination. A shell link repeated on seventeen routes is one
+ * destination, and asking a third party seventeen times is both slow and a
+ * good way to be rate limited into a false verdict.
  */
+const externalDestinations = new Map<string, ProofOutcome>();
+
 export async function proveExternalLink(
   page: Page,
   href: string,
 ): Promise<ProofOutcome> {
+  const cached = externalDestinations.get(href);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const outcome = await checkExternalDestination(page, href);
+  externalDestinations.set(href, outcome);
+  return outcome;
+}
+
+async function checkExternalDestination(page: Page, href: string): Promise<ProofOutcome> {
   try {
     const response = await page.request.get(href, { timeout: 15000, maxRedirects: 5 });
     if (response.status() >= 400) {

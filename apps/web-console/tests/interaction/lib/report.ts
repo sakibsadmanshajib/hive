@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import type { ControlKind } from "./enumerate";
 
-export type ControlStatus = "proven" | "declared" | "unproven";
+export type ControlStatus = "proven" | "declared" | "disabled" | "unproven";
 
 export interface ControlRecord {
   route: string;
@@ -56,6 +56,8 @@ export interface CoverageReport {
     enumerated: number;
     proven: number;
     declared: number;
+    /** Rendered disabled: never proof, never a failure on its own. */
+    disabled: number;
     unproven: number;
     coverage: number;
   };
@@ -63,6 +65,15 @@ export interface CoverageReport {
   routes: RouteRecord[];
   controls: ControlRecord[];
   unprovenControls: ControlRecord[];
+  /**
+   * Controls the run found disabled.
+   *
+   * Listed rather than counted as proof. A disabled control used to pass this
+   * gate on any `title` attribute, which made greying a surface out the
+   * cheapest way to stay green. What fails an accidental disable now is
+   * route-floors.json, which names the controls each route must leave usable.
+   */
+  disabledControls: ControlRecord[];
   /** Registry and route-fixture integrity failures. */
   problems: string[];
 }
@@ -81,9 +92,21 @@ export function identityOf(route: string, key: string): string {
   return route + " " + key.replace(/~\d+$/, "");
 }
 
+/**
+ * Coverage as a fraction, with no denominator of zero scoring as full marks.
+ *
+ * It used to return 1 for 0 of 0, which read as "everything here is proven"
+ * for a route that rendered nothing at all. Two routes shipped in that state:
+ * /oauth/consent, whose recorded floor was literally zero controls, and
+ * /invitations/accept. Both reported one hundred percent coverage of a page
+ * the gate had never seen a single control on. An empty measurement is not a
+ * perfect one, and the sweep additionally raises a problem for any visited
+ * route that enumerates nothing, so this can only be reached by a route that
+ * was never visited.
+ */
 export function ratio(proven: number, enumerated: number): number {
   if (enumerated === 0) {
-    return 1;
+    return 0;
   }
   return Math.round((proven / enumerated) * 10000) / 10000;
 }
@@ -114,6 +137,7 @@ export function buildReport(input: {
     (cell) => cell.proven === cell.instances,
   ).length;
   const declared = input.controls.filter((c) => c.status === "declared").length;
+  const disabledControls = input.controls.filter((c) => c.status === "disabled");
   const unprovenControls = input.controls.filter((c) => c.status === "unproven");
   const proofTypes: Record<string, number> = {};
   for (const control of input.controls) {
@@ -132,6 +156,7 @@ export function buildReport(input: {
       enumerated: input.controls.length,
       proven,
       declared,
+      disabled: disabledControls.length,
       unproven: unprovenControls.length,
       coverage: ratio(proven, input.controls.length),
     },
@@ -139,6 +164,7 @@ export function buildReport(input: {
     routes: input.routes,
     controls: input.controls,
     unprovenControls,
+    disabledControls,
     problems: input.problems,
   };
 }
@@ -163,7 +189,7 @@ export function formatSummary(report: CoverageReport): string {
     `  routes        ${String(report.totals.routesVisited)} visited of ${String(report.totals.routesDiscovered)} discovered`,
   );
   lines.push(
-    `  controls      ${String(report.totals.enumerated)} enumerated, ${String(report.totals.proven)} proven, ${String(report.totals.declared)} declared, ${String(report.totals.unproven)} unproven`,
+    `  controls      ${String(report.totals.enumerated)} enumerated, ${String(report.totals.proven)} proven, ${String(report.totals.declared)} declared, ${String(report.totals.disabled)} disabled, ${String(report.totals.unproven)} unproven`,
   );
   lines.push(
     `  identities    ${String(report.totals.identitiesProven)} proven of ${String(report.totals.identities)} distinct`,
@@ -182,6 +208,16 @@ export function formatSummary(report: CoverageReport): string {
     lines.push(
       `  ${label.padEnd(40).slice(0, 40)}  ${String(route.enumerated).padStart(4)}  ${String(route.proven).padStart(6)}  ${String(route.declared).padStart(4)}  ${String(route.unproven).padStart(6)}  ${percent(route.coverage).padStart(8)}`,
     );
+  }
+  if (report.disabledControls.length > 0) {
+    lines.push("");
+    lines.push(
+      `  DISABLED CONTROLS (${String(report.disabledControls.length)}) — not proof of anything, and not counted as covered`,
+    );
+    for (const control of report.disabledControls) {
+      lines.push(`    ${control.route}  ${control.key}`);
+      lines.push(`      ${control.detail}`);
+    }
   }
   if (report.unprovenControls.length > 0) {
     lines.push("");

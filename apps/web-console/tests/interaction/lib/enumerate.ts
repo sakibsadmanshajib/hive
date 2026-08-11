@@ -43,7 +43,9 @@ export interface RawControl {
   ariaChecked: string;
   ariaExpanded: string;
   ariaHasPopup: string;
-  /** True when the element lives inside a `<form>` with a non-empty action. */
+  /** True when the element lives inside a `<form>`, whatever its action. */
+  inForm: boolean;
+  /** The enclosing form's action, empty for a client submitted form. */
   formAction: string;
   formMethod: string;
   ordinal: number;
@@ -330,6 +332,7 @@ export function enumerateInPage(): EnumerationResult {
       ariaChecked: el.getAttribute("aria-checked") ?? "",
       ariaExpanded: el.getAttribute("aria-expanded") ?? "",
       ariaHasPopup: el.getAttribute("aria-haspopup") ?? "",
+      inForm: form !== null,
       formAction: form ? form.getAttribute("action") ?? "" : "",
       formMethod: form ? (form.getAttribute("method") ?? "get").toLowerCase() : "",
       ordinal,
@@ -359,8 +362,13 @@ export function signatureInPage(): string {
     hash = (hash * 31 + text.charCodeAt(i)) | 0;
   }
   const states: string[] = [];
+  // `[disabled]` and `[aria-disabled]` are in here for the commonest effect a
+  // text field has: typing into it enables the Save button beside it. Without
+  // them that transition changes no text, no element count and no attribute
+  // this signature reads, so the edit looked like it did nothing at all and
+  // the field could only be proven from its markup.
   const stateful = document.querySelectorAll(
-    "[aria-expanded],[aria-checked],[aria-selected],[aria-pressed],[open],[role=dialog],[role=menu],[role=alert],input,select,textarea",
+    "[aria-expanded],[aria-checked],[aria-selected],[aria-pressed],[aria-disabled],[disabled],[open],[role=dialog],[role=menu],[role=alert],input,select,textarea",
   );
   for (const el of Array.from(stateful)) {
     const value =
@@ -378,6 +386,9 @@ export function signatureInPage(): string {
         el.getAttribute("aria-selected") ?? "",
         el.getAttribute("aria-pressed") ?? "",
         el.hasAttribute("open") ? "open" : "",
+        el.hasAttribute("disabled") || el.getAttribute("aria-disabled") === "true"
+          ? "disabled"
+          : "",
         value,
       ].join("."),
     );
